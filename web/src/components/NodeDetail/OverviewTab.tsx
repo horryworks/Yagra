@@ -81,6 +81,7 @@ import {
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { memPctSeries } from './overviewMetrics';
 import {
+  countAxisLabel,
   merakiApHistorySeries,
   merakiApRadioReadingsShown,
   merakiPairLine,
@@ -933,7 +934,7 @@ function MerakiHealth({
             timestamps={apCharts.counts.timestamps}
             series={apCharts.counts.series}
             xRange={apWin ?? undefined}
-            yFormat={(v) => formatCount(v)}
+            yFormat={(v) => countAxisLabel(v, formatCount)}
             legendFormat={(v) => formatCount(v)}
           />
         </div>

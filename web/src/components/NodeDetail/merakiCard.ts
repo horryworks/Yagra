@@ -341,3 +341,15 @@ export function merakiApHistorySeries(
   );
   return { counts, util };
 }
+
+/**
+ * An axis tick on a chart of counts: its number when it is a whole one, and nothing otherwise.
+ *
+ * uPlot puts ticks at fractions when the range is small, and a whole-number formatter then prints
+ * them rounded — "4, 4, 3, 3, 2" down the axis of a chart whose values were 2 and 4, seen on the
+ * lab deployment. A client or an SSID has no half, so the fractional ticks keep their grid line and
+ * say nothing.
+ */
+export function countAxisLabel(v: number, format: (n: number) => string): string {
+  return Number.isInteger(v) ? format(v) : '';
+}

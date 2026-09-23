@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
 import {
   MERAKI_UPLINK_STATES,
+  countAxisLabel,
   merakiApHistorySeries,
   merakiApRadioReadingsShown,
   merakiPairLine,
@@ -307,5 +308,14 @@ describe('merakiApHistorySeries', () => {
     const { counts, util } = merakiApHistorySeries([], [], [], PAL, L);
     expect(counts).toEqual({ timestamps: [], series: [] });
     expect(util).toEqual({ timestamps: [], series: [] });
+  });
+});
+
+describe('countAxisLabel', () => {
+  // Seen on the lab: a count chart's axis read '4, 4, 3, 3, 2' because fractional ticks were rounded.
+  it('labels only whole-number ticks', () => {
+    const fmt = (n: number) => String(n);
+    expect([4, 3.5, 3, 2.5, 2].map((v) => countAxisLabel(v, fmt))).toEqual(['4', '', '3', '', '2']);
+    expect(countAxisLabel(0, fmt)).toBe('0');
   });
 });
