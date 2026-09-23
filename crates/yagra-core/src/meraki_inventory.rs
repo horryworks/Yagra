@@ -156,31 +156,75 @@ pub fn lan_reads_due(
     due
 }
 
-/// The address an MX takes from its network's LAN side: the first of `ips` (they are in VLAN order)
-/// that lies inside some folder's IP range, else the first. `None` when the network has none.
+/// The address an MX takes from its network's LAN side. `ips` are in VLAN order; an address in
+/// `shared` is one another network of the organization holds too. Among the addresses **no other
+/// network holds**, the first that lies inside some folder's IP range, else the first; only when
+/// every address is shared, the first of all. `None` when the network has none.
 ///
-/// Why not simply the lowest VLAN: on a real organization it was outside the corporate ranges in 29
-/// networks of 342 — a VLAN 1 left at "Default" or a guest VLAN, and **the same subnet reused by up to
-/// eight sites**, so the lowest VLAN alone would give eight sites' MX one address and could file
-/// them into whichever folder claims it. In every one of the 29 the next VLAN or the one after was
-/// inside the ranges. The ranges are the operator's own statement of which addresses belong to a
-/// site, so they decide.
+/// Why not simply the lowest VLAN: on a real organization it was a VLAN 1 left at "Default" or a
+/// guest VLAN in 29 networks of 342, and **the same subnet was reused by up to eight sites**, so the
+/// lowest VLAN alone gives eight sites' MX one address and can file them into whichever folder
+/// claims it. In every one of the 29 the next VLAN or the one after was the site's own.
+///
+/// Why the shared addresses go first, before the ranges: an address several sites hold identifies
+/// none of them, and a range cannot tell them apart either. Found on a lab deployment (2026-09-23):
+/// with the ranges applied first, one reused guest subnet happened to lie in a home folder's /24, and
+/// 196 MX in about a hundred networks all took that one address. Skipping the shared addresses on
+/// the recorded organization gives 339 networks of 350 a corporate address and no two networks the
+/// same one.
 #[must_use]
-pub fn choose_lan_address(ips: &[IpAddr], in_a_range: &HashSet<IpAddr>) -> Option<IpAddr> {
-    ips.iter()
+pub fn choose_lan_address(
+    ips: &[IpAddr],
+    in_a_range: &HashSet<IpAddr>,
+    shared: &HashSet<IpAddr>,
+) -> Option<IpAddr> {
+    let own: Vec<&IpAddr> = ips.iter().filter(|ip| !shared.contains(ip)).collect();
+    own.iter()
         .find(|ip| in_a_range.contains(ip))
+        .or_else(|| own.first())
+        .copied()
         .or_else(|| ips.first())
         .copied()
 }
 
-/// [`choose_lan_address`] for every network whose LAN side has been read.
+/// The addresses that more than one network lists — the reused subnets [`choose_lan_address`]
+/// skips. A warm-spare pair is one network, so its shared VLANs are not "shared" here.
+#[must_use]
+pub fn shared_lan_addresses(lans: &HashMap<String, NetworkLan>) -> HashSet<IpAddr> {
+    let mut seen: HashMap<IpAddr, usize> = HashMap::new();
+    for lan in lans.values() {
+        // `lan_order` already lists each address once per network.
+        for ip in &lan.ips {
+            *seen.entry(*ip).or_default() += 1;
+        }
+    }
+    seen.into_iter()
+        .filter(|(_, networks)| *networks > 1)
+        .map(|(ip, _)| ip)
+        .collect()
+}
+
+/// [`choose_lan_address`] for every network whose LAN side has been read, with `shared` taken over
+/// all of them.
+///
+/// ⚠️ While the first round is still reading an organization, "shared" is decided over the networks
+/// read so far: an address reused by two sites is found shared only once both have been read, and
+/// until then the first one may take it (and follows away from it a sync later). An MX imported in
+/// that window is filed by it for good (決定 6) — a narrow case, since it takes a new MX whose
+/// network's reused address is also the one the ranges or the VLAN order would pick.
 #[must_use]
 pub fn lan_addresses(
     lans: &HashMap<String, NetworkLan>,
     in_a_range: &HashSet<IpAddr>,
 ) -> LanAddresses {
+    let shared = shared_lan_addresses(lans);
     lans.iter()
-        .map(|(network, lan)| (network.clone(), choose_lan_address(&lan.ips, in_a_range)))
+        .map(|(network, lan)| {
+            (
+                network.clone(),
+                choose_lan_address(&lan.ips, in_a_range, &shared),
+            )
+        })
         .collect()
 }
 
@@ -1532,19 +1576,58 @@ mod tests {
         );
     }
 
-    /// The case that decided the rule: VLAN 1 left at a default subnet several sites share, and the
-    /// site's own VLAN next. The ranges pick the site's; with no range holding any, the lowest wins.
+    /// Among addresses no other network holds: the lowest VLAN inside a range, else the lowest.
     #[test]
     fn an_mx_takes_the_lowest_vlan_inside_a_range_else_the_lowest() {
+        let none = HashSet::new();
         let ips = [ip("192.168.128.1"), ip("10.2.0.1"), ip("10.3.0.1")];
         let ranges: HashSet<IpAddr> = [ip("10.2.0.1"), ip("10.3.0.1")].into();
-        assert_eq!(choose_lan_address(&ips, &ranges), Some(ip("10.2.0.1")));
         assert_eq!(
-            choose_lan_address(&ips, &HashSet::new()),
+            choose_lan_address(&ips, &ranges, &none),
+            Some(ip("10.2.0.1"))
+        );
+        assert_eq!(
+            choose_lan_address(&ips, &none, &none),
             Some(ip("192.168.128.1"))
         );
         // A network with no LAN side: nothing to take, and no WAN address to fall back to.
-        assert_eq!(choose_lan_address(&[], &ranges), None);
+        assert_eq!(choose_lan_address(&[], &ranges, &none), None);
+    }
+
+    /// The case the lab found (2026-09-23): a guest subnet reused by every site happens to lie in a
+    /// folder's range, and each site's own VLAN in none. The reused address is skipped however the
+    /// ranges fall — and taken only when a network has nothing else.
+    #[test]
+    fn an_address_other_networks_hold_is_never_chosen_while_there_is_another() {
+        let read = |ips: &[&str]| NetworkLan {
+            ips: ips.iter().map(|s| ip(s)).collect(),
+            read_at: at(0),
+        };
+        let lans: HashMap<String, NetworkLan> = [
+            ("N_a", read(&["192.168.50.1", "10.1.0.1"])),
+            ("N_b", read(&["192.168.50.1", "10.2.0.1"])),
+            ("N_c", read(&["192.168.50.1"])),
+            // A warm-spare pair is ONE network: its VLANs are its own, not shared.
+            ("N_d", read(&["10.4.0.1"])),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        assert_eq!(
+            shared_lan_addresses(&lans),
+            [ip("192.168.50.1")].into_iter().collect()
+        );
+        // The guest subnet is inside a folder's range; the sites' own VLANs are in none.
+        let ranges: HashSet<IpAddr> = [ip("192.168.50.1")].into();
+        let got = lan_addresses(&lans, &ranges);
+        assert_eq!(got["N_a"], Some(ip("10.1.0.1")));
+        assert_eq!(got["N_b"], Some(ip("10.2.0.1")));
+        assert_eq!(got["N_d"], Some(ip("10.4.0.1")));
+        assert_eq!(
+            got["N_c"],
+            Some(ip("192.168.50.1")),
+            "a network with nothing of its own still has an address"
+        );
     }
 
     #[test]

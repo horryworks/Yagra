@@ -1163,10 +1163,10 @@ pub(crate) struct MerakiDeviceView {
     /// Whether the device's network is one this organization watches.
     network_monitored: bool,
     /// The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX
-    /// (`appliance`) reports none, so its address is its own IP on the lowest-numbered VLAN that lies
-    /// inside a folder's IP range, else on the lowest-numbered VLAN — never its WAN address. `null`
-    /// for an MX until its network's VLANs have been read; such an MX is not imported automatically
-    /// until then.
+    /// (`appliance`) reports none, so its address is one of its own VLAN IPs — never its WAN
+    /// address. An IP another network of the organization also uses is skipped; of the rest, the
+    /// lowest-numbered VLAN inside a folder's IP range, else the lowest-numbered. `null` for an MX
+    /// until its network's VLANs have been read; such an MX is not imported automatically until then.
     #[schema(value_type = Option<String>)]
     lan_ip: Option<std::net::IpAddr>,
     state: MerakiDeviceState,

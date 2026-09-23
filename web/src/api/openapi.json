@@ -31820,7 +31820,7 @@
               "string",
               "null"
             ],
-            "description": "The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX\n(`appliance`) reports none, so its address is its own IP on the lowest-numbered VLAN that lies\ninside a folder's IP range, else on the lowest-numbered VLAN — never its WAN address. `null`\nfor an MX until its network's VLANs have been read; such an MX is not imported automatically\nuntil then."
+            "description": "The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX\n(`appliance`) reports none, so its address is one of its own VLAN IPs — never its WAN\naddress. An IP another network of the organization also uses is skipped; of the rest, the\nlowest-numbered VLAN inside a folder's IP range, else the lowest-numbered. `null` for an MX\nuntil its network's VLANs have been read; such an MX is not imported automatically until then."
           },
           "missing_since": {
             "type": [

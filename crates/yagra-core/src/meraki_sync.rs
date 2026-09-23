@@ -979,6 +979,8 @@ mod tests {
         /// `10.0.0.1` — the address `listing` has always given its devices — so a test about
         /// something else sees an MX addressed and imported exactly as before 決定 28.
         lan: Mutex<MerakiNetworkLan>,
+        /// Per-network answers that take the place of `lan` for the networks they name.
+        lan_for: Mutex<HashMap<String, MerakiNetworkLan>>,
         /// Every network a LAN read was asked about, in order.
         lan_asked: Mutex<Vec<String>>,
     }
@@ -999,8 +1001,16 @@ mod tests {
                 asked: Mutex::new(0),
                 roles: Mutex::new(Ok(Vec::new())),
                 lan: Mutex::new(Ok(vec![vlan(1, "10.0.0.1")])),
+                lan_for: Mutex::new(HashMap::new()),
                 lan_asked: Mutex::new(Vec::new()),
             })
+        }
+
+        fn lan_answer_for(&self, network: &str, lan: MerakiNetworkLan) {
+            self.lan_for
+                .lock()
+                .expect("lan for")
+                .insert(network.to_owned(), lan);
         }
 
         fn roles_answer(&self, roles: RolesAnswer) {
@@ -1060,9 +1070,15 @@ mod tests {
                 .expect("lan asked")
                 .extend(network_ids.iter().cloned());
             let lan = self.lan.lock().expect("lan").clone();
+            let lan_for = self.lan_for.lock().expect("lan for").clone();
             Ok(network_ids
                 .iter()
-                .map(|n| (n.clone(), lan.clone()))
+                .map(|n| {
+                    (
+                        n.clone(),
+                        lan_for.get(n).cloned().unwrap_or_else(|| lan.clone()),
+                    )
+                })
                 .collect())
         }
     }
@@ -2268,5 +2284,51 @@ mod tests {
         .await
         .expect("read stamp");
         assert!(stale, "a failed read must not stamp the network as read");
+    }
+
+    /// What the lab found on 2026-09-23, end to end: two sites reuse one guest subnet, a folder's
+    /// range happens to hold it, and neither site's own VLAN is in any range. Each MX takes its own
+    /// VLAN address — never the reused one — and so neither is filed into that folder.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_guest_subnet_several_sites_reuse_is_never_an_mx_address(pool: sqlx::PgPool) {
+        let home = pgtest::group(&pool, "home").await;
+        pgtest::prefix(&pool, home, "192.168.50.0/24").await;
+        let mx = |serial: &str, network: &str| MerakiInventoryDevice {
+            info: MerakiDeviceInfo {
+                serial: serial.into(),
+                name: format!("mx-{serial}"),
+                model: Some("MX67".into()),
+                product_type: "appliance".into(),
+                network_id: network.into(),
+                lan_ip: None,
+            },
+            availability: UP,
+        };
+        let listing = MerakiInventory {
+            networks: ["N_1", "N_2"]
+                .iter()
+                .map(|id| MerakiNetworkInfo {
+                    id: (*id).into(),
+                    name: format!("site {id}"),
+                })
+                .collect(),
+            devices: vec![mx("Q2-A", "N_1"), mx("Q2-B", "N_2")],
+        };
+        let r = rig(&pool, Ok(listing)).await;
+        r.directory.lan_answer_for(
+            "N_1",
+            Ok(vec![vlan(5, "192.168.50.1"), vlan(10, "10.1.0.1")]),
+        );
+        r.directory.lan_answer_for(
+            "N_2",
+            Ok(vec![vlan(5, "192.168.50.1"), vlan(10, "10.2.0.1")]),
+        );
+
+        r.sync.sync_org(&r.org().await).await.expect("first sync");
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.1.0.1");
+        assert_eq!(node_as_it_stands(&pool, "Q2-B").await.1, "10.2.0.1");
+        assert_ne!(folder_of(&pool, "Q2-A").await, Some(home));
+        assert_ne!(folder_of(&pool, "Q2-B").await, Some(home));
     }
 }
