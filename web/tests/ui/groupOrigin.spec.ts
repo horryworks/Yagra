@@ -49,10 +49,18 @@ test('a folder an integration keeps carries its badge, and a hand-made one carri
   const netbox = row('from-netbox').locator('.ntree-badge');
   await expect(netbox).toHaveText('NetBox');
   await expect(netbox).toHaveAttribute('title', 'Created by the NetBox integration');
+  // NetBox's blue on white (2026-09-23), Meraki's white on green: each wears its own colours.
+  const colours = (badge: typeof netbox) =>
+    badge.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return [cs.color, cs.backgroundColor];
+    });
+  expect(await colours(netbox)).toEqual(['rgb(22, 133, 252)', 'rgb(255, 255, 255)']);
 
   const meraki = row('from-meraki').locator('.ntree-badge');
   await expect(meraki).toHaveText('Meraki');
   await expect(meraki).toHaveAttribute('title', 'Created by the Cisco Meraki integration');
+  expect(await colours(meraki)).toEqual(['rgb(255, 255, 255)', 'rgb(103, 179, 70)']);
 
   // The row is there, and unmarked. Counting the badge on a row that was never found would pass
   // just as well, so the row is counted first.

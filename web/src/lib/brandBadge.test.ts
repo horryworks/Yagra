@@ -17,17 +17,19 @@ describe('brand badges', () => {
   it('adds a class only for a brand', () => {
     expect(brandBadgeClass(null)).toBe('');
     expect(brandBadgeClass('meraki')).toBe(' is-meraki');
+    expect(brandBadgeClass('netbox')).toBe(' is-netbox');
   });
 
-  it('puts both Meraki badges in Meraki colours, and nothing else', () => {
+  it('puts both Meraki badges in Meraki colours, the NetBox folder in NetBox colours, and nothing else', () => {
     expect(NODE_KIND_SPEC.meraki.badgeBrand).toBe('meraki');
     expect(GROUP_ORIGIN_BADGE_BRANDS.meraki).toBe('meraki');
+    expect(GROUP_ORIGIN_BADGE_BRANDS.netbox).toBe('netbox');
     const others = [
       ...Object.entries(NODE_KIND_SPEC)
         .filter(([k]) => k !== 'meraki')
         .map(([, s]) => s.badgeBrand),
       ...Object.entries(GROUP_ORIGIN_BADGE_BRANDS)
-        .filter(([k]) => k !== 'meraki')
+        .filter(([k]) => k !== 'meraki' && k !== 'netbox')
         .map(([, b]) => b),
     ];
     expect(others.every((b) => b === null)).toBe(true);

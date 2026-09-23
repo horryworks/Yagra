@@ -24,11 +24,12 @@ export const GROUP_ORIGIN_BADGES: Record<GroupOrigin, string> = {
   netbox: 'NetBox',
 };
 
-/** Whose colours each origin's badge wears (`lib/brandBadge.ts`). NetBox keeps Yagra's accent:
- *  only Meraki was asked for. A `Record` so a third origin decides rather than inherits. */
+/** Whose colours each origin's badge wears (`lib/brandBadge.ts`): Meraki's green, NetBox's blue
+ *  on white (user decisions, 2026-09-23). A `Record` so a third origin decides rather than
+ *  inherits. */
 export const GROUP_ORIGIN_BADGE_BRANDS: Record<GroupOrigin, BadgeBrand | null> = {
   meraki: 'meraki',
-  netbox: null,
+  netbox: 'netbox',
 };
 
 /** The origin to mark a folder with, or `null` for none.

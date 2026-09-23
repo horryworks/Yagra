@@ -682,6 +682,11 @@ button.ntree-supp-icon:hover {
   border-color: var(--brand-meraki);
 }
 
+.ntree-badge.is-netbox {
+  color: var(--brand-netbox-fg);
+  background: var(--brand-netbox);
+}
+
 /* A badge drawn as a glyph (`BADGE_ICONS` in lib/nodeKind.ts): an access point's Wi-Fi mark, black
    on white. The glyph sits in the line box the text would, so the pill keeps its height. */
 .ntree-badge.is-wifi {

@@ -10,7 +10,7 @@
 // The colours themselves are tokens (`--brand-<name>` / `--brand-<name>-fg` in tokens.css).
 
 /** The third parties whose colours a badge may wear. */
-export const BADGE_BRANDS = ['meraki'] as const;
+export const BADGE_BRANDS = ['meraki', 'netbox'] as const;
 export type BadgeBrand = (typeof BADGE_BRANDS)[number];
 
 /** The class that puts a badge in `brand`'s colours, or `''` for Yagra's own accent. */

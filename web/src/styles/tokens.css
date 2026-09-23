@@ -26,6 +26,11 @@
      decision, 2026-09-23), and the word it carries is also the badge's tooltip. */
   --brand-meraki: #67b346;
   --brand-meraki-fg: #ffffff;
+  /* NetBox's blue, read off its logo, on white (user decision, 2026-09-23) — the other way round
+     from Meraki's, so here the pair's background is the white. About 3.6:1, below 4.5:1 for small
+     text, kept for the same reason as the green above. */
+  --brand-netbox: #ffffff;
+  --brand-netbox-fg: #1685fc;
   /* An access point's badge: the Wi-Fi mark, black on white in both themes (user decision,
      2026-09-23 — it replaced the word "AP"). The badge is an image named by its tooltip. */
   --badge-wifi-bg: #ffffff;
