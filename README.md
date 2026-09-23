@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.29 — Cisco wireless controllers (AireOS and the 9800) list and import their access points, an access point a Cisco controller stops listing is down and the controller counts the missing ones, AireOS controllers show their model and serial number, an access point its controller stops reporting reads unknown rather than its last OK**
+> Status: **v0.3.30 — Meraki MS switch ports and MR access points are monitored like SNMP switch ports and a controller's access points, Meraki MX WAN uplinks, Auto VPN and warm-spare pairs are watched, an MX is filed by its LAN address rather than its WAN, a Meraki organization's slow reads no longer hold up its availability collects, a port alert no longer closes because its readings stopped**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
