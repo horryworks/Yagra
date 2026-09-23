@@ -182,9 +182,9 @@ async fn run_heartbeat_loop<B>(
                 // like the seven above: a claim about the build.
                 //
                 // 🚨 Core withholds that tier from a pool unless every live member claims this —
-                // an older poller cannot decode the job, drops it, and the organization's single
-                // collect flight then sits taken for its whole lease, availability collects
-                // included.
+                // an older poller cannot decode the job, drops it, and the lane it was sent in
+                // then sits taken for its whole lease: the slow one — the SSID read waits — for a
+                // switch-port collect, the fast one — availability included — for a wireless round.
                 yagra_bus::CAP_MERAKI_SWITCH_PORTS.to_owned(),
                 // …and the wireless tier (ADR-168), withheld from a pool for the same reason.
                 yagra_bus::CAP_MERAKI_WIRELESS.to_owned(),

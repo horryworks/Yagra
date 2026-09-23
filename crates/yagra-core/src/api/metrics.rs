@@ -694,6 +694,14 @@ async fn get_node_metric_range(
 /// collection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from
 /// an earlier version those arrays are empty for every window predating that upgrade while the bps
 /// arrays are populated.
+///
+/// **A Cisco Meraki switch port (ADR-167) is read differently.** Its `in_bps`/`out_bps` are the
+/// five-minute averages the Dashboard reports, stored as they came — Meraki gives no counter, so
+/// these two are the exception to "derived at query time" — and they arrive 12 to 17 minutes late.
+/// The Dashboard gives no packet, error or discard counts either, so for such a port those six
+/// arrays are always empty: that is "not collected", never "no errors". Its `ifindex` is the
+/// number Yagra gives the port (the port number, or a hash of a module port's id), not an SNMP
+/// ifIndex.
 //
 // ⚠️ The optical paragraph above is said twice. `mcp/tools/system.rs`'s `get_interface_series`
 // `description` repeats it, because this doc comment reaches OpenAPI readers and that string
@@ -751,7 +759,7 @@ pub(crate) fn canary_interface_series() -> InterfaceSeries {
     get, path = "/api/v1/nodes/{node_id}/interfaces/{ifindex}/series", tag = "metrics",
     params(
         ("node_id" = Uuid, Path, description = "Node id"),
-        ("ifindex" = u32, Path, description = "SNMP ifIndex of the interface"),
+        ("ifindex" = u32, Path, description = "The interface's row key: its SNMP ifIndex, or for a Cisco Meraki switch port the number Yagra gives it (get_node_status lists both)"),
         RangeQuery,
     ),
     responses(

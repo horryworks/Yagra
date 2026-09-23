@@ -121,10 +121,12 @@ impl MerakiSchedule {
     ///   Everything in this lane takes seconds, so a tier that waits a tick behind one before it
     ///   loses 15 s, never a cadence. Availability being first is also what makes a restart count
     ///   core's own failures against it (ADR-164 決定 18).
-    ///   ⚠️ Nothing but these four may take this lane. The inventory sync did, from its own loop,
-    ///   and delayed availability by one tick on every run — a 75 s interval at a 60 s cadence,
-    ///   which a chart draws as a gap (VictoriaMetrics: about 1.125× the interval). It is in the
-    ///   slow lane now (`meraki_sync::MerakiSync::sync_org_scheduled`).
+    ///   ⚠️ Nothing else the scheduler sends may take this lane. The periodic inventory sync did,
+    ///   from its own loop, and delayed availability by one tick on every run — a 75 s interval at a
+    ///   60 s cadence, which a chart draws as a gap (VictoriaMetrics: about 1.125× the interval). It
+    ///   is in the slow lane now (`meraki_sync::MerakiSync::sync_org_scheduled`). The one exception
+    ///   is an operator's "Sync now" while the slow lane is busy (ADR-169 決定 1), and that sync
+    ///   reads no network's LAN side here (ADR-164 決定 29), so it stays a few seconds.
     #[must_use]
     pub fn plan(
         &self,

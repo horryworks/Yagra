@@ -120,6 +120,13 @@ impl CheckState {
         self.dwell.observed()
     }
 
+    /// Whether the dwell is part-way through a run that would change the committed state — see
+    /// [`hysteresis::DwellTracker::pending`].
+    #[must_use]
+    pub const fn pending(&self) -> bool {
+        self.dwell.pending()
+    }
+
     /// Re-point the dwell at what the check's rule says now — see
     /// [`hysteresis::DwellTracker::set_dwell`]. The flap detector is untouched: its window is a
     /// property of the engine, not of any one rule.

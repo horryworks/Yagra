@@ -1096,9 +1096,9 @@ const SWITCH_PORT_CONFIG_PER_PAGE: u32 = 50;
 /// ([`SWITCH_PORTS_BUDGET`]). At the measured 1.7 s a page the fixed [`MAX_PAGES`] would have cut
 /// the listing at 1,000 switches, silently.
 const SWITCH_PORT_MAX_PAGES: usize = 2_500;
-/// How long one switch-port collect may keep asking. Core leases an organization's single collect
-/// flight for 300 s ("LEASE" in its Meraki scheduler) and counts a flight that outlives it as
-/// unanswered, so this stops well inside it.
+/// How long one switch-port collect may keep asking. Core leases the lane it sends one in (the
+/// organization's slow lane, ADR-169) for 300 s ("LEASE" in its Meraki scheduler) and counts a
+/// flight that outlives it as unanswered, so this stops well inside it.
 const SWITCH_PORTS_BUDGET: Duration = Duration::from_secs(240);
 /// The Dashboard's switch-port usage buckets are five minutes long.
 const SWITCH_USAGE_BUCKET_SECS: u64 = 300;
@@ -1327,18 +1327,49 @@ fn attach_ports(
     observations: &mut Vec<MerakiObservation>,
     spine: BTreeMap<String, BTreeMap<u32, MerakiPort>>,
 ) {
+    let mut at = ObservationIndex::of(observations);
     for (serial, ports) in spine {
-        let ports: Vec<MerakiPort> = ports.into_values().collect();
-        match observations.iter_mut().find(|o| o.serial == serial) {
-            Some(obs) => obs.ports = ports,
-            None => observations.push(MerakiObservation {
-                serial,
-                samples: Vec::new(),
-                uplinks: Vec::new(),
-                ports,
-                radios: Vec::new(),
-            }),
+        at.observation(observations, serial).ports = ports.into_values().collect();
+    }
+}
+
+/// Where each device's observation sits in the collect's list, so attaching the switch ports or the
+/// radios is one lookup per device. Each used to scan the list per device — quadratic in the
+/// organization's switches or access points, on the poller's async worker, every collect.
+struct ObservationIndex(HashMap<String, usize>);
+
+impl ObservationIndex {
+    fn of(observations: &[MerakiObservation]) -> Self {
+        let mut at = HashMap::with_capacity(observations.len());
+        for (i, o) in observations.iter().enumerate() {
+            // The first one answers, as the scan's `find` did — `fold` never makes two.
+            at.entry(o.serial.clone()).or_insert(i);
         }
+        Self(at)
+    }
+
+    /// The observation for `serial`, appended with nothing in it when the collect has none.
+    fn observation<'a>(
+        &mut self,
+        observations: &'a mut Vec<MerakiObservation>,
+        serial: String,
+    ) -> &'a mut MerakiObservation {
+        let i = match self.0.get(&serial) {
+            Some(&i) => i,
+            None => {
+                let i = observations.len();
+                self.0.insert(serial.clone(), i);
+                observations.push(MerakiObservation {
+                    serial,
+                    samples: Vec::new(),
+                    uplinks: Vec::new(),
+                    ports: Vec::new(),
+                    radios: Vec::new(),
+                });
+                i
+            }
+        };
+        &mut observations[i]
     }
 }
 
@@ -1577,18 +1608,9 @@ fn attach_radios(
     observations: &mut Vec<MerakiObservation>,
     radios: BTreeMap<String, BTreeMap<u32, MerakiRadio>>,
 ) {
+    let mut at = ObservationIndex::of(observations);
     for (serial, slots) in radios {
-        let slots: Vec<MerakiRadio> = slots.into_values().collect();
-        match observations.iter_mut().find(|o| o.serial == serial) {
-            Some(obs) => obs.radios = slots,
-            None => observations.push(MerakiObservation {
-                serial,
-                samples: Vec::new(),
-                uplinks: Vec::new(),
-                ports: Vec::new(),
-                radios: slots,
-            }),
-        }
+        at.observation(observations, serial).radios = slots.into_values().collect();
     }
 }
 
@@ -2393,6 +2415,71 @@ fn parse_device_info(it: &Value) -> Option<MerakiDeviceInfo> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The ports and radios go on the device's own observation when the collect has one, and on a
+    /// new one — appended, in serial order — when it does not; an observation of the ports' does not
+    /// get another for its radios. What the index replaced was a scan per device, so this pins that
+    /// the answer did not move with it.
+    #[test]
+    fn ports_and_radios_join_their_devices_observation_or_start_one() {
+        let seen = |serial: &str| MerakiObservation {
+            serial: serial.into(),
+            samples: vec![MerakiSample {
+                metric: "meraki_device_up".into(),
+                ifindex: None,
+                value: 1.0,
+            }],
+            uplinks: Vec::new(),
+            ports: Vec::new(),
+            radios: Vec::new(),
+        };
+        let port = |ifindex: u32| MerakiPort {
+            ifindex,
+            port_id: ifindex.to_string(),
+            alias: None,
+            speed_bps: None,
+            duplex: None,
+        };
+        let radio = |slot: u32| MerakiRadio {
+            slot,
+            band: yagra_common::WlanBand::Band5G,
+            channel_util_pct: Some(5.0),
+            non_wifi_util_pct: None,
+            channel: None,
+            tx_power_dbm: None,
+        };
+        let mut observations = vec![seen("Q2-B"), seen("Q2-A")];
+        attach_ports(
+            &mut observations,
+            BTreeMap::from([
+                (
+                    "Q2-A".to_owned(),
+                    BTreeMap::from([(2, port(2)), (1, port(1))]),
+                ),
+                ("Q2-C".to_owned(), BTreeMap::from([(1, port(1))])),
+            ]),
+        );
+        attach_radios(
+            &mut observations,
+            BTreeMap::from([
+                ("Q2-B".to_owned(), BTreeMap::from([(1, radio(1))])),
+                ("Q2-C".to_owned(), BTreeMap::from([(1, radio(1))])),
+                ("Q2-D".to_owned(), BTreeMap::from([(1, radio(1))])),
+            ]),
+        );
+        let serials: Vec<&str> = observations.iter().map(|o| o.serial.as_str()).collect();
+        assert_eq!(serials, ["Q2-B", "Q2-A", "Q2-C", "Q2-D"]);
+        let at = |s: &str| observations.iter().find(|o| o.serial == s).unwrap();
+        assert_eq!(at("Q2-A").ports, [port(1), port(2)]);
+        assert_eq!(
+            at("Q2-A").samples.len(),
+            1,
+            "the sample stayed with its device"
+        );
+        assert_eq!(at("Q2-B").radios, [radio(1)]);
+        assert_eq!((at("Q2-C").ports.len(), at("Q2-C").radios.len()), (1, 1));
+        assert!(at("Q2-D").samples.is_empty() && at("Q2-D").ports.is_empty());
+    }
 
     #[test]
     fn session_new_refuses_non_meraki_host() {

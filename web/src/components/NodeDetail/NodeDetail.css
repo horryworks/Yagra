@@ -717,7 +717,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 /* Padding, not column-gap, spaces the columns: a gap would break each row's rule into four pieces. */
 .nd-mk-uplink > span {
   padding: 6px 16px 6px 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: var(--border-width) solid var(--border-color);
   white-space: nowrap;
 }
 

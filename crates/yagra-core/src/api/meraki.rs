@@ -339,10 +339,11 @@ pub(crate) struct MerakiOrgView {
     wireless_secs: u32,
     enabled_tiers: Vec<String>,
     /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
-    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
-    /// wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
-    /// and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
-    /// paces, so the total can then exceed this by up to 0.1.
+    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
+    /// wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
+    /// sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+    /// each lane stops at 0.1, the slowest a session paces, so the two together can then send up
+    /// to 0.2 whatever this says.
     target_rps: f64,
     group_id: Option<Uuid>,
     /// Which stored credential holds this organization's API key. An id, not a secret — the key
@@ -745,10 +746,11 @@ pub(super) struct MerakiCadenceReq {
     wireless_secs: Option<i32>,
     enabled_tiers: Vec<String>,
     /// Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
-    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
-    /// wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
-    /// and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
-    /// paces, so the total can then exceed this by up to 0.1.
+    /// in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
+    /// wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
+    /// sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+    /// each lane stops at 0.1, the slowest a session paces, so the two together can then send up
+    /// to 0.2 whatever this says.
     target_rps: f64,
 }
 
@@ -1058,9 +1060,12 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
 
 /// Sync one organization's inventory now, rather than waiting for the periodic sync.
 ///
-/// Read-only upstream (three paged GETs). It takes one of the organization's two collect lanes —
-/// the slow one if it is free, else the fast one — so it answers 409 only while both are busy,
-/// rather than spending the organization's rate budget three ways at once.
+/// Read-only upstream: the three paged inventory listings, the MX uplink statuses (for each
+/// warm-spare pair's configured roles), and — only when it runs in the slow lane — the VLANs of the
+/// MX networks whose LAN side is due to be read, one network at a time (`appliance/vlans`, falling
+/// back to `appliance/singleLan`). It takes one of the organization's two collect lanes — the slow
+/// one if it is free, else the fast one — so it answers 409 only while both are busy, rather than
+/// spending the organization's rate budget three ways at once.
 #[utoipa::path(
     post, path = "/api/v1/meraki/orgs/{id}/sync", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
@@ -1069,7 +1074,7 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
-        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), a collect or another sync is running for it (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`)", body = super::error::ErrorBody),
+        (status = 409, description = "Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), both of its collect lanes are held by collects or another sync (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`)", body = super::error::ErrorBody),
         (status = 500, description = "The sync ran and Yagra could not read or write its own database (`meraki_sync_failed`, reason `internal`)", body = super::error::ErrorBody),
         (status = 502, description = "The sync ran and the Dashboard API did not give a complete answer (`meraki_sync_failed`). Whatever the status, the reason is recorded on the organization as `last_sync_error`", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode), or this core is a standby (`not_leader`)", body = super::error::ErrorBody),
@@ -1165,8 +1170,10 @@ pub(crate) struct MerakiDeviceView {
     /// The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX
     /// (`appliance`) reports none, so its address is one of its own VLAN IPs — never its WAN
     /// address. An IP another network of the organization also uses is skipped; of the rest, the
-    /// lowest-numbered VLAN inside a folder's IP range, else the lowest-numbered. `null` for an MX
-    /// until its network's VLANs have been read; such an MX is not imported automatically until then.
+    /// lowest-numbered VLAN inside a folder's IP range, else the lowest-numbered — and when every IP
+    /// is shared, the lowest-numbered of them all. `null` for an MX until its network's VLANs have
+    /// been read (such an MX is not imported automatically until then), and for good for an MX whose
+    /// network has no LAN side at all.
     #[schema(value_type = Option<String>)]
     lan_ip: Option<std::net::IpAddr>,
     state: MerakiDeviceState,
@@ -1183,8 +1190,8 @@ pub(crate) struct MerakiDeviceView {
     /// Where an import would file the device, and why. `null` for a device that is already a
     /// node: it is where it is, and no import moves it.
     filing: Option<MerakiFilingView>,
-    /// An MX's configured warm-spare role (ADR-164 決定 26); `null` for a single MX, a device that
-    /// is not an MX, and one whose role the sync has not read yet.
+    /// An MX's configured warm-spare role (ADR-164 決定 26). Absent from the object — not `null` —
+    /// for a single MX, a device that is not an MX, and one whose role the sync has not read yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     ha_role: Option<yagra_common::MerakiHaRole>,
 }
@@ -1972,6 +1979,101 @@ mod tests {
         digits
             .parse()
             .unwrap_or_else(|_| panic!("{name} in {path} is not a plain number"))
+    }
+
+    /// The quoted words of one `export const NAME = [ … ] as const;` array in a WebUI file, in
+    /// order. Panics when the array is not there, for the reason [`declared_number`] does.
+    fn declared_words(text: &str, path: &str, name: &str) -> Vec<String> {
+        let declared = format!("export const {name} = [");
+        let rest = text
+            .split_once(declared.as_str())
+            .unwrap_or_else(|| panic!("{name} is not declared in {path}"))
+            .1;
+        let body = rest
+            .split_once(']')
+            .unwrap_or_else(|| panic!("{name} in {path} does not close"))
+            .0;
+        body.split('\'')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The Meraki tiers are a bare string in the API, so nothing generated carries the set to the
+    /// WebUI: `merakiTiers.ts` labels every stored token and `merakiCadence.ts` draws one interval
+    /// per tier, each hand-written. A seventh tier added here would otherwise be a raw key in the
+    /// organization list and an interval the dialog cannot edit — so both lists are pinned to
+    /// `MerakiTier::ALL`, in order.
+    #[test]
+    fn the_webuis_two_tier_lists_are_the_backends_tiers_in_order() {
+        let backend: Vec<String> = yagra_common::MerakiTier::ALL
+            .iter()
+            .map(|t| t.as_str().to_owned())
+            .collect();
+        for (file, name) in [
+            ("pages/merakiTiers.ts", "MERAKI_TIERS"),
+            (
+                "pages/integrations/merakiCadence.ts",
+                "MERAKI_CADENCE_FIELDS",
+            ),
+        ] {
+            let path = format!("{}/../../web/src/{file}", env!("CARGO_MANIFEST_DIR"));
+            let text = std::fs::read_to_string(&path).expect("a WebUI tier list");
+            assert_eq!(
+                declared_words(&text, &path, name),
+                backend,
+                "{name} in {path} is not MerakiTier::ALL"
+            );
+        }
+    }
+
+    /// `merakiCard.ts::merakiUplinkState` reads a stored `meraki_uplink_status` back into a word —
+    /// a second copy of `MerakiUplinkStatus::gauge`. Change one number here and the card would call
+    /// a failed uplink "not connected" with nothing failing, so each word the card knows is pinned
+    /// to the value the collector writes for it.
+    #[test]
+    fn the_cards_uplink_words_read_the_values_the_collector_writes() {
+        use yagra_common::MerakiUplinkStatus as S;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/src/components/NodeDetail/merakiCard.ts"
+        );
+        let text = std::fs::read_to_string(path).expect("the Meraki card's judgement module");
+        let body = text
+            .split_once("export function merakiUplinkState(")
+            .expect("merakiUplinkState is declared")
+            .1;
+        let body = &body[..body.find("\n}\n").expect("merakiUplinkState closes")];
+        // `case <number>:` then, on the next line, `return '<word>';`.
+        let mut read: Vec<(f64, String)> = Vec::new();
+        let mut lines = body.lines().map(str::trim);
+        while let Some(line) = lines.next() {
+            if let Some(n) = line.strip_prefix("case ").and_then(|l| l.strip_suffix(':')) {
+                let word = lines
+                    .next()
+                    .and_then(|l| l.strip_prefix("return '"))
+                    .and_then(|l| l.strip_suffix("';"))
+                    .unwrap_or_else(|| panic!("case {n} in {path} returns no plain word"));
+                read.push((n.parse().expect("a numeric case"), word.to_owned()));
+            }
+        }
+        let expected = [
+            (S::Active.gauge(), "active"),
+            (S::Ready.gauge(), "ready"),
+            (S::NotConnected.gauge(), "notConnected"),
+            (S::Failed.gauge(), "failed"),
+        ];
+        assert_eq!(read.len(), expected.len(), "{read:?}");
+        for (value, word) in expected {
+            assert!(
+                read.iter().any(|(v, w)| *v == value && w == word),
+                "the card does not read {value} as {word}: {read:?}"
+            );
+        }
+        // Connecting, and a word this build does not know, are written as not connected.
+        assert_eq!(S::Connecting.gauge(), S::NotConnected.gauge());
+        assert_eq!(S::Other.gauge(), S::NotConnected.gauge());
     }
 
     /// ADR-164 決定 26, as a table: what a warm-spare pair is doing, from either MX. The roles say

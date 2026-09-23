@@ -134,13 +134,22 @@ pub fn lan_order(addrs: &[MerakiLanAddress]) -> Vec<IpAddr> {
 
 /// Which of the organization's MX networks this sync should read, most needed first: every network
 /// never read (in id order — a network's MX is not imported until it has been, see
-/// [`DeviceRecord::lan_pending`]), then every one read longer than [`LAN_REFRESH`] ago, oldest
-/// first. The caller reads as many as its budget allows; the rest wait for the next sync.
+/// [`DeviceRecord::lan_pending`]), then at most `rereads` of those read longer than
+/// [`LAN_REFRESH`] ago, oldest first. The caller reads as many as its budget allows; the rest wait
+/// for the next sync.
+///
+/// 🚨 **The cap on re-reads is what keeps them spread out** (ADR-164 決定 29). Without it every
+/// stale network was due at once: the first round reads about sixty networks per sync, so a day
+/// later those sixty went stale together and each of about six syncs spent its whole minute
+/// re-reading them — holding the lane the switch-port collects run in, every day at the same time.
+/// Capped, a clump drains a few per sync, and each network's next read lands where it was read.
+/// The networks never read are not capped: their MX waits for that read to be imported.
 #[must_use]
 pub fn lan_reads_due(
     mx_networks: &BTreeSet<String>,
     stored: &HashMap<String, NetworkLan>,
     now: DateTime<Utc>,
+    rereads: usize,
 ) -> Vec<String> {
     let mut stale: Vec<(DateTime<Utc>, &String)> = Vec::new();
     let mut due: Vec<String> = Vec::new();
@@ -152,8 +161,25 @@ pub fn lan_reads_due(
         }
     }
     stale.sort();
-    due.extend(stale.into_iter().map(|(_, n)| n.clone()));
+    due.extend(stale.into_iter().take(rereads).map(|(_, n)| n.clone()));
     due
+}
+
+/// How many stale networks one sync re-reads (ADR-164 決定 29): the share of the organization's MX
+/// networks that falls to one sync if each is read once per [`LAN_REFRESH`], rounded up, plus one.
+///
+/// Rounding up is what guarantees a whole round a day at any interval — `ceil(n × s / D)` reads per
+/// sync over `D / s` syncs is at least `n` — and the one extra lets a round recover from the reads
+/// that failed. 350 networks synced every 300 s re-read 3 a sync, 864 a day.
+#[must_use]
+pub fn lan_rereads_per_sync(mx_networks: usize, sync_every_secs: u32) -> usize {
+    let per_day = LAN_REFRESH.num_seconds().max(1).unsigned_abs();
+    let share = (mx_networks as u64)
+        .saturating_mul(u64::from(sync_every_secs.max(1)))
+        .div_ceil(per_day);
+    usize::try_from(share)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
 }
 
 /// The address an MX takes from its network's LAN side. `ips` are in VLAN order; an address in
@@ -1652,9 +1678,55 @@ mod tests {
         .map(|(k, v)| (k.to_owned(), v))
         .collect();
         assert_eq!(
-            lan_reads_due(&mx, &stored, now),
+            lan_reads_due(&mx, &stored, now, 10),
             ["N_new_a", "N_new_b", "N_older", "N_old"]
         );
+    }
+
+    /// ADR-164 決定 29: the never-read networks are all due whatever the cap, and only `rereads` of
+    /// the stale ones — the oldest — follow them. A cap of zero still reads every new network.
+    #[test]
+    fn a_sync_re_reads_only_its_share_of_the_stale_networks() {
+        let now = at(10 * 86_400);
+        let mx: BTreeSet<String> = ["N_new", "N_s1", "N_s2", "N_s3"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let read = |secs_ago: i64| NetworkLan {
+            ips: vec![ip("10.0.0.1")],
+            read_at: at(10 * 86_400 - secs_ago),
+        };
+        let stored: HashMap<String, NetworkLan> = [
+            ("N_s1", read(2 * 86_400)),
+            ("N_s2", read(4 * 86_400)),
+            ("N_s3", read(3 * 86_400)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        assert_eq!(
+            lan_reads_due(&mx, &stored, now, 2),
+            ["N_new", "N_s2", "N_s3"]
+        );
+        assert_eq!(lan_reads_due(&mx, &stored, now, 0), ["N_new"]);
+    }
+
+    /// The share is rounded up plus one, so a whole round fits in a day at any interval — checked
+    /// against the day's arithmetic rather than a table of expected numbers.
+    #[test]
+    fn a_days_rereads_cover_every_network_at_any_interval() {
+        assert_eq!(lan_rereads_per_sync(350, 300), 3);
+        assert_eq!(lan_rereads_per_sync(0, 300), 1);
+        for networks in [1_usize, 7, 350, 5_000] {
+            for secs in [60_u32, 300, 900, 3_600, 86_400] {
+                let per_sync = lan_rereads_per_sync(networks, secs);
+                let syncs_a_day = 86_400 / secs as usize;
+                assert!(
+                    per_sync * syncs_a_day >= networks,
+                    "{networks} networks every {secs}s: {per_sync} a sync"
+                );
+            }
+        }
     }
 
     /// An MX takes the chosen address of its network and never the one the listing carries; an MX in

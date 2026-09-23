@@ -181,8 +181,9 @@ impl MerakiOrg {
     /// per organization, and the two lanes can be asking at the same moment.
     ///
     /// ⚠️ Below twice [`yagra_transport::MERAKI_MIN_RPS`] the halving stops at that floor, because
-    /// no session paces slower; the two lanes together then send up to the floor more than the
-    /// setting. The inventory sync paces at this too — the periodic one runs in the slow lane,
+    /// no session paces slower; the two lanes together then send twice the floor, whatever the
+    /// setting — up to twice the floor more than a setting near zero. The inventory sync paces at
+    /// this too — the periodic one runs in the slow lane,
     /// "Sync now" in whichever is free (`meraki_sync.rs`).
     #[must_use]
     pub fn lane_rps(&self) -> f64 {

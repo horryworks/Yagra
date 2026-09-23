@@ -8,7 +8,7 @@
 // The RTT chart followed the shared range control as of ADR-117; it was a fixed 30-minute sparkline
 // before that, which on an ICMP-only node was the whole reason the period buttons looked broken.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { collectionFaultNotice } from './collectionFault';
@@ -605,6 +605,10 @@ function UrlHealth({
   );
 }
 
+/** A radio utilization chart's fixed axis. One array for the module, never a literal at the call
+ *  site: `MetricChart` compares `yRange` by reference and redraws on a new one. */
+const PCT_Y_RANGE: [number, number] = [0, 100];
+
 /** Cisco Meraki device health (ADR-164 増分 13・14): availability (`meraki_device_up`), an MX's Auto
  *  VPN reach and warm-spare pair as tiles, its WAN uplinks as one row each (state, average send and
  *  receive), and the WAN traffic those rows were stored as, charted over the range. Shown only for
@@ -760,21 +764,25 @@ function MerakiHealth({
   // the collect stops writing them, and the latest-value read would otherwise draw the last ones
   // beside "Offline" for half an hour (ADR-168 決定 4).
   const radioReadings = merakiApRadioReadingsShown(up);
-  const apCharts = merakiApHistorySeries(
-    apHistory.clients,
-    apHistory.ssids,
-    apHistory.radios,
-    PALETTE,
-    {
-      clients: t('overview.apSeries.clients'),
-      ssids: t('overview.apSeries.ssids'),
-      nonWifi: (band) => t('overview.apSeries.nonWifi', { band }),
-    },
+  // Memoised on what they are built from: `MetricChart` keys its data effect on these arrays by
+  // reference, so building them afresh on every render redrew up to three charts per render.
+  const apCharts = useMemo(
+    () =>
+      merakiApHistorySeries(apHistory.clients, apHistory.ssids, apHistory.radios, PALETTE, {
+        clients: t('overview.apSeries.clients'),
+        ssids: t('overview.apSeries.ssids'),
+        nonWifi: (band) => t('overview.apSeries.nonWifi', { band }),
+      }),
+    [apHistory, t],
   );
-  const traffic = merakiTrafficSeries(history, PALETTE, {
-    sent: t('overview.trafficAxis.sent'),
-    recv: t('overview.trafficAxis.received'),
-  });
+  const traffic = useMemo(
+    () =>
+      merakiTrafficSeries(history, PALETTE, {
+        sent: t('overview.trafficAxis.sent'),
+        recv: t('overview.trafficAxis.received'),
+      }),
+    [history, t],
+  );
 
   return (
     <section>
@@ -947,7 +955,7 @@ function MerakiHealth({
             timestamps={apCharts.util.timestamps}
             series={apCharts.util.series}
             xRange={apWin ?? undefined}
-            yRange={[0, 100]}
+            yRange={PCT_Y_RANGE}
             yFormat={(v) => formatUtil(v)}
             legendFormat={(v) => formatUtil(v)}
           />

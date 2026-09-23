@@ -58,8 +58,8 @@ use yagra_transport::{
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
 use crate::meraki_import::{pick_automatic, ImportResolver};
 use crate::meraki_inventory::{
-    lan_addresses, lan_order, lan_reads_due, networks_with_an_mx, plan_sync, seen_devices,
-    LanAddresses, MerakiInventoryRepo, NetworkLan,
+    lan_addresses, lan_order, lan_reads_due, lan_rereads_per_sync, networks_with_an_mx, plan_sync,
+    seen_devices, LanAddresses, MerakiInventoryRepo, NetworkLan,
 };
 use crate::repo::NodeRepo;
 use crate::secrets::CredentialStore;
@@ -77,7 +77,9 @@ const SYNC_TIMEOUT: Duration = Duration::from_secs(120);
 const LEASE: Duration = Duration::from_secs(150);
 /// The most one sync spends reading networks' LAN sides (ADR-164 決定 28). They are read one network
 /// at a time at the lane's pace (about one a second), so an organization of 350 MX networks takes
-/// about six syncs to read the first time, and then a few requests a sync as each goes stale.
+/// about six syncs to read the first time, and then a few requests a sync as each goes stale — a
+/// few because `lan_rereads_per_sync` caps them (決定 29), not because they happen to go stale
+/// apart: a first round read in six clumps goes stale in six clumps.
 const LAN_READ_BUDGET: Duration = Duration::from_secs(60);
 /// What the rest of the sync keeps once the LAN reads start: one request already in flight when the
 /// budget ran out ([`REQUEST_TIMEOUT`]), then the writes, the role read and the import.
@@ -414,19 +416,20 @@ impl MerakiSync {
     ) -> Result<MerakiSyncReport, SyncError> {
         let job = Uuid::new_v4();
         let now = Instant::now();
-        if !lanes
+        let Some(lane) = lanes
             .iter()
-            .any(|&lane| self.inflight.acquire_sync(org.id, lane, job, LEASE, now))
-        {
+            .copied()
+            .find(|&lane| self.inflight.acquire_sync(org.id, lane, job, LEASE, now))
+        else {
             metrics::counter!("yagra_meraki_syncs_total", "outcome" => "busy").increment(1);
             return Err(SyncError::Busy);
-        }
+        };
         let _flight = Flight {
             inflight: &self.inflight,
             job,
         };
 
-        match self.attempt(org).await {
+        match self.attempt(org, lane).await {
             Ok(report) => {
                 if let Err(e) = self.orgs.record_sync_success(org.id).await {
                     // The rows are written and correct; only the stamp is missing, so the loop
@@ -490,7 +493,11 @@ impl MerakiSync {
 
     /// The sync itself. Reads first, writes last: every `?` above the two inventory writes leaves
     /// the database exactly as it was. The import comes after them — it reads the rows they wrote.
-    async fn attempt(&self, org: &MerakiOrg) -> Result<MerakiSyncReport, MerakiSyncFailure> {
+    async fn attempt(
+        &self,
+        org: &MerakiOrg,
+        lane: MerakiLane,
+    ) -> Result<MerakiSyncReport, MerakiSyncFailure> {
         let api_key = resolve_meraki_key(&self.creds, org.credential_id)
             .await
             .ok_or(MerakiSyncFailure::Credential)?;
@@ -509,7 +516,9 @@ impl MerakiSync {
             }
         };
         // Reads only, like everything above the writes: what it read is written below.
-        let lans = self.lan_stage(org, &api_key, &listing, started).await?;
+        let lans = self
+            .lan_stage(org, &api_key, &listing, started, lane)
+            .await?;
         let seen = seen_devices(&listing, &lans.chosen);
         let stored = self
             .inventory
@@ -577,12 +586,18 @@ impl MerakiSync {
     /// to be imported); the next sync asks again. What *does* fail the sync is this core's own
     /// database — the stored addresses, or the folders' ranges — because reading either as empty
     /// would move hundreds of node addresses and move them back a sync later.
+    ///
+    /// ⚠️ **Only a sync in the slow lane reads** (ADR-164 決定 29). "Sync now" takes the fast lane
+    /// when the slow one is busy, and the fast lane is the one availability is collected in: a
+    /// minute of LAN reads there held availability back a minute, which a chart draws as a gap. A
+    /// fast-lane sync chooses from what is already known, and the next periodic sync reads.
     async fn lan_stage(
         &self,
         org: &MerakiOrg,
         api_key: &str,
         listing: &MerakiInventory,
         started: Instant,
+        lane: MerakiLane,
     ) -> Result<LanStage, MerakiSyncFailure> {
         let internal = |what: &'static str| {
             move |e: anyhow::Error| {
@@ -601,7 +616,15 @@ impl MerakiSync {
             .map_err(internal("reading the networks' LAN addresses failed"))?;
         known.retain(|network, _| mx.contains(network));
 
-        let due = lan_reads_due(&mx, &known, Utc::now());
+        let due = match lane {
+            MerakiLane::Slow => lan_reads_due(
+                &mx,
+                &known,
+                Utc::now(),
+                lan_rereads_per_sync(mx.len(), org.inventory_secs),
+            ),
+            MerakiLane::Fast => Vec::new(),
+        };
         let left = SYNC_TIMEOUT.saturating_sub(started.elapsed());
         let budget = LAN_READ_BUDGET.min(left.saturating_sub(LAN_READ_RESERVE));
         let mut fresh = Vec::new();
@@ -2248,6 +2271,45 @@ mod tests {
         assert_eq!(second.imported, 1);
         assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
         assert_eq!(folder_of(&pool, "Q2-A").await, Some(site));
+    }
+
+    /// ADR-164 決定 29: "Sync now" that had to take the fast lane — a switch-port collect holds the
+    /// slow one — reads no network's LAN side, because the fast lane is availability's and a minute
+    /// of reads there is a minute availability waits. It still syncs; the MX just waits for the next
+    /// sync in the slow lane, which reads it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sync_in_the_fast_lane_reads_no_lan_and_the_next_slow_one_does(pool: sqlx::PgPool) {
+        let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
+        r.directory.lan_answer(Ok(vec![vlan(10, "10.20.0.1")]));
+        let ports = Uuid::new_v4();
+        assert!(r.inflight.acquire_collect(
+            r.org,
+            MerakiLane::Slow,
+            ports,
+            MerakiTier::SwitchPorts,
+            Duration::from_secs(300),
+            Instant::now()
+        ));
+
+        let fast = r.sync.sync_org(&r.org().await).await.expect("Sync now");
+        assert!(
+            r.directory.lan_asked().is_empty(),
+            "a sync in the fast lane read LAN sides"
+        );
+        assert_eq!(fast.imported, 0, "{fast:?}");
+        assert!(r.inventory.devices(r.org).await.expect("devices")[0].lan_pending);
+        assert_eq!(r.org().await.last_sync_ok, Some(true));
+
+        r.inflight.complete(ports);
+        let slow = r
+            .sync
+            .sync_org_scheduled(&r.org().await)
+            .await
+            .expect("periodic sync");
+        assert_eq!(r.directory.lan_asked(), ["N_1"]);
+        assert_eq!(slow.imported, 1);
+        assert_eq!(node_as_it_stands(&pool, "Q2-A").await.1, "10.20.0.1");
     }
 
     /// A node that carries the address it was given before 決定 28 — its WAN — follows to its LAN

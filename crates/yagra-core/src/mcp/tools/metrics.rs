@@ -457,7 +457,12 @@ impl YagraMcp {
                        interfaces). `from`/`to` are Unix seconds (default: last hour) and `step` is \
                        the sample interval in seconds (clamped; defaults to ~120 points across the \
                        window). This is the per-interface counterpart to query_metrics, which is \
-                       node-level only."
+                       node-level only. A Cisco Meraki switch port is read differently: its \
+                       in_bps/out_bps are the Dashboard's five-minute averages stored as they \
+                       came (Meraki keeps no counter), 12 to 17 minutes behind, and the Dashboard \
+                       gives no packet, error or discard counts, so those six arrays are always \
+                       empty for it — not collected, never evidence of a clean link. Its ifindex \
+                       is the number Yagra gives the port, not an SNMP ifIndex."
     )]
     async fn get_interface_series(
         &self,

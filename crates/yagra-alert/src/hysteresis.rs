@@ -87,6 +87,14 @@ impl DwellTracker {
         }
     }
 
+    /// Whether a run of samples disagreeing with the committed state is under way — the dwell has
+    /// started counting and not yet committed. A check with one is not settled, whatever it has
+    /// committed: its next agreeing sample still matters (ADR-076 増分 8 決定 16).
+    #[must_use]
+    pub const fn pending(&self) -> bool {
+        self.candidate.is_some()
+    }
+
     /// Change how many consecutive samples a flip needs, keeping the committed state and any
     /// candidate run in place.
     ///
@@ -141,6 +149,22 @@ mod tests {
         let mut t = DwellTracker::new(NodeState::Ok, 1);
         assert_eq!(t.observe(NodeState::Critical), Some(NodeState::Critical));
         assert_eq!(t.committed(), NodeState::Critical);
+    }
+
+    /// A disagreeing run is pending until it commits or an agreeing sample ends it — and neither a
+    /// fresh tracker nor one that just committed is (ADR-076 増分 8 決定 16 reads this).
+    #[test]
+    fn a_run_is_pending_until_it_commits_or_is_broken() {
+        let mut t = DwellTracker::new(NodeState::Ok, 3);
+        assert!(!t.pending());
+        t.observe(NodeState::Warning);
+        assert!(t.pending());
+        t.observe(NodeState::Ok);
+        assert!(!t.pending(), "an agreeing sample ends the run");
+        t.observe(NodeState::Warning);
+        t.observe(NodeState::Warning);
+        assert_eq!(t.observe(NodeState::Warning), Some(NodeState::Warning));
+        assert!(!t.pending(), "a commit ends the run");
     }
 
     #[test]

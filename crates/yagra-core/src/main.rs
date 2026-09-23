@@ -2134,7 +2134,8 @@ struct MerakiScheduler {
 /// the ports' configured names once an hour per organization — and on its first collect after this
 /// core started. The wireless tier (ADR-168) is the same shape: [`yagra_bus::CAP_MERAKI_WIRELESS`],
 /// the access points alone, and the SSIDs and radio settings every twenty minutes — read by a
-/// wireless round sent in the slow lane in place of the fast one (ADR-169 決定 2).
+/// collect of their own in the slow lane (`ssid_only`), which publishes no client count or
+/// utilization, so the fast lane's wireless rounds keep their spacing (ADR-169 決定 2).
 ///
 /// ⚠️ Every decision below is [`meraki_schedule::MerakiSchedule`]'s, which is what a test drives;
 /// this loop reads the stores and publishes.

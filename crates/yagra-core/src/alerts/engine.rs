@@ -2042,6 +2042,37 @@ impl AlertManager {
             .copied()
     }
 
+    /// Whether a derived per-port check has **nothing left to recover**: it has committed `Ok`, no
+    /// run toward another state is under way, and no alert of its is open. A check never observed
+    /// is quiet too.
+    ///
+    /// What the utilisation evaluator asks before it stops tracking a port that left its candidate
+    /// set (ADR-076 増分 8 決定 16). Tracking exists so a busy port's recovery gets observed; once
+    /// the recovery has committed, reading the port again on every tick only buys cost, and the
+    /// next time it crosses the floor the evaluator tracks it afresh.
+    #[must_use]
+    pub fn interface_check_is_quiet(
+        &self,
+        node: NodeId,
+        ifindex: IfIndex,
+        metric: &'static str,
+    ) -> bool {
+        let check = interface_check_id(node, ifindex, metric);
+        // One lock at a time — neither is held while the other is taken.
+        let settled = self
+            .states
+            .lock()
+            .expect("states mutex poisoned")
+            .get(&check)
+            .is_none_or(|s| s.committed() == NodeState::Ok && !s.pending());
+        settled
+            && !self
+                .active
+                .lock()
+                .expect("alerts mutex poisoned")
+                .contains_key(&check)
+    }
+
     /// Resolve every active **derived** per-interface alert whose rule no longer resolves.
     ///
     /// Nothing polls `if_in_util_pct`, so [`Self::observe_with_no_reading`] never visits `metric@ifindex` for a
@@ -5514,6 +5545,60 @@ mod tests {
             mgr.observe_interface_metric(node, IfIndex(8), "if_in_util_pct", 99.0, 1_000)
                 .is_none(),
             "port 8 has no rule, so nothing should be observed for it"
+        );
+    }
+
+    /// ADR-076 増分 8 決定 16: a port check is quiet only when it has nothing left to recover — not
+    /// while its dwell is counting toward a breach, not while its alert is open, not while it is
+    /// counting its way back — and quiet again once the recovery commits.
+    #[test]
+    fn a_port_check_is_quiet_only_once_its_recovery_has_committed() {
+        let node = NodeId::from(Uuid::new_v4());
+        let port = IfIndex(7);
+        let metric = "if_in_util_pct";
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::new_v4(),
+                ScopeLevel::Interface,
+                vec![format!("{}:7", node.as_uuid())],
+                yagra_common::ThresholdRule::new(
+                    metric,
+                    yagra_common::ThresholdBounds::above(None, Some(90.0)),
+                    2,
+                ),
+            )],
+            HashMap::new(),
+        ));
+        assert!(
+            mgr.interface_check_is_quiet(node, port, metric),
+            "a check never observed has nothing to recover"
+        );
+        let mut t = 0;
+        let mut feed = |value: f64| {
+            t += 60_000;
+            mgr.observe_interface_metric(node, port, metric, value, t)
+                .expect("a rule is in force");
+        };
+        feed(95.0);
+        assert!(
+            !mgr.interface_check_is_quiet(node, port, metric),
+            "mid-dwell toward a breach"
+        );
+        feed(95.0);
+        assert!(
+            !mgr.interface_check_is_quiet(node, port, metric),
+            "the alert is open"
+        );
+        feed(10.0);
+        assert!(
+            !mgr.interface_check_is_quiet(node, port, metric),
+            "counting its way back, alert still open"
+        );
+        feed(10.0);
+        assert!(
+            mgr.interface_check_is_quiet(node, port, metric),
+            "recovered and committed: nothing left to track"
         );
     }
 

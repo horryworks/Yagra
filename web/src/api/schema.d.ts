@@ -1655,9 +1655,12 @@ export interface paths {
         put?: never;
         /**
          * Sync one organization's inventory now, rather than waiting for the periodic sync.
-         * @description Read-only upstream (three paged GETs). It takes one of the organization's two collect lanes —
-         *     the slow one if it is free, else the fast one — so it answers 409 only while both are busy,
-         *     rather than spending the organization's rate budget three ways at once.
+         * @description Read-only upstream: the three paged inventory listings, the MX uplink statuses (for each
+         *     warm-spare pair's configured roles), and — only when it runs in the slow lane — the VLANs of the
+         *     MX networks whose LAN side is due to be read, one network at a time (`appliance/vlans`, falling
+         *     back to `appliance/singleLan`). It takes one of the organization's two collect lanes — the slow
+         *     one if it is free, else the fast one — so it answers 409 only while both are busy, rather than
+         *     spending the organization's rate budget three ways at once.
          */
         post: operations["sync_meraki_org"];
         delete?: never;
@@ -8339,6 +8342,14 @@ export interface components {
          *     collection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from
          *     an earlier version those arrays are empty for every window predating that upgrade while the bps
          *     arrays are populated.
+         *
+         *     **A Cisco Meraki switch port (ADR-167) is read differently.** Its `in_bps`/`out_bps` are the
+         *     five-minute averages the Dashboard reports, stored as they came — Meraki gives no counter, so
+         *     these two are the exception to "derived at query time" — and they arrive 12 to 17 minutes late.
+         *     The Dashboard gives no packet, error or discard counts either, so for such a port those six
+         *     arrays are always empty: that is "not collected", never "no errors". Its `ifindex` is the
+         *     number Yagra gives the port (the port number, or a hash of a module port's id), not an SNMP
+         *     ifIndex.
          */
         InterfaceSeries: {
             in_bps: (number | null)[];
@@ -8706,10 +8717,11 @@ export interface components {
             /**
              * Format: double
              * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
-             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
-             *     wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
-             *     and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
-             *     paces, so the total can then exceed this by up to 0.1.
+             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
+             *     wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
+             *     sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+             *     each lane stops at 0.1, the slowest a session paces, so the two together can then send up
+             *     to 0.2 whatever this says.
              */
             target_rps: number;
             /** Format: int32 */
@@ -8842,8 +8854,10 @@ export interface components {
              * @description The device's LAN address, when a usable one is known: the `lanIp` Meraki reports. An MX
              *     (`appliance`) reports none, so its address is one of its own VLAN IPs — never its WAN
              *     address. An IP another network of the organization also uses is skipped; of the rest, the
-             *     lowest-numbered VLAN inside a folder's IP range, else the lowest-numbered. `null` for an MX
-             *     until its network's VLANs have been read; such an MX is not imported automatically until then.
+             *     lowest-numbered VLAN inside a folder's IP range, else the lowest-numbered — and when every IP
+             *     is shared, the lowest-numbered of them all. `null` for an MX until its network's VLANs have
+             *     been read (such an MX is not imported automatically until then), and for good for an MX whose
+             *     network has no LAN side at all.
              */
             lan_ip?: string | null;
             /**
@@ -9073,10 +9087,11 @@ export interface components {
             /**
              * Format: double
              * @description Requests per second this organization may be sent, **in total** (ADR-169). Its collects run
-             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic, a
-             *     wireless round and the inventory sync, a slow one for the switch ports and the SSID read —
-             *     and each paces at half of this. Below 0.2 each lane stops at 0.1, the slowest a session
-             *     paces, so the total can then exceed this by up to 0.1.
+             *     in two lanes that can be asking at once — a fast one for availability, uplink, traffic and a
+             *     wireless round, a slow one for the switch ports, the SSID read and the periodic inventory
+             *     sync ("Sync now" takes whichever lane is free) — and each paces at half of this. Below 0.2
+             *     each lane stops at 0.1, the slowest a session paces, so the two together can then send up
+             *     to 0.2 whatever this says.
              */
             target_rps: number;
             /** Format: int32 */
@@ -19504,7 +19519,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), a collect or another sync is running for it (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`) */
+            /** @description Meraki polling is paused globally (`meraki_polling_paused`), this organization is paused (`meraki_org_paused`), both of its collect lanes are held by collects or another sync (`meraki_sync_busy`), or the sync ran and the organization's stored key or base URL cannot be used (`meraki_sync_failed`, reason `credential` or `config`) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -23434,7 +23449,7 @@ export interface operations {
             path: {
                 /** @description Node id */
                 node_id: string;
-                /** @description SNMP ifIndex of the interface */
+                /** @description The interface's row key: its SNMP ifIndex, or for a Cisco Meraki switch port the number Yagra gives it (get_node_status lists both) */
                 ifindex: number;
             };
             cookie?: never;

@@ -1337,10 +1337,25 @@ fn node_interface_rate_query(dir: PortDirection, node: Uuid, w: u64) -> String {
 
 /// The fleet's summed traffic in one direction in bits/sec, through a `w`-second window.
 ///
-/// `sum(A or B)`, never `sum(A) + sum(B)`: the sum of an empty vector is empty, not zero, so on a
-/// deployment with no Meraki switch the second form would be empty everywhere (ADR-167 決定 7).
+/// `(sum(A) + sum(B)) or sum(A) or sum(B)`, where `A` is the SNMP counters' rate in bits and `B`
+/// the Meraki switch ports' gauge — the same two halves as [`port_bps_expr`], summed apart.
+///
+/// * **Each `sum` is taken straight over a rollup**, the one shape VictoriaMetrics aggregates
+///   incrementally: it adds each series in as it reads it instead of first building every
+///   interface's series. ADR-167 shipped `sum(A or B)`, which gives the same numbers but puts a
+///   binary operator under the `sum`, so every port's series was materialised on every call
+///   (ADR-167 決定 7 の補い — reasoned from how VictoriaMetrics evaluates, not measured).
+/// * **The `or`s are what make it safe when a half is empty.** The sum of an empty vector is empty,
+///   not zero, so on a deployment with no Meraki switch `sum(A) + sum(B)` alone would be empty
+///   everywhere. With neither half the answer stays empty rather than 0, so a stretch with no data
+///   is drawn as a gap. VictoriaMetrics' `or` fills the left side's gaps from the right one point
+///   by point, and a `sum` carries no labels, so all three terms line up.
 fn fleet_throughput_query(dir: PortDirection, w: u64) -> String {
-    format!("sum({})", port_bps_expr(dir, "", w, 0))
+    let w = w.max(1);
+    let g = PORT_GAUGE_WINDOW_SECS.max(w);
+    let counters = format!("(sum(rate({}[{w}s])) * 8)", dir.counter());
+    let gauges = format!("sum(last_over_time({}[{g}s]))", dir.gauge());
+    format!("(({counters} + {gauges}) or {counters} or {gauges})")
 }
 
 /// One interface's traffic in one direction in bits/sec, through a `w`-second window — a port's
@@ -2831,8 +2846,8 @@ mod tests {
     }
 
     /// The three reads with no `topk`: one node's ports (bytes/s — its callers scale ×8, so the
-    /// gauge is divided), the fleet total (`sum(A or B)`, never `sum(A) + sum(B)`, which is empty
-    /// on a deployment with no Meraki switch), and one port's heatmap row.
+    /// gauge is divided), the fleet total (each half summed apart, then `(A + B) or A or B`, so a
+    /// deployment with no Meraki switch still has a total), and one port's heatmap row.
     #[test]
     fn the_node_and_fleet_throughput_reads_fold_in_the_meraki_gauges() {
         let node = Uuid::nil();
@@ -2843,7 +2858,8 @@ mod tests {
         );
         assert_eq!(
             fleet_throughput_query(PortDirection::Out, 300),
-            format!("sum({OUT_300})")
+            "(((sum(rate(if_hc_out_octets[300s])) * 8) + sum(last_over_time(meraki_port_out_bps[1800s]))) \
+             or (sum(rate(if_hc_out_octets[300s])) * 8) or sum(last_over_time(meraki_port_out_bps[1800s])))"
         );
         let sel = "{node=\"00000000-0000-0000-0000-000000000000\",ifindex=\"7\"}";
         assert_eq!(
@@ -2860,6 +2876,26 @@ mod tests {
             )
         );
         assert!(fleet_throughput_query(PortDirection::In, 1200).contains("[1200s]"));
+    }
+
+    /// ADR-167 決定 7 の補い: the fleet total keeps VictoriaMetrics' incremental aggregation, which
+    /// applies only when a `sum`'s argument is a rollup over a selector. `sum(A or B)` — what shipped
+    /// first — returned the same numbers and lost it, so the shape itself is what is pinned: every
+    /// `sum(` opens straight onto `rate(` or `last_over_time(` — four of them, each half written
+    /// once for the `+` and once as its own fallback.
+    #[test]
+    fn every_sum_in_the_fleet_total_is_taken_straight_over_a_rollup() {
+        for dir in [PortDirection::In, PortDirection::Out] {
+            let q = fleet_throughput_query(dir, 300);
+            let sums: Vec<&str> = q.match_indices("sum(").map(|(i, _)| &q[i + 4..]).collect();
+            assert_eq!(sums.len(), 4, "{q}");
+            for rest in sums {
+                assert!(
+                    rest.starts_with("rate(") || rest.starts_with("last_over_time("),
+                    "a sum over something other than a rollup: {q}"
+                );
+            }
+        }
     }
 
     /// The trait's default for a port chart is the counter half alone, in bits: what every store

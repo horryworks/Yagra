@@ -28,7 +28,9 @@ export type MerakiUplinkState = (typeof MERAKI_UPLINK_STATES)[number];
  * ⚠️ A second copy of `yagra_common::MerakiUplinkStatus::gauge` (Rust): active 2, ready 1,
  * not connected / connecting 0, failed −1 — the encoding the metric's published meaning states.
  * A value that is none of the four (a history point from a future encoding) says nothing rather
- * than something wrong.
+ * than something wrong. A Rust test reads this switch and pins each `case` to the value the
+ * collector writes (`api/meraki.rs::the_cards_uplink_words_read_the_values_the_collector_writes`),
+ * so keep each case a number and each return a plain quoted word.
  */
 export function merakiUplinkState(value: number | null | undefined): MerakiUplinkState | null {
   switch (value) {

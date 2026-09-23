@@ -275,8 +275,11 @@ test('the scope id is a picker, and which picker follows the level', async ({ pa
   // profile ⇒ a populated multi-select (ADR-078), showing the profile's name, with the rule's
   // own target already ticked. An empty listbox is still a listbox, which is what a failed
   // profile load looks like — so the count and the checked state are both asserted.
+  // ⚠️ Polled, not read once: `MultiSelectList` draws its listbox before the profile list arrives,
+  // so a single `count()` taken under load read the empty one and failed (seen once, 2026-09-23).
+  // A load that never arrives still fails here — only the waiting changed.
   await expect(scope.locator('[role="listbox"]')).toHaveCount(1);
-  expect(await scope.locator('[role="option"]').count()).toBeGreaterThan(1);
+  await expect.poll(() => scope.locator('[role="option"]').count()).toBeGreaterThan(1);
   await expect(scope).toContainText(String(profile.name));
   await expect(scope.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
 
@@ -287,7 +290,7 @@ test('the scope id is a picker, and which picker follows the level', async ({ pa
   // folder group ⇒ the inventory tree, and the hint that says a rule inherits downwards.
   await level.selectOption('group_id');
   await expect(scope.locator('[role="listbox"]')).toHaveCount(1);
-  expect(await scope.locator('[role="option"]').count()).toBeGreaterThan(1);
+  await expect.poll(() => scope.locator('[role="option"]').count()).toBeGreaterThan(1);
   await expect(scope).toContainText('every group inside it');
   // Switching levels clears the targets — profile UUIDs left on a folder-group rule match nothing.
   await expect(scope.locator('[role="option"][aria-selected="true"]')).toHaveCount(0);

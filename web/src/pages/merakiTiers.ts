@@ -18,7 +18,8 @@ import type { TFunction } from 'i18next';
  *
  * Mirrors `MerakiTier::ALL` in `crates/yagra-common/src/meraki.rs`. Hand-maintained because the
  * tier is a bare string in the API (`MerakiOrgView.enabled_tiers`), so nothing generated carries
- * the set.
+ * the set — which is why a Rust test reads this array, and `MERAKI_CADENCE_FIELDS`, and compares
+ * both with `MerakiTier::ALL` in order (`api/meraki.rs::the_webuis_two_tier_lists_are_the_backends_tiers_in_order`).
  */
 export const MERAKI_TIERS = [
   'availability',

@@ -244,11 +244,12 @@ pub fn query_floor_bps(
 /// One tracked per-port check: which node, which port, which derived metric.
 pub type CheckKey = (NodeId, IfIndex, &'static str);
 
-/// The checks the evaluator has fed at least once, so it knows what to observe as recovered when a
-/// port drops out of the candidate set.
+/// The checks the evaluator has fed at least once, so it knows which ports to read again when they
+/// drop out of the candidate set.
 ///
-/// Bounded by whatever has ever crossed the floor, not by the fleet size: a port that has never
-/// been busy has never been tracked, and is never observed.
+/// Bounded by what is above the floor or still recovering, not by the fleet size: a port that has
+/// never been busy has never been tracked, and a check whose recovery has committed is forgotten
+/// (ADR-076 増分 8 決定 16) until it crosses the floor again.
 #[derive(Debug, Default)]
 pub struct TrackedChecks {
     seen: BTreeSet<CheckKey>,
@@ -265,17 +266,19 @@ impl TrackedChecks {
         self.seen.insert(key);
     }
 
-    /// Stop tracking a check — the rule it belonged to is gone.
+    /// Stop tracking a check — the rule it belonged to is gone, or it has nothing left to recover.
     ///
     /// 🚨 This is the **only** way the set shrinks. Without it `seen` is a high-water mark rather
     /// than a live set: every key ever marked stays forever, and the recovery sweep walks all of
-    /// them on every tick for the life of the process.
+    /// them on every tick for the life of the process — and since ADR-076 増分 8 that walk is a
+    /// store read, not a loop over memory.
     pub fn forget(&mut self, key: &CheckKey) {
         self.seen.remove(key);
     }
 
     /// The tracked checks for `metric` that are **not** in `present` — the ports that were busy
-    /// and no longer are, which the caller observes as recovered.
+    /// and are not now, either because they went quiet or because no value came. The caller reads
+    /// them again to tell those two apart ([`recovery_for`]).
     #[must_use]
     pub fn absent<'a>(
         &'a self,
@@ -315,6 +318,38 @@ pub struct PortReading {
     /// The same figure as a percentage of the port's own speed, or `None` when that speed is
     /// unusable (absent, zero, or the saturated sentinel — see [`utilisation_pct`]).
     pub pct: Option<f64>,
+}
+
+/// What the recovery sweep may feed a tracked check that has left the candidate set
+/// (ADR-076 増分 8 決定 15).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Recovery {
+    /// The port has a reading: observe it. It is below the floor — that is why it left the set —
+    /// so it walks the check back to `Ok` through the rule's dwell, carrying the value the port
+    /// actually has rather than a 0 nobody measured.
+    Observe(f64),
+    /// Nothing to judge by: observe nothing, and leave the alert open. Leaving the candidate set
+    /// means "below the floor" **or** "no value came", and only the first is a recovery — a dead
+    /// SNMP agent, a truncated walk or a Meraki window the Dashboard did not fill would otherwise
+    /// each be announced as one.
+    Hold,
+}
+
+/// Decide [`Recovery`] for one tracked check from the port's re-read value, if it has one.
+///
+/// The percentage needs a usable speed as well as a reading; with none it is held while the port's
+/// bits per second — which needs no denominator — is still observed.
+#[must_use]
+pub fn recovery_for(
+    metric: &'static str,
+    pair: DerivedPair,
+    reading: Option<&PortReading>,
+) -> Recovery {
+    match reading {
+        None => Recovery::Hold,
+        Some(r) if metric == pair.pct => r.pct.map_or(Recovery::Hold, Recovery::Observe),
+        Some(r) => Recovery::Observe(r.bps),
+    }
 }
 
 /// Turn a candidate set and a speed table into readings.
@@ -571,15 +606,21 @@ pub(crate) async fn run_interface_utilization_watch(
                 }
             }
 
-            // Anything tracked that is no longer above the floor has recovered: below the floor is
-            // below every rule's bound by construction. Frozen nodes are skipped here too, for the
-            // same reason they are skipped above.
+            // Anything tracked that has left the candidate set is read again, without the floor, and
+            // observed at what it actually carries: below the floor is below every rule's bound, so
+            // that walks the check back to `Ok` through its dwell. 🚨 **A port with no reading at
+            // all is held** — nothing observed, its alert left open (ADR-076 増分 8 決定 15).
+            // Leaving the set means "below the floor" *or* "no value came", and this sweep used to
+            // observe 0 for both, so a dead SNMP agent, a truncated walk or a Meraki window the
+            // Dashboard did not fill closed the alert as a recovery and paged one. Frozen nodes are
+            // skipped here too, for the same reason they are skipped above.
             //
             // Not done for a metric that has a `below` rule, and the reason is the same inversion
             // that `query_floor_bps` handles: the floor is zero there, so a port only leaves the
             // candidate set by losing its series altogether — and calling that "0 bits/sec" would
             // *fire* a `below` rule on a port nobody has heard from, which is a data gap being
             // reported as a traffic level.
+            let mut absent: Vec<util::CheckKey> = Vec::new();
             for metric in [pair.pct, pair.bps] {
                 let (can_fire, has_below) = if metric == pair.pct {
                     (pct_can_fire, pct_demand.has_below)
@@ -589,20 +630,96 @@ pub(crate) async fn run_interface_utilization_watch(
                 if !can_fire || has_below {
                     continue;
                 }
-                for key in tracked.absent(metric, &present) {
-                    let (node, ifindex, m) = key;
-                    if !util::may_observe_ports(alerts.node_liveness(node)) {
-                        continue;
+                absent.extend(
+                    tracked
+                        .absent(metric, &present)
+                        .into_iter()
+                        .filter(|(node, _, _)| {
+                            util::may_observe_ports(alerts.node_liveness(*node))
+                        }),
+                );
+            }
+            let mut held: BTreeMap<&'static str, usize> = BTreeMap::new();
+            if !absent.is_empty() {
+                // Only the nodes whose tracked ports left the set — a subset of what the candidate
+                // query already read, so this costs at most as much again, and usually far less:
+                // a check stops being tracked once its recovery has committed (決定 16).
+                let nodes: Vec<Uuid> = absent
+                    .iter()
+                    .map(|(node, _, _)| node.as_uuid())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let evidence: Option<BTreeMap<(NodeId, IfIndex), util::PortReading>> = match store
+                    .interface_candidates(dimension, 0.0, Some(nodes.as_slice()))
+                    .await
+                {
+                    Some(rows) => {
+                        let speeds: BTreeMap<(Uuid, i32), Option<i64>> = if absent
+                            .iter()
+                            .any(|(_, _, m)| *m == pair.pct)
+                        {
+                            match repo.interface_idents_for(&nodes).await {
+                                Ok(m) => m.iter().map(|(k, v)| (*k, v.if_speed)).collect(),
+                                Err(e) => {
+                                    // The percentages are held this tick; the rates, which
+                                    // need no speed, are still observed.
+                                    tracing::warn!(error = %e, metric = pair.pct, "reading interface speeds for the recovery sweep failed");
+                                    BTreeMap::new()
+                                }
+                            }
+                        } else {
+                            BTreeMap::new()
+                        };
+                        let (readings, _) = util::evaluate(&rows, &speeds);
+                        Some(
+                            readings
+                                .into_iter()
+                                .map(|r| ((r.node, r.ifindex), r))
+                                .collect(),
+                        )
                     }
-                    match alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms) {
-                        Some(a) => actions.extend(a),
-                        // The rule was deleted between the mark and now. Drop the key instead of
-                        // asking about it every tick for the life of the process; any alert it left
-                        // open was already closed by the orphan sweep at the top of this tick — not
-                        // by claiming the traffic fell to zero.
-                        None => tracked.forget(&key),
+                    None => {
+                        // No answer is not an answer of "nothing": every absent check is held.
+                        metrics::counter!("yagra_interface_util_query_failures_total").increment(1);
+                        None
+                    }
+                };
+                for key in absent {
+                    let (node, ifindex, m) = key;
+                    let reading = evidence.as_ref().and_then(|e| e.get(&(node, ifindex)));
+                    match util::recovery_for(m, pair, reading) {
+                        util::Recovery::Observe(value) => {
+                            match alerts.observe_interface_metric(node, ifindex, m, value, now_ms) {
+                                Some(a) => {
+                                    actions.extend(a);
+                                    if alerts.interface_check_is_quiet(node, ifindex, m) {
+                                        tracked.forget(&key);
+                                    }
+                                }
+                                // The rule was deleted between the mark and now. Drop the key
+                                // instead of asking about it every tick for the life of the
+                                // process; any alert it left open was already closed by the orphan
+                                // sweep at the top of this tick.
+                                None => tracked.forget(&key),
+                            }
+                        }
+                        // Nothing to recover — no alert open, no run under way — so there is no
+                        // reason to keep reading a port that has gone silent.
+                        util::Recovery::Hold
+                            if alerts.interface_check_is_quiet(node, ifindex, m) =>
+                        {
+                            tracked.forget(&key);
+                        }
+                        util::Recovery::Hold => *held.entry(m).or_default() += 1,
                     }
                 }
+            }
+            // How many port checks are open (or mid-dwell) with no value to judge them by — kept
+            // open on purpose, and invisible without a number.
+            for metric in [pair.pct, pair.bps] {
+                metrics::gauge!("yagra_interface_util_held", "metric" => metric)
+                    .set(held.get(metric).copied().unwrap_or(0) as f64);
             }
         }
 
@@ -942,6 +1059,72 @@ mod tests {
         tracked.mark(sibling);
         tracked.forget(&key);
         assert_eq!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none), vec![sibling]);
+    }
+
+    /// ADR-076 増分 8 決定 15: a tracked check that left the candidate set is observed only at a
+    /// value the port actually has. No reading holds it; a reading with no usable speed holds the
+    /// percentage and still observes the bits per second.
+    #[test]
+    fn a_port_that_left_the_set_is_observed_only_at_a_value_it_has() {
+        let pair = DERIVED_PAIRS[0];
+        let node = NodeId::new();
+        let with_speed = PortReading {
+            node,
+            ifindex: IfIndex(1),
+            bps: 2_000.0,
+            pct: Some(0.2),
+        };
+        let no_speed = PortReading {
+            pct: None,
+            ..with_speed
+        };
+        assert_eq!(
+            recovery_for(pair.pct, pair, Some(&with_speed)),
+            Recovery::Observe(0.2)
+        );
+        assert_eq!(
+            recovery_for(pair.bps, pair, Some(&with_speed)),
+            Recovery::Observe(2_000.0)
+        );
+        assert_eq!(
+            recovery_for(pair.pct, pair, Some(&no_speed)),
+            Recovery::Hold
+        );
+        assert_eq!(
+            recovery_for(pair.bps, pair, Some(&no_speed)),
+            Recovery::Observe(2_000.0)
+        );
+        // 🚨 The case this increment exists for: no value came, so nothing is observed — never 0.
+        assert_eq!(recovery_for(pair.pct, pair, None), Recovery::Hold);
+        assert_eq!(recovery_for(pair.bps, pair, None), Recovery::Hold);
+    }
+
+    /// The loop half of 決定 15, which no unit test can run: the recovery sweep observes what
+    /// [`recovery_for`] decided, and nowhere spells an observation of a literal zero — the form the
+    /// sweep had before, when every port that left the set was announced as recovered.
+    #[test]
+    fn the_recovery_sweep_observes_no_invented_zero() {
+        let production = crate::module_source::code("src", "interface_util");
+        let watch = production
+            .split("async fn run_interface_utilization_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        assert!(
+            body.contains("util::recovery_for(") && body.contains("util::Recovery::Hold"),
+            "the recovery sweep no longer decides through recovery_for"
+        );
+        let observations = body.matches("observe_interface_metric(").count();
+        assert!(
+            observations >= 2,
+            "the slice lost the observations it is about ({observations})"
+        );
+        for zero in [", 0.0, now_ms)", ", 0.0,now_ms)", ", 0_f64, now_ms)"] {
+            assert!(
+                !body.contains(zero),
+                "the sweep observes an invented zero ({zero}) — that closes an alert on absence"
+            );
+        }
     }
 
     /// The whole state table, because the gate is one line at two call sites and the interesting

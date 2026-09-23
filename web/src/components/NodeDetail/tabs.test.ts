@@ -89,7 +89,7 @@ describe('node-detail tab visibility', () => {
   // ADR-064 増分 C. An access point is never polled itself, so `snmpConfigured` is false on every
   // one of them — and asking only that question hid the radios its controller had already
   // collected. The two halves are separate and both are needed: `kinds` lets the tab through for
-  // this node kind, and `snmpFed` lets it through despite the node having no credential.
+  // this node kind, and `interfacesFed` lets it through despite the node having no credential.
   it('shows Interfaces on an access point, whose rows come from its controller', () => {
     const ap = { kind: 'wireless_ap' as const, snmpConfigured: false, isWlanController: false, merakiProductType: null };
     expect(visibleNodeDetailTabs(ap)).toContain('interfaces');
