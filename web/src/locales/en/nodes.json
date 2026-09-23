@@ -377,6 +377,13 @@
     "bodyTruncated": "The body was larger than the read budget, so the rule could not be decided.",
     "tlsCertificate": "TLS certificate",
     "merakiIdentity": "{{productType}} · serial {{serial}}",
+    "apCountsChart": "Clients and SSIDs",
+    "apUtilChart": "Channel utilization",
+    "apSeries": {
+      "clients": "Connected clients",
+      "ssids": "SSIDs broadcast",
+      "nonWifi": "{{band}} non-Wi-Fi"
+    },
     "merakiClients": "Connected clients",
     "merakiSsids": "SSIDs broadcast",
     "merakiChannelUtil": "Channel utilization ({{band}})",

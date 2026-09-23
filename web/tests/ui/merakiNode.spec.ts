@@ -412,6 +412,26 @@ test.describe('a Meraki access point', () => {
             { ...row, ifindex: 2, if_name: '5 GHz', if_type: 71 },
           ] as unknown as Json;
         },
+        // The stored history the two charts read back: the counts as one series each, each radio's
+        // two series by its row key. The 5 GHz radio stored no non-Wi-Fi share in this range.
+        '/api/v1/nodes/{node_id}/metrics/{metric}/range': (url) => {
+          const parts = url.pathname.split('/');
+          const name = decodeURIComponent(parts[parts.length - 2] ?? '');
+          const row = url.searchParams.get('row');
+          const body = defaultBodyFor(url.pathname) as unknown as Schemas['MetricRange'];
+          const key = row ? `${name}@${row}` : name;
+          const stored: Record<string, number> = {
+            wlan_ap_client_count: 12,
+            wlan_ap_ssid_count: 3,
+            'wlan_radio_channel_util_pct@1': 37.25,
+            'wlan_radio_channel_util_pct@2': 3.08,
+            'wlan_radio_non_wifi_util_pct@1': 0.5,
+          };
+          const v = stored[key];
+          const now = Math.floor(Date.now() / 1000);
+          const points = v == null ? [] : [1_500, 900, 300].map((d) => ({ t: now - d, v }));
+          return { ...body, metric: name, node_id: NODE_ID, points } as unknown as Json;
+        },
       },
       failures: Object.fromEntries(none.map((m) => [`/api/v1/nodes/${NODE_ID}/metrics/${m}`, 404])),
     },
@@ -449,9 +469,35 @@ test.describe('a Meraki access point', () => {
     await expect(tile('(2.4 GHz)').locator('.nd-mk-tile-sub')).toHaveText('of which non-Wi-Fi 0.5%');
     await expect(tile('(5 GHz)').locator('.nd-mk-tile-value')).toHaveText('3.1%');
     await expect(tile('(5 GHz)').locator('.nd-mk-tile-sub')).toHaveText('of which non-Wi-Fi 0%');
-    // No WAN rows on an access point, and no chart of them.
+    // No WAN rows on an access point.
     await expect(card.locator('.nd-mk-uplinks')).toHaveCount(0);
-    await expect(card.locator('.nd-mk-chart')).toHaveCount(0);
+    // The history (the user's request, 2026-09-23): the counts on one chart and the utilization on
+    // another — never one axis for "12 clients" and "37%" — with the range control to move them.
+    const charts = card.locator('.nd-mk-chart');
+    await expect(charts.locator('> .nd-mk-tile-label')).toHaveText([
+      'Clients and SSIDs',
+      'Channel utilization',
+    ]);
+    await expect(charts.nth(0).locator('.u-legend .u-series .u-label')).toHaveText([
+      'Time',
+      'Connected clients',
+      'SSIDs broadcast',
+    ]);
+    // A line with nothing stored draws no legend entry: the 5 GHz radio's non-Wi-Fi share.
+    await expect(charts.nth(1).locator('.u-legend .u-series .u-label')).toHaveText([
+      'Time',
+      '2.4 GHz',
+      '2.4 GHz non-Wi-Fi',
+      '5 GHz',
+    ]);
+    await expect(card.locator('.nd-section-head')).toContainText(/1h|Last/i);
+    // Each radio's history was read back by its row key — without `row` both would be one line.
+    const ranged = mock.requests
+      .filter((r) => r.pathname.startsWith(`/api/v1/nodes/${NODE_ID}/metrics/wlan_radio_`) && r.pathname.endsWith('/range'))
+      .map((r) => `${r.pathname.split('/').slice(-2, -1)[0]}@${new URLSearchParams(r.search).get('row')}`);
+    for (const m of ['wlan_radio_channel_util_pct', 'wlan_radio_non_wifi_util_pct']) {
+      for (const row of ['1', '2']) expect(ranged, `${m} row ${row}`).toContain(`${m}@${row}`);
+    }
 
     // The radios were asked for with their rows — without `rows=true` there is one number, not two.
     const asked = mock.requests
@@ -546,8 +592,11 @@ test.describe('a Meraki access point the Dashboard reports offline', () => {
       'Connected clients',
       'SSIDs broadcast',
     ]);
-    await expect(card).not.toContainText('Channel utilization');
-    await expect(card).not.toContainText('non-Wi-Fi');
+    // The tiles only: the history charts below keep drawing what was stored before it stopped —
+    // every point there carries its own time, which a latest value does not.
+    const tiles = card.locator('.nd-mk-tiles');
+    await expect(tiles).not.toContainText('Channel utilization');
+    await expect(tiles).not.toContainText('non-Wi-Fi');
     expect(errors.uncaught).toEqual([]);
   });
 });

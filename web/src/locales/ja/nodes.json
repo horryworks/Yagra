@@ -376,6 +376,13 @@
     "bodyTruncated": "本文が読み取り上限を超えたため、判定できませんでした。",
     "tlsCertificate": "TLS 証明書",
     "merakiIdentity": "{{productType}} · シリアル {{serial}}",
+    "apCountsChart": "接続中の端末と SSID",
+    "apUtilChart": "チャネル使用率",
+    "apSeries": {
+      "clients": "接続中の端末",
+      "ssids": "発信中の SSID",
+      "nonWifi": "{{band}} Wi-Fi 以外"
+    },
     "merakiClients": "接続中の端末",
     "merakiSsids": "発信中の SSID",
     "merakiChannelUtil": "チャネル使用率（{{band}}）",

@@ -81,12 +81,14 @@ import {
 import { ICMP_LOSS_METRIC, kindCardClaims, MERAKI_CARD, URL_CARD } from './overviewClaims';
 import { memPctSeries } from './overviewMetrics';
 import {
+  merakiApHistorySeries,
   merakiApRadioReadingsShown,
   merakiPairLine,
   merakiRadioLines,
   merakiTrafficSeries,
   merakiUplinkLines,
   merakiVpnLine,
+  type MerakiRadioHistory,
   type MerakiRadioLine,
   type MerakiUplinkHistory,
   type MerakiUplinkLine,
@@ -635,6 +637,12 @@ function MerakiHealth({
   const [clients, setClients] = useState<number | null>(null);
   const [ssids, setSsids] = useState<number | null>(null);
   const [radios, setRadios] = useState<MerakiRadioLine[]>([]);
+  const [apHistory, setApHistory] = useState<{
+    clients: MetricPoint[];
+    ssids: MetricPoint[];
+    radios: MerakiRadioHistory[];
+  }>({ clients: [], ssids: [], radios: [] });
+  const [apWin, setApWin] = useState<[number, number] | null>(null);
   const appliance = device.product_type === 'appliance';
   const accessPoint = isMerakiAccessPoint(device.product_type);
 
@@ -707,24 +715,61 @@ function MerakiHealth({
           ? ifs.value.flatMap((i) => (i.if_name ? [[i.ifindex, i.if_name] as [number, string]] : []))
           : [],
       );
-      setRadios(
-        merakiRadioLines(
-          u.status === 'fulfilled' ? (u.value.rows ?? []) : [],
-          n.status === 'fulfilled' ? (n.value.rows ?? []) : [],
-          names,
-        ),
+      const lines = merakiRadioLines(
+        u.status === 'fulfilled' ? (u.value.rows ?? []) : [],
+        n.status === 'fulfilled' ? (n.value.rows ?? []) : [],
+        names,
       );
+      setRadios(lines);
+      // The history charts read back what each collect stored: the two counts, and each radio's
+      // two series by its row key — the radios the rows read just named, offline or not. A read
+      // that fails costs that line, not the chart.
+      const { from, to } = resolveRange(range);
+      const points = (p: PromiseSettledResult<{ points: MetricPoint[] }>) =>
+        p.status === 'fulfilled' ? p.value.points : [];
+      void Promise.allSettled([
+        api.getNodeMetricRange(nodeId, MERAKI_CARD.clients, { from, to }),
+        api.getNodeMetricRange(nodeId, MERAKI_CARD.ssids, { from, to }),
+        ...lines.flatMap((l) => [
+          api.getNodeMetricRange(nodeId, MERAKI_CARD.radioUtil, { from, to, row: l.row }),
+          api.getNodeMetricRange(nodeId, MERAKI_CARD.radioNonWifi, { from, to, row: l.row }),
+        ]),
+      ]).then(([hc, hs, ...hr]) => {
+        if (cancelled) return;
+        setApHistory({
+          clients: points(hc),
+          ssids: points(hs),
+          radios: lines.map((l, i) => ({
+            row: l.row,
+            band: l.band,
+            util: points(hr[2 * i]),
+            nonWifi: points(hr[2 * i + 1]),
+          })),
+        });
+        setApWin([from, to]);
+      });
     });
     return () => {
       cancelled = true;
     };
-  }, [nodeId, tick, accessPoint]);
+  }, [nodeId, tick, accessPoint, range]);
 
   const pairLine = merakiPairLine(pair);
   // An access point the Dashboard reports offline has no live SSID count or radio utilization:
   // the collect stops writing them, and the latest-value read would otherwise draw the last ones
   // beside "Offline" for half an hour (ADR-168 決定 4).
   const radioReadings = merakiApRadioReadingsShown(up);
+  const apCharts = merakiApHistorySeries(
+    apHistory.clients,
+    apHistory.ssids,
+    apHistory.radios,
+    PALETTE,
+    {
+      clients: t('overview.apSeries.clients'),
+      ssids: t('overview.apSeries.ssids'),
+      nonWifi: (band) => t('overview.apSeries.nonWifi', { band }),
+    },
+  );
   const traffic = merakiTrafficSeries(history, PALETTE, {
     sent: t('overview.trafficAxis.sent'),
     recv: t('overview.trafficAxis.received'),
@@ -734,7 +779,7 @@ function MerakiHealth({
     <section>
       <div className="nd-section-head">
         <div className="nd-section-t">Cisco Meraki</div>
-        {appliance && <RangeControl value={range} onChange={setRange} />}
+        {(appliance || accessPoint) && <RangeControl value={range} onChange={setRange} />}
       </div>
       <div className="nd-fact-v mono nd-url-target">
         {t('overview.merakiIdentity', { productType: device.product_type, serial: device.serial })}
@@ -878,6 +923,33 @@ function MerakiHealth({
               </span>
             </div>
           ))}
+        </div>
+      )}
+      {accessPoint && apCharts.counts.timestamps.length > 0 && (
+        <div className="nd-mk-chart">
+          <div className="nd-mk-tile-label">{t('overview.apCountsChart')}</div>
+          <MetricChart
+            title=""
+            timestamps={apCharts.counts.timestamps}
+            series={apCharts.counts.series}
+            xRange={apWin ?? undefined}
+            yFormat={(v) => formatCount(v)}
+            legendFormat={(v) => formatCount(v)}
+          />
+        </div>
+      )}
+      {accessPoint && apCharts.util.timestamps.length > 0 && (
+        <div className="nd-mk-chart">
+          <div className="nd-mk-tile-label">{t('overview.apUtilChart')}</div>
+          <MetricChart
+            title=""
+            timestamps={apCharts.util.timestamps}
+            series={apCharts.util.series}
+            xRange={apWin ?? undefined}
+            yRange={[0, 100]}
+            yFormat={(v) => formatUtil(v)}
+            legendFormat={(v) => formatUtil(v)}
+          />
         </div>
       )}
       {traffic.timestamps.length > 0 && (

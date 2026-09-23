@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
 import {
   MERAKI_UPLINK_STATES,
+  merakiApHistorySeries,
   merakiApRadioReadingsShown,
   merakiPairLine,
   merakiRadioLines,
@@ -252,5 +253,59 @@ describe('merakiApRadioReadingsShown', () => {
     expect(merakiApRadioReadingsShown(0)).toBe(false);
     expect(merakiApRadioReadingsShown(1)).toBe(true);
     expect(merakiApRadioReadingsShown(null)).toBe(true);
+  });
+});
+
+describe('merakiApHistorySeries', () => {
+  const PAL = ['c0', 'c1', 'c2', 'c3', 'c4'];
+  const L = { clients: 'Clients', ssids: 'SSIDs', nonWifi: (b: string) => `${b} non-Wi-Fi` };
+  const p = (...pairs: [number, number][]) => pairs.map(([t, v]) => ({ t, v }));
+
+  // ADR-168: the card's history — counts on one chart, percentages on the other, each line placed
+  // by its own timestamps.
+  it('puts the counts and the utilization on separate charts, aligned by time', () => {
+    const { counts, util } = merakiApHistorySeries(
+      p([60, 7], [120, 9]),
+      p([120, 2]),
+      [
+        { row: 1, band: '2.4 GHz', util: p([60, 30], [120, 31.5]), nonWifi: p([60, 5.5]) },
+        { row: 2, band: '5 GHz', util: p([120, 8.5]), nonWifi: p([120, 0.6]) },
+      ],
+      PAL,
+      L,
+    );
+    expect(counts.timestamps).toEqual([60, 120]);
+    expect(counts.series).toEqual([
+      { label: 'Clients', values: [7, 9], color: 'c0' },
+      { label: 'SSIDs', values: [null, 2], color: 'c1' },
+    ]);
+    expect(util.timestamps).toEqual([60, 120]);
+    expect(util.series.map((s) => [s.label, s.values, s.color])).toEqual([
+      ['2.4 GHz', [30, 31.5], 'c0'],
+      ['2.4 GHz non-Wi-Fi', [5.5, null], 'c1'],
+      ['5 GHz', [null, 8.5], 'c2'],
+      ['5 GHz non-Wi-Fi', [null, 0.6], 'c3'],
+    ]);
+  });
+
+  it('leaves out a line with nothing stored and keeps the others on their colours', () => {
+    const { counts, util } = merakiApHistorySeries(
+      p([60, 3]),
+      [],
+      [
+        { row: 1, band: '2.4 GHz', util: [], nonWifi: [] },
+        { row: 2, band: '5 GHz', util: p([60, 4]), nonWifi: [] },
+      ],
+      PAL,
+      L,
+    );
+    expect(counts.series.map((s) => s.label)).toEqual(['Clients']);
+    expect(util.series).toEqual([{ label: '5 GHz', values: [4], color: 'c2' }]);
+  });
+
+  it('draws nothing for an access point with no history in the range', () => {
+    const { counts, util } = merakiApHistorySeries([], [], [], PAL, L);
+    expect(counts).toEqual({ timestamps: [], series: [] });
+    expect(util).toEqual({ timestamps: [], series: [] });
   });
 });

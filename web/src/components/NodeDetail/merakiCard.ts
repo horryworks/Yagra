@@ -272,3 +272,72 @@ export function merakiRadioLines(
 export function merakiApRadioReadingsShown(up: number | null): boolean {
   return up !== 0;
 }
+
+/** One line of a history chart before it is aligned: what it is called, its points, its colour. */
+interface HistoryLine {
+  label: string;
+  points: readonly MetricPoint[];
+  color: string;
+}
+
+/**
+ * Lines read back separately, on one time axis. Placed by timestamp — a point missing from one
+ * read must not shift another line — and a gap stays `null`, never `0`. A line with no stored
+ * point is left out rather than drawn as an empty legend entry.
+ */
+function alignedLines(lines: readonly HistoryLine[]): { timestamps: number[]; series: ChartSeries[] } {
+  const kept = lines.filter((l) => l.points.length > 0);
+  const at = new Set<number>();
+  for (const l of kept) for (const p of l.points) at.add(p.t);
+  const timestamps = [...at].sort((a, b) => a - b);
+  const series = kept.map((l) => ({
+    label: l.label,
+    values: alignTo(timestamps, [...l.points]),
+    color: l.color,
+  }));
+  return { timestamps, series };
+}
+
+/** One radio's stored history, as the card read it back (ADR-168). */
+export interface MerakiRadioHistory {
+  row: number;
+  band: string;
+  util: readonly MetricPoint[];
+  nonWifi: readonly MetricPoint[];
+}
+
+/**
+ * The two history charts on a Meraki access point's card (ADR-168): how many clients and SSIDs,
+ * and each radio's channel utilization with the part of it that was not Wi-Fi.
+ *
+ * - **Counts and percentages never share an axis** — 30 clients and 30% are different things, and
+ *   one scale would make whichever is smaller unreadable.
+ * - **Colour by the line's place in its chart**, fixed by the order the radios were read in (slot
+ *   order), so a radio that stored nothing this range does not move the others onto its colour.
+ * - The history is drawn **even while the access point is offline**: every point carries its own
+ *   time, unlike the tiles' latest value (`merakiApRadioReadingsShown`), and "it stopped at 14:05"
+ *   is exactly what the chart is for.
+ */
+export function merakiApHistorySeries(
+  clients: readonly MetricPoint[],
+  ssids: readonly MetricPoint[],
+  radios: readonly MerakiRadioHistory[],
+  palette: readonly string[],
+  labels: { clients: string; ssids: string; nonWifi: (band: string) => string },
+): {
+  counts: { timestamps: number[]; series: ChartSeries[] };
+  util: { timestamps: number[]; series: ChartSeries[] };
+} {
+  const color = (i: number) => palette[i % palette.length];
+  const counts = alignedLines([
+    { label: labels.clients, points: clients, color: color(0) },
+    { label: labels.ssids, points: ssids, color: color(1) },
+  ]);
+  const util = alignedLines(
+    radios.flatMap((r, i) => [
+      { label: r.band, points: r.util, color: color(2 * i) },
+      { label: labels.nonWifi(r.band), points: r.nonWifi, color: color(2 * i + 1) },
+    ]),
+  );
+  return { counts, util };
+}
