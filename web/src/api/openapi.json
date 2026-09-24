@@ -32309,7 +32309,7 @@
           "max_devices": {
             "type": "integer",
             "format": "int32",
-            "description": "The most nodes automatic import lets this organization hold.",
+            "description": "The most nodes automatic import lets this organization hold. A new organization starts at\n10,000; one added by an earlier version keeps the 1,000 it started with.",
             "minimum": 0
           },
           "name": {

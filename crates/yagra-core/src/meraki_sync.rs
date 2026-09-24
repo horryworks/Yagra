@@ -2110,8 +2110,8 @@ mod tests {
         .await;
         assert_eq!(
             r.org().await.max_devices,
-            1000,
-            "migration 0125's column default"
+            10_000,
+            "the column default a new organization starts with (migration 0134, ADR-164 決定 33)"
         );
         r.orgs
             .set_import_settings(r.org, true, true, 1)

@@ -9107,7 +9107,8 @@ export interface components {
             last_sync_ok?: boolean | null;
             /**
              * Format: int32
-             * @description The most nodes automatic import lets this organization hold.
+             * @description The most nodes automatic import lets this organization hold. A new organization starts at
+             *     10,000; one added by an earlier version keeps the 1,000 it started with.
              */
             max_devices: number;
             name: string;

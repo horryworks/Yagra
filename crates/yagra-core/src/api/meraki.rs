@@ -364,7 +364,8 @@ pub(crate) struct MerakiOrgView {
     import_devices: bool,
     /// Whether an imported device is filed by its address into the folder whose IP range holds it.
     file_by_prefix: bool,
-    /// The most nodes automatic import lets this organization hold.
+    /// The most nodes automatic import lets this organization hold. A new organization starts at
+    /// 10,000; one added by an earlier version keeps the 1,000 it started with.
     max_devices: u32,
     /// How many devices that cap left out on the last sync; zero while automatic import is off.
     devices_over_cap: u32,

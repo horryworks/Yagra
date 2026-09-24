@@ -1,0 +1,19 @@
+-- 0134_meraki_import_cap_default — a Meraki organization added from now on may import up to 10,000
+-- devices by default instead of 1,000 (ADR-164 決定 33).
+--
+-- reversible: only the column's DEFAULT changes. No row is written and nothing is dropped or
+-- narrowed; the CHECK (1–50,000) from 0125 stands. A core from before it names `max_devices`
+-- explicitly and never relies on the default, so rolling the binary back leaves every row as it
+-- is. No `schema_compat` floor, for the reason 0108 records: every release from 0.2.2 on tolerates
+-- a database carrying migrations it does not embed.
+--
+-- WHY
+-- 1,000 was set by 0125 as a brake against a surprise import of thousands of nodes, with no measured
+-- reason behind the number. A real organization of about 3,300 devices stopped at it on its first
+-- sync, and the operator raised it by hand every time the organization was added. 10,000 takes an
+-- organization of that size, three times over, without anyone touching it.
+--
+-- WHAT IT LEAVES ALONE
+-- Organizations already added keep the cap they have: a 1,000 on an existing row may be one an
+-- operator chose, and nothing tells the two apart.
+ALTER TABLE meraki_orgs ALTER COLUMN max_devices SET DEFAULT 10000;

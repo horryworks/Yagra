@@ -100,7 +100,8 @@ pub struct MerakiOrg {
     pub import_devices: bool,
     /// Whether an imported device is filed by its address into the folder whose IP range holds it.
     pub file_by_prefix: bool,
-    /// The most nodes automatic import lets this organization hold.
+    /// The most nodes automatic import lets this organization hold. The column defaults to 10,000
+    /// since migration 0134; an organization added before it keeps the 1,000 it was given.
     pub max_devices: u32,
     /// How many devices that cap left out on the last sync.
     pub devices_over_cap: u32,

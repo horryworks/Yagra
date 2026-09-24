@@ -808,9 +808,14 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const IMPORT_SETTINGS: i64 = 125;
+        // 0134 raises the cap's default for organizations added after it (ADR-164 決定 33), which
+        // is its own test below; this one stops before it, so it pins what 0125 did and nothing after.
+        const CAP_DEFAULT: i64 = 134;
         let embedded = embedded_migrations();
-        let (before, from): (Vec<_>, Vec<_>) =
-            embedded.iter().partition(|m| m.version < IMPORT_SETTINGS);
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .filter(|m| m.version < CAP_DEFAULT)
+            .partition(|m| m.version < IMPORT_SETTINGS);
         assert!(
             from.iter().any(|m| m.version == IMPORT_SETTINGS),
             "migration 0125 is not embedded"
@@ -865,6 +870,60 @@ mod tests {
             assert!(o.file_by_prefix, "{}", o.name);
             assert_eq!((o.max_devices, o.devices_over_cap), (1000, 0), "{}", o.name);
         }
+    }
+
+    /// **Migration 0134 raises the import cap only for an organization added after it** (ADR-164
+    /// 決定 33).
+    ///
+    /// It changes nothing but the column's default, so an organization already added keeps the 1,000
+    /// it was given — which may be one an operator chose, and nothing tells the two apart — while
+    /// one added afterwards starts at 10,000. The history is applied in two steps with an
+    /// organization created in between, for the reason the 0125 test above gives.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0134_raises_the_cap_only_for_organizations_added_after_it(
+        pool: sqlx::PgPool,
+    ) {
+        const CAP_DEFAULT: i64 = 134;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < CAP_DEFAULT);
+        assert!(
+            from.iter().any(|m| m.version == CAP_DEFAULT),
+            "migration 0134 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create("1", "Added before", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from before 0134");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create("2", "Added after", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from after 0134");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert_eq!(
+            old.max_devices, 1000,
+            "the upgrade changed the cap of an organization already added"
+        );
+        assert_eq!(new.max_devices, 10_000);
     }
 
     /// **Migration 0126 gives availability back to an organization saved without it, and touches no
