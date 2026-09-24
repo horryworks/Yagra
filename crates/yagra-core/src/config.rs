@@ -35,7 +35,8 @@ pub const MERAKI_SWITCH_PORTS_MAX_SECS: i32 = 600;
 /// bucket, and much past ten minutes a radio's row would be drawn as stale between two collects.
 pub const MERAKI_WIRELESS_MIN_SECS: i32 = 300;
 pub const MERAKI_WIRELESS_MAX_SECS: i32 = 600;
-/// Traffic tier cadence bounds (seconds).
+/// Traffic tier cadence bounds (seconds). The floor is the shortest usage window the Dashboard was
+/// measured to accept, and a new organization starts on it (migration 0135, ADR-164 決定 34).
 pub const MERAKI_TRAFFIC_MIN_SECS: i32 = 300;
 pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;
 /// Inventory sync cadence bounds (seconds). The floor was 900 while the tier did nothing; since
@@ -44,8 +45,8 @@ pub const MERAKI_TRAFFIC_MAX_SECS: i32 = 86_400;
 pub const MERAKI_INVENTORY_MIN_SECS: i32 = 60;
 pub const MERAKI_INVENTORY_MAX_SECS: i32 = 604_800;
 /// The most nodes one organization may be allowed to hold through automatic import (ADR-164).
-/// Mirrors the CHECK in migration 0125; the default a new organization starts with (1000) is that
-/// column's, and lives nowhere else. The cap is never silent: what it leaves out is written back
+/// Mirrors the CHECK in migration 0125; the default a new organization starts with (10,000 since
+/// migration 0134, ADR-164 決定 33) is that column's, and lives nowhere else. The cap is never silent: what it leaves out is written back
 /// as `devices_over_cap` and shown on the organization's page.
 pub const MERAKI_MAX_DEVICES_HARD: i32 = 50_000;
 /// Hard cap on the per-org request-rate budget (requests/sec) — a safeguard so an operator can't

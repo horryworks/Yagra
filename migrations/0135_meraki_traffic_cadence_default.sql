@@ -1,0 +1,20 @@
+-- 0135_meraki_traffic_cadence_default — a Meraki organization added from now on collects its MX
+-- uplinks' traffic every five minutes by default instead of every thirty (ADR-164 決定 34).
+--
+-- reversible: only the column's DEFAULT changes. No row is written and nothing is dropped or
+-- narrowed; the CHECK (300–86,400) from 0038 stands. A core from before it leaves the column out
+-- when it adds an organization, so after a rollback a new organization simply starts at 300 — a
+-- value the CHECK has allowed since 0038, and every release reads it. No `schema_compat` floor, for
+-- the reason 0108 records: every release from 0.2.2 on tolerates a database carrying migrations it
+-- does not embed.
+--
+-- WHY
+-- 0038 chose 1,800 when the traffic tier read `summary/top/devices/byUsage`, and recorded no reason
+-- for thirty minutes. Since 決定 23 the tier reads `appliance/uplinks/usage/byNetwork`: one request
+-- per organization, about half a second, no paging, and a 300-second window is accepted. The default
+-- outlived the read it was chosen for, and an MX's WAN chart drew one step every half hour.
+--
+-- WHAT IT LEAVES ALONE
+-- Organizations already added keep the interval they have: a 1,800 on an existing row may be one an
+-- operator chose, and nothing tells the two apart.
+ALTER TABLE meraki_orgs ALTER COLUMN traffic_secs SET DEFAULT 300;

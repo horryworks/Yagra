@@ -2092,7 +2092,8 @@ mod tests {
             "the org is not bound to its own deterministic root group"
         );
         // The last one is the device sync interval. It was 21600 until migration 0124 made the sync
-        // what brings a new device in, and moved its default to five minutes (ADR-164).
+        // what brings a new device in, and moved its default to five minutes (ADR-164). Traffic was
+        // 1800 until migration 0135 (ADR-164 決定 34): the tier's read takes a five-minute window.
         assert_eq!(
             (
                 org.availability_secs,
@@ -2100,7 +2101,7 @@ mod tests {
                 org.traffic_secs,
                 org.inventory_secs
             ),
-            (300, 300, 1800, 300),
+            (300, 300, 300, 300),
             "the per-tier cadence defaults are not what the migrations declare"
         );
         assert!((org.target_rps - 2.0).abs() < f64::EPSILON);

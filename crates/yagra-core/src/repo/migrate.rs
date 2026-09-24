@@ -926,6 +926,60 @@ mod tests {
         assert_eq!(new.max_devices, 10_000);
     }
 
+    /// **Migration 0135 shortens the traffic interval only for an organization added after it**
+    /// (ADR-164 決定 34).
+    ///
+    /// Like 0134 it changes nothing but the column's default: an organization already added keeps
+    /// the 1,800 seconds it was given — which may be one an operator chose — while one added
+    /// afterwards collects its MX uplinks' traffic every 300. The history is applied in two steps
+    /// with an organization created in between, for the reason the 0125 test above gives.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0135_shortens_the_traffic_interval_only_for_organizations_added_after_it(
+        pool: sqlx::PgPool,
+    ) {
+        const TRAFFIC_DEFAULT: i64 = 135;
+        let embedded = embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < TRAFFIC_DEFAULT);
+        assert!(
+            from.iter().any(|m| m.version == TRAFFIC_DEFAULT),
+            "migration 0135 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create("1", "Added before", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from before 0135");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create("2", "Added after", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from after 0135");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert_eq!(
+            old.traffic_secs, 1800,
+            "the upgrade changed the traffic interval of an organization already added"
+        );
+        assert_eq!(new.traffic_secs, 300);
+    }
+
     /// **Migration 0126 gives availability back to an organization saved without it, and touches no
     /// other row** (ADR-164 決定 17).
     ///
