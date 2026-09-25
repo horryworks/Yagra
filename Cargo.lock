@@ -5064,7 +5064,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "async-trait",
  "serde",
@@ -5078,7 +5078,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-authz"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "data-encoding",
  "nkeys",
@@ -5091,7 +5091,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -5110,7 +5110,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "serde",
  "serde_json",
@@ -5120,7 +5120,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5181,7 +5181,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "regex",
  "serde_json",
@@ -5190,7 +5190,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-forward"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "chrono",
  "regex",
@@ -5206,7 +5206,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-hoststats"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "libc",
  "sysinfo",
@@ -5216,7 +5216,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-ingest"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -5224,7 +5224,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-poller"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5253,7 +5253,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5263,7 +5263,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-telemetry"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
@@ -5280,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "uuid",
  "yagra-common",
@@ -5288,7 +5288,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-transport"
-version = "0.3.31"
+version = "0.3.32"
 dependencies = [
  "async-trait",
  "csnmp",

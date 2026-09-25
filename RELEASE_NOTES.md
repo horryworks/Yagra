@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.32 — Deleting a folder deletes everything beneath it, the whole inventory or one folder can be sorted by IP range, the inventory tree's filters sit behind one button, Discovery sweeps a /20 in one scan, NetBox Sync now and AI root-cause explanations finish after the tab closes, 22 Meraki integration fixes
+
 ### Breaking changes
 
 - **Deleting a folder now deletes everything beneath it.** `DELETE /api/v1/node-groups/{id}` removes the folder, every folder under it at any depth, and every node filed in any of them, in one transaction. It used to move the folder's direct sub-folders and nodes up to its parent and delete no node. There is no undo: the nodes' settings, thresholds and bindings go with them (their metric history and alert history stay). A node elsewhere that named one of the deleted nodes as its dependency parent keeps its row and loses that parent. Integration folders are no exception — the devices under a Meraki organization's folder stay deleted until imported again by hand, and a NetBox folder comes back empty on the next sync. The route now also honours a group-scoped token: a folder outside the caller's folders answers `404` and nothing is deleted (it used to be reachable by any role holding Manage monitoring). In the WebUI the confirmation counts the folders and nodes that will go and, when there is anything beneath the folder, keeps **Delete** disabled until the folder's name is typed. Removing a Meraki organization now also removes any folder an operator made inside its network folders, and anything filed there — such a folder used to fall to the top of the tree.

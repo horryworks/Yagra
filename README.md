@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.31 — A folder lists the subnets its devices carry that its IP prefixes do not cover, the inventory tree draws its branches, a new Meraki organization is read whole before anything is imported, Sync now re-reads an organization in the background, a page of the node list no longer reads unknown for nodes that are up**
+> Status: **v0.3.32 — Deleting a folder deletes everything beneath it, the whole inventory or one folder can be sorted by IP range, the inventory tree's filters sit behind one button, Discovery sweeps a /20 in one scan, NetBox Sync now and AI root-cause explanations finish after the tab closes, 22 Meraki integration fixes**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
