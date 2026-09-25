@@ -629,7 +629,18 @@ export function MerakiIntegrationPage() {
   // A read asked for by "Sync now", or an organization's first, runs for minutes: keep the rows
   // moving while one does (ADR-164 決定 32). The list is small, so one read serves both halves.
   const reading = orgs.some((o) => orgFullRead(o, pollingOn).kind !== 'none');
-  useMerakiReadWatch(reading, load, load);
+  // Not `load`: that one blocks the whole page on a failure, and the next poll is five seconds
+  // away — one dropped read would replace every row with the load-failure notice. Here a failure
+  // only leaves the progress where it was, as on the organization page.
+  const pollOrgs = useCallback(() => {
+    Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
+      .then(([list, polling]) => {
+        setOrgs(list);
+        setPollingOn(polling.enabled);
+      })
+      .catch(() => undefined);
+  }, []);
+  useMerakiReadWatch(reading, pollOrgs, load);
 
   // Apart from `load` on purpose. Joined to its `Promise.all`, a credentials read that failed
   // would block the whole page over an annotation — so a failure here only means "no names".

@@ -1214,6 +1214,89 @@ mod tests {
         );
     }
 
+    /// `get_prefix_gaps` withholds another folder's range from a scoped caller exactly as
+    /// `GET /node-groups/:id/prefix-gaps` does (ADR-170, ADR-014), and a folder outside the scope
+    /// answers "not available" rather than its report. The unrestricted call first, so the
+    /// withheld fields are known to exist when there is nothing to hide.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_is_not_told_whose_range_a_gap_falls_in(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let folder = |name: &'static str| {
+            let st = st.clone();
+            let tok = tok.clone();
+            async move {
+                let (_, body) = send(
+                    &st,
+                    "POST",
+                    "/api/v1/node-groups",
+                    &tok,
+                    Some(serde_json::json!({ "name": name, "group_type": "site" })),
+                )
+                .await;
+                body["id"]
+                    .as_str()
+                    .expect("id")
+                    .parse::<Uuid>()
+                    .expect("uuid")
+            }
+        };
+        let site = folder("site-a").await;
+        let other = folder("site-b").await;
+        crate::pgtest::prefix(&pool, other, "10.9.0.0/24").await;
+        let node = crate::pgtest::node(&pool, "cs-a", 1, Some(site)).await;
+        crate::l3::L3Repo::new(pool.clone())
+            .record_observation(
+                node,
+                &yagra_common::L3Snapshot::new(vec![yagra_common::L3Address::new(
+                    1,
+                    "10.9.0.5".parse().expect("ip"),
+                    24,
+                )]),
+            )
+            .await
+            .expect("record");
+
+        let tool = YagraMcp::new(st.clone());
+        let gap = |r: &CallToolResult| json_of(r)["gaps"][0].clone();
+
+        let r = tool
+            .prefix_gaps_in(PrefixGapsParams { group_id: site }, &unrestricted())
+            .await
+            .expect("ok result");
+        let open = gap(&r);
+        assert_eq!(open["kind"], "other_folder", "{open}");
+        assert_eq!(open["range_group"], other.to_string(), "{open}");
+        assert_eq!(open["range_group_name"], "site-b", "{open}");
+
+        let scoped = NodeScope::Groups(std::sync::Arc::new(crate::api::scope::ScopeSet {
+            visible: crate::api::scope::subtree_of(&st, site)
+                .await
+                .expect("subtree"),
+            breadcrumb: Vec::new(),
+        }));
+        let r = tool
+            .prefix_gaps_in(PrefixGapsParams { group_id: site }, &scoped)
+            .await
+            .expect("ok result");
+        let hidden = gap(&r);
+        assert_eq!(hidden["kind"], "other_folder", "{hidden}");
+        assert!(hidden["range"].is_null(), "range withheld: {hidden}");
+        assert!(hidden["range_group"].is_null(), "folder withheld: {hidden}");
+        assert!(
+            hidden["range_group_name"].is_null(),
+            "name withheld: {hidden}"
+        );
+
+        let r = tool
+            .prefix_gaps_in(PrefixGapsParams { group_id: other }, &scoped)
+            .await
+            .expect("ok result");
+        assert_eq!(json_of(&r)["available"], false, "{}", text_of(&r));
+    }
+
     /// A half-specified keyset cursor is a protocol error on this surface as it is over REST.
     /// Dropping it would restart paging from the newest page, so a client walking the history would
     /// loop over page one forever while looking like it was progressing.

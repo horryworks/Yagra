@@ -98,12 +98,12 @@ mod coordinator;
 /// How far apart each node's polls are, shared with the readers outside the scheduler (ADR-144).
 mod poll_interval;
 mod pollers;
-// Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170).
 mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
 mod poolres;
 /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
 mod preferences;
+// Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170).
 mod prefix_gaps;
 mod public_access;
 mod ratelimit;

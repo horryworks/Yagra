@@ -2,7 +2,7 @@
 // The folder pane's "subnets missing from the IP prefixes" section (ADR-170). Layout only — what
 // each line says is decided in `prefixGaps.ts`.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError, errMsg } from '../../services/api';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -17,7 +17,14 @@ export function PrefixGaps({ groupId }: { groupId: string }) {
   const [report, setReport] = useState<PrefixGapReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // A folder over the server's device cap answers `too_many_nodes` every time, and finding that out
+  // costs the server a read of every device id under the folder. Ask again when the folder changes,
+  // not on every refresh tick.
+  const refusedFor = useRef<string | null>(null);
+
   useEffect(() => {
+    if (refusedFor.current === groupId) return undefined;
+    refusedFor.current = null;
     let cancelled = false;
     api
       .getPrefixGaps(groupId)
@@ -28,12 +35,10 @@ export function PrefixGaps({ groupId }: { groupId: string }) {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
+        const tooMany = e instanceof ApiError && e.code === 'too_many_nodes';
+        if (tooMany) refusedFor.current = groupId;
         setReport(null);
-        setError(
-          e instanceof ApiError && e.code === 'too_many_nodes'
-            ? t('prefixGaps.tooMany')
-            : errMsg(e, t('prefixGaps.err')),
-        );
+        setError(tooMany ? t('prefixGaps.tooMany') : errMsg(e, t('prefixGaps.err')));
       });
     return () => {
       cancelled = true;

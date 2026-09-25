@@ -8,8 +8,8 @@ import type { PrefixGap, PrefixGapReport } from '../../types/api';
 export type { PrefixGap, PrefixGapReport };
 
 /** Why a subnet is reported, in the server's order. ⚠️ **Keep the array on one line**:
- *  `yagra-core`'s `prefix_gaps.rs::the_webuis_kind_list_is_this_enum_in_order` reads it. The label
- *  is built at runtime (`` t(`prefixGaps.kind.${kind}`) ``), so `i18nEnumKeys.test.ts` iterates it. */
+ *  `yagra-core`'s `prefix_gaps.rs::the_webuis_kind_list_is_this_enum_in_order` reads it.
+ *  `i18nEnumKeys.test.ts` iterates it so every kind has a label in both locales. */
 export const PREFIX_GAP_KINDS = ['unregistered', 'partial', 'other_folder', 'parent_only'] as const;
 
 export type PrefixGapKind = (typeof PREFIX_GAP_KINDS)[number];
