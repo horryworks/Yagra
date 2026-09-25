@@ -98,7 +98,9 @@ test('a sidebar item returns to its own search term after a visit to a sibling i
   await expect(box).toHaveValue('sw');
 
   await sideItem(page, 'Discovery').click();
-  await expect(page).toHaveURL(/\/nodes\/discovery$/);
+  // Discovery reattaches to its newest sweep on arrival and writes `?scan=` (ADR-068), so whether
+  // the id is in the URL yet depends on when the scan list answers — either is the right page.
+  await expect(page).toHaveURL(/\/nodes\/discovery(\?scan=[^&]+)?$/);
 
   await sideItem(page, 'All nodes').click();
   // Before 増分 3 the link was the bare `/nodes`, and the box came back empty.

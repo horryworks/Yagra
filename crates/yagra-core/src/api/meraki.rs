@@ -711,12 +711,15 @@ fn no_org(id: Uuid) -> ApiError {
     ApiError::not_found("meraki_org_not_found", format!("no meraki org {id}"))
 }
 
-/// Delete an organization: removes its device nodes, config, and folder tree.
+/// Delete an organization, its folder tree, and every node filed beneath that tree (ADR-174).
+///
+/// "Every node" includes nodes Meraki did not import: the tree goes the way any folder deletion
+/// does, so a device an operator filed under the organization's folders goes with it.
 #[utoipa::path(
     delete, path = "/api/v1/meraki/orgs/{id}", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     responses(
-        (status = 204, description = "Organization, its device nodes and its folder tree removed"),
+        (status = 204, description = "Organization and its folder tree removed, with every node filed beneath that tree — including nodes Meraki did not import and sub-folders an operator added"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),

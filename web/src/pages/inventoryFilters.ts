@@ -97,7 +97,7 @@ export function inventoryColumns(
   return specColumns(inventoryFilterSpecs(t, pools));
 }
 
-/** Plain-text names for the bar and the mobile sheet. */
+/** Plain-text names for the filter popover and the chips that say what is in force. */
 export function inventoryFilterLabels(t: TFunction): Record<string, string> {
   return {
     state: t('inventory.cols.state'),

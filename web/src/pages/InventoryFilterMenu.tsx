@@ -102,8 +102,9 @@ export function InventoryFilterButton(p: InventoryFilterProps) {
   const label = t('inventory.filterMenu.label');
   return (
     <span ref={anchorRef} className="invf-anchor">
-      <button
+      <Button
         type="button"
+        variant="outline"
         className={count > 0 ? 'nodes-pane-add invf-trigger on' : 'nodes-pane-add invf-trigger'}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -113,7 +114,7 @@ export function InventoryFilterButton(p: InventoryFilterProps) {
       >
         <FunnelIcon />
         {count > 0 && <span className="invf-count">{count}</span>}
-      </button>
+      </Button>
       <AnchoredPopover
         open={open}
         anchorRef={anchorRef}

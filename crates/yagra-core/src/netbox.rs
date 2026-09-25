@@ -1834,6 +1834,13 @@ async fn sync_server_marked(
                 sites = report.sites,
                 missing = report.missing,
                 without_site_id = report.sites_without_site_id,
+                // Since "Sync now" became a request (ADR-172) no response carries the report, so
+                // this line is the only place a token refused `ipam.view_prefix` is told apart
+                // from a NetBox with no prefixes.
+                prefixes_readable = report.prefixes_readable,
+                prefixes = report.prefixes,
+                prefixes_skipped = report.prefixes_skipped,
+                folders_changed = report.folders_changed,
                 "netbox sync completed"
             );
             Ok(report)

@@ -663,11 +663,14 @@ impl RcaOrchestrator {
     }
 }
 
-/// The cache key: the evidence, plus everything else that changes the answer.
+/// A record of what was asked: the evidence, plus everything else that changes the answer. Stored
+/// on the report as `context_digest`.
 ///
-/// Provider, model and language are folded in because switching any of them produces a genuinely
-/// different report — serving a Gemini answer to someone who has since moved to Claude would make
-/// the stored `provider` column a lie.
+/// ⚠️ **No longer the cache key.** Since ADR-172 決定 3 a report is reused for any request about the
+/// same incident (root node, check, language) within the TTL, so switching provider, model or tool
+/// mode serves the earlier report for up to fifteen minutes. That is the cost the decision accepted;
+/// "regenerate" (`force`) is the way past it. The stored `provider` column stays true either way —
+/// it names the provider that wrote the report being served.
 fn digest_of(
     ctx: &IncidentContext,
     config: &ActiveConfig,
@@ -683,8 +686,8 @@ fn digest_of(
     h.update(b"\x00");
     h.update(format!("{lang:?}").as_bytes());
     // ADR-028 WS-G. The seed context is identical in both modes — agentic retrieval adds turns, not
-    // a different question — so without this a deployment that turned tools on would keep serving
-    // pre-tool answers from the cache for fifteen minutes and look like the feature had not shipped.
+    // a different question — so without this two reports asked in different modes would record the
+    // same digest. (It no longer keeps the cache apart: see the doc above.)
     h.update(b"\x00");
     h.update(if agentic { "agentic" } else { "single" }.as_bytes());
     hex(&h.finalize())
@@ -1034,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn switching_model_provider_or_language_misses_the_cache() {
+    fn switching_model_provider_or_language_changes_the_digest() {
         let base = digest_of(
             &ctx(),
             &config(ProviderKind::Claude, "m"),

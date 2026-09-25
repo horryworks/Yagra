@@ -7757,7 +7757,8 @@
         "tags": [
           "meraki"
         ],
-        "summary": "Delete an organization: removes its device nodes, config, and folder tree.",
+        "summary": "Delete an organization, its folder tree, and every node filed beneath that tree (ADR-174).",
+        "description": "\"Every node\" includes nodes Meraki did not import: the tree goes the way any folder deletion\ndoes, so a device an operator filed under the organization's folders goes with it.",
         "operationId": "delete_meraki_org",
         "parameters": [
           {
@@ -7773,7 +7774,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Organization, its device nodes and its folder tree removed"
+            "description": "Organization and its folder tree removed, with every node filed beneath that tree — including nodes Meraki did not import and sub-folders an operator added"
           },
           "401": {
             "description": "No valid bearer token",
@@ -11370,7 +11371,7 @@
             }
           },
           "400": {
-            "description": "An unknown destination folder, a node named for two folders, or more ids in total than one request may carry. Nothing moved",
+            "description": "An unknown destination folder, a folder named twice (`duplicate_destination`), a node named for two folders, or more ids in total than one request may carry. Nothing moved",
             "content": {
               "application/json": {
                 "schema": {
@@ -11519,6 +11520,16 @@
               }
             }
           },
+          "400": {
+            "description": "The folder does not exist (`invalid_group`) — answered to a caller who may see every folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid bearer token",
             "content": {
@@ -11540,7 +11551,7 @@
             }
           },
           "404": {
-            "description": "The folder does not exist or is not one this caller may see",
+            "description": "The folder is not one this caller may see",
             "content": {
               "application/json": {
                 "schema": {

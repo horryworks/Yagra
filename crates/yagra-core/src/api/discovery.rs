@@ -745,7 +745,7 @@ async fn import_discovered(
     // The addresses the rule still has to decide: a row the operator named a folder for is already
     // settled, and asking the matcher about it would only invite the answer to overwrite the
     // choice. Collected before the rule runs so the two cannot disagree.
-    let chosen: Vec<IpAddr> = body
+    let chosen: HashSet<IpAddr> = body
         .nodes
         .iter()
         .zip(prepared.iter())

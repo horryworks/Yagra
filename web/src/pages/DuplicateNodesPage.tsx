@@ -147,7 +147,7 @@ export function DuplicateNodesPage() {
         header: t('duplicates.cols.address'),
         width: '150px',
         render: (r) => (
-          <span className="mono" title={r.member.address}>
+          <span className="mono" title={addressText(r.member.address, t)}>
             {addressText(r.member.address, t)}
           </span>
         ),

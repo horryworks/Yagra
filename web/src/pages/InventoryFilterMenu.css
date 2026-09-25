@@ -28,7 +28,7 @@
   padding: 0 4px;
   border-radius: 8px;
   background: var(--accent-color);
-  color: var(--brand-mark);
+  color: var(--on-brand);
   font-size: var(--font-2xs);
   font-weight: 700;
   line-height: 16px;
@@ -150,7 +150,7 @@
 
 .invf-sw input:checked + .invf-sw-track::after {
   transform: translateX(12px);
-  background: var(--brand-mark);
+  background: var(--on-brand);
 }
 
 .invf-sw input:focus-visible + .invf-sw-track {

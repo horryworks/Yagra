@@ -116,14 +116,6 @@
 }
 
 /* The chip row under the pane head (ADR-177 — it held the filter controls themselves before). */
-/* The state / kind / pool controls, on their own row under the pane head. Wrapping rather than
-   sharing the head's row: the pane is narrow by design (and narrower still on mobile), and three
-   controls beside the search box would squeeze it to nothing.
-   ⚠️ **That is what this file has said since the row was written, and the markup did not do it** —
-   the row was a *child* of `.nodes-pane-head`, which is a single-line flex row with a fixed 38px
-   height, so it shared the line with the title, the buttons and the search box and rendered as
-   nothing. A comment describing the intended layout is not the layout; it was a sibling only in
-   prose until 2026-08-14. `flex: none` keeps its natural height inside the pane's flex column. */
 .nodes-pane-filters {
   display: flex;
   flex-wrap: wrap;
@@ -178,7 +170,6 @@
   font-size: var(--font-xs);
 }
 
-/* The pane is narrow, so the bar's triggers wrap rather than each taking a fixed floor. */
 /* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). No handle
    is rendered while railed — there is nothing to proportion — so this is a two-column grid and the
    gap comes back as a gap. */

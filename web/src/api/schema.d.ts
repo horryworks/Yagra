@@ -1536,7 +1536,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete an organization: removes its device nodes, config, and folder tree. */
+        /**
+         * Delete an organization, its folder tree, and every node filed beneath that tree (ADR-174).
+         * @description "Every node" includes nodes Meraki did not import: the tree goes the way any folder deletion
+         *     does, so a device an operator filed under the organization's folders goes with it.
+         */
         delete: operations["delete_meraki_org"];
         options?: never;
         head?: never;
@@ -19302,7 +19306,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Organization, its device nodes and its folder tree removed */
+            /** @description Organization and its folder tree removed, with every node filed beneath that tree — including nodes Meraki did not import and sub-folders an operator added */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -22223,7 +22227,7 @@ export interface operations {
                     "application/json": components["schemas"]["PrefixMoveResult"];
                 };
             };
-            /** @description An unknown destination folder, a node named for two folders, or more ids in total than one request may carry. Nothing moved */
+            /** @description An unknown destination folder, a folder named twice (`duplicate_destination`), a node named for two folders, or more ids in total than one request may carry. Nothing moved */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -22352,6 +22356,15 @@ export interface operations {
                     "application/json": components["schemas"]["SubtreeMovePreviewResult"];
                 };
             };
+            /** @description The folder does not exist (`invalid_group`) — answered to a caller who may see every folder */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description No valid bearer token */
             401: {
                 headers: {
@@ -22370,7 +22383,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The folder does not exist or is not one this caller may see */
+            /** @description The folder is not one this caller may see */
             404: {
                 headers: {
                     [name: string]: unknown;

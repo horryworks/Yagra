@@ -718,6 +718,10 @@ fn changes_monitoring_config(path: &str) -> bool {
         // rebuilds reads; the read it asks for runs in the leader's sync loop, and whatever that
         // changes it bumps itself. Counted, every press re-resolved the whole fleet (増分 18).
         || (path.starts_with("/api/v1/meraki/orgs/") && path.ends_with("/sync"))
+        // NetBox's "Sync now" has the same shape since ADR-172: it writes `sync_requested_at` and
+        // nothing else, and the sync loop bumps the generation itself when a folder actually
+        // changes (ADR-178 決定 7). Counted, every press re-resolved the whole fleet for nothing.
+        || (path.starts_with("/api/v1/netbox/servers/") && path.ends_with("/sync"))
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1838,6 +1842,20 @@ mod tests {
         ));
         assert!(changes_monitoring_config("/api/v1/node-groups/abc/pool"));
         assert!(changes_monitoring_config("/api/v1/node-groups/abc"));
+    }
+
+    /// Both integrations' "Sync now" only record a request; the sync loop that serves it bumps the
+    /// generation itself when something it writes changes. Nothing else keeps these exempt.
+    #[test]
+    fn asking_an_integration_to_sync_does_not_dirty_the_config_generation() {
+        assert!(!changes_monitoring_config("/api/v1/meraki/orgs/abc/sync"));
+        assert!(!changes_monitoring_config(
+            "/api/v1/netbox/servers/abc/sync"
+        ));
+        // The suffix match must not swallow the writes beside them, which do invalidate.
+        assert!(changes_monitoring_config("/api/v1/netbox/servers/abc"));
+        assert!(changes_monitoring_config("/api/v1/netbox/servers"));
+        assert!(changes_monitoring_config("/api/v1/meraki/orgs/abc"));
     }
 
     /// A route registered with a mutating method whose handler asks only for a **read** permission

@@ -2169,7 +2169,7 @@ pub(super) struct PrefixMoveResult {
     request_body = PrefixMoveReq,
     responses(
         (status = 200, description = "Every destination was written, in one transaction; the counts say how many of each moved", body = PrefixMoveResult),
-        (status = 400, description = "An unknown destination folder, a node named for two folders, or more ids in total than one request may carry. Nothing moved", body = super::error::ErrorBody),
+        (status = 400, description = "An unknown destination folder, a folder named twice (`duplicate_destination`), a node named for two folders, or more ids in total than one request may carry. Nothing moved", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "A destination folder is not one this caller may act on. Nothing moved", body = super::error::ErrorBody),
@@ -2458,8 +2458,9 @@ pub(super) struct SubtreeMovePreviewResult {
     responses(
         (status = 200, description = "Which folder's IP range contains the address of each node in the subtree (or the whole inventory)", body = SubtreeMovePreviewResult),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 400, description = "The folder does not exist (`invalid_group`) — answered to a caller who may see every folder", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "The folder does not exist or is not one this caller may see", body = super::error::ErrorBody),
+        (status = 404, description = "The folder is not one this caller may see", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
