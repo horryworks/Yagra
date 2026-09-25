@@ -37450,7 +37450,7 @@
       },
       "ScanSummary": {
         "type": "object",
-        "description": "One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.\n\nThe omission is the point: 20 retained scans of up to 1024 candidates each would make listing\nthem far more expensive than the question deserves. A caller that wants a scan's candidates asks\nfor that scan.",
+        "description": "One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.\n\nThe omission is the point: 20 retained scans of up to 4096 candidates each would make listing\nthem far more expensive than the question deserves. A caller that wants a scan's candidates asks\nfor that scan.",
         "required": [
           "scan_id",
           "state",

@@ -40,10 +40,15 @@ use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
 
-/// Most targets a single scan may sweep. The cap is what keeps one request from becoming an
-/// unbounded outbound scan of someone else's network. The import and its preview hold to it too:
-/// they carry what one sweep found.
-const MAX_SCAN_TARGETS: usize = 1024;
+/// Most targets a single scan may sweep — a /20 (ADR-173). The cap is what keeps one request from
+/// becoming an unbounded outbound scan of someone else's network. The import and its preview hold
+/// to it too: they carry what one sweep found.
+///
+/// ⚠️ **Not the size of a bus message.** A scan this wide goes out as several jobs of at most
+/// [`crate::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to fit in
+/// one NATS message; raising this number costs more jobs, never a bigger message. It was 1024
+/// while one scan was one job.
+const MAX_SCAN_TARGETS: usize = 4096;
 
 /// Default page size for the discovered-endpoint list.
 const ENDPOINT_DEFAULT_LIMIT: i64 = 100;
@@ -1553,9 +1558,10 @@ mod tests {
     /// The poller republishes the **whole** candidate list on every chunk — `DiscoveryResult::found`
     /// is cumulative by design, so that an older core reading one message as final still converges
     /// (ADR-017). The largest such message a single request can provoke is therefore bounded by
-    /// [`MAX_SCAN_TARGETS`], here, and the ceiling it must clear is NATS's `max_payload`, which is
-    /// 1 MiB unless the server config says otherwise (`docker/nats/nats-server.conf` now says so
-    /// out loud rather than inheriting it).
+    /// the widest **job**, [`JOB_TARGETS`] — since ADR-173 a scan wider than that goes out as
+    /// several jobs, so [`MAX_SCAN_TARGETS`] no longer sets it — and the ceiling it must clear is
+    /// NATS's `max_payload`, which is 1 MiB unless the server config says otherwise
+    /// (`docker/nats/nats-server.conf` now says so out loud rather than inheriting it).
     ///
     /// Exceeding it fails the way this feature has already failed twice: the publish is rejected,
     /// the poller logs one warning, no terminal result is ever sent, and the scan sits at
@@ -1576,11 +1582,12 @@ mod tests {
     fn a_full_sweep_of_the_widest_devices_still_fits_in_one_bus_message() {
         // NATS's default, restated here as well as in the server config. The config is loaded on
         // one deployment shape (the remote-poller one); this bound applies to all of them.
+        use crate::discovery::JOB_TARGETS;
         const NATS_MAX_PAYLOAD: usize = 1024 * 1024;
         const OBSERVED_WORST_SYSDESCR: usize = 384;
 
         fn message_bytes(sysdescr_len: usize) -> usize {
-            let found: Vec<yagra_bus::DiscoveredDevice> = (0..MAX_SCAN_TARGETS)
+            let found: Vec<yagra_bus::DiscoveredDevice> = (0..JOB_TARGETS)
                 .map(|i| yagra_bus::DiscoveredDevice {
                     address: std::net::IpAddr::V6(std::net::Ipv6Addr::new(
                         0x2001,
@@ -1599,7 +1606,7 @@ mod tests {
                     matched_credential: Some(Uuid::from_u128(1)),
                 })
                 .collect();
-            let targets = u32::try_from(MAX_SCAN_TARGETS).unwrap_or(u32::MAX);
+            let targets = u32::try_from(JOB_TARGETS).unwrap_or(u32::MAX);
             serde_json::to_vec(&yagra_bus::DiscoveryResult {
                 scan_id: Uuid::from_u128(7),
                 found,
@@ -1615,7 +1622,7 @@ mod tests {
         let realistic = message_bytes(OBSERVED_WORST_SYSDESCR);
         assert!(
             realistic < NATS_MAX_PAYLOAD,
-            "a full sweep of {MAX_SCAN_TARGETS} devices at the longest sysDescr seen on real              hardware serializes to {realistic} bytes, past the {NATS_MAX_PAYLOAD}-byte bus limit              -- such a sweep would end with no terminal message and sit at `running` forever"
+            "a full job of {JOB_TARGETS} devices at the longest sysDescr seen on real              hardware serializes to {realistic} bytes, past the {NATS_MAX_PAYLOAD}-byte bus limit              -- such a sweep would end with no terminal message and sit at `running` forever"
         );
 
         // The margin as a number rather than an adjective: how long a sysDescr this budget can
@@ -1626,9 +1633,19 @@ mod tests {
         let break_even = lengths.partition_point(|&n| message_bytes(n) < NATS_MAX_PAYLOAD);
         assert!(
             (750..CEILING).contains(&break_even),
-            "the budget absorbs a sysDescr of {break_even} bytes on every one of              {MAX_SCAN_TARGETS} devices before the message stops fitting. Below 750 the margin              over the {OBSERVED_WORST_SYSDESCR} bytes measured on real hardware is too thin to              call a margin -- if a field was just added to DiscoveredDevice, this is the number              that has to be re-decided rather than the floor that has to be lowered. At {CEILING}              nothing was found to fail at all, which would mean this test measures nothing."
+            "the budget absorbs a sysDescr of {break_even} bytes on every one of              {JOB_TARGETS} devices before the message stops fitting. Below 750 the margin              over the {OBSERVED_WORST_SYSDESCR} bytes measured on real hardware is too thin to              call a margin -- if a field was just added to DiscoveredDevice, this is the number              that has to be re-decided rather than the floor that has to be lowered. At {CEILING}              nothing was found to fail at all, which would mean this test measures nothing."
         );
     }
+    /// The other half of ADR-173: the widest scan the API accepts is a handful of jobs, each no
+    /// wider than the one the test above measured. A cap raised past four jobs is a decision about
+    /// how long a sweep may hold the poller's sequential job loop, not a free change.
+    #[test]
+    fn the_widest_scan_is_a_few_jobs_no_wider_than_one_bus_message_holds() {
+        use crate::discovery::JOB_TARGETS;
+        assert_eq!(MAX_SCAN_TARGETS, 4096, "a /20");
+        assert_eq!(MAX_SCAN_TARGETS.div_ceil(JOB_TARGETS), 4);
+    }
+
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A sweep is accepted and becomes a scan the caller can look up by id.

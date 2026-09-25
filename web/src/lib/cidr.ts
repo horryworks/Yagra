@@ -4,6 +4,11 @@
 // A spec is a comma/whitespace-separated list whose tokens may each be a single IPv4, an IPv4
 // CIDR, or an inclusive range.
 
+/** The most addresses one sweep may carry — a /20 (`MAX_SCAN_TARGETS` in `api/discovery.rs`,
+ *  ADR-173). Core cuts a sweep this wide into several poller jobs; the screen never needs to know.
+ *  It was 1024 while one sweep was one job. */
+export const SWEEP_LIMIT = 4096;
+
 /** Parse a dotted-quad IPv4 into a uint32, or null if malformed. */
 function parseIp(s: string): number | null {
   const octets = s.split('.');
@@ -53,7 +58,7 @@ function expandRange(token: string, max: number): string[] {
  *  ("192.168.1.0/24"), or an inclusive range ("192.168.1.10-192.168.1.20" or shorthand
  *  "192.168.1.10-20"). De-duplicates (first-seen order preserved). Returns [] if the spec is
  *  empty, any token is malformed/over-cap, or the combined total exceeds `max`. */
-export function expandTargets(input: string, max = 1024): string[] {
+export function expandTargets(input: string, max = SWEEP_LIMIT): string[] {
   const tokens = input
     .split(/[,\s]+/)
     .map((t) => t.trim())
@@ -86,7 +91,7 @@ export function expandTargets(input: string, max = 1024): string[] {
 /** Expand an IPv4 CIDR (e.g. "192.168.1.0/24") into host IPs, or return [ip] for a bare address.
  *  Returns [] for malformed input or a range larger than `max`. Network + broadcast are
  *  excluded for prefixes ≤ /30; /31 and /32 include all addresses. */
-export function expandCidr(input: string, max = 1024): string[] {
+export function expandCidr(input: string, max = SWEEP_LIMIT): string[] {
   const s = input.trim();
   if (!s) return [];
   if (!s.includes('/')) return [s];

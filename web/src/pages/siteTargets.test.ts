@@ -61,7 +61,7 @@ describe('prefixRows', () => {
   // the sweep must then send 254. Checked against the expander itself, not against a repeat of the
   // arithmetic, over the shapes where the two rules differ (/31 and /32 keep every address).
   it('counts exactly what the expander would produce, for every shape it accepts', () => {
-    for (const p of ['192.168.1.0/24', '10.0.0.0/30', '10.0.0.0/31', '10.0.0.5/32', '10.0.0.0/22']) {
+    for (const p of ['192.168.1.0/24', '10.0.0.0/30', '10.0.0.0/31', '10.0.0.5/32', '10.0.0.0/22', '10.0.0.0/20']) {
       const [row] = prefixRows(px(p));
       expect(row.unsweepable, p).toBeUndefined();
       expect(row.hosts, p).toBe(expandCidr(p).length);
@@ -81,9 +81,10 @@ describe('prefixRows', () => {
     expect(row.hosts).toBe(2 ** 24 - 2);
   });
 
-  it('treats a /21 as too large, because one sweep is capped at 1024 addresses', () => {
-    expect(prefixRows(px('10.0.0.0/21'))[0].unsweepable).toBe('tooLarge');
-    expect(prefixRows(px('10.0.0.0/22'))[0].unsweepable).toBeUndefined();
+  it('treats a /19 as too large, because one sweep is capped at 4096 addresses (ADR-173)', () => {
+    expect(prefixRows(px('10.0.0.0/19'))[0].unsweepable).toBe('tooLarge');
+    expect(prefixRows(px('10.0.0.0/20'))[0].unsweepable).toBeUndefined();
+    expect(prefixRows(px('10.0.0.0/20'))[0].hosts).toBe(4094);
   });
 
   it('has a reason token for every way a row can be unsweepable', () => {
@@ -150,9 +151,9 @@ describe('sumHosts', () => {
   // The case the sum exists for: past the limit `hostCount` answers null, and a total that simply
   // vanished would make an over-large selection look like an empty one.
   it('still answers past the sweep limit, where the exact count cannot', () => {
-    const wide = prefixRows(px('10.0.0.0/22', '10.1.0.0/22'));
+    const wide = prefixRows(px('10.0.0.0/20', '10.1.0.0/20'));
     const all = defaultChecked(wide);
-    expect(sumHosts(wide, all)).toBe(2044);
+    expect(sumHosts(wide, all)).toBe(8188);
     expect(sumHosts(wide, all)).toBeGreaterThan(SWEEP_LIMIT);
     expect(hostCount(specFor(wide, all))).toBeNull();
   });
@@ -175,7 +176,7 @@ describe('hostCount', () => {
   });
 
   it('is null past the sweep limit', () => {
-    expect(hostCount('10.0.0.0/22, 10.0.4.0/24')).toBeNull();
+    expect(hostCount('10.0.0.0/20, 10.0.16.0/24')).toBeNull();
   });
 
   it('is null for an empty or malformed spec', () => {

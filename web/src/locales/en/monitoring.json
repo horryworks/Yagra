@@ -483,7 +483,7 @@
       "skippedExisting_other": "Skipped {{count}} devices already in the tree."
     },
     "err": {
-      "badTargets": "Enter IPs, CIDRs (≤/22), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤1024 hosts total.",
+      "badTargets": "Enter IPs, CIDRs (≤/20), or ranges (e.g. 192.168.1.10-20), comma-separated — ≤4096 hosts total.",
       "startScan": "failed to start scan",
       "selectOne": "Select at least one device to import.",
       "import": "failed to import"

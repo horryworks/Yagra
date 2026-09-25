@@ -11643,7 +11643,7 @@ export interface components {
         /**
          * @description One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.
          *
-         *     The omission is the point: 20 retained scans of up to 1024 candidates each would make listing
+         *     The omission is the point: 20 retained scans of up to 4096 candidates each would make listing
          *     them far more expensive than the question deserves. A caller that wants a scan's candidates asks
          *     for that scan.
          */

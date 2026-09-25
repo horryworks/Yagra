@@ -6,7 +6,7 @@
 // (`tsxJudgement.test.ts`).
 //
 // ⚠️ **This module does not expand anything.** `lib/cidr.ts` is the one expander in the repository
-// and it owns the 1024-address ceiling, the /22 shape limit and the network/broadcast rules. What
+// and it owns the 4096-address ceiling, the /20 shape limit and the network/broadcast rules. What
 // is decided here is only *which prefixes can be offered*, *how many addresses each covers* and
 // *what to say about the ones that cannot be swept*.
 
@@ -14,8 +14,9 @@ import { expandCidr, expandTargets } from '../lib/cidr';
 import { groupPath } from '../lib/nodeTree';
 import type { NodeGroup } from '../types/api';
 
-/** The most addresses one sweep may carry (`MAX_SCAN_TARGETS` in `api/discovery.rs`). */
-export const SWEEP_LIMIT = 1024;
+/** The most addresses one sweep may carry. Declared beside the expander that enforces it, and
+ *  re-exported here for the picker that displays it. */
+export { SWEEP_LIMIT } from '../lib/cidr';
 
 /** Why a prefix cannot be swept. Both members have a `t()` key, so the array is what the i18n
  *  coverage test iterates (`extensibility.md` §4). */
@@ -109,7 +110,7 @@ export function sumHosts(rows: readonly PrefixRow[], checked: ReadonlySet<string
 /**
  * How many addresses a target spec covers, or `null` when it is not usable as it stands.
  *
- * `null` folds together every reason `expandTargets` returns nothing — malformed, wider than /22,
+ * `null` folds together every reason `expandTargets` returns nothing — malformed, wider than /20,
  * or past the sweep limit in total — because the free-text field's own error message already names
  * all three and a second wording of it would be a second thing to keep in step.
  *

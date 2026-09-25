@@ -335,8 +335,8 @@ export function DiscoveryPage() {
   /** How many addresses that covers, or `null` when it will not run as it stands.
    *
    *  🚨 On screen at all times, not only after a failure. Three ordinary /24s come to 762
-   *  addresses against a 1024 limit (measured on the lab), so the ceiling is reached by ordinary
-   *  use — and past it `expandTargets` returns an empty list, which makes pressing Scan look like
+   *  addresses (measured on the lab), and a site's /20 is 4094 against a 4096 limit, so the ceiling
+   *  is reached by ordinary use — and past it `expandTargets` returns an empty list, which makes pressing Scan look like
    *  it did nothing. */
   const exactCount = useMemo(() => hostCount(effectiveSpec), [effectiveSpec]);
 
@@ -787,7 +787,7 @@ export function DiscoveryPage() {
                   removes wherever it finds it.
 
                   Ticks rather than a comma-separated string, because the limit is reached by
-                  ordinary use: three /24s at one site come to 762 addresses against 1024, so
+                  ordinary use: a site's /20 alone comes to 4094 addresses against 4096, so
                   "take that one out" is a routine operation and it should not be a text edit. */}
               {siteId ? (
                 <div className="form-label disco-f-targets">

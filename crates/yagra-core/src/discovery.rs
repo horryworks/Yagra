@@ -13,8 +13,8 @@
 //!
 //! ## Scan state is in memory, and that is a decision with a price (ADR-068)
 //!
-//! Scans are short-lived — the sweep is capped at 1024 targets, so the longest legitimate one runs
-//! for minutes, not days — and their candidates are not an asset until they are imported. That is
+//! Scans are short-lived — the sweep is capped at 4096 targets, so the longest legitimate one runs
+//! for minutes to an hour or so, not days — and their candidates are not an asset until they are imported. That is
 //! why this is a `HashMap` and not a table: the threshold for persistence is *how long the work
 //! lives*, not *whether a list of it is wanted*.
 //!
@@ -50,6 +50,17 @@ use crate::classification::Classifier;
 /// Per-probe timeout pushed to the poller (ms).
 const SCAN_TIMEOUT_MS: u32 = 2000;
 
+/// Most targets one [`DiscoveryJob`] carries — and so the most devices one of the poller's
+/// **cumulative** results can list (ADR-173).
+///
+/// A scan may be wider than this (`api::discovery::MAX_SCAN_TARGETS`); [`DiscoveryRunner::start`]
+/// cuts it into parts of at most this many and publishes each as a job of its own. The number is
+/// set by the bus, not by the network: the poller re-sends every device it has found so far in one
+/// message, NATS refuses a message past 1 MiB, and a refused final result leaves the scan `running`
+/// forever. `api::discovery`'s `a_full_sweep_of_the_widest_devices_still_fits_in_one_bus_message`
+/// measures one part at this size against that limit.
+pub(crate) const JOB_TARGETS: usize = 1024;
+
 /// What a sweep does with an address that does not answer ICMP (ADR-068 Increment 3).
 ///
 /// A named pair rather than a `bool` parameter because [`DiscoveryRunner::start`] is called from
@@ -71,7 +82,7 @@ pub enum SilentTargets {
 ///
 /// ⚠️ **This is also the Discovery-queue widget's window.** [`DiscoveryRunner::recent_candidates`]
 /// reads the candidates of *every* retained scan, so whatever is evicted here leaves that widget
-/// too. The value is therefore chosen for the widget, not for memory — 20 scans of at most 1024
+/// too. The value is therefore chosen for the widget, not for memory — 20 scans of at most 4096
 /// candidates is not a memory problem, and picking a shorter window to "tidy up" would silently
 /// empty a dashboard panel.
 const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -83,10 +94,11 @@ const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const MAX_SCANS: usize = 20;
 
 /// A scan still marked running after this is dropped: its poller died, or its final result was
-/// lost. Comfortably longer than the slowest legitimate sweep (1024 targets, ~22s per target in the
-/// worst credential-probe case, 16 at a time ⇒ well under an hour), so this can only catch a sweep
-/// that is genuinely never going to report.
-const RUNNING_MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
+/// lost. Comfortably longer than the slowest legitimate sweep (4096 targets, ~22s per target in the
+/// worst credential-probe case, 16 at a time ⇒ about 94 minutes, ADR-173), plus the time a sweep can
+/// wait behind another on the poller's strictly sequential job loop, so this can only catch a sweep
+/// that is genuinely never going to report. It was two hours while the cap was 1024.
+const RUNNING_MAX_AGE: Duration = Duration::from_secs(4 * 60 * 60);
 
 /// One device a scan found, with a suggested profile for the operator to confirm on import.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -196,7 +208,7 @@ pub struct ScanStatus {
 
 /// One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.
 ///
-/// The omission is the point: 20 retained scans of up to 1024 candidates each would make listing
+/// The omission is the point: 20 retained scans of up to 4096 candidates each would make listing
 /// them far more expensive than the question deserves. A caller that wants a scan's candidates asks
 /// for that scan.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -213,11 +225,34 @@ pub struct ScanSummary {
     pub pool: Option<String>,
 }
 
-struct ScanState {
-    targets: Vec<IpAddr>,
-    state: DiscoveryScanState,
+/// One job's share of a scan (ADR-173): at most [`JOB_TARGETS`] consecutive targets, swept by one
+/// [`DiscoveryJob`] under an id of its own.
+///
+/// ⚠️ Everything the poller reports is **per job**: its `probed` counts this part's targets, and its
+/// `found` is this part's cumulative list. So both are folded in here, and the scan-wide numbers
+/// are derived from the parts — never accumulated across them, which would count a part's devices
+/// once per message it sent.
+struct Part {
+    /// The `scan_id` the part's job was published under. The first part's is the scan's own id, so
+    /// a scan no wider than one job is exactly what it was before parts existed.
+    job_id: Uuid,
+    /// Where this part's targets start in [`ScanState::targets`].
+    offset: usize,
+    len: usize,
     probed: u32,
     candidates: Vec<Candidate>,
+    /// The poller sent this part's terminal result.
+    done: bool,
+    /// …and that result said it stopped early.
+    cancelled: bool,
+}
+
+struct ScanState {
+    targets: Vec<IpAddr>,
+    /// In target order, and never empty: a scan with no targets still has one (empty) part, which
+    /// is what the API refuses before it gets here anyway.
+    parts: Vec<Part>,
+    state: DiscoveryScanState,
     started_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     /// The route [`DiscoveryRunner::start`] actually published on — **not** the pool the caller
@@ -230,26 +265,72 @@ struct ScanState {
 }
 
 impl ScanState {
-    fn new(targets: Vec<IpAddr>, pool: Option<String>, now: DateTime<Utc>) -> Self {
+    /// Register a scan and cut its targets into parts of at most [`JOB_TARGETS`]. The first part
+    /// takes `scan_id`; the rest get fresh ids.
+    fn new(scan_id: Uuid, targets: Vec<IpAddr>, pool: Option<String>, now: DateTime<Utc>) -> Self {
+        let mut parts = Vec::new();
+        let mut offset = 0;
+        loop {
+            let len = (targets.len() - offset).min(JOB_TARGETS);
+            parts.push(Part {
+                job_id: if offset == 0 { scan_id } else { Uuid::new_v4() },
+                offset,
+                len,
+                probed: 0,
+                candidates: Vec::new(),
+                done: false,
+                cancelled: false,
+            });
+            offset += len;
+            if offset >= targets.len() {
+                break;
+            }
+        }
         Self {
             targets,
+            parts,
             // Not `Running`: at this point the job has been published and nothing has confirmed
             // that any poller holds it. See [`DiscoveryScanState::Queued`].
             state: DiscoveryScanState::Queued,
-            probed: 0,
-            candidates: Vec::new(),
             started_at: now,
             updated_at: now,
             pool,
         }
     }
 
-    /// Fold a (possibly partial) poller result in. Each message carries the cumulative
-    /// found list, so candidates are replaced, not appended. Progress never regresses
-    /// (guards against out-of-order delivery). The classifier resolves each device's
-    /// suggested profile server-side from its sysObjectID / sysDescr.
+    /// Each part's job id and targets, in order — what [`DiscoveryRunner::start`] publishes.
+    fn jobs(&self) -> impl Iterator<Item = (Uuid, &[IpAddr])> {
+        self.parts
+            .iter()
+            .map(|p| (p.job_id, &self.targets[p.offset..p.offset + p.len]))
+    }
+
+    /// Whether a result carrying this `scan_id` belongs to this scan.
+    fn owns(&self, job_id: Uuid) -> bool {
+        self.parts.iter().any(|p| p.job_id == job_id)
+    }
+
+    /// The job ids a stop has to reach: every part that has not reported its end. A part already
+    /// finished has nothing left to stop.
+    fn unfinished_jobs(&self) -> Vec<Uuid> {
+        self.parts
+            .iter()
+            .filter(|p| !p.done)
+            .map(|p| p.job_id)
+            .collect()
+    }
+
+    /// Fold a (possibly partial) poller result into the part it belongs to. Each message carries
+    /// that part's cumulative found list, so the part's candidates are replaced, not appended.
+    /// Progress never regresses (guards against out-of-order delivery), per part. The classifier
+    /// resolves each device's suggested profile server-side from its sysObjectID / sysDescr.
     fn apply(&mut self, result: DiscoveryResult, classifier: &Classifier, now: DateTime<Utc>) {
-        if result.probed < self.probed && !result.done {
+        let Some(part) = self.parts.iter_mut().find(|p| p.job_id == result.scan_id) else {
+            return;
+        };
+        // A part that has ended stays ended: a duplicate or late terminal result must not move it,
+        // and a late partial must not replace what the terminal one reported.
+        if part.done || (result.probed < part.probed && !result.done) {
             return;
         }
         // Any message at all means a poller has this sweep in hand, so this is where `Queued`
@@ -259,7 +340,7 @@ impl ScanState {
             self.state = DiscoveryScanState::Running;
         }
         self.updated_at = now;
-        self.candidates = result
+        part.candidates = result
             .found
             .into_iter()
             .map(|d| {
@@ -294,81 +375,104 @@ impl ScanState {
                 }
             })
             .collect();
-        self.probed = self.probed.max(result.probed);
+        part.probed = part.probed.max(result.probed);
         if result.done {
-            // **The poller's report decides, not what core last recorded.** Reading `Cancelling` as
-            // "therefore cancelled" would report a sweep that finished before the stop landed —
-            // the N-1 case, where the poller never subscribed to the cancel subject at all — as
-            // having been stopped. `DiscoveryResult::cancelled` exists precisely so this does not
-            // have to be guessed.
-            //
-            // Exhaustive over the state rather than `_ =>`: a future variant must be decided here,
-            // not defaulted into `Done` (extensibility.md §1).
-            self.state = match (self.state, result.cancelled) {
-                // `Queued` cannot actually reach here — the promotion above ran on this same
-                // message — but it is listed rather than wildcarded, because the day a promotion
-                // rule gains a condition is the day this needs to be decided again rather than
-                // silently defaulting (extensibility.md §1).
-                (
-                    DiscoveryScanState::Queued
-                    | DiscoveryScanState::Running
-                    | DiscoveryScanState::Cancelling,
-                    true,
-                ) => DiscoveryScanState::Cancelled,
-                (
-                    DiscoveryScanState::Queued
-                    | DiscoveryScanState::Running
-                    | DiscoveryScanState::Cancelling,
-                    false,
-                ) => DiscoveryScanState::Done,
-                // Already settled — a duplicate or late terminal result must not move it.
-                (s @ (DiscoveryScanState::Cancelled | DiscoveryScanState::Done), _) => s,
-            };
+            part.done = true;
+            part.cancelled = result.cancelled;
         }
+        // The scan ends when its last part does — whichever order they end in, since a pool with
+        // two pollers can sweep two parts side by side.
+        if !self.parts.iter().all(|p| p.done) {
+            return;
+        }
+        let cancelled = self.parts.iter().any(|p| p.cancelled);
+        // **The poller's report decides, not what core last recorded.** Reading `Cancelling` as
+        // "therefore cancelled" would report a sweep that finished before the stop landed — the
+        // N-1 case, where the poller never subscribed to the cancel subject at all — as having been
+        // stopped. `DiscoveryResult::cancelled` exists precisely so this does not have to be
+        // guessed; across parts, one that stopped early is enough to say the scan did.
+        //
+        // Exhaustive over the state rather than `_ =>`: a future variant must be decided here,
+        // not defaulted into `Done` (extensibility.md §1).
+        self.state = match (self.state, cancelled) {
+            // `Queued` cannot actually reach here — the promotion above ran on this same message —
+            // but it is listed rather than wildcarded, because the day a promotion rule gains a
+            // condition is the day this needs to be decided again rather than silently defaulting
+            // (extensibility.md §1).
+            (
+                DiscoveryScanState::Queued
+                | DiscoveryScanState::Running
+                | DiscoveryScanState::Cancelling,
+                true,
+            ) => DiscoveryScanState::Cancelled,
+            (
+                DiscoveryScanState::Queued
+                | DiscoveryScanState::Running
+                | DiscoveryScanState::Cancelling,
+                false,
+            ) => DiscoveryScanState::Done,
+            // Already settled — a duplicate or late terminal result must not move it.
+            (s @ (DiscoveryScanState::Cancelled | DiscoveryScanState::Done), _) => s,
+        };
     }
 
     fn total(&self) -> u32 {
         u32::try_from(self.targets.len()).unwrap_or(u32::MAX)
     }
 
+    /// Targets probed across every part.
+    fn probed(&self) -> u32 {
+        self.parts
+            .iter()
+            .fold(0u32, |n, p| n.saturating_add(p.probed))
+            .min(self.total())
+    }
+
+    /// Every part's candidates, in target order.
+    fn candidates(&self) -> impl Iterator<Item = &Candidate> {
+        self.parts.iter().flat_map(|p| p.candidates.iter())
+    }
+
     fn status(&self, scan_id: Uuid) -> ScanStatus {
-        let total = self.total();
         // Only while a poller is actually working through the list — not merely "not finished".
         // A queued sweep would otherwise report `targets[0]`, i.e. "now probing 192.168.1.1" about
         // a sweep nobody has picked up, which is the exact false impression `Queued` exists to
-        // remove.
+        // remove. Across parts it is the first one still going: the poller takes jobs in the order
+        // they were published.
         let scanning = matches!(
             self.state,
             DiscoveryScanState::Running | DiscoveryScanState::Cancelling
         )
         .then(|| {
-            self.targets
-                .get(self.probed as usize)
-                .map(IpAddr::to_string)
+            self.parts.iter().find(|p| !p.done).and_then(|p| {
+                let at = p.offset + usize::try_from(p.probed).unwrap_or(usize::MAX);
+                (at < p.offset + p.len)
+                    .then(|| self.targets.get(at).map(IpAddr::to_string))
+                    .flatten()
+            })
         })
         .flatten();
         ScanStatus {
             scan_id,
             done: self.state.is_terminal(),
             state: self.state,
-            probed: self.probed.min(total),
-            total,
+            probed: self.probed(),
+            total: self.total(),
             scanning,
             started_at: self.started_at.to_rfc3339(),
             updated_at: self.updated_at.to_rfc3339(),
             pool: self.pool.clone(),
-            candidates: self.candidates.clone(),
+            candidates: self.candidates().cloned().collect(),
         }
     }
 
     fn summary(&self, scan_id: Uuid) -> ScanSummary {
-        let total = self.total();
         ScanSummary {
             scan_id,
             state: self.state,
-            probed: self.probed.min(total),
-            total,
-            candidate_count: u32::try_from(self.candidates.len()).unwrap_or(u32::MAX),
+            probed: self.probed(),
+            total: self.total(),
+            candidate_count: u32::try_from(self.candidates().count()).unwrap_or(u32::MAX),
             started_at: self.started_at.to_rfc3339(),
             updated_at: self.updated_at.to_rfc3339(),
             pool: self.pool.clone(),
@@ -454,30 +558,39 @@ impl DiscoveryRunner {
         silent: SilentTargets,
     ) -> anyhow::Result<Uuid> {
         let scan_id = Uuid::new_v4();
-        {
+        // One job per part, cut here rather than at publish so the ids the consumer matches on are
+        // the ids that went out (ADR-173). A scan no wider than [`JOB_TARGETS`] is one job carrying
+        // the scan's own id — byte-for-byte what was published before parts existed.
+        let jobs: Vec<(Uuid, Vec<IpAddr>)> = {
             let now = Utc::now();
-            let mut g = self.scans.lock().expect("scans mutex poisoned");
             // The route actually taken is stored, not the pool the caller asked for — see
             // `ScanState::pool`.
-            g.insert(
-                scan_id,
-                ScanState::new(targets.clone(), pool.map(str::to_owned), now),
-            );
-            // Evicting *after* the insert is deliberate: the new scan is `Running`, which rule 3
+            let scan = ScanState::new(scan_id, targets, pool.map(str::to_owned), now);
+            let jobs = scan.jobs().map(|(id, t)| (id, t.to_vec())).collect();
+            let mut g = self.scans.lock().expect("scans mutex poisoned");
+            g.insert(scan_id, scan);
+            // Evicting *after* the insert is deliberate: the new scan is `Queued`, which rule 3
             // never touches, so it cannot evict the very scan it was called for.
             evict(&mut g, now);
-        }
-        let job = DiscoveryJob {
-            scan_id,
-            targets,
-            communities,
-            credentials,
-            timeout_ms: SCAN_TIMEOUT_MS,
-            snmp_when_unreachable: silent == SilentTargets::ProbeSnmp,
+            jobs
         };
-        match pool {
-            Some(p) => self.bus.publish_discovery_job_for_pool(p, job).await?,
-            None => self.bus.publish_discovery_job(job).await?,
+        // In target order: the poller's job loop is sequential, so on one poller the parts sweep
+        // in the order the operator wrote the range. ⚠️ A publish that fails part-way returns the
+        // error with the earlier parts already out — the same as a single job failing to publish,
+        // where the scan was registered too; `RUNNING_MAX_AGE` retires what never finishes.
+        for (job_id, targets) in jobs {
+            let job = DiscoveryJob {
+                scan_id: job_id,
+                targets,
+                communities: communities.clone(),
+                credentials: credentials.clone(),
+                timeout_ms: SCAN_TIMEOUT_MS,
+                snmp_when_unreachable: silent == SilentTargets::ProbeSnmp,
+            };
+            match pool {
+                Some(p) => self.bus.publish_discovery_job_for_pool(p, job).await?,
+                None => self.bus.publish_discovery_job(job).await?,
+            }
         }
         Ok(scan_id)
     }
@@ -506,7 +619,7 @@ impl DiscoveryRunner {
     /// Fire-and-forget: `Ok` means the broker accepted the message, never that a sweep stopped.
     /// The poller's terminal result is what settles that — see [`ScanState::apply`].
     pub async fn cancel(&self, scan_id: Uuid) -> anyhow::Result<Option<String>> {
-        let route = {
+        let (route, jobs) = {
             let mut g = self.scans.lock().expect("scans mutex poisoned");
             match g.get_mut(&scan_id) {
                 // Only a running sweep moves. A finished one stays finished — re-cancelling it
@@ -524,16 +637,27 @@ impl DiscoveryRunner {
                         s.state = DiscoveryScanState::Cancelling;
                         s.updated_at = Utc::now();
                     }
-                    s.pool.clone()
+                    // Every part still going, each under its own job id (ADR-173) — a part
+                    // queued behind the others is stopped before it starts. When none is left,
+                    // the scan's own id still goes out, as it always did.
+                    let mut jobs = s.unfinished_jobs();
+                    if jobs.is_empty() {
+                        jobs.push(scan_id);
+                    }
+                    (s.pool.clone(), jobs)
                 }
                 // Unknown here means "this core restarted", not "no such sweep". The stop still
                 // goes out — on the global subject, because the route it took is unknowable now.
-                None => None,
+                // ⚠️ Only to the id given: the later parts' ids went with the forgotten record, so
+                // a restarted core can stop the first 1024 targets of a wider sweep and no more.
+                None => (None, vec![scan_id]),
             }
         };
-        self.bus
-            .publish_discovery_cancel(route.as_deref(), DiscoveryCancel { scan_id })
-            .await?;
+        for job_id in jobs {
+            self.bus
+                .publish_discovery_cancel(route.as_deref(), DiscoveryCancel { scan_id: job_id })
+                .await?;
+        }
         Ok(route)
     }
 
@@ -589,7 +713,7 @@ impl DiscoveryRunner {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for scan in g.values() {
-            for c in &scan.candidates {
+            for c in scan.candidates() {
                 if seen.insert(c.address.clone()) {
                     out.push(c.clone());
                     if out.len() >= limit {
@@ -616,7 +740,12 @@ impl DiscoveryRunner {
                 "discovery result received"
             );
             let mut g = self.scans.lock().expect("scans mutex poisoned");
-            if let Some(s) = g.get_mut(&r.scan_id) {
+            // A result names its *job*, which is the scan's own id only for the first part
+            // (ADR-173), so the scan is found by the part it owns. At most twenty scans of at most
+            // four parts each are retained, so the walk costs nothing worth an index — and an
+            // index would be a second record of which job belongs where, to keep in step with
+            // `evict`.
+            if let Some(s) = g.values_mut().find(|s| s.owns(r.scan_id)) {
                 s.apply(r, &self.classifier, Utc::now());
             }
             // An unknown scan_id is dropped on purpose: this core restarted (or was never the
@@ -662,7 +791,7 @@ mod tests {
 
     /// A scan of `n` targets starting now, on the global route.
     fn scan(n: u8) -> ScanState {
-        ScanState::new(targets(n), None, Utc::now())
+        ScanState::new(Uuid::nil(), targets(n), None, Utc::now())
     }
 
     fn partial(probed: u32, done: bool, found: Vec<DiscoveredDevice>) -> DiscoveryResult {
@@ -957,7 +1086,7 @@ mod tests {
         updated_ago: chrono::Duration,
         now: DateTime<Utc>,
     ) -> ScanState {
-        let mut s = ScanState::new(targets(1), None, now - started_ago);
+        let mut s = ScanState::new(Uuid::nil(), targets(1), None, now - started_ago);
         s.state = state;
         s.updated_at = now - updated_ago;
         s
@@ -1015,8 +1144,10 @@ mod tests {
             abandoned,
             aged(
                 DiscoveryScanState::Running,
-                chrono::Duration::hours(3),
-                chrono::Duration::hours(3),
+                // Relative to the window rather than a number of hours: it moved from two to four
+                // with ADR-173, and a literal here would have gone on testing the old one.
+                chrono::Duration::from_std(RUNNING_MAX_AGE).unwrap() + chrono::Duration::hours(1),
+                chrono::Duration::from_std(RUNNING_MAX_AGE).unwrap() + chrono::Duration::hours(1),
                 now,
             ),
         );
@@ -1477,6 +1608,227 @@ mod tests {
         assert_eq!(
             u32::try_from(st.candidates.len()).unwrap(),
             sum.candidate_count
+        );
+    }
+
+    // ── A scan wider than one job (ADR-173) ─────────────────────────────────────
+
+    /// `n` distinct IPv4 targets from 10.1.0.1 on — wider than `targets` can make.
+    fn wide_targets(n: usize) -> Vec<IpAddr> {
+        (1..=n)
+            .map(|i| {
+                let i = u32::try_from(i).expect("small");
+                IpAddr::V4(Ipv4Addr::from(0x0A01_0000 + i))
+            })
+            .collect()
+    }
+
+    fn part_result(job: Uuid, probed: u32, done: bool, cancelled: bool) -> DiscoveryResult {
+        DiscoveryResult {
+            scan_id: job,
+            found: Vec::new(),
+            probed,
+            total: probed,
+            done,
+            cancelled,
+        }
+    }
+
+    #[test]
+    fn a_scan_wider_than_one_job_is_cut_into_parts_no_wider_than_a_job() {
+        let s = ScanState::new(Uuid::from_u128(9), wide_targets(3000), None, Utc::now());
+        let jobs: Vec<(Uuid, usize)> = s.jobs().map(|(id, t)| (id, t.len())).collect();
+        assert_eq!(
+            jobs.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+            vec![1024, 1024, 952]
+        );
+        assert_eq!(
+            jobs[0].0,
+            Uuid::from_u128(9),
+            "the first part carries the scan's own id"
+        );
+        let ids: std::collections::HashSet<Uuid> = jobs.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids.len(), 3, "every part has an id of its own");
+        // The parts cover the targets exactly, in order.
+        let joined: Vec<IpAddr> = s.jobs().flat_map(|(_, t)| t.iter().copied()).collect();
+        assert_eq!(joined, wide_targets(3000));
+    }
+
+    #[test]
+    fn a_scan_no_wider_than_one_job_is_one_part_under_the_scans_own_id() {
+        let s = ScanState::new(
+            Uuid::from_u128(5),
+            wide_targets(JOB_TARGETS),
+            None,
+            Utc::now(),
+        );
+        let jobs: Vec<Uuid> = s.jobs().map(|(id, _)| id).collect();
+        assert_eq!(jobs, vec![Uuid::from_u128(5)]);
+    }
+
+    #[test]
+    fn parts_ending_out_of_order_add_up_and_the_scan_ends_with_its_last_part() {
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = ScanState::new(Uuid::from_u128(1), wide_targets(2100), None, now);
+        let ids: Vec<Uuid> = s.jobs().map(|(id, _)| id).collect();
+        assert_eq!(ids.len(), 3);
+
+        // The last part finishes first (a second poller in the pool took it).
+        s.apply(part_result(ids[2], 52, true, false), &c, now);
+        assert_eq!(s.state, DiscoveryScanState::Running);
+        s.apply(part_result(ids[0], 500, false, false), &c, now);
+        let st = s.status(Uuid::from_u128(1));
+        assert_eq!(st.probed, 552, "progress is the sum over the parts");
+        assert_eq!(
+            st.scanning,
+            Some(wide_targets(2100)[500].to_string()),
+            "the current address is in the first part still going"
+        );
+
+        s.apply(part_result(ids[0], 1024, true, false), &c, now);
+        assert_eq!(
+            s.state,
+            DiscoveryScanState::Running,
+            "one part is still out"
+        );
+        s.apply(part_result(ids[1], 1024, true, false), &c, now);
+        let st = s.status(Uuid::from_u128(1));
+        assert_eq!(st.state, DiscoveryScanState::Done);
+        assert_eq!((st.probed, st.total), (2100, 2100));
+    }
+
+    #[test]
+    fn each_parts_devices_are_kept_and_listed_in_target_order() {
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = ScanState::new(Uuid::from_u128(1), wide_targets(1500), None, now);
+        let ids: Vec<Uuid> = s.jobs().map(|(id, _)| id).collect();
+        let mut late = part_result(ids[1], 10, false, false);
+        late.found = vec![device(2, None)];
+        let mut early = part_result(ids[0], 10, false, false);
+        early.found = vec![device(1, None)];
+        // The second part reports first; its device must not be replaced by the first part's.
+        s.apply(late, &c, now);
+        s.apply(early, &c, now);
+        let addrs: Vec<String> = s
+            .status(Uuid::from_u128(1))
+            .candidates
+            .into_iter()
+            .map(|c| c.address)
+            .collect();
+        assert_eq!(addrs, vec!["10.0.0.1".to_owned(), "10.0.0.2".to_owned()]);
+    }
+
+    #[test]
+    fn one_part_stopping_early_makes_the_whole_scan_cancelled() {
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = ScanState::new(Uuid::from_u128(1), wide_targets(2048), None, now);
+        let ids: Vec<Uuid> = s.jobs().map(|(id, _)| id).collect();
+        s.apply(part_result(ids[0], 1024, true, false), &c, now);
+        s.apply(part_result(ids[1], 0, true, true), &c, now);
+        let st = s.status(Uuid::from_u128(1));
+        assert_eq!(st.state, DiscoveryScanState::Cancelled);
+        assert!(st.probed < st.total);
+    }
+
+    #[test]
+    fn a_result_for_another_scans_part_is_not_folded_in() {
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = ScanState::new(Uuid::from_u128(1), wide_targets(2000), None, now);
+        s.apply(part_result(Uuid::from_u128(99), 5, true, false), &c, now);
+        assert_eq!(s.state, DiscoveryScanState::Queued);
+        assert_eq!(s.probed(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_wide_scan_publishes_one_job_per_part_and_the_consumer_finds_every_part() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let mut global = bus.subscribe_discovery_jobs();
+        let runner = Arc::new(DiscoveryRunner::new(bus.clone(), Arc::new(classifier())));
+        let scan = runner
+            .start(
+                wide_targets(2500),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
+            .await
+            .expect("publish succeeds");
+
+        let mut jobs = Vec::new();
+        for _ in 0..3 {
+            jobs.push(global.recv().await.expect("job published"));
+        }
+        assert!(global.try_recv().is_err(), "exactly three jobs");
+        assert_eq!(jobs[0].scan_id, scan);
+        assert_eq!(
+            jobs.iter().map(|j| j.targets.len()).collect::<Vec<_>>(),
+            vec![1024, 1024, 452]
+        );
+
+        let results = futures::stream::iter(
+            jobs.iter()
+                .map(|j| {
+                    part_result(
+                        j.scan_id,
+                        u32::try_from(j.targets.len()).unwrap(),
+                        true,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        runner.clone().run_consumer(results).await;
+        let st = runner.get(scan).expect("still listed");
+        assert_eq!(st.state, DiscoveryScanState::Done);
+        assert_eq!((st.probed, st.total), (2500, 2500));
+    }
+
+    #[tokio::test]
+    async fn a_stop_reaches_every_part_still_going_and_none_already_finished() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let mut global = bus.subscribe_discovery_jobs();
+        let mut rx = bus.subscribe_discovery_cancels();
+        let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
+        let scan = runner
+            .start(
+                wide_targets(3000),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
+            .await
+            .expect("publish succeeds");
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(global.recv().await.expect("job published").scan_id);
+        }
+        // The first part has finished; the other two have not.
+        {
+            let mut g = runner.scans.lock().unwrap();
+            g.get_mut(&scan).unwrap().apply(
+                part_result(ids[0], 1024, true, false),
+                &classifier(),
+                Utc::now(),
+            );
+        }
+        runner.cancel(scan).await.unwrap();
+        let mut stopped = vec![
+            rx.recv().await.unwrap().1.scan_id,
+            rx.recv().await.unwrap().1.scan_id,
+        ];
+        stopped.sort();
+        let mut expected = vec![ids[1], ids[2]];
+        expected.sort();
+        assert_eq!(stopped, expected);
+        assert!(
+            rx.try_recv().is_err(),
+            "the finished part is not asked to stop"
         );
     }
 }

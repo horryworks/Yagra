@@ -18,7 +18,15 @@ describe('expandCidr', () => {
     expect(expandCidr('10.0.0.0/31')).toEqual(['10.0.0.0', '10.0.0.1']);
   });
 
+  it('expands a /20, the widest one sweep carries (ADR-173)', () => {
+    const ips = expandCidr('10.0.0.0/20');
+    expect(ips).toHaveLength(4094);
+    expect(ips[0]).toBe('10.0.0.1');
+    expect(ips[ips.length - 1]).toBe('10.0.15.254');
+  });
+
   it('rejects ranges larger than the cap', () => {
+    expect(expandCidr('10.0.0.0/19')).toEqual([]);
     expect(expandCidr('10.0.0.0/8')).toEqual([]);
     expect(expandCidr('172.16.0.0/16')).toEqual([]);
   });
@@ -74,8 +82,8 @@ describe('expandTargets', () => {
     expect(expandTargets('10.0.0.1, garbage')).toEqual([]);
   });
 
-  it('rejects when the combined total exceeds the cap (5×/24 = 1270 > 1024)', () => {
-    const spec = [0, 1, 2, 3, 4].map((n) => `192.168.${n}.0/24`).join(', ');
+  it('rejects when the combined total exceeds the cap (17×/24 = 4318 > 4096)', () => {
+    const spec = Array.from({ length: 17 }, (_, n) => `192.168.${n}.0/24`).join(', ');
     expect(expandTargets(spec)).toEqual([]);
   });
 
