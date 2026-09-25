@@ -45,7 +45,9 @@ const UNTRUSTED_CLOSE: &str = "UNTRUSTED-DEVICE-OUTPUT>>>";
 /// explanation of their own network.
 //  Per-variant `rename`, not `rename_all`: the stored tokens are the ISO codes `en`/`ja`, and
 //  `rename_all = "snake_case"` would emit `english`/`japanese`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, utoipa::ToSchema,
+)]
 pub enum Language {
     #[default]
     #[serde(rename = "en")]

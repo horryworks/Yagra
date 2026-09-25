@@ -205,6 +205,7 @@
     "setDependency": "依存関係の設定に失敗しました",
     "addDnsMonitor": "DNS 監視の追加に失敗しました",
     "movePreview": "アドレスとフォルダの IP レンジの照合に失敗しました",
+    "moveByPrefix": "移動に失敗しました。1 台も移動していません",
     "prefixEmpty": "レンジが空です。",
     "prefixDuplicate": "{{prefix}} が 2 回書かれています。",
     "prefixOwnedBySync": "{{prefix}} は同期が管理しているため、ここでは編集できません。",
@@ -997,7 +998,6 @@
     "unmatched": "どのレンジにも入らない（{{count}} 件）",
     "apply": "{{count}} 件を移動",
     "result": "{{requested}} 件のうち {{moved}} 件を移動しました。",
-    "failedGroups": "失敗したフォルダ: {{groups}}",
     "empty": {
       "noPrefixes": "IP レンジを持つフォルダが 1 つもありません。照合する相手がありません。",
       "noMatch": "どのアドレスもフォルダの IP レンジに入りません。",

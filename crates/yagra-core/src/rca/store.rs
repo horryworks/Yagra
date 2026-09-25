@@ -342,14 +342,31 @@ impl RcaRepo {
 
     // ── Reports ─────────────────────────────────────────────────────────────────────────────
 
-    /// The newest report for a context digest, if one exists. The TTL comparison is the caller's:
-    /// the store answers "has this exact evidence been explained", not "recently enough".
-    pub async fn latest_for_digest(&self, digest: &str) -> anyhow::Result<Option<RcaReport>> {
+    /// The newest report explaining one incident — the node it was filed under (the root cause,
+    /// not the node clicked), the check, and the language it was written in. The TTL comparison is
+    /// the caller's.
+    ///
+    /// ⚠️ This replaced a lookup by context digest (ADR-172 決定 3). The digest changes whenever
+    /// the evidence does, and during an outage it does most minutes — so an explanation generated
+    /// after the operator closed the dialog was, on reopening, billed again rather than shown. The
+    /// cost is that fresh evidence inside the TTL is not re-explained unless someone presses
+    /// Regenerate (`force`).
+    pub async fn latest_for_incident(
+        &self,
+        node_id: Uuid,
+        check_id: Uuid,
+        language: super::prompt::Language,
+    ) -> anyhow::Result<Option<RcaReport>> {
+        let language = serde_json::to_value(language)?;
         let row = sqlx::query(
             "SELECT id, node_id, check_id, provider, model, summary, body, generated_at, created_by \
-             FROM rca_reports WHERE context_digest = $1 ORDER BY generated_at DESC LIMIT 1",
+             FROM rca_reports \
+             WHERE node_id = $1 AND check_id = $2 AND body->'language' = $3 \
+             ORDER BY generated_at DESC LIMIT 1",
         )
-        .bind(digest)
+        .bind(node_id)
+        .bind(check_id)
+        .bind(language)
         .fetch_optional(&self.pool)
         .await?;
         row.as_ref().map(row_to_report).transpose()
@@ -359,8 +376,8 @@ impl RcaRepo {
     ///
     /// `retention::Subject::RcaReports`. Each row carries a full JSONB body, and nothing pruned
     /// them before. Note what pruning costs here that it does not cost elsewhere: this table is
-    /// also the digest cache [`Self::latest_for_digest`] reads, so deleting a row means the next
-    /// question about that evidence is answered by another (billed) LLM call rather than a lookup.
+    /// also the cache [`Self::latest_for_incident`] reads, so deleting a row means the next
+    /// question about that incident is answered by another (billed) LLM call rather than a lookup.
     pub async fn prune_reports(&self, retention_secs: i64) -> anyhow::Result<u64> {
         let res = sqlx::query(
             "DELETE FROM rca_reports WHERE generated_at < now() - make_interval(secs => $1)",

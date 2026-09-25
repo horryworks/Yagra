@@ -10,6 +10,21 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`POST /api/v1/netbox/servers/{id}/sync` ("Sync now") now answers `202` and runs in the background.** It used to run the sync inside the request and answer `200` with what it mirrored, so a tab closed or reloaded mid-sync stopped it half done — some folders written, removed prefixes never swept, and neither success nor failure recorded. It now records the request and answers at once with `{ requested_at, started_at }`; the leader runs it, usually within five seconds, and records how it ended on the server as before (`last_sync_at` / `last_sync_ok` / `last_sync_error`). A second press while one is waiting or running is the same request. A paused server is refused with `409 netbox_server_paused` — nothing would run the request — and the `502 netbox_upstream` answer is gone. The server listing gains `sync` (the request and the run in flight), `last_sync_sites` and `last_sync_sites_without_site_id`; the per-run prefix counts the old answer carried are no longer returned.
+
+### New Features
+
+- **`POST /api/v1/nodes/move-by-prefix` applies an IP-range move in one request.** It takes every destination the preview proposed, `{ moves: [{ group_id, node_ids }] }`, and writes them in one transaction: either every folder is filled or nothing moves. At most 1,000 nodes in total; a node named for two folders is refused with `400 duplicate_node`.
+
+### Improvements
+
+- **NetBox "Sync now" survives leaving the page.** The row says "Sync requested" and then "Syncing…", refreshes itself every five seconds while it does, and keeps the Site ID outcome of the last successful sync on the row, where it used to vanish with the page. The button is not shown for a paused server.
+- **Moving nodes by IP range is all or nothing.** "Move by IP range…" used to send one request per destination folder, so closing the tab mid-way left some folders moved and the rest not, with no summary. It is one request now.
+- **An AI root-cause explanation finishes even if its dialog is closed.** The explanation used to run inside the request, so closing the dialog's tab mid-way paid for the model's answer and stored nothing. It now runs on its own and is stored either way; reopening the dialog for the same alert within fifteen minutes shows it at no cost, or waits for it if it is still being written, instead of starting another. "Regenerate" still always makes a new one. A request refused because two explanations are already running no longer uses up one of the ten allowed per minute.
+- **Turning "Accept remote pollers" on or off, and starting an upgrade, can no longer leave the fleet paused by accident.** Both open a fleet-wide maintenance window and then hand the change to the updater. A tab closed at the wrong moment could leave the window with no change behind it, pausing every alert for fifteen minutes; and if the hand-off failed, the window stayed open behind the error. The hand-off now finishes whoever is waiting, and a failed one closes its window at once.
+
 ## v0.3.31 — A folder lists the subnets its devices carry that its IP prefixes do not cover, the inventory tree draws its branches, a new Meraki organization is read whole before anything is imported, Sync now re-reads an organization in the background, a page of the node list no longer reads unknown for nodes that are up
 
 ### Breaking changes

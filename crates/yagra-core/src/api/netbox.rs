@@ -2,7 +2,7 @@
 //! NetBox — read-only site-hierarchy import (ADR-100 Inc.1).
 //!
 //! Seven routes: list / create / update / delete a configured server, test a connection before it
-//! is saved, run a sync now, and list the NetBox fields that could supply a site code. Reads are
+//! is saved, ask for a sync now, and list the NetBox fields that could supply a site code. Reads are
 //! `View`, writes are `ManageConfig` — the same split as `api/meraki.rs`, because this is the same
 //! kind of thing: an external system Yagra reads to decide what it monitors.
 //!
@@ -198,6 +198,34 @@ pub(crate) struct NetboxServerView {
     /// Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100
     /// decision 5) — surfaced so the operator can decide.
     missing_folders: usize,
+    /// A "Sync now" not finished yet, or a run in flight; `null` when neither (ADR-172 決定 1).
+    sync: Option<NetboxSyncView>,
+    /// Sites the last successful run saw, or `null` before one has run.
+    last_sync_sites: Option<i32>,
+    /// Of those, how many had no usable Site ID. `0` when no Site ID field is configured —
+    /// nothing was asked for, so nothing is missing.
+    last_sync_sites_without_site_id: Option<i32>,
+}
+
+/// "Sync now" and the run it starts, as the row holds them (ADR-172 決定 1).
+#[derive(Debug, Default, Serialize, utoipa::ToSchema)]
+pub(crate) struct NetboxSyncView {
+    /// When "Sync now" asked; `null` when nothing is asked for. A second press keeps the first time.
+    requested_at: Option<String>,
+    /// When the run in flight began; `null` while the request waits for the leader's loop.
+    started_at: Option<String>,
+}
+
+impl NetboxSyncView {
+    fn of(s: &NetboxServer) -> Option<Self> {
+        if s.sync_requested_at.is_none() && s.sync_started_at.is_none() {
+            return None;
+        }
+        Some(Self {
+            requested_at: s.sync_requested_at.map(|t| t.to_rfc3339()),
+            started_at: s.sync_started_at.map(|t| t.to_rfc3339()),
+        })
+    }
 }
 
 fn view(s: &NetboxServer, missing: usize) -> NetboxServerView {
@@ -215,6 +243,9 @@ fn view(s: &NetboxServer, missing: usize) -> NetboxServerView {
         last_sync_ok: s.last_sync_ok,
         last_sync_error: s.last_sync_error.clone(),
         missing_folders: missing,
+        sync: NetboxSyncView::of(s),
+        last_sync_sites: s.last_sync_sites,
+        last_sync_sites_without_site_id: s.last_sync_sites_without_site_id,
     }
 }
 
@@ -673,45 +704,15 @@ async fn test_netbox_connection(
     }))
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(crate) struct SyncNetboxResult {
-    regions: usize,
-    sites: usize,
-    /// Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not
-    /// deleted).
-    missing_folders: usize,
-    /// Sites whose configured Site ID field held nothing, so their folder kept NetBox's bare name.
-    ///
-    /// 🚨 The reason this number is returned at all: picking the wrong field produces **no error
-    /// and no visible change**, so without it "the feature does not work" and "that field is empty
-    /// on every site" look identical. Zero when no field is configured.
-    sites_without_site_id: usize,
-    /// Whether this token may read `/api/ipam/prefixes/` (ADR-100 decision 10).
-    ///
-    /// 🚨 `false` means **refused**, not "there are none". When it is false nothing was written
-    /// and — deliberately — nothing was swept, so the site prefixes stored by earlier runs are
-    /// still there. Reading a zero `prefixes` without checking this flag turns a permission
-    /// problem into "our NetBox has no subnets", which is not a sentence anyone can act on.
-    prefixes_readable: bool,
-    /// Prefix rows attached to a folder by this run.
-    prefixes: usize,
-    /// Prefix rows that reached no folder — scoped to a Location or a SiteGroup (which Yagra does
-    /// not model), scoped to an object this run did not see, or refused as not an address.
-    ///
-    /// 🚨 Same reason as `sites_without_site_id`: a dropped prefix is otherwise indistinguishable
-    /// from a NetBox that never had one.
-    prefixes_skipped: usize,
-}
-
 #[utoipa::path(
     post, path = "/api/v1/netbox/servers/{id}/sync", tag = "netbox",
     params(("id" = Uuid, Path, description = "The server id")),
     responses(
-        (status = 200, description = "The sync ran; the counts say what was mirrored", body = SyncNetboxResult),
+        (status = 202, description = "The sync is asked for — or already was. The leader runs it in the background, usually within five seconds; watch `sync` on the server, then `last_sync_at` / `last_sync_ok` / `last_sync_error` for how it ended", body = NetboxSyncView),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such server", body = super::error::ErrorBody),
-        (status = 502, description = "The NetBox call failed; the reason is stored on the server row and shown on the integration screen", body = super::error::ErrorBody),
+        (status = 409, description = "`netbox_server_paused`: the server is paused, so nothing would run the request", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -719,35 +720,45 @@ async fn sync_netbox_server(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<SyncNetboxResult>> {
+) -> ApiResult<(StatusCode, Json<NetboxSyncView>)> {
+    let internal = |e: anyhow::Error| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "netbox sync request",
+            "failed to ask for the server to be synced",
+        )
+    };
     let server = admin
         .netbox
         .get(id)
         .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "read netbox server",
-                "failed to read the server",
-            )
-        })?
+        .map_err(internal)?
         .ok_or_else(|| no_server(id))?;
-
-    // The same function the leader task calls, so a manual sync and a scheduled one cannot behave
-    // differently — including recording the failure on the row, which is what puts the reason on
-    // the screen rather than only in the container log.
-    let report = netbox::sync_server(&admin.netbox, &admin.creds, &server)
+    // The loop never runs a paused server, so a request accepted here would wait for ever. Said as a
+    // conflict so the operator learns which switch.
+    if !server.enabled {
+        return Err(ApiError::conflict(
+            "netbox_server_paused",
+            "this NetBox server is paused; resume it before syncing",
+        ));
+    }
+    // Written rather than run (ADR-172 決定 1). The sync used to run inside this request, so a tab
+    // closed or reloaded mid-sync dropped the handler: some folders written, the prefix sweep never
+    // run, and neither success nor failure recorded. The leader's loop runs it now and records how
+    // it ended on the row either way — so any core may take the request.
+    if !admin.netbox.request_sync(id).await.map_err(internal)? {
+        return Err(no_server(id));
+    }
+    let server = admin
+        .netbox
+        .get(id)
         .await
-        .map_err(|e| upstream_error("sync", &e))?;
-    Ok(Json(SyncNetboxResult {
-        regions: report.regions,
-        sites: report.sites,
-        missing_folders: report.missing,
-        sites_without_site_id: report.sites_without_site_id,
-        prefixes_readable: report.prefixes_readable,
-        prefixes: report.prefixes,
-        prefixes_skipped: report.prefixes_skipped,
-    }))
+        .map_err(internal)?
+        .ok_or_else(|| no_server(id))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(NetboxSyncView::of(&server).unwrap_or_default()),
+    ))
 }
 
 #[utoipa::path(
@@ -853,6 +864,85 @@ mod tests {
             leaked, 0,
             "the token must never appear in a plaintext column"
         );
+    }
+
+    /// ADR-172 決定 1: "Sync now" writes a request and answers 202; it does not run the sync.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sync_request_is_accepted_and_recorded_on_the_row(pool: sqlx::PgPool) {
+        let st = live_state(pool.clone()).await;
+        let hdr = token(&st, yagra_common::Role::Operator);
+        let created = send(
+            &st,
+            "POST",
+            "/api/v1/netbox/servers",
+            &hdr,
+            Some(serde_json::json!({
+                "name": "lab",
+                "base_url": "http://10.0.0.14:8000/",
+                "token": "0123456789abcdef",
+                "sync_interval_secs": 3600
+            })),
+        )
+        .await;
+        assert_eq!(created.0, StatusCode::CREATED, "body: {}", created.1);
+        let id = created.1["id"].as_str().expect("id").to_owned();
+        let path = format!("/api/v1/netbox/servers/{id}/sync");
+
+        let first = send(&st, "POST", &path, &hdr, None).await;
+        assert_eq!(first.0, StatusCode::ACCEPTED, "body: {}", first.1);
+        let requested = first.1["requested_at"]
+            .as_str()
+            .expect("requested_at")
+            .to_owned();
+        assert!(
+            first.1["started_at"].is_null(),
+            "nothing runs it inside the request"
+        );
+
+        let second = send(&st, "POST", &path, &hdr, None).await;
+        assert_eq!(second.0, StatusCode::ACCEPTED);
+        assert_eq!(
+            second.1["requested_at"].as_str(),
+            Some(requested.as_str()),
+            "a second press is the same request"
+        );
+
+        let listed = send(&st, "GET", "/api/v1/netbox/servers", &hdr, None).await;
+        assert_eq!(listed.0, StatusCode::OK);
+        assert_eq!(
+            listed.1[0]["sync"], second.1,
+            "the listing shows the request"
+        );
+        assert!(
+            listed.1[0]["last_sync_at"].is_null() && listed.1[0]["last_sync_ok"].is_null(),
+            "the endpoint must not have run the sync itself"
+        );
+
+        // A paused server: nothing would run the request, so it is refused rather than queued.
+        sqlx::query("UPDATE netbox_servers SET enabled = FALSE, sync_requested_at = NULL")
+            .execute(&pool)
+            .await
+            .expect("pause");
+        let paused = send(&st, "POST", &path, &hdr, None).await;
+        assert_eq!(paused.0, StatusCode::CONFLICT, "body: {}", paused.1);
+        assert_eq!(paused.1["error"]["code"], "netbox_server_paused");
+        let left: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT sync_requested_at FROM netbox_servers")
+                .fetch_one(&pool)
+                .await
+                .expect("read");
+        assert_eq!(left, None, "a refused request leaves nothing behind");
+
+        let missing = send(
+            &st,
+            "POST",
+            &format!("/api/v1/netbox/servers/{}/sync", uuid::Uuid::new_v4()),
+            &hdr,
+            None,
+        )
+        .await;
+        assert_eq!(missing.0, StatusCode::NOT_FOUND);
     }
 
     /// 🚨 The defect this pins was found while diagnosing a live "NetBox refused the API token"

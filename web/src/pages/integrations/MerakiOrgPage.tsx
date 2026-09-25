@@ -60,7 +60,7 @@ import {
   unwatchedNotice,
 } from './merakiDevices';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
-import { useMerakiReadWatch } from './useMerakiReadWatch';
+import { useSyncWatch } from './useSyncWatch';
 import { useMerakiSync } from './useMerakiSync';
 import './MerakiOrgPage.css';
 
@@ -302,7 +302,7 @@ export function MerakiOrgPage() {
       .catch(() => undefined);
   }, [orgId]);
   const reloadAll = useCallback(() => void load(), [load]);
-  useMerakiReadWatch(
+  useSyncWatch(
     org !== null && orgFullRead(org, pollingOn).kind !== 'none',
     pollOrg,
     reloadAll,

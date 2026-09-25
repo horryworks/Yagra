@@ -78,3 +78,28 @@ export function syncSummary(row: {
   if (!row.last_sync_at) return { kind: 'never' };
   return { kind: 'ok', at: row.last_sync_at, missing: row.missing_folders ?? 0 };
 }
+
+/** Where a "Sync now" stands (ADR-172 決定 1). The endpoint answers 202 and the leader's loop runs
+ *  the sync, so this — not the answer to the button — is what the row shows while it goes. */
+export type SyncProgress = { kind: 'none' } | { kind: 'queued' } | { kind: 'running' };
+
+/** Read a server row's `sync` field into one of three states.
+ *
+ *  A run in flight outranks a request, because a request made during a run survives that run and
+ *  is shown again as `queued` once it ends — the reverse order would read "waiting" while NetBox is
+ *  already being read. */
+export function syncProgress(row: {
+  sync?: { requested_at?: string | null; started_at?: string | null } | null;
+}): SyncProgress {
+  if (row.sync?.started_at) return { kind: 'running' };
+  if (row.sync?.requested_at) return { kind: 'queued' };
+  return { kind: 'none' };
+}
+
+/** Whether a page showing these rows should keep re-reading them: something is asked for or
+ *  running, so the row will change without anyone touching it. */
+export function anySyncInProgress(
+  rows: readonly { sync?: { requested_at?: string | null; started_at?: string | null } | null }[],
+): boolean {
+  return rows.some((r) => syncProgress(r).kind !== 'none');
+}

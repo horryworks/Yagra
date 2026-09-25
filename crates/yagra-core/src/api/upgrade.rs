@@ -32,6 +32,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use utoipa::OpenApi;
 
 use super::error::{ApiError, ApiResult};
@@ -845,7 +846,7 @@ async fn upload_bundle(
     tracing::warn!(run = %id, target = %tag, bytes, by = %by, "image archive received");
     Ok((
         StatusCode::ACCEPTED,
-        Json(dispatch(&upgrade, &admin, Command::Bundle, &id, &tag, &by, now).await?),
+        Json(dispatch(&upgrade.0, &admin, Command::Bundle, &id, &tag, &by, now).await?),
     ))
 }
 
@@ -1024,16 +1025,109 @@ pub(super) async fn reachable(
     Ok(())
 }
 
-/// Open the bounded maintenance window, then hand the request over.
+/// What a hand-off to the updater needs, owned, so it can run in a task the request cannot cancel.
+pub(super) struct Handoff {
+    /// The fleet-wide window's name, as the Maintenance page lists it.
+    pub(super) window_name: String,
+    pub(super) command: Command,
+    pub(super) id: String,
+    pub(super) tag: Option<String>,
+    pub(super) by: String,
+    pub(super) now: i64,
+    pub(super) extra: Vec<(String, String)>,
+    /// What the error log says failed, e.g. "hand the upgrade request to the updater".
+    pub(super) what: &'static str,
+}
+
+/// Open the bounded maintenance window, then hand the request over — **in a task of its own**.
 ///
-/// Shared so the two commands cannot drift on the order. It matters: core stops moments after the
-/// request file appears, so the window has to exist first or it never will.
+/// Shared so the upgrade and the bus change cannot drift on the order. It matters: core stops
+/// moments after the request file appears, so the window has to exist first or it never will.
 ///
-/// Nothing here closes it — this process will not be alive to. The core that comes back does that
-/// once the run reports an outcome ([`crate::upgrade::UpgradeRepo::settle_finished_run`]); the
-/// `ends_at` written here is the backstop for the run that never reports at all.
+/// 🚨 In a task of its own because of what the request can no longer do once the window exists
+/// (ADR-172 決定 4). A tab closed while the window's `INSERT` was in flight used to drop the
+/// handler there: a fleet-wide window with no request behind it, pausing every judgement for the
+/// full fifteen minutes with nothing to close it. The task finishes the hand-off whoever is left
+/// waiting.
+///
+/// Nothing here closes the window on success — this process will not be alive to. The core that
+/// comes back does that once the run reports an outcome
+/// ([`crate::upgrade::UpgradeRepo::settle_finished_run`]); the `ends_at` written here is the
+/// backstop for the run that never reports at all.
+pub(super) async fn open_window_then_request(
+    upgrade: Arc<crate::upgrade::UpgradeRepo>,
+    maintenance: Arc<crate::maintenance::MaintenanceRepo>,
+    handoff: Handoff,
+) -> Result<Option<uuid::Uuid>, ApiError> {
+    tokio::spawn(hand_off(upgrade, maintenance, handoff))
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                &e,
+                "hand a run to the updater",
+                "failed to hand the request to the updater",
+            )
+        })?
+}
+
+/// The body of [`open_window_then_request`], for a caller that is already inside a task of its
+/// own (the bus change, which reissues a certificate first). Returns the window's id, when one was
+/// opened.
+///
+/// Three things happen in a fixed order: the request is **checked** (so one the updater would
+/// refuse refuses here, before anything is opened), the window is **opened**, and the request is
+/// **written**. If the write fails the window is closed at once — before ADR-172 it stayed open
+/// for its fifteen minutes behind a 500.
+pub(super) async fn hand_off(
+    upgrade: Arc<crate::upgrade::UpgradeRepo>,
+    maintenance: Arc<crate::maintenance::MaintenanceRepo>,
+    h: Handoff,
+) -> Result<Option<uuid::Uuid>, ApiError> {
+    let extra: Vec<(&str, &str)> = h
+        .extra
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let refused = |e: anyhow::Error| {
+        ApiError::from_internal(e.as_ref(), h.what, format!("failed to {}", h.what))
+    };
+    upgrade
+        .check_request(h.command, &h.id, h.tag.as_deref(), &extra)
+        .map_err(refused)?;
+
+    // Failure is not fatal: a run that goes noisily is better than one that does not go.
+    let ends = chrono::Utc::now() + chrono::Duration::seconds(MAINTENANCE_WINDOW_SECS);
+    let window = maintenance
+        .create_window(
+            &h.window_name,
+            crate::maintenance::WindowScope::System.as_str(),
+            crate::maintenance::UPGRADE_SCOPE_ID,
+            chrono::Utc::now(),
+            ends,
+        )
+        .await
+        .map_err(|e| tracing::warn!(error = %e, "could not open the maintenance window"))
+        .ok();
+
+    if let Err(e) = upgrade.request_with(h.command, &h.id, h.tag.as_deref(), &h.by, h.now, &extra) {
+        // No run will report, so nothing else would close this window before its backstop — and
+        // while it is open the engine judges nothing, fleet-wide.
+        if let Some(w) = window {
+            if let Err(close) = maintenance.end_window_now(w).await {
+                tracing::warn!(
+                    error = %close, window = %w,
+                    "the request was not written and its maintenance window could not be closed"
+                );
+            }
+        }
+        return Err(refused(e));
+    }
+    Ok(window)
+}
+
+/// The upgrade's hand-off: [`open_window_then_request`] with its name and its log line.
 async fn dispatch(
-    upgrade: &crate::upgrade::UpgradeRepo,
+    upgrade: &Arc<crate::upgrade::UpgradeRepo>,
     admin: &Admin,
     command: Command,
     id: &str,
@@ -1041,30 +1135,21 @@ async fn dispatch(
     by: &str,
     now: i64,
 ) -> Result<RunAccepted, ApiError> {
-    // Failure is not fatal: an upgrade that runs noisily is better than one that does not run.
-    let ends = chrono::Utc::now() + chrono::Duration::seconds(MAINTENANCE_WINDOW_SECS);
-    let window = admin
-        .maintenance
-        .create_window(
-            &format!("Upgrade to {tag}"),
-            crate::maintenance::WindowScope::System.as_str(),
-            crate::maintenance::UPGRADE_SCOPE_ID,
-            chrono::Utc::now(),
-            ends,
-        )
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "could not open the upgrade maintenance window"))
-        .ok();
-
-    upgrade
-        .request(command, id, Some(tag), by, now)
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "hand the upgrade request to the updater",
-                "failed to hand the upgrade request to the updater",
-            )
-        })?;
+    let window = open_window_then_request(
+        Arc::clone(upgrade),
+        Arc::clone(&admin.maintenance),
+        Handoff {
+            window_name: format!("Upgrade to {tag}"),
+            command,
+            id: id.to_owned(),
+            tag: Some(tag.to_owned()),
+            by: by.to_owned(),
+            now,
+            extra: Vec::new(),
+            what: "hand the upgrade request to the updater",
+        },
+    )
+    .await?;
     tracing::warn!(
         run = %id, target = tag, command = command.as_str(), by = %by,
         "upgrade requested; core will restart"
@@ -1432,5 +1517,98 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
         assert!(repo.enabled().await);
+    }
+}
+
+#[cfg(test)]
+mod hand_off_tests {
+    use super::{hand_off, Handoff};
+    use crate::maintenance::MaintenanceRepo;
+    use crate::upgrade::{Command, UpgradeRepo};
+    use std::sync::Arc;
+
+    fn bus_change(id: &str) -> Handoff {
+        Handoff {
+            window_name: "Enabling remote pollers".to_owned(),
+            command: Command::Bus,
+            id: id.to_owned(),
+            tag: None,
+            by: "admin".to_owned(),
+            now: chrono::Utc::now().timestamp(),
+            extra: vec![("bus_mode".to_owned(), "on".to_owned())],
+            what: "hand the bus change to the updater",
+        }
+    }
+
+    /// ADR-172 決定 4: a request the updater never receives must not leave the fleet paused.
+    ///
+    /// Before, a failed write answered 500 and the fleet-wide window it had just opened stayed open
+    /// for its fifteen minutes — every judgement paused, with nothing that would ever close it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_request_that_cannot_be_written_closes_the_window_it_opened(pool: sqlx::PgPool) {
+        let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
+        // A hand-off directory that does not exist: every check passes, the write fails.
+        let missing = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
+        let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(missing), 0));
+
+        let id = crate::upgrade::new_run_id();
+        let refused = hand_off(upgrade, Arc::clone(&maintenance), bus_change(&id)).await;
+        assert!(refused.is_err(), "the write failed, so the hand-off failed");
+
+        let windows = maintenance.list_windows().await.expect("list");
+        assert_eq!(
+            windows.len(),
+            1,
+            "the window was opened before the write, as it must be"
+        );
+        assert!(
+            !windows[0].active,
+            "…and closed when the write failed, instead of pausing the fleet for fifteen minutes"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_written_request_leaves_its_window_open(pool: sqlx::PgPool) {
+        let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
+        let dir = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(dir.clone()), 0));
+
+        let id = crate::upgrade::new_run_id();
+        let window = hand_off(upgrade, Arc::clone(&maintenance), bus_change(&id))
+            .await
+            .expect("hand-off");
+        let request = std::fs::read_to_string(dir.join("request")).expect("request written");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(request.contains("bus_mode=on"), "{request}");
+        let windows = maintenance.list_windows().await.expect("list");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(Some(windows[0].id), window);
+        assert!(
+            windows[0].active,
+            "the core that comes back closes it; closing it here would unpause the fleet mid-restart"
+        );
+    }
+
+    /// A request the updater would refuse is refused before the window is opened.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_request_that_fails_its_checks_opens_no_window(pool: sqlx::PgPool) {
+        let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
+        let dir = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
+        let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(dir), 0));
+        let mut bad = bus_change(&crate::upgrade::new_run_id());
+        bad.extra = vec![("bus_mode".to_owned(), "on\nforged=1".to_owned())];
+
+        assert!(hand_off(upgrade, Arc::clone(&maintenance), bad)
+            .await
+            .is_err());
+        assert!(
+            maintenance.list_windows().await.expect("list").is_empty(),
+            "nothing is opened for a request that was never going to be written"
+        );
     }
 }

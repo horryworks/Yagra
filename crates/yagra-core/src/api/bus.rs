@@ -40,7 +40,7 @@ use super::extract::{Admin, BusTls, Caller, RequireManageSystem, Upgrade};
 use super::ApiState;
 use crate::bus_cert::BusTlsView;
 use crate::server_cert::CertError;
-use crate::upgrade::{Command, MAINTENANCE_WINDOW_SECS};
+use crate::upgrade::Command;
 
 #[derive(OpenApi)]
 #[openapi(paths(get_bus, regenerate_bus_cert, set_bus_remote))]
@@ -230,101 +230,101 @@ async fn set_bus_remote(
         .map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
     let id = uuid::Uuid::new_v4().to_string();
 
-    // Reissue BEFORE the bus restarts, so the certificate it comes back serving already covers the
-    // site. Doing it afterwards would need a second restart, and the operator would have watched
-    // monitoring stop twice for one change.
-    let (poller_secret, ca_certificate, extra) = if body.enabled {
-        let names = merge_names(&body.names);
-        if body.names.iter().all(|n| n.trim().is_empty()) {
-            return Err(ApiError::bad_request(
-                "missing_address",
-                "give the hostname or IP address remote pollers will dial — their connection fails \
-                 unless it is in the certificate",
-            ));
-        }
-        let by_id = caller.as_ref().map(|c| c.0.user_id);
-        let cert = bus.reissue(&names, by_id).await.map_err(to_api_error)?;
-        // 🚨 Before the bus changes, not after: turning this on also turns poller auto-registration
-        // off (ADR-065 Inc.7), because from then on the Auth Callout is what refuses an id nobody
-        // registered. The pollers inside this composition bypass the callout on a static account,
-        // so they are never refused — they would simply stop being able to *appear*. On a fresh
-        // deployment where this switch is the first thing pressed, that is a fleet with no poller
-        // rows and therefore no assignments, on a deployment that has just been told the change
-        // succeeded.
-        //
-        // The updater is the only thing that knows which ids are local; core cannot work it out,
-        // because nothing on the bus says which compose project a poller belongs to. Failure is
-        // logged and ignored: this is preparation for the change, not the change.
-        //
-        // WARNING: this moment is necessary and NOT sufficient (ADR-065 Inc.8). It adopts the
-        // ids that exist right now; an upgrade later replaces the composition without anyone
-        // pressing this switch, so `run_live` runs the same adoption at every start.
-        match crate::pollers::register_local(&admin.pollers, &upgrade).await {
-            Ok(Some((created, known))) => tracing::info!(
-                created,
-                known,
-                "registered the pollers this deployment owns, before the callout refuses unknown ids"
-            ),
-            Ok(None) => {}
-            Err(e) => tracing::warn!(
-                error = %e,
-                "could not pre-register the co-located pollers; one never seen stays hidden"
-            ),
-        }
-        let core_secret = random_secret();
-        let poller_secret = random_secret();
-        (
-            Some(poller_secret.clone()),
-            Some(cert.certificate),
-            vec![
-                ("bus_mode".to_owned(), "on".to_owned()),
-                ("bus_core_password".to_owned(), core_secret),
-                ("bus_poller_password".to_owned(), poller_secret),
-            ],
-        )
-    } else {
-        (None, None, vec![("bus_mode".to_owned(), "off".to_owned())])
-    };
+    let names = merge_names(&body.names);
+    if body.enabled && body.names.iter().all(|n| n.trim().is_empty()) {
+        return Err(ApiError::bad_request(
+            "missing_address",
+            "give the hostname or IP address remote pollers will dial — their connection fails \
+             unless it is in the certificate",
+        ));
+    }
 
-    // Failure is not fatal: a change that runs noisily is better than one that does not run.
-    let ends = chrono::Utc::now() + chrono::Duration::seconds(MAINTENANCE_WINDOW_SECS);
-    let window = admin
-        .maintenance
-        .create_window(
-            if body.enabled {
-                "Enabling remote pollers"
-            } else {
-                "Disabling remote pollers"
-            },
-            crate::maintenance::WindowScope::System.as_str(),
-            crate::maintenance::UPGRADE_SCOPE_ID,
-            chrono::Utc::now(),
-            ends,
-        )
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "could not open the bus-change maintenance window"))
-        .ok();
-
-    let borrowed: Vec<(&str, &str)> = extra
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    upgrade
-        .request_with(
-            Command::Bus,
-            &id,
-            None,
-            &by,
-            chrono::Utc::now().timestamp(),
-            &borrowed,
-        )
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "hand the bus change to the updater",
-                "failed to hand the bus change to the updater",
+    // 🚨 Everything from the first write on runs in a task of its own (ADR-172 決定 4). A tab
+    // closed mid-way used to drop the handler wherever it stood: a reissued certificate the running
+    // bus does not serve, or — worse — a fleet-wide maintenance window with no request behind it,
+    // pausing every judgement for fifteen minutes with nothing to close it. The task finishes the
+    // change whoever is left waiting for the answer.
+    let enabled = body.enabled;
+    let by_id = caller.as_ref().map(|c| c.0.user_id);
+    let (bus, upgrade, admin) = (bus.0, upgrade.0, admin.0);
+    let (run_id, run_by) = (id.clone(), by.clone());
+    let change = async move {
+        // Reissue BEFORE the bus restarts, so the certificate it comes back serving already covers
+        // the site. Doing it afterwards would need a second restart, and the operator would have
+        // watched monitoring stop twice for one change.
+        let (poller_secret, ca_certificate, extra) = if enabled {
+            let cert = bus.reissue(&names, by_id).await.map_err(to_api_error)?;
+            // 🚨 Before the bus changes, not after: turning this on also turns poller
+            // auto-registration off (ADR-065 Inc.7), because from then on the Auth Callout is what
+            // refuses an id nobody registered. The pollers inside this composition bypass the
+            // callout on a static account, so they are never refused — they would simply stop
+            // being able to *appear*. On a fresh deployment where this switch is the first thing
+            // pressed, that is a fleet with no poller rows and therefore no assignments, on a
+            // deployment that has just been told the change succeeded.
+            //
+            // The updater is the only thing that knows which ids are local; core cannot work it
+            // out, because nothing on the bus says which compose project a poller belongs to.
+            // Failure is logged and ignored: this is preparation for the change, not the change.
+            //
+            // WARNING: this moment is necessary and NOT sufficient (ADR-065 Inc.8). It adopts the
+            // ids that exist right now; an upgrade later replaces the composition without anyone
+            // pressing this switch, so `run_live` runs the same adoption at every start.
+            match crate::pollers::register_local(&admin.pollers, &upgrade).await {
+                Ok(Some((created, known))) => tracing::info!(
+                    created,
+                    known,
+                    "registered the pollers this deployment owns, before the callout refuses unknown ids"
+                ),
+                Ok(None) => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "could not pre-register the co-located pollers; one never seen stays hidden"
+                ),
+            }
+            let core_secret = random_secret();
+            let poller_secret = random_secret();
+            (
+                Some(poller_secret.clone()),
+                Some(cert.certificate),
+                vec![
+                    ("bus_mode".to_owned(), "on".to_owned()),
+                    ("bus_core_password".to_owned(), core_secret),
+                    ("bus_poller_password".to_owned(), poller_secret),
+                ],
             )
-        })?;
+        } else {
+            (None, None, vec![("bus_mode".to_owned(), "off".to_owned())])
+        };
+
+        let window = super::upgrade::hand_off(
+            upgrade,
+            std::sync::Arc::clone(&admin.maintenance),
+            super::upgrade::Handoff {
+                window_name: if enabled {
+                    "Enabling remote pollers"
+                } else {
+                    "Disabling remote pollers"
+                }
+                .to_owned(),
+                command: Command::Bus,
+                id: run_id,
+                tag: None,
+                by: run_by,
+                now: chrono::Utc::now().timestamp(),
+                extra,
+                what: "hand the bus change to the updater",
+            },
+        )
+        .await?;
+        Ok::<_, ApiError>((window, poller_secret, ca_certificate))
+    };
+    let (window, poller_secret, ca_certificate) = tokio::spawn(change).await.map_err(|e| {
+        ApiError::from_internal(
+            &e,
+            "change remote-poller acceptance",
+            "failed to hand the bus change to the updater",
+        )
+    })??;
     tracing::warn!(
         run = %id, enabled = body.enabled, by = %by,
         "remote-poller acceptance change requested; the bus and core will restart"

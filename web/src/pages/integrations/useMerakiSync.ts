@@ -7,7 +7,7 @@
 //
 // Since ADR-164 決定 32 the request only asks: the server answers 202 at once and the read it asked
 // for runs in the background for minutes, shown by the organization's `full_sync`
-// (`orgFullRead`, `useMerakiReadWatch`). `busy` covers the request, not the read.
+// (`orgFullRead`, `useSyncWatch`). `busy` covers the request, not the read.
 
 import { useCallback, useState } from 'react';
 import { api, errMsg } from '../../services/api';

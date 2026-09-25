@@ -9,7 +9,9 @@
 //! Three things bound what an operator's click can cost, and they are deliberately different
 //! mechanisms because they fail differently:
 //!
-//! * **The cache** removes the call entirely. Same evidence ⇒ same digest ⇒ the stored report.
+//! * **The cache** removes the call entirely. The same incident within the TTL ⇒ the stored report
+//!   (ADR-172 決定 3 — it was the same *evidence* until then, which during an outage changes most
+//!   minutes).
 //!   Beyond saving money this is a *correctness* property: model output is non-deterministic, and
 //!   an explanation that rewords itself every time you reopen it is one nobody comes to trust.
 //! * **The rate limit** bounds arrival — ten new generations a minute, shared across all callers.
@@ -145,6 +147,110 @@ struct CachedClient {
     provider: Arc<dyn LlmProvider>,
 }
 
+/// What a generation hands back, to every caller waiting on it.
+type Outcome = Result<RcaReport, Arc<RcaError>>;
+
+/// One incident's explanation: the node it is filed under, the check, the language.
+type RunKey = (uuid::Uuid, uuid::Uuid, Language);
+
+/// A generation any number of callers can wait on. It runs in a task of its own, so dropping every
+/// handle does not stop it.
+type SharedRun = futures::future::Shared<futures::future::BoxFuture<'static, Outcome>>;
+
+/// What admission decided.
+enum Admitted {
+    Cached(RcaReport),
+    Running(SharedRun),
+}
+
+fn generation_panicked() -> Outcome {
+    Err(Arc::new(RcaError::Internal(anyhow::anyhow!(
+        "the explanation task stopped unexpectedly"
+    ))))
+}
+
+/// The work running right now, keyed so a second request for the same thing waits for the first
+/// instead of starting another (ADR-172 決定 3).
+///
+/// Only this process's runs: a request that reaches another core does not join, and finds the
+/// report in the store once the first one lands.
+pub(crate) struct InFlight<K, V: Clone> {
+    runs: Mutex<std::collections::HashMap<K, (u64, SharedFuture<V>)>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+type SharedFuture<V> = futures::future::Shared<futures::future::BoxFuture<'static, V>>;
+
+impl<K, V> InFlight<K, V>
+where
+    K: Eq + std::hash::Hash + Clone + Send + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            runs: Mutex::new(std::collections::HashMap::new()),
+            next: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
+    /// The run for `key`, if one is going.
+    pub(crate) fn join(&self, key: &K) -> Option<SharedFuture<V>> {
+        self.runs
+            .lock()
+            .expect("in-flight mutex poisoned")
+            .get(key)
+            .map(|(_, run)| run.clone())
+    }
+
+    /// Start `work` in a task of its own and register it under `key`, replacing any run already
+    /// there (a forced regeneration). The entry leaves when the run ends — however it ends.
+    pub(crate) fn start<F>(
+        self: &Arc<Self>,
+        key: K,
+        work: F,
+        on_panic: fn() -> V,
+    ) -> SharedFuture<V>
+    where
+        F: std::future::Future<Output = V> + Send + 'static,
+    {
+        use futures::FutureExt as _;
+        // Held across the spawn and the insert, so a run that finishes at once cannot remove its
+        // entry before the entry exists — and so leave a finished run registered for ever.
+        let mut runs = self.runs.lock().expect("in-flight mutex poisoned");
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let done = Arc::clone(self);
+        let done_key = key.clone();
+        let task = tokio::spawn(async move {
+            let v = work.await;
+            done.finish(&done_key, id);
+            v
+        });
+        let failed = Arc::clone(self);
+        let failed_key = key.clone();
+        let run = async move {
+            match task.await {
+                Ok(v) => v,
+                Err(_) => {
+                    failed.finish(&failed_key, id);
+                    on_panic()
+                }
+            }
+        }
+        .boxed()
+        .shared();
+        runs.insert(key, (id, run.clone()));
+        run
+    }
+
+    /// Remove `key`'s entry if it is still run `id` — a forced run may have replaced it.
+    fn finish(&self, key: &K, id: u64) {
+        let mut runs = self.runs.lock().expect("in-flight mutex poisoned");
+        if runs.get(key).is_some_and(|(current, _)| *current == id) {
+            runs.remove(key);
+        }
+    }
+}
+
 /// The stores, caps and provider cache behind `POST /api/v1/rca`.
 pub struct RcaOrchestrator {
     repo: Arc<RcaRepo>,
@@ -162,6 +268,8 @@ pub struct RcaOrchestrator {
     max_turns: usize,
     task_budget: Duration,
     client: Mutex<Option<CachedClient>>,
+    /// Generations running now, so a second request for the same incident waits for the first.
+    running: Arc<InFlight<RunKey, Outcome>>,
 }
 
 impl RcaOrchestrator {
@@ -207,6 +315,7 @@ impl RcaOrchestrator {
             max_turns,
             task_budget,
             client: Mutex::new(None),
+            running: InFlight::new(),
         }
     }
 
@@ -218,14 +327,37 @@ impl RcaOrchestrator {
 
     /// Explain the incident containing `req.node`/`req.check`.
     ///
+    /// Three stages (ADR-172 決定 3). **Admission** runs in the caller: the config, the context, the
+    /// cache, the concurrency permit and the rate window — everything that can refuse. **The
+    /// generation** — the provider round trips and the stored report — runs in a task of its own,
+    /// holding the permit. **The caller** then only waits for that task.
+    ///
+    /// 🚨 Why the split: the generation used to run inside the HTTP request, and a tab closed or
+    /// reloaded mid-way dropped the request and the generation with it — tokens billed, nothing
+    /// stored. Now a dropped caller leaves the task running; the report is stored, and reopening
+    /// the dialog finds it in the cache or joins the run still going.
+    ///
     /// # Errors
     /// See [`RcaError`]. Every variant is a clean refusal — nothing here can leave the alert engine
-    /// in a different state than it was before the call.
+    /// in a different state than it was before the call. Shared behind an `Arc` because a run that
+    /// two callers joined fails for both of them.
     pub async fn explain(
-        &self,
+        self: &Arc<Self>,
         req: &RcaRequest,
-        tools: &super::agent::AgentTools,
-    ) -> Result<RcaReport, RcaError> {
+        tools: super::agent::AgentTools,
+    ) -> Result<RcaReport, Arc<RcaError>> {
+        match self.admit(req, tools).await? {
+            Admitted::Cached(report) => Ok(report),
+            Admitted::Running(run) => run.await,
+        }
+    }
+
+    /// Everything that can refuse, in the caller; then the generation, started or joined.
+    async fn admit(
+        self: &Arc<Self>,
+        req: &RcaRequest,
+        tools: super::agent::AgentTools,
+    ) -> Result<Admitted, RcaError> {
         let config = self.repo.active().await?.ok_or(RcaError::NotConfigured)?;
 
         let window = req
@@ -248,30 +380,71 @@ impl RcaOrchestrator {
         // Whether the model gets tools. One turn means it does not, which is Increment 1 exactly.
         //
         // The *retrieval* is what varies between the two modes, not the question, so the seed
-        // context stays deterministic and the digest keeps working — but the two modes must not
-        // share a cache entry, or reopening an incident after an operator changed `max_turns` would
-        // serve an answer built from a different amount of evidence.
+        // context stays deterministic and the digest keeps working as a record of what was asked.
         let agentic = self.max_turns > 1;
         let digest = digest_of(&ctx, &config, req.language, agentic);
+        let key: RunKey = (ctx.root_node_id, req.check.0, req.language);
 
         // The cache check comes before admission on purpose: a served-from-store report costs
         // nothing external, so charging it against the rate limit would punish the cheap path.
+        //
+        // ⚠️ Keyed by the incident, no longer by the digest (ADR-172 決定 3): the digest moves with
+        // the evidence, which during an outage is most minutes, so a report generated after the
+        // dialog was closed would be billed again on reopening instead of shown.
         if !req.force {
-            if let Some(mut hit) = self.repo.latest_for_digest(&digest).await? {
+            if let Some(mut hit) = self.repo.latest_for_incident(key.0, key.1, key.2).await? {
                 if self.is_fresh(&hit, now_s) {
                     hit.cached = true;
                     metrics::counter!("yagra_rca_reports_total", "cached" => "true").increment(1);
-                    return Ok(hit);
+                    return Ok(Admitted::Cached(hit));
                 }
+            }
+            // The same incident is being explained right now — most often by this operator, before
+            // they closed the dialog. Wait for that run rather than paying for a second one.
+            if let Some(run) = self.running.join(&key) {
+                metrics::counter!("yagra_rca_reports_joined_total").increment(1);
+                return Ok(Admitted::Running(run));
             }
         }
 
-        self.admit_rate()?;
-        let _permit = Arc::clone(&self.slots)
+        // The permit before the rate window, the order `AnalysisRunner::create` takes them in: the
+        // other way round, a request refused for concurrency had already spent a rate slot.
+        let permit = Arc::clone(&self.slots)
             .try_acquire_owned()
             .map_err(|_| RcaError::TooManyConcurrent(self.max_concurrent))?;
-
+        self.admit_rate()?;
+        // Built here, not in the task, so a provider saved without its key refuses the request
+        // rather than failing a run nobody is waiting on.
         let provider = self.provider_for(&config)?;
+
+        let me = Arc::clone(self);
+        let req = req.clone();
+        let generation = async move {
+            // Held for the whole generation; dropping it at the end frees the slot.
+            let _permit = permit;
+            me.generate(&req, &tools, &config, provider, ctx, &digest, agentic)
+                .await
+                .map_err(Arc::new)
+        };
+        Ok(Admitted::Running(self.running.start(
+            key,
+            generation,
+            generation_panicked,
+        )))
+    }
+
+    /// The provider round trips and the stored report. Runs in its own task (see [`Self::explain`]).
+    #[allow(clippy::too_many_arguments)] // one call site, and every argument is admission's output
+    async fn generate(
+        &self,
+        req: &RcaRequest,
+        tools: &super::agent::AgentTools,
+        config: &ActiveConfig,
+        provider: Arc<dyn LlmProvider>,
+        ctx: IncidentContext,
+        digest: &str,
+        agentic: bool,
+    ) -> Result<RcaReport, RcaError> {
         let mut request = prompt::render(&ctx, req.language, config.max_output_tokens);
         if agentic {
             request.tools = tools.schemas();
@@ -339,10 +512,10 @@ impl RcaOrchestrator {
             .repo
             .insert(&NewReport {
                 // Filed under the node the incident was attributed to, not the one clicked — that
-                // is the node this report explains.
+                // is the node this report explains, and the node the incident cache looks under.
                 node_id: ctx.root_node_id,
                 check_id: req.check.0,
-                context_digest: &digest,
+                context_digest: digest,
                 provider: config.kind.as_str(),
                 model: &config.provider.model,
                 summary: &answer.summary,
@@ -549,6 +722,116 @@ fn hex(bytes: &[u8]) -> String {
         s.push_str(&format!("{b:02x}"));
     }
     s
+}
+
+#[cfg(test)]
+mod in_flight_tests {
+    use super::InFlight;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    fn panicked() -> u32 {
+        0
+    }
+
+    /// ADR-172 決定 3: a second request for the same incident waits for the first run rather than
+    /// paying for another, and the run finishes even when nobody is left waiting.
+    #[tokio::test]
+    async fn a_second_caller_joins_the_run_and_the_run_outlives_its_callers() {
+        let runs: Arc<InFlight<&'static str, u32>> = InFlight::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (release, gate) = tokio::sync::oneshot::channel::<()>();
+
+        let counted = Arc::clone(&calls);
+        let first = runs.start(
+            "incident",
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = gate.await;
+                7
+            },
+            panicked,
+        );
+        let second = runs
+            .join(&"incident")
+            .expect("the run is registered while it runs");
+        assert!(runs.join(&"another").is_none());
+
+        // Every caller goes away — the tab was closed. The run must not go with them.
+        drop(first);
+        drop(second);
+        release.send(()).expect("release");
+        for _ in 0..100 {
+            if runs.join(&"incident").is_none() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            runs.join(&"incident").is_none(),
+            "a finished run leaves the table, or the next request would be handed a stale answer"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the work ran once");
+    }
+
+    #[tokio::test]
+    async fn every_joiner_gets_the_same_answer() {
+        let runs: Arc<InFlight<u8, u32>> = InFlight::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let (release, gate) = tokio::sync::oneshot::channel::<()>();
+        let first = runs.start(
+            1,
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = gate.await;
+                42
+            },
+            panicked,
+        );
+        let second = runs.join(&1).expect("joined");
+        release.send(()).expect("release");
+        assert_eq!((first.await, second.await), (42, 42));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_forced_run_replaces_the_entry_and_the_old_one_does_not_remove_it() {
+        let runs: Arc<InFlight<u8, u32>> = InFlight::new();
+        let (release_old, old_gate) = tokio::sync::oneshot::channel::<()>();
+        let old = runs.start(
+            1,
+            async move {
+                let _ = old_gate.await;
+                1
+            },
+            panicked,
+        );
+        let (release_new, new_gate) = tokio::sync::oneshot::channel::<()>();
+        let new = runs.start(
+            1,
+            async move {
+                let _ = new_gate.await;
+                2
+            },
+            panicked,
+        );
+        release_old.send(()).expect("release");
+        assert_eq!(old.await, 1);
+        let joined = runs
+            .join(&1)
+            .expect("the older run ending must not remove the newer run's entry");
+        release_new.send(()).expect("release");
+        assert_eq!((new.await, joined.await), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_run_that_panics_answers_and_leaves_the_table() {
+        let runs: Arc<InFlight<u8, u32>> = InFlight::new();
+        let run = runs.start(1, async { panic!("boom") }, panicked);
+        assert_eq!(run.await, 0);
+        assert!(runs.join(&1).is_none());
+    }
 }
 
 #[cfg(test)]

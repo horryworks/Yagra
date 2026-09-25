@@ -44,10 +44,9 @@ export interface Destination {
 /**
  * Group the proposals by the folder they would go to, in the order the folders first appear.
  *
- * This is also the request plan: one `moveNodes` call per destination, because the endpoint moves
- * a set of nodes into **one** folder. ⚠️ That makes a multi-destination apply non-atomic — a
- * failure partway leaves the earlier folders' nodes moved — which is why the caller reports what
- * landed rather than claiming all or nothing.
+ * This is also the request body: `POST /api/v1/nodes/move-by-prefix` takes every destination at
+ * once and writes them in one transaction (ADR-172 決定 2). It used to be one `moveNodes` call per
+ * destination, which a closed tab could stop halfway.
  */
 export function byDestination(preview: MovePreview): Destination[] {
   const out: Destination[] = [];
@@ -64,22 +63,19 @@ export function byDestination(preview: MovePreview): Destination[] {
   return out;
 }
 
-/** One destination's result, as the apply loop collects them. */
+/** One destination's result, as the server reports it. */
 export interface DestinationResult {
-  groupId: string;
-  /** Rows the server said it moved, or 0 when the request itself failed. */
+  /** Rows the server moved. Lower than `requested` for a node deleted since the preview, or one
+   *  outside the caller's scope. */
   moved: number;
   requested: number;
-  failed: boolean;
 }
 
-/** What to tell the operator after applying. */
+/** What to tell the operator after applying. The request is all or nothing, so a failure is an
+ *  error and never reaches here — what can still fall short is a node that had gone. */
 export interface ApplySummary {
   moved: number;
   requested: number;
-  /** Destinations whose request failed outright — named, because "12 of 14" without saying which
-   *  two leaves the operator to diff the tree by eye. */
-  failedGroups: string[];
   /** Whether everything asked for actually landed. */
   complete: boolean;
 }
@@ -88,6 +84,5 @@ export interface ApplySummary {
 export function summarize(results: readonly DestinationResult[]): ApplySummary {
   const moved = results.reduce((n, r) => n + r.moved, 0);
   const requested = results.reduce((n, r) => n + r.requested, 0);
-  const failedGroups = results.filter((r) => r.failed).map((r) => r.groupId);
-  return { moved, requested, failedGroups, complete: moved === requested && requested > 0 };
+  return { moved, requested, complete: moved === requested && requested > 0 };
 }

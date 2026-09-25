@@ -802,6 +802,8 @@
     "sync": {
       "never": "未同期",
       "ok": "前回の同期 {{at}}",
+      "requested": "同期を依頼しました。まもなく始まります",
+      "running": "同期中…",
       "missing_one": "NetBox に無いフォルダー {{count}} 件",
       "missing_other": "NetBox に無いフォルダー {{count}} 件",
       "failed": "前回の同期に失敗",
@@ -817,7 +819,7 @@
     "err": {
       "test": "接続テストを実行できませんでした",
       "save": "NetBox の設定を保存できませんでした",
-      "sync": "同期に失敗しました",
+      "sync": "同期を依頼できませんでした",
       "toggle": "このサーバーの有効／無効を変更できませんでした",
       "delete": "NetBox の登録を削除できませんでした"
     }

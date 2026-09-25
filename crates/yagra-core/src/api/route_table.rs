@@ -1080,6 +1080,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/move-by-prefix",
+        // Scoped for the reason `/nodes/move` is: it is that route's several-destination form,
+        // written in one transaction so a closed tab cannot leave the move half done (ADR-172
+        // 決定 2).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/delete",
         // Scoped for the reason `/nodes/move` is (ADR-124 増分 6): an Operator holds
         // `manage_config` and can be group-scoped, and a bulk delete that skipped the scope would

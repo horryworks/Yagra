@@ -102,8 +102,12 @@ const MIN_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 /// worth knowing before "fixing" the drift.
 const DEFAULT_SYNC_INTERVAL_SECS: u64 = 3600;
 
-/// How often the loop wakes to see whether any server is due.
+/// How often the loop looks at the schedule to see whether any server is due.
 const TICK: Duration = Duration::from_secs(30);
+
+/// How often the loop looks for a "Sync now" request (ADR-172 決定 1). It reads the server list,
+/// a handful of rows, so waking this often costs nothing; it is what "Sync now" feels like.
+const REQUEST_TICK: Duration = Duration::from_secs(5);
 
 /// The deterministic folder id for a NetBox Region.
 #[must_use]
@@ -897,6 +901,15 @@ pub struct NetboxServer {
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_sync_ok: Option<bool>,
     pub last_sync_error: Option<String>,
+    /// When "Sync now" asked for a run that has not finished yet (ADR-172 決定 1). `None` when
+    /// nothing is asked for.
+    pub sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the run in flight began. `None` when no run is going.
+    pub sync_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Sites the last successful run saw, and how many of them had no usable Site ID. Kept on the
+    /// row because the response that used to carry them is gone now that a run is a request.
+    pub last_sync_sites: Option<i32>,
+    pub last_sync_sites_without_site_id: Option<i32>,
 }
 
 impl NetboxServer {
@@ -905,7 +918,9 @@ impl NetboxServer {
     /// at `try_get` in production.
     const COLUMNS: &'static str = "id, name, base_url, credential_id, ca_cert_pem, enabled, \
                                    sync_interval_secs, site_id_field, api_version, last_sync_at, \
-                                   last_sync_ok, last_sync_error";
+                                   last_sync_ok, last_sync_error, sync_requested_at, \
+                                   sync_started_at, last_sync_sites, \
+                                   last_sync_sites_without_site_id";
 
     fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
@@ -921,6 +936,10 @@ impl NetboxServer {
             last_sync_at: row.try_get("last_sync_at")?,
             last_sync_ok: row.try_get("last_sync_ok")?,
             last_sync_error: row.try_get("last_sync_error")?,
+            sync_requested_at: row.try_get("sync_requested_at")?,
+            sync_started_at: row.try_get("sync_started_at")?,
+            last_sync_sites: row.try_get("last_sync_sites")?,
+            last_sync_sites_without_site_id: row.try_get("last_sync_sites_without_site_id")?,
         })
     }
 
@@ -1159,23 +1178,93 @@ impl NetboxRepo {
     /// anywhere that could be passed `false` with a timestamp. The invariant — `last_sync_at`
     /// advances only on a full success — is therefore held up by the type signature rather than by
     /// a `CASE WHEN` and a comment, which is what the first version had.
+    ///
+    /// The run's Site ID counts go on the row with it (ADR-172 決定 1): once "Sync now" answers 202
+    /// the row is the only place the page can read them from.
     pub async fn record_success(
         &self,
         id: Uuid,
-        at: chrono::DateTime<chrono::Utc>,
+        report: &SyncReport,
         api_version: Option<&str>,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE netbox_servers SET last_sync_at = $2, last_sync_ok = TRUE, \
-                    last_sync_error = NULL, api_version = COALESCE($3, api_version) \
+                    last_sync_error = NULL, api_version = COALESCE($3, api_version), \
+                    last_sync_sites = $4, last_sync_sites_without_site_id = $5 \
              WHERE id = $1",
         )
         .bind(id)
-        .bind(at)
+        .bind(report.started_at)
         .bind(api_version)
+        .bind(i32::try_from(report.sites).unwrap_or(i32::MAX))
+        .bind(i32::try_from(report.sites_without_site_id).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Ask for a run now (ADR-172 決定 1). Returns `false` when there is no such server.
+    ///
+    /// `COALESCE`: a second press while the first is still waiting or running keeps the first
+    /// time, so it is the same request rather than a second run queued behind it.
+    pub async fn request_sync(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE netbox_servers SET sync_requested_at = COALESCE(sync_requested_at, now()) \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Mark a run as started, and return the database's time for it — the moment
+    /// [`Self::finish_sync`] compares the request against.
+    async fn start_sync(&self, id: Uuid) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+        Ok(sqlx::query_scalar(
+            "UPDATE netbox_servers SET sync_started_at = now() WHERE id = $1 \
+             RETURNING sync_started_at",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?)
+    }
+
+    /// End a run, however it ended: clear the in-flight mark, and the request **only if it was
+    /// made before this run started**.
+    ///
+    /// 🚨 A press during a scheduled run arrives after that run read NetBox, so the run cannot have
+    /// answered it; clearing it anyway would drop a request the operator is still waiting on. A
+    /// press during a *requested* run leaves the timestamp where it was (`COALESCE` in
+    /// [`Self::request_sync`]), so it is older than the start and is answered by this run.
+    async fn finish_sync(
+        &self,
+        id: Uuid,
+        started: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE netbox_servers SET sync_started_at = NULL, \
+                    sync_requested_at = CASE WHEN sync_requested_at <= $2 THEN NULL \
+                                             ELSE sync_requested_at END \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(started)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Forget every in-flight mark. Called once when the leader's loop starts: a run never outlives
+    /// the process running it, so any mark found then belongs to a core that died mid-run. The
+    /// requests stay — the loop runs them.
+    pub async fn clear_started(&self) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE netbox_servers SET sync_started_at = NULL WHERE sync_started_at IS NOT NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Record a **failed** sync: the reason, and nothing else.
@@ -1579,6 +1668,22 @@ pub async fn sync_server(
     creds: &CredentialStore,
     server: &NetboxServer,
 ) -> anyhow::Result<SyncReport> {
+    // The in-flight mark goes up before anything is read, and comes down however the run ends —
+    // the page reads it as "Syncing…", and `finish_sync` needs its time to know which request this
+    // run answered (ADR-172 決定 1).
+    let started = repo.start_sync(server.id).await?;
+    let result = sync_server_marked(repo, creds, server).await;
+    if let Err(e) = repo.finish_sync(server.id, started).await {
+        tracing::warn!(server = %server.id, error = %e, "netbox: could not clear the sync marks");
+    }
+    result
+}
+
+async fn sync_server_marked(
+    repo: &NetboxRepo,
+    creds: &CredentialStore,
+    server: &NetboxServer,
+) -> anyhow::Result<SyncReport> {
     let outcome = async {
         let token = resolve_netbox_token(creds, server.credential_id)
             .await
@@ -1595,7 +1700,7 @@ pub async fn sync_server(
 
     match outcome {
         Ok((mut report, version)) => {
-            repo.record_success(server.id, report.started_at, version.as_deref())
+            repo.record_success(server.id, &report, version.as_deref())
                 .await?;
             // Counted after `last_sync_at` moved, because that timestamp is what "missing" is
             // measured against.
@@ -1630,11 +1735,29 @@ pub async fn sync_server(
 ///
 /// Returned as a future rather than self-spawning, so `yagra_telemetry::spawn_cancellable` owns the
 /// shutdown path the way it does for every other background loop in this binary.
+///
+/// ➕ It also runs "Sync now" (ADR-172 決定 1): the endpoint only writes the request, and this loop
+/// looks for one every [`REQUEST_TICK`]. The schedule is still looked at every [`TICK`] — a failed
+/// run does not move `last_sync_at`, so an unreachable NetBox is retried at the schedule's pace,
+/// and shrinking that to five seconds would retry it twelve times as often.
 pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
-    let mut tick = tokio::time::interval(TICK);
+    match repo.clear_started().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            servers = n,
+            "netbox: cleared marks of runs a previous core left"
+        ),
+        Err(e) => tracing::warn!(error = %e, "netbox: could not clear stale sync marks"),
+    }
+    let mut tick = tokio::time::interval(REQUEST_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_schedule: Option<tokio::time::Instant> = None;
     loop {
         tick.tick().await;
+        let schedule = last_schedule.is_none_or(|t| t.elapsed() >= TICK);
+        if schedule {
+            last_schedule = Some(tokio::time::Instant::now());
+        }
         let servers = match repo.list().await {
             Ok(s) => s,
             Err(e) => {
@@ -1643,11 +1766,8 @@ pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
             }
         };
         let now = chrono::Utc::now();
-        for server in servers.iter().filter(|s| s.enabled) {
-            let due = server.last_sync_at.is_none_or(|last| {
-                now.signed_duration_since(last).to_std().unwrap_or_default() >= server.interval()
-            });
-            if !due {
+        for server in &servers {
+            if !should_sync(server, now, schedule) {
                 continue;
             }
             // One server's failure must not stop the others, and `sync_server` has already
@@ -1655,6 +1775,25 @@ pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
             let _ = sync_server(&repo, &creds, server).await;
         }
     }
+}
+
+/// Whether the loop runs `server` on this tick.
+///
+/// A paused server never runs — the endpoint refuses a request for one, so a request found on it
+/// was made before it was paused, and pausing means "leave that NetBox alone". A request runs at
+/// once, ignoring the interval. Otherwise the server runs when the schedule is being looked at and
+/// its interval has passed since the last success.
+fn should_sync(server: &NetboxServer, now: chrono::DateTime<chrono::Utc>, schedule: bool) -> bool {
+    if !server.enabled {
+        return false;
+    }
+    if server.sync_requested_at.is_some() {
+        return true;
+    }
+    schedule
+        && server.last_sync_at.is_none_or(|last| {
+            now.signed_duration_since(last).to_std().unwrap_or_default() >= server.interval()
+        })
 }
 
 #[cfg(test)]
@@ -1937,7 +2076,7 @@ mod tests {
         let first = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
-        repo.record_success(server, first.started_at, Some("4.6.9"))
+        repo.record_success(server, &first, Some("4.6.9"))
             .await
             .expect("record");
         // 🚨 The regression that motivated `started_at`. Storing the run's *finish* time here made
@@ -1954,7 +2093,7 @@ mod tests {
         let second = apply(&repo, server, &lab_regions(), &sites, None, None)
             .await
             .expect("re-sync");
-        repo.record_success(server, second.started_at, Some("4.6.9"))
+        repo.record_success(server, &second, Some("4.6.9"))
             .await
             .expect("record");
 
@@ -1994,7 +2133,7 @@ mod tests {
         let report = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("sync");
-        repo.record_success(server, report.started_at, Some("4.6.9"))
+        repo.record_success(server, &report, Some("4.6.9"))
             .await
             .expect("ok");
         let after_success = repo.get(server).await.expect("get").expect("row");
@@ -2060,6 +2199,89 @@ mod tests {
                 .expect("row")
                 .1,
             Some(region_group_id(server, 6))
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_request_is_kept_until_a_run_that_started_after_it_ends(pool: sqlx::PgPool) {
+        // ADR-172 決定 1: the request lives on the row, and only a run that could have answered
+        // it takes it off.
+        let (repo, server) = lab_server(&pool).await;
+        async fn row_of(repo: &NetboxRepo, id: Uuid) -> NetboxServer {
+            repo.get(id).await.expect("get").expect("row")
+        }
+
+        assert!(repo.request_sync(server).await.expect("request"));
+        let first = row_of(&repo, server)
+            .await
+            .sync_requested_at
+            .expect("requested");
+        assert!(repo.request_sync(server).await.expect("second press"));
+        assert_eq!(
+            row_of(&repo, server).await.sync_requested_at,
+            Some(first),
+            "a second press is the same request"
+        );
+
+        let started = repo.start_sync(server).await.expect("start");
+        assert!(
+            row_of(&repo, server).await.sync_started_at.is_some(),
+            "the page reads this as Syncing…"
+        );
+        repo.finish_sync(server, started).await.expect("finish");
+        let done = row_of(&repo, server).await;
+        assert_eq!(
+            done.sync_requested_at, None,
+            "answered by a run that started after it"
+        );
+        assert_eq!(done.sync_started_at, None);
+
+        // A press while a scheduled run is already reading NetBox: that run cannot answer it.
+        let started = repo.start_sync(server).await.expect("start");
+        assert!(repo.request_sync(server).await.expect("press mid-run"));
+        repo.finish_sync(server, started).await.expect("finish");
+        let kept = row_of(&repo, server).await;
+        assert!(
+            kept.sync_requested_at.is_some(),
+            "a request made during a run survives it, so the loop runs it next"
+        );
+        assert_eq!(kept.sync_started_at, None);
+
+        // A core that died mid-run leaves its mark; the next leader's loop clears it and keeps
+        // the request.
+        repo.start_sync(server).await.expect("start");
+        assert_eq!(repo.clear_started().await.expect("clear"), 1);
+        let after = row_of(&repo, server).await;
+        assert_eq!(after.sync_started_at, None);
+        assert!(
+            after.sync_requested_at.is_some(),
+            "the request stays; the loop runs it"
+        );
+
+        assert!(
+            !repo.request_sync(Uuid::new_v4()).await.expect("unknown"),
+            "no such server"
+        );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_success_keeps_its_site_id_counts_on_the_row(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let mut report = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
+            .await
+            .expect("sync");
+        report.sites_without_site_id = 1;
+        repo.record_success(server, &report, None)
+            .await
+            .expect("record");
+        let row = repo.get(server).await.expect("get").expect("row");
+        assert_eq!(row.last_sync_sites, Some(2));
+        assert_eq!(
+            row.last_sync_sites_without_site_id,
+            Some(1),
+            "the page reads the Site ID outcome from here once Sync now answers 202"
         );
     }
 
@@ -2263,9 +2485,9 @@ mod tests {
         assert_eq!(page.results[1].latitude, None);
     }
 
-    #[test]
-    fn the_sync_interval_has_a_floor_so_a_bad_row_cannot_spin() {
-        let mut s = NetboxServer {
+    /// A server row with nothing about it set, for the pure tests.
+    fn bare_server() -> NetboxServer {
+        NetboxServer {
             id: Uuid::nil(),
             name: "x".into(),
             base_url: "http://x".into(),
@@ -2278,7 +2500,49 @@ mod tests {
             last_sync_at: None,
             last_sync_ok: None,
             last_sync_error: None,
-        };
+            sync_requested_at: None,
+            sync_started_at: None,
+            last_sync_sites: None,
+            last_sync_sites_without_site_id: None,
+        }
+    }
+
+    #[test]
+    fn a_request_runs_at_once_and_the_schedule_waits_for_its_interval() {
+        let now = chrono::Utc::now();
+        let mut s = bare_server();
+        s.last_sync_at = Some(now - chrono::Duration::minutes(5));
+        assert!(
+            !should_sync(&s, now, true),
+            "synced 5 minutes ago, interval is an hour"
+        );
+
+        s.sync_requested_at = Some(now);
+        assert!(
+            should_sync(&s, now, false),
+            "a request does not wait for the schedule tick"
+        );
+        assert!(should_sync(&s, now, true));
+
+        // Paused beats a request: pausing means "leave that NetBox alone", and the endpoint refuses
+        // a request on a paused server, so one found here predates the pause.
+        s.enabled = false;
+        assert!(!should_sync(&s, now, false));
+
+        let mut due = bare_server();
+        due.last_sync_at = Some(now - chrono::Duration::hours(2));
+        assert!(should_sync(&due, now, true), "overdue on a schedule tick");
+        assert!(
+            !should_sync(&due, now, false),
+            "…but not on a request-only tick: a failing NetBox would otherwise be retried every \
+             five seconds, since a failure never moves last_sync_at"
+        );
+        assert!(should_sync(&bare_server(), now, true), "never synced");
+    }
+
+    #[test]
+    fn the_sync_interval_has_a_floor_so_a_bad_row_cannot_spin() {
+        let mut s = bare_server();
         assert_eq!(s.interval(), Duration::from_secs(3600));
         // A deliberate short cadence is honoured, then floored — this is the accept side, and
         // without it "always return the default" would satisfy the two corrupt cases below.

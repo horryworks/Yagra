@@ -1055,12 +1055,10 @@ export type NetboxServer = components['schemas']['NetboxServerView'];
  *  fields are what let the screen say "wrong token" rather than "cannot connect". */
 export type NetboxTestResult = components['schemas']['TestNetboxResult'];
 
-/** What one sync mirrored (`POST /api/v1/netbox/servers/{id}/sync`).
- *
- *  ⚠️ `sites_without_site_id` is not decoration: choosing the wrong Site ID field produces no
- *  error and no visible change, so this count is the only thing that separates "I picked the wrong
- *  field" from "this feature does not work". */
-export type NetboxSyncResult = components['schemas']['SyncNetboxResult'];
+/** "Sync now" and the run it starts (`POST /api/v1/netbox/servers/{id}/sync` answers this with
+ *  202, and every server row carries it as `sync`). ADR-172 決定 1: the sync runs in the leader's
+ *  loop, so the page reads how it ended from the row, not from this answer. */
+export type NetboxSyncView = components['schemas']['NetboxSyncView'];
 
 /** The site-code sources one NetBox offers
  *  (`GET /api/v1/netbox/servers/{id}/site-fields`, and inside `NetboxTestResult`).

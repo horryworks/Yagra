@@ -2,14 +2,13 @@
 // @vitest-environment jsdom
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MERAKI_READ_POLL_MS } from './merakiOrgRow';
-import { useMerakiReadWatch } from './useMerakiReadWatch';
+import { SYNC_WATCH_POLL_MS, useSyncWatch } from './useSyncWatch';
 
-// The two Meraki pages lean on this for "keep moving while a read runs, reload once when it ends".
+// The integration pages lean on this for "keep moving while a read runs, reload once when it ends".
 // Getting the edge wrong either leaves the progress frozen or reloads thousands of device rows on
 // every render.
 
-describe('useMerakiReadWatch', () => {
+describe('useSyncWatch', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -20,12 +19,12 @@ describe('useMerakiReadWatch', () => {
   it('polls on the interval while a read is active, and not before', () => {
     const poll = vi.fn();
     const settled = vi.fn();
-    renderHook(() => useMerakiReadWatch(true, poll, settled));
+    renderHook(() => useSyncWatch(true, poll, settled));
 
     expect(poll).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(MERAKI_READ_POLL_MS);
+    vi.advanceTimersByTime(SYNC_WATCH_POLL_MS);
     expect(poll).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(MERAKI_READ_POLL_MS * 2);
+    vi.advanceTimersByTime(SYNC_WATCH_POLL_MS * 2);
     expect(poll).toHaveBeenCalledTimes(3);
     expect(settled).not.toHaveBeenCalled();
   });
@@ -33,11 +32,11 @@ describe('useMerakiReadWatch', () => {
   it('neither polls nor settles when no read was ever running', () => {
     const poll = vi.fn();
     const settled = vi.fn();
-    const { rerender } = renderHook(({ on }) => useMerakiReadWatch(on, poll, settled), {
+    const { rerender } = renderHook(({ on }) => useSyncWatch(on, poll, settled), {
       initialProps: { on: false },
     });
 
-    vi.advanceTimersByTime(MERAKI_READ_POLL_MS * 3);
+    vi.advanceTimersByTime(SYNC_WATCH_POLL_MS * 3);
     rerender({ on: false });
     expect(poll).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
@@ -46,7 +45,7 @@ describe('useMerakiReadWatch', () => {
   it('settles exactly once when the read ends, and stops polling', () => {
     const poll = vi.fn();
     const settled = vi.fn();
-    const { rerender } = renderHook(({ on }) => useMerakiReadWatch(on, poll, settled), {
+    const { rerender } = renderHook(({ on }) => useSyncWatch(on, poll, settled), {
       initialProps: { on: true },
     });
 
@@ -57,14 +56,14 @@ describe('useMerakiReadWatch', () => {
     rerender({ on: false });
     expect(settled).toHaveBeenCalledTimes(1);
 
-    vi.advanceTimersByTime(MERAKI_READ_POLL_MS * 3);
+    vi.advanceTimersByTime(SYNC_WATCH_POLL_MS * 3);
     expect(poll).not.toHaveBeenCalled();
   });
 
   it('settles again after a second read starts and ends', () => {
     const poll = vi.fn();
     const settled = vi.fn();
-    const { rerender } = renderHook(({ on }) => useMerakiReadWatch(on, poll, settled), {
+    const { rerender } = renderHook(({ on }) => useSyncWatch(on, poll, settled), {
       initialProps: { on: true },
     });
 

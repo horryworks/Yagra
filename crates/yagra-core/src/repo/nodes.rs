@@ -705,6 +705,38 @@ impl NodeRepo {
         group: Option<Uuid>,
         scope: GroupFilter<'_>,
     ) -> anyhow::Result<(usize, u64)> {
+        Self::set_node_group_batch_on(&self.pool, ids, group, scope).await
+    }
+
+    /// Several of [`Self::set_node_group_batch`], each into its own folder, **in one
+    /// transaction** — the IP-range move, whose nodes go to as many folders as their addresses
+    /// match (ADR-172 決定 2). Returns `(requested, moved)` per entry, in the order given.
+    ///
+    /// 🚨 Why one transaction: the browser used to send one request per destination, so a tab
+    /// closed mid-way left some folders moved and the rest not, and no summary was ever shown.
+    /// Now either every destination is written or none is. The entries are applied in order, so a
+    /// node named twice ends where the later entry puts it — the endpoint refuses that rather than
+    /// relying on it.
+    pub async fn set_node_group_batches(
+        &self,
+        moves: &[(Uuid, Vec<Uuid>)],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<(usize, u64)>> {
+        let mut tx = self.pool.begin().await?;
+        let mut out = Vec::with_capacity(moves.len());
+        for (group, ids) in moves {
+            out.push(Self::set_node_group_batch_on(&mut *tx, ids, Some(*group), scope).await?);
+        }
+        tx.commit().await?;
+        Ok(out)
+    }
+
+    async fn set_node_group_batch_on<'e>(
+        executor: impl sqlx::PgExecutor<'e>,
+        ids: &[Uuid],
+        group: Option<Uuid>,
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
         let mut seen = std::collections::HashSet::new();
         let ids: Vec<Uuid> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
         if ids.is_empty() {
@@ -724,7 +756,7 @@ impl NodeRepo {
         .bind(&ids)
         .bind(group)
         .bind(Self::scope_bind(scope))
-        .execute(&self.pool)
+        .execute(executor)
         .await?;
         Ok((ids.len(), res.rows_affected()))
     }

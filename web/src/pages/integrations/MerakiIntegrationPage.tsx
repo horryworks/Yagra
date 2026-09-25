@@ -54,7 +54,7 @@ import {
 } from './merakiAddOrg';
 import { canSyncNow, merakiOrgPath, orgFullRead } from './merakiOrgRow';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
-import { useMerakiReadWatch } from './useMerakiReadWatch';
+import { useSyncWatch } from './useSyncWatch';
 import { useMerakiSync } from './useMerakiSync';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select).
@@ -640,7 +640,7 @@ export function MerakiIntegrationPage() {
       })
       .catch(() => undefined);
   }, []);
-  useMerakiReadWatch(reading, pollOrgs, load);
+  useSyncWatch(reading, pollOrgs, load);
 
   // Apart from `load` on purpose. Joined to its `Promise.all`, a credentials read that failed
   // would block the whole page over an annotation — so a failure here only means "no names".

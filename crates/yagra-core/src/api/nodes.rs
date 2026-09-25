@@ -57,6 +57,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     move_nodes,
     delete_nodes,
     preview_move_by_prefix,
+    move_nodes_by_prefix,
     set_node_pool,
     bulk_set_node_pool,
     poll_nodes_now,
@@ -80,6 +81,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/delete", post(delete_nodes))
         .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
+        .route("/api/v1/nodes/move-by-prefix", post(move_nodes_by_prefix))
         .route("/api/v1/nodes/pool", post(bulk_set_node_pool))
         .route("/api/v1/nodes/poll", post(poll_nodes_now))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
@@ -2086,6 +2088,123 @@ async fn move_nodes(
     Ok(Json(BulkMoveResult { requested, moved }))
 }
 
+/// One destination of an IP-range move: a folder, and the nodes the preview proposed for it.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct PrefixMoveDestination {
+    group_id: Uuid,
+    node_ids: Vec<Uuid>,
+}
+
+/// Apply what `POST /api/v1/nodes/move-preview` proposed and the operator accepted: every
+/// destination at once, in one transaction (ADR-172 決定 2).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct PrefixMoveReq {
+    moves: Vec<PrefixMoveDestination>,
+}
+
+/// What one destination of an IP-range move did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct PrefixMoveOutcome {
+    group_id: Uuid,
+    /// Distinct ids named for this folder.
+    requested: usize,
+    /// Rows that moved. Lower than `requested` for a node deleted since the preview or outside the
+    /// caller's scope — the same meaning as in `BulkMoveResult`.
+    moved: u64,
+}
+
+/// What an IP-range move did, one entry per destination in the order given.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct PrefixMoveResult {
+    results: Vec<PrefixMoveOutcome>,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/nodes/move-by-prefix", tag = "nodes",
+    request_body = PrefixMoveReq,
+    responses(
+        (status = 200, description = "Every destination was written, in one transaction; the counts say how many of each moved", body = PrefixMoveResult),
+        (status = 400, description = "An unknown destination folder, a node named for two folders, or more ids in total than one request may carry. Nothing moved", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "A destination folder is not one this caller may act on. Nothing moved", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn move_nodes_by_prefix(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<PrefixMoveReq>,
+) -> ApiResult<Json<PrefixMoveResult>> {
+    // The client sends back the pairs the preview showed rather than asking the server to match
+    // again: what is applied is exactly what the operator looked at and pressed (ADR-124 決定 6).
+    // One request, one transaction — it used to be one request per destination from the browser,
+    // and a tab closed mid-way left the move half done with no summary (ADR-172 決定 2).
+    let total: usize = body.moves.iter().map(|m| m.node_ids.len()).sum();
+    if total > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!("at most {NODE_MOVE_BATCH_MAX} nodes may be moved in one request, got {total}"),
+        ));
+    }
+    let mut destinations = std::collections::HashSet::new();
+    let mut named = std::collections::HashSet::new();
+    for m in &body.moves {
+        if !destinations.insert(m.group_id) {
+            return Err(ApiError::bad_request(
+                "duplicate_destination",
+                format!("folder {} is named more than once", m.group_id),
+            ));
+        }
+        // Within one destination a repeat is harmless (the writer de-duplicates); across two it is
+        // a request that has not said where the node goes.
+        let mine: std::collections::HashSet<Uuid> = m.node_ids.iter().copied().collect();
+        for id in mine {
+            if !named.insert(id) {
+                return Err(ApiError::bad_request(
+                    "duplicate_node",
+                    format!("node {id} is named for more than one folder"),
+                ));
+            }
+        }
+    }
+    // Every destination is checked before anything is written, so a refusal moves nothing.
+    for m in &body.moves {
+        require_visible_destination(&scope, Some(m.group_id))?;
+        super::groups::require_group_exists(&admin, Some(m.group_id)).await?;
+    }
+    let moves: Vec<(Uuid, Vec<Uuid>)> = body
+        .moves
+        .into_iter()
+        .map(|m| (m.group_id, m.node_ids))
+        .collect();
+    let counts = admin
+        .repo
+        .set_node_group_batches(&moves, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "move nodes by prefix", "failed to move nodes")
+        })?;
+    let results: Vec<PrefixMoveOutcome> = moves
+        .iter()
+        .zip(counts)
+        .map(|((group_id, _), (requested, moved))| PrefixMoveOutcome {
+            group_id: *group_id,
+            requested,
+            moved,
+        })
+        .collect();
+    let moved: u64 = results.iter().map(|r| r.moved).sum();
+    tracing::info!(
+        destinations = results.len(),
+        requested = total,
+        moved,
+        "node move by prefix"
+    );
+    Ok(Json(PrefixMoveResult { results }))
+}
+
 /// Refuse a move into a folder the caller may not act on — `404` for a folder outside their scope
 /// (its existence is not theirs to learn), `403 out_of_scope` for "ungrouped" when they cannot see
 /// ungrouped nodes. One rule for the three writers that move a node: the bulk move, the single move
@@ -3870,6 +3989,83 @@ mod tests {
             let node = repo.get_node(id).await.expect("read").expect("the node");
             assert_eq!(node.group.map(|g| g.0), Some(dest), "{id} did not move");
         }
+    }
+
+    /// ADR-172 決定 2: an IP-range move is one request and one transaction — every destination or
+    /// none. It used to be one request per destination from the browser.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_move_by_prefix_writes_every_destination_or_none(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let tokyo = crate::pgtest::group(&pool, "Tokyo").await;
+        let osaka = crate::pgtest::group(&pool, "Osaka").await;
+        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let c = crate::pgtest::node(&pool, "c", 3, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        let group_of = |id| {
+            let repo = &repo;
+            async move {
+                repo.get_node(id)
+                    .await
+                    .expect("read")
+                    .expect("the node")
+                    .group
+                    .map(|g| g.0)
+            }
+        };
+
+        // One destination the caller cannot use: nothing moves, not even the valid one before it.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-by-prefix",
+            &tok,
+            Some(serde_json::json!({ "moves": [
+                { "group_id": tokyo, "node_ids": [a] },
+                { "group_id": uuid::Uuid::new_v4(), "node_ids": [b] },
+            ] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(group_of(a).await, None, "a refused request moves nothing");
+
+        // A node named for two folders has not said where it goes.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-by-prefix",
+            &tok,
+            Some(serde_json::json!({ "moves": [
+                { "group_id": tokyo, "node_ids": [a] },
+                { "group_id": osaka, "node_ids": [a] },
+            ] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "duplicate_node", "{body}");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-by-prefix",
+            &tok,
+            Some(serde_json::json!({ "moves": [
+                { "group_id": tokyo, "node_ids": [a, b] },
+                { "group_id": osaka, "node_ids": [c] },
+            ] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["results"][0]["group_id"], tokyo.to_string(), "{body}");
+        assert_eq!(body["results"][0]["requested"], 2, "{body}");
+        assert_eq!(body["results"][0]["moved"], 2, "{body}");
+        assert_eq!(body["results"][1]["moved"], 1, "{body}");
+        assert_eq!(group_of(a).await, Some(tokyo));
+        assert_eq!(group_of(b).await, Some(tokyo));
+        assert_eq!(group_of(c).await, Some(osaka));
     }
 
     /// 🚨 **A batch dropped between two rows lands there, not at the end** (ADR-124 増分 8).

@@ -205,6 +205,7 @@
     "setDependency": "failed to set dependency",
     "addDnsMonitor": "failed to add DNS monitor",
     "movePreview": "failed to match addresses against folder ranges",
+    "moveByPrefix": "failed to move the nodes — none of them moved",
     "prefixEmpty": "A range cannot be empty.",
     "prefixDuplicate": "{{prefix}} is listed twice.",
     "prefixOwnedBySync": "{{prefix}} is maintained by a sync and cannot be edited here.",
@@ -1002,7 +1003,6 @@
     "unmatched": "Inside no folder range ({{count}})",
     "apply": "Move {{count}}",
     "result": "Moved {{moved}} of {{requested}}.",
-    "failedGroups": "These folders failed: {{groups}}.",
     "empty": {
       "noPrefixes": "No folder carries an IP range, so there is nothing to match against.",
       "noMatch": "No address falls inside a folder range.",

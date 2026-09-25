@@ -2285,6 +2285,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/move-by-prefix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["move_nodes_by_prefix"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/move-preview": {
         parameters: {
             query?: never;
@@ -9596,6 +9612,17 @@ export interface components {
             last_sync_error?: string | null;
             last_sync_ok?: boolean | null;
             /**
+             * Format: int32
+             * @description Sites the last successful run saw, or `null` before one has run.
+             */
+            last_sync_sites?: number | null;
+            /**
+             * Format: int32
+             * @description Of those, how many had no usable Site ID. `0` when no Site ID field is configured —
+             *     nothing was asked for, so nothing is missing.
+             */
+            last_sync_sites_without_site_id?: number | null;
+            /**
              * @description Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100
              *     decision 5) — surfaced so the operator can decide.
              */
@@ -9606,8 +9633,16 @@ export interface components {
              *     a built-in name, or `cf:` and a custom field's key.
              */
             site_id_field?: string | null;
+            sync?: null | components["schemas"]["NetboxSyncView"];
             /** Format: int32 */
             sync_interval_secs: number;
+        };
+        /** @description "Sync now" and the run it starts, as the row holds them (ADR-172 決定 1). */
+        NetboxSyncView: {
+            /** @description When "Sync now" asked; `null` when nothing is asked for. A second press keeps the first time. */
+            requested_at?: string | null;
+            /** @description When the run in flight began; `null` while the request waits for the leader's loop. */
+            started_at?: string | null;
         };
         /**
          * @description `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
@@ -10658,6 +10693,36 @@ export interface components {
              * @description Distinct subnets compared, covered ones included.
              */
             subnets_checked: number;
+        };
+        /** @description One destination of an IP-range move: a folder, and the nodes the preview proposed for it. */
+        PrefixMoveDestination: {
+            /** Format: uuid */
+            group_id: string;
+            node_ids: string[];
+        };
+        /** @description What one destination of an IP-range move did. */
+        PrefixMoveOutcome: {
+            /** Format: uuid */
+            group_id: string;
+            /**
+             * Format: int64
+             * @description Rows that moved. Lower than `requested` for a node deleted since the preview or outside the
+             *     caller's scope — the same meaning as in `BulkMoveResult`.
+             */
+            moved: number;
+            /** @description Distinct ids named for this folder. */
+            requested: number;
+        };
+        /**
+         * @description Apply what `POST /api/v1/nodes/move-preview` proposed and the operator accepted: every
+         *     destination at once, in one transaction (ADR-172 決定 2).
+         */
+        PrefixMoveReq: {
+            moves: components["schemas"]["PrefixMoveDestination"][];
+        };
+        /** @description What an IP-range move did, one entry per destination in the order given. */
+        PrefixMoveResult: {
+            results: components["schemas"]["PrefixMoveOutcome"][];
         };
         /** @description One node, and the single folder whose IP range contains its address. */
         PrefixProposal: {
@@ -12006,42 +12071,6 @@ export interface components {
          * @enum {string}
          */
         SubjectKind: "node" | "pool" | "meraki_org";
-        SyncNetboxResult: {
-            /**
-             * @description Folders this server owns that NetBox no longer lists (ADR-100 decision 5 — marked, not
-             *     deleted).
-             */
-            missing_folders: number;
-            /** @description Prefix rows attached to a folder by this run. */
-            prefixes: number;
-            /**
-             * @description Whether this token may read `/api/ipam/prefixes/` (ADR-100 decision 10).
-             *
-             *     🚨 `false` means **refused**, not "there are none". When it is false nothing was written
-             *     and — deliberately — nothing was swept, so the site prefixes stored by earlier runs are
-             *     still there. Reading a zero `prefixes` without checking this flag turns a permission
-             *     problem into "our NetBox has no subnets", which is not a sentence anyone can act on.
-             */
-            prefixes_readable: boolean;
-            /**
-             * @description Prefix rows that reached no folder — scoped to a Location or a SiteGroup (which Yagra does
-             *     not model), scoped to an object this run did not see, or refused as not an address.
-             *
-             *     🚨 Same reason as `sites_without_site_id`: a dropped prefix is otherwise indistinguishable
-             *     from a NetBox that never had one.
-             */
-            prefixes_skipped: number;
-            regions: number;
-            sites: number;
-            /**
-             * @description Sites whose configured Site ID field held nothing, so their folder kept NetBox's bare name.
-             *
-             *     🚨 The reason this number is returned at all: picking the wrong field produces **no error
-             *     and no visible change**, so without it "the feature does not work" and "that field is empty
-             *     on every site" look identical. Zero when no field is configured.
-             */
-            sites_without_site_id: number;
-        };
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
             /** @description NATS — **inferred** from a recent scheduler sweep, not a direct ping. */
@@ -20776,13 +20805,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The sync ran; the counts say what was mirrored */
-            200: {
+            /** @description The sync is asked for — or already was. The leader runs it in the background, usually within five seconds; watch `sync` on the server, then `last_sync_at` / `last_sync_ok` / `last_sync_error` for how it ended */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncNetboxResult"];
+                    "application/json": components["schemas"]["NetboxSyncView"];
                 };
             };
             /** @description No valid bearer token */
@@ -20812,8 +20841,8 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The NetBox call failed; the reason is stored on the server row and shown on the integration screen */
-            502: {
+            /** @description `netbox_server_paused`: the server is paused, so nothing would run the request */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -22001,6 +22030,75 @@ export interface operations {
                 };
             };
             /** @description The destination folder is not one this caller may act on */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    move_nodes_by_prefix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrefixMoveReq"];
+            };
+        };
+        responses: {
+            /** @description Every destination was written, in one transaction; the counts say how many of each moved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrefixMoveResult"];
+                };
+            };
+            /** @description An unknown destination folder, a node named for two folders, or more ids in total than one request may carry. Nothing moved */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A destination folder is not one this caller may act on. Nothing moved */
             404: {
                 headers: {
                     [name: string]: unknown;

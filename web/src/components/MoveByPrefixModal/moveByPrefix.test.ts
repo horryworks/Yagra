@@ -82,23 +82,19 @@ describe('byDestination', () => {
 });
 
 describe('summarize', () => {
-  it('adds up what landed and names the destinations that failed', () => {
+  it('adds up what landed across every destination', () => {
     const s = summarize([
-      { groupId: 'g1', moved: 3, requested: 3, failed: false },
-      { groupId: 'g2', moved: 0, requested: 2, failed: true },
+      { moved: 3, requested: 3 },
+      { moved: 1, requested: 2 },
     ]);
-    expect(s).toEqual({ moved: 3, requested: 5, failedGroups: ['g2'], complete: false });
+    expect(s).toEqual({ moved: 4, requested: 5, complete: false });
   });
 
   it('reports complete only when everything asked for landed', () => {
-    expect(summarize([{ groupId: 'g1', moved: 2, requested: 2, failed: false }]).complete).toBe(
-      true,
-    );
+    expect(summarize([{ moved: 2, requested: 2 }]).complete).toBe(true);
     // A node deleted between the preview and the apply: the request succeeded, one row did not
     // move, and saying "done" would be a claim nobody checked.
-    expect(summarize([{ groupId: 'g1', moved: 1, requested: 2, failed: false }]).complete).toBe(
-      false,
-    );
+    expect(summarize([{ moved: 1, requested: 2 }]).complete).toBe(false);
   });
 
   it('is not complete when there was nothing to do', () => {

@@ -25,7 +25,6 @@ import {
   emptyReason,
   summarize,
   type ApplySummary,
-  type DestinationResult,
 } from './moveByPrefix';
 import './MoveByPrefixModal.css';
 
@@ -72,30 +71,18 @@ export function MoveByPrefixModal({
   const apply = async () => {
     setBusy(true);
     setError(null);
-    const results: DestinationResult[] = [];
-    for (const d of destinations) {
-      try {
-        const r = await api.moveNodes(d.nodeIds, d.groupId);
-        results.push({
-          groupId: d.groupId,
-          moved: r.moved,
-          requested: r.requested,
-          failed: false,
-        });
-      } catch {
-        // Keep going: the folders already moved stay moved, and stopping here would leave the
-        // operator with a partial result they were never told about.
-        results.push({
-          groupId: d.groupId,
-          moved: 0,
-          requested: d.nodeIds.length,
-          failed: true,
-        });
-      }
+    // One request for every destination, written in one transaction (ADR-172 決定 2). It used to
+    // be one request per destination, so a tab closed mid-way left some folders moved and the
+    // rest not, with no summary shown. Now a failure means nothing moved.
+    try {
+      const r = await api.moveNodesByPrefix(destinations);
+      onMoved();
+      setDone(summarize(r.results));
+    } catch (e: unknown) {
+      setError(errMsg(e, t('err.moveByPrefix')));
+    } finally {
+      setBusy(false);
     }
-    onMoved();
-    setDone(summarize(results));
-    setBusy(false);
   };
 
   const nodeLine = (id: string) => {
@@ -197,10 +184,6 @@ export function MoveByPrefixModal({
         {done && (
           <p className={done.complete ? 'mbp-done' : 'form-error'}>
             {t('moveByPrefix.result', { moved: done.moved, requested: done.requested })}
-            {done.failedGroups.length > 0 &&
-              ` ${t('moveByPrefix.failedGroups', {
-                groups: done.failedGroups.map((g) => paths.get(g) ?? g).join(', '),
-              })}`}
           </p>
         )}
         {error && <p className="form-error">{error}</p>}

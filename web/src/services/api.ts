@@ -82,7 +82,7 @@ import type {
   MetricReading,
   NetboxServer,
   NetboxSiteIdFields,
-  NetboxSyncResult,
+  NetboxSyncView,
   NetboxTestResult,
   NodeMetricEntry,
   MetricTopAgg,
@@ -1166,8 +1166,9 @@ export const api = {
     ca_cert_pem?: string | null;
   }): Promise<NetboxTestResult> => apiPost('/api/v1/netbox/test', { body }),
 
-  /** Sync one server now, rather than waiting for its cadence. */
-  syncNetboxServer: (id: string): Promise<NetboxSyncResult> =>
+  /** Ask for one server to be synced now, rather than waiting for its cadence. Answers 202 at
+   *  once; the leader's loop runs it (ADR-172 決定 1), and the server row says how it went. */
+  syncNetboxServer: (id: string): Promise<NetboxSyncView> =>
     apiPost('/api/v1/netbox/servers/{id}/sync', { path: { id } }),
 
   /** The site-code sources a **saved** server's NetBox offers.
@@ -1394,6 +1395,15 @@ export const api = {
    *  prefixes cleared, so the same arithmetic done in the browser would quietly miss ranges. */
   previewMoveByPrefix: (nodeIds: string[]): Promise<MovePreview> =>
     apiPost('/api/v1/nodes/move-preview', { body: { node_ids: nodeIds } }),
+
+  /** Apply what the IP-range preview proposed: every destination in one request and one
+   *  transaction, so a failure moves nothing (ADR-172 決定 2). */
+  moveNodesByPrefix: (
+    destinations: readonly { groupId: string; nodeIds: string[] }[],
+  ): Promise<{ results: { group_id: string; requested: number; moved: number }[] }> =>
+    apiPost('/api/v1/nodes/move-by-prefix', {
+      body: { moves: destinations.map((d) => ({ group_id: d.groupId, node_ids: d.nodeIds })) },
+    }),
 
   /** Set (or clear with `null`) a node's dependency parent (upstream) — the alert-suppression
    *  edge (parent down ⇒ suppress children, ADR-015). Distinct from `setNodeGroup` (the folder

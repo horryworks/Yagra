@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
-import type { NetboxServer, NetboxSiteIdFields, NetboxSyncResult, NetboxTestResult } from '../../types/api';
+import type { NetboxServer, NetboxSiteIdFields, NetboxTestResult } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -29,7 +29,8 @@ import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { formatTimestamp } from '../../lib/format';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
-import { syncSummary } from './netboxStatus';
+import { anySyncInProgress, syncProgress, syncSummary } from './netboxStatus';
+import { useSyncWatch } from './useSyncWatch';
 import {
   SITE_ID_NONE,
   SITE_ID_OTHER,
@@ -321,20 +322,18 @@ function ServerRow({
   const { t } = useTranslation('system');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastRun, setLastRun] = useState<NetboxSyncResult | null>(null);
   const summary = syncSummary(server);
+  const progress = syncProgress(server);
 
+  // Asks, then re-reads: the sync itself runs in the leader's loop (ADR-172 決定 1), so how it
+  // went arrives on the row — which is also what survives leaving this page. `busy` covers only
+  // the request.
   const sync = () => {
     setBusy(true);
     setError(null);
     api
       .syncNetboxServer(server.id)
-      .then((r) => {
-        // Kept, not discarded: the Site ID count below is the only signal that separates "the
-        // wrong field is selected" from "the feature does nothing", and this is where it arrives.
-        setLastRun(r);
-        onSynced();
-      })
+      .then(onSynced)
       .catch((e: unknown) => setError(errMsg(e, t('netbox.err.sync'))))
       .finally(() => setBusy(false));
   };
@@ -369,6 +368,8 @@ function ServerRow({
       </div>
 
       <div className="netbox-row-sync">
+        {progress.kind === 'queued' && <span className="muted">{t('netbox.sync.requested')}</span>}
+        {progress.kind === 'running' && <span className="muted">{t('netbox.sync.running')}</span>}
         {summary.kind === 'never' && <span className="muted">{t('netbox.sync.never')}</span>}
         {summary.kind === 'ok' && (
           <>
@@ -388,7 +389,12 @@ function ServerRow({
           </span>
         )}
         {(() => {
-          const outcome = lastRun && siteIdOutcome(lastRun.sites, lastRun.sites_without_site_id);
+          // From the row, not from the answer to the button: the Site ID count is the only signal
+          // that separates "the wrong field is selected" from "the feature does nothing", and it
+          // has to outlive leaving the page.
+          const outcome =
+            server.last_sync_sites != null &&
+            siteIdOutcome(server.last_sync_sites, server.last_sync_sites_without_site_id ?? 0);
           return (
             outcome && (
               <span className="netbox-missing">
@@ -409,9 +415,13 @@ function ServerRow({
             <input type="checkbox" checked={server.enabled} onChange={toggle} />
             <span>{server.enabled ? t('netbox.row.enabled') : t('netbox.row.paused')}</span>
           </label>
-          <Button onClick={sync} disabled={busy}>
-            {t('netbox.row.syncNow')}
-          </Button>
+          {/* Not drawn while paused: the loop never runs a paused server, so the endpoint refuses
+              the request (409) and a button that can only fail is not offered. */}
+          {server.enabled && (
+            <Button onClick={sync} disabled={busy || progress.kind !== 'none'}>
+              {t('netbox.row.syncNow')}
+            </Button>
+          )}
           <Button onClick={onEdit}>{t('common:actions.edit')}</Button>
           <Button onClick={onDelete}>{t('common:actions.delete')}</Button>
         </div>
@@ -444,6 +454,11 @@ export function NetboxIntegrationPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // A "Sync now" runs in the leader's loop (ADR-172 決定 1), so the rows change by themselves
+  // while one is asked for or running. The list is a handful of rows, so the poll and the reload
+  // after it are the same read.
+  useSyncWatch(anySyncInProgress(servers), load, load);
 
   const content = useMemo(() => {
     if (block) {

@@ -84,10 +84,6 @@ export function orgFullRead(
   return { kind: 'none' };
 }
 
-/** How often a page re-reads the organizations while one of them is being read, so the progress
- *  moves without a reload. A read of 350 networks takes three to six minutes. */
-export const MERAKI_READ_POLL_MS = 5_000;
-
 /** Whether the row's device counts describe anything yet.
  *
  *  Before the first successful sync every count is zero, and "0 of 0 devices monitored" reads as a

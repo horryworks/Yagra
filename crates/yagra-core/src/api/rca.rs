@@ -187,7 +187,7 @@ pub(crate) async fn explain_incident(
     // caller so the two cannot be different (ADR-028 WS-G). Both callers had it and dropped it.
     req.scope = scope.clone();
     let tools = crate::rca::agent::AgentTools::new(st.clone());
-    rca.explain(&req, &tools).await.map_err(|e| rca_error(&e))
+    rca.explain(&req, tools).await.map_err(|e| rca_error(&e))
 }
 
 /// The `GET /api/v1/llm/config` body.

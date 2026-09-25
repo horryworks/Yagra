@@ -1167,16 +1167,14 @@ impl UpgradeRepo {
         now: i64,
         extra: &[(&str, &str)],
     ) -> anyhow::Result<()> {
+        self.check_request(command, id, tag, extra)?;
         let dir = self
             .dir
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("the upgrade mechanism is not enabled"))?;
         let tag = checked_tag(command, tag)?;
-        anyhow::ensure!(is_run_id(id), "invalid run id");
         let mut body = request_body(REQUEST_SCHEMA, id, command.as_str(), tag, requested_by, now);
         for (key, value) in extra {
-            anyhow::ensure!(is_request_key(key), "invalid request field name");
-            anyhow::ensure!(is_request_value(value), "invalid request field value");
             body.push_str(key);
             body.push('=');
             body.push_str(value);
@@ -1185,6 +1183,30 @@ impl UpgradeRepo {
         let tmp = dir.join("request.tmp");
         std::fs::write(&tmp, body)?;
         std::fs::rename(&tmp, dir.join("request"))?;
+        Ok(())
+    }
+
+    /// Every check [`Self::request_with`] makes before writing, without writing.
+    ///
+    /// Asked before the fleet-wide maintenance window is opened (ADR-172 決定 4): a request the
+    /// updater would refuse must refuse the click, not open a window no run will ever close.
+    ///
+    /// # Errors
+    /// The mechanism is off, or the tag, the run id, a field name or a field value is invalid.
+    pub fn check_request(
+        &self,
+        command: Command,
+        id: &str,
+        tag: Option<&str>,
+        extra: &[(&str, &str)],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(self.dir.is_some(), "the upgrade mechanism is not enabled");
+        checked_tag(command, tag)?;
+        anyhow::ensure!(is_run_id(id), "invalid run id");
+        for (key, value) in extra {
+            anyhow::ensure!(is_request_key(key), "invalid request field name");
+            anyhow::ensure!(is_request_value(value), "invalid request field value");
+        }
         Ok(())
     }
 
