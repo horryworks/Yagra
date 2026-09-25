@@ -10,9 +10,11 @@
 
 ## Unreleased
 
+## v0.3.31 — A folder lists the subnets its devices carry that its IP prefixes do not cover, the inventory tree draws its branches, a new Meraki organization is read whole before anything is imported, Sync now re-reads an organization in the background, a page of the node list no longer reads unknown for nodes that are up
+
 ### Breaking changes
 
-- **`POST /api/v1/meraki/orgs/{id}/sync` ("Sync now") now answers `202` and runs in the background.** It used to run the sync inside the request and answer `200` with a report of what it found. It now re-reads the whole organization, which takes minutes, so it records the request and answers at once with the organization's `full_sync` (when it was asked for, and — once it has begun — how many networks it reads and how many it has read). How it ended is the organization's `last_sync_at`, `last_sync_ok` and `last_sync_error`, as for any sync. It no longer answers `409 meraki_sync_busy` (a request waits for the organization's collect lane instead), nor `meraki_sync_failed` with 409, 500 or 502 (the reason is on the organization). `409 meraki_polling_paused` and `409 meraki_org_paused` are unchanged. Pressing it again while a read is waiting or running is the same request. A standby core now accepts it too.
+- **`POST /api/v1/meraki/orgs/{id}/sync` ("Sync now") now answers `202` and runs in the background.** It used to run the sync inside the request and answer `200` with a report of what it found. It now re-reads the whole organization, which takes minutes, so it records the request and answers at once with the organization's `full_sync` (when it was asked for, and — once it has begun — how many networks it reads and how many it has read). How it ended is the organization's `last_sync_at`, `last_sync_ok` and `last_sync_error`, as for any sync. It no longer answers `409 meraki_sync_busy` (a request waits for the organization's collect lane instead), nor `meraki_sync_failed` with 409, 500 or 502 (the reason is on the organization). `409 meraki_polling_paused` and `409 meraki_org_paused` are unchanged. Pressing it again while the requested read is waiting or running is the same request; pressed while a read nobody asked for is running (an organization's first), it runs once that read has ended. A standby core now accepts it too.
 
 ### New Features
 

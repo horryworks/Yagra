@@ -10,7 +10,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.3.30"
+    "version": "0.3.31"
   },
   "paths": {
     "/api/v1/alerts": {
@@ -8270,7 +8270,7 @@
           "meraki"
         ],
         "summary": "Ask for the whole organization to be read again now, rather than waiting for the periodic sync\n(ADR-164 決定 32).",
-        "description": "**Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which\ntakes minutes (about six for 350 networks at the default rate), so this records the request and\nanswers 202. The leader runs it once the organization's slow collect lane is free — never in the\nfast lane, which is availability's — and the organization shows `full_sync` while it waits and\nwhile it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any\nsync. Asking while one is already asked for or running changes nothing: it is the same request.\n\nRead-only upstream: the three paged inventory listings, the VLANs of every MX network\n(`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each\nwarm-spare pair's configured roles). Then the devices the organization imports are imported.\nWhile it runs, the organization's switch-port and SSID reads wait for the lane.",
+        "description": "**Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which\ntakes minutes (about six for 350 networks at the default rate), so this records the request and\nanswers 202. The leader runs it once the organization's slow collect lane is free — never in the\nfast lane, which is availability's — and the organization shows `full_sync` while it waits and\nwhile it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any\nsync. Asking while one is already asked for, or while the one asked for is running, changes\nnothing: it is the same request. Asked while a read nobody asked for is running — an\norganization's first, or a sync that found networks never read — the request stands and runs\nonce that read has ended.\n\nRead-only upstream: the three paged inventory listings, the VLANs of every MX network\n(`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each\nwarm-spare pair's configured roles). Then the devices the organization imports are imported.\nWhile it runs, the organization's switch-port and SSID reads wait for the lane.",
         "operationId": "sync_meraki_org",
         "parameters": [
           {

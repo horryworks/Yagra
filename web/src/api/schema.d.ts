@@ -1661,7 +1661,10 @@ export interface paths {
          *     answers 202. The leader runs it once the organization's slow collect lane is free — never in the
          *     fast lane, which is availability's — and the organization shows `full_sync` while it waits and
          *     while it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any
-         *     sync. Asking while one is already asked for or running changes nothing: it is the same request.
+         *     sync. Asking while one is already asked for, or while the one asked for is running, changes
+         *     nothing: it is the same request. Asked while a read nobody asked for is running — an
+         *     organization's first, or a sync that found networks never read — the request stands and runs
+         *     once that read has ended.
          *
          *     Read-only upstream: the three paged inventory listings, the VLANs of every MX network
          *     (`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each

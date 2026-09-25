@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.30 — Meraki MS switch ports and MR access points are monitored like SNMP switch ports and a controller's access points, Meraki MX WAN uplinks, Auto VPN and warm-spare pairs are watched, an MX is filed by its LAN address rather than its WAN, a Meraki organization's slow reads no longer hold up its availability collects, a port alert no longer closes because its readings stopped**
+> Status: **v0.3.31 — A folder lists the subnets its devices carry that its IP prefixes do not cover, the inventory tree draws its branches, a new Meraki organization is read whole before anything is imported, Sync now re-reads an organization in the background, a page of the node list no longer reads unknown for nodes that are up**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
