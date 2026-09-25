@@ -16,8 +16,9 @@
 
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { sectionForPath, sidebarGroups } from '../../nav';
+import { itemLandingPath, sectionForPath, sidebarGroups } from '../../nav';
 import { usePrefsStore } from '../../prefs';
+import { useSectionRouteStore } from '../../store';
 import { runningCount, useTroubleshootStore } from '../../troubleshoot/store';
 import './SideBar.css';
 
@@ -27,6 +28,7 @@ export function SideBar() {
   const section = sectionForPath(pathname);
   const collapsed = usePrefsStore((s) => s.sidebarCollapsed);
   const toggle = usePrefsStore((s) => s.toggleSidebar);
+  const byItem = useSectionRouteStore((s) => s.byItem);
   // Live "Analysis runs" badge — the number of running troubleshoot jobs (like the TopBar bell
   // badge reads the alert store). Resolved from the item's `liveBadge` discriminator below.
   const runningRuns = useTroubleshootStore((s) => runningCount(s.jobs));
@@ -57,7 +59,9 @@ export function SideBar() {
             {group.items.map((item) => (
               <NavLink
                 key={item.path}
-                to={item.path}
+                // The item's own last route, search term and filters included (ADR-134 増分 3).
+                // `NavLink` lights by pathname alone, so the query does not change which is active.
+                to={itemLandingPath(item, byItem)}
                 // `end` so the section-root item (e.g. /nodes) isn't kept active on children.
                 end={item.path === section.path || item.path.split('/').length <= 2}
                 className={({ isActive }) => (isActive ? 'sidebar-item active' : 'sidebar-item')}

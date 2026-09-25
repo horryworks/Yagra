@@ -8,6 +8,7 @@ import {
   rememberableRoute,
   sectionForPath,
   sectionItems,
+  itemLandingPath,
   sectionLandingPath,
   sidebarGroups,
 } from './nav';
@@ -256,10 +257,12 @@ describe('rememberableRoute (what a section may remember)', () => {
     // the filter row cannot be closed while it filters, and `Clear all filters (N)` sits beside it.
     expect(rememberableRoute('/events', '?message=router')).toEqual({
       sectionKey: 'events',
+      itemPath: '/events',
       route: '/events?message=router',
     });
     expect(rememberableRoute('/dashboard/my', '')).toEqual({
       sectionKey: 'dashboard',
+      itemPath: '/dashboard/my',
       route: '/dashboard/my',
     });
   });
@@ -335,6 +338,61 @@ describe('sectionLandingPath (where a top-bar tab goes back to)', () => {
     // The floor counts what was INSPECTED, not what was found: a lookup that stopped matching
     // would otherwise report "nothing wrong" over zero screens, which is indistinguishable from a
     // healthy nav (floor-must-count-what-was-checked). 44 items today, across 7 sections.
+    expect(inspected).toBeGreaterThanOrEqual(34);
+  });
+});
+
+describe('itemLandingPath (where a sidebar item goes back to, ADR-134 増分 3)', () => {
+  const item = (path: string) => {
+    const hit = NAV.flatMap((s) => sectionItems(s)).find((i) => i.path === path);
+    if (!hit) throw new Error(`no nav item ${path}`);
+    return hit;
+  };
+
+  it('lands on the item’s bare path when it has never been visited', () => {
+    expect(itemLandingPath(item('/nodes'), {})).toBe('/nodes');
+  });
+
+  it('brings All nodes’ search term back after a visit to Discovery — the reported symptom', () => {
+    // "All nodes から Discovery に行って、戻ったら保持されていない". Both items are in the Nodes
+    // section, so the section memory now names Discovery; the item memory is what still holds `q`.
+    const byItem = { '/nodes': '/nodes?q=sw&sel=node%3Aabc', '/nodes/discovery': '/nodes/discovery' };
+    expect(itemLandingPath(item('/nodes'), byItem)).toBe('/nodes?q=sw&sel=node%3Aabc');
+    expect(itemLandingPath(item('/nodes/discovery'), byItem)).toBe('/nodes/discovery');
+  });
+
+  it('refuses a route that belongs to a different item, even in the same section', () => {
+    // Nothing writes that, but a value that got there must not turn one menu item into another.
+    expect(itemLandingPath(item('/nodes'), { '/nodes': '/nodes/discovery' })).toBe('/nodes');
+  });
+
+  it('refuses a path the nav no longer declares', () => {
+    expect(itemLandingPath(item('/nodes'), { '/nodes': '/nodes/collection-profiles' })).toBe(
+      '/nodes',
+    );
+  });
+
+  it('drops an over-long query but keeps the screen', () => {
+    const long = '/events?message=' + 'x'.repeat(MAX_REMEMBERED_ROUTE);
+    expect(itemLandingPath(item('/events'), { '/events': long })).toBe('/events');
+  });
+
+  it('round-trips every screen in the menu, and says how many it inspected', () => {
+    const wrong: string[] = [];
+    let inspected = 0;
+    for (const s of NAV) {
+      for (const it of sectionItems(s)) {
+        inspected++;
+        const hit = rememberableRoute(it.path, '?q=x');
+        if (!hit || hit.itemPath !== it.path) {
+          wrong.push(it.path);
+          continue;
+        }
+        if (itemLandingPath(it, { [hit.itemPath]: hit.route }) !== it.path + '?q=x') wrong.push(it.path);
+      }
+    }
+    expect(wrong).toEqual([]);
+    // Counts what was inspected, as the section round-trip above does (floor-must-count-what-was-checked).
     expect(inspected).toBeGreaterThanOrEqual(34);
   });
 });

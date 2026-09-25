@@ -10,8 +10,9 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { FOCUSABLE_SELECTOR, trapTarget } from '../../lib/focusTrap';
-import { NAV, sectionForPath, sidebarGroups } from '../../nav';
+import { NAV, itemLandingPath, sectionForPath, sidebarGroups } from '../../nav';
 import { usePrefsStore } from '../../prefs';
+import { useSectionRouteStore } from '../../store';
 import './MobileNavDrawer.css';
 
 interface Props {
@@ -24,6 +25,8 @@ export function MobileNavDrawer({ open, onClose }: Props) {
   const { pathname } = useLocation();
   const active = sectionForPath(pathname);
   const setUiMode = usePrefsStore((s) => s.setUiMode);
+  // Each item returns to its own last route, as the sidebar's do (ADR-134 増分 3).
+  const byItem = useSectionRouteStore((s) => s.byItem);
   // Which section accordion is expanded (single-open). Defaults to the active route's section.
   const [expanded, setExpanded] = useState(active.key);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -98,7 +101,7 @@ export function MobileNavDrawer({ open, onClose }: Props) {
                         {group.items.map((item) => (
                           <NavLink
                             key={item.path}
-                            to={item.path}
+                            to={itemLandingPath(item, byItem)}
                             end={item.path === section.path || item.path.split('/').length <= 2}
                             className={({ isActive }) =>
                               isActive ? 'mdrawer-item active' : 'mdrawer-item'

@@ -296,23 +296,38 @@ export const useMapViewStore = create<MapViewStore>()(
 //
 // sessionStorage, like the three above: part of "what am I looking at", not a standing preference,
 // and deliberately not on the account (決定 11 — one PUT and one audit row per navigation).
+//
+// Since 増分 3 it also keeps the last route per menu ITEM, which is what the sidebar and the mobile
+// drawer read (`itemLandingPath`). One section holds several items, so the section's memory alone
+// could not bring All nodes' search term back after a visit to Discovery.
 interface SectionRouteStore {
   /** Section key → the last route visited in it (`/dashboard/my`, `/events?message=router`).
    *  A key absent means "never visited", so that section's landing child wins. */
   bySection: Record<string, string>;
-  rememberSectionRoute: (key: string, route: string) => void;
+  /** Menu item path → the last route visited on that item (`/nodes` → `/nodes?q=sw`). Absent
+   *  means "never visited" — and is what a session begun on an older build holds — so the item's
+   *  bare path wins. */
+  byItem: Record<string, string>;
+  /** Record one arrival in both memories at once. */
+  rememberRoute: (sectionKey: string, itemPath: string, route: string) => void;
 }
 
 export const useSectionRouteStore = create<SectionRouteStore>()(
   persist(
     (set) => ({
       bySection: {},
+      byItem: {},
       // Same value ⇒ same state object, so nothing re-renders and nothing is written. A filter can
       // rewrite the URL on every keystroke, and this effect runs on every one of them.
-      rememberSectionRoute: (key, route) =>
-        set((s) =>
-          s.bySection[key] === route ? s : { bySection: { ...s.bySection, [key]: route } },
-        ),
+      rememberRoute: (sectionKey, itemPath, route) =>
+        set((s) => {
+          const byItem = s.byItem ?? {};
+          if (s.bySection[sectionKey] === route && byItem[itemPath] === route) return s;
+          return {
+            bySection: { ...s.bySection, [sectionKey]: route },
+            byItem: { ...byItem, [itemPath]: route },
+          };
+        }),
     }),
     { name: 'yagra.navroute', storage: createJSONStorage(sessionStore) },
   ),

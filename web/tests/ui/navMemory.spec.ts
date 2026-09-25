@@ -80,3 +80,29 @@ test('the logo stays home while the tabs remember', async ({ page }) => {
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(activeItem(page)).toHaveText('Shared dashboard');
 });
+
+/** A menu item in the sidebar. Scoped for the same reason `tab()` is. */
+function sideItem(page: import('@playwright/test').Page, name: string) {
+  return page.locator('.sidebar').getByRole('link', { name, exact: true });
+}
+
+test('a sidebar item returns to its own search term after a visit to a sibling item', async ({
+  page,
+}) => {
+  // ADR-134 増分 3, the reported symptom: "All nodes から Discovery に行って、戻ったら保持されて
+  // いない". Both items are in the Nodes section, so the section memory now names Discovery and
+  // cannot bring the term back — the per-item memory the sidebar reads is what does.
+  const box = page.locator('.nodes-pane-search input');
+
+  await page.goto('/nodes?q=sw');
+  await expect(box).toHaveValue('sw');
+
+  await sideItem(page, 'Discovery').click();
+  await expect(page).toHaveURL(/\/nodes\/discovery$/);
+
+  await sideItem(page, 'All nodes').click();
+  // Before 増分 3 the link was the bare `/nodes`, and the box came back empty.
+  await expect(page).toHaveURL(/\/nodes\?q=sw$/);
+  await expect(box).toHaveValue('sw');
+  await expect(activeItem(page)).toHaveText('All nodes');
+});

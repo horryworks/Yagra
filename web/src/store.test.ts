@@ -165,18 +165,21 @@ describe('map view memory (ADR-134)', () => {
   });
 });
 
-describe('nav section route memory (ADR-134 増分 2)', () => {
-  beforeEach(() => useSectionRouteStore.setState({ bySection: {} }));
+describe('nav route memory (ADR-134 増分 2 and 3)', () => {
+  beforeEach(() => useSectionRouteStore.setState({ bySection: {}, byItem: {} }));
+  const remember = (section: string, item: string, route: string) =>
+    useSectionRouteStore.getState().rememberRoute(section, item, route);
 
   it('remembers nothing until a section is visited, so its landing child still wins', () => {
     expect(useSectionRouteStore.getState().bySection).toEqual({});
+    expect(useSectionRouteStore.getState().byItem).toEqual({});
   });
 
   // One entry per section: the seven tabs are seven independent destinations, and a shared key
   // would send Nodes to a dashboard.
   it('keeps one route per section', () => {
-    useSectionRouteStore.getState().rememberSectionRoute('dashboard', '/dashboard/my');
-    useSectionRouteStore.getState().rememberSectionRoute('events', '/events?message=router');
+    remember('dashboard', '/dashboard/my', '/dashboard/my');
+    remember('events', '/events', '/events?message=router');
     expect(useSectionRouteStore.getState().bySection).toEqual({
       dashboard: '/dashboard/my',
       events: '/events?message=router',
@@ -184,17 +187,30 @@ describe('nav section route memory (ADR-134 増分 2)', () => {
   });
 
   it('replaces a section’s route when the operator moves within it', () => {
-    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes');
-    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/credentials');
+    remember('nodes', '/nodes', '/nodes');
+    remember('nodes', '/nodes/credentials', '/nodes/credentials');
     expect(useSectionRouteStore.getState().bySection).toEqual({ nodes: '/nodes/credentials' });
+  });
+
+  // 増分 3 — the reported symptom: search All nodes, open Discovery. The section now points at
+  // Discovery, and the item memory still holds All nodes' term for the sidebar link back.
+  it('keeps one route per item, which a move to a sibling item does not overwrite', () => {
+    remember('nodes', '/nodes', '/nodes?q=sw');
+    remember('nodes', '/nodes/discovery', '/nodes/discovery');
+    expect(useSectionRouteStore.getState().bySection).toEqual({ nodes: '/nodes/discovery' });
+    expect(useSectionRouteStore.getState().byItem).toEqual({
+      '/nodes': '/nodes?q=sw',
+      '/nodes/discovery': '/nodes/discovery',
+    });
   });
 
   // The effect that writes this runs on every route change, and a filter can rewrite the query on
   // every keystroke — so an unchanged value must return the same state object and re-render nothing.
   it('does not churn state when the route has not changed', () => {
-    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/mib');
-    const before = useSectionRouteStore.getState().bySection;
-    useSectionRouteStore.getState().rememberSectionRoute('nodes', '/nodes/mib');
-    expect(useSectionRouteStore.getState().bySection).toBe(before);
+    remember('nodes', '/nodes/mib', '/nodes/mib');
+    const before = useSectionRouteStore.getState();
+    remember('nodes', '/nodes/mib', '/nodes/mib');
+    expect(useSectionRouteStore.getState().bySection).toBe(before.bySection);
+    expect(useSectionRouteStore.getState().byItem).toBe(before.byItem);
   });
 });

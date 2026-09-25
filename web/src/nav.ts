@@ -538,15 +538,19 @@ export function labelKeysForPath(pathname: string): {
   return { sectionKey: hit.section.labelKey, labelKey: hit.item.labelKey };
 }
 
-// ── Where a top-bar tab goes back to (ADR-134 増分 2) ─────────────────────────────────────────
+// ── Where a top-bar tab or a menu item goes back to (ADR-134 増分 2, 3) ───────────────────────
 //
 // `NavSection.path` above is a constant, and its own doc says so: the tab lands on the section's
 // first child, whatever the operator was last looking at. So Dashboard always opened Shared
 // dashboard, never the My-dashboard board the operator had left — which is conspicuous now that
 // the board itself is remembered (増分 1), and has been true since the shell's first commit.
 //
-// The memory is read here and nowhere else. Two functions, both pure: one decides what may be
-// written, one decides what a stored value is worth.
+// The same was true one level down: a sidebar item linked to its bare path, so searching All nodes,
+// opening Discovery and clicking All nodes again dropped the term (増分 3). So there are two
+// memories — per section for the tab, per item for the sidebar — written from one route.
+//
+// Both are read here and nowhere else. All pure: one function decides what may be written, one
+// decides what a stored value is worth, and a reader for each memory calls it.
 
 /** How long a remembered route may be before its query is dropped (決定 9). */
 export const MAX_REMEMBERED_ROUTE = 512;
@@ -554,6 +558,10 @@ export const MAX_REMEMBERED_ROUTE = 512;
 /**
  * What to remember for the route the operator has arrived on, or `null` when that route is not one
  * of the menu's own screens — a node detail, `/login`, a vacated address mid-redirect.
+ *
+ * One answer for both memories: the section's (the top-bar tab, ADR-134 増分 2) and the item's (the
+ * sidebar and the mobile drawer, 増分 3). `itemPath` is the menu item the route is on, which is the
+ * key the item memory is kept under.
  *
  * 🚨 **決定 8 lives here.** Remembering "wherever I am" would land the Nodes tab on one device's
  * detail page, and on a 404 once that node is deleted. The query string *is* carried (決定 9), and
@@ -564,33 +572,56 @@ export const MAX_REMEMBERED_ROUTE = 512;
 export function rememberableRoute(
   pathname: string,
   search: string,
-): { sectionKey: string; route: string } | null {
+): { sectionKey: string; itemPath: string; route: string } | null {
   const hit = navItemForPath(pathname);
   if (!hit) return null;
-  return { sectionKey: hit.section.key, route: hit.item.path + search };
+  return { sectionKey: hit.section.key, itemPath: hit.item.path, route: hit.item.path + search };
+}
+
+/**
+ * A stored route, if it is still one worth navigating to — else `fallback`.
+ *
+ * The one place a remembered value is refused, shared by both readers below so the two memories
+ * cannot disagree about what is valid. It refuses three kinds: a path `NAV` no longer declares (an
+ * item renamed since this session began), a path `belongs` rejects (a value nothing in the app
+ * would have written under that key), and one longer than [`MAX_REMEMBERED_ROUTE`].
+ *
+ * ⚠️ The length case keeps the path and drops only the query. The screen is still the right screen,
+ * so sending the operator somewhere else would be the larger harm.
+ */
+function rememberedOr(
+  stored: string | undefined,
+  belongs: (hit: { section: NavSection; item: NavItem }) => boolean,
+  fallback: string,
+): string {
+  if (!stored) return fallback;
+  const q = stored.indexOf('?');
+  const path = q === -1 ? stored : stored.slice(0, q);
+  const hit = navItemForPath(path);
+  if (!hit || !belongs(hit)) return fallback;
+  return stored.length > MAX_REMEMBERED_ROUTE ? path : stored;
 }
 
 /**
  * Where a section's top-bar tab navigates: the last route visited inside that section, else the
  * section's own landing child.
- *
- * The only reader of the memory, so the only place a stored value can be refused — and it refuses
- * three kinds: a path `NAV` no longer declares (an item renamed since this session began), a path
- * belonging to a *different* section (a value nothing in the app would have written), and one
- * longer than [`MAX_REMEMBERED_ROUTE`].
- *
- * ⚠️ The length case keeps the path and drops only the query. The screen is still the right screen,
- * so sending the operator somewhere else would be the larger harm.
  */
 export function sectionLandingPath(
   section: NavSection,
   bySection: Record<string, string>,
 ): string {
-  const stored = bySection[section.key];
-  if (!stored) return section.path;
-  const q = stored.indexOf('?');
-  const path = q === -1 ? stored : stored.slice(0, q);
-  const hit = navItemForPath(path);
-  if (!hit || hit.section.key !== section.key) return section.path;
-  return stored.length > MAX_REMEMBERED_ROUTE ? path : stored;
+  return rememberedOr(bySection[section.key], (hit) => hit.section.key === section.key, section.path);
+}
+
+/**
+ * Where a menu item navigates (the sidebar and the mobile drawer): the last route visited on that
+ * item's screen — its search term, filters and selection — else the item's bare path (ADR-134
+ * 増分 3, 決定 13).
+ *
+ * Kept per item rather than read from the section's memory, because two items share one section:
+ * searching All nodes and then opening Discovery overwrites the Nodes section's memory, and the
+ * sidebar link back to All nodes used to drop the term with it.
+ */
+export function itemLandingPath(item: NavItem, byItem: Record<string, string>): string {
+  return rememberedOr(byItem[item.path], (hit) => hit.item.path === item.path, item.path);
 }

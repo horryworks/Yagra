@@ -27,7 +27,7 @@ export function AppShell() {
   const mobile = useViewportMode() === 'mobile';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { pathname, search } = useLocation();
-  const rememberSectionRoute = useSectionRouteStore((s) => s.rememberSectionRoute);
+  const rememberRoute = useSectionRouteStore((s) => s.rememberRoute);
   useTroubleshootStream();
 
   // Close the drawer on any route change — covers the browser Back button and a tap on the
@@ -36,19 +36,19 @@ export function AppShell() {
     setDrawerOpen(false);
   }, [pathname]);
 
-  // Remember where each nav section was last visited, so its top-bar tab returns here (ADR-134
-  // 増分 2). Recorded from the *route*, not from a nav click: a redirect, the bell's shortcut and a
-  // shared link all land the operator somewhere real, and that somewhere is their current position
-  // (決定 12). `rememberableRoute` returns null for anything the menu does not declare, which is
-  // what keeps a node detail from becoming the Nodes tab's destination.
+  // Remember where each nav section and each menu item was last visited, so the top-bar tab and the
+  // sidebar item both return here (ADR-134 増分 2 and 3). Recorded from the *route*, not from a
+  // nav click: a redirect, the bell's shortcut and a shared link all land the operator somewhere
+  // real, and that somewhere is their current position (決定 12). `rememberableRoute` returns null
+  // for anything the menu does not declare, which is what keeps a node detail from becoming the
+  // Nodes tab's destination.
   //
-  // Above the mobile branch on purpose: both shells record the same way, and the mobile drawer
-  // needs no change of its own — its section headings only expand, and its items already link to
-  // their own paths.
+  // Above the mobile branch on purpose: both shells record the same way, and the mobile drawer's
+  // items read the same per-item memory as the sidebar's.
   useEffect(() => {
     const hit = rememberableRoute(pathname, search);
-    if (hit) rememberSectionRoute(hit.sectionKey, hit.route);
-  }, [pathname, search, rememberSectionRoute]);
+    if (hit) rememberRoute(hit.sectionKey, hit.itemPath, hit.route);
+  }, [pathname, search, rememberRoute]);
 
   if (mobile) {
     return (
