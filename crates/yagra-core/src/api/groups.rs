@@ -39,7 +39,8 @@ use uuid::Uuid;
     set_node_group_pool,
     set_node_group_geo,
     set_node_group_prefixes,
-    set_node_group_tags
+    set_node_group_tags,
+    get_prefix_gaps
 ))]
 pub(super) struct Doc;
 
@@ -62,6 +63,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/node-groups/:id/prefixes",
             put(set_node_group_prefixes),
         )
+        .route("/api/v1/node-groups/:id/prefix-gaps", get(get_prefix_gaps))
         .route("/api/v1/node-groups/:id/tags", put(set_node_group_tags))
 }
 
@@ -744,6 +746,166 @@ async fn set_node_group_prefixes(
             )
         })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The most devices one prefix-gap report reads the addresses of (ADR-170).
+///
+/// The report is fetched every time a folder is opened, and opening a region or the root would
+/// otherwise read the address list of most of the fleet — each capped at
+/// `MAX_ADDRESSES_PER_NODE`, so tens of megabytes at 50k nodes. A site folder is far below this.
+/// Above it the report is refused by name rather than computed over a slice: a partial answer
+/// would list "no gaps" for subnets it never looked at.
+pub(crate) const MAX_PREFIX_GAP_NODES: usize = 2_000;
+
+#[utoipa::path(
+    get, path = "/api/v1/node-groups/{id}/prefix-gaps", tag = "groups",
+    params(("id" = String, Path, description = "Folder id")),
+    responses(
+        (status = 200, description = "The subnets this folder's devices (and those of every folder beneath it) carry that none of those folders' IP ranges contains, with why each is reported", body = crate::prefix_gaps::PrefixGapReport),
+        (status = 400, description = "`too_many_nodes`: the folder and its subfolders hold more devices than one report reads; open a folder further down", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such folder, or not one this caller may see", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_prefix_gaps(
+    _guard: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<crate::prefix_gaps::PrefixGapReport>> {
+    Ok(Json(prefix_gap_report(&admin, &scope, id).await?))
+}
+
+/// Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170). Shared by
+/// `GET /node-groups/{id}/prefix-gaps` and the `get_prefix_gaps` MCP tool, so the two cannot come
+/// to differ about what is disclosed.
+///
+/// Every range in the deployment is compared — a subnet claimed by a folder the caller cannot see
+/// is still `other_folder`, not `unregistered`, because calling it unregistered would send the
+/// operator to create a duplicate in NetBox. What is withheld is **which** folder and **which**
+/// range: the same line `visible_groups` draws when it clears a breadcrumb's prefixes.
+pub(crate) async fn prefix_gap_report(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    id: Uuid,
+) -> ApiResult<crate::prefix_gaps::PrefixGapReport> {
+    use crate::groups::{group_ancestors, group_subtree};
+    use crate::prefix_gaps::{classify, Range, Relation};
+
+    super::scope::require_visible_group(scope, id)?;
+    let groups = admin.groups.list().await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "list node groups", "failed to read node groups")
+    })?;
+    if !groups.iter().any(|g| g.id == id) {
+        return Err(ApiError::not_found("group_not_found", "no such node group"));
+    }
+    let edges: Vec<(Uuid, Option<Uuid>)> = groups.iter().map(|g| (g.id, g.parent_id)).collect();
+    let subtree: std::collections::HashSet<Uuid> = group_subtree(&edges, id).into_iter().collect();
+    let ancestors: std::collections::HashSet<Uuid> =
+        group_ancestors(&edges, id).into_iter().collect();
+
+    let subtree_ids: Vec<Uuid> = subtree.iter().copied().collect();
+    let nodes = admin
+        .repo
+        .nodes_in_groups(&subtree_ids)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list folder nodes", "failed to read nodes")
+        })?;
+    if nodes.len() > MAX_PREFIX_GAP_NODES {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "this folder holds {} devices; a report reads at most {MAX_PREFIX_GAP_NODES}",
+                nodes.len()
+            ),
+        ));
+    }
+    let snapshots = admin.l3.current_for(&nodes).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read node addresses",
+            "failed to read addresses",
+        )
+    })?;
+
+    // A stored range that does not parse (a `/0`, which is no subnet) covers nothing.
+    let ranges: Vec<Range> = groups
+        .iter()
+        .flat_map(|g| {
+            let relation = if subtree.contains(&g.id) {
+                Relation::Subtree
+            } else if ancestors.contains(&g.id) {
+                Relation::Ancestor
+            } else {
+                Relation::Other
+            };
+            g.prefixes.iter().filter_map(move |p| {
+                Some(Range {
+                    group: g.id,
+                    prefix: p.prefix.parse().ok()?,
+                    relation,
+                })
+            })
+        })
+        .collect();
+
+    let observed: Vec<(Uuid, &yagra_common::L3Snapshot)> =
+        snapshots.iter().map(|(n, s)| (*n, s)).collect();
+    let (mut gaps, checked) = classify(&observed, &ranges);
+
+    let names: std::collections::HashMap<Uuid, &str> =
+        groups.iter().map(|g| (g.id, g.name.as_str())).collect();
+    for gap in &mut gaps {
+        match gap.range_group {
+            Some(g) if scope.allows_group(Some(g)) => {
+                gap.range_group_name = names.get(&g).map(|n| (*n).to_owned());
+            }
+            Some(_) => {
+                gap.range = None;
+                gap.range_group = None;
+            }
+            None => {}
+        }
+    }
+
+    let listed: Vec<Uuid> = {
+        let set: std::collections::BTreeSet<Uuid> = gaps
+            .iter()
+            .flat_map(|g| g.seen_on.iter().map(|s| s.node_id))
+            .collect();
+        set.into_iter().collect()
+    };
+    let idents = admin
+        .repo
+        .interface_idents_for(&listed)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "read interface names",
+                "failed to read interfaces",
+            )
+        })?;
+    for seen in gaps.iter_mut().flat_map(|g| g.seen_on.iter_mut()) {
+        let key = (
+            seen.node_id,
+            i32::try_from(seen.ifindex).unwrap_or(i32::MAX),
+        );
+        seen.if_name = idents.get(&key).and_then(|i| i.if_name.clone());
+    }
+
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Ok(crate::prefix_gaps::PrefixGapReport {
+        group_id: id,
+        nodes_total: count(nodes.len()),
+        nodes_with_addresses: count(snapshots.len()),
+        nodes_truncated: count(snapshots.iter().filter(|(_, s)| s.truncated).count()),
+        subnets_checked: count(checked),
+        gaps,
+    })
 }
 
 #[cfg(test)]
@@ -1788,6 +1950,194 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "prefix_owned_by_sync", "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+    }
+
+    // ── ADR-170: subnets missing from a folder's ranges ─────────────────────────────────────
+
+    /// A region → site → child tree, a sibling site, one range each, and devices in the site and
+    /// its child carrying one subnet of every kind. Returns (site, other site, the region).
+    async fn gap_fixture(pool: &sqlx::PgPool, st: &ApiState, tok: &str) -> (Uuid, Uuid, Uuid) {
+        use crate::api::tests_support::send;
+        let folder = |name: &'static str, parent: Option<Uuid>| {
+            let st = st.clone();
+            let tok = tok.to_owned();
+            async move {
+                let (_, body) = send(
+                    &st,
+                    "POST",
+                    "/api/v1/node-groups",
+                    &tok,
+                    Some(serde_json::json!({ "name": name, "group_type": "site", "parent_id": parent })),
+                )
+                .await;
+                body["id"]
+                    .as_str()
+                    .expect("id")
+                    .parse::<Uuid>()
+                    .expect("uuid")
+            }
+        };
+        let region = folder("region", None).await;
+        let site = folder("site-a", Some(region)).await;
+        let child = folder("site-a-floor", Some(site)).await;
+        let other = folder("site-b", Some(region)).await;
+        crate::pgtest::prefix(pool, region, "10.1.0.0/16").await;
+        crate::pgtest::prefix(pool, site, "10.1.1.0/24").await;
+        crate::pgtest::prefix(pool, child, "10.1.2.0/24").await;
+        crate::pgtest::prefix(pool, other, "10.9.0.0/24").await;
+        crate::pgtest::prefix(pool, other, "172.30.0.0/25").await;
+
+        let l3 = crate::l3::L3Repo::new(pool.clone());
+        let a = crate::pgtest::node(pool, "cs-a", 1, Some(site)).await;
+        let b = crate::pgtest::node(pool, "as-a", 2, Some(child)).await;
+        // Filed in the site, never walked: counted in the total, not in "read".
+        crate::pgtest::node(pool, "ping-only", 3, Some(site)).await;
+        let snap = |rows: &[(u32, &str, u8)]| {
+            yagra_common::L3Snapshot::new(
+                rows.iter()
+                    .map(|(i, ip, len)| {
+                        yagra_common::L3Address::new(*i, ip.parse().expect("ip"), *len)
+                    })
+                    .collect(),
+            )
+        };
+        l3.record_observation(
+            a,
+            &snap(&[
+                (1, "10.1.1.1", 24),   // the site's own
+                (2, "10.1.3.1", 24),   // only the region's /16
+                (3, "10.9.0.5", 24),   // site-b's range
+                (4, "172.30.0.1", 24), // wider than site-b's /25
+                (5, "192.0.2.1", 24),  // nothing anywhere
+            ]),
+        )
+        .await
+        .expect("record a");
+        l3.record_observation(b, &snap(&[(1, "10.1.2.1", 24), (2, "192.0.2.2", 24)]))
+            .await
+            .expect("record b");
+        (site, other, region)
+    }
+
+    /// 🚨 The read is **answered** — kinds, ranges, names and the three counts — and a subnet a
+    /// subfolder's range covers is the site's own, not a gap.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folders_missing_subnets_are_reported_with_why(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (site, other, region) = gap_fixture(&pool, &st, &tok).await;
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/node-groups/{site}/prefix-gaps"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["nodes_total"], 3, "{body}");
+        assert_eq!(body["nodes_with_addresses"], 2, "{body}");
+        assert_eq!(body["subnets_checked"], 6, "{body}");
+        let gaps: Vec<(String, String, serde_json::Value, serde_json::Value)> = body["gaps"]
+            .as_array()
+            .expect("gaps")
+            .iter()
+            .map(|g| {
+                (
+                    g["subnet"].as_str().expect("subnet").to_owned(),
+                    g["kind"].as_str().expect("kind").to_owned(),
+                    g["range"].clone(),
+                    g["range_group_name"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            gaps,
+            vec![
+                (
+                    "192.0.2.0/24".into(),
+                    "unregistered".into(),
+                    serde_json::Value::Null,
+                    serde_json::Value::Null
+                ),
+                (
+                    "172.30.0.0/24".into(),
+                    "partial".into(),
+                    "172.30.0.0/25".into(),
+                    "site-b".into()
+                ),
+                (
+                    "10.9.0.0/24".into(),
+                    "other_folder".into(),
+                    "10.9.0.0/24".into(),
+                    "site-b".into()
+                ),
+                (
+                    "10.1.3.0/24".into(),
+                    "parent_only".into(),
+                    "10.1.0.0/16".into(),
+                    "region".into()
+                ),
+            ],
+            "{body}"
+        );
+        let unregistered = &body["gaps"][0];
+        assert_eq!(
+            unregistered["node_count"], 2,
+            "both devices carry it: {body}"
+        );
+        assert_eq!(body["gaps"][2]["range_group"], other.to_string());
+        assert_eq!(body["gaps"][3]["range_group"], region.to_string());
+    }
+
+    /// A scoped caller learns **that** another folder claims a subnet, never which folder or
+    /// range — and a folder outside its scope is a 404.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_is_not_told_whose_range_it_is(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (site, other, _) = gap_fixture(&pool, &st, &admin).await;
+        let scoped = scoped_token(&st, &[site]);
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/node-groups/{site}/prefix-gaps"),
+            &scoped,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let by_kind = |kind: &str| {
+            body["gaps"]
+                .as_array()
+                .expect("gaps")
+                .iter()
+                .find(|g| g["kind"] == kind)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {kind}: {body}"))
+        };
+        for kind in ["other_folder", "parent_only", "partial"] {
+            let g = by_kind(kind);
+            assert!(g["range"].is_null(), "{kind} range withheld: {g}");
+            assert!(g["range_group"].is_null(), "{kind} folder withheld: {g}");
+            assert!(g["range_group_name"].is_null(), "{kind} name withheld: {g}");
+        }
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/node-groups/{other}/prefix-gaps"),
+            &scoped,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
     }
 
     /// A folder outside a scoped caller's reach is a 404, not a silent write.

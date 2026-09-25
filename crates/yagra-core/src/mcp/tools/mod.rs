@@ -169,6 +169,7 @@ impl YagraMcp {
                 self.list_node_groups_in(p!(ListNodeGroupsParams), scope)
                     .await
             }
+            "get_prefix_gaps" => self.prefix_gaps_in(p!(PrefixGapsParams), scope).await,
             "list_wireless_aps" => self.wireless_aps_in(p!(WirelessApsParams), scope).await,
             "list_suppressions" => self.list_suppressions_in(scope).await,
             "alert_trends" => self.alert_trends_in(p!(AlertTrendsParams), scope).await,

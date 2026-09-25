@@ -90,6 +90,7 @@ import type {
   Mute,
   NodeDetail,
   NodeGroup,
+  PrefixGapReport,
   Pins,
   MovePreview,
   ImportPreview,
@@ -1420,6 +1421,11 @@ export const api = {
 
   /** The node groups (the inventory folder tree; flat list with parent links). */
   listNodeGroups: (): Promise<NodeGroup[]> => apiGet('/api/v1/node-groups'),
+
+  /** The subnets a folder's devices (and its subfolders') carry that its IP prefixes do not cover
+   *  (ADR-170). `too_many_nodes` (400) for a folder holding more devices than one report reads. */
+  getPrefixGaps: (id: string): Promise<PrefixGapReport> =>
+    apiGet('/api/v1/node-groups/{id}/prefix-gaps', { path: { id } }),
 
   // ── Troubleshoot analysis jobs (ADR-022) ──
   /** Recent analysis jobs (the runs list), newest first. */

@@ -28,6 +28,7 @@ import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
+import { PrefixGaps } from './PrefixGapsSection';
 import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
 
@@ -216,6 +217,11 @@ export function GroupDetail({
             </div>
           </section>
         )}
+
+        {/* The subnets this folder's devices carry that its prefixes do not cover (ADR-170).
+            Always drawn, unlike the list above: a folder with no prefixes at all is exactly the
+            one whose every subnet is missing. */}
+        <PrefixGaps groupId={group.id} />
 
         <section>
           <div className="nd-section-t">{t('groupDetail.members')}</div>

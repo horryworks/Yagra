@@ -10453,6 +10453,87 @@
         }
       }
     },
+    "/api/v1/node-groups/{id}/prefix-gaps": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "get_prefix_gaps",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subnets this folder's devices (and those of every folder beneath it) carry that none of those folders' IP ranges contains, with why each is reported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrefixGapReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`too_many_nodes`: the folder and its subfolders hold more devices than one report reads; open a folder further down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder, or not one this caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-groups/{id}/prefixes": {
       "put": {
         "tags": [
@@ -29491,6 +29572,16 @@
           }
         }
       },
+      "GapKind": {
+        "type": "string",
+        "description": "Why a subnet is reported. Ordered by how directly it names something to fix in NetBox.",
+        "enum": [
+          "unregistered",
+          "partial",
+          "other_folder",
+          "parent_only"
+        ]
+      },
       "GeoSource": {
         "type": "string",
         "description": "Where a group's effective map position came from.",
@@ -34946,6 +35037,109 @@
           }
         }
       },
+      "PrefixGap": {
+        "type": "object",
+        "description": "One subnet a folder's devices carry that its own ranges do not cover.",
+        "required": [
+          "subnet",
+          "kind",
+          "node_count",
+          "seen_on"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/GapKind"
+          },
+          "node_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many distinct devices carry an address in this subnet.",
+            "minimum": 0
+          },
+          "range": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The range that contains it (`parent_only`, `other_folder`) or lies inside it (`partial`).\n`null` for `unregistered`, **and** when that range belongs to a folder this caller may not\nsee — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 決定 10)."
+          },
+          "range_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder `range` belongs to, under the same rule."
+          },
+          "range_group_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That folder's name, under the same rule."
+          },
+          "seen_on": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeenOn"
+            },
+            "description": "Up to [`SEEN_ON_MAX`] of the places it was seen, ordered by device then port."
+          },
+          "subnet": {
+            "type": "string",
+            "description": "The subnet, as `network/length`."
+          }
+        }
+      },
+      "PrefixGapReport": {
+        "type": "object",
+        "description": "The answer for one folder.",
+        "required": [
+          "group_id",
+          "nodes_total",
+          "nodes_with_addresses",
+          "nodes_truncated",
+          "subnets_checked",
+          "gaps"
+        ],
+        "properties": {
+          "gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrefixGap"
+            },
+            "description": "Ordered by kind, then subnet."
+          },
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nodes_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices filed in the folder or beneath it.",
+            "minimum": 0
+          },
+          "nodes_truncated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many address lists were cut at the per-device cap.",
+            "minimum": 0
+          },
+          "nodes_with_addresses": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many have reported their addresses at all. A device with no SNMP, or whose\naddress walk has never succeeded, contributes nothing — so **no gaps is not the same as\ncomplete** unless this equals `nodes_total`.",
+            "minimum": 0
+          },
+          "subnets_checked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distinct subnets compared, covered ones included.",
+            "minimum": 0
+          }
+        }
+      },
       "PrefixProposal": {
         "type": "object",
         "description": "One node, and the single folder whose IP range contains its address.",
@@ -37327,6 +37521,36 @@
             "items": {
               "$ref": "#/components/schemas/SettingOption"
             }
+          }
+        }
+      },
+      "SeenOn": {
+        "type": "object",
+        "description": "One place a subnet was seen: a device, the port it is configured on, and the address itself.",
+        "required": [
+          "node_id",
+          "ifindex",
+          "ip"
+        ],
+        "properties": {
+          "if_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The port's name when the interface inventory has one. Filled by the caller."
+          },
+          "ifindex": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ip": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

@@ -1361,6 +1361,30 @@ mod tests {
         );
         assert_inventory_dto_is_clean(&group_json, "NodeGroup");
 
+        // Served straight through from the REST handler (ADR-170).
+        let gaps = crate::prefix_gaps::PrefixGapReport {
+            group_id: uuid::Uuid::new_v4(),
+            nodes_total: 2,
+            nodes_with_addresses: 1,
+            nodes_truncated: 0,
+            subnets_checked: 3,
+            gaps: vec![crate::prefix_gaps::PrefixGap {
+                subnet: "10.1.2.0/24".to_owned(),
+                kind: crate::prefix_gaps::GapKind::OtherFolder,
+                range: Some("10.1.2.0/24".to_owned()),
+                range_group: Some(uuid::Uuid::new_v4()),
+                range_group_name: Some("site-b".to_owned()),
+                node_count: 1,
+                seen_on: vec![crate::prefix_gaps::SeenOn {
+                    node_id: uuid::Uuid::new_v4(),
+                    ifindex: 3,
+                    if_name: Some("Vlan10".to_owned()),
+                    ip: "10.1.2.1".to_owned(),
+                }],
+            }],
+        };
+        assert_inventory_dto_is_clean(&serde_json::to_value(&gaps).unwrap(), "PrefixGapReport");
+
         let history = AlertHistoryDto::from_row(
             &AlertHistoryRow {
                 id: Uuid::new_v4(),
@@ -1537,6 +1561,7 @@ mod tests {
         ("query_metrics", "MetricSeries"),
         ("top_interfaces", "RankedInterfaceTopEntry"),
         ("list_node_groups", "NodeGroup"),
+        ("get_prefix_gaps", "PrefixGapReport"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("search_events", "Event"),

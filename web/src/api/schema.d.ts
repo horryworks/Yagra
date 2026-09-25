@@ -2091,6 +2091,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-groups/{id}/prefix-gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_prefix_gaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-groups/{id}/prefixes": {
         parameters: {
             query?: never;
@@ -7661,6 +7677,11 @@ export interface components {
             sending: boolean;
         };
         /**
+         * @description Why a subnet is reported. Ordered by how directly it names something to fix in NetBox.
+         * @enum {string}
+         */
+        GapKind: "unregistered" | "partial" | "other_folder" | "parent_only";
+        /**
          * @description Where a group's effective map position came from.
          * @enum {string}
          */
@@ -10580,6 +10601,61 @@ export interface components {
              */
             unmatched: number;
         };
+        /** @description One subnet a folder's devices carry that its own ranges do not cover. */
+        PrefixGap: {
+            kind: components["schemas"]["GapKind"];
+            /**
+             * Format: int32
+             * @description How many distinct devices carry an address in this subnet.
+             */
+            node_count: number;
+            /**
+             * @description The range that contains it (`parent_only`, `other_folder`) or lies inside it (`partial`).
+             *     `null` for `unregistered`, **and** when that range belongs to a folder this caller may not
+             *     see — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 決定 10).
+             */
+            range?: string | null;
+            /**
+             * Format: uuid
+             * @description The folder `range` belongs to, under the same rule.
+             */
+            range_group?: string | null;
+            /** @description That folder's name, under the same rule. */
+            range_group_name?: string | null;
+            /** @description Up to [`SEEN_ON_MAX`] of the places it was seen, ordered by device then port. */
+            seen_on: components["schemas"]["SeenOn"][];
+            /** @description The subnet, as `network/length`. */
+            subnet: string;
+        };
+        /** @description The answer for one folder. */
+        PrefixGapReport: {
+            /** @description Ordered by kind, then subnet. */
+            gaps: components["schemas"]["PrefixGap"][];
+            /** Format: uuid */
+            group_id: string;
+            /**
+             * Format: int32
+             * @description Devices filed in the folder or beneath it.
+             */
+            nodes_total: number;
+            /**
+             * Format: int32
+             * @description Of those, how many address lists were cut at the per-device cap.
+             */
+            nodes_truncated: number;
+            /**
+             * Format: int32
+             * @description Of those, how many have reported their addresses at all. A device with no SNMP, or whose
+             *     address walk has never succeeded, contributes nothing — so **no gaps is not the same as
+             *     complete** unless this equals `nodes_total`.
+             */
+            nodes_with_addresses: number;
+            /**
+             * Format: int32
+             * @description Distinct subnets compared, covered ones included.
+             */
+            subnets_checked: number;
+        };
         /** @description One node, and the single folder whose IP range contains its address. */
         PrefixProposal: {
             /** Format: uuid */
@@ -11632,6 +11708,16 @@ export interface components {
             kind: string;
             label: string;
             options?: components["schemas"]["SettingOption"][];
+        };
+        /** @description One place a subnet was seen: a device, the port it is configured on, and the address itself. */
+        SeenOn: {
+            /** @description The port's name when the interface inventory has one. Filled by the caller. */
+            if_name?: string | null;
+            /** Format: int32 */
+            ifindex: number;
+            ip: string;
+            /** Format: uuid */
+            node_id: string;
         };
         /** @description Reset-password request body. The password is hashed before storage and never logged. */
         SetPassword: {
@@ -21228,6 +21314,74 @@ export interface operations {
                 };
             };
             /** @description No such group */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_prefix_gaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subnets this folder's devices (and those of every folder beneath it) carry that none of those folders' IP ranges contains, with why each is reported */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrefixGapReport"];
+                };
+            };
+            /** @description `too_many_nodes`: the folder and its subfolders hold more devices than one report reads; open a folder further down */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such folder, or not one this caller may see */
             404: {
                 headers: {
                     [name: string]: unknown;

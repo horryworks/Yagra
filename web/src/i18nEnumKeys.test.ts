@@ -111,6 +111,7 @@ import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
+import { PREFIX_GAP_KINDS } from './components/NodeDetail/prefixGaps';
 import { FAULT_SERIES, OPTICAL_SERIES } from './components/NodeDetail/interfaceMetrics';
 import { DUPLEX_STATES, SPEED_TIERS } from './components/NodeDetail/linkMode';
 import { MONITOR_KINDS } from './pages/monitorKinds';
@@ -587,6 +588,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'group.prefixSource.',
       [...PREFIX_SOURCES],
     );
+  });
+
+  it('every prefix-gap kind has a label (nodes:prefixGaps.kind.*)', () => {
+    // The folder pane falls back to the bare kind when a range is withheld by scope (ADR-170).
+    expectKeys('prefix-gap kind', { en: enNodes, ja: jaNodes }, 'prefixGaps.kind.', [
+      ...PREFIX_GAP_KINDS,
+    ]);
   });
 
   it('every ＋-menu label resolves (nodes:tree.*/addMenu.*)', () => {

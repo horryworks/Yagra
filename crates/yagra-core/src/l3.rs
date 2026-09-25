@@ -129,6 +129,24 @@ impl L3Repo {
         .transpose()
     }
 
+    /// The current address sets of `nodes`, for those that have one (ADR-170). A node that has
+    /// never had an address walk recorded is absent — the caller counts the difference.
+    pub async fn current_for(&self, nodes: &[Uuid]) -> anyhow::Result<Vec<(Uuid, L3Snapshot)>> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query("SELECT node_id, addresses FROM node_l3 WHERE node_id = ANY($1)")
+            .bind(nodes)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let snapshot: Json<L3Snapshot> = row.try_get("addresses")?;
+                Ok((row.try_get("node_id")?, snapshot.0))
+            })
+            .collect()
+    }
+
     /// The newest `last_seen` across every node, or `None` when nothing has been observed.
     ///
     /// This is half the derivation task's change signal. `config_gen` (ADR-026) moves when an

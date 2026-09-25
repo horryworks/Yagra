@@ -688,6 +688,30 @@
     "prefixes": "IP prefixes",
     "tags": "Tags"
   },
+  "prefixGaps": {
+    "title": "Subnets missing from the IP prefixes",
+    "loading": "Comparing the devices' subnets with the IP prefixes…",
+    "err": "failed to compare the subnets with the IP prefixes",
+    "tooMany": "This folder holds too many devices to compare at once. Open a folder further down.",
+    "noData": "No device here has reported its addresses yet.",
+    "clean": "Every subnet on these devices is in an IP prefix.",
+    "read": "Addresses read from {{read}} of {{total}} devices.",
+    "truncated_one": "{{count}} device reported more addresses than are kept.",
+    "truncated_other": "{{count}} devices reported more addresses than are kept.",
+    "more_one": "+{{count}} more device",
+    "more_other": "+{{count}} more devices",
+    "kind": {
+      "unregistered": "Not in any IP prefix",
+      "partial": "Only partly covered by an IP prefix",
+      "other_folder": "In another folder's IP prefix",
+      "parent_only": "Only in a parent folder's IP prefix"
+    },
+    "reason": {
+      "partial": "Only partly covered by {{range}}",
+      "otherFolder": "In {{range}}, registered to {{name}}",
+      "parentOnly": "Only in {{range}} on the parent folder {{name}}"
+    }
+  },
   "bulkTag": {
     "title": "Tag {{count}} nodes",
     "note": "These tags are added to what each of the {{count}} selected nodes already carries — nothing else is removed. To tag a whole site instead, put the tag on its folder: everything inside it inherits it, including nodes discovered later.",

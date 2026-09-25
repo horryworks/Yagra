@@ -316,6 +316,12 @@ export const PREFIX_SOURCES = ['manual', 'sync'] as const;
 /** Where a folder's range came from. */
 export type PrefixSource = (typeof PREFIX_SOURCES)[number];
 
+/** The subnets a folder's devices carry that its IP prefixes do not cover (ADR-170). */
+export type PrefixGapReport = components['schemas']['PrefixGapReport'];
+
+/** One such subnet, with why it is reported. */
+export type PrefixGap = components['schemas']['PrefixGap'];
+
 /** Which folder's IP range would claim each candidate address
  *  (`POST /api/v1/discovery/import-preview`). A proposal — nothing is imported when this
  *  arrives (ADR-131 決定 7). */

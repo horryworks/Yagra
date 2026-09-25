@@ -1022,6 +1022,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "GET",
+        "/api/v1/node-groups/:id/prefix-gaps",
+        GroupFiltered,
+        Tool("get_prefix_gaps"),
+    ),
+    (
         "PUT",
         "/api/v1/node-groups/:id/prefixes",
         // `GroupFiltered`, deliberately not inheriting the `ADMIN_CFG` its siblings claim

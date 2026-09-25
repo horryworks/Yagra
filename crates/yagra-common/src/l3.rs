@@ -296,6 +296,70 @@ impl fmt::Display for SubnetKey {
     }
 }
 
+impl SubnetKey {
+    /// Whether `other` lies wholly inside this network — PostgreSQL's `other <<= self` on `cidr`.
+    ///
+    /// Equal networks contain each other; a network never contains a wider one; the two families
+    /// never contain each other (an IPv4 network against an IPv6 one is `false`, as it is in
+    /// PostgreSQL). Re-masks `other` rather than comparing prefixes of text, so there is one
+    /// implementation of the arithmetic — [`subnet_key`]'s.
+    ///
+    /// ⚠️ **This is a second implementation of `<<=`**, which `yagra-core`'s folder-range matching
+    /// deliberately keeps in SQL (`groups.rs::match_prefixes`). It exists for ADR-170, which
+    /// classifies subnets in a pure function so every case is unit-testable, and a database test
+    /// there (`prefix_gaps::the_containment_rule_agrees_with_postgresql`) pins the two together.
+    #[must_use]
+    pub fn contains(&self, other: &SubnetKey) -> bool {
+        if other.prefix_len < self.prefix_len {
+            return false;
+        }
+        match (self.network, other.network) {
+            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_)) => {
+                subnet_key(other.network, self.prefix_len).as_ref() == Some(self)
+            }
+            (IpAddr::V4(_), IpAddr::V6(_)) | (IpAddr::V6(_), IpAddr::V4(_)) => false,
+        }
+    }
+
+    /// Whether the two networks share any address. For CIDR blocks that is exactly "one contains
+    /// the other" — two aligned blocks are either nested or disjoint.
+    #[must_use]
+    pub fn overlaps(&self, other: &SubnetKey) -> bool {
+        self.contains(other) || other.contains(self)
+    }
+}
+
+/// Why a text is not a [`SubnetKey`]: it carries the text. Hand-written `Display` rather than
+/// `thiserror`, which this crate does not depend on for one message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubnetParseError(pub String);
+
+impl fmt::Display for SubnetParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "not an IP network: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for SubnetParseError {}
+
+impl std::str::FromStr for SubnetKey {
+    type Err = SubnetParseError;
+
+    /// Parse `address/length` — the text PostgreSQL renders for a `cidr` column.
+    ///
+    /// Host bits are cleared rather than refused, the same forgiveness `network($n::inet)::cidr`
+    /// gives a value typed by a person. Refused: a missing or non-numeric length, a length wider
+    /// than the family, and `/0` — which [`subnet_key`] declines to call a subnet, so a `0.0.0.0/0`
+    /// range covers nothing here rather than everything.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bad = || SubnetParseError(s.to_owned());
+        let (addr, len) = s.trim().split_once('/').ok_or_else(bad)?;
+        let ip: IpAddr = addr.parse().map_err(|_| bad())?;
+        let prefix_len: u8 = len.parse().map_err(|_| bad())?;
+        subnet_key(ip, prefix_len).ok_or_else(bad)
+    }
+}
+
 /// Mask an address down to its network.
 ///
 /// Operates on the raw octets — 4 of them or 16 — so there is exactly one implementation for both
@@ -653,6 +717,57 @@ mod tests {
         assert_eq!(subnet_key(v4("10.0.0.1"), 33), None);
         assert_eq!(subnet_key(v6("2001:db8::1"), 129), None);
         assert_eq!(subnet_key(v4("10.0.0.1"), 0), None);
+    }
+
+    fn net(s: &str) -> SubnetKey {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn a_subnet_parses_from_the_text_postgresql_renders() {
+        assert_eq!(net("192.168.1.0/24").to_string(), "192.168.1.0/24");
+        assert_eq!(net("2001:db8::/64").to_string(), "2001:db8::/64");
+        // Host bits are cleared, the way `network($n::inet)::cidr` treats a typed value.
+        assert_eq!(net("10.1.2.130/26").to_string(), "10.1.2.128/26");
+        for bad in [
+            "10.0.0.0",
+            "10.0.0.0/",
+            "10.0.0.0/x",
+            "10.0.0.0/33",
+            "0.0.0.0/0",
+            "::/0",
+            "",
+        ] {
+            assert!(bad.parse::<SubnetKey>().is_err(), "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn containment_is_nesting_within_one_family() {
+        assert!(net("10.0.0.0/8").contains(&net("10.1.2.0/24")));
+        assert!(
+            net("10.1.2.0/24").contains(&net("10.1.2.0/24")),
+            "equal nets contain each other"
+        );
+        assert!(
+            !net("10.1.2.0/24").contains(&net("10.0.0.0/8")),
+            "never a wider one"
+        );
+        assert!(
+            !net("10.1.2.0/24").contains(&net("10.1.3.0/24")),
+            "never a sibling"
+        );
+        // The partial-byte branch: /26 halves of a /25.
+        assert!(net("10.1.2.128/25").contains(&net("10.1.2.192/26")));
+        assert!(!net("10.1.2.128/25").contains(&net("10.1.2.64/26")));
+        assert!(net("2001:db8::/32").contains(&net("2001:db8:1::/48")));
+        assert!(!net("2001:db8::/32").contains(&net("2001:db9::/48")));
+        // Across families, both ways, whatever the lengths.
+        assert!(!net("10.0.0.0/8").contains(&net("::a00:0/104")));
+        assert!(!net("::/96").contains(&net("10.0.0.0/8")));
+        assert!(net("10.0.0.0/8").overlaps(&net("10.1.2.0/24")));
+        assert!(net("10.1.2.0/24").overlaps(&net("10.0.0.0/8")));
+        assert!(!net("10.1.2.0/24").overlaps(&net("10.1.3.0/24")));
     }
 
     #[test]

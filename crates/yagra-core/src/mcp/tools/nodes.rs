@@ -141,6 +141,12 @@ pub(super) struct ListNodeGroupsParams {
     include_state: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct PrefixGapsParams {
+    /// The folder to check (an id from list_node_groups). Its subfolders are included.
+    group_id: Uuid,
+}
+
 #[tool_router(router = nodes_router, vis = "pub(super)")]
 impl YagraMcp {
     #[tool(
@@ -653,6 +659,48 @@ impl YagraMcp {
             .map(|g| NodeGroupDto::from_summary(g).with_state(rollup.groups.get(&g.id)))
             .collect();
         ok_json(TOOL, &out)
+    }
+
+    #[tool(
+        description = "Which subnets the devices in one folder (and every folder beneath it) \
+                       carry that none of those folders' IP ranges contains — the ranges normally \
+                       being the site's NetBox prefixes. Each subnet says why: `unregistered` (no \
+                       range overlaps it), `partial` (a range lies inside it but none covers all \
+                       of it), `other_folder` (another folder's range contains it: a prefix filed \
+                       under the wrong site, or one private range reused at two sites), or \
+                       `parent_only` (only a folder above has a containing range). The range and \
+                       its folder are omitted when that folder is outside your scope. No gaps \
+                       means complete only when nodes_with_addresses equals nodes_total — a \
+                       device with no SNMP address walk contributes nothing. A folder holding \
+                       more than 2,000 devices is refused; ask about a folder further down. \
+                       Requires live mode."
+    )]
+    async fn get_prefix_gaps(
+        &self,
+        Parameters(p): Parameters<PrefixGapsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_prefix_gaps";
+        match self.scope_for(identity_of(&ctx)).await {
+            Ok(scope) => self.prefix_gaps_in(p, &scope).await,
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    pub(super) async fn prefix_gaps_in(
+        &self,
+        p: PrefixGapsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_prefix_gaps";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "prefix gaps require live mode");
+        };
+        // The REST handler's own function, so the two surfaces disclose the same things.
+        match crate::api::groups::prefix_gap_report(admin, scope, p.group_id).await {
+            Ok(report) => ok_json(TOOL, &report),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
     }
 
     #[tool(
