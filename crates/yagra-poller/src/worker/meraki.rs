@@ -116,7 +116,12 @@ pub async fn execute_meraki(
         .map(|d| (d.serial.as_str(), d.node_id))
         .collect();
 
-    let mut results = Vec::new();
+    // 🚨 The report goes FIRST (ADR-164 決定 36). Core releases the collect's flight on the first
+    // result it reads for the job, and a device result arriving first read as "the Dashboard
+    // answered" — resetting the tier's run of failures to nothing, before the report after it set
+    // it to one. A read of the uplink tier that failed every time while the other two answered was
+    // shown as failing once, since the latest collect, for as long as it went on failing.
+    let mut results = vec![collect_report(job, check, failure, listing, at_unix_ms)];
     for obs in observations {
         let Some(&node_id) = by_serial.get(obs.serial.as_str()) else {
             continue; // reported by the API but not imported → not in scope
@@ -182,7 +187,6 @@ pub async fn execute_meraki(
             meraki_collect: None,
         });
     }
-    results.push(collect_report(job, check, failure, listing, at_unix_ms));
     results
 }
 
@@ -431,6 +435,20 @@ mod tests {
             }],
             uplinks: vec![],
         }]
+    }
+
+    /// 🚨 ADR-164 決定 36: the report is the FIRST result of a collect. Core releases the flight on
+    /// the first result it reads, and a device result read first counted as "answered".
+    #[tokio::test]
+    async fn the_report_goes_out_before_the_devices_it_reports_on() {
+        let transport = FakeTransport::reachable(1.0).with_meraki(one_device_up());
+        let results = collect_with(&transport, Uuid::from_u128(9), MerakiTier::Availability).await;
+        assert_eq!(results.len(), 2, "one report and one device");
+        assert!(
+            results[0].meraki_collect.is_some(),
+            "the report came after a device result"
+        );
+        assert!(results[1].meraki_collect.is_none());
     }
 
     /// The reports among `results` — there must be exactly one per collect.

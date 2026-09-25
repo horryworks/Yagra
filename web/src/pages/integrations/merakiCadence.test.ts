@@ -11,7 +11,10 @@ import {
   CADENCE_TRAFFIC_MIN_SECS,
   MERAKI_CADENCE_BOUNDS,
   MERAKI_CADENCE_FIELDS,
+  CADENCE_TARGET_RPS_MAX,
   cadenceRange,
+  parseCadence,
+  parseTargetRps,
 } from './merakiCadence';
 
 describe('the cadence bounds', () => {
@@ -52,5 +55,28 @@ describe('the cadence bounds', () => {
       expect(min, field).toBeGreaterThan(0);
       expect(max, field).toBeGreaterThan(min);
     }
+  });
+});
+
+describe('what a cadence box may be saved with (ADR-164 増分 18)', () => {
+  it('refuses an emptied box, which used to be sent as 0', () => {
+    expect(parseCadence('availability', '')).toBeNull();
+    expect(parseCadence('availability', '   ')).toBeNull();
+    expect(parseTargetRps('')).toBeNull();
+  });
+
+  it('holds each interval to its own band', () => {
+    expect(parseCadence('availability', String(CADENCE_FAST_MIN_SECS))).toBe(CADENCE_FAST_MIN_SECS);
+    expect(parseCadence('availability', String(CADENCE_FAST_MIN_SECS - 1))).toBeNull();
+    expect(parseCadence('traffic', String(CADENCE_TRAFFIC_MAX_SECS + 1))).toBeNull();
+    expect(parseCadence('traffic', '1.5')).toBeNull();
+  });
+
+  it('takes a fractional rate above zero, up to the ceiling', () => {
+    expect(parseTargetRps('0.5')).toBe(0.5);
+    expect(parseTargetRps('0')).toBeNull();
+    expect(parseTargetRps(String(CADENCE_TARGET_RPS_MAX))).toBe(CADENCE_TARGET_RPS_MAX);
+    expect(parseTargetRps(String(CADENCE_TARGET_RPS_MAX + 1))).toBeNull();
+    expect(parseTargetRps('-1')).toBeNull();
   });
 });

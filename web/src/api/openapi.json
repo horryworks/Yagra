@@ -7473,11 +7473,21 @@
         },
         "responses": {
           "201": {
-            "description": "How many devices became nodes and how they were filed; already-imported serials are skipped",
+            "description": "How many devices became nodes and how they were filed; already-imported serials are skipped, and an MX whose network's LAN side has not been read yet is not imported (`waiting_lan`)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MerakiImported"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A serial this organization's inventory does not hold (`unknown_serial`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -7606,7 +7616,7 @@
             }
           },
           "400": {
-            "description": "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host",
+            "description": "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), base_url is not an https allow-listed Meraki host, or an org id is not one the key can see (`unknown_org`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8187,6 +8197,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "503": {
             "description": "Inventory storage is unavailable (skeleton mode)",
             "content": {
@@ -8204,6 +8224,7 @@
           "meraki"
         ],
         "summary": "Set the monitored (watch/skip) flag for a set of the org's networks.",
+        "description": "⚠️ With the organization's automatic import on, watching a network makes the next sync import\nevery device in it that is not a node yet. Un-watching one stops collecting for the nodes in it:\nthey keep their last state until it is watched again.",
         "operationId": "set_meraki_networks_monitored",
         "parameters": [
           {
@@ -8231,6 +8252,16 @@
           "204": {
             "description": "Network scope updated"
           },
+          "400": {
+            "description": "`network_ids` is empty (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid bearer token",
             "content": {
@@ -8243,6 +8274,16 @@
           },
           "403": {
             "description": "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such organization",
             "content": {
               "application/json": {
                 "schema": {
@@ -23594,7 +23635,7 @@
               "string",
               "null"
             ],
-            "description": "The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value\nthe alert's own `node` field carries, so an integration can echo back what it received."
+            "description": "The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value\nthe alert's own `node` field carries, so an integration can echo back what it received."
           }
         }
       },
@@ -23686,7 +23727,7 @@
             }
           }
         ],
-        "description": "An active alert plus its inbound (read-only) ack state.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID or `pool:<name>`. The live alert stream emits the same three keys."
+        "description": "An active alert plus its inbound (read-only) ack state.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys."
       },
       "AddressAmbiguity": {
         "type": "object",
@@ -29045,7 +29086,8 @@
           "ambiguous",
           "unmatched",
           "no_address",
-          "not_asked"
+          "not_asked",
+          "lan_pending"
         ]
       },
       "FilterExpr": {
@@ -32246,38 +32288,43 @@
       },
       "MerakiImportDeviceReq": {
         "type": "object",
+        "description": "One device to import. **Only `serial` is read** (ADR-164 決定 39): everything else about the\ndevice — its name, model, network and address — is taken from what this organization's last\nsync recorded, never from the request. A page opened before Meraki renamed a device used to\ncreate the node under the old name, and the node then never followed a rename again. The other\nfields are accepted and ignored, so a client that still sends them keeps working.",
         "required": [
-          "serial",
-          "product_type",
-          "network_id"
+          "serial"
         ],
         "properties": {
           "lan_ip": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Ignored; the inventory's address is used."
           },
           "model": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Ignored."
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "Ignored; the inventory's name is used."
           },
           "network_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Ignored."
           },
           "network_name": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Ignored."
           },
           "product_type": {
-            "type": "string"
+            "type": "string",
+            "description": "Ignored."
           },
           "serial": {
             "type": "string"
@@ -32348,9 +32395,17 @@
         "required": [
           "imported",
           "filed",
-          "ranges_configured"
+          "ranges_configured",
+          "waiting_lan",
+          "bound_elsewhere"
         ],
         "properties": {
+          "bound_elsewhere": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices asked for that are already a node of **another** organization (the device was moved\nbetween organizations in Meraki). A serial is one node deployment-wide, so they were skipped.",
+            "minimum": 0
+          },
           "filed": {
             "$ref": "#/components/schemas/MerakiFiled",
             "description": "How those devices were filed. The four add up to `imported`, except that all four are zero\nwhen filing by IP range was off for this import: the request's `file_by_prefix`, or the\norganization's own setting when the request leaves it out."
@@ -32364,6 +32419,12 @@
           "ranges_configured": {
             "type": "boolean",
             "description": "Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing\nabout the devices: there was nothing for an address to match."
+          },
+          "waiting_lan": {
+            "type": "integer",
+            "format": "int32",
+            "description": "MX that were asked for and not imported, because their network's LAN side has not been read\nyet (ADR-164 決定 39) — their address, and so their folder, is not known. The next sync reads\nit; import them after that.",
+            "minimum": 0
           }
         }
       },

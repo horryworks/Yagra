@@ -175,12 +175,22 @@ impl ConfigBundleRepo {
         }
         cap("node_groups", node_groups.len())?;
 
+        // 🚨 Not a node an integration owns (ADR-164 決定 40): a Meraki device or an access point
+        // a controller reports. Neither is polled by a pool — the organization's collects and the
+        // controller's walk speak for them — and the binding that says so (`meraki_devices`,
+        // `wireless_aps`) does not travel. Carried, they arrived as ordinary devices and were
+        // pinged and SNMP-polled at their LAN address, `0.0.0.0` for a mesh repeater. On the target,
+        // adding the same organization makes the sync create them again under the same ids.
+        // Whatever points at them is dropped by the importer with its usual note.
         let mut nodes = Vec::new();
         for row in sqlx::query(
             "SELECT id, name, parent_id, host(address) AS address, profile_id, group_id, \
                     credential_id, pool, vendor, model, sort_order, tags, tags_excluded, notes, \
                     profile_locked \
-             FROM nodes ORDER BY sort_order, name",
+             FROM nodes n \
+             WHERE NOT EXISTS (SELECT 1 FROM meraki_devices d WHERE d.node_id = n.id) \
+               AND NOT EXISTS (SELECT 1 FROM wireless_aps w WHERE w.node_id = n.id) \
+             ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
         .await?

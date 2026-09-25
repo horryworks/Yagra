@@ -430,6 +430,16 @@ impl Session {
                     return Err(Stop::RateLimited);
                 }
                 let wait = retry_after(&resp).unwrap_or_else(|| Duration::from_secs(1));
+                // A wait that would outlast the budget is not waited (決定 37): the session would
+                // only wake past it, and a collect held past core's lease is a second collect sent
+                // beside it.
+                if self.deadline.is_some_and(|d| Instant::now() + wait >= d) {
+                    tracing::warn!(
+                        wait_ms = wait.as_millis(),
+                        "meraki 429 would outlast the collect's time budget; keeping what it read"
+                    );
+                    return Err(Stop::Budget);
+                }
                 tracing::warn!(
                     wait_ms = wait.as_millis(),
                     "meraki 429; honoring Retry-After"
@@ -522,8 +532,9 @@ enum Stop {
     /// The session's page cap ([`MAX_PAGES`] unless the collect set its own) was read and the
     /// server still offered another.
     PageCap,
-    /// The collect's time budget ran out before the next request (ADR-167). Only the switch-port
-    /// tier sets one ([`SWITCH_PORTS_BUDGET`]).
+    /// The collect's time budget ran out before the next request (ADR-167), or a 429's wait would
+    /// have outlasted it. Every collect sets one since ADR-164 決定 37 ([`COLLECT_BUDGET`]), and the
+    /// LAN reads their own.
     Budget,
 }
 
@@ -794,6 +805,12 @@ pub(crate) async fn collect(
         tracing::debug!(error = %e, "meraki collect session refused");
         MerakiFetchError::Config
     })?;
+    // Every collect stops asking at a budget under core's 300-second lease (ADR-164 決定 37). The
+    // switch-port and wireless tiers had one; availability, uplink and traffic did not, and a slow
+    // or rate-limiting Dashboard could hold them past the lease — core then read the collect as
+    // unanswered and sent a second into the same lane, doubling the requests at the moment the
+    // Dashboard was asking for fewer. Those two tiers set the same budget again below.
+    session.deadline = Some(Instant::now() + COLLECT_BUDGET);
     // How each listing of this collect ended (ADR-164 決定 18 and 25).
     let mut listings = Listings::default();
     // Every listing asks the WHOLE organization and keeps the watched networks' rows here
@@ -1100,6 +1117,9 @@ const SWITCH_PORT_MAX_PAGES: usize = 2_500;
 /// organization's slow lane, ADR-169) for 300 s ("LEASE" in its Meraki scheduler) and counts a
 /// flight that outlives it as unanswered, so this stops well inside it.
 const SWITCH_PORTS_BUDGET: Duration = Duration::from_secs(240);
+/// How long any collect may keep asking (ADR-164 決定 37): the same as the two slow tiers', under
+/// core's 300-second collect lease with room for the one request still in flight.
+const COLLECT_BUDGET: Duration = Duration::from_secs(240);
 /// The Dashboard's switch-port usage buckets are five minutes long.
 const SWITCH_USAGE_BUCKET_SECS: u64 = 300;
 /// How long after a bucket ends it is read. Measured on a real organization: 78 s after its end no
@@ -1816,7 +1836,10 @@ fn parse_availability(items: &[Value]) -> Vec<DeviceDatum> {
         .iter()
         .filter_map(|it| {
             let serial = it.get("serial")?.as_str()?.to_owned();
-            let status = it.get("status").and_then(Value::as_str).unwrap_or("");
+            // A row with no status word says nothing about the device, so it gives no sample
+            // (ADR-164 増分 18). An unknown WORD is read as down — that is policy — but a missing
+            // one used to be read as the empty word, and so as down, and so paged.
+            let status = it.get("status")?.as_str()?;
             let up = MerakiAvailability::from_status(status).is_up();
             Some(DeviceDatum {
                 serial,
@@ -1831,7 +1854,84 @@ fn parse_availability(items: &[Value]) -> Vec<DeviceDatum> {
         .collect()
 }
 
+/// `uplinksLossAndLatency` → each MX uplink's loss and latency.
+///
+/// 🚨 The Dashboard answers one row per **(serial, uplink, probe destination)** — the `ip` the MX
+/// measures against. With two destinations configured, the same uplink came out twice, and one
+/// result carried two samples of one series at one instant (ADR-164 増分 18). The rows are folded
+/// per (serial, uplink) and each figure keeps its worst: an uplink losing packets to one destination
+/// is losing packets.
 fn parse_uplink_loss_latency(items: &[Value]) -> Vec<DeviceDatum> {
+    let mut worst: BTreeMap<(String, u32), LossLatencyRow> = BTreeMap::new();
+    for row in uplink_loss_latency_rows(items) {
+        match worst.entry((row.serial.clone(), row.ifindex)) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(row);
+            }
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                let kept = o.get_mut();
+                kept.loss = max_of(kept.loss, row.loss);
+                kept.latency = max_of(kept.latency, row.latency);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for LossLatencyRow {
+        serial,
+        ifindex,
+        uplink,
+        loss,
+        latency,
+    } in worst.into_values()
+    {
+        let uplink_meta = MerakiUplink {
+            ifindex,
+            name: uplink_name(ifindex).unwrap_or(&uplink).to_owned(),
+        };
+        if let Some(loss) = loss {
+            out.push(DeviceDatum {
+                serial: serial.clone(),
+                sample: MerakiSample {
+                    metric: METRIC_MERAKI_UPLINK_LOSS_PCT.to_owned(),
+                    ifindex: Some(ifindex),
+                    value: loss,
+                },
+                uplink: Some(uplink_meta.clone()),
+            });
+        }
+        if let Some(latency) = latency {
+            out.push(DeviceDatum {
+                serial,
+                sample: MerakiSample {
+                    metric: METRIC_MERAKI_UPLINK_LATENCY_MS.to_owned(),
+                    ifindex: Some(ifindex),
+                    value: latency,
+                },
+                uplink: Some(uplink_meta),
+            });
+        }
+    }
+    out
+}
+
+fn max_of(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// One `uplinksLossAndLatency` row: whose, which uplink (its row key and its word), and the latest
+/// loss and latency it reported.
+struct LossLatencyRow {
+    serial: String,
+    ifindex: u32,
+    uplink: String,
+    loss: Option<f64>,
+    latency: Option<f64>,
+}
+
+fn uplink_loss_latency_rows(items: &[Value]) -> Vec<LossLatencyRow> {
     let mut out = Vec::new();
     for it in items {
         let (Some(serial), Some(uplink)) = (
@@ -1861,32 +1961,13 @@ fn parse_uplink_loss_latency(items: &[Value]) -> Vec<DeviceDatum> {
             })
             .unwrap_or((None, None));
 
-        let uplink_meta = MerakiUplink {
+        out.push(LossLatencyRow {
+            serial: serial.to_owned(),
             ifindex,
-            name: uplink_name(ifindex).unwrap_or(uplink).to_owned(),
-        };
-        if let Some(loss) = loss {
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_UPLINK_LOSS_PCT.to_owned(),
-                    ifindex: Some(ifindex),
-                    value: loss,
-                },
-                uplink: Some(uplink_meta.clone()),
-            });
-        }
-        if let Some(latency) = latency {
-            out.push(DeviceDatum {
-                serial: serial.to_owned(),
-                sample: MerakiSample {
-                    metric: METRIC_MERAKI_UPLINK_LATENCY_MS.to_owned(),
-                    ifindex: Some(ifindex),
-                    value: latency,
-                },
-                uplink: Some(uplink_meta),
-            });
-        }
+            uplink: uplink.to_owned(),
+            loss,
+            latency,
+        });
     }
     out
 }
@@ -2267,8 +2348,10 @@ pub async fn fetch_network_lans(
     let mut out = Vec::new();
     for network in network_ids {
         let answer = network_lan(&mut s, network).await;
-        // A request the deadline refused was never sent: nothing was learned about this network.
-        if matches!(answer, Err(MerakiFetchError::Truncated)) && Instant::now() >= deadline {
+        // The budget stopped it — a request the deadline refused was never sent, and a 429 whose
+        // wait would outlast the budget was not waited (決定 37). Nothing was learned about this
+        // network, and the networks after it would be stopped the same way.
+        if matches!(answer, Err(MerakiFetchError::Truncated)) {
             break;
         }
         let same_for_every_network = matches!(
@@ -2313,7 +2396,14 @@ async fn network_lan(s: &mut Session, network: &str) -> MerakiNetworkLan {
             )
             .await
         {
-            Ok(documents) => Ok(documents.iter().filter_map(parse_single_lan).collect()),
+            // A settings document with no `applianceIp` is not the answer this read asks for (決定 19,
+            // ADR-164 増分 18). Read as "no LAN side", it was remembered for a day and the MX was
+            // imported with no address.
+            Ok(documents) => documents
+                .iter()
+                .map(parse_single_lan)
+                .collect::<Option<Vec<_>>>()
+                .ok_or(MerakiFetchError::Malformed),
             Err(MerakiFetchError::Status(400)) => Ok(Vec::new()),
             Err(e) => Err(e),
         },
@@ -3163,6 +3253,46 @@ mod tests {
             .find(|s| s.metric == METRIC_MERAKI_UPLINK_LATENCY_MS)
             .unwrap();
         assert_eq!(lat.value, 22.0);
+    }
+
+    /// ADR-164 増分 18: the Dashboard answers a row per probe destination. Two destinations are one
+    /// uplink, and the uplink reports its worst.
+    #[test]
+    fn two_probe_destinations_of_one_uplink_are_one_reading_at_their_worst() {
+        let items = vec![
+            json!({"serial": "Q2-A", "uplink": "wan1", "ip": "192.0.2.1",
+                   "timeSeries": [{"lossPercent": 0.0, "latencyMs": 30.0}]}),
+            json!({"serial": "Q2-A", "uplink": "wan1", "ip": "198.51.100.1",
+                   "timeSeries": [{"lossPercent": 4.0, "latencyMs": 12.0}]}),
+        ];
+        let obs = fold(parse_uplink_loss_latency(&items));
+        assert_eq!(obs.len(), 1);
+        let of = |metric: &str| -> Vec<f64> {
+            obs[0]
+                .samples
+                .iter()
+                .filter(|s| s.metric == metric)
+                .map(|s| s.value)
+                .collect()
+        };
+        assert_eq!(of(METRIC_MERAKI_UPLINK_LOSS_PCT), vec![4.0]);
+        assert_eq!(of(METRIC_MERAKI_UPLINK_LATENCY_MS), vec![30.0]);
+    }
+
+    /// ADR-164 増分 18: a row with no status word gives no reading. It used to be read as the empty
+    /// word — down — and page someone.
+    #[test]
+    fn an_availability_row_with_no_status_gives_no_reading() {
+        let items = vec![
+            json!({"serial": "Q2-A"}),
+            json!({"serial": "Q2-B", "status": null}),
+            json!({"serial": "Q2-C", "status": "online"}),
+        ];
+        let serials: Vec<String> = parse_availability(&items)
+            .into_iter()
+            .map(|d| d.serial)
+            .collect();
+        assert_eq!(serials, vec!["Q2-C".to_owned()]);
     }
 
     #[test]

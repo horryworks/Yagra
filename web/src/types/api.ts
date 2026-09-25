@@ -1002,6 +1002,7 @@ export const MERAKI_FILING_REASONS = [
   'unmatched',
   'no_address',
   'not_asked',
+  'lan_pending',
 ] as const;
 
 /** One reason a device is filed where it is. */

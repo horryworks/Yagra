@@ -133,11 +133,19 @@ struct TierState {
 #[derive(Debug, Default)]
 pub struct MerakiCollectHealth {
     tiers: Mutex<HashMap<(Uuid, MerakiTier), TierState>>,
+    /// The tiers the scheduler has stopped asking about — no device of their kind, no watched
+    /// network, switched off, or no poller in the pool that can run them (ADR-164 決定 35). Nothing
+    /// will ever answer such a tier again, so a failure it carried would be shown, and an alert it
+    /// raised kept open, for good. Marked by the scheduler, cleared when it sends one again.
+    idle: Mutex<HashSet<(Uuid, MerakiTier)>>,
 }
 
 impl MerakiCollectHealth {
     /// A collect of `tier` for `org` was answered.
     pub fn record_answered(&self, org: Uuid, tier: MerakiTier) {
+        if self.is_idle(org, tier) {
+            return;
+        }
         self.tiers
             .lock()
             .expect("meraki collect health poisoned")
@@ -173,6 +181,11 @@ impl MerakiCollectHealth {
         listing: Option<MerakiListing>,
         at_unix_ms: i64,
     ) {
+        // A report from a collect sent before the scheduler stopped asking says nothing about
+        // what is asked now — nothing is (ADR-164 決定 35).
+        if self.is_idle(org, tier) {
+            return;
+        }
         let mut tiers = self.tiers.lock().expect("meraki collect health poisoned");
         let state = tiers.entry((org, tier)).or_insert(TierState {
             failures: 0,
@@ -235,12 +248,52 @@ impl MerakiCollectHealth {
             .collect()
     }
 
-    /// Drop everything known about organizations that no longer exist.
+    /// Drop everything known about organizations outside `keep`.
+    ///
+    /// [`CollectWatch::evaluate`] keeps the organizations that are being collected, so a paused
+    /// one, or every one while Meraki polling is off, starts again from nothing (ADR-164 決定 35):
+    /// failures counted before the pause are not evidence about the collects after it, and kept,
+    /// they re-raised the alert on the first tick after a resume — before a single collect was sent.
     pub fn retain_orgs(&self, keep: &HashSet<Uuid>) {
         self.tiers
             .lock()
             .expect("meraki collect health poisoned")
             .retain(|(org, _), _| keep.contains(org));
+        self.idle
+            .lock()
+            .expect("meraki collect health poisoned")
+            .retain(|(org, _)| keep.contains(org));
+    }
+
+    /// The scheduler has stopped asking about `tier` for `org` (ADR-164 決定 35): forget how its
+    /// collects were ending, and say nothing about it until it is asked again.
+    pub fn set_idle(&self, org: Uuid, tier: MerakiTier) {
+        self.tiers
+            .lock()
+            .expect("meraki collect health poisoned")
+            .remove(&(org, tier));
+        self.idle
+            .lock()
+            .expect("meraki collect health poisoned")
+            .insert((org, tier));
+    }
+
+    /// The scheduler is asking about `tier` for `org` again — a collect was sent, or core counted a
+    /// failure of its own that kept one from being sent.
+    pub fn set_active(&self, org: Uuid, tier: MerakiTier) {
+        self.idle
+            .lock()
+            .expect("meraki collect health poisoned")
+            .remove(&(org, tier));
+    }
+
+    /// Whether the scheduler has stopped asking about `tier` for `org`.
+    #[must_use]
+    pub fn is_idle(&self, org: Uuid, tier: MerakiTier) -> bool {
+        self.idle
+            .lock()
+            .expect("meraki collect health poisoned")
+            .contains(&(org, tier))
     }
 }
 
@@ -289,8 +342,10 @@ pub struct OrgFacts {
 pub enum ResolveWhy {
     /// An availability collect was answered.
     Answered,
-    /// There is nothing left to answer for: the organization is gone or paused, or Meraki polling
-    /// is switched off. Configuration is evidence too — nobody is being collected, by decision.
+    /// There is nothing left to answer for: the organization is gone or paused, Meraki polling is
+    /// switched off, or the scheduler has stopped asking about its availability (it watches no
+    /// network, or has no device left — ADR-164 決定 35). Configuration is evidence too — nobody is
+    /// being collected, by decision.
     NotCollected,
 }
 
@@ -353,12 +408,16 @@ impl CollectWatch {
             .filter(|o| o.enabled && polling_enabled)
             .map(|o| o.id)
             .collect();
+        // What was counted about an organization that is not being collected is not evidence about
+        // the collects after it resumes (ADR-164 決定 35).
+        health.retain_orgs(&collected);
 
         // Resolve first, so an organization cannot be raised and resolved in one pass.
         let mut raised: Vec<Uuid> = self.raised.iter().copied().collect();
         raised.sort_unstable();
         for org in raised {
-            let why = if !collected.contains(&org) {
+            let why = if !collected.contains(&org) || health.is_idle(org, MerakiTier::Availability)
+            {
                 Some(ResolveWhy::NotCollected)
             } else if health.answered(org, MerakiTier::Availability) == Some(true) {
                 Some(ResolveWhy::Answered)
@@ -375,7 +434,7 @@ impl CollectWatch {
         let mut candidates: Vec<Uuid> = collected.into_iter().collect();
         candidates.sort_unstable();
         for org in candidates {
-            if self.raised.contains(&org) {
+            if self.raised.contains(&org) || health.is_idle(org, MerakiTier::Availability) {
                 continue;
             }
             // Only the tier liveness rides on. An organization whose uplink collects fail while
@@ -418,7 +477,8 @@ pub fn raised_orgs(active: &[yagra_alert::Alert]) -> Vec<Uuid> {
 /// known about keeps what the row already says — after a restart that is every tier, and clearing
 /// them all would have the page say "collecting" about an outage still in progress. An
 /// organization nobody is collected for (`collected == false`) says nothing is failing: nothing is
-/// being asked.
+/// being asked — and neither does a tier the scheduler has stopped asking about (ADR-164 決定 35),
+/// which nothing will ever answer again.
 #[must_use]
 pub fn row_failures(
     stored: &[TierFailure],
@@ -433,6 +493,9 @@ pub fn row_failures(
     MerakiTier::ALL
         .into_iter()
         .filter_map(|tier| {
+            if health.is_idle(org, tier) {
+                return None;
+            }
             if let Some(now) = failing.iter().find(|f| f.tier == tier) {
                 return Some(*now);
             }
@@ -501,10 +564,8 @@ pub(crate) async fn run_meraki_collect_watch(
                 enabled: o.enabled,
             })
             .collect();
-        inflight
-            .health
-            .retain_orgs(&facts.iter().map(|o| o.id).collect());
-
+        // `evaluate` forgets what it knew about organizations that are gone, paused, or all of them
+        // while polling is off.
         for transition in watch.evaluate(&facts, polling, &inflight.health) {
             let action = match transition {
                 Transition::Raise { org, failure } => {
@@ -662,6 +723,91 @@ mod tests {
         // A fourth failure is the same outage, not a second alert.
         fail(&health, ORG, MerakiTier::Availability, 1);
         assert_eq!(watch.evaluate(&[on(ORG)], true, &health), vec![]);
+    }
+
+    /// 🚨 ADR-164 決定 35: a pause resolves the alert, and the failures counted before it must go
+    /// with it. Kept, they re-raised the alert on the first tick after the resume — three failures
+    /// "in a row" with a pause between them, before one collect had been sent since.
+    #[test]
+    fn resuming_a_paused_organization_starts_counting_again_from_nothing() {
+        let health = MerakiCollectHealth::default();
+        let mut watch = CollectWatch::default();
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
+
+        let paused = OrgFacts {
+            id: ORG,
+            enabled: false,
+        };
+        assert_eq!(
+            watch.evaluate(&[paused], true, &health),
+            vec![Transition::Resolve {
+                org: ORG,
+                why: ResolveWhy::NotCollected
+            }]
+        );
+        assert_eq!(
+            watch.evaluate(&[on(ORG)], true, &health),
+            vec![],
+            "the failures from before the pause raised the alert again on resume"
+        );
+        assert!(health.failing(ORG).is_empty());
+
+        // The same with the global switch instead of the organization's own.
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
+        assert_eq!(watch.evaluate(&[on(ORG)], false, &health).len(), 1);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health), vec![]);
+
+        // …and a fresh run of three after the resume still raises.
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
+    }
+
+    /// 🚨 ADR-164 決定 35: an organization that watches no network (決定 16) or has no device left is
+    /// sent no collect, so nothing will ever answer its availability again. Its open alert closes on
+    /// that configuration, and a tier nobody asks about is not shown as failing.
+    #[test]
+    fn a_tier_the_scheduler_stopped_asking_about_closes_its_alert_and_leaves_the_row() {
+        let health = MerakiCollectHealth::default();
+        let mut watch = CollectWatch::default();
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        fail(&health, ORG, MerakiTier::Uplink, 2);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
+
+        health.set_idle(ORG, MerakiTier::Availability);
+        health.set_idle(ORG, MerakiTier::Uplink);
+        assert_eq!(
+            watch.evaluate(&[on(ORG)], true, &health),
+            vec![Transition::Resolve {
+                org: ORG,
+                why: ResolveWhy::NotCollected
+            }]
+        );
+        let stored = [TierFailure {
+            tier: MerakiTier::Uplink,
+            reason: MerakiSyncFailure::Auth,
+            since_unix_ms: 1,
+            failures: 2,
+            listing: None,
+        }];
+        assert_eq!(
+            row_failures(&stored, ORG, true, &health),
+            vec![],
+            "a stored failure of a tier nobody asks about stayed on the row"
+        );
+
+        // A report that arrives while idle — from a collect sent before — is not evidence.
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        health.record_answered(ORG, MerakiTier::Availability);
+        assert_eq!(health.answered(ORG, MerakiTier::Availability), None);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health), vec![]);
+
+        // Asked again: counted from nothing, and three new failures raise.
+        health.set_active(ORG, MerakiTier::Availability);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health), vec![]);
+        fail(&health, ORG, MerakiTier::Availability, 3);
+        assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
     }
 
     /// 決定 18 (3): the uplink and traffic tiers decide nothing about liveness, so they page nobody

@@ -46,9 +46,7 @@ use uuid::Uuid;
 
 use crate::meraki_filing::{Filing, FilingReason, MerakiFiled};
 use crate::meraki_import::ImportCandidate;
-use crate::meraki_inventory::{
-    usable_address, DeviceRecord, MerakiDeviceCounts, MerakiDeviceState,
-};
+use crate::meraki_inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
 use crate::meraki_sync::MerakiSyncFailure;
 
 /// Default Dashboard API base URL (the global shard).
@@ -591,7 +589,7 @@ fn not_yet_onboarded<'a>(
     request_body = CreateMerakiOrgsReq,
     responses(
         (status = 201, description = "How many organizations the batch created, and how many it named were here already; a per-org failure is skipped, not fatal", body = MerakiCreated),
-        (status = 400, description = "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host", body = super::error::ErrorBody),
+        (status = 400, description = "The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), base_url is not an https allow-listed Meraki host, or an org id is not one the key can see (`unknown_org`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 502, description = "The Dashboard API rejected the key or was unreachable", body = super::error::ErrorBody),
@@ -641,6 +639,18 @@ async fn create_meraki_orgs(
         ));
     }
 
+    // Only organizations this key can see (ADR-164 増分 18). One it cannot see used to be stored
+    // under its own id as a name, and then every sync of it failed.
+    if let Some(unseen) = fresh
+        .iter()
+        .find(|oid| !orgs.iter().any(|o| o.id.as_str() == oid.as_str()))
+    {
+        tracing::debug!(org = %unseen, "meraki: an organization the key cannot see was asked for");
+        return Err(ApiError::bad_request(
+            "unknown_org",
+            "an organization id is not one this API key can see",
+        ));
+    }
     // The name each requested org goes by, falling back to its id exactly as the row below does.
     let org_name = |oid: &String| -> String {
         orgs.iter()
@@ -931,6 +941,7 @@ pub(crate) struct MerakiNetworkView {
         (status = 200, description = "The org's known networks and whether each is in scope", body = Vec<MerakiNetworkView>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -947,6 +958,7 @@ pub(crate) async fn network_views(
     admin: &super::AdminState,
     org: Uuid,
 ) -> ApiResult<Vec<MerakiNetworkView>> {
+    require_org(admin, org, "networks: load org").await?;
     let nets = admin.meraki_orgs.list_networks(org).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -964,6 +976,20 @@ pub(crate) async fn network_views(
         .collect())
 }
 
+/// 404 unless organization `id` exists — what every `/meraki/orgs/{id}/…` route answers for one
+/// that does not. The two networks routes used to answer `200 []` and `204` instead.
+async fn require_org(admin: &super::AdminState, id: Uuid, what: &'static str) -> ApiResult<()> {
+    admin
+        .meraki_orgs
+        .get(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), what, "failed to load meraki organization")
+        })?
+        .map(|_| ())
+        .ok_or_else(|| no_org(id))
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct MerakiMonitoredReq {
     network_ids: Vec<String>,
@@ -971,14 +997,20 @@ pub(super) struct MerakiMonitoredReq {
 }
 
 /// Set the monitored (watch/skip) flag for a set of the org's networks.
+///
+/// ⚠️ With the organization's automatic import on, watching a network makes the next sync import
+/// every device in it that is not a node yet. Un-watching one stops collecting for the nodes in it:
+/// they keep their last state until it is watched again.
 #[utoipa::path(
     put, path = "/api/v1/meraki/orgs/{id}/networks", tag = "meraki",
     params(("id" = Uuid, Path, description = "Organization row id")),
     request_body = MerakiMonitoredReq,
     responses(
         (status = 204, description = "Network scope updated"),
+        (status = 400, description = "`network_ids` is empty (`invalid_request`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 404, description = "No such organization", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -990,6 +1022,13 @@ async fn set_meraki_networks_monitored(
     Json(body): Json<MerakiMonitoredReq>,
 ) -> ApiResult<StatusCode> {
     meraki_is_deployment_wide(&scope)?;
+    if body.network_ids.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_request",
+            "at least one network id is required",
+        ));
+    }
+    require_org(&admin, id, "networks: load org").await?;
     admin
         .meraki_orgs
         .set_networks_monitored(id, &body.network_ids, body.monitored)
@@ -1256,15 +1295,34 @@ impl From<&Filing> for MerakiFilingView {
     }
 }
 
+impl MerakiFilingView {
+    /// An MX no import takes yet: its network's LAN side has not been read (ADR-164 決定 39).
+    fn lan_pending() -> Self {
+        Self {
+            reason: FilingReason::LanPending,
+            prefix: None,
+            folders: None,
+        }
+    }
+}
+
 impl MerakiDeviceView {
     /// `filing` is what an import would do with the device; `None` for one that is already a node.
+    /// An MX still waiting for its network's LAN side says so instead (決定 39), whatever the match
+    /// made of the address it does not have yet.
     fn new(d: DeviceRecord, filing: Option<&Filing>) -> Self {
+        let waiting = filing.is_some() && d.lan_pending;
         Self {
             folder_id: match filing {
+                Some(_) if waiting => None,
                 Some(f) => f.folder(),
                 None => d.node_group_id,
             },
-            filing: filing.map(MerakiFilingView::from),
+            filing: if waiting {
+                Some(MerakiFilingView::lan_pending())
+            } else {
+                filing.map(MerakiFilingView::from)
+            },
             serial: d.serial,
             name: d.name,
             model: d.model,
@@ -1526,18 +1584,37 @@ pub(super) struct MerakiImportReq {
     file_by_prefix: Option<bool>,
 }
 
+/// One device to import. **Only `serial` is read** (ADR-164 決定 39): everything else about the
+/// device — its name, model, network and address — is taken from what this organization's last
+/// sync recorded, never from the request. A page opened before Meraki renamed a device used to
+/// create the node under the old name, and the node then never followed a rename again. The other
+/// fields are accepted and ignored, so a client that still sends them keeps working.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct MerakiImportDeviceReq {
     serial: String,
+    /// Ignored; the inventory's name is used.
     #[serde(default)]
+    #[allow(dead_code)]
     name: String,
+    /// Ignored.
     #[serde(default)]
+    #[allow(dead_code)]
     model: Option<String>,
+    /// Ignored.
+    #[serde(default)]
+    #[allow(dead_code)]
     product_type: String,
+    /// Ignored.
+    #[serde(default)]
+    #[allow(dead_code)]
     network_id: String,
+    /// Ignored.
     #[serde(default)]
+    #[allow(dead_code)]
     network_name: Option<String>,
+    /// Ignored; the inventory's address is used.
     #[serde(default)]
+    #[allow(dead_code)]
     lan_ip: Option<String>,
 }
 
@@ -1553,6 +1630,13 @@ pub(crate) struct MerakiImported {
     /// Whether any folder carries an IP range at all. False means `filed.unmatched` says nothing
     /// about the devices: there was nothing for an address to match.
     ranges_configured: bool,
+    /// MX that were asked for and not imported, because their network's LAN side has not been read
+    /// yet (ADR-164 決定 39) — their address, and so their folder, is not known. The next sync reads
+    /// it; import them after that.
+    waiting_lan: u32,
+    /// Devices asked for that are already a node of **another** organization (the device was moved
+    /// between organizations in Meraki). A serial is one node deployment-wide, so they were skipped.
+    bound_elsewhere: u32,
 }
 
 /// Import selected devices as nodes, atomically.
@@ -1565,7 +1649,8 @@ pub(crate) struct MerakiImported {
     post, path = "/api/v1/meraki/import", tag = "meraki",
     request_body = MerakiImportReq,
     responses(
-        (status = 201, description = "How many devices became nodes and how they were filed; already-imported serials are skipped", body = MerakiImported),
+        (status = 201, description = "How many devices became nodes and how they were filed; already-imported serials are skipped, and an MX whose network's LAN side has not been read yet is not imported (`waiting_lan`)", body = MerakiImported),
+        (status = 400, description = "A serial this organization's inventory does not hold (`unknown_serial`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such organization", body = super::error::ErrorBody),
@@ -1591,45 +1676,41 @@ async fn import_meraki_devices(
             )
         })?
         .ok_or_else(|| no_org(body.org_uuid))?;
-    if !body.monitored_network_ids.is_empty() {
-        // 🚨 Not fatal, and not silent either. Collection asks the Dashboard about watched networks
-        // only, so a network that fails to be watched here is a node that is collected nothing for
-        // — the state `MerakiDeviceCounts.monitored_unwatched` and the page's own "N monitored
-        // devices are in networks that are not watched" notice both exist to name (決定 15). That
-        // notice is the recovery, which is why this does not fail the import: the devices really
-        // were imported, and unwinding them would be worse than a request the operator repeats.
-        // What it must not do is say nothing — `let _ =` left a whole organization uncollected
-        // with not one line anywhere saying a write had failed.
-        if let Err(e) = admin
-            .meraki_orgs
-            .set_networks_monitored(org.id, &body.monitored_network_ids, true)
-            .await
-        {
-            tracing::warn!(
-                org = %org.org_id,
-                networks = body.monitored_network_ids.len(),
-                error = %e,
-                "meraki import: the networks to watch could not be stored; the imported devices are \
-                 nodes nothing is collected for until they are watched"
-            );
-        }
-    }
-    // Where each device goes is decided by the resolver the sync also uses, and written by
-    // `import_devices`; which serials are already nodes is decided *there*, under its lock. Reading
-    // them here first is what let two imports of one device both see it free.
-    let candidates: Vec<ImportCandidate> = body
-        .devices
+    // What each device IS comes from the inventory this organization's sync keeps, by serial —
+    // never from the request (ADR-164 決定 39). A serial it does not hold is refused: it is not a
+    // device of this organization, or not one the sync has seen.
+    let inventory: std::collections::HashMap<String, DeviceRecord> = admin
+        .meraki_inventory
+        .devices(org.id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "import: read inventory",
+                "failed to import meraki devices",
+            )
+        })?
         .into_iter()
-        .map(|d| ImportCandidate {
-            lan_ip: d.lan_ip.as_deref().and_then(usable_address),
-            serial: d.serial,
-            name: d.name,
-            model: d.model,
-            product_type: d.product_type,
-            network_id: d.network_id,
-            network_name: d.network_name,
-        })
+        .map(|d| (d.serial.clone(), d))
         .collect();
+    let mut candidates: Vec<ImportCandidate> = Vec::with_capacity(body.devices.len());
+    let mut waiting_lan = 0u32;
+    for d in &body.devices {
+        let Some(record) = inventory.get(&d.serial) else {
+            return Err(ApiError::bad_request(
+                "unknown_serial",
+                "a serial is not a device of this organization's inventory",
+            ));
+        };
+        // Automatic import waits for an MX's LAN side (決定 28); by hand it waits too (決定 39). An
+        // import files a node once and never moves it, and without its LAN address an MX would be
+        // filed under its network's folder for good.
+        if record.node_id.is_none() && record.lan_pending {
+            waiting_lan += 1;
+            continue;
+        }
+        candidates.push(ImportCandidate::from(record));
+    }
     let resolved = admin
         .meraki_import
         .resolve(
@@ -1655,12 +1736,40 @@ async fn import_meraki_devices(
                 "failed to import meraki devices",
             )
         })?;
+    // After the import, not before it (決定 39): with automatic import on, a watched network has its
+    // every device imported by the next sync, and an import that then failed left the networks
+    // watched with nothing the operator asked for done.
+    if !body.monitored_network_ids.is_empty() {
+        // 🚨 Not fatal, and not silent either. Collection asks the Dashboard about watched networks
+        // only, so a network that fails to be watched here is a node that is collected nothing for
+        // — the state `MerakiDeviceCounts.monitored_unwatched` and the page's own "N monitored
+        // devices are in networks that are not watched" notice both exist to name (決定 15). That
+        // notice is the recovery, which is why this does not fail the import: the devices really
+        // were imported, and unwinding them would be worse than a request the operator repeats.
+        // What it must not do is say nothing — `let _ =` left a whole organization uncollected
+        // with not one line anywhere saying a write had failed.
+        if let Err(e) = admin
+            .meraki_orgs
+            .set_networks_monitored(org.id, &body.monitored_network_ids, true)
+            .await
+        {
+            tracing::warn!(
+                org = %org.org_id,
+                networks = body.monitored_network_ids.len(),
+                error = %e,
+                "meraki import: the networks to watch could not be stored; the imported devices are \
+                 nodes nothing is collected for until they are watched"
+            );
+        }
+    }
     Ok((
         StatusCode::CREATED,
         Json(MerakiImported {
             imported: outcome.imported,
             filed: outcome.filed,
             ranges_configured: resolved.ranges_configured,
+            waiting_lan,
+            bound_elsewhere: outcome.bound_elsewhere,
         }),
     ))
 }
@@ -1739,6 +1848,47 @@ mod tests {
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
+
+    /// One device as this organization's sync would have recorded it, in a network whose LAN side
+    /// has been read (so an MX is not waiting for it). An import takes every fact about a device
+    /// from here, never from the request (ADR-164 決定 39).
+    async fn listed(
+        pool: &sqlx::PgPool,
+        org: Uuid,
+        (serial, name, model, product_type, network, ip): (
+            &str,
+            &str,
+            &str,
+            &str,
+            &str,
+            Option<&str>,
+        ),
+    ) {
+        sqlx::query(
+            "INSERT INTO meraki_org_networks (org_id, network_id, name, lan_ips, lan_read_at) \
+             VALUES ($1, $2, $2 || '-name', '{}', now()) ON CONFLICT (org_id, network_id) DO NOTHING",
+        )
+        .bind(org)
+        .bind(network)
+        .execute(pool)
+        .await
+        .expect("network row");
+        sqlx::query(
+            "INSERT INTO meraki_inventory \
+                 (org_id, serial, name, model, product_type, network_id, lan_ip, first_online_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now())",
+        )
+        .bind(org)
+        .bind(serial)
+        .bind(name)
+        .bind(model)
+        .bind(product_type)
+        .bind(network)
+        .bind(ip)
+        .execute(pool)
+        .await
+        .expect("inventory row");
+    }
 
     const ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -2245,6 +2395,12 @@ mod tests {
                 "{name} in {path} is not what `check_cadence` accepts"
             );
         }
+        // The rate box's ceiling too (ADR-164 増分 18): the dialog refuses a save past it.
+        assert_eq!(
+            f64::from(declared_number(&text, path, "CADENCE_TARGET_RPS_MAX")),
+            crate::config::MERAKI_TARGET_RPS_MAX,
+            "CADENCE_TARGET_RPS_MAX in {path} is not what `check_cadence` accepts"
+        );
         // The edge really is held to those constants: one second outside each band is refused.
         let at = |availability: i32, traffic: i32, inventory: i32, ports: i32, wireless: i32| {
             MerakiCadenceReq {
@@ -2704,10 +2860,21 @@ mod tests {
             .await
             .expect("create org");
         let caller = token(&st, yagra_common::Role::Admin);
-        let device = |serial: &str, ip: Option<&str>| {
+        for (serial, ip) in [
+            ("Q3-0", Some("10.1.0.4")),
+            ("Q3-1", Some("10.1.0.5")),
+            ("Q3-2", None),
+            ("Q3-3", Some("0.0.0.0")),
+            ("Q3-4", Some("10.1.0.6")),
+        ] {
+            listed(&pool, org, (serial, serial, "MR46", "wireless", "N_1", ip)).await;
+        }
+        // The request's own fields are ignored (決定 39): it sends a wrong address on purpose, and
+        // each device is still filed by the address the inventory holds.
+        let device = |serial: &str, _ip: Option<&str>| {
             serde_json::json!({
-                "serial": serial, "name": serial, "model": "MR46", "product_type": "wireless",
-                "network_id": "N_1", "network_name": "One", "lan_ip": ip,
+                "serial": serial, "name": "stale", "model": "MR46", "product_type": "wireless",
+                "network_id": "N_1", "network_name": "One", "lan_ip": "192.0.2.200",
             })
         };
         let folder_of = |pool: sqlx::PgPool, serial: &'static str| async move {
@@ -2802,6 +2969,164 @@ mod tests {
             "{answer}"
         );
         assert_eq!(folder_of(pool.clone(), "Q3-4").await, Some(network));
+    }
+
+    /// 🚨 ADR-164 決定 39: a manual import takes everything about a device from the inventory, by
+    /// serial. A page opened before Meraki renamed a device used to create the node under the old
+    /// name — which then never followed a rename again (決定 14 follows only while the node still
+    /// carries Meraki's name). A serial the organization does not hold is refused, and an MX whose
+    /// network's LAN side has not been read waits, as automatic import does (決定 28).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_manual_import_reads_the_inventory_and_waits_for_an_unread_mx(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let caller = token(&st, yagra_common::Role::Admin);
+        listed(
+            &pool,
+            org,
+            (
+                "Q4-AP",
+                "ap-renamed",
+                "MR46",
+                "wireless",
+                "N_1",
+                Some("10.1.0.9"),
+            ),
+        )
+        .await;
+        // An MX in a network the sync has recorded but not read the LAN side of.
+        sqlx::query(
+            "INSERT INTO meraki_org_networks (org_id, network_id, name) VALUES ($1, 'N_2', 'Two')",
+        )
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("unread network");
+        sqlx::query(
+            "INSERT INTO meraki_inventory \
+                 (org_id, serial, name, model, product_type, network_id, first_online_at) \
+             VALUES ($1, 'Q4-MX', 'edge', 'MX85', 'appliance', 'N_2', now())",
+        )
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("unread mx");
+
+        // The page's list says so before anything is pressed.
+        let (_, list) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/meraki/orgs/{org}/devices"),
+            &caller,
+            None,
+        )
+        .await;
+        let mx = list
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|d| d["serial"] == "Q4-MX")
+            .expect("listed")
+            .clone();
+        assert_eq!(mx["filing"]["reason"], "lan_pending", "{mx}");
+        assert!(mx["folder_id"].is_null(), "{mx}");
+
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [
+                    { "serial": "Q4-AP", "name": "ap-old-name", "lan_ip": "192.0.2.1",
+                      "product_type": "wireless", "network_id": "N_1" },
+                    { "serial": "Q4-MX", "product_type": "appliance", "network_id": "N_2" },
+                ],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(answer["imported"], 1, "{answer}");
+        assert_eq!(answer["waiting_lan"], 1, "{answer}");
+        let (name, address): (String, String) =
+            sqlx::query_as("SELECT name, host(address) FROM nodes WHERE id = $1")
+                .bind(crate::meraki::device_node_id("Q4-AP"))
+                .fetch_one(&pool)
+                .await
+                .expect("the node");
+        assert_eq!(
+            (name.as_str(), address.as_str()),
+            ("ap-renamed", "10.1.0.9"),
+            "the request's stale name or address was used"
+        );
+        let mx_node: Option<Uuid> = sqlx::query_scalar("SELECT id FROM nodes WHERE id = $1")
+            .bind(crate::meraki::device_node_id("Q4-MX"))
+            .fetch_optional(&pool)
+            .await
+            .expect("query");
+        assert_eq!(mx_node, None, "an MX with its LAN side unread was imported");
+
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [{ "serial": "Q4-NOT-HERE" }],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+        assert_eq!(answer["error"]["code"], "unknown_serial", "{answer}");
+    }
+
+    /// 🚨 ADR-164 決定 40: a configuration bundle does not carry a node a Meraki organization owns.
+    /// Its binding does not travel, so on the target it was an ordinary device, pinged and polled at
+    /// its LAN address. The ordinary node beside it still travels.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_configuration_bundle_leaves_out_a_node_an_integration_owns(pool: sqlx::PgPool) {
+        use crate::api::tests_support::live_state;
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let plain = crate::pgtest::node(&pool, "switch-1", 1, None).await;
+        let owned = crate::pgtest::node(&pool, "mr-1", 2, None).await;
+        sqlx::query(
+            "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+             VALUES ($1, $2, 'Q5-MR', 'N_1', 'wireless')",
+        )
+        .bind(owned)
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("binding");
+
+        let bundle = crate::config_bundle::ConfigBundleRepo::new(pool.clone())
+            .export()
+            .await
+            .expect("export");
+        let carried: Vec<Uuid> = bundle.nodes.iter().map(|n| n.id).collect();
+        assert!(carried.contains(&plain), "the ordinary node was left out");
+        assert!(
+            !carried.contains(&owned),
+            "the Meraki node travelled as an ordinary device"
+        );
     }
 
     /// The import settings are accepted and reach the row, and an absurd cap is refused rather than
@@ -2912,6 +3237,19 @@ mod tests {
             .await
             .expect("create org");
         let operator = token(&st, yagra_common::Role::Operator);
+        listed(
+            &pool,
+            org,
+            (
+                "Q2XX-0001",
+                "edge-tokyo",
+                "MX67",
+                "appliance",
+                "N_1",
+                Some("10.1.0.1"),
+            ),
+        )
+        .await;
         let (status, body) = send(
             &st,
             "POST",
@@ -2919,11 +3257,7 @@ mod tests {
             &operator,
             Some(serde_json::json!({
                 "org_uuid": org,
-                "devices": [{
-                    "serial": "Q2XX-0001", "name": "edge-tokyo", "model": "MX67",
-                    "product_type": "appliance", "network_id": "N_1", "network_name": "Tokyo",
-                    "lan_ip": "10.1.0.1",
-                }],
+                "devices": [{ "serial": "Q2XX-0001" }],
             })),
         )
         .await;
@@ -3503,6 +3837,48 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED, "{body}");
         assert_eq!(body, json!({ "created": 0, "already_added": 1 }));
         assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+
+        // An organization the key cannot see is refused, not stored under its own id to fail every
+        // sync after (ADR-164 増分 18).
+        let (status, body) = send(
+            &st,
+            "POST",
+            orgs_path,
+            &operator,
+            Some(json!({ "credential_id": credential, "org_ids": ["999"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "unknown_org", "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 2);
+
+        // The two networks routes answer an unknown organization the way their siblings do, and an
+        // empty list of networks is a request that says nothing.
+        let unknown = format!("/api/v1/meraki/orgs/{}/networks", Uuid::from_u128(0xDEAD));
+        let (status, body) = send(&st, "GET", &unknown, &operator, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &unknown,
+            &operator,
+            Some(json!({ "network_ids": ["N_1"], "monitored": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        let known = format!(
+            "/api/v1/meraki/orgs/{}/networks",
+            list[0]["id"].as_str().expect("id")
+        );
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &known,
+            &operator,
+            Some(json!({ "network_ids": [], "monitored": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 
     /// 🚨 The security half: a credential that is not a Meraki key is refused **before the Dashboard

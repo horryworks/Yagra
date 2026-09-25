@@ -37,8 +37,11 @@ import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
 import {
+  CADENCE_TARGET_RPS_MAX,
   MERAKI_CADENCE_BOUNDS,
   cadenceRange,
+  parseCadence,
+  parseTargetRps,
   type CadenceBounds,
   type MerakiCadenceField,
 } from './merakiCadence';
@@ -376,14 +379,26 @@ function CadenceModal({
   onSaved: () => void;
 }) {
   const { t } = useTranslation('system');
-  const [availability, setAvailability] = useState(org.availability_secs);
-  const [uplink, setUplink] = useState(org.uplink_secs);
-  const [traffic, setTraffic] = useState(org.traffic_secs);
-  const [inventory, setInventory] = useState(org.inventory_secs);
-  const [switchPorts, setSwitchPorts] = useState(org.switch_ports_secs);
-  const [wireless, setWireless] = useState(org.wireless_secs);
+  // The boxes hold what was typed, and a save is only offered when every one of them parses: an
+  // emptied box used to be sent as 0 and answered with the server's English error (増分 18).
+  const [availability, setAvailability] = useState(String(org.availability_secs));
+  const [uplink, setUplink] = useState(String(org.uplink_secs));
+  const [traffic, setTraffic] = useState(String(org.traffic_secs));
+  const [inventory, setInventory] = useState(String(org.inventory_secs));
+  const [switchPorts, setSwitchPorts] = useState(String(org.switch_ports_secs));
+  const [wireless, setWireless] = useState(String(org.wireless_secs));
   const [tiers, setTiers] = useState<Set<string>>(new Set(org.enabled_tiers));
-  const [targetRps, setTargetRps] = useState(org.target_rps);
+  const [targetRps, setTargetRps] = useState(String(org.target_rps));
+  const parsed = {
+    availability: parseCadence('availability', availability),
+    uplink: parseCadence('uplink', uplink),
+    traffic: parseCadence('traffic', traffic),
+    inventory: parseCadence('inventory', inventory),
+    switch_ports: parseCadence('switch_ports', switchPorts),
+    wireless: parseCadence('wireless', wireless),
+  };
+  const rps = parseTargetRps(targetRps);
+  const valid = Object.values(parsed).every((v) => v !== null) && rps !== null;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -396,18 +411,19 @@ function CadenceModal({
     });
 
   const save = () => {
+    if (!valid) return;
     setBusy(true);
     setError(null);
     api
       .setMerakiOrgCadence(org.id, {
-        availability_secs: availability,
-        uplink_secs: uplink,
-        traffic_secs: traffic,
-        inventory_secs: inventory,
-        switch_ports_secs: switchPorts,
-        wireless_secs: wireless,
+        availability_secs: parsed.availability!,
+        uplink_secs: parsed.uplink!,
+        traffic_secs: parsed.traffic!,
+        inventory_secs: parsed.inventory!,
+        switch_ports_secs: parsed.switch_ports!,
+        wireless_secs: parsed.wireless!,
         enabled_tiers: tiersToSave(tiers),
-        target_rps: targetRps,
+        target_rps: rps!,
       })
       .then(() => {
         onSaved();
@@ -421,9 +437,11 @@ function CadenceModal({
 
   const numField = (
     label: string,
-    value: number,
-    set: (n: number) => void,
+    value: string,
+    set: (text: string) => void,
     hint: string,
+    ok: boolean,
+    range: string,
     bounds?: CadenceBounds,
   ) => (
     <div className="modal-field">
@@ -433,9 +451,10 @@ function CadenceModal({
         min={bounds?.min}
         max={bounds?.max}
         value={value}
-        onChange={(e) => set(Number(e.target.value))}
+        onChange={(e) => set(e.target.value)}
       />
       <span className="modal-hint">{hint}</span>
+      {!ok && <span className="form-error">{t('meraki.cadence.outOfRange', { range })}</span>}
     </div>
   );
   // The range each interval accepts comes from `merakiCadence.ts`, which a Rust test holds to the
@@ -443,9 +462,18 @@ function CadenceModal({
   const intervalField = (
     field: MerakiCadenceField,
     label: string,
-    value: number,
-    set: (n: number) => void,
-  ) => numField(label, value, set, cadenceRange(field), MERAKI_CADENCE_BOUNDS[field]);
+    value: string,
+    set: (text: string) => void,
+  ) =>
+    numField(
+      label,
+      value,
+      set,
+      cadenceRange(field),
+      parsed[field] !== null,
+      cadenceRange(field),
+      MERAKI_CADENCE_BOUNDS[field],
+    );
 
   return (
     <Modal
@@ -456,7 +484,7 @@ function CadenceModal({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
+          <Button variant="primary" onClick={save} disabled={busy || !valid}>
             {t('common:actions.save')}
           </Button>
         </>
@@ -497,6 +525,8 @@ function CadenceModal({
         targetRps,
         setTargetRps,
         t('meraki.cadence.rateBudgetHint'),
+        rps !== null,
+        `0–${CADENCE_TARGET_RPS_MAX}`,
       )}
       {error && <p className="form-error">{error}</p>}
     </Modal>

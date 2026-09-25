@@ -1102,15 +1102,8 @@ export const api = {
   importMerakiDevices: (body: {
     org_uuid: string;
     monitored_network_ids?: string[];
-    devices: {
-      serial: string;
-      name: string;
-      model?: string | null;
-      product_type: string;
-      network_id: string;
-      network_name?: string | null;
-      lan_ip?: string | null;
-    }[];
+    /** Serials only: the server reads every other fact from its inventory (ADR-164 決定 39). */
+    devices: { serial: string }[];
     file_by_prefix?: boolean;
   }): Promise<MerakiImported> => apiPost('/api/v1/meraki/import', { body }),
 

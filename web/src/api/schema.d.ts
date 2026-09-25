@@ -1635,7 +1635,12 @@ export interface paths {
         };
         /** The org's networks with their monitored (in-scope) flag. */
         get: operations["list_meraki_networks"];
-        /** Set the monitored (watch/skip) flag for a set of the org's networks. */
+        /**
+         * Set the monitored (watch/skip) flag for a set of the org's networks.
+         * @description ⚠️ With the organization's automatic import on, watching a network makes the next sync import
+         *     every device in it that is not a node yet. Un-watching one stops collecting for the nodes in it:
+         *     they keep their last state until it is watched again.
+         */
         put: operations["set_meraki_networks_monitored"];
         post?: never;
         delete?: never;
@@ -4974,7 +4979,7 @@ export interface components {
             /** @description Originating tool: `pagerduty` | `jsm` | `manual` | … */
             source?: string | null;
             /**
-             * @description The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value
+             * @description The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value
              *     the alert's own `node` field carries, so an integration can echo back what it received.
              */
             subject?: string | null;
@@ -5005,7 +5010,7 @@ export interface components {
          * @description An active alert plus its inbound (read-only) ack state.
          *
          *     `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
-         *     node's UUID or `pool:<name>`. The live alert stream emits the same three keys.
+         *     node's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys.
          */
         ActiveAlertView: components["schemas"]["Alert"] & {
             acked?: null | components["schemas"]["AckView"];
@@ -7376,7 +7381,7 @@ export interface components {
          * @description Why a device would be filed where it would be. Serialized as the snake_case token; never stored.
          * @enum {string}
          */
-        FilingReason: "matched" | "ambiguous" | "unmatched" | "no_address" | "not_asked";
+        FilingReason: "matched" | "ambiguous" | "unmatched" | "no_address" | "not_asked" | "lan_pending";
         /** @description A destination's filter as stored and edited. `{}` deserializes to "match everything". */
         FilterExpr: {
             /** @description The conditions; empty means match everything. */
@@ -9040,13 +9045,26 @@ export interface components {
          * @enum {string}
          */
         MerakiHaRole: "primary" | "spare";
+        /**
+         * @description One device to import. **Only `serial` is read** (ADR-164 決定 39): everything else about the
+         *     device — its name, model, network and address — is taken from what this organization's last
+         *     sync recorded, never from the request. A page opened before Meraki renamed a device used to
+         *     create the node under the old name, and the node then never followed a rename again. The other
+         *     fields are accepted and ignored, so a client that still sends them keeps working.
+         */
         MerakiImportDeviceReq: {
+            /** @description Ignored; the inventory's address is used. */
             lan_ip?: string | null;
+            /** @description Ignored. */
             model?: string | null;
+            /** @description Ignored; the inventory's name is used. */
             name?: string;
-            network_id: string;
+            /** @description Ignored. */
+            network_id?: string;
+            /** @description Ignored. */
             network_name?: string | null;
-            product_type: string;
+            /** @description Ignored. */
+            product_type?: string;
             serial: string;
         };
         MerakiImportReq: {
@@ -9082,6 +9100,12 @@ export interface components {
         /** @description What an import created, and where it put it. */
         MerakiImported: {
             /**
+             * Format: int32
+             * @description Devices asked for that are already a node of **another** organization (the device was moved
+             *     between organizations in Meraki). A serial is one node deployment-wide, so they were skipped.
+             */
+            bound_elsewhere: number;
+            /**
              * @description How those devices were filed. The four add up to `imported`, except that all four are zero
              *     when filing by IP range was off for this import: the request's `file_by_prefix`, or the
              *     organization's own setting when the request leaves it out.
@@ -9097,6 +9121,13 @@ export interface components {
              *     about the devices: there was nothing for an address to match.
              */
             ranges_configured: boolean;
+            /**
+             * Format: int32
+             * @description MX that were asked for and not imported, because their network's LAN side has not been read
+             *     yet (ADR-164 決定 39) — their address, and so their folder, is not known. The next sync reads
+             *     it; import them after that.
+             */
+            waiting_lan: number;
         };
         MerakiMonitoredReq: {
             monitored: boolean;
@@ -19018,13 +19049,22 @@ export interface operations {
             };
         };
         responses: {
-            /** @description How many devices became nodes and how they were filed; already-imported serials are skipped */
+            /** @description How many devices became nodes and how they were filed; already-imported serials are skipped, and an MX whose network's LAN side has not been read yet is not imported (`waiting_lan`) */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["MerakiImported"];
+                };
+            };
+            /** @description A serial this organization's inventory does not hold (`unknown_serial`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */
@@ -19134,7 +19174,7 @@ export interface operations {
                     "application/json": components["schemas"]["MerakiCreated"];
                 };
             };
-            /** @description The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), or base_url is not an https allow-listed Meraki host */
+            /** @description The org list is empty or both `api_key` and `credential_id` were sent (`invalid_request`), no key was named (`invalid_api_key`), `credential_id` is not a stored Meraki API key (`invalid_credential`), base_url is not an https allow-listed Meraki host, or an org id is not one the key can see (`unknown_org`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -19606,6 +19646,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
+            /** @description No such organization */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
@@ -19640,6 +19689,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description `network_ids` is empty (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description No valid bearer token */
             401: {
                 headers: {
@@ -19651,6 +19709,15 @@ export interface operations {
             };
             /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such organization */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

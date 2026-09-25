@@ -664,6 +664,11 @@ pub struct MerakiImportDevice {
 pub struct MerakiImportOutcome {
     pub imported: u32,
     pub filed: MerakiFiled,
+    /// Serials skipped because a node is already bound to them **under another organization** —
+    /// a device Meraki moved between organizations (ADR-164 増分 18). A serial is one node
+    /// deployment-wide, so this organization cannot import it; counted and logged rather than
+    /// skipped in silence, which left it "New" here, holding a seat under the cap, for good.
+    pub bound_elsewhere: u32,
 }
 
 /// PostgreSQL-backed store for Meraki orgs + their network scope + device import.
@@ -1239,13 +1244,17 @@ impl MerakiOrgRepo {
             .await?;
 
         let wanted: Vec<String> = devices.iter().map(|d| d.serial.clone()).collect();
-        let mut taken: HashSet<String> =
-            sqlx::query_scalar("SELECT serial FROM meraki_devices WHERE serial = ANY($1)")
+        let bound: Vec<(String, Uuid)> =
+            sqlx::query_as("SELECT serial, org_id FROM meraki_devices WHERE serial = ANY($1)")
                 .bind(&wanted)
                 .fetch_all(&mut *tx)
-                .await?
-                .into_iter()
-                .collect();
+                .await?;
+        let elsewhere: HashMap<String, Uuid> = bound
+            .iter()
+            .filter(|(_, owner)| *owner != org.id)
+            .map(|(serial, owner)| (serial.clone(), *owner))
+            .collect();
+        let mut taken: HashSet<String> = bound.into_iter().map(|(serial, _)| serial).collect();
         let chosen: Vec<Uuid> = devices.iter().filter_map(|d| d.filing.folder()).collect();
         let standing: HashSet<Uuid> =
             sqlx::query_scalar("SELECT id FROM node_groups WHERE id = ANY($1)")
@@ -1263,6 +1272,15 @@ impl MerakiOrgRepo {
         for d in devices {
             // `insert`, not `contains`: a serial listed twice in one batch is one device too.
             if !taken.insert(d.serial.clone()) {
+                if let Some(owner) = elsewhere.get(&d.serial) {
+                    tracing::warn!(
+                        org = %org.org_id,
+                        serial = %d.serial,
+                        bound_to = %owner,
+                        "meraki import: this serial is already a node of another organization; skipped"
+                    );
+                    outcome.bound_elsewhere += 1;
+                }
                 continue;
             }
             let filing = match &d.filing {

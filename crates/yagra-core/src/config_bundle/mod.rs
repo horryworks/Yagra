@@ -34,6 +34,11 @@
 //!   imported channel could never be made to work, and a routing rule pointing at one would notify
 //!   nobody, silently — the worst possible outcome for an alerting system. Re-create channels on
 //!   the target, then re-create the rules.
+//! * **The nodes a Meraki organization or a wireless controller owns** (ADR-164 決定 40). Their
+//!   binding (`meraki_devices`, `wireless_aps`) is the only thing that keeps them out of a pool's
+//!   polling, and it does not travel, so they would arrive as ordinary devices and be pinged at
+//!   their LAN address. Adding the same organization on the target recreates them under the same
+//!   ids. Carrying a whole organization's settings is a backlog item.
 //! * **`llm_config` / `ldap_config` / `meraki_*`** — provider credentials, same reason as
 //!   `credentials`. `ldap_config` additionally sits with `oidc_providers` above: it decides who may
 //!   sign in and as what, so carrying it would make importing a bundle a way to hand yourself a

@@ -9,15 +9,30 @@ const result = (
   imported: number,
   filed: Partial<MerakiImported['filed']> = {},
   ranges_configured = true,
+  skipped: { waiting_lan?: number; bound_elsewhere?: number } = {},
 ): MerakiImported => ({
   imported,
   ranges_configured,
   filed: { matched: 0, ambiguous: 0, unmatched: 0, no_address: 0, ...filed },
+  waiting_lan: skipped.waiting_lan ?? 0,
+  bound_elsewhere: skipped.bound_elsewhere ?? 0,
 });
 
 const keys = (r: MerakiImported) => merakiImportMessage(r, 'Acme').map((p) => p.key);
 
 describe('merakiImportMessage', () => {
+  it('says why an MX waiting for its LAN read was not imported, never that it was monitored already', () => {
+    expect(merakiImportMessage(result(0, {}, true, { waiting_lan: 2 }), 'Acme')).toEqual([
+      { key: 'meraki.import.waitingLan', args: { count: 2 } },
+    ]);
+    expect(keys(result(1, { unmatched: 1 }, true, { waiting_lan: 1, bound_elsewhere: 1 }))).toEqual([
+      'meraki.import.done',
+      'meraki.import.filed.none',
+      'meraki.import.waitingLan',
+      'meraki.import.boundElsewhere',
+    ]);
+  });
+
   it('says nothing was imported, and nothing about filing, when every device was skipped', () => {
     expect(merakiImportMessage(result(0), 'Acme')).toEqual([
       { key: 'meraki.import.doneNone', args: {} },

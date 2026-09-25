@@ -243,11 +243,13 @@ fn every_statement_names_a_table_its_file_declares() {
     );
 
     let carried: BTreeSet<&str> = BUNDLE_TABLES.iter().copied().collect();
-    // The export may name what the bundle carries, plus the settings table it takes two columns of.
+    // The export may name what the bundle carries, plus the settings table it takes two columns of,
+    // plus the two bindings that mark a node an integration owns — read only to leave those nodes
+    // out (ADR-164 決定 40).
     let exported: Vec<&str> = carried
         .iter()
         .copied()
-        .chain(["app_settings"])
+        .chain(["app_settings", "meraki_devices", "wireless_aps"])
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

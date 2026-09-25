@@ -384,6 +384,12 @@ pub struct MerakiSync {
     directory: Arc<dyn MerakiDirectory>,
     inflight: Arc<MerakiInflight>,
     resolver: Arc<ImportResolver>,
+    /// The MX networks this process has asked for a LAN side, by organization (ADR-164 決定 38).
+    /// One whose read fails every time stays unread in the database, and "a network never read"
+    /// is what makes a sync a whole-organization read (決定 30) — so without this, every periodic
+    /// sync of that organization became one: progress on the page every five minutes, "Sync now"
+    /// hidden while it ran, and a read at the full rate for an organization with no node.
+    tried: std::sync::Mutex<HashMap<Uuid, HashSet<String>>>,
 }
 
 impl MerakiSync {
@@ -403,6 +409,7 @@ impl MerakiSync {
             directory,
             inflight,
             resolver,
+            tried: std::sync::Mutex::default(),
         }
     }
 
@@ -456,6 +463,12 @@ impl MerakiSync {
         if reading.whole || kind == SyncKind::Requested {
             self.end_full_read(org, kind, &reading, result.is_ok(), started.elapsed())
                 .await;
+        } else if let Err(e) = self.orgs.finish_full_sync(org.id, false).await {
+            // Every sync clears a "reading" another left behind (ADR-164 決定 38): only a whole
+            // read did, so one whose clear failed — or that panicked — left the page polling and
+            // "Sync now" hidden until the next whole read, which may never come. Writes nothing
+            // when there is nothing to clear.
+            tracing::debug!(org = %org.org_id, error = %e, "meraki sync: clearing a read left behind failed");
         }
 
         match result {
@@ -494,14 +507,6 @@ impl MerakiSync {
                     );
                     metrics::counter!("yagra_meraki_nodes_followed_total")
                         .increment(u64::from(report.followed));
-                }
-                // One bump for the sync, and only when a node row really changed. It is the address
-                // that needs it: the connectivity graph is re-derived when the generation or an
-                // observation watermark moves (`run_topology_derivation`), and a re-addressed node
-                // moves neither watermark. A rename alone would not need one — a notification reads
-                // names on a 60-second TTL — but it is rare enough not to be worth telling apart.
-                if report.imported > 0 || report.followed > 0 {
-                    crate::config_gen::bump();
                 }
                 Ok(report)
             }
@@ -622,11 +627,32 @@ impl MerakiSync {
             .apply(org.id, &plan)
             .await
             .map_err(internal("writing the inventory failed"))?;
+        // Bumped here, the moment node rows changed, and not at the end of the sync (ADR-164
+        // 決定 38): a later stage that fails would skip it, and the next sync finds the addresses
+        // already followed — `followed == 0` — so it would never come. It is the address that needs
+        // it: the connectivity graph is re-derived when the generation or an observation watermark
+        // moves (`run_topology_derivation`), and a re-addressed node moves neither watermark.
+        if applied.followed > 0 {
+            crate::config_gen::bump();
+        }
         // After `apply`, which created the rows of devices seen for the first time.
         self.inflight
             .extend(job, ROLES_TIMEOUT + LEASE_MARGIN, Instant::now());
         let roles = self.ha_roles(org, &api_key, ROLES_TIMEOUT).await;
-        let (imported, over_cap) = self.import(org, lans.complete).await?;
+        // 🚨 The row as it is NOW, not as it was when this sync began (ADR-164 決定 38). A sync that
+        // reads the organization whole runs for minutes — up to half an hour — and an operator who
+        // switched automatic import off, lowered the cap or stopped filing by range in that time
+        // was ignored: the sync imported under the settings it started with, and wrote back the
+        // over-cap count the switch had just cleared. A row that is gone or paused imports nothing.
+        let now = self
+            .orgs
+            .get(org.id)
+            .await
+            .map_err(internal("reading the organization again failed"))?;
+        let (imported, over_cap) = match now {
+            Some(now) if now.enabled => self.import(&now, lans.complete).await?,
+            _ => (0, 0),
+        };
 
         Ok(MerakiSyncReport {
             devices: count(seen.len()),
@@ -709,7 +735,20 @@ impl MerakiSync {
             .map_err(internal("reading the networks' LAN addresses failed"))?;
         known.retain(|network, _| mx.contains(network));
 
-        let whole = kind == SyncKind::Requested || mx.iter().any(|n| !known.contains_key(n));
+        let tried: HashSet<String> = self
+            .tried
+            .lock()
+            .expect("meraki tried networks poisoned")
+            .get(&org.id)
+            .cloned()
+            .unwrap_or_default();
+        // A network never read makes this a whole read (決定 30) — once. One this process has
+        // already asked, whose read failed, is asked again by every sync (it is first in `due`) but
+        // no longer turns each of them into a whole read (決定 38).
+        let whole = kind == SyncKind::Requested
+            || mx
+                .iter()
+                .any(|n| !known.contains_key(n) && !tried.contains(n));
         let reads = match kind {
             SyncKind::Requested => LanReads::Every,
             SyncKind::Scheduled => LanReads::Due {
@@ -786,6 +825,12 @@ impl MerakiSync {
                     });
                 let now = Utc::now();
                 let mut read: Vec<(String, Vec<IpAddr>)> = Vec::new();
+                self.tried
+                    .lock()
+                    .expect("meraki tried networks poisoned")
+                    .entry(org.id)
+                    .or_default()
+                    .extend(reached.iter().map(|(network, _)| network.clone()));
                 for (network, answer) in reached {
                     reading.tried += 1;
                     let outcome = match answer {
@@ -939,6 +984,10 @@ impl MerakiSync {
                 .await
                 .map_err(internal("importing devices failed"))?
                 .imported;
+            // At once, for the reason `attempt` bumps after `apply` (決定 38).
+            if imported > 0 {
+                crate::config_gen::bump();
+            }
         }
         self.orgs
             .record_over_cap(org.id, pick.over_cap)
@@ -1084,8 +1133,23 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
     let mut running = RunningSyncs::default();
     loop {
         tick.tick().await;
-        running.reap(&mut schedule, Instant::now());
+        for ended in running.reap(&mut schedule, Instant::now()) {
+            // A sync that ended without an answer ran nothing past where it stopped: clear the
+            // "reading" it may have left. The request it was asked to answer goes too when it
+            // panicked — asked again, it would panic again every tick — and stays when it was
+            // stopped on purpose, because a pause keeps a request for the resume (決定 32).
+            if let Err(e) = sync
+                .orgs
+                .finish_full_sync(ended.org, ended.requested && !ended.stopped)
+                .await
+            {
+                tracing::warn!(org = %ended.org, error = %e, "meraki sync: clearing a stopped read failed");
+            }
+        }
         if !settings.get_meraki_polling_enabled().await {
+            // The switch gives the Dashboard API budget back at once (ADR-164 決定 38): a whole
+            // read runs for up to half an hour, and a sync already running used to go on to its end.
+            running.stop_unless(&HashSet::new());
             continue;
         }
         let orgs = match sync.orgs.list_enabled().await {
@@ -1095,6 +1159,8 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
                 continue;
             }
         };
+        // …and so does pausing or deleting one organization.
+        running.stop_unless(&orgs.iter().map(|o| o.id).collect());
         for org in orgs {
             let requested = org.full_sync_requested_at.is_some();
             if running.contains(org.id)
@@ -1103,7 +1169,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
                 continue;
             }
             let sync = sync.clone();
-            running.spawn(org.id, async move {
+            running.spawn(org.id, requested, async move {
                 if requested {
                     sync.sync_org_requested(&org).await
                 } else {
@@ -1120,47 +1186,101 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
 #[derive(Default)]
 pub struct RunningSyncs {
     set: tokio::task::JoinSet<Result<MerakiSyncReport, SyncError>>,
-    orgs: HashMap<tokio::task::Id, Uuid>,
+    orgs: HashMap<tokio::task::Id, Running>,
+}
+
+struct Running {
+    org: Uuid,
+    /// Whether it is the read "Sync now" asked for.
+    requested: bool,
+    handle: tokio::task::AbortHandle,
+}
+
+/// A sync that ended without an answer: stopped on purpose ([`RunningSyncs::stop_unless`]) or
+/// panicked. What it may have left on the organization's row is the loop's to clear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndedUnanswered {
+    pub org: Uuid,
+    pub requested: bool,
+    /// Stopped on purpose, rather than panicked.
+    pub stopped: bool,
 }
 
 impl RunningSyncs {
     /// Start `sync` for `org`. The caller has checked [`Self::contains`].
-    pub fn spawn<F>(&mut self, org: Uuid, sync: F)
+    pub fn spawn<F>(&mut self, org: Uuid, requested: bool, sync: F)
     where
         F: std::future::Future<Output = Result<MerakiSyncReport, SyncError>> + Send + 'static,
     {
         let handle = self.set.spawn(sync);
-        self.orgs.insert(handle.id(), org);
+        self.orgs.insert(
+            handle.id(),
+            Running {
+                org,
+                requested,
+                handle,
+            },
+        );
     }
 
     /// Whether `org` has a sync in flight.
     #[must_use]
     pub fn contains(&self, org: Uuid) -> bool {
-        self.orgs.values().any(|o| *o == org)
+        self.orgs.values().any(|r| r.org == org)
+    }
+
+    /// Stop every sync whose organization is not in `keep` — paused, deleted, or every one while
+    /// Meraki polling is switched off (ADR-164 決定 38). A stopped sync's transaction rolls back and
+    /// its drop guard gives the lane back; [`Self::reap`] reports it as stopped.
+    pub fn stop_unless(&mut self, keep: &HashSet<Uuid>) {
+        for r in self.orgs.values() {
+            if !keep.contains(&r.org) {
+                r.handle.abort();
+            }
+        }
     }
 
     /// Hand every sync that has ended to `schedule`: a success hands the next one back to the row,
     /// a failure waits an interval, a busy lane asks again next tick. A sync that panicked counts as
     /// failed, so the loop backs off rather than asking again every fifteen seconds.
-    pub fn reap(&mut self, schedule: &mut SyncSchedule, now: Instant) {
+    ///
+    /// Returns the syncs that ended with no answer — stopped on purpose, or panicked — whose
+    /// "reading" the caller clears. A stopped one does not back off: it was the configuration that
+    /// ended it, and the next sync is due when the organization is collected again.
+    pub fn reap(&mut self, schedule: &mut SyncSchedule, now: Instant) -> Vec<EndedUnanswered> {
+        let mut unanswered = Vec::new();
         while let Some(ended) = self.set.try_join_next_with_id() {
-            let (id, outcome) = match ended {
-                Ok((id, outcome)) => (id, Some(outcome)),
+            let (id, outcome, stopped) = match ended {
+                Ok((id, outcome)) => (id, Some(outcome), false),
                 Err(e) => {
-                    tracing::warn!(error = %e, "meraki sync: a sync ended without an answer");
-                    (e.id(), None)
+                    if !e.is_cancelled() {
+                        tracing::warn!(error = %e, "meraki sync: a sync ended without an answer");
+                    }
+                    (e.id(), None, e.is_cancelled())
                 }
             };
-            let Some(org) = self.orgs.remove(&id) else {
+            let Some(running) = self.orgs.remove(&id) else {
                 continue;
             };
+            let org = running.org;
             match outcome {
                 Some(Ok(_)) => schedule.succeeded(org),
                 // A slow collect holds the organization. Not a failure: ask again next tick.
                 Some(Err(SyncError::Busy)) => {}
-                Some(Err(SyncError::Failed(_))) | None => schedule.failed(org, now),
+                Some(Err(SyncError::Failed(_))) => schedule.failed(org, now),
+                None => {
+                    if !stopped {
+                        schedule.failed(org, now);
+                    }
+                    unanswered.push(EndedUnanswered {
+                        org,
+                        requested: running.requested,
+                        stopped,
+                    });
+                }
             }
         }
+        unanswered
     }
 }
 
@@ -3140,7 +3260,7 @@ mod tests {
             (busy.id, Err(SyncError::Busy)),
         ] {
             let gate = gate.clone();
-            running.spawn(org, async move {
+            running.spawn(org, false, async move {
                 gate.acquire().await.expect("gate").forget();
                 outcome
             });
@@ -3172,6 +3292,57 @@ mod tests {
         assert!(
             schedule.is_due(&busy, t0, now),
             "a busy lane was taken for a failure"
+        );
+    }
+
+    /// 🚨 ADR-164 決定 38: pausing an organization (or switching Meraki polling off) stops the sync
+    /// already running for it. A whole read runs for up to half an hour, and it used to go on
+    /// spending the organization's Dashboard budget to the end. The stop is reported, so the loop
+    /// clears the "reading" it left, and it does not back off like a failure.
+    #[tokio::test]
+    async fn a_paused_organizations_running_sync_is_stopped_and_reported() {
+        let mut paused = org_with(None, 300);
+        paused.id = Uuid::from_u128(1);
+        let mut kept = org_with(None, 300);
+        kept.id = Uuid::from_u128(2);
+        let mut running = RunningSyncs::default();
+        for (org, requested) in [(paused.id, true), (kept.id, false)] {
+            running.spawn(org, requested, async move {
+                std::future::pending::<()>().await;
+                Err(SyncError::Busy)
+            });
+        }
+        running.stop_unless(&[kept.id].into_iter().collect());
+
+        let mut schedule = SyncSchedule::default();
+        let now = Instant::now();
+        let ended = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let ended = running.reap(&mut schedule, now);
+                if !ended.is_empty() {
+                    return ended;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the stopped sync ended");
+        assert_eq!(
+            ended,
+            vec![EndedUnanswered {
+                org: paused.id,
+                requested: true,
+                stopped: true
+            }]
+        );
+        assert!(
+            running.contains(kept.id),
+            "the other organization's sync was stopped"
+        );
+        let t0 = DateTime::from_timestamp(1_800_000_000, 0).expect("in range");
+        assert!(
+            schedule.is_due(&paused, t0, now),
+            "a stop backed off like a failure"
         );
     }
 

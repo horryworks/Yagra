@@ -41,9 +41,11 @@ const STATE_SPECS: Record<MerakiDeviceState, { isNode: boolean; importable: bool
   deleted: { isNode: false, importable: true },
 };
 
-/** Whether a row gets a checkbox: it is listed by Meraki and is not a node here. */
-export function isImportable(device: Pick<MerakiDevice, 'state'>): boolean {
-  return STATE_SPECS[device.state].importable;
+/** Whether a row gets a checkbox: it is listed by Meraki, is not a node here, and is not an MX
+ *  still waiting for its LAN read — the server imports none of those (ADR-164 決定 39), and a box
+ *  that can only be refused is not drawn (ADR-056). */
+export function isImportable(device: Pick<MerakiDevice, 'state' | 'filing'>): boolean {
+  return STATE_SPECS[device.state].importable && device.filing?.reason !== 'lan_pending';
 }
 
 // ──────────────────────────────────────────────────────────────── destination
@@ -125,6 +127,7 @@ function filingNote(filing: MerakiDevice['filing']): FilingNote | null {
     case 'unmatched':
     case 'no_address':
     case 'not_asked':
+    case 'lan_pending':
       return { reason: filing.reason, args: {} };
   }
 }
@@ -174,28 +177,11 @@ export function uncollectedDevices(
 
 // ───────────────────────────────────────────────────────────────────── import
 
-/** One device as `POST /meraki/import` wants it. */
+/** One device as `POST /meraki/import` wants it: **its serial and nothing else**. The server takes
+ *  every other fact from its own inventory (ADR-164 決定 39) — a name read when this page opened
+ *  could be one Meraki has since changed, and a node created under it never followed a rename. */
 export interface MerakiImportDevice {
   serial: string;
-  name: string;
-  model: string | null;
-  product_type: string;
-  network_id: string;
-  network_name: string | null;
-  lan_ip: string | null;
-}
-
-/** A row, as the import request carries it. */
-export function toImportDevice(device: MerakiDevice): MerakiImportDevice {
-  return {
-    serial: device.serial,
-    name: device.name,
-    model: device.model ?? null,
-    product_type: device.product_type,
-    network_id: device.network_id,
-    network_name: device.network_name ?? null,
-    lan_ip: device.lan_ip ?? null,
-  };
 }
 
 /** The devices an "Import N devices" press sends: ticked **and still importable**.
@@ -205,8 +191,13 @@ export function toImportDevice(device: MerakiDevice): MerakiImportDevice {
 export function devicesToImport(
   devices: readonly MerakiDevice[],
   selected: ReadonlySet<string>,
-): MerakiImportDevice[] {
-  return devices.filter((d) => selected.has(d.serial) && isImportable(d)).map(toImportDevice);
+): MerakiDevice[] {
+  return devices.filter((d) => selected.has(d.serial) && isImportable(d));
+}
+
+/** The request body's device list for the rows {@link devicesToImport} chose. */
+export function importRequestDevices(chosen: readonly MerakiDevice[]): MerakiImportDevice[] {
+  return chosen.map((d) => ({ serial: d.serial }));
 }
 
 /** The networks an import press asks the server to start watching: the ones the chosen devices are
@@ -227,7 +218,7 @@ export function devicesToImport(
  *  serial gives the same answer today only because every device in one network carries the same
  *  flag — an invariant nothing here states, and one a per-device override would end. */
 export function networksToWatchOnImport(
-  chosen: readonly Pick<MerakiImportDevice, 'network_id'>[],
+  chosen: readonly Pick<MerakiDevice, 'network_id'>[],
   devices: readonly Pick<MerakiDevice, 'network_id' | 'network_monitored'>[],
   importsAutomatically: boolean,
 ): string[] {
@@ -244,7 +235,7 @@ export function networksToWatchOnImport(
  *  "select all" is how an operator says "import everything new" without meaning the 400 devices
  *  they deleted on purpose. */
 export function importableSerials(
-  devices: readonly Pick<MerakiDevice, 'serial' | 'state'>[],
+  devices: readonly Pick<MerakiDevice, 'serial' | 'state' | 'filing'>[],
 ): string[] {
   return devices.filter(isImportable).map((d) => d.serial);
 }

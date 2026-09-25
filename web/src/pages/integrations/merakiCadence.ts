@@ -59,6 +59,30 @@ export const MERAKI_CADENCE_BOUNDS: Record<MerakiCadenceField, CadenceBounds> = 
   inventory: { min: CADENCE_INVENTORY_MIN_SECS, max: CADENCE_INVENTORY_MAX_SECS },
 };
 
+/** The most requests a second an organization may be paced at (`config::MERAKI_TARGET_RPS_MAX`).
+ *  The least is anything above zero — the server refuses 0 and below. */
+export const CADENCE_TARGET_RPS_MAX = 10;
+
+/** What an interval's box holds, as the whole seconds the server would take, or `null` when it is
+ *  not one (ADR-164 増分 18). Digits only: an emptied box was sent as 0, and the server's English
+ *  `invalid_cadence` came back instead of the range the operator needed. */
+export function parseCadence(field: MerakiCadenceField, raw: string): number | null {
+  const text = raw.trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  const { min, max } = MERAKI_CADENCE_BOUNDS[field];
+  return n >= min && n <= max ? n : null;
+}
+
+/** What the rate box holds, or `null` when the server would refuse it: above 0, at most
+ *  {@link CADENCE_TARGET_RPS_MAX}. A fraction is fine (0.5 is one request every two seconds). */
+export function parseTargetRps(raw: string): number | null {
+  const text = raw.trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) return null;
+  const n = Number(text);
+  return n > 0 && n <= CADENCE_TARGET_RPS_MAX ? n : null;
+}
+
 /** What an interval's hint line reads. Built from the bounds so the two cannot disagree. */
 export const cadenceRange = (field: MerakiCadenceField): string => {
   const { min, max } = MERAKI_CADENCE_BOUNDS[field];

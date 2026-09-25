@@ -714,6 +714,10 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/llm/test"
         || path == "/api/v1/settings/ldap/test"
         || path == "/api/v1/meraki/orgs/discover"
+        // "Sync now" (ADR-164 決定 32) writes one column, `full_sync_requested_at`, which none of the
+        // rebuilds reads; the read it asks for runs in the leader's sync loop, and whatever that
+        // changes it bumps itself. Counted, every press re-resolved the whole fleet (増分 18).
+        || (path.starts_with("/api/v1/meraki/orgs/") && path.ends_with("/sync"))
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves

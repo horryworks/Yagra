@@ -611,7 +611,8 @@
       "trafficInterval": "Traffic interval (s)",
       "inventoryInterval": "Device sync interval (s)",
       "rateBudget": "Rate budget (req/s)",
-      "rateBudgetHint": "Conservative — kept well under the org API cap so the customer keeps headroom."
+      "rateBudgetHint": "Conservative — kept well under the org API cap so the customer keeps headroom.",
+      "outOfRange": "Enter a number in {{range}}."
     },
     "delete": {
       "title": "Delete organization",
@@ -665,7 +666,8 @@
         "ambiguous": "{{count}} folders match equally",
         "unmatched": "No matching IP range",
         "no_address": "No address",
-        "not_asked": "Filing by IP range is off"
+        "not_asked": "Filing by IP range is off",
+        "lan_pending": "LAN address not read yet — can be imported after the next sync"
       },
       "allStates": "All states",
       "notWatched": "not watched",
@@ -691,6 +693,10 @@
         "ambiguous_one": "{{count}} device matched more than one folder equally and was not filed by range — check for overlapping IP ranges.",
         "ambiguous_other": "{{count}} devices matched more than one folder equally and were not filed by range — check for overlapping IP ranges."
       },
+      "waitingLan_one": "{{count}} MX was not imported: its LAN address has not been read yet. Import it after the next sync.",
+      "waitingLan_other": "{{count}} MX were not imported: their LAN address has not been read yet. Import them after the next sync.",
+      "boundElsewhere_one": "{{count}} device is already monitored under another organization and was skipped.",
+      "boundElsewhere_other": "{{count}} devices are already monitored under another organization and were skipped.",
       "err": {
         "import": "failed to import devices"
       }

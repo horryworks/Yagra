@@ -81,17 +81,22 @@ pub enum FilingReason {
     NoAddress,
     /// The organization does not file by IP range: it goes under the network's folder.
     NotAsked,
+    /// An MX whose network's LAN side has not been read yet (ADR-164 決定 28): its address is not
+    /// known, so no import — automatic or by hand — takes it until a sync has read it (決定 39).
+    /// Only the device list says this; an import never files a device under it.
+    LanPending,
 }
 
 #[cfg(test)]
 impl FilingReason {
     /// Every reason. Test-only, like `MerakiDeviceState::ALL`: nothing in production iterates them.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Matched,
         Self::Ambiguous,
         Self::Unmatched,
         Self::NoAddress,
         Self::NotAsked,
+        Self::LanPending,
     ];
 }
 
@@ -320,7 +325,8 @@ mod tests {
     }
 
     /// The WebUI keys a sentence on each token (`meraki.devices.filing.<token>`), so the spelling
-    /// is a contract. Only a match carries a folder; the other four all mean the network's folder.
+    /// is a contract. Only a match carries a folder; the others all mean the network's folder, or
+    /// (`lan_pending`, ADR-164 決定 39) no import yet.
     #[test]
     fn every_reason_has_the_token_the_webui_keys_on_and_only_a_match_names_a_folder() {
         let tokens: Vec<String> = FilingReason::ALL
@@ -335,7 +341,8 @@ mod tests {
                 "ambiguous",
                 "unmatched",
                 "no_address",
-                "not_asked"
+                "not_asked",
+                "lan_pending"
             ]
         );
         for f in [

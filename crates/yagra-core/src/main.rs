@@ -2188,6 +2188,17 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             ),
         };
         for org in orgs {
+            // A tier switched off, or one no poller in the pool can run, is never asked about:
+            // nothing will answer it again, so it must not go on showing — or holding open — a
+            // failure from before (ADR-164 決定 35).
+            let active = org.active_tiers();
+            for tier in yagra_common::MerakiTier::ALL {
+                if tier != yagra_common::MerakiTier::Inventory
+                    && !(active.contains(&tier) && meraki::pool_can_run(tier, caps))
+                {
+                    inflight.health.set_idle(org.id, tier);
+                }
+            }
             let plan = schedule.plan(&org, now, caps, |lane| {
                 !inflight.is_inflight(org.id, lane, now)
             });
@@ -2210,6 +2221,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     // ahead of the work that does have something to ask.
                     Ok(_) => {
                         schedule.dispatched(org.id, &work, now);
+                        inflight.health.set_idle(org.id, tier);
                         continue;
                     }
                     // A read of this core's own database that failed *is* a collect that did not
@@ -2217,6 +2229,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     Err(e) => {
                         tracing::warn!(org = %org.org_id, error = %e, "meraki device refs load failed");
                         if schedule.count_core_failure(org.id, tier, cadence, now) {
+                            inflight.health.set_active(org.id, tier);
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
@@ -2243,11 +2256,19 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     Err(why) => {
                         tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
                         // Watching nothing is a configuration, not a fault — 決定 16 says such an
-                        // organization is sent no collect, so there is nothing failing to report.
-                        // A read that *failed* is the other thing entirely, and is counted.
+                        // organization is sent no collect, so there is nothing failing to report,
+                        // and nothing will answer any of its tiers: an alert raised before must
+                        // close on that (決定 35). A read that *failed* is the other thing
+                        // entirely, and is counted.
+                        if why == meraki::NoCollect::NothingWatched {
+                            for idle in &active {
+                                inflight.health.set_idle(org.id, *idle);
+                            }
+                        }
                         if why == meraki::NoCollect::Unreadable
                             && schedule.count_core_failure(org.id, tier, cadence, now)
                         {
+                            inflight.health.set_active(org.id, tier);
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
@@ -2266,6 +2287,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     // No job is sent, so no poller can report this: it is core that knows the
                     // organization's devices are not being asked about (ADR-164 決定 18).
                     if schedule.count_core_failure(org.id, tier, cadence, now) {
+                        inflight.health.set_active(org.id, tier);
                         inflight.health.record_failed(
                             org.id,
                             tier,
@@ -2282,6 +2304,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                 if !inflight.acquire_collect(org.id, lane, job_id, tier, LEASE, now) {
                     continue; // lost an acquire race
                 }
+                let devices_sent = device_refs.len();
                 let check = meraki::build_collect_check(
                     &org,
                     tier,
@@ -2294,6 +2317,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                 match bus.publish_job_for_pool(&meraki_pool, job).await {
                     Ok(()) => {
                         schedule.dispatched(org.id, &work, now);
+                        inflight.health.set_active(org.id, tier);
                         metrics::counter!(
                             "yagra_meraki_collects_dispatched_total",
                             "lane" => lane.as_str()
@@ -2310,7 +2334,27 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                         // Release the lane so the next tick retries rather than waiting out the
                         // lease.
                         inflight.complete(job_id);
-                        tracing::error!(org = %org.org_id, error = %e, "meraki collect publish failed");
+                        tracing::error!(
+                            org = %org.org_id,
+                            tier = tier.as_str(),
+                            devices = devices_sent,
+                            error = %e,
+                            "meraki collect publish failed"
+                        );
+                        // No job went out, so no poller will ever report this one: core counts it,
+                        // like the three failures above (ADR-164 決定 36). A publish refused for its
+                        // size fails on every tick — an organization of about 13,000 imported devices
+                        // outgrows NATS's 1 MiB `max_payload` — and used to leave every node at its
+                        // last state with nothing alerting.
+                        if schedule.count_core_failure(org.id, tier, cadence, now) {
+                            inflight.health.set_active(org.id, tier);
+                            inflight.health.record_failed(
+                                org.id,
+                                tier,
+                                meraki_sync::MerakiSyncFailure::Internal,
+                                pool_coverage::now_unix_ms(),
+                            );
+                        }
                     }
                 }
             }

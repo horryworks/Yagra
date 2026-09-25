@@ -595,6 +595,7 @@
       "trafficInterval": "トラフィックの取得間隔（秒）",
       "inventoryInterval": "デバイス一覧の同期間隔（秒）",
       "rateBudget": "レート予算（req/s）",
+      "outOfRange": "{{range}} の数を入れてください。",
       "rateBudgetHint": "控えめな値 — 組織の API 上限に対して十分な余裕を残すよう抑えています。"
     },
     "delete": {
@@ -646,7 +647,8 @@
         "ambiguous": "{{count}} 個のフォルダが同じ長さで一致",
         "unmatched": "一致する IP レンジなし",
         "no_address": "アドレスなし",
-        "not_asked": "IP レンジでの振り分けはオフ"
+        "not_asked": "IP レンジでの振り分けはオフ",
+        "lan_pending": "LAN のアドレスをまだ読んでいません。次の同期のあとにインポートできます"
       },
       "allStates": "すべての状態",
       "notWatched": "監視対象外",
@@ -668,6 +670,8 @@
         "some": "{{matched}} 台は IP レンジに合うフォルダへ、{{rest}} 台は {{folder}} の下へ入れました。",
         "ambiguous_other": "{{count}} 台は複数のフォルダが同じ長さで一致したため、IP レンジでは入れていません。IP レンジの重なりを確認してください。"
       },
+      "waitingLan_other": "MX {{count}} 台は、LAN のアドレスをまだ読んでいないためインポートしていません。次の同期のあとにインポートしてください。",
+      "boundElsewhere_other": "{{count}} 台は別の組織で監視中のため、飛ばしました。",
       "err": {
         "import": "デバイスのインポートに失敗しました"
       }

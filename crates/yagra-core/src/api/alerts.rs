@@ -70,7 +70,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// An active alert plus its inbound (read-only) ack state.
 ///
 /// `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
-/// node's UUID or `pool:<name>`. The live alert stream emits the same three keys.
+/// node's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys.
 //
 // They are here rather than on `Alert` itself so the alert's own serialized form stays
 // byte-identical for a node subject — the same reason `Subject` serializes flat.
@@ -502,7 +502,7 @@ pub(super) struct AckRequest {
     /// something other than a node (a poller pool). Exactly one of the two is required.
     #[serde(default)]
     node: Option<Uuid>,
-    /// The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value
+    /// The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value
     /// the alert's own `node` field carries, so an integration can echo back what it received.
     #[serde(default)]
     subject: Option<String>,
@@ -587,7 +587,7 @@ fn ack_subject(
     subject.and_then(|s| s.parse().ok()).ok_or_else(|| {
         ApiError::bad_request(
             "invalid_subject",
-            "send `node`, or a `subject` of `<uuid>` or `pool:<name>`",
+            "send `node`, or a `subject` of `<uuid>`, `pool:<name>` or `meraki_org:<uuid>`",
         )
     })
 }

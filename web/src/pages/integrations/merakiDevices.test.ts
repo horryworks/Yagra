@@ -26,7 +26,7 @@ import {
   networksToWatchOnImport,
   parseMaxDevices,
   pruneSelection,
-  toImportDevice,
+  importRequestDevices,
   uncollectedDevices,
   unwatchedNetworkIds,
   unwatchedNotice,
@@ -51,6 +51,11 @@ const device = (over: Partial<MerakiDevice> = {}): MerakiDevice => ({
 });
 
 describe('isImportable', () => {
+  it('offers no box for an MX still waiting for its LAN read — the server would not import it', () => {
+    expect(isImportable(device({ state: 'new', filing: { reason: 'lan_pending' } }))).toBe(false);
+    expect(isImportable(device({ state: 'new', filing: { reason: 'no_address' } }))).toBe(true);
+  });
+
   it('offers exactly the rows Meraki lists that are not nodes here', () => {
     const importable = MERAKI_DEVICE_STATES.filter((state) => isImportable({ state }));
     // `never_online` and `deleted` are the two the automatic import skips on purpose; if the manual
@@ -209,33 +214,14 @@ describe('monitored devices nothing is collected for (ADR-164 決定 15)', () =>
 });
 
 describe('the import request', () => {
-  it('carries the seven fields the endpoint reads, and nothing else', () => {
-    const sent = toImportDevice(
+  it('carries the serial and nothing else (ADR-164 決定 39)', () => {
+    // A name or an address read when the page opened can be one Meraki has changed since; the
+    // server reads them from its inventory. No `file_by_prefix` or `folder_id` either: where a
+    // device goes is the organization's own setting.
+    const sent = importRequestDevices([
       device({ node_id: null, folder_id: 'g-1', filing: { reason: 'matched', prefix: '10/8' } }),
-    );
-    expect(sent).toEqual({
-      serial: 'Q2XX-0001',
-      name: 'edge-tokyo',
-      model: 'MX67',
-      product_type: 'appliance',
-      network_id: 'N_1',
-      network_name: 'Tokyo',
-      lan_ip: '10.1.0.1',
-    });
-    // In particular no `file_by_prefix` and no `folder_id`: where a device goes is decided by the
-    // server from the organization's own setting, which is the point of this page not sending one.
-    expect(Object.keys(sent).sort()).toEqual(
-      ['lan_ip', 'model', 'name', 'network_id', 'network_name', 'product_type', 'serial'].sort(),
-    );
-  });
-
-  it('sends null, not undefined, for what Meraki did not report', () => {
-    const sent = toImportDevice(
-      device({ model: undefined, network_name: undefined, lan_ip: null }),
-    );
-    expect(sent.model).toBeNull();
-    expect(sent.network_name).toBeNull();
-    expect(sent.lan_ip).toBeNull();
+    ]);
+    expect(sent).toEqual([{ serial: 'Q2XX-0001' }]);
   });
 
   it('sends only rows that are ticked and still importable', () => {
@@ -258,8 +244,7 @@ describe('the networks an import starts watching (ADR-164 決定 16)', () => {
     device({ serial: 'C', network_id: 'N_tokyo', network_monitored: true }),
     device({ serial: 'D', network_id: 'N_kyoto', network_monitored: false }),
   ];
-  const chosen = (...serials: string[]) =>
-    list.filter((d) => serials.includes(d.serial)).map(toImportDevice);
+  const chosen = (...serials: string[]) => list.filter((d) => serials.includes(d.serial));
 
   it('is the networks the chosen devices are in, each once', () => {
     // A node in a network that is not watched is collected nothing for, so importing a device

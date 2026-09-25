@@ -1386,6 +1386,60 @@ async fn each_network_answers_with_its_vlans_its_single_lan_or_nothing() {
     );
 }
 
+/// ADR-164 増分 18 (決定 19): a single-LAN answer with no `applianceIp` is not the answer this
+/// read asks for. It used to read as "no LAN side", which was remembered for a day.
+#[tokio::test]
+async fn a_single_lan_with_no_appliance_ip_is_malformed() {
+    let (origin, _, _) = serve(vec![
+        Reply::json(400, r#"{"errors":["VLANs are not enabled"]}"#),
+        Reply::ok(r#"{"errors":["not the settings"]}"#),
+    ])
+    .await;
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["N_1"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(
+        got,
+        vec![("N_1".to_owned(), Err(MerakiFetchError::Malformed))]
+    );
+}
+
+/// 🚨 ADR-164 決定 37: a 429 whose wait would outlast the budget is not waited. A collect held past
+/// core's lease was read as unanswered, and a second was sent into the same lane beside it.
+#[tokio::test]
+async fn a_429_that_would_outlast_the_budget_is_not_waited() {
+    let (origin, _, seen) = serve(vec![
+        Reply::json(429, r#"{"errors":["rate limited"]}"#).header("Retry-After", "60")
+    ])
+    .await;
+    let started = std::time::Instant::now();
+    let got = fetch_network_lans(
+        BASE,
+        KEY,
+        &nets(&["N_1", "N_2"]),
+        1000.0,
+        TIMEOUT,
+        Duration::from_secs(5),
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the 60-second wait was taken"
+    );
+    assert_eq!(got, vec![], "nothing was learned, about either network");
+    assert_eq!(lines(&seen).len(), 1, "the next network was asked anyway");
+}
+
 #[tokio::test]
 async fn a_refused_key_stops_the_read_after_one_request() {
     let (origin, _, seen) = serve(vec![Reply::json(401, r#"{"errors":["mock"]}"#)]).await;

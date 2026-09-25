@@ -843,6 +843,30 @@ fn writer_gone(counter: &'static str, logged: &AtomicBool, writer: &'static str)
     }
 }
 
+/// Clear the collect lane this job holds on the collect's first returning result (all fan-out
+/// results share the job id; a no-op for non-Meraki jobs) — and record how the collect ended
+/// (ADR-164 決定 18). Memory only — this is the hot path, and deciding belongs to
+/// `meraki_health`'s loop.
+///
+/// A report says so outright, and since 決定 36 it is the **first** result a poller publishes, so
+/// it is also what releases the flight; the device results after it release nothing and record
+/// nothing. A result with no report that released a flight is a poller from before the report
+/// existed, whose device results are the only sign the Dashboard answered.
+///
+/// 🚨 Before 決定 36 the report came last, so a current poller's first *device* result took this
+/// second arm: it counted as "answered" and reset the tier's run of failures, and the report behind
+/// it set it back to one. A read that failed on every collect read as failing once, since the latest.
+fn record_collect_outcome(meraki_inflight: &meraki::MerakiInflight, result: &PollResult) {
+    let released = meraki_inflight.complete(result.job_id);
+    match (&result.meraki_collect, released) {
+        (Some(report), _) => meraki_inflight
+            .health
+            .record_report(report, result.at_unix_ms),
+        (None, Some((org, Some(tier)))) => meraki_inflight.health.record_answered(org, tier),
+        (None, _) => {}
+    }
+}
+
 /// Match one poll result on the single in-memory matcher: count it, attribute provenance, then
 /// **hand off** persistence — metrics to the VM writer, interface/identity metadata to the PG writer,
 /// alert history to the PG writer (inline fallback if full) — and evaluate alerts synchronously
@@ -870,19 +894,7 @@ async fn ingest_result(
     if let Some(pid) = &result.poller_id {
         coordinator.record_result(pid);
     }
-    // Clear the collect lane this job holds on the collect's first returning result (all fan-out
-    // results share the job id; a no-op for non-Meraki jobs) — and record how the collect ended
-    // (ADR-164 決定 18). A report says so outright. A result with no report that released a collect
-    // flight is a poller from before the report existed: a device result means the Dashboard
-    // answered. Memory only — this is the hot path, and deciding belongs to `meraki_health`'s loop.
-    let released = meraki_inflight.complete(result.job_id);
-    match (&result.meraki_collect, released) {
-        (Some(report), _) => meraki_inflight
-            .health
-            .record_report(report, result.at_unix_ms),
-        (None, Some((org, Some(tier)))) => meraki_inflight.health.record_answered(org, tier),
-        (None, _) => {}
-    }
+    record_collect_outcome(meraki_inflight, result);
 
     // End-to-end ingest lag (poll timestamp → matcher entry) — the primary scale health signal.
     if result.at_unix_ms > 0 {
@@ -1393,6 +1405,52 @@ async fn flush_history(history: &Arc<AlertHistoryStore>, buf: &mut Vec<HistoryRe
 mod tests {
     use super::*;
     use crate::store::{self, MetricPoint};
+
+    /// 🚨 ADR-164 決定 36: a current poller sends its report first, so the report releases the flight
+    /// and the device results after it record nothing — and a read that fails on every collect
+    /// counts one more failure each time. Before, the first device result counted as "answered"
+    /// and reset the run, so the organization's page said "failing once, since the latest collect"
+    /// for as long as it went on failing.
+    #[test]
+    fn a_tier_that_keeps_failing_in_part_counts_up_collect_after_collect() {
+        use yagra_common::MerakiTier;
+        let inflight = meraki::MerakiInflight::default();
+        let org = uuid::Uuid::from_u128(0xACE);
+        let result = |job: uuid::Uuid, report: Option<yagra_bus::MerakiCollectReport>| {
+            let mut r: PollResult = serde_json::from_value(serde_json::json!({
+                "job_id": job,
+                "node_id": uuid::Uuid::from_u128(1),
+                "at_unix_ms": 1_000,
+                "outcome": serde_json::to_value(yagra_bus::CheckOutcome::Reachable).unwrap(),
+            }))
+            .expect("a minimal result");
+            r.meraki_collect = report;
+            r
+        };
+        for n in 1..=3 {
+            let job = uuid::Uuid::new_v4();
+            assert!(inflight.acquire_collect(
+                org,
+                meraki::MerakiLane::Fast,
+                job,
+                MerakiTier::Uplink,
+                std::time::Duration::from_secs(300),
+                std::time::Instant::now(),
+            ));
+            let report = yagra_bus::MerakiCollectReport {
+                org,
+                tier: MerakiTier::Uplink,
+                failure: Some("status".into()),
+                listing: Some("appliance_vpn_statuses".into()),
+            };
+            // The order a poller publishes in since 決定 36: the report, then a device.
+            record_collect_outcome(&inflight, &result(job, Some(report)));
+            record_collect_outcome(&inflight, &result(job, None));
+            let failing = inflight.health.failing(org);
+            assert_eq!(failing.len(), 1, "{failing:?}");
+            assert_eq!(failing[0].failures, n, "collect {n}");
+        }
+    }
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use yagra_bus::{CheckOutcome, Sample};

@@ -27,7 +27,18 @@ export function merakiImportMessage(
   folder: string,
 ): MerakiImportMessagePart[] {
   const count = result.imported;
-  if (count === 0) return [{ key: 'meraki.import.doneNone', args: {} }];
+  // What was not imported, and why — said whether or not anything else was (ADR-164 決定 39). An MX
+  // waiting for its LAN read is not "already monitored", so it must not fall into that sentence.
+  const skipped: MerakiImportMessagePart[] = [];
+  if (result.waiting_lan > 0) {
+    skipped.push({ key: 'meraki.import.waitingLan', args: { count: result.waiting_lan } });
+  }
+  if (result.bound_elsewhere > 0) {
+    skipped.push({ key: 'meraki.import.boundElsewhere', args: { count: result.bound_elsewhere } });
+  }
+  if (count === 0) {
+    return skipped.length > 0 ? skipped : [{ key: 'meraki.import.doneNone', args: {} }];
+  }
   const parts: MerakiImportMessagePart[] = [{ key: 'meraki.import.done', args: { count } }];
   const matched = result.filed.matched;
   const rest = count - matched;
@@ -41,5 +52,5 @@ export function merakiImportMessage(
   if (result.filed.ambiguous > 0) {
     parts.push({ key: 'meraki.import.filed.ambiguous', args: { count: result.filed.ambiguous } });
   }
-  return parts;
+  return [...parts, ...skipped];
 }

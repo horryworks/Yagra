@@ -47,6 +47,7 @@ import {
   MAX_DEVICES_RANGE,
   deviceDestination,
   devicesToImport,
+  importRequestDevices,
   importableSerials,
   isImportable,
   merakiDeviceFilterColumns,
@@ -462,7 +463,7 @@ export function MerakiOrgPage() {
       // No `file_by_prefix`: absent means the organization's own setting (see the file header).
       .importMerakiDevices({
         org_uuid: org.id,
-        devices: chosen,
+        devices: importRequestDevices(chosen),
         ...(watch.length > 0 ? { monitored_network_ids: watch } : {}),
       })
       .then((result) => {
