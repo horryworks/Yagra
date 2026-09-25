@@ -2809,6 +2809,30 @@ mod tests {
         assert_eq!(once.imported, 1);
     }
 
+    /// A device is identified by its serial, never by its name: two devices Meraki calls the same
+    /// thing are two nodes. Nothing makes a node name unique, and a check that skipped a repeated
+    /// name — or keyed anything on it — would leave the second device silently unmonitored.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn two_devices_with_the_same_name_are_two_nodes(pool: sqlx::PgPool) {
+        let (repo, org) = acme(&pool).await;
+        let named = |serial: &str| MerakiImportDevice {
+            name: "branch-gw".to_owned(),
+            ..device(serial, "N_1", "One")
+        };
+        let outcome = repo
+            .import_devices(&org, &[named("Q3-1"), named("Q3-2")])
+            .await
+            .expect("import");
+        assert_eq!(outcome.imported, 2, "the second device was skipped");
+        let nodes: i64 = sqlx::query_scalar("SELECT count(*) FROM nodes WHERE name = 'branch-gw'")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(nodes, 2);
+        assert_eq!(pgtest::rows(&pool, "meraki_devices").await, 2);
+    }
+
     /// The UNIQUE on `meraki_devices.serial` spans every organization, so the skip has to as well:
     /// a serial bound under another organization is left alone, and the rest of the batch lands.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

@@ -312,6 +312,21 @@ mod tests {
         assert_eq!(pick.over_cap, 0);
     }
 
+    /// The name orders the pick and decides nothing else: two devices Meraki calls the same thing
+    /// both qualify, and both count against the cap.
+    #[test]
+    fn two_devices_with_the_same_name_are_both_picked() {
+        let named = |serial: &str| DeviceRecord {
+            name: "branch-gw".into(),
+            ..record(serial, MerakiDeviceState::New, true)
+        };
+        let devices = [named("Q3-1"), named("Q3-2")];
+        let pick = pick_automatic(&devices, 1000, true);
+        assert_eq!(serials(&pick), ["Q3-1", "Q3-2"]);
+        let capped = pick_automatic(&devices, 1, true);
+        assert_eq!((serials(&capped), capped.over_cap), (vec!["Q3-1"], 1));
+    }
+
     /// ADR-164 決定 28: an MX whose network's LAN side has not been read yet has no address, and an
     /// import would file it by none and never move it. It waits — **in its place**: the devices
     /// behind it in the order do not take its slot under the cap, or on an organization's first
