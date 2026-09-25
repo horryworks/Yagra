@@ -235,7 +235,14 @@ fn render_context(ctx: &IncidentContext) -> String {
 }
 
 fn render_node(n: &NodeFacts) -> String {
-    let mut s = format!("{} ({})", n.name, n.address);
+    // A node with no address is stored at the unspecified one (a Meraki mesh repeater, a DNS
+    // monitor on the system resolver). Handing the model `0.0.0.0` invites it to reason about an
+    // address that does not exist, so it is told there is none (ADR-175).
+    let mut s = if n.address.is_unspecified() {
+        format!("{} (no address)", n.name)
+    } else {
+        format!("{} ({})", n.name, n.address)
+    };
     match (&n.vendor, &n.model) {
         (Some(v), Some(m)) => {
             let _ = write!(s, ", {v} {m}");
@@ -351,6 +358,17 @@ mod tests {
             pool: Some("branch-osaka".to_owned()),
             tags: vec!["core".to_owned()],
         }
+    }
+
+    /// ADR-175: the unspecified address is "no address", never an address to reason about.
+    #[test]
+    fn a_node_with_no_address_is_described_as_having_none() {
+        let mut n = node("ap-01");
+        assert!(render_node(&n).starts_with("ap-01 (192.168.10.1)"));
+        n.address = "0.0.0.0".parse::<IpAddr>().unwrap();
+        let line = render_node(&n);
+        assert!(line.starts_with("ap-01 (no address)"), "{line}");
+        assert!(!line.contains("0.0.0.0"), "{line}");
     }
 
     fn ctx() -> IncidentContext {

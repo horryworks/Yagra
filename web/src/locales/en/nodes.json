@@ -60,7 +60,12 @@
     "meraki": "Cisco Meraki (Dashboard API)"
   },
   "kindBadge": {
-    "accessPoint": "Access point"
+    "accessPoint": "Access point",
+    "meshRepeater": "Mesh repeater — this access point has no wired uplink and reaches the network over Wi-Fi through another AP, so Meraki reports no LAN IP for it."
+  },
+  "address": {
+    "none": "No IP",
+    "noneRepeater": "No IP (mesh repeater)"
   },
   "groupType": {
     "site": "Site",

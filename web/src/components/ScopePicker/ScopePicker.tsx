@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import { SearchField } from '../ui/SearchField';
 import { groupOptions } from '../../lib/nodeTree';
 import { useNodeSearch } from '../../lib/useNodeSearch';
@@ -221,7 +222,7 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
                       onClick={() => pickNode(n.id, n.name)}
                     >
                       <span className="scope-opt-name">{n.name}</span>
-                      <span className="scope-opt-addr mono">{n.address}</span>
+                      <span className="scope-opt-addr mono">{addressText(n.address, t)}</span>
                     </button>
                   ))
                 )}

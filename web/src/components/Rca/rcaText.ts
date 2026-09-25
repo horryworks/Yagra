@@ -5,6 +5,7 @@
 
 import { ApiError } from '../../services/api';
 import type { RcaNodeFacts } from '../../types/api';
+import { hasAddress } from '../../lib/nodeAddress';
 
 /** Minimal shape of i18next's `t` — enough to map a code to a sentence without importing react. */
 export type Translate = (key: string, opts?: Record<string, unknown>) => string;
@@ -16,10 +17,13 @@ export function formatWindow(secs: number): string {
   return `${Math.round(secs / 60)}m`;
 }
 
-/** `name (address)`, with vendor/model appended when the inventory has them. */
+/** `name (address)`, with vendor/model appended when the inventory has them. A node stored at the
+ *  unspecified address has none, so the parenthesis is left out rather than showing `0.0.0.0`
+ *  (ADR-175). */
 export function nodeLine(n: RcaNodeFacts): string {
   const suffix = [n.vendor, n.model].filter(Boolean).join(' ');
-  return suffix ? `${n.name} (${n.address}) · ${suffix}` : `${n.name} (${n.address})`;
+  const head = hasAddress(n.address) ? `${n.name} (${n.address})` : n.name;
+  return suffix ? `${head} · ${suffix}` : head;
 }
 
 /**

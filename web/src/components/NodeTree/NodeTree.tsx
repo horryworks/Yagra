@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
@@ -1322,7 +1323,7 @@ export function NodeTree({
           tabIndex={-1}
           className="ntree-node-name"
           // Every row: the name can be cut off, and the address is how two rows are told apart.
-          title={`${node.name} — ${node.address}`}
+          title={`${node.name} — ${addressText(node.address, t, { meshRepeater: node.meraki_repeater })}`}
           onClick={(e) => {
             e.stopPropagation();
             clickNode(e, node);
@@ -1330,7 +1331,9 @@ export function NodeTree({
         >
           {node.name}
         </button>
-        {sameName.has(node.id) && <span className="ntree-node-addr">{node.address}</span>}
+        {sameName.has(node.id) && <span className="ntree-node-addr">
+            {addressText(node.address, t, { meshRepeater: node.meraki_repeater })}
+          </span>}
         {pins?.nodes.has(node.id) && (
           <span className="ntree-pin" role="img" title={t('tree.pinnedMark')} aria-label={t('tree.pinnedMark')}>
             <PinIcon />
@@ -1339,7 +1342,11 @@ export function NodeTree({
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
             ordinary devices, so a badge on every one of 50k rows would say nothing. */}
-        {nodeBadges({ kind: node.kind, merakiProductType: node.meraki_product_type }).map(
+        {nodeBadges({
+          kind: node.kind,
+          merakiProductType: node.meraki_product_type,
+          merakiRepeater: node.meraki_repeater,
+        }).map(
           (badge) => (
             <NodeBadgeTag
               key={badge.text}

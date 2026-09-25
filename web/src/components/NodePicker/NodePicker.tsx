@@ -7,6 +7,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import { SearchField } from '../ui/SearchField';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import { isImeComposing } from '../../lib/ime';
@@ -226,7 +227,7 @@ export function NodePicker({
                     onClick={() => pick(n.id, n.name)}
                   >
                     <span className="nodepick-opt-name">{n.name}</span>
-                    <span className="nodepick-opt-addr mono">{n.address}</span>
+                    <span className="nodepick-opt-addr mono">{addressText(n.address, t)}</span>
                   </button>
                 ))
               )}

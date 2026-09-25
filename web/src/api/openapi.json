@@ -33532,7 +33532,8 @@
         ],
         "properties": {
           "address": {
-            "type": "string"
+            "type": "string",
+            "description": "The node's address; `0.0.0.0` (or `::`) means it has none (see `NodeSummary.address`)."
           },
           "credential_id": {
             "type": [
@@ -33595,6 +33596,10 @@
                 "description": "A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on\nits spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair."
               }
             ]
+          },
+          "meraki_repeater": {
+            "type": "boolean",
+            "description": "`true` when the Meraki device is a mesh repeater — an access point with no wired uplink,\nwhose `address` is therefore `0.0.0.0` (ADR-175). Absent otherwise."
           },
           "model": {
             "type": [
@@ -34173,7 +34178,8 @@
         ],
         "properties": {
           "address": {
-            "type": "string"
+            "type": "string",
+            "description": "The node's address. `0.0.0.0` (or `::`) means the node **has none** — a Meraki device the\nDashboard reports no LAN IP for, such as a mesh repeater (ADR-175). The column cannot be\nempty, so that is how \"no address\" is stored; it is not an address anything can reach."
           },
           "group_id": {
             "type": [
@@ -34196,6 +34202,10 @@
               "null"
             ],
             "description": "A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),\n`switch`, `appliance`, … — and absent on every other node. What the list's \"AP\" badge is\nread from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is\nan access point. The detail page reads the same value from `meraki_device.product_type`."
+          },
+          "meraki_repeater": {
+            "type": "boolean",
+            "description": "`true` on a Meraki access point that is a **mesh repeater**: it has no wired uplink, so the\nDashboard reports no LAN IP for it and its `address` is `0.0.0.0` (ADR-175). Absent\notherwise. What the list's \"Repeater\" badge is read from."
           },
           "model": {
             "type": [

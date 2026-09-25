@@ -12,6 +12,7 @@
 
 import type { TFunction } from 'i18next';
 import type { NodeDetail } from '../../types/api';
+import { addressText, hasAddress } from '../../lib/nodeAddress';
 
 export interface SubLinePart {
   /** Stable key for the React list — the fact this part states, not its text. */
@@ -47,7 +48,13 @@ export function nodeSubLineParts(node: NodeDetail, t: TFunction): SubLinePart[] 
     case 'meraki':
     case 'wireless_ap':
       return [
-        { id: 'address', text: node.address, mono: true },
+        {
+          id: 'address',
+          // A mesh repeater, or any node stored at the unspecified address, says it has none
+          // rather than showing `0.0.0.0` (ADR-175).
+          text: addressText(node.address, t, { meshRepeater: node.meraki_repeater }),
+          mono: hasAddress(node.address),
+        },
         {
           id: 'device',
           text: [node.vendor, node.model].filter(Boolean).join(' ') || t('detail.unknownDevice'),

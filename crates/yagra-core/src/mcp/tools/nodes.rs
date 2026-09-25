@@ -256,7 +256,10 @@ impl YagraMcp {
                        inherited from the folder tree when the node sets none); `limit` is 1–100 \
                        (default 50). Returns node id, name, address, state, kind, parent, group, \
                        vendor, model, and tags. `kind` says what a node is — `device`, `url`, \
-                       `dns`, `meraki` or `wireless_ap` — and therefore which metrics it can have."
+                       `dns`, `meraki` or `wireless_ap` — and therefore which metrics it can have. \
+                       `address` is null when the node has none — a Meraki access point marked \
+                       `meraki_repeater: true` is a mesh repeater, with no wired uplink and so \
+                       no LAN IP."
     )]
     async fn list_nodes(
         &self,
@@ -359,6 +362,7 @@ impl YagraMcp {
                     &tags,
                 )
                 .with_meraki_product_type(kinds.meraki_product_types.remove(&n.id.as_uuid()))
+                .with_meraki_repeater(kinds.meraki_repeaters.contains(&n.id.as_uuid()))
             })
             .collect();
         ok_json(TOOL, &out)
@@ -505,13 +509,26 @@ impl YagraMcp {
             meraki.as_ref(),
         )
         .await;
+        // The product type and the repeater mark the list carries (ADR-168 決定 11, ADR-175), read
+        // only for a Meraki node.
+        let product = match meraki {
+            Some(_) => admin
+                .meraki_devices
+                .product_types(&[p.node_id])
+                .await
+                .unwrap_or_default()
+                .remove(&p.node_id),
+            None => None,
+        };
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
                 Some(state),
                 kind,
                 &crate::api::util::tag_resolver(admin).await,
-            ),
+            )
+            .with_meraki_repeater(product.as_ref().is_some_and(|p| p.mesh_repeater))
+            .with_meraki_product_type(product.map(|p| p.product_type)),
             // The same one rule the REST detail view reads, from the same holder — never
             // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),

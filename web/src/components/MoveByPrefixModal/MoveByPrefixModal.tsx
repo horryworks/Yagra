@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import { api, errMsg } from '../../services/api';
 import type { MovePreview, NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
@@ -91,8 +92,14 @@ export function MoveByPrefixModal({
     return (
       <li key={id}>
         <span className="mbp-name">{n.name}</span>
-        <span className="mbp-addr mono">{n.address}</span>
-        {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map((badge) => (
+        <span className="mbp-addr mono">
+          {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
+        </span>
+        {nodeBadges({
+          kind: n.kind,
+          merakiProductType: n.meraki_product_type,
+          merakiRepeater: n.meraki_repeater,
+        }).map((badge) => (
           <NodeBadgeTag
             key={badge.text}
             badge={badge}

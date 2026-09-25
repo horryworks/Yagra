@@ -127,6 +127,28 @@ describe('node badges drawn as a glyph', () => {
     ).toEqual([null]);
   });
 
+  // ADR-175: a mesh repeater is an MR, so "Repeater" follows the AP mark — and only there. The
+  // flag on anything that is not a Meraki access point draws nothing.
+  it('marks a Meraki access point that is a mesh repeater, after the AP mark', () => {
+    expect(
+      nodeBadges({ kind: 'meraki', merakiProductType: 'wireless', merakiRepeater: true }).map(
+        (b) => [b.text, b.icon, b.labelKey],
+      ),
+    ).toEqual([
+      ['Meraki', null, 'kind.meraki'],
+      ['AP', 'wifi', 'kindBadge.accessPoint'],
+      ['Repeater', null, 'kindBadge.meshRepeater'],
+    ]);
+    expect(
+      nodeBadges({ kind: 'meraki', merakiProductType: 'switch', merakiRepeater: true }).map(
+        (b) => b.text,
+      ),
+    ).toEqual(['Meraki']);
+    expect(nodeBadges({ kind: 'wireless_ap', merakiRepeater: true }).map((b) => b.text)).toEqual([
+      'AP',
+    ]);
+  });
+
   it('adds a class only for a glyph', () => {
     expect(badgeIconClass(null)).toBe('');
     expect(badgeIconClass('wifi')).toBe(' is-wifi');

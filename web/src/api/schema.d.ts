@@ -9760,6 +9760,7 @@ export interface components {
          *     node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
          */
         NodeDetail: {
+            /** @description The node's address; `0.0.0.0` (or `::`) means it has none (see `NodeSummary.address`). */
             address: string;
             /** Format: uuid */
             credential_id?: string | null;
@@ -9794,6 +9795,11 @@ export interface components {
             kind: components["schemas"]["NodeKind"];
             meraki_device?: null | components["schemas"]["MerakiDeviceConfig"];
             meraki_pair?: null | components["schemas"]["MerakiPairView"];
+            /**
+             * @description `true` when the Meraki device is a mesh repeater — an access point with no wired uplink,
+             *     whose `address` is therefore `0.0.0.0` (ADR-175). Absent otherwise.
+             */
+            meraki_repeater?: boolean;
             model?: string | null;
             name: string;
             /**
@@ -10105,6 +10111,11 @@ export interface components {
         };
         /** @description One inventory row (mirrors the WebUI `NodeSummary`). */
         NodeSummary: {
+            /**
+             * @description The node's address. `0.0.0.0` (or `::`) means the node **has none** — a Meraki device the
+             *     Dashboard reports no LAN IP for, such as a mesh repeater (ADR-175). The column cannot be
+             *     empty, so that is how "no address" is stored; it is not an address anything can reach.
+             */
             address: string;
             /**
              * Format: uuid
@@ -10127,6 +10138,12 @@ export interface components {
              *     an access point. The detail page reads the same value from `meraki_device.product_type`.
              */
             meraki_product_type?: string | null;
+            /**
+             * @description `true` on a Meraki access point that is a **mesh repeater**: it has no wired uplink, so the
+             *     Dashboard reports no LAN IP for it and its `address` is `0.0.0.0` (ADR-175). Absent
+             *     otherwise. What the list's "Repeater" badge is read from.
+             */
+            meraki_repeater?: boolean;
             model?: string | null;
             name: string;
             /**

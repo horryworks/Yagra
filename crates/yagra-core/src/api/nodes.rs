@@ -243,6 +243,9 @@ pub(crate) async fn fresh_fleet_ids(store: &dyn crate::store::MetricStore) -> Ha
 pub(crate) struct NodeSummary {
     id: NodeId,
     name: String,
+    /// The node's address. `0.0.0.0` (or `::`) means the node **has none** — a Meraki device the
+    /// Dashboard reports no LAN IP for, such as a mesh repeater (ADR-175). The column cannot be
+    /// empty, so that is how "no address" is stored; it is not an address anything can reach.
     address: String,
     state: NodeState,
     /// Descriptive maker/model for the "name (addr) (vendor) (model)" display.
@@ -268,6 +271,11 @@ pub(crate) struct NodeSummary {
     /// an access point. The detail page reads the same value from `meraki_device.product_type`.
     #[serde(skip_serializing_if = "Option::is_none")]
     meraki_product_type: Option<String>,
+    /// `true` on a Meraki access point that is a **mesh repeater**: it has no wired uplink, so the
+    /// Dashboard reports no LAN IP for it and its `address` is `0.0.0.0` (ADR-175). Absent
+    /// otherwise. What the list's "Repeater" badge is read from.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    meraki_repeater: bool,
 }
 
 /// One keyset page of the inventory.
@@ -435,11 +443,13 @@ pub(crate) struct NodeKinds {
     /// A Meraki node's product type (`wireless`, `switch`, …), for the list's "AP" badge
     /// (ADR-168 決定 11). Read in the same query that says the node is a Meraki one.
     pub(crate) meraki_product_types: HashMap<Uuid, String>,
+    /// The Meraki access points that are mesh repeaters (ADR-175), from the same read.
+    pub(crate) meraki_repeaters: HashSet<Uuid>,
 }
 
 /// [`node_kinds`], keeping the Meraki product types the kind was read from.
 pub(crate) async fn node_kinds_with_products(admin: &AdminState, ids: &[Uuid]) -> NodeKinds {
-    let (wireless_ap, meraki_product_types, url, dns) = tokio::join!(
+    let (wireless_ap, meraki_products, url, dns) = tokio::join!(
         async {
             admin
                 .wireless
@@ -457,6 +467,15 @@ pub(crate) async fn node_kinds_with_products(admin: &AdminState, ids: &[Uuid]) -
         async { admin.url_checks.filter_url(ids).await.unwrap_or_default() },
         async { admin.dns_checks.filter_dns(ids).await.unwrap_or_default() },
     );
+    let meraki_repeaters = meraki_products
+        .iter()
+        .filter(|(_, p)| p.mesh_repeater)
+        .map(|(id, _)| *id)
+        .collect();
+    let meraki_product_types: HashMap<Uuid, String> = meraki_products
+        .into_iter()
+        .map(|(id, p)| (id, p.product_type))
+        .collect();
     let kinds = resolve_kinds(
         ids,
         &KindSets {
@@ -469,6 +488,7 @@ pub(crate) async fn node_kinds_with_products(admin: &AdminState, ids: &[Uuid]) -
     NodeKinds {
         kinds,
         meraki_product_types,
+        meraki_repeaters,
     }
 }
 
@@ -571,6 +591,7 @@ pub(super) async fn build_node_summaries(
                 .copied()
                 .unwrap_or(NodeKind::Device),
             meraki_product_type: kinds.meraki_product_types.remove(&n.id.as_uuid()),
+            meraki_repeater: kinds.meraki_repeaters.contains(&n.id.as_uuid()),
             id: n.id,
             name: n.name,
             address: n.address.to_string(),
@@ -1083,6 +1104,7 @@ pub(crate) async fn resolve_node_names(
 pub(crate) struct NodeDetail {
     id: NodeId,
     name: String,
+    /// The node's address; `0.0.0.0` (or `::`) means it has none (see `NodeSummary.address`).
     address: String,
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
@@ -1130,6 +1152,10 @@ pub(crate) struct NodeDetail {
     dns_check: Option<DnsCheckConfig>,
     /// Cisco Meraki binding when this node carries a `meraki_devices` row; `null` otherwise.
     meraki_device: Option<yagra_common::MerakiDeviceConfig>,
+    /// `true` when the Meraki device is a mesh repeater — an access point with no wired uplink,
+    /// whose `address` is therefore `0.0.0.0` (ADR-175). Absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    meraki_repeater: bool,
     /// What this node is to the wireless inventory: a controller's AP inventory and import settings,
     /// or an imported access point's entry in the AP list. `null` for a node that is neither.
     wireless: Option<super::wireless::NodeWireless>,
@@ -1239,6 +1265,16 @@ async fn get_node(
     let url_check = admin.url_checks.get(node_id).await.unwrap_or(None);
     let dns_check = admin.dns_checks.get(node_id).await.unwrap_or(None);
     let meraki_device = admin.meraki_devices.get(node_id).await.unwrap_or(None);
+    let meraki_repeater = match meraki_device {
+        Some(_) => admin
+            .meraki_devices
+            .product_types(&[node_id])
+            .await
+            .unwrap_or_default()
+            .get(&node_id)
+            .is_some_and(|p| p.mesh_repeater),
+        None => false,
+    };
     let wireless = super::wireless::node_wireless(&st, admin, &scope, node_id).await;
     let meraki_pair =
         super::meraki::node_meraki_pair(&st, admin, &scope, node_id, meraki_device.as_ref()).await;
@@ -1262,6 +1298,7 @@ async fn get_node(
         url_check,
         dns_check,
         meraki_device,
+        meraki_repeater,
         wireless,
         meraki_pair,
         id: node.id,

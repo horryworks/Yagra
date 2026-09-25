@@ -42,8 +42,11 @@ fn state_str(state: Option<NodeState>) -> String {
 pub struct NodeSummaryDto {
     pub id: Uuid,
     pub name: String,
-    /// Management address (IPv4 or IPv6), rendered as text.
-    pub address: String,
+    /// Management address (IPv4 or IPv6), rendered as text. `null` when the node has none — a
+    /// Meraki device the Dashboard reports no LAN IP for, such as a mesh repeater (ADR-175). The
+    /// inventory stores that as `0.0.0.0`, which is not an address anything can reach, so it is
+    /// never passed on as one.
+    pub address: Option<String>,
     /// Rolled-up display state: `ok`/`warning`/`critical`/`unknown`/`unreachable`/`maintenance`.
     pub state: String,
     /// What this node is, and therefore what it can be asked about:
@@ -68,6 +71,11 @@ pub struct NodeSummaryDto {
     /// the list tool carries it too (read parity).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meraki_product_type: Option<String>,
+    /// `true` on a Meraki access point that is a mesh repeater: no wired uplink, reached over
+    /// Wi-Fi through another AP, and therefore no address (ADR-175). Absent otherwise — the WebUI
+    /// badges it "Repeater", so the tools carry it too (read parity).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub meraki_repeater: bool,
 }
 
 impl NodeSummaryDto {
@@ -86,7 +94,7 @@ impl NodeSummaryDto {
         Self {
             id: node.id.0,
             name: node.name.clone(),
-            address: node.address.to_string(),
+            address: (!node.address.is_unspecified()).then(|| node.address.to_string()),
             state: state_str(state),
             // The serde token, so this string and the REST field are produced by one mechanism.
             kind: serde_json::to_value(kind)
@@ -99,6 +107,7 @@ impl NodeSummaryDto {
             model: node.model.clone(),
             tags: tags.effective(node),
             meraki_product_type: None,
+            meraki_repeater: false,
         }
     }
 
@@ -106,6 +115,13 @@ impl NodeSummaryDto {
     #[must_use]
     pub fn with_meraki_product_type(mut self, product_type: Option<String>) -> Self {
         self.meraki_product_type = product_type;
+        self
+    }
+
+    /// The same row, marked as a mesh repeater when the caller read that it is one (ADR-175).
+    #[must_use]
+    pub fn with_meraki_repeater(mut self, repeater: bool) -> Self {
+        self.meraki_repeater = repeater;
         self
     }
 }
@@ -1015,6 +1031,33 @@ mod tests {
         let json = serde_json::to_value(&ap).expect("serialize");
         assert_eq!(json["kind"], "meraki");
         assert_eq!(json["meraki_product_type"], "wireless");
+        assert!(
+            json.get("meraki_repeater").is_none(),
+            "an AP that is not a repeater carries the field"
+        );
+        let repeater = ap.with_meraki_repeater(true);
+        let json = serde_json::to_value(&repeater).expect("serialize");
+        assert_eq!(json["meraki_repeater"], true);
+    }
+
+    /// ADR-175: a node with no address is stored at the unspecified address, and the tools say
+    /// `null` rather than hand a model `0.0.0.0` as if it were one. Both families.
+    #[test]
+    fn node_summary_dto_reports_no_address_for_the_unspecified_one() {
+        let tags = crate::tagres::TagResolver::empty();
+        let mut node = sample_node_with_secret();
+        for unspecified in ["0.0.0.0", "::"] {
+            node.address = unspecified.parse().expect("addr");
+            let dto = NodeSummaryDto::from_node(&node, None, NodeKind::Meraki, &tags);
+            let json = serde_json::to_value(&dto).expect("serialize");
+            assert!(
+                json["address"].is_null(),
+                "{unspecified} was passed on as an address"
+            );
+        }
+        node.address = "192.0.2.7".parse().expect("addr");
+        let dto = NodeSummaryDto::from_node(&node, None, NodeKind::Device, &tags);
+        assert_eq!(dto.address.as_deref(), Some("192.0.2.7"));
     }
 
     /// A URL check with the binding actually set — the only version of this test that proves

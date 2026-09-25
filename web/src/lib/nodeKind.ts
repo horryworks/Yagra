@@ -118,10 +118,15 @@ export interface NodeBadge {
  * `kind: meraki` — its liveness and its screens are the Meraki ones — so the kind alone cannot say
  * it is an access point. It is the controller-walked AP's badge exactly — the Wi-Fi mark, black on
  * white — because it names what the device is rather than whose it is.
+ *
+ * Last, for a Meraki access point that is a mesh repeater, "Repeater" (ADR-175): it has no wired
+ * uplink, which is why it has no address and no IP range files it. English in both languages, like
+ * "Meraki" and "AP"; the tooltip carries the meaning.
  */
 export function nodeBadges(node: {
   kind: NodeKind;
   merakiProductType?: string | null;
+  merakiRepeater?: boolean | null;
 }): NodeBadge[] {
   const spec = NODE_KIND_SPEC[node.kind];
   const out: NodeBadge[] = [];
@@ -136,6 +141,9 @@ export function nodeBadges(node: {
   if (node.kind === 'meraki' && isMerakiAccessPoint(node.merakiProductType)) {
     const ap = NODE_KIND_SPEC.wireless_ap;
     out.push({ text: 'AP', brand: null, icon: ap.badgeIcon, labelKey: 'kindBadge.accessPoint' });
+    if (node.merakiRepeater) {
+      out.push({ text: 'Repeater', brand: null, icon: null, labelKey: 'kindBadge.meshRepeater' });
+    }
   }
   return out;
 }

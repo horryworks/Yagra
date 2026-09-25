@@ -375,6 +375,7 @@ export function NodeDetail({
             {nodeBadges({
               kind: node.kind,
               merakiProductType: node.meraki_device?.product_type,
+              merakiRepeater: node.meraki_repeater,
             }).map((badge) => (
               <NodeBadgeTag
                 key={badge.text}

@@ -108,6 +108,7 @@ import { DnsHealth } from './DnsHealth';
 import { CheckConfigActions } from './CheckConfigActions';
 import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
+import { addressText, hasAddress } from '../../lib/nodeAddress';
 
 interface Props {
   node: NodeDetail;
@@ -1116,7 +1117,11 @@ function useFacts(
             mono: assignment?.polled_by.state === 'assigned',
             warn: polledByIsWarning(assignment?.polled_by),
           },
-    address: { label: t('field.ipAddress'), value: node.address, mono: true },
+    address: {
+      label: t('field.ipAddress'),
+      value: addressText(node.address, t, { meshRepeater: node.meraki_repeater }),
+      mono: hasAddress(node.address),
+    },
     maker: { label: t('field.maker'), value: node.vendor || '—' },
     model: { label: t('field.model'), value: node.model || '—', mono: true },
     // Observed, not configured (ADR-147): a stack lists every member, and a dash means ENTITY-MIB

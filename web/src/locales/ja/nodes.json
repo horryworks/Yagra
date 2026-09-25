@@ -60,7 +60,12 @@
     "meraki": "Cisco Meraki (Dashboard API)"
   },
   "kindBadge": {
-    "accessPoint": "アクセスポイント"
+    "accessPoint": "アクセスポイント",
+    "meshRepeater": "メッシュのリピーター。有線の上り回線が無く、ほかの AP を経由して無線でつながっています。そのため Meraki は LAN の IP を返しません。"
+  },
+  "address": {
+    "none": "IP なし",
+    "noneRepeater": "IP なし（メッシュのリピーター）"
   },
   "groupType": {
     "site": "サイト",

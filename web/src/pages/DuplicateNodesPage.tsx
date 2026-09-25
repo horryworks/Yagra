@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../lib/nodeAddress';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 import { useCan } from '../store';
@@ -147,7 +148,7 @@ export function DuplicateNodesPage() {
         width: '150px',
         render: (r) => (
           <span className="mono" title={r.member.address}>
-            {r.member.address}
+            {addressText(r.member.address, t)}
           </span>
         ),
       },

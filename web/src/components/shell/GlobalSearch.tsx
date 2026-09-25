@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import { SearchField } from '../ui/SearchField';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import type { NodeSearchResult } from '../../types/api';
@@ -147,7 +148,7 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
                   onClick={() => go(r)}
                 >
                   <span className="gsearch-opt-name">{r.name}</span>
-                  <span className="gsearch-opt-addr mono">{r.address}</span>
+                  <span className="gsearch-opt-addr mono">{addressText(r.address, t)}</span>
                 </button>
               ))
             )}

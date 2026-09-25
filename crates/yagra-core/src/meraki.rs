@@ -1379,6 +1379,31 @@ pub struct MerakiDeviceRepo {
     pool: PgPool,
 }
 
+/// What the node list says about one Meraki node beyond its kind: the Dashboard's product type
+/// (the "AP" badge, ADR-168 決定 11) and whether it is a mesh repeater (the "Repeater" badge,
+/// ADR-175).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerakiProduct {
+    pub product_type: String,
+    pub mesh_repeater: bool,
+}
+
+/// Whether a Meraki device is a mesh repeater — an access point with no wired uplink, which the
+/// Dashboard's device listing reports with no `lanIp` (ADR-175 決定 1).
+///
+/// Read from the inventory row the sync keeps current, so an AP later cabled in loses the mark at
+/// the next sync. A device with **no** inventory row is not called a repeater: nothing has said it
+/// lacks an address, and a wrong mark is worse than a missing one. Measured on a real organization
+/// (1,710 MRs): offline APs keep their `lanIp`, so an empty one does not mean "switched off".
+#[must_use]
+pub fn is_mesh_repeater(product_type: &str, listed: bool, lan_ip: Option<&str>) -> bool {
+    product_type.trim().eq_ignore_ascii_case("wireless")
+        && listed
+        && lan_ip
+            .and_then(crate::meraki_inventory::usable_address)
+            .is_none()
+}
+
 impl MerakiDeviceRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -1404,19 +1429,40 @@ impl MerakiDeviceRepo {
 
     /// Of the given node ids, the Meraki devices and each one's product type as the Dashboard names
     /// it (`wireless`, `switch`, `appliance`, …) — what the node list needs for both its kind and
-    /// the "AP" badge beside it (ADR-168 決定 11), in the one read it already made for the kind.
+    /// the "AP" badge beside it (ADR-168 決定 11), in the one read it already made for the kind —
+    /// and whether it is a mesh repeater (ADR-175), read from the inventory row in the same query.
     /// Empty input short-circuits so we never run an empty-array query.
-    pub async fn product_types(&self, node_ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, String>> {
+    pub async fn product_types(
+        &self,
+        node_ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, MerakiProduct>> {
         if node_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows =
-            sqlx::query("SELECT node_id, product_type FROM meraki_devices WHERE node_id = ANY($1)")
-                .bind(node_ids)
-                .fetch_all(&self.pool)
-                .await?;
+        let rows = sqlx::query(
+            "SELECT d.node_id, d.product_type, i.serial AS inventory_serial, i.lan_ip \
+             FROM meraki_devices d \
+             LEFT JOIN meraki_inventory i ON i.org_id = d.org_id AND i.serial = d.serial \
+             WHERE d.node_id = ANY($1)",
+        )
+        .bind(node_ids)
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
-            .map(|r| Ok((r.try_get("node_id")?, r.try_get("product_type")?)))
+            .map(|r| {
+                let product_type: String = r.try_get("product_type")?;
+                let listed: Option<String> = r.try_get("inventory_serial")?;
+                let lan_ip: Option<String> = r.try_get("lan_ip")?;
+                let mesh_repeater =
+                    is_mesh_repeater(&product_type, listed.is_some(), lan_ip.as_deref());
+                Ok((
+                    r.try_get("node_id")?,
+                    MerakiProduct {
+                        product_type,
+                        mesh_repeater,
+                    },
+                ))
+            })
             .collect()
     }
 
@@ -2050,6 +2096,90 @@ mod tests {
             Uuid::new_v5(&MERAKI_NODE_NS, as_org.as_bytes()),
             org_group_id(as_org)
         );
+    }
+
+    /// ADR-175 決定 1: a repeater is an MR whose inventory row carries no usable LAN address. Every
+    /// other combination is not one — including an MR with no inventory row, where nothing has
+    /// said it lacks an address.
+    #[test]
+    fn a_mesh_repeater_is_an_access_point_listed_with_no_lan_address() {
+        assert!(is_mesh_repeater("wireless", true, None));
+        assert!(is_mesh_repeater("Wireless", true, Some("0.0.0.0")));
+        assert!(is_mesh_repeater("wireless", true, Some("::")));
+        assert!(!is_mesh_repeater("wireless", true, Some("10.0.0.5")));
+        assert!(
+            !is_mesh_repeater("wireless", false, None),
+            "no inventory row"
+        );
+        assert!(!is_mesh_repeater("switch", true, None));
+        assert!(
+            !is_mesh_repeater("appliance", true, None),
+            "an MX waiting for its VLANs"
+        );
+    }
+
+    /// The node list's read joins the inventory row by (organization, serial) and marks only the
+    /// access point that is listed with no LAN address (ADR-175).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn product_types_mark_only_an_access_point_listed_without_a_lan_address(
+        pool: sqlx::PgPool,
+    ) {
+        let (repo, org) = acme(&pool).await;
+        let mut switch = device("MS-1", "N_1", "One");
+        switch.product_type = "switch".to_owned();
+        repo.import_devices(
+            &org,
+            &[
+                device("RPT-1", "N_1", "One"),
+                device("WIRED-1", "N_1", "One"),
+                device("UNLISTED-1", "N_1", "One"),
+                switch,
+            ],
+        )
+        .await
+        .expect("import");
+        for (serial, product, lan_ip) in [
+            ("RPT-1", "wireless", None),
+            ("WIRED-1", "wireless", Some("10.4.0.9")),
+            ("MS-1", "switch", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO meraki_inventory (org_id, serial, product_type, lan_ip)                  VALUES ($1, $2, $3, $4)                  ON CONFLICT (org_id, serial) DO UPDATE                  SET product_type = EXCLUDED.product_type, lan_ip = EXCLUDED.lan_ip",
+            )
+            .bind(org.id)
+            .bind(serial)
+            .bind(product)
+            .bind(lan_ip)
+            .execute(&pool)
+            .await
+            .expect("an inventory row");
+        }
+        let node_of = |serial: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT node_id FROM meraki_devices WHERE serial = $1",
+                )
+                .bind(serial)
+                .fetch_one(&pool)
+                .await
+                .expect("the imported node")
+            }
+        };
+        let ids = [
+            node_of("RPT-1").await,
+            node_of("WIRED-1").await,
+            node_of("UNLISTED-1").await,
+            node_of("MS-1").await,
+        ];
+        let got = MerakiDeviceRepo::new(pool.clone())
+            .product_types(&ids)
+            .await
+            .expect("read");
+        let marked: Vec<bool> = ids.iter().map(|id| got[id].mesh_repeater).collect();
+        assert_eq!(marked, vec![true, false, false, false]);
+        assert_eq!(got[&ids[3]].product_type, "switch");
     }
 
     // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------

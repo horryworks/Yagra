@@ -7,6 +7,7 @@
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { addressText } from '../../lib/nodeAddress';
 import { StatusDot } from '../ui/StatusDot';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -260,7 +261,11 @@ export function GroupDetail({
                   <>
                     <StatusDot state={n.state} withLabel={false} />
                     <span className="nd-member-name">{n.name}</span>
-                    {nodeBadges({ kind: n.kind, merakiProductType: n.meraki_product_type }).map(
+                    {nodeBadges({
+                      kind: n.kind,
+                      merakiProductType: n.meraki_product_type,
+                      merakiRepeater: n.meraki_repeater,
+                    }).map(
                       (badge) => (
                         <NodeBadgeTag
                           key={badge.text}
@@ -270,7 +275,9 @@ export function GroupDetail({
                         />
                       ),
                     )}
-                    <span className="nd-member-addr mono">{n.address}</span>
+                    <span className="nd-member-addr mono">
+                      {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
+                    </span>
                   </>
                 );
                 // A real button, so the row is reachable by keyboard like every other drill-in
