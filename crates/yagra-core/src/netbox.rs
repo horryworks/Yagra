@@ -1118,6 +1118,9 @@ pub struct SyncReport {
     /// reads identically whether NetBox has none or whether every one of them was dropped. The
     /// per-row reason goes to `tracing::warn!`; the number is what makes someone go and read it.
     pub prefixes_skipped: usize,
+    /// Folders this run created or changed. Zero on a sync of an unchanged NetBox, which is what
+    /// lets the config generation stay put when nothing moved (ADR-178 決定 7).
+    pub folders_changed: usize,
     /// The database's clock **at the moment the run began**, before a single row was written.
     ///
     /// 🚨 This has to be the *start* and not the finish, and getting it wrong is not subtle — it
@@ -1376,6 +1379,16 @@ impl NetboxRepo {
     /// the `DO UPDATE SET`: the scope is one sequence shared with the folder's nodes, so rewriting
     /// it every cycle would move every synced folder above every node — and it would overwrite an
     /// order the operator arranged here, which is the more recent statement of intent.
+    ///
+    /// Returns whether the folder was **created or changed** — the `WHERE … IS DISTINCT FROM` makes
+    /// an identical row a no-op, so an hourly sync of an unchanged NetBox writes nothing to
+    /// `node_groups`. A change bumps the config generation at once (ADR-178 決定 7): the scope
+    /// resolver's folder-tree cache (`GroupRepo::cached_edges`) and the alert-config rebuild both
+    /// key on it, and before this a site NetBox added stayed invisible to a scoped caller until
+    /// some unrelated API write happened to bump it. Bumped here rather than at the end of the
+    /// sync, because a run that fails after this folder would never reach the end — and the next
+    /// run finds the row already as NetBox has it, changes nothing, and would never bump either
+    /// (the trap ADR-164 決定 38 records for the Meraki sync).
     #[allow(clippy::too_many_arguments)] // A parameter struct here would be one shape used once.
     async fn upsert_group(
         &self,
@@ -1387,7 +1400,7 @@ impl NetboxRepo {
         latitude: Option<f64>,
         longitude: Option<f64>,
         order: f64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let group_id = kind.group_id(server_id, object_id);
         let mut tx = self.pool.begin().await?;
         // 🚨 **`sort_order` is set when the folder is CREATED and never again** (ADR-162 decision 7).
@@ -1399,7 +1412,7 @@ impl NetboxRepo {
         // every node. The cost of taking it out is that re-ordering sites in NetBox no longer
         // reaches Yagra — chosen deliberately: what the operator arranged here is the more recent
         // statement of intent.
-        sqlx::query(
+        let written = sqlx::query(
             "INSERT INTO node_groups \
                (id, name, group_type, parent_id, sort_order, latitude, longitude) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
@@ -1408,7 +1421,12 @@ impl NetboxRepo {
                group_type = EXCLUDED.group_type, \
                parent_id = EXCLUDED.parent_id, \
                latitude = EXCLUDED.latitude, \
-               longitude = EXCLUDED.longitude",
+               longitude = EXCLUDED.longitude \
+             WHERE (node_groups.name, node_groups.group_type, node_groups.parent_id, \
+                    node_groups.latitude, node_groups.longitude) \
+                   IS DISTINCT FROM \
+                   (EXCLUDED.name, EXCLUDED.group_type, EXCLUDED.parent_id, \
+                    EXCLUDED.latitude, EXCLUDED.longitude)",
         )
         .bind(group_id)
         .bind(name)
@@ -1418,7 +1436,9 @@ impl NetboxRepo {
         .bind(latitude)
         .bind(longitude)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected()
+            > 0;
         sqlx::query(
             "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id, last_seen_at) \
              VALUES ($1, $2, $3, $4, now()) \
@@ -1432,7 +1452,10 @@ impl NetboxRepo {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(())
+        if written {
+            crate::config_gen::bump();
+        }
+        Ok(written)
     }
 
     /// Attach one prefix to one folder.
@@ -1600,6 +1623,7 @@ pub async fn apply(
     // that was never written — a dangling `parent_id` is a foreign-key error that would fail the
     // whole sync over one object.
     let known: std::collections::HashSet<i64> = regions.iter().map(|r| r.id).collect();
+    let mut folders_changed = 0usize;
 
     // Siblings are ordered by name so the tree does not depend on NetBox's id order. Built per
     // parent, which is the scope `sort_order` is compared within.
@@ -1626,17 +1650,21 @@ pub async fn apply(
         let parent = parent_netbox
             .filter(|p| known.contains(p))
             .map(|p| region_group_id(server_id, p));
-        repo.upsert_group(
-            server_id,
-            ObjectKind::Region,
-            r.id,
-            &r.name,
-            parent,
-            None,
-            None,
-            order_of(&region_order, parent_netbox, r.id),
-        )
-        .await?;
+        if repo
+            .upsert_group(
+                server_id,
+                ObjectKind::Region,
+                r.id,
+                &r.name,
+                parent,
+                None,
+                None,
+                order_of(&region_order, parent_netbox, r.id),
+            )
+            .await?
+        {
+            folders_changed += 1;
+        }
     }
 
     // The name each Site's folder gets, computed once. It is needed twice — to order siblings and
@@ -1669,20 +1697,24 @@ pub async fn apply(
         let parent = region_netbox
             .filter(|r| known.contains(r))
             .map(|r| region_group_id(server_id, r));
-        repo.upsert_group(
-            server_id,
-            ObjectKind::Site,
-            s.id,
-            name,
-            parent,
-            s.latitude,
-            s.longitude,
-            // Sites sort after regions within the same parent, so a folder that contains both
-            // reads "areas, then places". The offset is large enough that no realistic region
-            // count collides with it.
-            10_000.0 + order_of(&site_order, region_netbox, s.id),
-        )
-        .await?;
+        if repo
+            .upsert_group(
+                server_id,
+                ObjectKind::Site,
+                s.id,
+                name,
+                parent,
+                s.latitude,
+                s.longitude,
+                // Sites sort after regions within the same parent, so a folder that contains both
+                // reads "areas, then places". The offset is large enough that no realistic region
+                // count collides with it.
+                10_000.0 + order_of(&site_order, region_netbox, s.id),
+            )
+            .await?
+        {
+            folders_changed += 1;
+        }
     }
 
     // Prefixes last: every folder they can attach to has now been written, so the foreign key
@@ -1741,6 +1773,7 @@ pub async fn apply(
         regions: regions.len(),
         sites: sites.len(),
         missing: 0,
+        folders_changed,
         sites_without_site_id,
         prefixes_readable: prefixes.is_some(),
         prefixes: prefixes_stored,
@@ -2234,9 +2267,11 @@ mod tests {
         assert_eq!(lat, Some(33.850422));
         assert_eq!(lon, Some(132.775909));
 
+        assert_eq!(report.folders_changed, 5, "all five were created");
+
         // Idempotence — the property every derived id exists for. A second run must not duplicate
         // the tree, and `create` is not called again.
-        apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
+        let second = apply(&repo, server, &lab_regions(), &lab_sites(), None, None)
             .await
             .expect("second sync");
         assert_eq!(
@@ -2245,6 +2280,24 @@ mod tests {
             "a re-sync must not duplicate folders"
         );
         assert_eq!(crate::pgtest::rows(&pool, "netbox_groups").await, 5);
+        // ADR-178 決定 7: nothing moved, so nothing was written — and the config generation, which
+        // the scope cache and the alert-config rebuild key on, is left where it was.
+        assert_eq!(
+            second.folders_changed, 0,
+            "an unchanged NetBox writes no folder"
+        );
+
+        // One site renamed in NetBox: exactly that folder changes.
+        let mut renamed = lab_sites();
+        renamed[0].name = "Matsuyama Office".to_owned();
+        let third = apply(&repo, server, &lab_regions(), &renamed, None, None)
+            .await
+            .expect("third sync");
+        assert_eq!(third.folders_changed, 1);
+        assert_eq!(
+            folder(&pool, matsuyama).await.expect("Matsuyama").0,
+            "Matsuyama Office"
+        );
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

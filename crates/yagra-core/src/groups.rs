@@ -829,15 +829,31 @@ fn coords_of(lat: Option<f64>, lon: Option<f64>) -> Option<(f64, f64)> {
     }
 }
 
+/// The `(id, parent_id)` edge list of the folder tree, shared out of [`GroupRepo::cached_edges`].
+pub type GroupEdges = std::sync::Arc<Vec<(Uuid, Option<Uuid>)>>;
+
 /// PostgreSQL-backed group store.
 pub struct GroupRepo {
     pool: PgPool,
+    /// [`Self::cached_edges`]' copy of the tree and the config generation it was read at.
+    ///
+    /// 🚨 **Here, beside the pool it was read from — not in a `static`.** It used to be one per
+    /// process in `api/scope.rs`, keyed by the generation alone, so two stores over two databases
+    /// shared it. Production has one database and never noticed; the test suite, where every
+    /// `#[sqlx::test]` gets its own database and runs in parallel, did: a test whose generation
+    /// happened to match another's resolved a scoped token against the *other* test's tree and
+    /// answered 404 for a folder it had just made. Six flash-verify runs lost a test that way
+    /// (memory `edge-cache-flakes-parallel-db-tests`).
+    edge_cache: std::sync::Mutex<Option<(u64, GroupEdges)>>,
 }
 
 impl GroupRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            edge_cache: std::sync::Mutex::new(None),
+        }
     }
 
     /// All groups (the UI builds the tree from the flat list). Ordered by the manual sort_order
@@ -1381,6 +1397,33 @@ impl GroupRepo {
                 .execute(&self.pool)
                 .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// [`Self::edges`], re-read only when the config generation has moved since the last read
+    /// (ADR-026) — the scope resolver's copy, asked on every scoped request.
+    ///
+    /// ⚠️ **Only as fresh as the generation.** A write to `node_groups` that does not end in
+    /// [`crate::config_gen::bump`] leaves this answering with the old tree until something else
+    /// bumps it. Every API write bumps through the audit middleware; a background writer has to do
+    /// it itself — the Meraki sync does, and the NetBox sync does since ADR-178 決定 7.
+    pub async fn cached_edges(&self) -> anyhow::Result<GroupEdges> {
+        let generation = crate::config_gen::current();
+        if let Some((at, cached)) = self
+            .edge_cache
+            .lock()
+            .expect("edge cache poisoned")
+            .as_ref()
+        {
+            if *at == generation {
+                return Ok(cached.clone());
+            }
+        }
+        let fresh: GroupEdges = std::sync::Arc::new(self.edges().await?);
+        // Stored under the generation read BEFORE the query: a mutation that lands while it is in
+        // flight moves the counter past this, so the next caller re-reads rather than pinning
+        // edges that may predate it to a number that says they do not.
+        *self.edge_cache.lock().expect("edge cache poisoned") = Some((generation, fresh.clone()));
+        Ok(fresh)
     }
 
     /// The `(id, parent_id)` edges, for cycle checks before a move.
@@ -1941,6 +1984,52 @@ mod tests {
             listed, ours,
             "types/api.ts lists exactly these, in this order"
         );
+    }
+
+    /// ADR-178 決定 7: the folder-tree cache belongs to the store that read it. Two stores see
+    /// their own reads even at one generation — the property the process-wide `static` lacked,
+    /// which let one parallel test resolve its scope against another test's database — and a
+    /// bump is what makes a store read again.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_edge_cache_belongs_to_its_store_and_follows_the_generation(pool: sqlx::PgPool) {
+        let first = GroupRepo::new(pool.clone());
+        let a = crate::pgtest::group(&pool, "a").await;
+        let before = first.cached_edges().await.expect("edges");
+        assert!(before.iter().any(|(id, _)| *id == a));
+
+        // A folder written straight to the table, with no bump — what a writer that forgets to
+        // bump looks like. The store that already cached the tree keeps its copy …
+        let b = crate::pgtest::group(&pool, "b").await;
+        let second = GroupRepo::new(pool.clone());
+        let generation = crate::config_gen::current();
+        let cached = first.cached_edges().await.expect("edges");
+        if crate::config_gen::current() == generation {
+            // (Only meaningful if no parallel test bumped in between; skip the claim otherwise.)
+            assert!(
+                !cached.iter().any(|(id, _)| *id == b),
+                "the first store answers from its cache"
+            );
+        }
+        // … while a second store never sees the first one's copy: it reads its own.
+        assert!(
+            second
+                .cached_edges()
+                .await
+                .expect("edges")
+                .iter()
+                .any(|(id, _)| *id == b),
+            "a store never answers from another store's cache"
+        );
+
+        // A bump makes the first store read again.
+        crate::config_gen::bump();
+        assert!(first
+            .cached_edges()
+            .await
+            .expect("edges")
+            .iter()
+            .any(|(id, _)| *id == b));
     }
 
     /// The marks, read back from a real tree: a Meraki organization with one network folder and

@@ -45,9 +45,9 @@
 //!    next refresh), never briefly visible to someone who should not see it.
 
 use super::{ApiError, ApiState};
-use crate::groups::{group_ancestors, group_subtree};
+use crate::groups::{group_ancestors, group_subtree, GroupEdges};
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 use yagra_common::{NodeId, Principal};
 
@@ -369,33 +369,19 @@ pub fn ranking_fetch_limit(scope: &NodeScope, limit: usize) -> usize {
     }
 }
 
-/// The `(id, parent_id)` edge list of the folder tree — the shape [`crate::groups::GroupRepo::edges`]
-/// returns and both tree walks consume.
-type GroupEdges = Arc<Vec<(Uuid, Option<Uuid>)>>;
-
-/// Cached edges plus the config generation they were read at.
-static EDGE_CACHE: Mutex<Option<(u64, GroupEdges)>> = Mutex::new(None);
-
 /// The group edges, re-read only when the config generation has advanced (ADR-026).
+///
+/// The cache lives on the group store (`GroupRepo::cached_edges`), beside the database it was read
+/// from — it used to be a `static` here, shared by every store in the process (ADR-178 決定 7).
 async fn edges(st: &ApiState) -> Result<GroupEdges, ApiError> {
-    let generation = crate::config_gen::current();
-    if let Some((at, cached)) = EDGE_CACHE.lock().expect("edge cache poisoned").as_ref() {
-        if *at == generation {
-            return Ok(cached.clone());
-        }
-    }
     // Skeleton mode has no group store. A scoped principal therefore resolves to an empty scope
     // and sees nothing, which is the fail-closed direction; an unrestricted one never gets here.
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Arc::new(Vec::new()));
     };
-    let fresh = Arc::new(admin.groups.edges().await.map_err(|e| {
+    admin.groups.cached_edges().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "read group edges", "failed to resolve scope")
-    })?);
-    // Re-read the generation: if a mutation landed while the query was in flight, store the older
-    // generation so the next request re-reads rather than pinning stale edges to a fresh number.
-    *EDGE_CACHE.lock().expect("edge cache poisoned") = Some((generation, fresh.clone()));
-    Ok(fresh)
+    })
 }
 
 /// A folder group and everything beneath it, from the same cached edges the scope resolver uses.

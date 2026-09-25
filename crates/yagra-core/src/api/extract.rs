@@ -642,7 +642,8 @@ const LIST_SEATS: usize = 8;
 const LIST_SEAT_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Process-wide, because the resource it protects is process-wide — the one PostgreSQL pool every
-/// core store shares. `api/scope.rs`'s `EDGE_CACHE` is the same shape and the same reason.
+/// core store shares. (`api/scope.rs` used to keep its folder-tree cache the same way; ADR-178
+/// moved it onto `GroupRepo`, because a cache holds one database's contents and this holds none.)
 static LIST_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
     std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(LIST_SEATS));
 
