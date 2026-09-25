@@ -33,6 +33,19 @@
 - **A sidebar item returns to where you left it on that screen.** Search All nodes, open Discovery, click All nodes again: the search term, the filters and the selected row are back. The sidebar used to link every item to its bare address, and the per-section memory the top-bar tabs read could not help — All nodes and Discovery share a section, so visiting Discovery overwrote it. Each menu item now keeps its own last address for the browser session (the mobile menu too); **Clear all filters** is how you start over.
 - **A node with no address says "No IP" instead of showing `0.0.0.0`.** A Meraki device the Dashboard reports no LAN IP for, and a DNS monitor using the system resolver, are stored at `0.0.0.0` because the address cannot be empty; every screen that printed it — the tree, the node header and overview, the folder view, the pickers, global search, duplicate nodes, the move dialog — now says "No IP" ("No IP (mesh repeater)" for a repeater). The MCP tools return `address: null` for such a node, and the AI root-cause prompt describes it as having no address. The REST API still returns `"0.0.0.0"`; its field description now says what that means.
 
+### Bug Fixes
+
+- **A NetBox sync no longer takes over an IP range typed by hand.** When NetBox listed the same range on a site as one an operator had entered on that site's folder, the sync made the row its own: the description was replaced, and when NetBox later stopped listing the range the operator's entry was deleted with it. A hand-typed range now stays exactly as typed. Ranges already taken over before this release cannot be told apart and stay NetBox's.
+- **A NetBox server whose sync fails is retried after a growing wait, not every 30 seconds.** A failed sync used to be retried on every 30-second check whatever the sync interval — a revoked token meant 2,880 refused logins a day against NetBox, and every other server waited behind each timeout. It now waits 1 minute, then 2, 4 and so on, never longer than the server's interval. "Sync now" still runs at once.
+- **A NetBox served under a path (`BASE_PATH`, e.g. `https://example.com/netbox`) now works.** The path of the base URL used to be dropped, so every request went to `/api/…` at the host's root and failed. The path is now kept; a pasted page address such as `…/netbox/dcim/sites/` is still cut back to `…/netbox`.
+- **Pausing a NetBox server drops a waiting "Sync now".** The request was never run and never cleared, so the row said "Sync requested" and the page kept refreshing itself for as long as it was open.
+- **A NetBox token is always sent without surrounding whitespace.** A token rotated through `/api/v1/credentials` with a trailing newline was sent as typed, and every sync failed with "NetBox refused the API token".
+
+### Security
+
+- **Changing a NetBox server's address to another host requires its API token again.** An edit that changed only the base URL kept the stored token and sent it to the new host on the next sync, so anyone able to edit the server could collect a token they cannot read. `PUT /api/v1/netbox/servers/{id}` now refuses such an edit with `400 token_required_for_new_address` unless `token` is sent; a new path on the same host needs no token. The edit form asks for the token as soon as the host changes.
+
+
 ## v0.3.31 — A folder lists the subnets its devices carry that its IP prefixes do not cover, the inventory tree draws its branches, a new Meraki organization is read whole before anything is imported, Sync now re-reads an organization in the background, a page of the node list no longer reads unknown for nodes that are up
 
 ### Breaking changes

@@ -406,13 +406,74 @@ pub fn validate_base_url(raw: &str) -> Result<String, BaseUrlError> {
             return Err(BaseUrlError::Blocked);
         }
     }
-    // Normalize to "scheme://host[:port]" with no path, so joining an API path later cannot
-    // double a slash or inherit a stray query the operator pasted.
+    // Normalize to "scheme://host[:port][/base/path]" with no trailing slash, query or fragment, so
+    // joining an API path later cannot double a slash or inherit a stray query the operator pasted.
     let mut base = format!("{}://{}", url.scheme(), host);
     if let Some(port) = url.port() {
         base.push_str(&format!(":{port}"));
     }
+    // 🚨 **Only NetBox's own part of the path is dropped** (ADR-178 決定 4). This used to drop the
+    // whole path, which made a NetBox served under `BASE_PATH` (`https://h/netbox/`) answer 404 to
+    // every request. What the drop was for — someone pasting the browser's address bar,
+    // `/dcim/sites/?q=x` — still works: the path is cut at the first segment NetBox itself owns,
+    // and whatever came before it is the deployment's prefix.
+    let kept: Vec<&str> = url
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .take_while(|seg| !NETBOX_URL_ROOTS.contains(seg))
+        .filter(|seg| !seg.is_empty())
+        .collect();
+    for seg in kept {
+        base.push('/');
+        base.push_str(seg);
+    }
     Ok(base)
+}
+
+/// The first path segment of every page and API route NetBox serves. A base URL is cut at the first
+/// of these (see [`validate_base_url`]), so what precedes it is the deployment's `BASE_PATH`.
+///
+/// ⚠️ **NetBox grows this list between versions.** A pasted URL whose first NetBox-owned segment is
+/// missing here keeps its path and fails with the 404 every path used to — no worse than before the
+/// path was kept, and the fix is one word here.
+const NETBOX_URL_ROOTS: &[&str] = &[
+    "api",
+    "dcim",
+    "ipam",
+    "circuits",
+    "tenancy",
+    "virtualization",
+    "extras",
+    "users",
+    "user",
+    "core",
+    "wireless",
+    "vpn",
+    "plugins",
+    "search",
+    "login",
+    "logout",
+    "graphql",
+    "admin",
+    "media",
+    "static",
+];
+
+/// The `/base/path` part of a URL [`validate_base_url`] produced, or `""` for a NetBox at the root.
+fn base_path_of(base: &str) -> &str {
+    let after_scheme = base.find("://").map_or(0, |i| i + 3);
+    base[after_scheme..]
+        .find('/')
+        .map_or("", |i| &base[after_scheme + i..])
+}
+
+/// The origin — scheme, host and port — of a URL [`validate_base_url`] produced. Compared by the
+/// API edge to decide whether an edit is sending the stored token somewhere new (ADR-178 決定 3).
+#[must_use]
+pub fn origin_of(base: &str) -> &str {
+    let path = base_path_of(base);
+    &base[..base.len() - path.len()]
 }
 
 /// Validate a pasted CA certificate before it is stored (ADR-100 decision 8).
@@ -678,16 +739,31 @@ pub struct ProbeResult {
 /// reached it on (a reverse proxy, a container hostname, a split-horizon name). Following it
 /// verbatim would send the next request — carrying `Authorization: Token …` — to a host
 /// [`validate_base_url`] never saw. So only the path and query survive the trip.
-fn relative_target(target: &str) -> anyhow::Result<String> {
-    if target.starts_with('/') {
-        return Ok(target.to_owned());
+///
+/// 🚨 **And the base's own path comes off the front** (ADR-178 決定 4), because the result is
+/// joined back onto the base. A NetBox under `BASE_PATH=netbox/` writes `next` as
+/// `/netbox/api/…`; joined verbatim to `https://h/netbox` that is `/netbox/netbox/api/…`, a 404 on
+/// page two. A proxy that strips the prefix instead makes NetBox write `/api/…`, which has no prefix
+/// to remove and joins correctly as it is — so the strip happens only on a segment boundary, and
+/// only when the prefix is there.
+fn relative_target(target: &str, base_path: &str) -> anyhow::Result<String> {
+    let rel = if target.starts_with('/') {
+        target.to_owned()
+    } else {
+        let parsed = reqwest::Url::parse(target)
+            .map_err(|_| anyhow::anyhow!("netbox returned an unparseable next page"))?;
+        match parsed.query() {
+            Some(q) => format!("{}?{}", parsed.path(), q),
+            None => parsed.path().to_owned(),
+        }
+    };
+    if base_path.is_empty() {
+        return Ok(rel);
     }
-    let parsed = reqwest::Url::parse(target)
-        .map_err(|_| anyhow::anyhow!("netbox returned an unparseable next page"))?;
-    Ok(match parsed.query() {
-        Some(q) => format!("{}?{}", parsed.path(), q),
-        None => parsed.path().to_owned(),
-    })
+    match rel.strip_prefix(base_path) {
+        Some(rest) if rest.starts_with('/') || rest.starts_with('?') => Ok(rest.to_owned()),
+        _ => Ok(rel),
+    }
 }
 
 impl NetboxClient {
@@ -772,7 +848,7 @@ impl NetboxClient {
             if pages > MAX_PAGES {
                 anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
             }
-            let rel = relative_target(&target)?;
+            let rel = relative_target(&target, base_path_of(&self.base))?;
             let page: Page<T> = self
                 .get(&rel)
                 .send()
@@ -843,7 +919,7 @@ impl NetboxClient {
                 anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
             }
             let page: Page<T> = self
-                .get(&relative_target(&target)?)
+                .get(&relative_target(&target, base_path_of(&self.base))?)
                 .send()
                 .await?
                 .error_for_status()?
@@ -1120,6 +1196,11 @@ impl NetboxRepo {
     /// Takes a [`ServerUpdate`] rather than eight positional arguments: two `&str`s, a `Uuid` and a
     /// `bool` next to each other are four chances to swap a pair with no compile error, and the
     /// `Option<Option<&str>>` in the middle is the one a caller is most likely to get backwards.
+    ///
+    /// 🚨 **Pausing drops a pending "Sync now"** (ADR-178 決定 5). The loop never runs a paused
+    /// server, so a request left on one was never answered and never cleared: the row read
+    /// "requested" and the page re-read itself every five seconds for as long as it stayed open.
+    /// The in-flight mark is left alone — the run it belongs to clears it when it ends.
     pub async fn update(&self, id: Uuid, u: ServerUpdate<'_>) -> anyhow::Result<bool> {
         let ServerUpdate {
             name,
@@ -1133,7 +1214,8 @@ impl NetboxRepo {
         let res = sqlx::query(
             "UPDATE netbox_servers SET name = $2, base_url = $3, credential_id = $4, \
                     ca_cert_pem = CASE WHEN $5 THEN $6 ELSE ca_cert_pem END, \
-                    enabled = $7, sync_interval_secs = $8, site_id_field = $9 \
+                    enabled = $7, sync_interval_secs = $8, site_id_field = $9, \
+                    sync_requested_at = CASE WHEN $7 THEN sync_requested_at ELSE NULL END \
              WHERE id = $1",
         )
         .bind(id)
@@ -1364,6 +1446,13 @@ impl NetboxRepo {
     /// ⚠️ **One statement, no transaction, and the caller does not `?` on the error.** A single
     /// unparseable prefix must cost that prefix and nothing else; wrapped in the sync's own
     /// transaction it would abort every write after it.
+    ///
+    /// 🚨 **A hand-made row with the same CIDR is left exactly as it is** (ADR-178 決定 1) — the
+    /// `WHERE` on the `DO UPDATE`. Without it the sync took the row over: `netbox_server_id` set,
+    /// the operator's description replaced, and the row swept away the day NetBox stopped listing
+    /// it. `GroupRepo::set_manual_prefixes` already refused the opposite direction (`DO NOTHING`);
+    /// this is the same rule from the other side. The range is on the folder either way, so the
+    /// caller still counts it as stored.
     async fn upsert_prefix(
         &self,
         server_id: Uuid,
@@ -1378,7 +1467,8 @@ impl NetboxRepo {
              ON CONFLICT (group_id, prefix) DO UPDATE SET \
                description = EXCLUDED.description, \
                netbox_server_id = EXCLUDED.netbox_server_id, \
-               last_seen_at = now()",
+               last_seen_at = now() \
+             WHERE node_group_prefixes.netbox_server_id IS NOT NULL",
         )
         .bind(group_id)
         .bind(prefix)
@@ -1737,9 +1827,14 @@ async fn sync_server_marked(
 /// shutdown path the way it does for every other background loop in this binary.
 ///
 /// ➕ It also runs "Sync now" (ADR-172 決定 1): the endpoint only writes the request, and this loop
-/// looks for one every [`REQUEST_TICK`]. The schedule is still looked at every [`TICK`] — a failed
-/// run does not move `last_sync_at`, so an unreachable NetBox is retried at the schedule's pace,
-/// and shrinking that to five seconds would retry it twelve times as often.
+/// looks for one every [`REQUEST_TICK`]. The schedule is still looked at every [`TICK`].
+///
+/// 🚨 **A failed run is retried after a backoff, not on the next schedule tick** (ADR-178 決定 2).
+/// A failure does not move `last_sync_at`, so a failing server stays "overdue" — and before this it
+/// was retried every [`TICK`], 2,880 times a day against a revoked token whatever the interval
+/// said, while every other server (the loop runs them one at a time) waited behind each timeout.
+/// The failures are counted here, in memory: a restart or a change of leader forgets them, which
+/// costs one early retry.
 pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
     match repo.clear_started().await {
         Ok(0) => {}
@@ -1752,6 +1847,7 @@ pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
     let mut tick = tokio::time::interval(REQUEST_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_schedule: Option<tokio::time::Instant> = None;
+    let mut failures: std::collections::HashMap<Uuid, Failures> = std::collections::HashMap::new();
     loop {
         tick.tick().await;
         let schedule = last_schedule.is_none_or(|t| t.elapsed() >= TICK);
@@ -1765,30 +1861,78 @@ pub async fn run_sync_loop(repo: Arc<NetboxRepo>, creds: Arc<CredentialStore>) {
                 continue;
             }
         };
+        // A server that was deleted takes its failure count with it.
+        failures.retain(|id, _| servers.iter().any(|s| s.id == *id));
         let now = chrono::Utc::now();
         for server in &servers {
-            if !should_sync(server, now, schedule) {
+            let failed = failures
+                .get(&server.id)
+                .map(|f| (f.count, f.last.elapsed()));
+            if !should_sync(server, now, schedule, failed) {
                 continue;
             }
             // One server's failure must not stop the others, and `sync_server` has already
             // recorded the reason on its row.
-            let _ = sync_server(&repo, &creds, server).await;
+            if sync_server(&repo, &creds, server).await.is_ok() {
+                failures.remove(&server.id);
+            } else {
+                let f = failures.entry(server.id).or_insert(Failures {
+                    count: 0,
+                    last: tokio::time::Instant::now(),
+                });
+                f.count = f.count.saturating_add(1);
+                f.last = tokio::time::Instant::now();
+            }
         }
     }
+}
+
+/// How many runs in a row have failed for one server, and when the last one did.
+struct Failures {
+    count: u32,
+    last: tokio::time::Instant,
+}
+
+/// The first wait after a failure; each further failure doubles it, up to the server's interval.
+const RETRY_BASE: Duration = Duration::from_secs(60);
+
+/// How long to wait after `failures` runs in a row have failed (ADR-178 決定 2):
+/// `min(interval, RETRY_BASE × 2^(failures − 1))` — 60 s, 120 s, 240 s …, never longer than the
+/// server would wait after a success. Zero failures is no wait.
+fn retry_backoff(failures: u32, interval: Duration) -> Duration {
+    if failures == 0 {
+        return Duration::ZERO;
+    }
+    let factor = 1u32.checked_shl(failures - 1).unwrap_or(u32::MAX);
+    RETRY_BASE.saturating_mul(factor).min(interval)
 }
 
 /// Whether the loop runs `server` on this tick.
 ///
 /// A paused server never runs — the endpoint refuses a request for one, so a request found on it
 /// was made before it was paused, and pausing means "leave that NetBox alone". A request runs at
-/// once, ignoring the interval. Otherwise the server runs when the schedule is being looked at and
-/// its interval has passed since the last success.
-fn should_sync(server: &NetboxServer, now: chrono::DateTime<chrono::Utc>, schedule: bool) -> bool {
+/// once, ignoring the interval — and ignoring a backoff too, because a person asked. Otherwise the
+/// server runs when the schedule is being looked at, its interval has passed since the last
+/// success, and — after a failure — its [`retry_backoff`] has passed since that failure.
+///
+/// `failed` is `(runs failed in a row, time since the last of them)`, or `None` when the last run
+/// this loop saw succeeded.
+fn should_sync(
+    server: &NetboxServer,
+    now: chrono::DateTime<chrono::Utc>,
+    schedule: bool,
+    failed: Option<(u32, Duration)>,
+) -> bool {
     if !server.enabled {
         return false;
     }
     if server.sync_requested_at.is_some() {
         return true;
+    }
+    if let Some((count, since)) = failed {
+        if since < retry_backoff(count, server.interval()) {
+            return false;
+        }
     }
     schedule
         && server.last_sync_at.is_none_or(|last| {
@@ -1887,6 +2031,74 @@ mod tests {
         assert_eq!(
             validate_base_url("  https://netbox.example.com/  "),
             Ok("https://netbox.example.com".to_owned())
+        );
+    }
+
+    /// ADR-178 決定 4: a NetBox under `BASE_PATH` keeps its prefix, and a pasted page or API URL
+    /// below it is still cut back to that prefix.
+    #[test]
+    fn a_netbox_under_a_base_path_keeps_it_and_loses_only_netboxs_own_part() {
+        for (raw, want) in [
+            (
+                "https://h.example.com/netbox",
+                "https://h.example.com/netbox",
+            ),
+            (
+                "https://h.example.com/netbox/",
+                "https://h.example.com/netbox",
+            ),
+            (
+                "https://h.example.com/netbox/dcim/sites/?q=x",
+                "https://h.example.com/netbox",
+            ),
+            (
+                "https://h.example.com/netbox/api/",
+                "https://h.example.com/netbox",
+            ),
+            (
+                "https://h.example.com:8443/a/b/ipam/prefixes/",
+                "https://h.example.com:8443/a/b",
+            ),
+            ("https://h.example.com/api/status/", "https://h.example.com"),
+            ("https://h.example.com/#/dcim", "https://h.example.com"),
+        ] {
+            assert_eq!(validate_base_url(raw).as_deref(), Ok(want), "{raw}");
+        }
+        assert_eq!(
+            origin_of("https://h.example.com:8443/a/b"),
+            "https://h.example.com:8443"
+        );
+        assert_eq!(origin_of("https://h.example.com"), "https://h.example.com");
+        assert_eq!(
+            origin_of("http://[fd00::1]:8000/nb"),
+            "http://[fd00::1]:8000"
+        );
+        assert_eq!(base_path_of("http://[fd00::1]:8000/nb"), "/nb");
+    }
+
+    /// ADR-178 決定 4: page two of a listing under `BASE_PATH` must not double the prefix, and a
+    /// `next` on another host still comes back to ours.
+    #[test]
+    fn a_next_page_is_joined_back_onto_the_base_without_doubling_its_path() {
+        let next = "https://internal-name/netbox/api/dcim/sites/?limit=250&offset=250";
+        assert_eq!(
+            relative_target(next, "/netbox").unwrap(),
+            "/api/dcim/sites/?limit=250&offset=250"
+        );
+        // A proxy that strips the prefix makes NetBox write root-relative links: nothing to cut.
+        assert_eq!(
+            relative_target("/api/dcim/sites/?offset=250", "/netbox").unwrap(),
+            "/api/dcim/sites/?offset=250"
+        );
+        // Only on a segment boundary: `/netboxes/…` is not under `/netbox`.
+        assert_eq!(
+            relative_target("/netboxes/api/x/", "/netbox").unwrap(),
+            "/netboxes/api/x/"
+        );
+        // At the root nothing changes, which is every server stored before this.
+        assert_eq!(
+            relative_target("https://other/api/dcim/regions/?offset=250", "").unwrap(),
+            "/api/dcim/regions/?offset=250"
         );
     }
 
@@ -2265,6 +2477,54 @@ mod tests {
         );
     }
 
+    /// ADR-178 決定 5: pausing a server takes a waiting "Sync now" off it, since nothing will ever
+    /// run it — and an edit that leaves the server on keeps the request.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn pausing_a_server_drops_a_waiting_sync_request(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let row = repo.get(server).await.expect("get").expect("row");
+        let edit = |enabled: bool| ServerUpdate {
+            name: "lab",
+            base_url: "https://netbox.example.com",
+            credential_id: row.credential_id,
+            ca_cert_pem: None,
+            enabled,
+            sync_interval_secs: 3600,
+            site_id_field: None,
+        };
+
+        assert!(repo.request_sync(server).await.expect("request"));
+        assert!(repo.update(server, edit(true)).await.expect("edit"));
+        let kept = repo.get(server).await.expect("get").expect("row");
+        assert!(
+            kept.sync_requested_at.is_some(),
+            "an edit that leaves it on keeps the request"
+        );
+
+        let started = repo.start_sync(server).await.expect("start");
+        assert!(repo.update(server, edit(false)).await.expect("pause"));
+        let paused = repo.get(server).await.expect("get").expect("row");
+        assert!(!paused.enabled);
+        assert_eq!(paused.sync_requested_at, None, "nothing would ever run it");
+        assert_eq!(
+            paused.sync_started_at,
+            Some(started),
+            "the run in flight clears its own mark"
+        );
+
+        assert!(repo.update(server, edit(true)).await.expect("resume"));
+        assert_eq!(
+            repo.get(server)
+                .await
+                .expect("get")
+                .expect("row")
+                .sync_requested_at,
+            None,
+            "resuming does not bring the request back"
+        );
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_success_keeps_its_site_id_counts_on_the_row(pool: sqlx::PgPool) {
@@ -2513,31 +2773,74 @@ mod tests {
         let mut s = bare_server();
         s.last_sync_at = Some(now - chrono::Duration::minutes(5));
         assert!(
-            !should_sync(&s, now, true),
+            !should_sync(&s, now, true, None),
             "synced 5 minutes ago, interval is an hour"
         );
 
         s.sync_requested_at = Some(now);
         assert!(
-            should_sync(&s, now, false),
+            should_sync(&s, now, false, None),
             "a request does not wait for the schedule tick"
         );
-        assert!(should_sync(&s, now, true));
+        assert!(should_sync(&s, now, true, None));
 
         // Paused beats a request: pausing means "leave that NetBox alone", and the endpoint refuses
         // a request on a paused server, so one found here predates the pause.
         s.enabled = false;
-        assert!(!should_sync(&s, now, false));
+        assert!(!should_sync(&s, now, false, None));
 
         let mut due = bare_server();
         due.last_sync_at = Some(now - chrono::Duration::hours(2));
-        assert!(should_sync(&due, now, true), "overdue on a schedule tick");
         assert!(
-            !should_sync(&due, now, false),
+            should_sync(&due, now, true, None),
+            "overdue on a schedule tick"
+        );
+        assert!(
+            !should_sync(&due, now, false, None),
             "…but not on a request-only tick: a failing NetBox would otherwise be retried every \
              five seconds, since a failure never moves last_sync_at"
         );
-        assert!(should_sync(&bare_server(), now, true), "never synced");
+        assert!(should_sync(&bare_server(), now, true, None), "never synced");
+    }
+
+    /// ADR-178 決定 2. The wait doubles from a minute and stops at the interval, so a server on a
+    /// one-hour cadence that keeps failing is retried hourly — never every 30-second tick.
+    #[test]
+    fn a_failing_server_waits_longer_after_each_failure_up_to_its_interval() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(retry_backoff(0, hour), Duration::ZERO);
+        assert_eq!(retry_backoff(1, hour), Duration::from_secs(60));
+        assert_eq!(retry_backoff(2, hour), Duration::from_secs(120));
+        assert_eq!(retry_backoff(3, hour), Duration::from_secs(240));
+        assert_eq!(retry_backoff(7, hour), hour, "capped at the interval");
+        assert_eq!(retry_backoff(u32::MAX, hour), hour, "no overflow");
+        // A cadence shorter than the base wait is still the ceiling.
+        assert_eq!(
+            retry_backoff(1, Duration::from_secs(60)),
+            Duration::from_secs(60)
+        );
+
+        let now = chrono::Utc::now();
+        let failing = bare_server(); // never succeeded, so always "overdue"
+        let secs = Duration::from_secs;
+        assert!(
+            !should_sync(&failing, now, true, Some((1, secs(30)))),
+            "30 s after the first failure is too soon — this is the tick it used to retry on"
+        );
+        assert!(should_sync(&failing, now, true, Some((1, secs(61)))));
+        assert!(!should_sync(&failing, now, true, Some((3, secs(200)))));
+        assert!(should_sync(&failing, now, true, Some((3, secs(241)))));
+        assert!(
+            !should_sync(&failing, now, false, Some((1, secs(61)))),
+            "…and still only on a schedule tick"
+        );
+
+        let mut asked = bare_server();
+        asked.sync_requested_at = Some(now);
+        assert!(
+            should_sync(&asked, now, false, Some((5, secs(1)))),
+            "a person pressing Sync now does not wait out the backoff"
+        );
     }
 
     #[test]
@@ -3153,6 +3456,81 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["192.168.1.0/24".to_owned(), "192.168.2.0/24".to_owned()],
             "the removed one is gone and the other two are untouched"
+        );
+    }
+
+    /// 🚨 ADR-178 決定 1: a range the operator typed onto a NetBox folder is **theirs**, even when
+    /// NetBox later lists the same CIDR — the sync neither takes it over nor sweeps it away.
+    ///
+    /// Before the fix the second `apply` set `netbox_server_id` and replaced the description, and
+    /// the third deleted the row the operator had typed.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_hand_typed_range_is_never_taken_over_or_swept_by_a_sync(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        // The folders first, with nothing NetBox claims yet.
+        apply(&repo, server, &lab_regions(), &lab_sites(), Some(&[]), None)
+            .await
+            .expect("folders");
+        let site = site_group_id(server, 6);
+        sqlx::query(
+            "INSERT INTO node_group_prefixes (group_id, prefix, description) \
+             VALUES ($1, '192.168.1.0/24', 'typed by hand')",
+        )
+        .bind(site)
+        .execute(&pool)
+        .await
+        .expect("manual range");
+
+        let owner = |pool: sqlx::PgPool| async move {
+            sqlx::query_as::<_, (Option<Uuid>, String)>(
+                "SELECT netbox_server_id, description FROM node_group_prefixes \
+                 WHERE group_id = $1 AND prefix = '192.168.1.0/24'",
+            )
+            .bind(site)
+            .fetch_optional(&pool)
+            .await
+            .expect("read")
+        };
+
+        // NetBox now lists the same CIDR on that site.
+        let report = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("second");
+        assert_eq!(
+            report.prefixes, 4,
+            "the range is on the folder, so it counts"
+        );
+        assert_eq!(
+            owner(pool.clone()).await,
+            Some((None, "typed by hand".to_owned())),
+            "still the operator's row, with the operator's description"
+        );
+        // The accept side: NetBox's own rows on the same folder were written as usual.
+        assert_eq!(folder_prefixes(&pool, site).await.len(), 3);
+
+        // NetBox drops it. The sweep is NetBox's, so the operator's row stays.
+        let without: Vec<NetboxPrefix> = lab_prefixes().into_iter().filter(|p| p.id != 1).collect();
+        apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&without),
+            None,
+        )
+        .await
+        .expect("third");
+        assert_eq!(
+            owner(pool.clone()).await,
+            Some((None, "typed by hand".to_owned()))
         );
     }
 

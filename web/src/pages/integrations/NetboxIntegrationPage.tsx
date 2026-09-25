@@ -31,6 +31,7 @@ import { formatTimestamp } from '../../lib/format';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { anySyncInProgress, syncProgress, syncSummary } from './netboxStatus';
 import { useSyncWatch } from './useSyncWatch';
+import { addressChangeNeedsToken } from './netboxBaseUrl';
 import {
   SITE_ID_NONE,
   SITE_ID_OTHER,
@@ -98,6 +99,10 @@ function ServerModal({
   }, [existing]);
 
   const canTest = baseUrl.trim() !== '' && token.trim() !== '';
+  // ADR-178 決定 3: the stored token never goes to a new address — the backend refuses the save,
+  // so the form asks for the token before Save rather than after.
+  const tokenNeeded =
+    !existing || addressChangeNeedsToken(existing.base_url, baseUrl);
 
   const test = () => {
     setBusy(true);
@@ -188,7 +193,7 @@ function ServerModal({
           <Button
             variant="primary"
             onClick={save}
-            disabled={busy || name.trim() === '' || baseUrl.trim() === '' || (!existing && token.trim() === '')}
+            disabled={busy || name.trim() === '' || baseUrl.trim() === '' || (tokenNeeded && token.trim() === '')}
           >
             {t('common:actions.save')}
           </Button>
@@ -216,9 +221,13 @@ function ServerModal({
           autoComplete="off"
           onChange={(e) => setToken(e.target.value)}
         />
-        <span className="netbox-hint">
-          {existing ? t('netbox.form.tokenKeepHint') : t('netbox.form.tokenHint')}
-        </span>
+        {existing && tokenNeeded ? (
+          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.tokenNewAddressHint')}</span>
+        ) : (
+          <span className="netbox-hint">
+            {existing ? t('netbox.form.tokenKeepHint') : t('netbox.form.tokenHint')}
+          </span>
+        )}
       </label>
       <label className="netbox-field">
         <span>{t('netbox.form.caCert')}</span>

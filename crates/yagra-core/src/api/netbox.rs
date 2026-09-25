@@ -411,7 +411,7 @@ pub(crate) struct UpdateNetboxServerReq {
     request_body = UpdateNetboxServerReq,
     responses(
         (status = 204, description = "Updated"),
-        (status = 400, description = "A field failed validation (see the create route)", body = super::error::ErrorBody),
+        (status = 400, description = "A field failed validation (see the create route), or `token_required_for_new_address`: base_url names a different scheme, host or port and no replacement token was sent — the stored token is never sent to a new address", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such server", body = super::error::ErrorBody),
@@ -441,15 +441,27 @@ async fn update_netbox_server(
         })?
         .ok_or_else(|| no_server(id))?;
 
-    // A replacement token becomes a new sealed credential rather than an in-place rewrite: the
-    // store's `create` is the only writer of the envelope columns, and the old row stays until an
-    // operator removes it, so a mistyped replacement is recoverable.
-    let credential_id = match body
+    let new_token = body
         .token
         .as_deref()
         .map(str::trim)
-        .filter(|t| !t.is_empty())
-    {
+        .filter(|t| !t.is_empty());
+
+    // 🚨 **A new address needs the token typed again** (ADR-178 決定 3). Otherwise pointing the
+    // server at a host the caller controls delivers the sealed token there on the next sync — and
+    // `ManageConfig` is an Operator's, while no Operator can read a stored token. Compared on the
+    // origin only, so moving a NetBox to another path on the same host still round-trips.
+    if new_token.is_none() && netbox::origin_of(&base) != netbox::origin_of(&existing.base_url) {
+        return Err(ApiError::bad_request(
+            "token_required_for_new_address",
+            "base_url points at a different host; enter the API token again to send it there",
+        ));
+    }
+
+    // A replacement token becomes a new sealed credential rather than an in-place rewrite: the
+    // store's `create` is the only writer of the envelope columns, and the old row stays until an
+    // operator removes it, so a mistyped replacement is recoverable.
+    let credential_id = match new_token {
         Some(token) => {
             let secret = serde_json::json!({ "token": token }).to_string();
             admin
@@ -945,6 +957,120 @@ mod tests {
         assert_eq!(missing.0, StatusCode::NOT_FOUND);
     }
 
+    /// ADR-178 決定 3: the stored token is never sent to a new host without being typed again, and
+    /// the edits that do not change the host still round-trip without it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_new_host_needs_the_token_typed_again(pool: sqlx::PgPool) {
+        let st = live_state(pool.clone()).await;
+        let hdr = token(&st, yagra_common::Role::Operator);
+        let created = send(
+            &st,
+            "POST",
+            "/api/v1/netbox/servers",
+            &hdr,
+            Some(serde_json::json!({
+                "name": "lab",
+                "base_url": "http://10.0.0.14:8000/",
+                "token": "0123456789abcdef",
+                "sync_interval_secs": 3600
+            })),
+        )
+        .await;
+        assert_eq!(created.0, StatusCode::CREATED, "body: {}", created.1);
+        let id = created.1["id"].as_str().expect("id").to_owned();
+        let path = format!("/api/v1/netbox/servers/{id}");
+        let stored = |pool: sqlx::PgPool| async move {
+            sqlx::query_as::<_, (String, uuid::Uuid)>(
+                "SELECT base_url, credential_id FROM netbox_servers",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("row")
+        };
+        let (_, first_cred) = stored(pool.clone()).await;
+        let edit = |base: &str, token: Option<&str>| {
+            let mut b = serde_json::json!({
+                "name": "lab",
+                "base_url": base,
+                "enabled": true,
+                "sync_interval_secs": 3600
+            });
+            if let Some(t) = token {
+                b["token"] = serde_json::json!(t);
+            }
+            b
+        };
+
+        // Another host, no token: refused, and nothing changes.
+        let refused = send(
+            &st,
+            "PUT",
+            &path,
+            &hdr,
+            Some(edit("http://198.51.100.7:8000", None)),
+        )
+        .await;
+        assert_eq!(refused.0, StatusCode::BAD_REQUEST, "body: {}", refused.1);
+        assert_eq!(refused.1["error"]["code"], "token_required_for_new_address");
+        // A blank token is no token.
+        let blank = send(
+            &st,
+            "PUT",
+            &path,
+            &hdr,
+            Some(edit("http://198.51.100.7:8000", Some("  "))),
+        )
+        .await;
+        assert_eq!(blank.0, StatusCode::BAD_REQUEST, "body: {}", blank.1);
+        // Only the port differs: still another address.
+        let port = send(
+            &st,
+            "PUT",
+            &path,
+            &hdr,
+            Some(edit("http://10.0.0.14:8443", None)),
+        )
+        .await;
+        assert_eq!(port.0, StatusCode::BAD_REQUEST, "body: {}", port.1);
+        assert_eq!(
+            stored(pool.clone()).await,
+            ("http://10.0.0.14:8000".to_owned(), first_cred)
+        );
+
+        // Same host, a path added (ADR-178 決定 4): no token needed.
+        let moved = send(
+            &st,
+            "PUT",
+            &path,
+            &hdr,
+            Some(edit("http://10.0.0.14:8000/netbox/", None)),
+        )
+        .await;
+        assert_eq!(moved.0, StatusCode::NO_CONTENT, "body: {}", moved.1);
+        assert_eq!(
+            stored(pool.clone()).await,
+            ("http://10.0.0.14:8000/netbox".to_owned(), first_cred)
+        );
+
+        // Another host with the token typed again: accepted, under a new sealed credential.
+        let accepted = send(
+            &st,
+            "PUT",
+            &path,
+            &hdr,
+            Some(edit("http://198.51.100.7:8000", Some("fedcba9876543210"))),
+        )
+        .await;
+        assert_eq!(accepted.0, StatusCode::NO_CONTENT, "body: {}", accepted.1);
+        let (base, cred) = stored(pool.clone()).await;
+        assert_eq!(base, "http://198.51.100.7:8000");
+        assert_ne!(
+            cred, first_cred,
+            "the new address got the token typed for it"
+        );
+    }
+
     /// 🚨 The defect this pins was found while diagnosing a live "NetBox refused the API token"
     /// (2026-09-03). That one turned out to be a genuinely wrong token — but the diagnosis showed
     /// `create` and `test` validating `token.trim()` and then using the **untrimmed** string, while
@@ -981,6 +1107,13 @@ mod tests {
         let store = crate::secrets::CredentialStore::new(pool.clone(), crate::pgtest::kek());
         let (kind, bytes) = store.open(cred_id).await.expect("open").expect("row");
         assert_eq!(kind, crate::secrets::KIND_NETBOX_TOKEN);
+        // ⚠️ The raw document, not only the parsed token: since ADR-178 決定 6 `parse` trims too, so
+        // on its own it would pass whether or not this endpoint did.
+        let raw: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            raw["token"], "0123456789abcdef",
+            "sealed trimmed, not trimmed on read"
+        );
         let secret = crate::secrets::NetboxTokenSecret::parse(&bytes).expect("parses");
         assert_eq!(
             secret.token, "0123456789abcdef",

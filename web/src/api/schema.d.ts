@@ -20706,7 +20706,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A field failed validation (see the create route) */
+            /** @description A field failed validation (see the create route), or `token_required_for_new_address`: base_url names a different scheme, host or port and no replacement token was sent — the stored token is never sent to a new address */
             400: {
                 headers: {
                     [name: string]: unknown;
