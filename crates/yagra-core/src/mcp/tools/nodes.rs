@@ -663,12 +663,12 @@ impl YagraMcp {
 
     #[tool(
         description = "Which subnets the devices in one folder (and every folder beneath it) \
-                       carry that none of those folders' IP ranges contains — the ranges normally \
-                       being the site's NetBox prefixes. Each subnet says why: `unregistered` (no \
-                       range overlaps it), `partial` (a range lies inside it but none covers all \
-                       of it), `other_folder` (another folder's range contains it: a prefix filed \
-                       under the wrong site, or one private range reused at two sites), or \
-                       `parent_only` (only a folder above has a containing range). The range and \
+                       carry that none of those folders' IP prefixes contains. Each subnet says \
+                       why: `unregistered` (no prefix overlaps it), `partial` (a prefix lies \
+                       inside it but none covers all of it), `other_folder` (another folder's \
+                       prefix contains it: a prefix attached to the wrong folder, or one private \
+                       range reused at two sites), or `parent_only` (only a folder above has a \
+                       containing prefix). The prefix and \
                        its folder are omitted when that folder is outside your scope. No gaps \
                        means complete only when nodes_with_addresses equals nodes_total — a \
                        device with no SNMP address walk contributes nothing. A folder holding \
