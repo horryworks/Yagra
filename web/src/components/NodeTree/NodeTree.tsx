@@ -267,6 +267,8 @@ interface Props {
   onTagChecked?: () => void;
   /** Propose a folder for this one node by IP range. Omit to hide it. */
   onMoveNodeByPrefix?: (node: NodeSummary) => void;
+  /** Propose a folder by IP range for every node in this folder's subtree (ADR-176). Omit to hide it. */
+  onMoveGroupByPrefix?: (groupId: string) => void;
   /** Move nodes into a group (or null = ungroup) — a drop, of one row or of the whole working set.
    *  **A list even for one** (ADR-124 Inc.4): the drag used to hand over a single id and the page
    *  used to answer it with the single-node endpoint, which is how a three-row selection moved one
@@ -378,6 +380,7 @@ export function NodeTree({
   onMoveCheckedByPrefix,
   onTagChecked,
   onMoveNodeByPrefix,
+  onMoveGroupByPrefix,
   onMoveNodes,
   onMoveGroup,
   onSortGroupChildren,
@@ -2137,6 +2140,19 @@ export function NodeTree({
                   }}
                 >
                   {t('tree.runDiscovery')}
+                </button>
+              )}
+              {/* Sort everything under this folder into the folders whose ranges claim it (ADR-176).
+                  The server collects the nodes, so folders that were never opened count too. */}
+              {onMoveGroupByPrefix && canMoveByPrefix(groups, canEdit) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onMoveGroupByPrefix(menu.group.id);
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.moveGroupByPrefix')}
                 </button>
               )}
               {/* Arrange this folder's own children in name order (ADR-130). Two items rather

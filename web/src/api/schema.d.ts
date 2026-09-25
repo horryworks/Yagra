@@ -2323,6 +2323,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/move-preview/subtree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["preview_move_by_subtree"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/poll": {
         parameters: {
             query?: never;
@@ -9408,6 +9424,11 @@ export interface components {
              *     against" — one message for two situations is how an inert feature looks like a working one.
              */
             any_prefixes: boolean;
+            /**
+             * @description Ids already in the folder their range names, or in a folder beneath it (ADR-176 決定 2).
+             *     Not a move, so in none of the three lists above.
+             */
+            in_place: string[];
             matched: components["schemas"]["PrefixProposal"][];
             /** @description Ids whose address falls inside no visible folder's range. */
             unmatched: string[];
@@ -10765,6 +10786,13 @@ export interface components {
          * @enum {string}
          */
         PrefixSource: "manual" | "sync";
+        /** @description A node named in a subtree proposal, so the dialog can show it without the tree having loaded it. */
+        PreviewNodeLabel: {
+            address: string;
+            name: string;
+            /** Format: uuid */
+            node_id: string;
+        };
         /** @description One field that could not be used. */
         PreviewProblem: {
             /** @description `subject` or `body`. */
@@ -12094,6 +12122,40 @@ export interface components {
          * @enum {string}
          */
         SubjectKind: "node" | "pool" | "meraki_org";
+        /**
+         * @description What the IP-range match proposes for a whole subtree. **A proposal, not an action**, like
+         *     [`MovePreviewResult`], and applied through the same `POST /api/v1/nodes/move-by-prefix`.
+         */
+        SubtreeMovePreviewResult: {
+            /** @description At most 200. */
+            ambiguous: components["schemas"]["PrefixAmbiguity"][];
+            ambiguous_total: number;
+            /** @description Whether **any** folder this caller can see carries a range at all. */
+            any_prefixes: boolean;
+            /** @description Nodes already in the folder their range names, or beneath it. Counted, not listed. */
+            in_place_total: number;
+            /**
+             * @description At most 1,000 proposals — what one `move-by-prefix` request may carry. Apply them and ask
+             *     again: the moved nodes are then in place, so the next slice comes back.
+             */
+            matched: components["schemas"]["PrefixProposal"][];
+            /** @description Every node that would move, including those past the first 1,000. */
+            matched_total: number;
+            /** @description Name and address of every node the three lists above name. */
+            nodes: components["schemas"]["PreviewNodeLabel"][];
+            /** @description At most 200. */
+            unmatched: string[];
+            unmatched_total: number;
+        };
+        /** @description Which folder a subtree proposal covers. */
+        SubtreeMoveReq: {
+            /**
+             * Format: uuid
+             * @description The folder whose subtree to examine. `null` examines the whole inventory the caller may
+             *     see, ungrouped nodes included.
+             */
+            group_id?: string | null;
+        };
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
             /** @description NATS — **inferred** from a recent scheduler sweep, not a direct ping. */
@@ -22183,6 +22245,66 @@ export interface operations {
             };
             /** @description Role lacks ManageConfig */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    preview_move_by_subtree: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubtreeMoveReq"];
+            };
+        };
+        responses: {
+            /** @description Which folder's IP range contains the address of each node in the subtree (or the whole inventory) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubtreeMovePreviewResult"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The folder does not exist or is not one this caller may see */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

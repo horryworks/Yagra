@@ -257,6 +257,8 @@ export type Pins = components['schemas']['Pins'];
 /** What the IP-range match proposes for a set of nodes (`POST /api/v1/nodes/move-preview`).
  *  A proposal — nothing has moved when this arrives (ADR-124 決定 6). */
 export type MovePreview = components['schemas']['MovePreviewResult'];
+/** The same proposal over a folder's subtree or the whole inventory (ADR-176). */
+export type SubtreeMovePreview = components['schemas']['SubtreeMovePreviewResult'];
 
 /** One node and the single folder whose range contains its address. */
 export type PrefixProposal = components['schemas']['PrefixProposal'];

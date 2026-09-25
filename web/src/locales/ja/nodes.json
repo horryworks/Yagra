@@ -814,7 +814,8 @@
     "origin": {
       "meraki": "Cisco Meraki 連携が作ったフォルダ",
       "netbox": "NetBox 連携が作ったフォルダ"
-    }
+    },
+    "moveGroupByPrefix": "このフォルダの中を IP レンジで振り分け…"
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -1006,8 +1007,19 @@
     "empty": {
       "noPrefixes": "IP レンジを持つフォルダが 1 つもありません。照合する相手がありません。",
       "noMatch": "どのアドレスもフォルダの IP レンジに入りません。",
-      "allAmbiguous": "該当したものはすべて、複数のフォルダが同じだけ該当しました。"
-    }
+      "allAmbiguous": "該当したものはすべて、複数のフォルダが同じだけ該当しました。",
+      "allInPlace": "該当したノードは、すべてすでに正しいフォルダにあります。"
+    },
+    "titleAll": "全ノードを IP レンジで振り分け",
+    "titleFolder": "{{name}} の中を IP レンジで振り分け",
+    "more": "ほか {{count}} 件",
+    "firstBatch": "今回は最初の {{shown}} 件を移動します。残りの {{rest}} 件は、移動のあとで続けて振り分けられます。",
+    "continue": "続きを振り分ける（残り {{count}} 件）",
+    "inPlace": "すでに正しいフォルダにある: {{count}} 件（動かしません）。"
   },
-  "maintenanceWindowNameMany": "メンテナンス — {{count}} 台"
+  "maintenanceWindowNameMany": "メンテナンス — {{count}} 台",
+  "moreMenu": {
+    "trigger": "その他の操作",
+    "moveAllByPrefix": "全ノードを IP レンジで振り分け…"
+  }
 }

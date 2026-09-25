@@ -818,7 +818,8 @@
     "origin": {
       "meraki": "Created by the Cisco Meraki integration",
       "netbox": "Created by the NetBox integration"
-    }
+    },
+    "moveGroupByPrefix": "Sort this folder by IP range…"
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -1011,8 +1012,19 @@
     "empty": {
       "noPrefixes": "No folder carries an IP range, so there is nothing to match against.",
       "noMatch": "No address falls inside a folder range.",
-      "allAmbiguous": "Every match was claimed by more than one folder."
-    }
+      "allAmbiguous": "Every match was claimed by more than one folder.",
+      "allInPlace": "Every matching node is already in its folder."
+    },
+    "titleAll": "Sort every node by IP range",
+    "titleFolder": "Sort {{name}} by IP range",
+    "more": "…and {{count}} more",
+    "firstBatch": "The first {{shown}} move now. Continue afterwards to sort the remaining {{rest}}.",
+    "continue": "Continue ({{count}} left)",
+    "inPlace": "Already in the right folder: {{count}} (left where they are)."
   },
-  "maintenanceWindowNameMany": "Maintenance — {{count}} nodes"
+  "maintenanceWindowNameMany": "Maintenance — {{count}} nodes",
+  "moreMenu": {
+    "trigger": "More actions",
+    "moveAllByPrefix": "Sort every node by IP range…"
+  }
 }

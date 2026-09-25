@@ -666,6 +666,8 @@ fn changes_monitoring_config(path: &str) -> bool {
         // this function keeps the entry honest — and forgetting it makes every press of the
         // preview button rebuild the poll specs for the whole fleet, silently.
         || path == "/api/v1/nodes/move-preview"
+        // The same proposal over a subtree or the whole inventory (ADR-176). Same blind spot.
+        || path == "/api/v1/nodes/move-preview/subtree"
         // The same shape, one step earlier in the workflow (ADR-131 決定 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
@@ -1778,6 +1780,10 @@ mod tests {
         assert!(
             !changes_monitoring_config("/api/v1/nodes/move-preview"),
             "the preview writes nothing and must not invalidate"
+        );
+        assert!(
+            !changes_monitoring_config("/api/v1/nodes/move-preview/subtree"),
+            "the subtree preview writes nothing and must not invalidate"
         );
         assert!(
             changes_monitoring_config("/api/v1/nodes/move"),

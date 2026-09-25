@@ -57,6 +57,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     move_nodes,
     delete_nodes,
     preview_move_by_prefix,
+    preview_move_by_subtree,
     move_nodes_by_prefix,
     set_node_pool,
     bulk_set_node_pool,
@@ -81,6 +82,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/delete", post(delete_nodes))
         .route("/api/v1/nodes/tags", post(bulk_tag_nodes))
         .route("/api/v1/nodes/move-preview", post(preview_move_by_prefix))
+        .route(
+            "/api/v1/nodes/move-preview/subtree",
+            post(preview_move_by_subtree),
+        )
         .route("/api/v1/nodes/move-by-prefix", post(move_nodes_by_prefix))
         .route("/api/v1/nodes/pool", post(bulk_set_node_pool))
         .route("/api/v1/nodes/poll", post(poll_nodes_now))
@@ -1932,6 +1937,9 @@ pub(super) struct MovePreviewResult {
     ambiguous: Vec<PrefixAmbiguity>,
     /// Ids whose address falls inside no visible folder's range.
     unmatched: Vec<Uuid>,
+    /// Ids already in the folder their range names, or in a folder beneath it (ADR-176 決定 2).
+    /// Not a move, so in none of the three lists above.
+    in_place: Vec<Uuid>,
     /// Whether **any** folder this caller can see carries a range at all.
     ///
     /// Without this, a deployment with no NetBox reports every node as unmatched and the operator
@@ -2364,12 +2372,162 @@ async fn preview_move_by_prefix(
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "read group prefixes", "failed to read prefixes")
         })?;
+    let (in_place, left, hits) = split_in_place(&admin, &body.node_ids, hits).await?;
     let (matched, ambiguous, unmatched) =
-        node_prefix_dtos(crate::groups::fold_prefix_matches(&body.node_ids, hits));
+        node_prefix_dtos(crate::groups::fold_prefix_matches(&left, hits));
     Ok(Json(MovePreviewResult {
         matched,
         ambiguous,
         unmatched,
+        in_place,
+        any_prefixes,
+    }))
+}
+
+/// Take the nodes already where their range puts them out of a match (ADR-176 決定 2). Returns
+/// those ids, and what is left to fold.
+async fn split_in_place(
+    admin: &Admin,
+    requested: &[Uuid],
+    hits: Vec<crate::groups::PrefixHit<Uuid>>,
+) -> Result<(Vec<Uuid>, Vec<Uuid>, Vec<crate::groups::PrefixHit<Uuid>>), ApiError> {
+    let found = admin.groups.nodes_in_place(&hits).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read node placement",
+            "failed to match prefixes",
+        )
+    })?;
+    let (left, hits) = crate::groups::without_in_place(requested, hits, &found);
+    let in_place = requested
+        .iter()
+        .copied()
+        .filter(|id| found.contains(id))
+        .collect();
+    Ok((in_place, left, hits))
+}
+
+/// How many ambiguous or unmatched nodes a subtree proposal names. The totals are always exact;
+/// the lists are a sample, because a whole inventory with no ranges would otherwise name every
+/// node it has (ADR-176 決定 4).
+const SUBTREE_PREVIEW_LIST_MAX: usize = 200;
+
+/// Which folder a subtree proposal covers.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct SubtreeMoveReq {
+    /// The folder whose subtree to examine. `null` examines the whole inventory the caller may
+    /// see, ungrouped nodes included.
+    #[serde(default)]
+    group_id: Option<Uuid>,
+}
+
+/// A node named in a subtree proposal, so the dialog can show it without the tree having loaded it.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct PreviewNodeLabel {
+    node_id: Uuid,
+    name: String,
+    address: String,
+}
+
+/// What the IP-range match proposes for a whole subtree. **A proposal, not an action**, like
+/// [`MovePreviewResult`], and applied through the same `POST /api/v1/nodes/move-by-prefix`.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct SubtreeMovePreviewResult {
+    /// At most 1,000 proposals — what one `move-by-prefix` request may carry. Apply them and ask
+    /// again: the moved nodes are then in place, so the next slice comes back.
+    matched: Vec<PrefixProposal>,
+    /// Every node that would move, including those past the first 1,000.
+    matched_total: usize,
+    /// At most 200.
+    ambiguous: Vec<PrefixAmbiguity>,
+    ambiguous_total: usize,
+    /// At most 200.
+    unmatched: Vec<Uuid>,
+    unmatched_total: usize,
+    /// Nodes already in the folder their range names, or beneath it. Counted, not listed.
+    in_place_total: usize,
+    /// Name and address of every node the three lists above name.
+    nodes: Vec<PreviewNodeLabel>,
+    /// Whether **any** folder this caller can see carries a range at all.
+    any_prefixes: bool,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/nodes/move-preview/subtree", tag = "nodes",
+    request_body = SubtreeMoveReq,
+    responses(
+        (status = 200, description = "Which folder's IP range contains the address of each node in the subtree (or the whole inventory)", body = SubtreeMovePreviewResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "The folder does not exist or is not one this caller may see", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_move_by_subtree(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<SubtreeMoveReq>,
+) -> ApiResult<Json<SubtreeMovePreviewResult>> {
+    if let Some(g) = body.group_id {
+        super::scope::require_visible_group(&scope, g)?;
+        super::groups::require_group_exists(&admin, Some(g)).await?;
+    }
+    let fail = |what: &'static str| {
+        move |e: anyhow::Error| {
+            ApiError::from_internal(e.as_ref(), what, "failed to match prefixes")
+        }
+    };
+    let ids = admin
+        .groups
+        .nodes_under(body.group_id, scope.group_filter())
+        .await
+        .map_err(fail("list subtree nodes"))?;
+    let hits = admin
+        .groups
+        .match_prefixes(&ids, scope.group_filter())
+        .await
+        .map_err(fail("match node prefixes"))?;
+    let any_prefixes = admin
+        .groups
+        .any_prefixes(scope.group_filter())
+        .await
+        .map_err(fail("read group prefixes"))?;
+    let (in_place, left, hits) = split_in_place(&admin, &ids, hits).await?;
+    let (mut matched, mut ambiguous, mut unmatched) =
+        node_prefix_dtos(crate::groups::fold_prefix_matches(&left, hits));
+    let (matched_total, ambiguous_total, unmatched_total) =
+        (matched.len(), ambiguous.len(), unmatched.len());
+    matched.truncate(NODE_MOVE_BATCH_MAX);
+    ambiguous.truncate(SUBTREE_PREVIEW_LIST_MAX);
+    unmatched.truncate(SUBTREE_PREVIEW_LIST_MAX);
+    let named: Vec<Uuid> = matched
+        .iter()
+        .map(|m| m.node_id)
+        .chain(ambiguous.iter().map(|a| a.node_id))
+        .chain(unmatched.iter().copied())
+        .collect();
+    let nodes = admin
+        .groups
+        .node_labels(&named)
+        .await
+        .map_err(fail("read node labels"))?
+        .into_iter()
+        .map(|(node_id, name, address)| PreviewNodeLabel {
+            node_id,
+            name,
+            address,
+        })
+        .collect();
+    Ok(Json(SubtreeMovePreviewResult {
+        matched,
+        matched_total,
+        ambiguous,
+        ambiguous_total,
+        unmatched,
+        unmatched_total,
+        in_place_total: in_place.len(),
+        nodes,
         any_prefixes,
     }))
 }
@@ -4741,6 +4899,148 @@ mod tests {
             .expect("read")
             .expect("the node");
         assert_eq!(node.group, None, "the preview moved a node");
+    }
+
+    /// ADR-176: the whole inventory is examined without the browser naming a node — ungrouped
+    /// nodes and nodes in the wrong folder are proposed, a node already filed beneath its folder
+    /// is counted in place, and the labels come back with the proposal.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_subtree_preview_covers_the_inventory_and_leaves_placed_nodes(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let tokyo = crate::pgtest::group(&pool, "Tokyo").await;
+        let floor = crate::pgtest::group(&pool, "Floor 3").await;
+        let osaka = crate::pgtest::group(&pool, "Osaka").await;
+        sqlx::query("UPDATE node_groups SET parent_id = $1 WHERE id = $2")
+            .bind(tokyo)
+            .bind(floor)
+            .execute(&pool)
+            .await
+            .expect("nest");
+        crate::pgtest::prefix(&pool, tokyo, "10.0.0.0/24").await;
+        let loose = crate::pgtest::node(&pool, "loose", 1, None).await;
+        let wrong = crate::pgtest::node(&pool, "wrong", 2, Some(osaka)).await;
+        let placed = crate::pgtest::node(&pool, "placed", 3, Some(floor)).await;
+        let far =
+            crate::pgtest::node_at(&pool, "far", "192.0.2.9".parse().expect("addr"), None).await;
+
+        let path = "/api/v1/nodes/move-preview/subtree";
+        let (status, body) = send(&st, "POST", path, &tok, Some(serde_json::json!({}))).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let ids = |v: &serde_json::Value, key: &str| -> Vec<String> {
+            v.as_array()
+                .expect("array")
+                .iter()
+                .map(|m| {
+                    if key.is_empty() {
+                        m.as_str().expect("id").to_string()
+                    } else {
+                        m[key].as_str().expect("id").to_string()
+                    }
+                })
+                .collect()
+        };
+        assert_eq!(
+            ids(&body["matched"], "node_id"),
+            vec![loose.to_string(), wrong.to_string()],
+            "{body}"
+        );
+        assert_eq!(body["matched_total"], 2, "{body}");
+        assert_eq!(ids(&body["unmatched"], ""), vec![far.to_string()], "{body}");
+        assert_eq!(body["in_place_total"], 1, "{body}");
+        let named = body["nodes"].as_array().expect("nodes");
+        assert_eq!(named.len(), 3, "{body}");
+        let far_label = named
+            .iter()
+            .find(|n| n["node_id"] == far.to_string())
+            .expect("far is labelled");
+        assert_eq!(far_label["name"], "far");
+        assert_eq!(far_label["address"], "192.0.2.9", "the netmask leaked in");
+        let _ = placed;
+
+        // A folder's subtree only: Osaka holds `wrong` alone.
+        let (status, body) = send(
+            &st,
+            "POST",
+            path,
+            &tok,
+            Some(serde_json::json!({ "group_id": osaka })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(ids(&body["matched"], "node_id"), vec![wrong.to_string()]);
+        assert_eq!(body["unmatched_total"], 0, "{body}");
+
+        let repo = crate::pgtest::repo(pool);
+        let node = repo.get_node(loose).await.expect("read").expect("node");
+        assert_eq!(node.group, None, "the preview moved a node");
+    }
+
+    /// A folder outside the caller's scope is a 404, and a scoped whole-inventory preview names
+    /// nothing outside it (ADR-176 決定 3).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_subtree_preview_stays_inside_the_callers_scope(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "Mine").await;
+        let theirs = crate::pgtest::group(&pool, "Theirs").await;
+        crate::pgtest::prefix(&pool, mine, "10.0.0.0/24").await;
+        let a = crate::pgtest::node(&pool, "a", 1, Some(theirs)).await;
+        let tok = scoped_token(&st, &[mine]);
+        let path = "/api/v1/nodes/move-preview/subtree";
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            path,
+            &tok,
+            Some(serde_json::json!({ "group_id": theirs })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+
+        let (status, body) = send(&st, "POST", path, &tok, Some(serde_json::json!({}))).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert!(
+            !body.to_string().contains(&a.to_string()),
+            "a node outside the scope was named: {body}"
+        );
+    }
+
+    /// Past 1,000 proposals the list stops at what one `move-by-prefix` may carry and the total
+    /// says how many are left (ADR-176 決定 4).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_subtree_preview_caps_its_proposals_at_one_request(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = crate::pgtest::group(&pool, "Big").await;
+        crate::pgtest::prefix(&pool, site, "10.8.0.0/16").await;
+        // The fixture writes one node per call; 1,001 of them through it would dominate the run.
+        sqlx::query(
+            "INSERT INTO nodes (id, name, address) \
+             SELECT gen_random_uuid(), 'n' || i, ('10.8.' || (i / 256) || '.' || (i % 256))::inet \
+             FROM generate_series(1, 1001) AS i",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/move-preview/subtree",
+            &tok,
+            Some(serde_json::json!({ "group_id": null })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body["matched"].as_array().expect("matched").len(), 1000);
+        assert_eq!(body["matched_total"], 1001);
     }
 
     /// `any_prefixes` is false where no folder carries a range — the difference between "your

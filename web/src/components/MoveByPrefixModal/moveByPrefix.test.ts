@@ -1,17 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Reading an IP-range proposal (ADR-124). The first describe is the one that matters: three
-// different situations that all show zero rows, and telling them apart is the whole point.
+// Reading an IP-range proposal (ADR-124). The first describe is the one that matters: different
+// situations that all show zero rows, and telling them apart is the whole point.
 import { describe, expect, it } from 'vitest';
-import { byDestination, emptyReason, summarize } from './moveByPrefix';
-import type { MovePreview } from '../../types/api';
+import {
+  EMPTY_REASONS,
+  byDestination,
+  emptyReason,
+  fromSelection,
+  fromSubtree,
+  remainingAfterApply,
+  summarize,
+  type ProposalView,
+} from './moveByPrefix';
+import type { MovePreview, SubtreeMovePreview } from '../../types/api';
+import en from '../../locales/en/nodes.json';
+import ja from '../../locales/ja/nodes.json';
 
-const preview = (over: Partial<MovePreview> = {}): MovePreview => ({
-  matched: [],
-  ambiguous: [],
-  unmatched: [],
-  any_prefixes: true,
-  ...over,
-});
+const preview = (over: Partial<MovePreview> = {}): ProposalView =>
+  fromSelection({
+    matched: [],
+    ambiguous: [],
+    unmatched: [],
+    in_place: [],
+    any_prefixes: true,
+    ...over,
+  });
 
 const hit = (node: string, group: string, prefix = '10.0.0.0/24') => ({
   node_id: node,
@@ -44,13 +57,60 @@ describe('emptyReason', () => {
     ).toBe('noMatch');
   });
 
+  it('says "already in place" only when nothing else is left over', () => {
+    // ADR-176 決定 2: the good kind of zero. With an unmatched node beside it, the operator still
+    // has something to look at, so it is not the whole story.
+    expect(emptyReason(preview({ in_place: ['a', 'b'] }))).toBe('allInPlace');
+    expect(emptyReason(preview({ in_place: ['a'], unmatched: ['b'] }))).toBe('noMatch');
+  });
+
   it('prefers "no ranges" over every other reading', () => {
-    // any_prefixes false makes the other two impossible, so it is checked first.
+    // any_prefixes false makes the others impossible, so it is checked first.
     expect(
       emptyReason(
         preview({ ambiguous: [{ node_id: 'a', group_ids: ['g1', 'g2'] }], any_prefixes: false }),
       ),
     ).toBe('noPrefixes');
+  });
+
+  it('has a sentence for every reason in both languages', () => {
+    for (const r of EMPTY_REASONS) {
+      expect(en.moveByPrefix.empty[r], `en ${r}`).toBeTruthy();
+      expect(ja.moveByPrefix.empty[r], `ja ${r}`).toBeTruthy();
+    }
+  });
+});
+
+describe('a subtree proposal', () => {
+  const subtree = (over: Partial<SubtreeMovePreview> = {}): SubtreeMovePreview => ({
+    matched: [],
+    matched_total: 0,
+    ambiguous: [],
+    ambiguous_total: 0,
+    unmatched: [],
+    unmatched_total: 0,
+    in_place_total: 0,
+    nodes: [],
+    any_prefixes: true,
+    ...over,
+  });
+
+  it('reads its totals, not the length of its sliced lists', () => {
+    // The server lists at most 200 unmatched; the count must still be the real one.
+    const view = fromSubtree(subtree({ unmatched: ['a'], unmatched_total: 5000 }));
+    expect(view.unmatchedTotal).toBe(5000);
+    expect(emptyReason(view)).toBe('noMatch');
+  });
+
+  it('leaves the rest of a capped proposal for the next round', () => {
+    // ADR-176 決定 4: 1,000 go now, 234 wait for "continue".
+    const matched = Array.from({ length: 1000 }, (_, i) => hit(`n${i}`, 'g1'));
+    expect(remainingAfterApply(fromSubtree(subtree({ matched, matched_total: 1234 })))).toBe(234);
+    expect(remainingAfterApply(fromSubtree(subtree({ matched, matched_total: 1000 })))).toBe(0);
+  });
+
+  it('is not empty while proposals remain past the slice', () => {
+    expect(emptyReason(fromSubtree(subtree({ matched_total: 3 })))).toBeNull();
   });
 });
 

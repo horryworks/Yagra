@@ -93,6 +93,7 @@ import type {
   PrefixGapReport,
   Pins,
   MovePreview,
+  SubtreeMovePreview,
   ImportPreview,
   NodeNameEntry,
   NodePage,
@@ -1395,6 +1396,11 @@ export const api = {
    *  prefixes cleared, so the same arithmetic done in the browser would quietly miss ranges. */
   previewMoveByPrefix: (nodeIds: string[]): Promise<MovePreview> =>
     apiPost('/api/v1/nodes/move-preview', { body: { node_ids: nodeIds } }),
+
+  /** The same proposal for every node in a folder's subtree, or in the whole inventory when
+   *  `groupId` is null — the server collects them, so the tree need not have loaded them (ADR-176). */
+  previewMoveBySubtree: (groupId: string | null): Promise<SubtreeMovePreview> =>
+    apiPost('/api/v1/nodes/move-preview/subtree', { body: { group_id: groupId } }),
 
   /** Apply what the IP-range preview proposed: every destination in one request and one
    *  transaction, so a failure moves nothing (ADR-172 決定 2). */

@@ -104,7 +104,10 @@ import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { memberFetchState } from '../components/NodeDetail/groupMembers';
 import { MoveNodeModal, type MoveTarget } from '../components/MoveNodeModal/MoveNodeModal';
-import { MoveByPrefixModal } from '../components/MoveByPrefixModal/MoveByPrefixModal';
+import {
+  MoveByPrefixModal,
+  type MoveByPrefixSource,
+} from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
@@ -332,7 +335,7 @@ export function NodesPage() {
    *  from the selection bar. `null` ⇒ closed. */
   const [moving, setMoving] = useState<MoveTarget[] | null>(null);
   /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 決定 6). */
-  const [movingByPrefix, setMovingByPrefix] = useState<NodeSummary[] | null>(null);
+  const [movingByPrefix, setMovingByPrefix] = useState<MoveByPrefixSource | null>(null);
   const [taggingNodes, setTaggingNodes] = useState<NodeSummary[] | null>(null);
   /** Node whose edit dialog is open, from the tree's right-click. The row is all this page has, so
    *  the dialog loads the detail itself (`EditNodeModalById`) — like Delete/Move above, editing does
@@ -1138,6 +1141,33 @@ export function NodesPage() {
                   )}
                 />
               )}
+              {canMoveByPrefix(groups, canConfig) && (
+                // Actions over the whole inventory (ADR-176). A menu of its own rather than a third
+                // item under ＋, which means "add": sorting is not adding, and the operator
+                // looking for it would not open the add menu to find it.
+                <ActionMenu
+                  label={t('moreMenu.trigger')}
+                  align="end"
+                  items={[
+                    {
+                      key: 'moveAllByPrefix',
+                      label: t('moreMenu.moveAllByPrefix'),
+                      onSelect: () => setMovingByPrefix({ kind: 'subtree', groupId: null }),
+                    },
+                  ]}
+                  trigger={(p) => (
+                    <Button
+                      {...p}
+                      variant="outline"
+                      className="nodes-pane-add"
+                      title={t('moreMenu.trigger')}
+                      aria-label={t('moreMenu.trigger')}
+                    >
+                      ⋯
+                    </Button>
+                  )}
+                />
+              )}
               {/* The clear affordance is the box's own, and it clears the box and nothing else.
                   clearAllFilters would take the state / kind / pool controls with it — three
                   filters the operator did not ask to drop. ClearFilters in the action row is the
@@ -1294,9 +1324,12 @@ export function NodesPage() {
             onRequestMoveNode={(n) => setMoving([n])}
             onMoveChecked={canConfig ? () => setMoving([...checked.values()]) : undefined}
             onMoveCheckedByPrefix={
-              canConfig ? () => setMovingByPrefix([...checked.values()]) : undefined
+              canConfig ? () => setMovingByPrefix({ kind: 'nodes', targets: [...checked.values()] }) : undefined
             }
-            onMoveNodeByPrefix={canConfig ? (n) => setMovingByPrefix([n]) : undefined}
+            onMoveNodeByPrefix={canConfig ? (n) => setMovingByPrefix({ kind: 'nodes', targets: [n] }) : undefined}
+            onMoveGroupByPrefix={
+              canConfig ? (groupId) => setMovingByPrefix({ kind: 'subtree', groupId }) : undefined
+            }
             onTagChecked={canConfig ? () => setTaggingNodes([...checked.values()]) : undefined}
             onMoveNodes={moveNodes}
             onMoveGroup={moveGroup}
@@ -1350,7 +1383,7 @@ export function NodesPage() {
                 </Button>
               )}
               {canMoveByPrefix(groups, canConfig) && (
-                <Button variant="outline" onClick={() => setMovingByPrefix([...checked.values()])}>
+                <Button variant="outline" onClick={() => setMovingByPrefix({ kind: 'nodes', targets: [...checked.values()] })}>
                   {t('select.moveByPrefix')}
                 </Button>
               )}
@@ -1609,7 +1642,7 @@ export function NodesPage() {
 
       {movingByPrefix && (
         <MoveByPrefixModal
-          targets={movingByPrefix}
+          source={movingByPrefix}
           groups={groups}
           onClose={() => setMovingByPrefix(null)}
           onMoved={() => {

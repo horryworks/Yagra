@@ -9,13 +9,17 @@
 // Three sections, each with its count, and the two that are *not* moves matter as much as the one
 // that is: a node whose address matches nothing, and a node two sites claim equally well, are both
 // shown rather than quietly dropped. Choosing between two sites is exactly the decision this
-// refuses to make.
+// refuses to make. A node already in its folder, or beneath it, is counted and left (ADR-176).
+//
+// Two sources (ADR-176): the nodes the operator selected, or a folder's subtree / the whole
+// inventory, which the server collects because the tree has only loaded the folders that are open.
+// A subtree proposes at most what one request may carry; "continue" asks again for the rest.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addressText } from '../../lib/nodeAddress';
 import { api, errMsg } from '../../services/api';
-import type { MovePreview, NodeGroup, NodeSummary } from '../../types/api';
+import type { NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
 import { nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
@@ -24,39 +28,69 @@ import { Button } from '../ui/Button';
 import {
   byDestination,
   emptyReason,
+  fromSelection,
+  fromSubtree,
+  remainingAfterApply,
   summarize,
   type ApplySummary,
+  type ProposalView,
 } from './moveByPrefix';
 import './MoveByPrefixModal.css';
 
+/** What the dialog examines: a selection, or every node under a folder (`null` ⇒ everywhere). */
+export type MoveByPrefixSource =
+  | { kind: 'nodes'; targets: readonly NodeSummary[] }
+  | { kind: 'subtree'; groupId: string | null };
+
+/** A node as the dialog names it. A selection brings full summaries (with badges); a subtree
+ *  proposal brings a name and an address. */
+type Label = { name: string; address: string; summary?: NodeSummary };
+
 export function MoveByPrefixModal({
-  targets,
+  source,
   groups,
   onClose,
   onMoved,
 }: {
-  targets: readonly NodeSummary[];
+  source: MoveByPrefixSource;
   groups: NodeGroup[];
   onClose: () => void;
   /** Refresh the inventory. Does not close — the result is worth reading. */
   onMoved: () => void;
 }) {
   const { t } = useTranslation('nodes');
-  const [preview, setPreview] = useState<MovePreview | null>(null);
+  const [view, setView] = useState<ProposalView | null>(null);
+  const [labels, setLabels] = useState<Map<string, Label>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<ApplySummary | null>(null);
+  /** Bumped by "continue", which asks the server again once a round has been applied. */
+  const [round, setRound] = useState(0);
 
-  const ids = useMemo(() => targets.map((n) => n.id), [targets]);
-  const byId = useMemo(() => new Map(targets.map((n) => [n.id, n])), [targets]);
+  const targets = source.kind === 'nodes' ? source.targets : null;
+  const subtreeRoot = source.kind === 'subtree' ? source.groupId : undefined;
   const paths = useMemo(() => new Map(groupOptions(groups).map((o) => [o.id, o.path])), [groups]);
 
   useEffect(() => {
     let live = true;
-    api
-      .previewMoveByPrefix(ids)
-      .then((p) => {
-        if (live) setPreview(p);
+    const ask: Promise<[ProposalView, Map<string, Label>]> = targets
+      ? api
+          .previewMoveByPrefix(targets.map((n) => n.id))
+          .then((p) => [
+            fromSelection(p),
+            new Map(targets.map((n) => [n.id, { name: n.name, address: n.address, summary: n }])),
+          ])
+      : api
+          .previewMoveBySubtree(subtreeRoot ?? null)
+          .then((p) => [
+            fromSubtree(p),
+            new Map(p.nodes.map((n) => [n.node_id, { name: n.name, address: n.address }])),
+          ]);
+    ask
+      .then(([v, l]) => {
+        if (!live) return;
+        setView(v);
+        setLabels(l);
       })
       .catch((e: unknown) => {
         if (live) setError(errMsg(e, t('err.movePreview')));
@@ -64,10 +98,11 @@ export function MoveByPrefixModal({
     return () => {
       live = false;
     };
-  }, [ids, t]);
+  }, [targets, subtreeRoot, round, t]);
 
-  const destinations = preview ? byDestination(preview) : [];
-  const reason = preview ? emptyReason(preview) : null;
+  const destinations = view ? byDestination(view) : [];
+  const reason = view ? emptyReason(view) : null;
+  const remaining = view ? remainingAfterApply(view) : 0;
 
   const apply = async () => {
     setBusy(true);
@@ -86,34 +121,54 @@ export function MoveByPrefixModal({
     }
   };
 
+  const next = () => {
+    setView(null);
+    setDone(null);
+    setError(null);
+    setRound((r) => r + 1);
+  };
+
   const nodeLine = (id: string) => {
-    const n = byId.get(id);
+    const n = labels.get(id);
     if (!n) return <li key={id}>{id}</li>;
+    const s = n.summary;
     return (
       <li key={id}>
         <span className="mbp-name">{n.name}</span>
         <span className="mbp-addr mono">
-          {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
+          {addressText(n.address, t, { meshRepeater: s?.meraki_repeater })}
         </span>
-        {nodeBadges({
-          kind: n.kind,
-          merakiProductType: n.meraki_product_type,
-          merakiRepeater: n.meraki_repeater,
-        }).map((badge) => (
-          <NodeBadgeTag
-            key={badge.text}
-            badge={badge}
-            className="mbp-badge"
-            label={t(badge.labelKey)}
-          />
-        ))}
+        {s &&
+          nodeBadges({
+            kind: s.kind,
+            merakiProductType: s.meraki_product_type,
+            merakiRepeater: s.meraki_repeater,
+          }).map((badge) => (
+            <NodeBadgeTag
+              key={badge.text}
+              badge={badge}
+              className="mbp-badge"
+              label={t(badge.labelKey)}
+            />
+          ))}
       </li>
     );
   };
 
+  /** "…and N more" under a list the server sliced. */
+  const more = (shown: number, total: number) =>
+    total > shown ? <p className="mbp-hint">{t('moveByPrefix.more', { count: total - shown })}</p> : null;
+
+  const title =
+    source.kind === 'nodes'
+      ? t('moveByPrefix.title', { count: source.targets.length })
+      : source.groupId === null
+        ? t('moveByPrefix.titleAll')
+        : t('moveByPrefix.titleFolder', { name: paths.get(source.groupId) ?? '' });
+
   return (
     <Modal
-      title={t('moveByPrefix.title', { count: targets.length })}
+      title={title}
       onClose={onClose}
       size="wide"
       footer={
@@ -127,27 +182,33 @@ export function MoveByPrefixModal({
               onClick={() => void apply()}
               disabled={busy || destinations.length === 0}
             >
-              {t('moveByPrefix.apply', {
-                count: preview?.matched.length ?? 0,
-              })}
+              {t('moveByPrefix.apply', { count: view?.matched.length ?? 0 })}
+            </Button>
+          )}
+          {done && remaining > 0 && (
+            <Button variant="primary" onClick={next}>
+              {t('moveByPrefix.continue', { count: remaining })}
             </Button>
           )}
         </>
       }
     >
       <div className="mbp">
-        {!preview && !error && <p className="muted">{t('moveByPrefix.loading')}</p>}
+        {!view && !error && <p className="muted">{t('moveByPrefix.loading')}</p>}
 
-        {preview && reason && (
-          // One of three sentences, never one generic one — see `emptyReason`.
+        {view && reason && (
+          // One sentence per reason, never one generic one — see `emptyReason`.
           <p className="mbp-reason">{t(`moveByPrefix.empty.${reason}`)}</p>
         )}
 
-        {preview && destinations.length > 0 && (
+        {view && destinations.length > 0 && (
           <section className="mbp-section">
-            <h4 className="mbp-head">
-              {t('moveByPrefix.willMove', { count: preview.matched.length })}
-            </h4>
+            <h4 className="mbp-head">{t('moveByPrefix.willMove', { count: view.matchedTotal })}</h4>
+            {remaining > 0 && (
+              <p className="mbp-hint">
+                {t('moveByPrefix.firstBatch', { shown: view.matched.length, rest: remaining })}
+              </p>
+            )}
             {destinations.map((d) => (
               <div className="mbp-dest" key={d.groupId}>
                 <div className="mbp-dest-head">
@@ -160,32 +221,38 @@ export function MoveByPrefixModal({
           </section>
         )}
 
-        {preview && preview.ambiguous.length > 0 && (
+        {view && view.ambiguousTotal > 0 && (
           <section className="mbp-section">
             <h4 className="mbp-head">
-              {t('moveByPrefix.ambiguous', { count: preview.ambiguous.length })}
+              {t('moveByPrefix.ambiguous', { count: view.ambiguousTotal })}
             </h4>
             <p className="mbp-hint">{t('moveByPrefix.ambiguousHint')}</p>
             <ul className="mbp-list">
-              {preview.ambiguous.map((a) => (
+              {view.ambiguous.map((a) => (
                 <li key={a.node_id}>
-                  <span className="mbp-name">{byId.get(a.node_id)?.name ?? a.node_id}</span>
+                  <span className="mbp-name">{labels.get(a.node_id)?.name ?? a.node_id}</span>
                   <span className="mbp-cands">
                     {a.group_ids.map((g) => paths.get(g) ?? g).join(' · ')}
                   </span>
                 </li>
               ))}
             </ul>
+            {more(view.ambiguous.length, view.ambiguousTotal)}
           </section>
         )}
 
-        {preview && preview.unmatched.length > 0 && (
+        {view && view.unmatchedTotal > 0 && (
           <section className="mbp-section">
             <h4 className="mbp-head">
-              {t('moveByPrefix.unmatched', { count: preview.unmatched.length })}
+              {t('moveByPrefix.unmatched', { count: view.unmatchedTotal })}
             </h4>
-            <ul className="mbp-list">{preview.unmatched.map(nodeLine)}</ul>
+            <ul className="mbp-list">{view.unmatched.map(nodeLine)}</ul>
+            {more(view.unmatched.length, view.unmatchedTotal)}
           </section>
+        )}
+
+        {view && view.inPlaceTotal > 0 && (
+          <p className="mbp-hint">{t('moveByPrefix.inPlace', { count: view.inPlaceTotal })}</p>
         )}
 
         {done && (

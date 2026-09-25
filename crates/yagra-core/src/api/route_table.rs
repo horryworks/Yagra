@@ -1147,6 +1147,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
              list_node_groups and list_nodes",
         ),
     ),
+    (
+        "POST",
+        "/api/v1/nodes/move-preview/subtree",
+        GroupFiltered,
+        Exempt(
+            "the same proposal as /nodes/move-preview, over a folder's subtree or the whole \
+             inventory instead of a selection (ADR-176): the only thing to do with it is press \
+             Move, which MCP cannot, and its facts are served by list_node_groups and list_nodes",
+        ),
+    ),
     ("DELETE", "/api/v1/nodes/:node_id", NodeScoped, NO_MCP_WRITE),
     (
         "GET",

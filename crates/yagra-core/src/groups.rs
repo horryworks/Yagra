@@ -316,6 +316,27 @@ where
     fold
 }
 
+/// Take the nodes [`GroupRepo::nodes_in_place`] found out of a node match before it is folded, so
+/// a node already where it belongs is neither proposed, nor ambiguous, nor unmatched (ADR-176
+/// 決定 2). Returns what is left to ask about, and its hits.
+#[must_use]
+pub fn without_in_place(
+    requested: &[Uuid],
+    hits: Vec<PrefixHit<Uuid>>,
+    in_place: &HashSet<Uuid>,
+) -> (Vec<Uuid>, Vec<PrefixHit<Uuid>>) {
+    (
+        requested
+            .iter()
+            .copied()
+            .filter(|id| !in_place.contains(id))
+            .collect(),
+        hits.into_iter()
+            .filter(|h| !in_place.contains(&h.key))
+            .collect(),
+    )
+}
+
 /// The gap a drop lands in: the order values on either side of it, within `siblings` — the
 /// destination scope's current items, ordered ascending and **not** including whatever is moving.
 /// `before`/`after` name the drop target (at most one is set); if neither matches a sibling the
@@ -1027,6 +1048,86 @@ impl GroupRepo {
                     prefix: row.try_get("prefix")?,
                 })
             })
+            .collect()
+    }
+
+    /// Which of `hits`' nodes **already sit where a match would put them** — in the claimed folder
+    /// or anywhere beneath it (ADR-176 決定 2).
+    ///
+    /// Such a node is not a move. Counting it as one both inflated the proposal and, worse, pulled a
+    /// node an operator had filed into a child folder with no range of its own back up into the
+    /// parent that carries the range. For an ambiguous node, sitting under **any** of the tied
+    /// folders counts: it is already in one of the sites that claim it, and choosing between them
+    /// is the decision the preview refuses to make.
+    ///
+    /// The ancestor closure is built over `node_groups` once (hundreds of rows) and hash-joined, so
+    /// the cost grows with the hits, not with hits × folders. `UNION` stops the walk on a cyclic
+    /// parent chain, for the reason `delete_subtree` gives.
+    pub async fn nodes_in_place(&self, hits: &[PrefixHit<Uuid>]) -> anyhow::Result<HashSet<Uuid>> {
+        if hits.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let nodes: Vec<Uuid> = hits.iter().map(|h| h.key).collect();
+        let groups: Vec<Uuid> = hits.iter().map(|h| h.group).collect();
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "WITH RECURSIVE anc(gid, ancestor) AS ( \
+               SELECT id, id FROM node_groups \
+               UNION \
+               SELECT a.gid, g.parent_id FROM anc a JOIN node_groups g ON g.id = a.ancestor \
+               WHERE g.parent_id IS NOT NULL \
+             ) \
+             SELECT DISTINCT t.node \
+             FROM unnest($1::uuid[], $2::uuid[]) AS t(node, grp) \
+             JOIN nodes n ON n.id = t.node \
+             JOIN anc ON anc.gid = n.group_id AND anc.ancestor = t.grp",
+        )
+        .bind(&nodes)
+        .bind(&groups)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Every node in `root`'s subtree, or in the whole inventory when `root` is `None`, that the
+    /// caller may see — ordered by name, so a capped proposal is the same slice on every press
+    /// (ADR-176 決定 3). Ungrouped nodes belong to the whole inventory and to no folder's subtree.
+    pub async fn nodes_under(
+        &self,
+        root: Option<Uuid>,
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
+        let ids = sqlx::query_scalar(
+            "WITH RECURSIVE sub(id) AS ( \
+               SELECT id FROM node_groups WHERE id = $1 \
+               UNION \
+               SELECT g.id FROM node_groups g JOIN sub ON g.parent_id = sub.id \
+             ) \
+             SELECT n.id FROM nodes n \
+             WHERE ($1::uuid IS NULL OR n.group_id IN (SELECT id FROM sub)) \
+               AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
+             ORDER BY n.name, n.id",
+        )
+        .bind(root)
+        .bind(&scope_bind)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(ids)
+    }
+
+    /// Name and address of each node named, for a proposal the browser has no node list for
+    /// (ADR-176). `host()` rather than `::TEXT`, which appends the netmask.
+    pub async fn node_labels(&self, ids: &[Uuid]) -> anyhow::Result<Vec<(Uuid, String, String)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows =
+            sqlx::query("SELECT id, name, host(address) AS address FROM nodes WHERE id = ANY($1)")
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter()
+            .map(|r| Ok((r.try_get("id")?, r.try_get("name")?, r.try_get("address")?)))
             .collect()
     }
 
@@ -2337,6 +2438,80 @@ mod tests {
 
         let hits = repo.match_prefixes(&[node], None).await.expect("match");
         assert_eq!(hits.len(), 2, "the tie was resolved somewhere: {hits:?}");
+    }
+
+    /// Put `child` under `parent`. The fixture only makes top-level folders.
+    async fn nest(pool: &sqlx::PgPool, child: Uuid, parent: Uuid) {
+        sqlx::query("UPDATE node_groups SET parent_id = $1 WHERE id = $2")
+            .bind(parent)
+            .bind(child)
+            .execute(pool)
+            .await
+            .expect("nest");
+    }
+
+    /// 🚨 A node already in the claimed folder, or filed by hand into a child of it, is in place —
+    /// the one elsewhere is not (ADR-176 決定 2). Before this, the child's node was proposed back
+    /// up into the parent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_at_or_below_its_claimed_folder_is_in_place(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        let floor = crate::pgtest::group(&pool, "Floor 3").await;
+        let grand = crate::pgtest::group(&pool, "Rack 1").await;
+        let other = crate::pgtest::group(&pool, "Osaka").await;
+        nest(&pool, floor, site).await;
+        nest(&pool, grand, floor).await;
+        crate::pgtest::prefix(&pool, site, "10.1.2.0/24").await;
+        let addr = |s: &str| s.parse().expect("addr");
+        let at = crate::pgtest::node_at(&pool, "at", addr("10.1.2.1"), Some(site)).await;
+        let below = crate::pgtest::node_at(&pool, "below", addr("10.1.2.2"), Some(grand)).await;
+        let away = crate::pgtest::node_at(&pool, "away", addr("10.1.2.3"), Some(other)).await;
+        let loose = crate::pgtest::node_at(&pool, "loose", addr("10.1.2.4"), None).await;
+
+        let asked = [at, below, away, loose];
+        let hits = repo.match_prefixes(&asked, None).await.expect("match");
+        let in_place = repo.nodes_in_place(&hits).await.expect("in place");
+        assert_eq!(in_place, HashSet::from([at, below]));
+
+        let (left, hits) = without_in_place(&asked, hits, &in_place);
+        let fold = fold_prefix_matches(&left, hits);
+        let moved: Vec<Uuid> = fold.matched.iter().map(|m| m.0).collect();
+        assert_eq!(moved, vec![away, loose]);
+        assert!(fold.unmatched.is_empty() && fold.ambiguous.is_empty());
+    }
+
+    /// A folder's subtree reaches its grandchildren and nothing beside it; the whole inventory
+    /// includes ungrouped nodes, and a scope narrows it (ADR-176 決定 3).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn nodes_under_walks_the_subtree_or_the_whole_inventory(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        let floor = crate::pgtest::group(&pool, "Floor 3").await;
+        let other = crate::pgtest::group(&pool, "Osaka").await;
+        nest(&pool, floor, site).await;
+        let a = crate::pgtest::node(&pool, "a", 1, Some(site)).await;
+        let b = crate::pgtest::node(&pool, "b", 2, Some(floor)).await;
+        let c = crate::pgtest::node(&pool, "c", 3, Some(other)).await;
+        let d = crate::pgtest::node(&pool, "d", 4, None).await;
+
+        assert_eq!(
+            repo.nodes_under(Some(site), None).await.expect("sub"),
+            vec![a, b]
+        );
+        assert_eq!(
+            repo.nodes_under(None, None).await.expect("all"),
+            vec![a, b, c, d]
+        );
+        assert_eq!(
+            repo.nodes_under(None, Some(&[other]))
+                .await
+                .expect("scoped"),
+            vec![c],
+            "a scoped caller got nodes outside its folders"
+        );
     }
 
     /// An address inside no range is simply absent, and a v4 node never matches a v6 range.
