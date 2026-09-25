@@ -362,13 +362,25 @@ interface AlertStore {
   alerts: Record<string, Alert>;
   upsertAlert: (alert: Alert) => void;
   resolveAlert: (key: Pick<Alert, 'node' | 'check' | 'severity'>) => void;
+  /** Replace the whole set with a fresh snapshot (ADR-019 増分 1). An alert absent from `list` is
+   *  dropped — that is the point: a resolution missed while the stream was down would otherwise
+   *  stay on screen until a reload. */
+  setAlerts: (list: Alert[]) => void;
   clear: () => void;
+}
+
+/** The store's shape for a snapshot: keyed by `alertKey`, a later duplicate winning. */
+export function alertsByKey(list: Alert[]): Record<string, Alert> {
+  const next: Record<string, Alert> = {};
+  for (const a of list) next[alertKey(a)] = a;
+  return next;
 }
 
 export const useAlertStore = create<AlertStore>((set) => ({
   alerts: {},
   upsertAlert: (alert) =>
     set((s) => ({ alerts: { ...s.alerts, [alertKey(alert)]: alert } })),
+  setAlerts: (list) => set({ alerts: alertsByKey(list) }),
   resolveAlert: (key) =>
     set((s) => {
       const next = { ...s.alerts };

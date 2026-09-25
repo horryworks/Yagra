@@ -25,7 +25,6 @@ import {
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
-import { useAlertStream } from '../hooks/useAlertStream';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import { BoardTabs } from './BoardTabs';
 import { CatalogModal } from './CatalogModal';
@@ -36,9 +35,6 @@ import './MyDashboardPage.css';
 
 export function MyDashboardPage() {
   const { t } = useTranslation('dashboard');
-  // One SSE subscription for the whole board (alert widgets read the shared store).
-  useAlertStream();
-
   const widgets = useLayoutStore((s) => s.widgets);
   const status = useLayoutStore((s) => s.status);
   const loaded = useLayoutStore((s) => s.loaded);

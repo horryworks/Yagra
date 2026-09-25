@@ -10,10 +10,14 @@ import type { AnalysisJob } from '../types/api';
 const listAnalysisJobs = vi.fn();
 const unsubscribe = vi.fn();
 let onJob: (j: AnalysisJob) => void = () => {};
-const subscribeAnalysis = vi.fn((cb: (j: AnalysisJob) => void) => {
-  onJob = cb;
-  return unsubscribe;
-});
+let onResync: (() => void) | undefined;
+const subscribeAnalysis = vi.fn(
+  (cb: (j: AnalysisJob) => void, _err?: unknown, resync?: () => void) => {
+    onJob = cb;
+    onResync = resync;
+    return unsubscribe;
+  },
+);
 
 const setJobs = vi.fn();
 const setLoadFailed = vi.fn();
@@ -23,7 +27,8 @@ vi.mock('../services/api', () => ({
   api: { listAnalysisJobs: (n: number) => listAnalysisJobs(n) },
 }));
 vi.mock('../services/sse', () => ({
-  subscribeAnalysis: (cb: (j: AnalysisJob) => void) => subscribeAnalysis(cb),
+  subscribeAnalysis: (cb: (j: AnalysisJob) => void, err?: unknown, resync?: () => void) =>
+    subscribeAnalysis(cb, err, resync),
 }));
 vi.mock('./store', () => ({
   // The seed reads the store outside React (`getState`) so the runs list can call it for a retry.
@@ -88,6 +93,18 @@ describe('useTroubleshootStream', () => {
 
     onJob(job('j2'));
     expect(upsertJob).toHaveBeenCalledWith(job('j2'));
+  });
+
+  it('re-reads the recent-jobs list on a resync (a reconnect replays nothing)', async () => {
+    const { useTroubleshootStream } = await import('./useTroubleshootStream');
+    renderHook(() => useTroubleshootStream());
+    await waitFor(() => expect(setJobs).toHaveBeenCalledTimes(1));
+    expect(onResync).toBeTypeOf('function');
+
+    listAnalysisJobs.mockResolvedValue([job('j1'), job('j3')]);
+    onResync!();
+    await waitFor(() => expect(setJobs).toHaveBeenCalledTimes(2));
+    expect(setJobs).toHaveBeenLastCalledWith([job('j1'), job('j3')]);
   });
 
   it('closes the stream on unmount', async () => {

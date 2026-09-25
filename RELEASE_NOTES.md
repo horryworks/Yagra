@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **The alert bell is live on every screen, and a resolved alert no longer stays on screen until a reload.** The WebUI subscribed to the alert stream only on Active alerts and the three dashboards, so elsewhere the bell read zero or kept the count from the last dashboard visited. The subscription now lives in the app shell. The active-alert list is also re-read whenever the stream reconnects or the server says frames were dropped, and that read replaces the list rather than adding to it — an alert resolved while the connection was down used to stay listed. The Troubleshoot runs list and Saved reports re-read on reconnect the same way.
+
 ## v0.3.32 — Deleting a folder deletes everything beneath it, the whole inventory or one folder can be sorted by IP range, the inventory tree's filters sit behind one button, Discovery sweeps a /20 in one scan, NetBox Sync now and AI root-cause explanations finish after the tab closes, 22 Meraki integration fixes
 
 ### Breaking changes

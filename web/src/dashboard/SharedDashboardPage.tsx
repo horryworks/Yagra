@@ -27,7 +27,6 @@ import {
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
-import { useAlertStream } from '../hooks/useAlertStream';
 import { useCan } from '../store';
 import { CatalogModal } from './CatalogModal';
 import { LayoutStoreProvider } from './LayoutStoreContext';
@@ -38,9 +37,6 @@ import './SharedDashboardPage.css';
 
 export function SharedDashboardPage() {
   const { t } = useTranslation('dashboard');
-  // One SSE subscription for the whole board (alert widgets read the shared store).
-  useAlertStream();
-
   // `PUT /shared-dashboard` is ManageConfig — the board everyone sees is configuration.
   const canConfig = useCan('manage_config');
 

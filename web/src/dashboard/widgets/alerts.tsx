@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// 02 · Alerts widgets. Active alerts + flapping + severity mix read the live alert store (the
-// page subscribes once via useAlertStream); alert volume buckets the history endpoint client-side.
+// 02 · Alerts widgets. Active alerts + flapping + severity mix read the live alert store (kept live by
+// the one useAlertStream AppShell mounts); alert volume buckets the history endpoint client-side.
 
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';

@@ -85,7 +85,8 @@ export function ReportsPage() {
   }, [setRuns, setRunsFailed]);
   useEffect(() => {
     seedRuns();
-    return subscribeReportRuns((run) => upsertRun(run));
+    // Re-seed on a resync — nothing is replayed after a reconnect (ADR-019 増分 1).
+    return subscribeReportRuns((run) => upsertRun(run), undefined, seedRuns);
   }, [seedRuns, upsertRun]);
 
   // Catalog + definitions + schedules. Manual reload bumps refetch immediately after a mutation.

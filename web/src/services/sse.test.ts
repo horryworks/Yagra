@@ -9,6 +9,7 @@ import {
   parseReportRun,
   subscribeAlerts,
   subscribeAnalysis,
+  subscribeReportRuns,
 } from './sse';
 import { setToken } from './api';
 
@@ -218,5 +219,52 @@ describe('subscribeAnalysis over fetch', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     unsubscribe();
+  });
+});
+
+// ADR-019 増分 1: the server's `resync` hint (and a reconnect) reached only the node-state stream —
+// the other three dropped it, so a lagged alert list stayed stale until a reload. Each must hand it
+// to its caller's onResync, and must not dispatch it as data.
+describe('the resync hint reaches every stream that asks for it', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const resyncResponse = () =>
+    Promise.resolve(
+      new Response(streamOf('event: resync\ndata: 3\n\n'), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+
+  it('alerts', async () => {
+    vi.stubGlobal('fetch', vi.fn(resyncResponse));
+    const onAlert = vi.fn();
+    const onResync = vi.fn();
+    const unsubscribe = subscribeAlerts(onAlert, undefined, undefined, onResync);
+    await vi.waitFor(() => expect(onResync).toHaveBeenCalled());
+    unsubscribe();
+    expect(onAlert).not.toHaveBeenCalled();
+  });
+
+  it('analysis', async () => {
+    vi.stubGlobal('fetch', vi.fn(resyncResponse));
+    const onJob = vi.fn();
+    const onResync = vi.fn();
+    const unsubscribe = subscribeAnalysis(onJob, undefined, onResync);
+    await vi.waitFor(() => expect(onResync).toHaveBeenCalled());
+    unsubscribe();
+    expect(onJob).not.toHaveBeenCalled();
+  });
+
+  it('report runs', async () => {
+    vi.stubGlobal('fetch', vi.fn(resyncResponse));
+    const onRun = vi.fn();
+    const onResync = vi.fn();
+    const unsubscribe = subscribeReportRuns(onRun, undefined, onResync);
+    await vi.waitFor(() => expect(onResync).toHaveBeenCalled());
+    unsubscribe();
+    expect(onRun).not.toHaveBeenCalled();
   });
 });

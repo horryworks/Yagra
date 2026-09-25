@@ -14,7 +14,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAlertStream } from '../hooks/useAlertStream';
 import { useAlertStore, useCan } from '../store';
 import { api } from '../services/api';
 import { subjectNodeId } from '../lib/alertSubject';
@@ -46,7 +45,6 @@ import { urlOnlyResolver } from './activeAlertFilters';
 
 export function ActiveAlertsPage() {
   const { t } = useTranslation('alerts');
-  useAlertStream();
   const count = useAlertStore((s) => Object.keys(s.alerts).length);
   const [rcaEnabled, setRcaEnabled] = useState(false);
   const [explaining, setExplaining] = useState<{ node: string; check: string } | null>(null);

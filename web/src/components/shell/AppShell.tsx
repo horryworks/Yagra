@@ -9,6 +9,10 @@
 // The Troubleshoot SSE stream and its toast are mounted here rather than on the three Troubleshoot
 // pages, so a "notify me" run still reports its completion after the operator has navigated away —
 // which is the whole point of asking to be notified.
+//
+// The alert stream is mounted here for the same reason (ADR-019 増分 1): the top-bar bell reads the
+// alert store on every screen, and while only four pages subscribed it read zero everywhere else,
+// or froze at whatever it was when the operator left a dashboard.
 
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
@@ -21,6 +25,7 @@ import { useSectionRouteStore } from '../../store';
 import { useViewportMode } from '../../lib/viewport';
 import { useTroubleshootStream } from '../../troubleshoot/useTroubleshootStream';
 import { TroubleshootToast } from '../../troubleshoot/TroubleshootToast';
+import { useAlertStream } from '../../hooks/useAlertStream';
 import './AppShell.css';
 
 export function AppShell() {
@@ -29,6 +34,7 @@ export function AppShell() {
   const { pathname, search } = useLocation();
   const rememberRoute = useSectionRouteStore((s) => s.rememberRoute);
   useTroubleshootStream();
+  useAlertStream();
 
   // Close the drawer on any route change — covers the browser Back button and a tap on the
   // already-current route (which wouldn't change the pathname otherwise).

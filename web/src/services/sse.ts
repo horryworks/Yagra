@@ -224,13 +224,15 @@ function subscribeSSE(
 }
 
 /**
- * Subscribe to the alert stream. Fires call `onAlert`; resolutions call `onResolve`.
+ * Subscribe to the alert stream. Fires call `onAlert`; resolutions call `onResolve`; `onResync`
+ * runs when frames were missed (server `resync`, or a reconnect) and should re-read the snapshot.
  * Returns an unsubscribe function.
  */
 export function subscribeAlerts(
   onAlert: (alert: Alert) => void,
   onResolve?: (alert: Alert) => void,
   onError?: (err: unknown) => void,
+  onResync?: () => void,
 ): () => void {
   return subscribeSSE(
     '/api/v1/stream/alerts',
@@ -241,6 +243,7 @@ export function subscribeAlerts(
       else onAlert(event);
     },
     onError,
+    onResync,
   );
 }
 
@@ -267,11 +270,13 @@ export function subscribeNodeStates(
 
 /**
  * Subscribe to the analysis-job status stream (ADR-022). Each event is a job's current row;
- * `onJob` upserts it into the runs store. Returns an unsubscribe function.
+ * `onJob` upserts it into the runs store; `onResync` re-reads the list after missed frames.
+ * Returns an unsubscribe function.
  */
 export function subscribeAnalysis(
   onJob: (job: AnalysisJob) => void,
   onError?: (err: unknown) => void,
+  onResync?: () => void,
 ): () => void {
   return subscribeSSE(
     '/api/v1/stream/analysis',
@@ -280,16 +285,19 @@ export function subscribeAnalysis(
       if (job) onJob(job);
     },
     onError,
+    onResync,
   );
 }
 
 /**
  * Subscribe to the report-run status stream. Each event is a run's current row; `onRun` upserts
- * it into the runs store so generation progress shows live. Returns an unsubscribe function.
+ * it into the runs store so generation progress shows live; `onResync` re-reads the list after
+ * missed frames. Returns an unsubscribe function.
  */
 export function subscribeReportRuns(
   onRun: (run: ReportRun) => void,
   onError?: (err: unknown) => void,
+  onResync?: () => void,
 ): () => void {
   return subscribeSSE(
     '/api/v1/stream/report-runs',
@@ -298,5 +306,6 @@ export function subscribeReportRuns(
       if (run) onRun(run);
     },
     onError,
+    onResync,
   );
 }

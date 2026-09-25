@@ -151,9 +151,10 @@ export function isInventoryFiltered(f: FilterState): boolean {
 //
 // Why the *display state* and not the alert list: the tree paints from `NodeSummary.state`, which
 // the server has already rolled up to the worst of a node's committed liveness and every active
-// alert on it (`alerts/engine.rs::node_states_for`). Asking the alert store instead would mean a
-// second subscription on this page — `useAlertStream()` is mounted by the Alerts screen and the
-// three dashboards, not by the shell — to answer a question the server answers already.
+// alert on it (`alerts/engine.rs::node_states_for`). Asking the alert store instead would mean
+// re-deriving that roll-up in the browser — the store is live on every screen now (AppShell mounts
+// `useAlertStream()`), but it holds alerts, not liveness — to answer a question the server answers
+// already.
 
 /** The states the preset selects, in the order the state filter offers them.
  *

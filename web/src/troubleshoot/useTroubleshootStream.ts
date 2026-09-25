@@ -27,6 +27,8 @@ export function useTroubleshootStream(): void {
 
   useEffect(() => {
     seedAnalysisJobs();
-    return subscribeAnalysis(upsertJob);
+    // Re-seed on a resync: the stream replays nothing, so a reconnect has missed whatever changed
+    // meanwhile (ADR-019 増分 1).
+    return subscribeAnalysis(upsertJob, undefined, seedAnalysisJobs);
   }, [upsertJob]);
 }

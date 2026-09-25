@@ -47,6 +47,21 @@ describe('alert store', () => {
     expect(Object.keys(useAlertStore.getState().alerts)).toHaveLength(0);
   });
 
+  it('setAlerts replaces the set: an alert missing from the snapshot drops out (ADR-019 増分 1)', () => {
+    const s = useAlertStore.getState();
+    s.upsertAlert(alert({ node: 'ghost' })); // resolved while the stream was down
+    s.upsertAlert(alert({ node: 'kept', at_unix_ms: 1 }));
+    s.setAlerts([alert({ node: 'kept', at_unix_ms: 7 }), alert({ node: 'new' })]);
+    const after = useAlertStore.getState().alerts;
+    expect(Object.values(after).map((a) => a.node).sort()).toEqual(['kept', 'new']);
+    expect(Object.values(after).find((a) => a.node === 'kept')?.at_unix_ms).toBe(7);
+  });
+
+  it('setAlerts keys the snapshot the way upsert does (a duplicate collapses)', () => {
+    useAlertStore.getState().setAlerts([alert({ at_unix_ms: 1 }), alert({ at_unix_ms: 2 })]);
+    expect(Object.values(useAlertStore.getState().alerts).map((a) => a.at_unix_ms)).toEqual([2]);
+  });
+
   it('sorts worst-first then most-recent-first', () => {
     const list = sortedAlerts({
       a: alert({ node: 'a', severity: 'warning', at_unix_ms: 5 }),
