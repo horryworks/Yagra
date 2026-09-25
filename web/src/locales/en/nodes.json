@@ -173,9 +173,9 @@
     "prefixSyncHint": "These ranges come from a NetBox sync and are kept in step with it. Edit them in NetBox."
   },
   "deleteGroup": {
-    "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>no nodes are deleted</b>.",
-    "impact": "{{subgroups}} and {{members}} move up to the parent",
-    "impactUncounted": "{{subgroups}} and its member nodes (still being counted) move up to the parent"
+    "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>this cannot be undone</b>.",
+    "impact": "{{subgroups}} and {{members}} beneath it are deleted too",
+    "impactUncounted": "{{subgroups}} and every node beneath it (still being counted) are deleted too"
   },
   "err": {
     "loadNodes": "failed to load nodes",

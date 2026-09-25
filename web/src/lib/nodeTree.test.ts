@@ -14,6 +14,8 @@ import {
   flatRowKey,
   flattenTree,
   groupDeletionImpact,
+  groupDeletionNeedsTypedName,
+  groupDeletionReach,
   groupOptions,
   groupPath,
   groupTrail,
@@ -1626,7 +1628,7 @@ describe('findTreeGroup', () => {
   });
 });
 
-describe('groupDeletionImpact', () => {
+describe('groupDeletionReach / groupDeletionImpact (ADR-174)', () => {
   const grp = (id: string, parent_id: string | null = null) =>
     ({ id, name: id, parent_id }) as NodeGroup;
   const counts = (n: number): StateCounts =>
@@ -1638,18 +1640,27 @@ describe('groupDeletionImpact', () => {
       ? `${key}=${opts.count}`
       : `${key}[${Object.values(opts ?? {}).join(',')}]`) as unknown as TFunction;
 
-  it('counts only DIRECT subgroups and the group’s own members', () => {
-    const groups = [grp('a'), grp('b', 'a'), grp('c', 'b'), grp('d', 'a')];
-    const out = groupDeletionImpact(groups, { a: counts(4) }, grp('a'), t);
-    // `c` is a grandchild — it is not counted, which is what the dialog's sentence claims.
-    expect(out).toContain('count.subgroup=2');
-    expect(out).toContain('count.memberNode=4');
+  it('counts the WHOLE subtree — grandchildren and their nodes are deleted too', () => {
+    // a ─ b ─ c, a ─ d; e is a sibling tree that must not be counted.
+    const groups = [grp('a'), grp('b', 'a'), grp('c', 'b'), grp('d', 'a'), grp('e')];
+    const reach = groupDeletionReach(
+      groups,
+      { a: counts(4), b: counts(2), c: counts(1), e: counts(9) },
+      grp('a'),
+    );
+    expect(reach).toEqual({ subgroups: 3, nodes: 7 });
+    const out = groupDeletionImpact(reach, t);
+    expect(out).toContain('deleteGroup.impact[');
+    expect(out).toContain('count.subgroup=3');
+    expect(out).toContain('count.memberNode=7');
   });
 
   it('says zero for a folder the answered roll-up does not list', () => {
     // An answered roll-up with no entry for this folder means it holds no nodes. Omitting the
     // clause would read as "this group is empty" by accident rather than by statement.
-    const out = groupDeletionImpact([grp('a')], {}, grp('a'), t);
+    const reach = groupDeletionReach([grp('a')], {}, grp('a'));
+    expect(reach).toEqual({ subgroups: 0, nodes: 0 });
+    const out = groupDeletionImpact(reach, t);
     expect(out).toContain('count.subgroup=0');
     expect(out).toContain('count.memberNode=0');
   });
@@ -1658,11 +1669,21 @@ describe('groupDeletionImpact', () => {
     // 🚨 `null`, not `{}`. The page does not wait for `/fleet/group-summary` (ADR-133), so the
     // dialog can open first — and this used to be modelled as `{}`, which made the consent read
     // "0 member nodes" about a folder holding hundreds. Neither a number nor silence: it says the
-    // members move, and that they have not been counted.
-    const out = groupDeletionImpact([grp('a'), grp('b', 'a')], null, grp('a'), t);
+    // nodes go, and that they have not been counted.
+    const reach = groupDeletionReach([grp('a'), grp('b', 'a')], null, grp('a'));
+    expect(reach).toEqual({ subgroups: 1, nodes: null });
+    const out = groupDeletionImpact(reach, t);
     expect(out).toContain('deleteGroup.impactUncounted');
     expect(out).toContain('count.subgroup=1');
     expect(out).not.toContain('count.memberNode');
+  });
+
+  it('asks for the typed name whenever anything could go with the folder', () => {
+    expect(groupDeletionNeedsTypedName({ subgroups: 0, nodes: 0 })).toBe(false);
+    expect(groupDeletionNeedsTypedName({ subgroups: 0, nodes: 1 })).toBe(true);
+    expect(groupDeletionNeedsTypedName({ subgroups: 1, nodes: 0 })).toBe(true);
+    // Not counted yet: the safe answer is to ask, not to assume the folder is empty.
+    expect(groupDeletionNeedsTypedName({ subgroups: 0, nodes: null })).toBe(true);
   });
 });
 

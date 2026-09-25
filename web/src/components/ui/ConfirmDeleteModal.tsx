@@ -6,9 +6,12 @@
 // supplies only what is actually specific: the title, the sentence naming the target, and the call.
 
 import { useState, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
+import { isImeComposing } from '../../lib/ime';
 import { errMsg } from '../../services/api';
 import { Button } from './Button';
+import { confirmPhraseMatches } from './confirmPhrase';
+import { TextInput } from './Field';
 import { Modal } from './Modal';
 
 interface Props {
@@ -25,6 +28,10 @@ interface Props {
   /** Confirm-button label. Defaults to the shared "Delete"; pass e.g. "Revoke" where that reads
    *  better for the operator. */
   confirmLabel?: ReactNode;
+  /** When set, the confirm button stays disabled until the operator types exactly this (ADR-174).
+   *  For a deletion whose reach is larger than the row it was started from — a folder that takes
+   *  every folder and node beneath it. Leave it unset for an ordinary one-row delete. */
+  confirmPhrase?: string;
 }
 
 export function ConfirmDeleteModal({
@@ -35,12 +42,16 @@ export function ConfirmDeleteModal({
   onClose,
   onDone,
   confirmLabel,
+  confirmPhrase,
 }: Props) {
   const { t } = useTranslation('common');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [typed, setTyped] = useState('');
+  const confirmed = confirmPhrase === undefined || confirmPhraseMatches(typed, confirmPhrase);
 
   const submit = () => {
+    if (!confirmed) return;
     setBusy(true);
     setError(null);
     onConfirm()
@@ -60,13 +71,37 @@ export function ConfirmDeleteModal({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('actions.cancel')}
           </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
+          <Button variant="danger" onClick={submit} disabled={busy || !confirmed}>
             {confirmLabel ?? t('actions.delete')}
           </Button>
         </>
       }
     >
       <p className="modal-confirm-text">{children}</p>
+      {confirmPhrase !== undefined && (
+        <label className="form-label">
+          <span>
+            <Trans
+              t={t}
+              i18nKey="confirmDelete.typeToConfirm"
+              values={{ phrase: confirmPhrase }}
+              components={{ b: <strong /> }}
+            />
+          </span>
+          <TextInput
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => {
+              // A folder name is often Japanese: Enter that commits an IME candidate must not delete.
+              if (e.key === 'Enter' && !isImeComposing(e)) submit();
+            }}
+            disabled={busy}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+      )}
       {error && <p className="form-error">{error}</p>}
     </Modal>
   );

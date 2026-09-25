@@ -1006,7 +1006,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("list_node_groups"),
     ),
     ("POST", "/api/v1/node-groups", ADMIN_CFG, NO_MCP_WRITE),
-    ("DELETE", "/api/v1/node-groups/:id", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/node-groups/:id",
+        // `GroupFiltered`, for the reason `/prefixes` gives below: `manage_config` is held by a
+        // group-scoped Operator too. Since ADR-174 this deletes every node beneath the folder, so
+        // the `ADMIN_CFG` it used to claim would let one site's operator empty another site.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
     ("PUT", "/api/v1/node-groups/:id", ADMIN_CFG, NO_MCP_WRITE),
     ("PUT", "/api/v1/node-groups/:id/geo", ADMIN_CFG, NO_MCP_WRITE),
     (

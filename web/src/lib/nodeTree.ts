@@ -1137,25 +1137,53 @@ export function findTreeGroup(roots: TreeGroup[], id: string): TreeGroup | null 
   return null;
 }
 
-/** One-line impact summary for deleting a group: how many direct subgroups and member nodes
- *  will be re-parented (nothing is deleted). The member count comes from the server per-group
- *  rollup (A-3) so it's correct without loading the group's members. Pluralised for readability. */
-export function groupDeletionImpact(
+/** What deleting a folder takes with it (ADR-174): every folder beneath it, at any depth, and
+ *  every node filed in the folder or any of those. */
+export interface GroupDeletionReach {
+  /** Folders beneath the one being deleted — grandchildren included, the folder itself not. */
+  subgroups: number;
+  /** Nodes in the folder and every folder beneath it; `null` while the server rollup has not
+   *  answered. */
+  nodes: number | null;
+}
+
+/** Count what deleting `g` removes. The per-folder counts from `/fleet/group-summary` are
+ *  **direct** members only, so they are summed over the subtree here.
+ *
+ *  `groupCounts` is `null` while the rollup has not answered. 🚨 Not `{}`: an empty map is the
+ *  valid answer "every folder is empty", and the consent then said "0 member nodes" about a folder
+ *  holding hundreds — for as long as `/fleet/group-summary` took, which the page does not wait
+ *  for. */
+export function groupDeletionReach(
   groups: NodeGroup[],
-  /** `null` while the server rollup has not answered. 🚨 Not `{}`: an empty map is the valid
-   *  answer "every folder is empty", and the consent then said "0 member nodes" about a folder
-   *  holding hundreds — for as long as `/fleet/group-summary` took, which the page does not wait
-   *  for. */
   groupCounts: Record<string, StateCounts> | null,
   g: NodeGroup,
-  t: TFunction,
-): string {
-  const subs = groups.filter((x) => x.parent_id === g.id).length;
-  const subgroups = t('count.subgroup', { count: subs });
-  if (groupCounts === null) return t('deleteGroup.impactUncounted', { subgroups });
-  const members = groupCounts[g.id] ? countsTotal(groupCounts[g.id]) : 0;
+): GroupDeletionReach {
+  const subtree = subtreeGroupIds(groups, g.id);
+  const subgroups = subtree.filter((id) => id !== g.id).length;
+  if (groupCounts === null) return { subgroups, nodes: null };
+  let nodes = 0;
+  for (const id of subtree) {
+    const c = groupCounts[id];
+    if (c) nodes += countsTotal(c);
+  }
+  return { subgroups, nodes };
+}
+
+/** Whether deleting a folder with this reach must make the operator type its name (ADR-174
+ *  決定 4): anything beneath it, or a node count not known yet. An empty folder is one click. */
+export function groupDeletionNeedsTypedName(reach: GroupDeletionReach): boolean {
+  return reach.nodes === null || reach.nodes > 0 || reach.subgroups > 0;
+}
+
+/** One-line impact summary for deleting a group: how many folders beneath it (any depth) and how
+ *  many nodes in it or beneath it will be **deleted** with it (ADR-174). Pluralised for
+ *  readability. */
+export function groupDeletionImpact(reach: GroupDeletionReach, t: TFunction): string {
+  const subgroups = t('count.subgroup', { count: reach.subgroups });
+  if (reach.nodes === null) return t('deleteGroup.impactUncounted', { subgroups });
   return t('deleteGroup.impact', {
     subgroups,
-    members: t('count.memberNode', { count: members }),
+    members: t('count.memberNode', { count: reach.nodes }),
   });
 }

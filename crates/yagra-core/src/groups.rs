@@ -5,9 +5,9 @@
 //! forming a tree. Nodes reference a group via `nodes.group_id` (see [`crate::repo`]). This
 //! module owns group CRUD; node↔group assignment lives on [`crate::repo::NodeRepo`].
 //!
-//! **Delete is non-destructive to nodes:** [`GroupRepo::delete`] re-parents a group's direct
-//! child groups and member nodes up to the group's own parent (NULL ⇒ root) in one transaction,
-//! then removes the row. Re-parenting a group guards against cycles via [`would_create_cycle`].
+//! **Delete takes the whole subtree** (ADR-174): [`GroupRepo::delete`] removes the folder, every
+//! folder under it and every node filed in any of them, in one transaction. Re-parenting a group
+//! guards against cycles via [`would_create_cycle`].
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -1451,39 +1451,18 @@ impl GroupRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Delete a group, re-parenting its direct child groups and member nodes up to the group's
-    /// own parent (NULL ⇒ root) so **no node is ever deleted**. Atomic. Returns whether the
-    /// group existed.
-    pub async fn delete(&self, id: Uuid) -> anyhow::Result<bool> {
+    /// Delete a folder **and everything under it** — every descendant folder and every node filed
+    /// in any of them (ADR-174). Atomic: a request dropped mid-way rolls the whole thing back.
+    /// Returns what went, or `None` when the folder did not exist.
+    ///
+    /// 🚨 **Destructive, and a behaviour change to a shipped endpoint.** Before ADR-174 this
+    /// re-parented the direct children to the folder's own parent and deleted no node. The caller
+    /// is responsible for the scope check; this method deletes whatever subtree it is named.
+    pub async fn delete(&self, id: Uuid) -> anyhow::Result<Option<GroupDeletion>> {
         let mut tx = self.pool.begin().await?;
-        // Resolve the group's parent (and confirm it exists). `query_scalar` over the nullable
-        // column yields Option<Option<Uuid>>: outer = row found, inner = the parent value.
-        let found: Option<Option<Uuid>> =
-            sqlx::query_scalar("SELECT parent_id FROM node_groups WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let Some(parent) = found else {
-            return Ok(false);
-        };
-        // Child groups move up to the parent.
-        sqlx::query("UPDATE node_groups SET parent_id = $2 WHERE parent_id = $1")
-            .bind(id)
-            .bind(parent)
-            .execute(&mut *tx)
-            .await?;
-        // Member nodes move up to the parent (never deleted).
-        sqlx::query("UPDATE nodes SET group_id = $2, updated_at = now() WHERE group_id = $1")
-            .bind(id)
-            .bind(parent)
-            .execute(&mut *tx)
-            .await?;
-        let res = sqlx::query("DELETE FROM node_groups WHERE id = $1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        let out = delete_subtree(&mut tx, id).await?;
         tx.commit().await?;
-        Ok(res.rows_affected() > 0)
+        Ok(out)
     }
 
     /// Renumber one folder's **direct** children by name — its sub-folders and its member nodes as
@@ -1554,6 +1533,65 @@ impl GroupRepo {
         tx.commit().await?;
         Ok(true)
     }
+}
+
+/// What deleting one folder took with it (ADR-174). Both counts include the folder's whole
+/// subtree; `groups` includes the folder itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupDeletion {
+    /// Folders removed: the one named and every one beneath it.
+    pub groups: u64,
+    /// Nodes removed: every node filed in any of those folders.
+    pub nodes: u64,
+}
+
+/// Delete `root`, every folder beneath it and every node filed in any of them, inside the
+/// caller's transaction (ADR-174). `None` when `root` does not exist.
+///
+/// Shared by the folder delete and the Meraki organization purge, so "delete a folder" has one
+/// meaning. Before this, the purge removed the root and its direct children only, and a folder an
+/// operator had made two levels down fell to the top of the tree through `ON DELETE SET NULL`.
+///
+/// Nodes go first, then folders. The root row is locked first so a concurrent create under it
+/// waits and then fails its foreign key, rather than landing under a folder about to vanish.
+/// `UNION` (not `UNION ALL`) stops the walk on a cyclic parent chain, which the API refuses to
+/// write but the column cannot rule out.
+///
+/// ⚠️ A node outside the subtree whose dependency parent (`nodes.parent_id`) is one of the deleted
+/// nodes keeps its row and loses that parent (`ON DELETE SET NULL`) — ADR-174 accepts that.
+pub(crate) async fn delete_subtree(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    root: Uuid,
+) -> anyhow::Result<Option<GroupDeletion>> {
+    let found: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM node_groups WHERE id = $1 FOR UPDATE")
+            .bind(root)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if found.is_none() {
+        return Ok(None);
+    }
+    let subtree: Vec<Uuid> = sqlx::query_scalar(
+        "WITH RECURSIVE sub(id) AS ( \
+             SELECT $1::uuid \
+             UNION \
+             SELECT g.id FROM node_groups g JOIN sub ON g.parent_id = sub.id \
+         ) SELECT id FROM sub",
+    )
+    .bind(root)
+    .fetch_all(&mut **tx)
+    .await?;
+    let nodes = sqlx::query("DELETE FROM nodes WHERE group_id = ANY($1)")
+        .bind(&subtree)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    let groups = sqlx::query("DELETE FROM node_groups WHERE id = ANY($1)")
+        .bind(&subtree)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    Ok(Some(GroupDeletion { groups, nodes }))
 }
 
 #[cfg(test)]
@@ -3051,6 +3089,109 @@ mod tests {
         assert_eq!(
             repo.sync_owned_prefixes(g).await.expect("read"),
             vec!["172.16.0.0/12".to_string()]
+        );
+    }
+
+    /// Deleting a folder takes its whole subtree — grandchildren included — and every node filed
+    /// in any of it, and nothing else (ADR-174). Before, the children moved up to the parent.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_folder_deletes_its_whole_subtree_and_its_nodes(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let top = crate::pgtest::group(&pool, "top").await;
+        let doomed = repo
+            .create("doomed", GroupType::Site, Some(top), None)
+            .await
+            .expect("doomed");
+        let child = repo
+            .create("child", GroupType::Generic, Some(doomed), None)
+            .await
+            .expect("child");
+        let grandchild = repo
+            .create("grandchild", GroupType::Generic, Some(child), None)
+            .await
+            .expect("grandchild");
+        let sibling = repo
+            .create("sibling", GroupType::Generic, Some(top), None)
+            .await
+            .expect("sibling");
+        crate::pgtest::node(&pool, "in-doomed", 1, Some(doomed)).await;
+        crate::pgtest::node(&pool, "in-child", 2, Some(child)).await;
+        crate::pgtest::node(&pool, "in-grandchild", 3, Some(grandchild)).await;
+        let kept_top = crate::pgtest::node(&pool, "in-top", 4, Some(top)).await;
+        let kept_sibling = crate::pgtest::node(&pool, "in-sibling", 5, Some(sibling)).await;
+        let kept_loose = crate::pgtest::node(&pool, "ungrouped", 6, None).await;
+
+        let gone = repo.delete(doomed).await.expect("delete");
+        assert_eq!(
+            gone,
+            Some(GroupDeletion {
+                groups: 3,
+                nodes: 3
+            })
+        );
+
+        let mut left: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM node_groups")
+            .fetch_all(&pool)
+            .await
+            .expect("groups");
+        left.sort();
+        let mut want = vec![top, sibling];
+        want.sort();
+        assert_eq!(
+            left, want,
+            "the parent and the sibling survive, nothing else"
+        );
+        let mut nodes: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM nodes")
+            .fetch_all(&pool)
+            .await
+            .expect("nodes");
+        nodes.sort();
+        let mut want = vec![kept_top, kept_sibling, kept_loose];
+        want.sort();
+        assert_eq!(nodes, want, "only nodes outside the subtree survive");
+    }
+
+    /// A folder that does not exist deletes nothing and says so.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_missing_folder_deletes_nothing(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let kept = crate::pgtest::group(&pool, "kept").await;
+        crate::pgtest::node(&pool, "n", 1, Some(kept)).await;
+        assert_eq!(repo.delete(Uuid::new_v4()).await.expect("delete"), None);
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 1);
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 1);
+    }
+
+    /// A node outside the subtree that named a deleted node as its dependency parent keeps its
+    /// row and loses the parent — the cost ADR-174 accepts, pinned so it is not a surprise.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_dependent_outside_the_subtree_survives_without_its_parent(pool: sqlx::PgPool) {
+        let repo = GroupRepo::new(pool.clone());
+        let doomed = crate::pgtest::group(&pool, "doomed").await;
+        let parent = crate::pgtest::node(&pool, "core-sw", 1, Some(doomed)).await;
+        let child = crate::pgtest::node(&pool, "edge-sw", 2, None).await;
+        sqlx::query("UPDATE nodes SET parent_id = $1 WHERE id = $2")
+            .bind(parent)
+            .bind(child)
+            .execute(&pool)
+            .await
+            .expect("set parent");
+
+        repo.delete(doomed).await.expect("delete");
+
+        let left: Option<Option<Uuid>> =
+            sqlx::query_scalar("SELECT parent_id FROM nodes WHERE id = $1")
+                .bind(child)
+                .fetch_optional(&pool)
+                .await
+                .expect("read");
+        assert_eq!(
+            left,
+            Some(None),
+            "the dependent survives, its parent link cleared"
         );
     }
 }

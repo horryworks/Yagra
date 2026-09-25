@@ -2036,6 +2036,12 @@ export interface paths {
         get?: never;
         put: operations["update_node_group"];
         post?: never;
+        /**
+         * Delete a folder **with everything under it**: every folder beneath it and every node filed in
+         *     any of them are deleted too, in one transaction (ADR-174). Nothing is moved to the parent.
+         * @description Scoped: a folder outside the caller's folders is a 404 and nothing is deleted. A caller's
+         *     visible set is closed under descent, so a folder it can see has no hidden folder beneath it.
+         */
         delete: operations["delete_node_group"];
         options?: never;
         head?: never;
@@ -21110,7 +21116,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Group deleted */
+            /** @description The folder, every folder beneath it and every node in any of them were deleted */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -21135,7 +21141,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such group */
+            /** @description No such group, or the group is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -111,7 +111,11 @@ import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
-import { groupDeletionImpact } from '../lib/nodeTree';
+import {
+  groupDeletionImpact,
+  groupDeletionNeedsTypedName,
+  groupDeletionReach,
+} from '../lib/nodeTree';
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
@@ -990,6 +994,11 @@ export function NodesPage() {
   const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
   // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
   const addTarget = addMenuTarget(selected, groupById, nodeById);
+  // What deleting the folder in the confirm dialog takes with it — its whole subtree (ADR-174).
+  // Only computed while the dialog is open: it walks the folder list.
+  const deletionReach = deletingGroup
+    ? groupDeletionReach(groups, groupSummary ? groupCounts : null, deletingGroup)
+    : null;
 
   return (
     <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
@@ -1231,7 +1240,7 @@ export function NodesPage() {
             // Asked for, not yet answered — which is a different statement from "every folder is
             // empty" and is what lets the members start arriving while the rollup is in flight
             // (ADR-133). `groupCounts` stays `{}` in that window so `GroupDetail` and
-            // `groupDeletionImpact` keep the shape they expect; the flag is what the tree reads.
+            // `groupDeletionReach` keep the shape they expect; the flag is what the tree reads.
             countsPending={groupSummary === null}
             loadedGroups={members.loadedGroups}
             revealedGroups={members.revealedGroups}
@@ -1514,9 +1523,12 @@ export function NodesPage() {
         />
       )}
 
-      {deletingGroup && (
+      {deletingGroup && deletionReach && (
         <ConfirmDeleteModal
           title={t('group.delete')}
+          confirmPhrase={
+            groupDeletionNeedsTypedName(deletionReach) ? deletingGroup.name : undefined
+          }
           onConfirm={() => api.deleteNodeGroup(deletingGroup.id)}
           errorFallback={t('err.deleteGroup')}
           onClose={() => setDeletingGroup(null)}
@@ -1530,7 +1542,7 @@ export function NodesPage() {
             i18nKey="deleteGroup.confirm"
             values={{
               name: deletingGroup.name,
-              impact: groupDeletionImpact(groups, groupSummary ? groupCounts : null, deletingGroup, t),
+              impact: groupDeletionImpact(deletionReach, t),
             }}
             components={{ b: <strong /> }}
           />

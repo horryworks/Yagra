@@ -1,6 +1,9 @@
 {
   "loading": "Loading…",
   "noRows": "No rows.",
+  "confirmDelete": {
+    "typeToConfirm": "Type <b>{{phrase}}</b> to confirm"
+  },
   "loadBlock": {
     "forbidden": "You don't have permission to view this. Ask an administrator if you need access.",
     "forbiddenPermission": "This screen needs the “{{permission}}” privilege. Ask an administrator if you need access."

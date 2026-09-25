@@ -10137,6 +10137,8 @@
         "tags": [
           "groups"
         ],
+        "summary": "Delete a folder **with everything under it**: every folder beneath it and every node filed in\nany of them are deleted too, in one transaction (ADR-174). Nothing is moved to the parent.",
+        "description": "Scoped: a folder outside the caller's folders is a 404 and nothing is deleted. A caller's\nvisible set is closed under descent, so a folder it can see has no hidden folder beneath it.",
         "operationId": "delete_node_group",
         "parameters": [
           {
@@ -10152,7 +10154,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Group deleted"
+            "description": "The folder, every folder beneath it and every node in any of them were deleted"
           },
           "401": {
             "description": "No valid bearer token",
@@ -10175,7 +10177,7 @@
             }
           },
           "404": {
-            "description": "No such group",
+            "description": "No such group, or the group is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {

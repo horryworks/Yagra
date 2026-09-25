@@ -952,8 +952,8 @@ impl MerakiOrgRepo {
     }
 
     /// Fully remove an org: delete its device **nodes** (which cascades their `meraki_devices`
-    /// rows), the org row (cascades its network scope), and its HostTree groups (root + per-network),
-    /// all in one transaction. Returns whether the org existed. Metrics history in the TSDB is left
+    /// rows), the org row (cascades its network scope), and its folder with everything beneath it
+    /// (`groups::delete_subtree`, ADR-174), all in one transaction. Returns whether the org existed. Metrics history in the TSDB is left
     /// (rebuildable / harmless); config is gone.
     pub async fn purge(&self, id: Uuid) -> anyhow::Result<bool> {
         let group = org_group_id(id);
@@ -968,11 +968,10 @@ impl MerakiOrgRepo {
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        // Root group + its per-network child groups (now empty).
-        sqlx::query("DELETE FROM node_groups WHERE id = $1 OR parent_id = $1")
-            .bind(group)
-            .execute(&mut *tx)
-            .await?;
+        // The organization's folder and everything beneath it — network folders, any folder an
+        // operator made inside one, and any node filed there (ADR-174 決定 5). This used to delete
+        // the root and its direct children only, so a folder two levels down fell to the top.
+        crate::groups::delete_subtree(&mut tx, group).await?;
         tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
@@ -3231,6 +3230,19 @@ mod tests {
 
         assert_eq!(pgtest::rows(&pool, "nodes").await, 2);
         assert_eq!(pgtest::rows(&pool, "node_groups").await, 4);
+        // A folder an operator made inside the organization's network folder: two levels below
+        // the root. Before ADR-174 the purge removed the root and its direct children only, and
+        // this one fell to the top of the tree through `ON DELETE SET NULL`.
+        crate::groups::GroupRepo::new(pool.clone())
+            .create(
+                "spares",
+                crate::groups::GroupType::Generic,
+                Some(network_group_id(acme, "N_1")),
+                None,
+            )
+            .await
+            .expect("operator's folder");
+        assert_eq!(pgtest::rows(&pool, "node_groups").await, 5);
 
         assert!(
             repo.purge(acme).await.expect("purge"),
@@ -3259,7 +3271,8 @@ mod tests {
         assert_eq!(
             pgtest::rows(&pool, "node_groups").await,
             2,
-            "the purged org's root and network groups were not removed, or the other org's were"
+            "the purged org's folder tree (root, network, the operator's folder under it) was not \
+             removed whole, or the other org's was touched"
         );
         assert!(
             repo.get(other).await.expect("get").is_some(),

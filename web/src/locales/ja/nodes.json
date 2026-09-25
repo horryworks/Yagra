@@ -173,9 +173,9 @@
     "prefixSyncHint": "これらのレンジは NetBox 同期が管理しています。変更は NetBox 側で行ってください。"
   },
   "deleteGroup": {
-    "confirm": "グループ <b>{{name}}</b> を削除しますか？{{impact}} — <b>ノードは削除されません</b>。",
-    "impact": "{{subgroups}} と {{members}} は親グループへ移ります",
-    "impactUncounted": "{{subgroups}} と、そのメンバーのノード（台数は集計中）は親グループへ移ります"
+    "confirm": "グループ <b>{{name}}</b> を削除しますか？{{impact}} — <b>元に戻せません</b>。",
+    "impact": "その下の{{subgroups}} と {{members}} も削除されます",
+    "impactUncounted": "その下の{{subgroups}} と、すべてのノード（台数は集計中）も削除されます"
   },
   "err": {
     "loadNodes": "ノードの読み込みに失敗しました",

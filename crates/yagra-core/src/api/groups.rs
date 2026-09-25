@@ -516,25 +516,40 @@ async fn set_node_group_geo(
     }
 }
 
+/// Delete a folder **with everything under it**: every folder beneath it and every node filed in
+/// any of them are deleted too, in one transaction (ADR-174). Nothing is moved to the parent.
+///
+/// Scoped: a folder outside the caller's folders is a 404 and nothing is deleted. A caller's
+/// visible set is closed under descent, so a folder it can see has no hidden folder beneath it.
 #[utoipa::path(
     delete, path = "/api/v1/node-groups/{id}", tag = "groups",
     params(("id" = Uuid, Path, description = "Group id")),
     responses(
-        (status = 204, description = "Group deleted"),
+        (status = 204, description = "The folder, every folder beneath it and every node in any of them were deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such group", body = super::error::ErrorBody),
+        (status = 404, description = "No such group, or the group is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_node_group(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // Before anything is deleted: until ADR-174 this route checked no scope at all, which cost
+    // little while a delete only moved things up a level and would now let one site's operator
+    // delete another site's inventory.
+    super::scope::require_visible_group(&scope, id)?;
     match admin.groups.delete(id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::not_found(
+        Ok(Some(gone)) => {
+            // The audit middleware records method and path only, so without this the log says a
+            // folder was deleted and never how much went with it — the bulk node delete's reason.
+            tracing::info!(group = %id, groups = gone.groups, nodes = gone.nodes, "group delete");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(None) => Err(ApiError::not_found(
             "group_not_found",
             format!("no group {id}"),
         )),
@@ -2177,5 +2192,95 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 0);
+    }
+
+    /// ADR-174: DELETE is ACCEPTED (204) and takes the folder's subtree and its nodes with it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn deleting_a_folder_is_accepted_and_takes_its_subtree(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let groups = GroupRepo::new(pool.clone());
+        let site = groups
+            .create("site", GroupType::Site, None, None)
+            .await
+            .expect("site");
+        let rack = groups
+            .create("rack", GroupType::Generic, Some(site), None)
+            .await
+            .expect("rack");
+        crate::pgtest::node(&pool, "sw", 1, Some(rack)).await;
+
+        let (status, body) = send(
+            &st,
+            "DELETE",
+            &format!("/api/v1/node-groups/{site}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 0);
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
+
+        let (status, body) = send(
+            &st,
+            "DELETE",
+            &format!("/api/v1/node-groups/{site}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+    }
+
+    /// ADR-174 決定 3: a group-scoped caller may delete a folder it can see, and gets a 404 — with
+    /// nothing deleted — for one it cannot. Before ADR-174 this route checked no scope at all.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_deletes_only_folders_it_can_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        use crate::groups::{GroupRepo, GroupType};
+        let st = live_state(pool.clone()).await;
+        let groups = GroupRepo::new(pool.clone());
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let my_rack = groups
+            .create("my rack", GroupType::Generic, Some(mine), None)
+            .await
+            .expect("my rack");
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        crate::pgtest::node(&pool, "their-sw", 1, Some(theirs)).await;
+        crate::pgtest::node(&pool, "my-sw", 2, Some(my_rack)).await;
+        let tok = scoped_token(&st, &[mine]);
+
+        let (status, body) = send(
+            &st,
+            "DELETE",
+            &format!("/api/v1/node-groups/{theirs}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 3);
+        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 2);
+
+        let (status, body) = send(
+            &st,
+            "DELETE",
+            &format!("/api/v1/node-groups/{my_rack}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 2);
+        assert_eq!(
+            crate::pgtest::rows(&pool, "nodes").await,
+            1,
+            "their node is untouched"
+        );
     }
 }
