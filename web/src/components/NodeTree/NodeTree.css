@@ -1,7 +1,7 @@
 /* Inventory tree: groups (folders) + member nodes, with drag-drop (move + reorder) and a context
    menu. Every row shares the same leading columns — a fixed twisty slot then a fixed icon slot —
    so group icons and node status dots line up in one column and names sit in another, with nesting
-   shown purely by the row's left padding. */
+   set by the row's left padding and drawn by the branch lines in it (ADR-171, at the end). */
 
 .ntree {
   display: flex;
@@ -699,4 +699,143 @@ button.ntree-supp-icon:hover {
   width: 1.3em;
   height: 1.3em;
   vertical-align: -0.25em;
+}
+
+/* ---- Branch lines (ADR-171) ----------------------------------------------------------------
+   One cell per ancestor level, absolutely placed in the row's left padding under that level's
+   twisty. A cell is a vertical line (`::before`) and, on the row's own level, a short stub into
+   the row (`::after`). The vertical line is two halves so a branch can turn at this row: the
+   selected row's branch runs down to its middle and turns in, while a sibling below keeps the
+   rest of the line plain.
+
+   Which part is lit is decided in `nodeTreeGuides.ts` and arrives as `data-up` / `data-down` /
+   `data-stub` = `strong` | `soft` | `plain`. The colours live only here. */
+.ntree-body {
+  --ntree-guide: color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  --ntree-guide-soft: color-mix(in srgb, var(--accent-color) 45%, var(--ntree-guide));
+}
+
+.ntree-guide {
+  position: absolute;
+  top: 0;
+  width: 12px;
+  height: var(--row-h);
+  pointer-events: none;
+  --up: var(--ntree-guide);
+  --down: var(--ntree-guide);
+  --stub: var(--ntree-guide);
+  --vw: 1px;
+  --sh: 1px;
+}
+
+.ntree-guide::before,
+.ntree-guide::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.ntree-guide-pipe::before,
+.ntree-guide-tee::before {
+  top: 0;
+  bottom: 0;
+  width: var(--vw);
+  background: linear-gradient(var(--up) 0 50%, var(--down) 50%);
+}
+
+/* The last child: the line stops at the row's middle. */
+.ntree-guide-elbow::before {
+  top: 0;
+  height: 50%;
+  width: var(--vw);
+  background: var(--up);
+}
+
+.ntree-guide-tee::after,
+.ntree-guide-elbow::after {
+  top: 50%;
+  width: 10px;
+  height: var(--sh);
+  background: var(--stub);
+}
+
+.ntree-guide[data-up='strong'] {
+  --up: var(--accent-color);
+}
+.ntree-guide[data-down='strong'] {
+  --down: var(--accent-color);
+}
+.ntree-guide[data-stub='strong'] {
+  --stub: var(--accent-color);
+}
+.ntree-guide[data-up='soft'] {
+  --up: var(--ntree-guide-soft);
+}
+.ntree-guide[data-down='soft'] {
+  --down: var(--ntree-guide-soft);
+}
+.ntree-guide[data-stub='soft'] {
+  --stub: var(--ntree-guide-soft);
+}
+/* A lit line is drawn 2px so it reads as a path, not as a recoloured hairline. */
+.ntree-guide:is([data-up='strong'], [data-up='soft'], [data-down='strong'], [data-down='soft']) {
+  --vw: 2px;
+}
+.ntree-guide:is([data-stub='strong'], [data-stub='soft']) {
+  --sh: 2px;
+}
+
+/* "N selected" on a folder the working set reaches into (ADR-171 決定 4). The accent, because it
+   is about the operator's selection and not about any device's state. */
+.ntree-pick {
+  flex: none;
+  font-size: var(--font-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-color);
+  border: var(--border-width) solid color-mix(in srgb, var(--accent-color) 60%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* ---- Pinned folders (ADR-171 決定 5) --------------------------------------------------------
+   A zero-height sticky element inside the scroller: it takes no room in the scroll height, so the
+   virtualized rows keep their `index × 30px` positions, and its band hangs down over them. */
+.ntree-sticky {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 2;
+}
+
+.ntree-sticky-band {
+  background: var(--bg-primary);
+  border-bottom: var(--border-width) solid var(--border-color);
+  box-shadow: 0 4px 6px -4px color-mix(in srgb, var(--text-primary) 25%, transparent);
+}
+
+.ntree-sticky-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--row-h);
+  padding-right: 8px;
+  cursor: pointer;
+}
+
+.ntree-sticky-row:hover {
+  background: var(--bg-secondary);
+}
+
+.ntree-sticky-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  font-size: var(--font-sm);
 }

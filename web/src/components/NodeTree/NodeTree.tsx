@@ -109,6 +109,16 @@ import {
   type MoveGesture,
 } from './nodeTreeKeys';
 import { pinFocusScroll, restoreScroll, type ScrollAt } from './nodeTreeScroll';
+import {
+  cellTones,
+  checkedPerGroup,
+  checkedRowIndices,
+  litGuides,
+  parentRows,
+  stickyParents,
+  treeGuides,
+  type GuideKind,
+} from './nodeTreeGuides';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
 
@@ -119,6 +129,9 @@ export type TreeSelection = { kind: 'node' | 'group'; id: string } | null;
 const INDENT = 16;
 /** Left padding of a depth-0 row. */
 const BASE_PAD = 6;
+/** Where a branch line runs inside its level's column: the middle of the 16px twisty slot, so a
+ *  folder's line drops straight down from under its own chevron (ADR-171). */
+const GUIDE_X = 8;
 /** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
@@ -549,6 +562,29 @@ export function NodeTree({
   };
 
   const checkedNodes: CheckedNodes = checked ?? EMPTY_CHECKED;
+
+  // The branch lines (ADR-171). Every judgement is in `nodeTreeGuides.ts`; these memos only feed it.
+  // Measured against `drawn`, like everything else that turns an index into something.
+  const guides = useMemo(() => treeGuides(drawn), [drawn]);
+  const parents = useMemo(() => parentRows(drawn), [drawn]);
+  const shownIndex = useMemo(() => indexOfSelection(drawn, shown), [drawn, shown]);
+  const lit = useMemo(
+    () => litGuides(drawn, parents, shownIndex, checkedRowIndices(drawn, checkedNodes)),
+    [drawn, parents, shownIndex, checkedNodes],
+  );
+  /** "N selected" on each folder the working set reaches into — the one mark a closed folder can
+   *  carry, since its rows (and so their branches) are not drawn (ADR-171 決定 4). */
+  const pickCounts = useMemo(() => checkedPerGroup(checkedNodes, groups), [checkedNodes, groups]);
+  /** The folders pinned at the top (ADR-171 決定 5). None while dragging: a band over the rows would
+   *  hide the row a drop is aimed at. The virtualizer re-renders as the scroll crosses rows, which
+   *  is the only granularity the band changes at. */
+  const band = drag ? [] : stickyParents(drawn, parents, rowVirtualizer.scrollOffset ?? 0, ROW_H);
+  // 🚨 A row the keyboard moves to must not land UNDER the band. `scrollToIndex` treats a row
+  // within `scrollPaddingStart` of the top as out of view, and the band's height is only known
+  // here, after the virtualizer was built for this render — so it is written onto the options the
+  // virtualizer will read when the next key press scrolls. `useVirtualizer` resets its options on
+  // every render, so this never outlives the render that computed it.
+  rowVirtualizer.options.scrollPaddingStart = band.length * ROW_H;
 
   /** Apply what a click on a node row decided (ADR-124 決定 2/4 + 増分 1).
    *
@@ -1037,8 +1073,32 @@ export function NodeTree({
    *  Null at the top level and among the Ungrouped nodes, which have no folder row. */
   const parentMarkId = dropParentId(dropTarget);
 
-  const groupRow = (row: Extract<FlatRow, { kind: 'group' }>): React.ReactNode => {
+  /** The branch lines at the start of row `index` (ADR-171): one cell per ancestor level, centred
+   *  under that level's twisty. Tones come from `cellTones`; the colours are the stylesheet's. */
+  const guideCells = (index: number): React.ReactNode => {
+    const cols: GuideKind[] | undefined = guides[index];
+    if (!cols || cols.length === 0) return null;
+    const litCols = lit.get(index);
+    return cols.map((kind, k) => {
+      if (!kind) return null;
+      const tone = cellTones(litCols?.get(k));
+      return (
+        <span
+          key={k}
+          className={`ntree-guide ntree-guide-${kind}`}
+          aria-hidden="true"
+          data-up={tone.up}
+          data-down={tone.down}
+          data-stub={tone.stub}
+          style={{ left: BASE_PAD + k * INDENT + GUIDE_X }}
+        />
+      );
+    });
+  };
+
+  const groupRow = (row: Extract<FlatRow, { kind: 'group' }>, index: number): React.ReactNode => {
     const { group, depth, isOpen, hasChildren, tally } = row;
+    const picked = pickCounts.get(group.id) ?? 0;
     const isSel = shown?.kind === 'group' && shown.id === group.id;
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
     // Null for a folder a person made — and for an origin this build does not know (see the lib).
@@ -1068,6 +1128,7 @@ export function NodeTree({
           setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
         }}
       >
+        {guideCells(index)}
         {/* Out of the Tab order, like the name beside it (ADR-155 決定 1): the tree is one Tab stop,
             and Right / Left / Enter open and close from the keyboard. */}
         <button
@@ -1097,6 +1158,13 @@ export function NodeTree({
         >
           {group.name}
         </button>
+        {/* How many of the working set are inside, closed or not (ADR-171 決定 4). Its own text is
+            the fact; the title only spells it out (ADR-055 R4). */}
+        {picked > 0 && (
+          <span className="ntree-pick" title={t('tree.pickCountTitle', { count: picked })}>
+            {t('tree.pickCount', { count: picked })}
+          </span>
+        )}
         {/* An integration made this folder and still keeps it (ADR-164 Inc.7): the organization's
             tree goes when the organization does, and a NetBox sync renames and re-parents its
             folders over whatever was typed. The badge's own text is the fact — the `title` only
@@ -1205,7 +1273,12 @@ export function NodeTree({
     );
   };
 
-  const renderNode = (node: NodeSummary, depth: number, level: number): React.ReactNode => {
+  const renderNode = (
+    node: NodeSummary,
+    depth: number,
+    level: number,
+    index: number,
+  ): React.ReactNode => {
     const target: Target = { kind: 'node', id: node.id, scope: node.group_id ?? null };
     const isSel = shown?.kind === 'node' && shown.id === node.id;
     // 🚨 A class of its own, never `sel`. `tests/ui/treeDeselect.spec.ts` pins `.ntree-row.sel`
@@ -1238,6 +1311,7 @@ export function NodeTree({
           setMenu({ x: e.clientX, y: e.clientY, kind: 'node', node });
         }}
       >
+        {guideCells(index)}
         {/* Spacer keeps the status dot in the same column as a group's icon at this depth. */}
         <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
         <span className="ntree-icon">
@@ -1391,13 +1465,14 @@ export function NodeTree({
     };
   };
 
-  const loadingRow = (depth: number, groupId: string): React.ReactNode => (
+  const loadingRow = (depth: number, groupId: string, index: number): React.ReactNode => (
     <div
       className="ntree-row ntree-loading"
       role="none"
       style={{ paddingLeft: depth * INDENT + BASE_PAD }}
       {...placeholderDrop(groupId)}
     >
+      {guideCells(index)}
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-loading-label muted">{t('tree.loadingNodes')}</span>
     </div>
@@ -1406,13 +1481,14 @@ export function NodeTree({
   // A group whose members could not be fetched (ADR-125). Says so, and offers the retry — because
   // nothing retries on its own any more, and a row that only said "loading" would be a lie the
   // operator waits on forever (ADR-055 R6: say it where they are looking).
-  const failedRow = (depth: number, groupId: string): React.ReactNode => (
+  const failedRow = (depth: number, groupId: string, index: number): React.ReactNode => (
     <div
       className="ntree-row ntree-failed"
       role="none"
       style={{ paddingLeft: depth * INDENT + BASE_PAD }}
       {...placeholderDrop(groupId)}
     >
+      {guideCells(index)}
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-failed-label">{t('tree.loadFailed')}</span>
       {onRetryGroup && (
@@ -1434,7 +1510,7 @@ export function NodeTree({
    * ⚠️ `role="none"` and out of the keyboard's reach (`rowSelection` answers null for this kind), so
    * the slot cannot become a cursor position or a selection. It is feedback, not inventory.
    */
-  const slotRow = (depth: number): React.ReactNode => (
+  const slotRow = (depth: number, index: number): React.ReactNode => (
     <div
       className="ntree-row ntree-drop-slot"
       role="none"
@@ -1445,6 +1521,7 @@ export function NodeTree({
       onDrop={onSlotDrop}
       title={t('tree.dropHere')}
     >
+      {guideCells(index)}
       <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
       <span className="ntree-icon">
         {dragged?.kind === 'group' ? (
@@ -1466,19 +1543,75 @@ export function NodeTree({
     </div>
   );
 
-  const renderRow = (row: FlatRow): React.ReactNode => {
+  /**
+   * One pinned folder in the band (ADR-171 決定 5). A lookalike, not a tree row:
+   *
+   * 🚨 **Never `.ntree-row`, never an id, never `role="treeitem"`.** `treeDeselect.spec.ts` counts
+   * `.ntree-row.sel` to prove the selection is single, `aria-activedescendant` names a row by its
+   * DOM id, and a screen reader would read every pinned folder twice. The band is `aria-hidden`;
+   * the keyboard already reaches a parent with ←.
+   *
+   * A click scrolls back to the folder's own row and selects it — never deselects it, which is what
+   * a second click on the real row does (ADR-073): the band is a way back, not a toggle.
+   */
+  const stickyRow = (index: number): React.ReactNode => {
+    const row = drawn[index];
+    if (row.kind !== 'group' && row.kind !== 'ungrouped-head') return null;
+    const depth = row.kind === 'group' ? row.depth : 0;
+    return (
+      <div
+        key={flatRowKey(row)}
+        className="ntree-sticky-row"
+        style={{ paddingLeft: depth * INDENT + BASE_PAD }}
+        // Keep focus where it is: a mousedown here would otherwise move it onto the tree body and
+        // run the scroll pin (`pinFocusScroll`) against a scroll this click is about to make.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.stopPropagation();
+          rowVirtualizer.scrollToIndex(index, { align: 'start' });
+          if (row.kind !== 'group') return;
+          if (isSelected('group', row.group.id) && !cursor) return;
+          setCursor(null);
+          if (!onSelectGroup) return;
+          showClicked({ kind: 'group', id: row.group.id });
+          onSelectGroup(row.group);
+        }}
+      >
+        <span className="ntree-twisty ntree-twisty-spacer open">▶</span>
+        {row.kind === 'group' ? (
+          <>
+            <span className="ntree-icon">
+              <GroupIcon type={asGroupType(row.group.group_type)} />
+            </span>
+            <span className="ntree-sticky-name" title={row.group.name}>
+              {row.group.name}
+            </span>
+            <span className="ntree-count">{row.tally ? row.tally.total : ''}</span>
+          </>
+        ) : (
+          <>
+            <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
+            <span className="ntree-sticky-name">{t('ungrouped')}</span>
+            <span className="ntree-count">{row.count}</span>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderRow = (row: FlatRow, index: number): React.ReactNode => {
     switch (row.kind) {
       case 'drop-slot':
-        return slotRow(row.depth);
+        return slotRow(row.depth, index);
       case 'group':
-        return groupRow(row);
+        return groupRow(row, index);
       case 'node':
       case 'ungrouped-node':
-        return renderNode(row.node, row.depth, ariaLevel(row));
+        return renderNode(row.node, row.depth, ariaLevel(row), index);
       case 'group-loading':
-        return loadingRow(row.depth, row.groupId);
+        return loadingRow(row.depth, row.groupId, index);
       case 'group-failed':
-        return failedRow(row.depth, row.groupId);
+        return failedRow(row.depth, row.groupId, index);
       case 'ungrouped-head':
         return ungroupedHeadRow(row.count);
     }
@@ -1894,23 +2027,32 @@ export function NodeTree({
           )
         ) : (
           // Virtualized body: only the on-screen window of `drawn` is turned into DOM (S13).
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
-            {virtualRows.map((vi) => (
-              <div
-                key={vi.key}
-                data-index={vi.index}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${vi.start}px)`,
-                }}
-              >
-                {renderRow(drawn[vi.index])}
+          <>
+            {/* The pinned folders (ADR-171 決定 5). A zero-height sticky element, so it takes no
+                room in the scroll height and the rows below keep their `index × 30px` positions. */}
+            {band.length > 0 && (
+              <div className="ntree-sticky" aria-hidden="true">
+                <div className="ntree-sticky-band">{band.map(stickyRow)}</div>
               </div>
-            ))}
-          </div>
+            )}
+            <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualRows.map((vi) => (
+                <div
+                  key={vi.key}
+                  data-index={vi.index}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${vi.start}px)`,
+                  }}
+                >
+                  {renderRow(drawn[vi.index], vi.index)}
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 

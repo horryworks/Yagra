@@ -761,6 +761,8 @@
     "moveToGroup": "Move to group…",
     "dropHere": "Will be placed here",
     "dropMore": "+{{count}} more",
+    "pickCount": "{{count}} selected",
+    "pickCountTitle": "{{count}} of the nodes you have selected are in this folder",
     "dragHint": "Drag onto a group to nest/assign; drag between rows to reorder.",
     "loadingNodes": "Loading nodes…",
     "loadFailed": "Could not load this folder's nodes.",
