@@ -3,7 +3,7 @@
 //
 // Why Tier1: which folders the switch keeps is decided in `flattenTree`/`foldersWithNodes`, both
 // unit-tested. What only a browser proves is the wiring around them, none of which Vitest runs: the
-// button beside Pinned only, the page holding the switch, and the tree reading the per-folder counts
+// switch behind the filter button (ADR-177), the page holding it, and the tree reading the per-folder counts
 // that arrive from `/fleet/group-summary` rather than from the members it has loaded.
 //
 // Its own tree rather than `twoLevelTree`: the point needs a folder whose only nodes sit one level
@@ -13,6 +13,12 @@
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, MOCK_PREFIX, type Json } from '../support/openapi';
+import {
+  filterChips,
+  inventorySwitch,
+  openInventoryFilter,
+  pressInventorySwitch,
+} from './inventoryFilter';
 
 const REGION = '00000000-0000-4000-8000-0000000000e1';
 const SITE = '00000000-0000-4000-8000-0000000000e2';
@@ -83,8 +89,8 @@ type Page = import('@playwright/test').Page;
 
 const row = (page: Page, name: string) =>
   page.locator('.ntree-body').getByText(label(name), { exact: true });
-const withNodesOnly = (page: Page) =>
-  page.getByRole('button', { name: 'With nodes' });
+// "Hide empty folders" since ADR-177, behind the inventory's one filter button.
+const HIDE_EMPTY = 'Hide empty folders';
 
 test('the switch drops a folder with nothing below it and keeps the one above the node', async ({
   page,
@@ -95,8 +101,8 @@ test('the switch drops a folder with nothing below it and keeps the one above th
     await expect(row(page, name)).toHaveCount(1);
   }
 
-  await withNodesOnly(page).click();
-  await expect(withNodesOnly(page)).toHaveAttribute('aria-pressed', 'true');
+  await pressInventorySwitch(page, HIDE_EMPTY);
+  await expect(inventorySwitch(page, HIDE_EMPTY)).toBeChecked();
   await expect(row(page, 'nowhere'), 'a folder with no node anywhere below it').toHaveCount(0);
   // The folder above the node has no members of its own and must stay, or the node it holds has
   // nowhere to be drawn.
@@ -104,17 +110,32 @@ test('the switch drops a folder with nothing below it and keeps the one above th
   await expect(row(page, 'site')).toHaveCount(1);
   await expect(row(page, 'sw1')).toHaveCount(1);
 
-  await withNodesOnly(page).click();
-  await expect(withNodesOnly(page)).toHaveAttribute('aria-pressed', 'false');
+  await pressInventorySwitch(page, HIDE_EMPTY);
+  await expect(inventorySwitch(page, HIDE_EMPTY)).not.toBeChecked();
   await expect(row(page, 'nowhere')).toHaveCount(1);
+});
+
+test('its chip says it is on, and removing the chip switches it off', async ({ page }) => {
+  await page.goto('/nodes');
+  await pressInventorySwitch(page, HIDE_EMPTY);
+  await page.keyboard.press('Escape');
+  // The switch is folded away once the popover closes, so the chip is the only thing on screen
+  // that says why a folder is missing (ADR-177 決定 3).
+  const chip = filterChips(page).getByRole('button', { name: 'Remove Empty folders hidden' });
+  await expect(chip).toHaveCount(1);
+  await chip.click();
+  await expect(row(page, 'nowhere')).toHaveCount(1);
+  await expect(filterChips(page)).toHaveCount(0);
 });
 
 test('"clear all filters" appears with it and switches it off', async ({ page }) => {
   await page.goto('/nodes');
-  await withNodesOnly(page).click();
+  await pressInventorySwitch(page, HIDE_EMPTY);
+  await page.keyboard.press('Escape');
   const clear = page.getByRole('button', { name: /clear all filters/i });
-  await expect(clear, 'the tree is narrowed, so the reset has to be on screen').toHaveCount(1);
+  await expect(clear, 'the tree is reshaped, so the reset has to be on screen').toHaveCount(1);
   await clear.click();
-  await expect(withNodesOnly(page)).toHaveAttribute('aria-pressed', 'false');
+  await openInventoryFilter(page);
+  await expect(inventorySwitch(page, HIDE_EMPTY)).not.toBeChecked();
   await expect(row(page, 'nowhere')).toHaveCount(1);
 });

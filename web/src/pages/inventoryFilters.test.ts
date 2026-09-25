@@ -12,6 +12,7 @@ import { NODE_KINDS } from '../types/api';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import {
   ATTENTION_STATES,
+  inventoryChips,
   inventoryColumns,
   inventoryFilterLabels,
   inventoryKey,
@@ -290,5 +291,35 @@ describe('the "Needs attention" preset (ADR-163)', () => {
     const on = toggleAttention(f({}));
     expect(isInventoryFiltered(on)).toBe(true);
     expect(isAttentionOnly(defaultFilters(COLS))).toBe(false);
+  });
+});
+
+describe('the chips under the inventory head (ADR-177)', () => {
+  const none = { pinnedOnly: false, hideEmpty: false };
+
+  it('shows nothing when nothing is in force', () => {
+    expect(inventoryChips(COLS, defaultFilters(COLS), none)).toEqual([]);
+  });
+
+  it('puts the account switches around the columns, in the row order', () => {
+    const f: FilterState = { ...defaultFilters(COLS), kind: 'device', pool: 'tokyo' };
+    expect(inventoryChips(COLS, f, { pinnedOnly: true, hideEmpty: true })).toEqual([
+      { kind: 'pinned' },
+      { kind: 'column', key: 'kind', values: ['device'] },
+      { kind: 'column', key: 'pool', values: ['tokyo'] },
+      { kind: 'hideEmpty' },
+    ]);
+  });
+
+  it('says Needs attention once, not again as a State chip', () => {
+    const f = toggleAttention(defaultFilters(COLS));
+    expect(inventoryChips(COLS, f, none)).toEqual([{ kind: 'attention' }]);
+  });
+
+  it('gives any other State selection its own chip', () => {
+    const f: FilterState = { ...defaultFilters(COLS), state: 'ok,warning' };
+    expect(inventoryChips(COLS, f, none)).toEqual([
+      { kind: 'column', key: 'state', values: ['ok', 'warning'] },
+    ]);
   });
 });

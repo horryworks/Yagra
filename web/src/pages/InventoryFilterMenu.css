@@ -1,0 +1,262 @@
+/* The inventory tree's filter button, its popover and the chip row (ADR-177). */
+
+.invf-anchor {
+  display: inline-flex;
+  flex: none;
+}
+
+.invf-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.invf-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Something is in force: the same accent border every other pressed filter control uses. */
+.invf-trigger.on {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.invf-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: var(--brand-mark);
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- the popover ---- */
+
+.invf-pop {
+  width: 260px;
+  max-width: calc(100vw - 16px);
+  /* Taller than a short window (443px against 360 measured): scroll inside rather than run the
+     Done button off the bottom of the screen. */
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.invf {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.invf-sec {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.invf-h {
+  padding: 0;
+  margin-bottom: 2px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.invf-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: var(--space-2);
+}
+
+.invf-opt,
+.invf-sw {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+
+.invf-opt:hover,
+.invf-sw:hover {
+  background: var(--bg-tertiary);
+}
+
+.invf-opt input {
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent-color);
+}
+
+.invf-opt span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The switch: a real checkbox (`role="switch"`) carries the semantics and the keyboard; the track
+   and knob are drawn from it, the way `TextConditionEditor`'s mode switch does. */
+.invf-sw input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.invf-sw-track {
+  flex: none;
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.invf-sw-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.invf-sw input:checked + .invf-sw-track {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.invf-sw input:checked + .invf-sw-track::after {
+  transform: translateX(12px);
+  background: var(--brand-mark);
+}
+
+.invf-sw input:focus-visible + .invf-sw-track {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.invf-pin {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--pin-color);
+}
+
+.invf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.invf-clear {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  color: var(--accent-color);
+  font: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.invf-clear:disabled {
+  color: var(--text-secondary);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- the chip row (a `.nodes-pane-filters`, so it keeps that row's height cap) ---- */
+
+.invf-chips {
+  gap: 4px;
+}
+
+.invf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border-radius: 11px;
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+}
+
+/* Hide empty folders reshapes the tree rather than narrowing the nodes in it — dashed, so it reads
+   as a setting that is on rather than a filter. */
+.invf-chip.soft {
+  background: none;
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
+.invf-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invf-chip-x {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+  padding: 0;
+}
+
+.invf-chip-x:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.invf-chips .clear-filters {
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: var(--font-xs);
+}
+
+html[data-viewport='mobile'] .invf-opt,
+html[data-viewport='mobile'] .invf-sw {
+  min-height: var(--touch-target);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .invf-sw-track,
+  .invf-sw-track::after {
+    transition: none;
+  }
+}

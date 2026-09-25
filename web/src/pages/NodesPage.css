@@ -8,8 +8,7 @@
    ⚠️ **Colour cannot say "on" here.** The text is already `--status-critical` at rest, and status is
    its own channel (design-system §1.1) — repainting it accent would trade the "these are problems"
    reading for an "active" one. The underline goes solid instead, and the authoritative pressed mark
-   is the `Needs attention` toggle in the filter row, which uses the accent border every other
-   filter control uses. `aria-pressed` carries it for anyone not reading either. */
+   is the `Needs attention` chip under the pane head and the count on the filter button (ADR-177). `aria-pressed` carries it for anyone not reading either. */
 .nodes-attention {
   padding: 0;
   border: none;
@@ -73,6 +72,7 @@
 }
 
 .nodes-pane-title {
+  flex: none;
   font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -80,18 +80,30 @@
   font-weight: var(--weight-medium);
 }
 
+/* ADR-177 put a fifth control in this 38px row, so the search box is the part that gives: it
+   shrinks toward 72px on a narrow pane rather than pushing the filter button out of the pane's
+   `overflow: hidden`. Every button keeps its width. */
 .nodes-pane-tools {
   margin-left: auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nodes-pane-tools > * {
+  flex: none;
 }
 
 /* Width on the wrapper, height on the input — the ✕ is positioned against the wrapper (ADR-132).
    The height is compound because the shared default (`.sfield-input`) sets `--control-h`, and a
    single class would be decided by stylesheet order. */
-.nodes-pane-search {
+.nodes-pane-tools > .nodes-pane-search {
   width: 150px;
+  flex: 0 1 150px;
+  min-width: 72px;
 }
 
 .nodes-pane-search > .sfield-input {
@@ -103,6 +115,7 @@
   padding: 0 9px;
 }
 
+/* The chip row under the pane head (ADR-177 — it held the filter controls themselves before). */
 /* The state / kind / pool controls, on their own row under the pane head. Wrapping rather than
    sharing the head's row: the pane is narrow by design (and narrower still on mobile), and three
    controls beside the search box would squeeze it to nothing.
@@ -127,20 +140,6 @@
      the tree keeps the rest. On any ordinary window the cap is never reached, so nothing moves. */
   max-height: 50%;
   overflow-y: auto;
-}
-
-/* Pinned only (ADR-146): `.mfilt-btn`'s look and pressed state, with room for its pin glyph. */
-.nodes-pinned-only {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* The pin's own yellow in both states; the pressed state is the border, as on Filter. */
-.nodes-pinned-only svg {
-  width: 15px;
-  height: 15px;
-  color: var(--pin-color);
 }
 
 /* The working set's row (ADR-124 決定 3; **below** the tree since 増分 5). Still a child of
@@ -180,16 +179,6 @@
 }
 
 /* The pane is narrow, so the bar's triggers wrap rather than each taking a fixed floor. */
-.nodes-pane-filters .fbar {
-  padding: 0;
-  border-bottom: none;
-  gap: var(--space-1) var(--space-2);
-}
-
-.nodes-pane-filters .fbar-item .dt-f-trigger {
-  min-width: 6rem;
-}
-
 /* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). No handle
    is rendered while railed — there is nothing to proportion — so this is a two-column grid and the
    gap comes back as a gap. */

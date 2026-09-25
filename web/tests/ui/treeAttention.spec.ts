@@ -2,8 +2,8 @@
 // The "Needs attention" preset on the inventory tree (ADR-163).
 //
 // Why Tier1: what the preset *selects* is decided in `inventoryFilters.ts` and unit-tested there.
-// What only a browser proves is that the two surfaces are the same control — a toggle in the filter
-// row and the header's own "N need attention" count both writing the `state` column, and reading
+// What only a browser proves is that the two surfaces are the same control — a switch behind the
+// filter button (ADR-177) and the header's own "N need attention" count both writing the `state` column, and reading
 // their pressed look back out of it. Nothing in Vitest runs either of those `.tsx` sites, and the
 // failure they guard against is silent: a button that lights up while the tree behind it is
 // unchanged, or a count that narrows a tree the operator cannot see.
@@ -14,6 +14,14 @@
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, MOCK_PREFIX, type Json } from '../support/openapi';
+import {
+  filterChips,
+  filterPopover,
+  filterTrigger,
+  inventorySwitch,
+  openInventoryFilter,
+  pressInventorySwitch,
+} from './inventoryFilter';
 
 type Page = import('@playwright/test').Page;
 
@@ -85,7 +93,9 @@ test.use({
 
 const row = (page: Page, name: string) =>
   page.locator('.ntree-body').getByText(label(name), { exact: true });
-const toggle = (page: Page) => page.getByRole('button', { name: 'Needs attention', exact: true });
+// Behind the inventory's one filter button since ADR-177.
+const toggle = (page: Page) => inventorySwitch(page, 'Needs attention');
+const pressToggle = (page: Page) => pressInventorySwitch(page, 'Needs attention');
 const headerCount = (page: Page) => page.getByRole('button', { name: /need attention/ });
 
 /** Every node on screen, before anything is pressed — so a later "gone" can only be the preset. */
@@ -99,16 +109,16 @@ test('the toggle keeps the warning and the down node and drops the healthy one',
   await page.goto('/nodes');
   await browsed(page);
 
-  await toggle(page).click();
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true');
+  await pressToggle(page);
+  await expect(toggle(page)).toBeChecked();
   await expect(row(page, 'healthy-sw'), 'a healthy node survived the preset').toHaveCount(0);
   await expect(row(page, 'hot-sw')).toHaveCount(1);
   // The reason the set is three states and not two: a down device is `unreachable`, never
   // `critical`, so a preset written from the severity words alone would hide it.
   await expect(row(page, 'down-sw'), 'the down node is the one this screen is opened for').toHaveCount(1);
 
-  await toggle(page).click();
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
+  await pressToggle(page);
+  await expect(toggle(page)).not.toBeChecked();
   await expect(row(page, 'healthy-sw')).toHaveCount(1);
 });
 
@@ -116,15 +126,21 @@ test('it writes the state filter the operator can already see, rather than a hid
   page,
 }) => {
   await page.goto('/nodes');
-  await toggle(page).click();
+  await pressToggle(page);
 
   // The URL is the whole of the preset's state (ADR-163 決定 5) — there is no preference behind it.
   await expect(page).toHaveURL(/[?&]state=warning%2Ccritical%2Cunreachable/);
-  // And the State control says so too. This is what makes the press explainable: the operator can
-  // see WHICH filter was set, and can take one state back out by hand.
-  const stateTrigger = page.getByRole('button', { name: 'Filter by state' });
-  await expect(stateTrigger).toHaveAttribute('aria-expanded', 'false');
-  await expect(stateTrigger, 'the State control did not show the preset').not.toHaveText(/^Any$/);
+  // And the State boxes in the same popover say so too. This is what makes the press explainable:
+  // the operator can see WHICH states were chosen, and can take one back out by hand.
+  const pop = filterPopover(page);
+  for (const s of ['Warning', 'Critical', 'Unreachable']) {
+    await expect(pop.getByRole('checkbox', { name: s, exact: true }), s).toBeChecked();
+  }
+  await expect(pop.getByRole('checkbox', { name: 'Ok', exact: true })).not.toBeChecked();
+  // …while the chip row says it once, not twice (ADR-177 決定 3).
+  await page.keyboard.press('Escape');
+  await expect(filterChips(page).locator('.invf-chip')).toHaveCount(1);
+  await expect(filterChips(page).getByText('Needs attention', { exact: true })).toHaveCount(1);
 });
 
 test('the header count presses the same preset, and the two agree', async ({ page }) => {
@@ -136,24 +152,29 @@ test('the header count presses the same preset, and the two agree', async ({ pag
   // Both surfaces read their pressed look out of the same filter, so they cannot disagree — which
   // is the property worth pinning, since two controls over one state is exactly where they do.
   await expect(headerCount(page)).toHaveAttribute('aria-pressed', 'true');
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true');
+  await openInventoryFilter(page);
+  await expect(toggle(page)).toBeChecked();
   await expect(row(page, 'healthy-sw')).toHaveCount(0);
 
+  await page.keyboard.press('Escape');
   await headerCount(page).click();
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
+  await openInventoryFilter(page);
+  await expect(toggle(page)).not.toBeChecked();
   await expect(row(page, 'healthy-sw')).toHaveCount(1);
 });
 
 test('"clear all filters" appears with it and switches it off', async ({ page }) => {
   await page.goto('/nodes');
-  await toggle(page).click();
+  await pressToggle(page);
+  await page.keyboard.press('Escape');
   const clear = page.getByRole('button', { name: /clear all filters/i });
   // No `extraActive` wiring exists for this button (ADR-163 決定 1) — it is counted because it
   // writes the `state` column. That is only true while it keeps writing it.
   await expect(clear, 'the tree is narrowed, so the reset has to be on screen').toHaveCount(1);
   await clear.click();
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false');
   await expect(row(page, 'healthy-sw')).toHaveCount(1);
+  await openInventoryFilter(page);
+  await expect(toggle(page)).not.toBeChecked();
 });
 
 test('pressing the header count opens the inventory when it is railed', async ({ page }) => {
@@ -170,51 +191,48 @@ test('pressing the header count opens the inventory when it is railed', async ({
   await expect(row(page, 'down-sw')).toHaveCount(1);
 });
 
-/** `{ drawn }` is the visible height of the filter row, `{ wanted }` what its contents ask for, and
- *  `{ tree }` what is left for the inventory. The three together are the only way to tell "the row
- *  fits" from "the cap is hiding half of it". */
-async function paneGeometry(page: Page) {
-  const row = await page
-    .locator('.nodes-pane-filters')
-    .evaluate((el) => ({ drawn: el.clientHeight, wanted: el.scrollHeight }));
-  const tree = await page
-    .locator('.ntree-body')
-    .evaluate((el) => Math.round(el.getBoundingClientRect().height));
-  return { ...row, tree };
-}
-
-test('the filter row fits on an ordinary window, with nothing behind a scrollbar', async ({
+test('the pane head keeps the filter button inside the pane at the narrowest tree', async ({
   page,
 }) => {
-  // 🚨 ADR-159 決定 11 capped this row at half the pane so it could never zero the tree again. The
-  // cap makes a row that does not fit **scroll**, which is a quiet failure: `ClearFilters` and the
-  // State control are the last children, so they are the ones that go out of reach, and every
-  // assertion in this file would still pass with them hidden.
-  //
-  // Measured at the walk's own viewport with the sixth control in place: 144px drawn, 144px wanted,
-  // 357px left for the tree. ⚠️ **Shortening the label does not move that number** — `Attention`
-  // (86px) was measured and gives the same 144px, because at a 310px pane the row fits two controls
-  // per line either way. So ADR-159 決定 10's advice ("make the label short") does not generalize:
-  // what costs a line here is the sixth control, not its width.
+  // ADR-177 put a fifth control in the 38px head, and `.nodes-pane` is `overflow: hidden`: a
+  // button pushed past its right edge is not drawn and not pressable, and nothing else would fail.
+  // 220px is `TREE_MIN_PX`; the search box is the part that gives.
   await page.goto('/nodes');
   await browsed(page);
-  const g = await paneGeometry(page);
-  expect(g.wanted, 'the filter row now overflows on a normal window — controls are unreachable')
-    .toBeLessThanOrEqual(g.drawn);
+  await page.getByRole('slider', { name: /resize the inventory pane/i }).focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowLeft');
+  const pane = await page.locator('.nodes-pane').first().boundingBox();
+  const btn = await filterTrigger(page).boundingBox();
+  expect(pane, 'the pane has no box').not.toBeNull();
+  expect(btn, 'the filter button has no box').not.toBeNull();
+  expect(pane!.width, 'the pane did not reach its floor').toBeLessThanOrEqual(230);
+  expect(btn!.x + btn!.width, 'the filter button is cut off by the pane').toBeLessThanOrEqual(
+    pane!.x + pane!.width,
+  );
 });
 
-test('the filter row still leaves the tree room to draw at 1280×360', async ({ page }) => {
-  // The other end of the same rule. This row wraps and is `flex: none` above a `flex: 1` tree, and
-  // the third toggle once left `.ntree-body` at **0px** — five filter controls above an inventory
-  // showing nothing. This is the sixth control, and here the cap IS binding (measured: 89px drawn
-  // against 144px wanted), which is the trade 決定 11 chose: at this height the row scrolls so the
-  // tree does not vanish.
+test('the chip row still leaves the tree room to draw at 1280×360', async ({ page }) => {
+  // ADR-159 決定 11's cap still binds the row under the head, now that it holds chips (ADR-177):
+  // it wraps, is `flex: none` above a `flex: 1` tree, and once left `.ntree-body` at 0px.
   await page.setViewportSize({ width: 1280, height: 360 });
   await page.goto('/nodes');
   await browsed(page);
-
-  const g = await paneGeometry(page);
-  // Three rows is the bar ADR-159 measured itself against after the cap went in (49–52px there);
-  // this control must not move that number.
-  expect(g.tree, 'the filter row has eaten the tree again').toBeGreaterThan(48);
+  await pressToggle(page);
+  await pressInventorySwitch(page, 'Hide empty folders');
+  // click, not check(): the box is controlled by the URL, which the router writes a frame later,
+  // so check() reads it back before the write lands and reports that nothing changed.
+  const device = filterPopover(page).getByRole('checkbox', { name: 'Device (ICMP / SNMP)', exact: true });
+  await device.click();
+  await expect(device).toBeChecked();
+  // The popover is taller than this window, so it must scroll rather than run off the bottom:
+  // its Done button is the last thing in it.
+  await filterPopover(page).getByRole('button', { name: 'Done' }).scrollIntoViewIfNeeded();
+  const done = await filterPopover(page).getByRole('button', { name: 'Done' }).boundingBox();
+  expect(done!.y + done!.height, 'Done is below the bottom of the window').toBeLessThanOrEqual(360);
+  await page.keyboard.press('Escape');
+  await expect(filterChips(page)).toHaveCount(1);
+  const tree = await page
+    .locator('.ntree-body')
+    .evaluate((el) => Math.round(el.getBoundingClientRect().height));
+  expect(tree, 'the chip row has eaten the tree').toBeGreaterThan(48);
 });

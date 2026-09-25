@@ -262,3 +262,45 @@ export function writeInventoryFilters(
 ): void {
   writeFilterParams(columns, params, next);
 }
+
+// ---------------------------------------------------------------------------
+// The chips under the inventory head (ADR-177).
+//
+// Since ADR-177 every control that narrows the tree lives behind ONE button, so what is in force is
+// no longer visible on the controls themselves. The chip row is what says it — and a chip the row
+// forgot is a narrowing nobody can see, which is why the list is decided here, where a test reaches
+// it, rather than in the `.tsx` that draws it.
+
+/** One thing currently narrowing (or reshaping) the tree, in the order the row shows them. */
+export type InventoryChip =
+  | { kind: 'pinned' }
+  | { kind: 'attention' }
+  | { kind: 'column'; key: string; values: string[] }
+  | { kind: 'hideEmpty' };
+
+/** What the chip row shows, and — its length — the number on the filter button.
+ *
+ *  - The two switches held on the account (Pinned only, Hide empty folders) come from `opts`; the
+ *    columns come from the URL-backed `filters`.
+ *  - ⚠️ **Needs attention replaces the State chip rather than sitting beside it.** The preset *is*
+ *    a State selection (ADR-163 決定 5), so showing both would say one thing twice — and removing
+ *    either would silently remove the other. Any other State selection gets its own chip.
+ *  - Hide empty folders is shown although it hides no node: it hides folders, and a folder that is
+ *    missing for a reason nobody can see is the ADR-159 complaint all over again. */
+export function inventoryChips(
+  columns: readonly FilterableColumn<never>[],
+  filters: FilterState,
+  opts: { pinnedOnly: boolean; hideEmpty: boolean },
+): InventoryChip[] {
+  const out: InventoryChip[] = [];
+  if (opts.pinnedOnly) out.push({ kind: 'pinned' });
+  const attention = isAttentionOnly(filters);
+  if (attention) out.push({ kind: 'attention' });
+  for (const c of columns) {
+    if (c.key === 'state' && attention) continue;
+    const values = decodeSet(filters[c.key] ?? '');
+    if (values.length > 0) out.push({ kind: 'column', key: c.key, values });
+  }
+  if (opts.hideEmpty) out.push({ kind: 'hideEmpty' });
+  return out;
+}

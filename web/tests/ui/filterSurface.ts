@@ -207,7 +207,9 @@ export async function inspectFilterSurface(page: Page): Promise<FilterFinding[]>
  *  that renders a trigger is inspected, declared or not), so this only needs to name the ones whose
  *  disappearance would be silent. Each is a distinct shape of the ADR-053 work. */
 export const MUST_FILTER: Record<string, string> = {
-  '/nodes': 'the tree bar (Inc.6 decision E — a list with no header row)',
+  // `/nodes` left this list with ADR-177: its State / Kind / Pool moved into the inventory's filter
+  // popover, which is closed at rest, so there is no trigger for the walk to find. The popover is
+  // pressed by `treeAttention.spec.ts` and `treeWithNodes.spec.ts` instead.
   '/nodes/discovery': 'the two discovery tables (Inc.6, and where the 28px defect landed)',
   '/nodes/mib': 'a server-side filter row: typing has to reach the request',
   '/nodes/profiles': 'the last hand-rolled row (a grouped `.ytable`, not a `.dt`) — Inc.10',

@@ -30,7 +30,6 @@ import { usePrefsStore } from '../prefs';
 import { setNodeTreePinnedOnly, setNodeTreeWithNodesOnly } from '../serverPrefs';
 import { usePinsStore } from '../pinsStore';
 import { pinnedView } from '../lib/pins';
-import { PinIcon } from '../components/ui/icons';
 import { useViewportMode } from '../lib/viewport';
 import type {
   FleetGroupSummary,
@@ -58,9 +57,7 @@ import {
   truncationNotice,
   writeInventoryFilters,
 } from './inventoryFilters';
-import { FilterBar } from '../components/ui/FilterBar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { InventoryFilterButton, InventoryFilterChips, type InventoryFilterProps } from './InventoryFilterMenu';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
@@ -376,7 +373,6 @@ export function NodesPage() {
   // state because `pools` is a dependency: pool names are the deployment's own, not an enum.
   const filterCols = useMemo(() => inventoryColumns(t, pools), [t, pools]);
   const filterLabels = useMemo(() => inventoryFilterLabels(t), [t]);
-  const [filterSheet, setFilterSheet] = useState(false);
   const inventoryFilters = readInventoryFilters(filterCols, searchParams);
   const setInventoryFilters = useCallback(
     (next: FilterState) => {
@@ -459,6 +455,23 @@ export function NodesPage() {
     assignTerm(params, '');
     setSearchParams(params, { replace: true });
   }, [filterCols, pinnedOnly, withNodesOnly, searchParams, setSearchParams, assignTerm]);
+  // The filter button and its chip row read the same props (ADR-177): one object, so the badge on
+  // the button and the chips under it cannot count different things.
+  const filterProps: InventoryFilterProps = {
+    columns: filterCols,
+    labels: filterLabels,
+    filters: inventoryFilters,
+    onChange: setInventoryFilters,
+    pinsReady,
+    pinnedOnly,
+    onPinnedOnly: setNodeTreePinnedOnly,
+    attentionOnly,
+    onAttention: () => pressAttention(false),
+    hideEmpty: withNodesOnly,
+    onHideEmpty: setNodeTreeWithNodesOnly,
+    onClearAll: clearAllFilters,
+    searching: filter.trim() !== '',
+  };
   // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
   // folders a group-name match reveals arrive separately through the per-group member cache below.
   // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
@@ -1023,8 +1036,8 @@ export function NodesPage() {
                 {/* The count is the way in (ADR-163). It already names the set the preset selects,
                     so making it press the preset costs no new control and no new vocabulary — and
                     it is the one place the number and the filter can be seen agreeing. Shares
-                    `pressAttention` with the toggle in the filter row, so there is one behaviour to
-                    reason about rather than two that look alike. */}
+                    `pressAttention` with the switch behind the filter button (ADR-177), so there
+                    is one behaviour to reason about rather than two that look alike. */}
                 <button
                   type="button"
                   className="nodes-attention"
@@ -1180,89 +1193,17 @@ export function NodesPage() {
                 onClear={() => term.setDraft('')}
                 placeholder={t('inventory.searchPlaceholder')}
               />
+              {/* Everything that narrows the tree, behind one button (ADR-177). */}
+              <InventoryFilterButton {...filterProps} />
             </div>
           </div>
-          {/* The tree has no header row to hang a filter row under, so the controls carry their
-              own names (ADR-053 Inc.6 decision E). All three are multi-select and reach the server
-              as comma-joined sets.
+          {/* What is in force, one chip each (ADR-177). Only while something is — the controls
+              themselves are folded into the button above, so this row is the one place on screen
+              that says the tree is narrowed.
               ⚠️ **A sibling of `.nodes-pane-head`, not a child of it.** That header is a
-              single-line flex row with a fixed 38px height, so a control placed inside it shares
-              the line with the title, the buttons and the search box — and the filter bar shipped
-              squeezed to nothing there. The same mistake as putting a filter in Discovery's 28px
-              select column: the container's size was never checked. */}
-          <div className="nodes-pane-filters">
-            <FilterButton
-              columns={filterCols}
-              filters={inventoryFilters}
-              onOpen={() => setFilterSheet(true)}
-            />
-            {/* Pinned only (ADR-146), right of Filter. The same button look as Filter, pressed the
-                same way, because it is the same kind of control: it narrows this tree. Not drawn
-                until the pins have loaded — a core without the endpoint gets no button. */}
-            {pinsReady && (
-              <button
-                type="button"
-                className={pinnedOnly ? 'mfilt-btn nodes-pinned-only on' : 'mfilt-btn nodes-pinned-only'}
-                aria-pressed={pinnedOnly}
-                title={t('inventory.pinnedOnlyHint')}
-                onClick={() => setNodeTreePinnedOnly(!pinnedOnly)}
-              >
-                <PinIcon />
-                {t('inventory.pinnedOnly')}
-              </button>
-            )}
-            {/* Folders with nodes only (ADR-159), right of Pinned only. The same button, pressed
-                the same way, for the same reason: it narrows this tree. Always drawn — it reads
-                the per-folder counts the tree already has, so there is no endpoint to be missing. */}
-            <button
-              type="button"
-              className={withNodesOnly ? 'mfilt-btn on' : 'mfilt-btn'}
-              aria-pressed={withNodesOnly}
-              title={t('inventory.withNodesOnlyHint')}
-              onClick={() => setNodeTreeWithNodesOnly(!withNodesOnly)}
-            >
-              {t('inventory.withNodesOnly')}
-            </button>
-            {/* Needs attention (ADR-163), right of With nodes. The same button for the third time,
-                because it is the same kind of control — but unlike the two beside it this one holds
-                nothing: it is a preset over the `state` filter below, so its pressed look is read
-                back out of that filter rather than out of a switch. Press it and the State trigger
-                lights up too, which is what says *what* it did. */}
-            <button
-              type="button"
-              className={attentionOnly ? 'mfilt-btn on' : 'mfilt-btn'}
-              aria-pressed={attentionOnly}
-              title={t('inventory.needAttentionOnlyHint')}
-              onClick={() => pressAttention(false)}
-            >
-              {t('inventory.needAttentionOnly')}
-            </button>
-            <FilterBar
-              columns={filterCols}
-              labels={filterLabels}
-              filters={inventoryFilters}
-              onChange={setInventoryFilters}
-            />
-            {/* The search box is a filter the operator can see but the row does not own, so it is
-                counted here as `extra` and cleared by the same handler — an operator who presses
-                "clear all filters" and is still looking at a narrowed tree has been told something
-                untrue. */}
-            <ClearFilters
-              columns={filterCols}
-              filters={inventoryFilters}
-              extraActive={filter.trim() !== '' || pinnedOnly || withNodesOnly}
-              onClear={clearAllFilters}
-            />
-            {filterSheet && (
-              <MobileFilterSheet
-                columns={filterCols}
-                labels={filterLabels}
-                filters={inventoryFilters}
-                onChange={setInventoryFilters}
-                onClose={() => setFilterSheet(false)}
-              />
-            )}
-          </div>
+              single-line flex row with a fixed 38px height; a row placed inside it shipped squeezed
+              to nothing once already. */}
+          <InventoryFilterChips {...filterProps} />
           <NodeTree
             groups={groups}
             nodes={liveTreeNodes}

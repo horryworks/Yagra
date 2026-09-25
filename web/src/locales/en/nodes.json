@@ -97,9 +97,21 @@
     "resizePane": "Drag to resize the inventory pane (double-click to reset)",
     "pinnedOnly": "Pinned only",
     "pinnedOnlyHint": "Show only the nodes and folders you pinned, with the folders above them",
-    "withNodesOnly": "With nodes",
+    "withNodesOnly": "Hide empty folders",
     "withNodesOnlyHint": "Hide folders that have no nodes in them or in any folder below. A folder you create here stays until you reload the page.",
     "needAttentionOnly": "Needs attention",
+    "filterMenu": {
+      "label": "Filter the inventory",
+      "labelCount": "Filter the inventory ({{count}} in force)",
+      "quick": "Quick",
+      "clearAll": "Clear all",
+      "done": "Done"
+    },
+    "chips": {
+      "label": "Filters in force",
+      "remove": "Remove {{name}}",
+      "emptyHidden": "Empty folders hidden"
+    },
     "needAttentionOnlyHint": "Show only the nodes that are warning, critical or unreachable — the same ones counted above. A node in a maintenance window is not one of them.",
     "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
     "cols": {
@@ -803,7 +815,7 @@
     "pinNamed": "Pin \"{{name}}\"",
     "unpinNamed": "Unpin \"{{name}}\"",
     "pinnedMark": "Pinned",
-    "withNodesEmpty": "No folder holds a node, so “With nodes” is hiding all of them. Turn it off to see the folders.",
+    "withNodesEmpty": "No folder holds a node, so “Hide empty folders” is hiding all of them. Turn it off to see the folders.",
     "pinnedEmpty": "Nothing is pinned yet. Right-click a node or folder and choose Pin, or press Pin in its detail pane.",
     "pinFailed": "failed to change the pin",
     "menuFor": "Actions for {{name}}",

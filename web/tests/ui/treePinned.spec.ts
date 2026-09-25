@@ -12,6 +12,7 @@
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, MOCK_PREFIX, type Json } from '../support/openapi';
+import { inventorySwitch, pressInventorySwitch } from './inventoryFilter';
 
 const REGION = '00000000-0000-4000-8000-0000000000d1';
 const SITE = '00000000-0000-4000-8000-0000000000d2';
@@ -86,7 +87,9 @@ type Page = import('@playwright/test').Page;
 
 const row = (page: Page, name: string) =>
   page.locator('.ntree-body').getByText(label(name), { exact: true });
-const pinnedOnly = (page: Page) => page.getByRole('button', { name: 'Pinned only' });
+// Behind the inventory's one filter button since ADR-177.
+const pinnedOnly = (page: Page) => inventorySwitch(page, 'Pinned only');
+const pressPinnedOnly = (page: Page) => pressInventorySwitch(page, 'Pinned only');
 
 test.describe('a pinned node', () => {
   test.use(overrides({ group_ids: [], nodes: [PINNED] }));
@@ -117,15 +120,15 @@ test.describe('a pinned node', () => {
     expect(mark.color).toBe(mark.expected);
     expect(mark.width).toBe(16);
 
-    await pinnedOnly(page).click();
-    await expect(pinnedOnly(page)).toHaveAttribute('aria-pressed', 'true');
+    await pressPinnedOnly(page);
+    await expect(pinnedOnly(page)).toBeChecked();
     for (const kept of ['region', 'site', 'pinned']) await expect(row(page, kept)).toHaveCount(1);
     await expect(row(page, 'sibling'), 'an unpinned node beside the pin is still shown').toHaveCount(0);
     await expect(row(page, 'elsewhere')).toHaveCount(0);
     await expect(row(page, 'far')).toHaveCount(0);
 
-    await pinnedOnly(page).click();
-    await expect(pinnedOnly(page)).toHaveAttribute('aria-pressed', 'false');
+    await pressPinnedOnly(page);
+    await expect(pinnedOnly(page)).not.toBeChecked();
     await expect(row(page, 'far')).toHaveCount(1);
   });
 
@@ -146,7 +149,7 @@ test.describe('a pinned folder', () => {
     await page.goto('/nodes');
     await expect(row(page, 'pinned')).toHaveCount(1);
 
-    await pinnedOnly(page).click();
+    await pressPinnedOnly(page);
     await expect(row(page, 'elsewhere')).toHaveCount(1);
     await expect(row(page, 'far')).toHaveCount(1);
     await expect(row(page, 'region')).toHaveCount(0);
@@ -160,7 +163,7 @@ test.describe('nothing pinned', () => {
   test('Pinned only says how to pin instead of drawing an empty tree', async ({ page }) => {
     await page.goto('/nodes');
     await expect(row(page, 'far')).toHaveCount(1);
-    await pinnedOnly(page).click();
+    await pressPinnedOnly(page);
     await expect(page.locator('.ntree-body').getByText('Nothing is pinned yet', { exact: false })).toHaveCount(1);
   });
 });

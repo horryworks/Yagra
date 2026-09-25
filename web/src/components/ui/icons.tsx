@@ -24,6 +24,15 @@ export function SearchIcon(props: IconProps) {
   );
 }
 
+/** A funnel — the inventory tree's one filter button (ADR-177). */
+export function FunnelIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.8" strokeLinejoin="round">
+      <path d="M3 5h18l-7 8.5V19l-4-2v-3.5z" />
+    </svg>
+  );
+}
+
 /** A pushpin — a node or folder pinned on the inventory tree (ADR-146). */
 export function PinIcon(props: IconProps) {
   return (
