@@ -204,14 +204,18 @@ export function DataTable<T>({
   // never handed to `measureElement` again — its ref callback does not re-run — so it falls back to
   // the 44px estimate. That was invisible while every row was 44px; on an `autoRowHeight` table a
   // taller row then overlapped the one below it after any open and close (Neighbors, ADR-179 増分 3).
-  // So the rows on screen are measured again as soon as they have rendered.
+  // So the rows on screen are measured again as soon as they have rendered — through `resizeItem`,
+  // not `measureElement`: opening a row scrolls the table, and `measureElement` skips its
+  // measurement while the virtualizer thinks a scroll is under way, which left every row below an
+  // open one at the estimate for as long as it stayed open.
   useEffect(() => {
     if (!expanded) return;
     virtualizer.measure();
     const frame = requestAnimationFrame(() => {
-      scrollRef.current
-        ?.querySelectorAll<HTMLElement>('[data-index]')
-        .forEach((el) => virtualizer.measureElement(el));
+      scrollRef.current?.querySelectorAll<HTMLElement>('[data-index]').forEach((el) => {
+        const index = Number(el.dataset.index);
+        if (Number.isInteger(index)) virtualizer.resizeItem(index, el.getBoundingClientRect().height);
+      });
     });
     return () => cancelAnimationFrame(frame);
     // `virtualizer` is stable for the life of the component; including it would re-run this on
