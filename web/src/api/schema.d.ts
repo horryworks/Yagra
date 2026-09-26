@@ -2879,9 +2879,9 @@ export interface paths {
         };
         /**
          * The node's current CDP/LLDP neighbours.
-         * @description `404` means no walk has recorded anything for this node yet — the node may not be an SNMP
-         *     device, may not speak either protocol, or may simply not have been walked since collection was
-         *     enabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device
+         * @description `404` means nothing has recorded this node's neighbours yet — the node may be neither an SNMP
+         *     device nor a Meraki switch (whose neighbours are read from the Meraki Dashboard), may not speak
+         *     either protocol, or may simply not have been read since collection was enabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device
          *     reports no neighbours.
          */
         get: operations["get_neighbors"];
@@ -8951,8 +8951,8 @@ export interface components {
             /**
              * @description Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
              *     `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
-             *     uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
-             *     `switch_port_usage`, `switch_port_config`), the wireless tier up to three
+             *     uplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,
+             *     `switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three
              *     (`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when
              *     the whole collect failed, or a poller from before this reported it.
              */
@@ -9688,11 +9688,15 @@ export interface components {
              *     update leaves it unchanged.
              */
             arp_interval_secs?: number | null;
-            /** @description Whether CDP/LLDP neighbour walks are issued at all. */
+            /**
+             * @description Whether CDP/LLDP neighbours are collected at all — the SNMP walks and a Meraki switch's
+             *     Dashboard read alike.
+             */
             enabled: boolean;
             /**
              * Format: int32
-             * @description How often each SNMP node's neighbour tables are walked, in seconds.
+             * @description How often each SNMP node's neighbour tables are walked, and each Meraki organization's
+             *     switch neighbours are read, in seconds.
              */
             interval_secs: number;
             /** @description Whether interface-address walks are issued at all. Omitted on update leaves it unchanged. */

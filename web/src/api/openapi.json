@@ -14454,7 +14454,7 @@
           "neighbors"
         ],
         "summary": "The node's current CDP/LLDP neighbours.",
-        "description": "`404` means no walk has recorded anything for this node yet — the node may not be an SNMP\ndevice, may not speak either protocol, or may simply not have been walked since collection was\nenabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device\nreports no neighbours.",
+        "description": "`404` means nothing has recorded this node's neighbours yet — the node may be neither an SNMP\ndevice nor a Meraki switch (whose neighbours are read from the Meraki Dashboard), may not speak\neither protocol, or may simply not have been read since collection was enabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device\nreports no neighbours.",
         "operationId": "get_neighbors",
         "parameters": [
           {
@@ -32177,7 +32177,7 @@
               "string",
               "null"
             ],
-            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_config`), the wireless tier up to three\n(`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when\nthe whole collect failed, or a poller from before this reported it."
+            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three\n(`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when\nthe whole collect failed, or a poller from before this reported it."
           },
           "reason": {
             "$ref": "#/components/schemas/MerakiSyncFailure",
@@ -33564,12 +33564,12 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "Whether CDP/LLDP neighbour walks are issued at all."
+            "description": "Whether CDP/LLDP neighbours are collected at all — the SNMP walks and a Meraki switch's\nDashboard read alike."
           },
           "interval_secs": {
             "type": "integer",
             "format": "int32",
-            "description": "How often each SNMP node's neighbour tables are walked, in seconds.",
+            "description": "How often each SNMP node's neighbour tables are walked, and each Meraki organization's\nswitch neighbours are read, in seconds.",
             "minimum": 0
           },
           "l3_enabled": {

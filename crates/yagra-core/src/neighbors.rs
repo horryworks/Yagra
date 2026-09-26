@@ -52,9 +52,11 @@ pub fn interval_in_bounds(secs: u32) -> bool {
 /// not the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdjacencySettings {
-    /// Whether CDP/LLDP neighbour jobs are scheduled at all.
+    /// Whether CDP/LLDP neighbour jobs are scheduled at all — and, since ADR-181, whether a Meraki
+    /// organization's switch-port collect reads its switches' neighbours.
     pub neighbors_enabled: bool,
-    /// How often each SNMP node's neighbour tables are walked.
+    /// How often each SNMP node's neighbour tables are walked, and a Meraki organization's switch
+    /// neighbours are read.
     pub neighbors_interval_secs: u32,
     /// Whether interface-address jobs are scheduled at all (ADR-043).
     pub l3_enabled: bool,

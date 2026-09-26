@@ -426,8 +426,8 @@ pub(crate) struct MerakiCollectFailureView {
     failures: u32,
     /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
     /// `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
-    /// uplink tier reads three, the switch-port tier up to three (`switch_port_statuses`,
-    /// `switch_port_usage`, `switch_port_config`), the wireless tier up to three
+    /// uplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,
+    /// `switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three
     /// (`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when
     /// the whole collect failed, or a poller from before this reported it.
     #[serde(skip_serializing_if = "Option::is_none")]
