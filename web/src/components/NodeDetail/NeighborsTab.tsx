@@ -322,6 +322,10 @@ export function NeighborsTab({ node }: Props) {
           <div className="nd-nb-table">
             <DataTable
               tableId="node.neighbors"
+              // An unmonitored address carries a third line, its "Set up monitoring" button
+              // (ADR-179 増分 3); at the fixed 44px it spilled over the next row, which then took
+              // its clicks. Rows without one stay the height they were (ADR-078 増分 5).
+              autoRowHeight
               rows={shownNeighbors}
               columns={columns}
               filters={filters}
