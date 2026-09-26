@@ -199,8 +199,21 @@ export function DataTable<T>({
   // collapsed keeps the height it had while open — the list stays full of gaps, which reads as a
   // rendering bug rather than as a stale cache. `measure()` is a no-op for a table with no
   // expansion, and the dependency never changes there.
+  //
+  // 🚨 Dropping is only half of it: `measure()` forgets every size, and a row that stays mounted is
+  // never handed to `measureElement` again — its ref callback does not re-run — so it falls back to
+  // the 44px estimate. That was invisible while every row was 44px; on an `autoRowHeight` table a
+  // taller row then overlapped the one below it after any open and close (Neighbors, ADR-179 増分 3).
+  // So the rows on screen are measured again as soon as they have rendered.
   useEffect(() => {
-    if (expanded) virtualizer.measure();
+    if (!expanded) return;
+    virtualizer.measure();
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current
+        ?.querySelectorAll<HTMLElement>('[data-index]')
+        .forEach((el) => virtualizer.measureElement(el));
+    });
+    return () => cancelAnimationFrame(frame);
     // `virtualizer` is stable for the life of the component; including it would re-run this on
     // every scroll frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps

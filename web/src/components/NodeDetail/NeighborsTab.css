@@ -34,6 +34,9 @@
   flex-direction: column;
   height: 40vh;
   min-height: 220px;
+  /* This pane is a flex column that scrolls, so without this a long change history below squeezed
+     the table down to a few rows instead of scrolling past it. */
+  flex-shrink: 0;
   padding: 0 var(--space-4);
 }
 
