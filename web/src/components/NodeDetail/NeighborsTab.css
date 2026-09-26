@@ -361,3 +361,10 @@ html[data-viewport='mobile'] .nd-nb-table {
 .nd-nb-table-setup {
   min-height: 560px;
 }
+
+/* Rows grow with their content (`autoRowHeight`), which DataTable top-aligns so a tall stacked cell
+   reads from its first line. Here no cell runs longer than two lines, and a row reads better with
+   every cell centred on it. Specific enough to win over `.dt-row-auto` whatever the load order. */
+.nd-nb-table .dt-row.dt-row-auto {
+  align-items: center;
+}
