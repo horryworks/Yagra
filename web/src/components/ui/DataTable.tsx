@@ -212,6 +212,10 @@ export function DataTable<T>({
     if (!expanded) return;
     virtualizer.measure();
     const frame = requestAnimationFrame(() => {
+      // ⚠️ Rebuild the positions first. Until something asks for them after `measure()`, the
+      // virtualizer still holds the sizes it had before, so `resizeItem` compared each row with its
+      // old height, found no change and wrote nothing — and the row then read back at 44px.
+      virtualizer.getVirtualItems();
       scrollRef.current?.querySelectorAll<HTMLElement>('[data-index]').forEach((el) => {
         const index = Number(el.dataset.index);
         if (Number.isInteger(index)) virtualizer.resizeItem(index, el.getBoundingClientRect().height);
