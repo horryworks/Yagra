@@ -1890,7 +1890,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/stream/config",
         Refused(
-            "the change feed says only that something changed anywhere in the configuration, and              for a group-scoped account that includes its outside (ADR-014); refused, not filtered",
+            "the change feed says only that something changed anywhere in the configuration, and for a group-scoped account that includes its outside (ADR-014); refused, not filtered",
         ),
         PENDING_STREAM,
     ),

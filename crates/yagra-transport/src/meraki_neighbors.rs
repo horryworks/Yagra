@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A Meraki switch's LLDP/CDP neighbours, from `switch/ports/topology/discovery/byDevice`
 //! (ADR-181) — the organization-wide listing that tells, per switch port, what the port hears.
 //!

@@ -6749,8 +6749,9 @@ export interface components {
             last_seen: string;
             /**
              * @description The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
-             *     labelled as MAC addresses are looked up. This names who made the network interface, which is
-             *     not necessarily who made the device or its software.
+             *     labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
+             *     no label, where an id shaped like a MAC address is. This names who made the network
+             *     interface, which is not necessarily who made the device or its software.
              */
             mac_vendors: components["schemas"]["MacVendor"][];
             /** @description The adjacencies the node last reported. */
@@ -6886,7 +6887,9 @@ export interface components {
             via_ifindex?: number | null;
             /**
              * Format: uuid
-             * @description Which monitored node resolved it; `null` once that node has been deleted.
+             * @description The row's one representative observer: the lowest-id monitored node among its evidence
+             *     (every observer is listed in `evidence`). `null` when no monitored node saw it — a
+             *     syslog/trap sender only — or once that node has been deleted.
              */
             via_node?: string | null;
         };
@@ -9766,6 +9769,11 @@ export interface components {
          *     Recorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]
          *     took — never inferred from how the stored text looks, because a text id can look like a MAC and
          *     the hex fallback always does.
+         *
+         *     ⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing
+         *     carries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
+         *     it reads as six octets. The cost of guessing wrong is a maker name beside a name that happens to
+         *     look like a MAC — display only (ADR-180 決定 5).
          * @enum {string}
          */
         NeighborIdKind: "mac" | "network_address" | "text" | "hex" | "unknown";
@@ -16305,7 +16313,10 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description Only endpoints seen by this node. */
+                /**
+                 * @description Only rows whose representative observer (`via_node`, the lowest-id observing node) is
+                 *     this node. A row this node also saw, but a lower-id node saw too, is not returned.
+                 */
                 via_node?: string;
                 /** @description Include endpoints that have since become monitored nodes. Default `false`. */
                 include_promoted?: boolean;

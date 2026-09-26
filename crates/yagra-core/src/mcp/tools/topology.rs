@@ -37,7 +37,9 @@ pub(super) struct NeighborsParams {
 pub(super) struct DiscoveredEndpointsParams {
     /// Max endpoints to return (1–500, default 100).
     limit: Option<i64>,
-    /// Only endpoints seen by this monitored node (its UUID).
+    /// Only rows whose representative observer (`via_node`, the lowest-id observing node) is
+    /// this monitored node (its UUID). A row it also saw, but a lower-id node saw too, is not
+    /// returned — read `evidence` for every observer.
     via_node: Option<Uuid>,
     /// Also include endpoints that have since become monitored nodes (default false).
     include_promoted: Option<bool>,
@@ -98,7 +100,8 @@ impl YagraMcp {
                        an address no node owns, `managed_by` names the wireless controller or \
                        Meraki organization that already lists the device there. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
-                       labelled a MAC address — the maker of the network interface, which is not \
+                       labelled a MAC address (on a Meraki switch, which reports no label, each id \
+                       shaped like one) — the maker of the network interface, which is not \
                        necessarily who made the device or its software."
     )]
     async fn get_neighbors(
@@ -173,8 +176,8 @@ impl YagraMcp {
                        with the observing node, its ifIndex and port name. `via_node` plus \
                        `via_ifindex` is the lowest observer and the port the host is behind. \
                        `limit` is 1–500 (default 100); page with `before_last_seen` (RFC 3339) and \
-                       `before_id` from `next`, both together or neither. Filter to one observer \
-                       with `via_node`. `summary.unmonitored_total` counts every unmonitored row \
+                       `before_id` from `next`, both together or neither. Filter on that lowest \
+                       observer with `via_node` (a row a lower-id node also saw is not matched). `summary.unmonitored_total` counts every unmonitored row \
                        you can see. A sender behind NAT shows the translator's address. \
                        ⚠️ Check `summary.truncated_nodes`: above zero, at least one router's ARP \
                        cache exceeded its row budget and the ARP half is a sample. ARP discovery is \

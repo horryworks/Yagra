@@ -1877,4 +1877,33 @@ mod tests {
         repo.apply(org, &gone).await.expect("apply");
         assert!(repo.devices_at(&[lan]).await.expect("devices").is_empty());
     }
+
+    /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a scan. Sequential scans are switched off for the statement so a tiny test table cannot hide a
+    /// query shape the index cannot serve (ADR-180 増分 2, migration 0139).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_address_lookup_can_use_the_listed_lan_ip_index(pool: sqlx::PgPool) {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let rows = sqlx::query(
+            "EXPLAIN SELECT i.serial FROM meraki_inventory i WHERE i.lan_ip = ANY($1) AND i.missing_since IS NULL",
+        )
+        .bind(vec!["192.0.2.1".to_owned()])
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        let plan: Vec<String> = rows
+            .iter()
+            .map(|r| sqlx::Row::get::<String, _>(r, 0))
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|l| l.contains("meraki_inventory_lan_ip_listed")),
+            "plan does not use the index:\n{}",
+            plan.join("\n")
+        );
+    }
 }

@@ -3500,7 +3500,7 @@
           {
             "name": "via_node",
             "in": "query",
-            "description": "Only endpoints seen by this node.",
+            "description": "Only rows whose representative observer (`via_node`, the lowest-id observing node) is\nthis node. A row this node also saw, but a lower-id node saw too, is not returned.",
             "required": false,
             "schema": {
               "type": "string",
@@ -27548,7 +27548,7 @@
             "items": {
               "$ref": "#/components/schemas/MacVendor"
             },
-            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up. This names who made the network interface, which is\nnot necessarily who made the device or its software."
+            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports\nno label, where an id shaped like a MAC address is. This names who made the network\ninterface, which is not necessarily who made the device or its software."
           },
           "neighbors": {
             "$ref": "#/components/schemas/NeighborSet",
@@ -27832,7 +27832,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Which monitored node resolved it; `null` once that node has been deleted."
+            "description": "The row's one representative observer: the lowest-id monitored node among its evidence\n(every observer is listed in `evidence`). `null` when no monitored node saw it — a\nsyslog/trap sender only — or once that node has been deleted."
           }
         }
       },
@@ -33679,7 +33679,7 @@
       },
       "NeighborIdKind": {
         "type": "string",
-        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.",
+        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.\n\n⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing\ncarries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets. The cost of guessing wrong is a maker name beside a name that happens to\nlook like a MAC — display only (ADR-180 決定 5).",
         "enum": [
           "mac",
           "network_address",

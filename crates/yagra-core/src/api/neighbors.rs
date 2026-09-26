@@ -76,8 +76,9 @@ pub(crate) struct CurrentNeighbors {
     /// node's interfaces carries — never on a name or chassis id.
     peers: Vec<NeighborPeer>,
     /// The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
-    /// labelled as MAC addresses are looked up. This names who made the network interface, which is
-    /// not necessarily who made the device or its software.
+    /// labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
+    /// no label, where an id shaped like a MAC address is. This names who made the network
+    /// interface, which is not necessarily who made the device or its software.
     mac_vendors: Vec<MacVendor>,
 }
 

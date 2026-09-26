@@ -137,6 +137,17 @@ impl EndpointSource {
     }
 }
 
+/// Drop every piece of evidence whose observing node is not in `visible` (ADR-179 増分 4).
+///
+/// A row is listed when its *lowest* observer is in the caller's scope, but its evidence names
+/// every observer — so without this a folder-scoped caller read another folder's node id, port and
+/// the platform it saw. The whole entry goes, not just its fields: that some hidden node saw the
+/// address at all is itself about a segment the caller cannot see. A sender's own evidence (no
+/// `via_node`) is about the endpoint and stays.
+pub fn drop_hidden_evidence(evidence: &mut Vec<EndpointEvidence>, visible: &BTreeSet<Uuid>) {
+    evidence.retain(|e| e.via_node.is_none_or(|n| visible.contains(&n)));
+}
+
 /// One observation that made an address a candidate.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct EndpointEvidence {
@@ -819,6 +830,25 @@ impl DiscoveredRepo {
         rows.iter().map(endpoint_from_row).collect()
     }
 
+    /// Which of `observers` a caller scoped to `groups` may see (ADR-179 増分 4) — one read for a
+    /// whole page's evidence. Only a scoped caller asks: an unrestricted one sees every observer.
+    pub async fn visible_observers(
+        &self,
+        observers: &[Uuid],
+        groups: &[Uuid],
+    ) -> anyhow::Result<BTreeSet<Uuid>> {
+        if observers.is_empty() || groups.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let ids: Vec<Uuid> =
+            sqlx::query_scalar("SELECT id FROM nodes WHERE id = ANY($1) AND group_id = ANY($2)")
+                .bind(observers)
+                .bind(groups)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(ids.into_iter().collect())
+    }
+
     /// How many endpoints the caller can see that are still unmonitored — the Discovery tab's count
     /// (ADR-179 決定 8). The same scope predicate as [`Self::list_page`], so the number and the list
     /// cannot disagree about what the caller may see.
@@ -1415,6 +1445,39 @@ mod tests {
             e.name.as_deref(),
             Some("sw-09"),
             "LLDP's name outranks a syslog hostname"
+        );
+    }
+
+    #[test]
+    fn hidden_observers_lose_their_evidence_and_a_senders_own_stays() {
+        let seen = |n: u128, source| EndpointEvidence {
+            source,
+            via_node: Some(node(n).as_uuid()),
+            via_ifindex: Some(7),
+            port: Some("Gi1/0/7".into()),
+            detail: Some("C9300-48P".into()),
+        };
+        let sender = EndpointEvidence {
+            source: EndpointSource::Syslog,
+            via_node: None,
+            via_ifindex: None,
+            port: None,
+            detail: Some("host-a".into()),
+        };
+        let mut evidence = vec![
+            seen(1, EndpointSource::Arp),
+            seen(2, EndpointSource::Lldp),
+            sender.clone(),
+        ];
+        let visible: BTreeSet<Uuid> = [node(1).as_uuid()].into_iter().collect();
+        drop_hidden_evidence(&mut evidence, &visible);
+        assert_eq!(evidence, vec![seen(1, EndpointSource::Arp), sender]);
+
+        let mut none_visible = vec![seen(2, EndpointSource::Lldp)];
+        drop_hidden_evidence(&mut none_visible, &BTreeSet::new());
+        assert!(
+            none_visible.is_empty(),
+            "nothing about a hidden observer is kept"
         );
     }
 

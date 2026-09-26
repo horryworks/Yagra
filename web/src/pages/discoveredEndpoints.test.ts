@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   coverageOf,
+  detectLineOf,
   detectPhase,
   detectResultOf,
   detectedDevice,
@@ -9,6 +10,8 @@ import {
   importName,
   importNameAfterDetect,
   isUnmonitored,
+  pollDetect,
+  MAX_DETECT_READS,
   sourcesOf,
   DISCOVERY_TABS,
   ENDPOINT_COVERAGE,
@@ -214,5 +217,126 @@ describe('detectPhase', () => {
   it('turns both kinds of no-answer into picking by hand', () => {
     expect(detectPhase({ kind: 'silent' })).toBe('manual');
     expect(detectPhase({ kind: 'lost' })).toBe('manual');
+  });
+});
+
+describe('pollDetect', () => {
+  const found = { kind: 'found', profileId: 'p1', credentialId: 'c1' } as const;
+  const wait = () => Promise.resolve();
+
+  it('keeps reading until the scan answers, and returns that answer', async () => {
+    const answers = [null, null, found];
+    let reads = 0;
+    const r = await pollDetect({
+      read: async () => answers[reads++],
+      wait,
+      alive: () => true,
+      maxFailures: 5,
+    });
+    expect(r).toEqual(found);
+    expect(reads).toBe(3);
+  });
+
+  it('gives up as lost after the read budget, one read per wait', async () => {
+    let reads = 0;
+    let waits = 0;
+    const r = await pollDetect({
+      read: async () => {
+        reads += 1;
+        return null;
+      },
+      wait: async () => {
+        waits += 1;
+      },
+      alive: () => true,
+      maxReads: 4,
+      maxFailures: 5,
+    });
+    expect(r).toEqual({ kind: 'lost' });
+    expect(reads).toBe(4);
+    expect(waits).toBe(4);
+  });
+
+  it('stops as lost after that many failed reads in a row', async () => {
+    let reads = 0;
+    const r = await pollDetect({
+      read: async () => {
+        reads += 1;
+        throw new Error('502');
+      },
+      wait,
+      alive: () => true,
+      maxFailures: 3,
+    });
+    expect(r).toEqual({ kind: 'lost' });
+    expect(reads).toBe(3);
+  });
+
+  it('forgives a failure once a read succeeds', async () => {
+    // fail, fail, ok, fail, fail, answer: never three in a row, so it reaches the answer.
+    const script: Array<'fail' | null | typeof found> = ['fail', 'fail', null, 'fail', 'fail', found];
+    let reads = 0;
+    const r = await pollDetect({
+      read: async () => {
+        const s = script[reads++];
+        if (s === 'fail') throw new Error('timeout');
+        return s;
+      },
+      wait,
+      alive: () => true,
+      maxFailures: 3,
+    });
+    expect(r).toEqual(found);
+    expect(reads).toBe(6);
+  });
+
+  it('writes nothing — not even lost — once the surface has gone', async () => {
+    let alive = true;
+    let reads = 0;
+    const r = await pollDetect({
+      read: async () => {
+        reads += 1;
+        return null;
+      },
+      wait: async () => {
+        if (reads === 2) alive = false;
+      },
+      alive: () => alive,
+      maxFailures: 5,
+    });
+    expect(r).toBeNull();
+    expect(reads).toBe(2);
+  });
+
+  it('is bounded by default', () => {
+    expect(MAX_DETECT_READS).toBeGreaterThan(0);
+    expect(Number.isFinite(MAX_DETECT_READS)).toBe(true);
+  });
+});
+
+describe('detectLineOf', () => {
+  const creds = [{ id: 'c1', name: 'core-v3' }];
+
+  it('says nothing before an answer', () => {
+    expect(detectLineOf(undefined, creds)).toBeNull();
+    expect(detectLineOf('running', creds)).toBeNull();
+  });
+
+  it('names silent and lost by their own sentence', () => {
+    expect(detectLineOf({ kind: 'silent' }, creds)).toEqual({ key: 'discovery.seen.detect.silent' });
+    expect(detectLineOf({ kind: 'lost' }, creds)).toEqual({ key: 'discovery.seen.detect.lost' });
+  });
+
+  it('names the device and the credential by its name when found', () => {
+    expect(
+      detectLineOf({ kind: 'found', profileId: 'p', credentialId: 'c1', vendor: 'Cisco', model: 'C9300' }, creds),
+    ).toEqual({ key: 'discovery.seen.detect.found', values: { device: 'Cisco C9300', credential: 'core-v3' } });
+  });
+
+  it('falls back to the bare sentence, and to the id for a credential no longer listed', () => {
+    expect(detectLineOf({ kind: 'found', profileId: 'p', credentialId: 'gone' }, creds)).toEqual({
+      key: 'discovery.seen.detect.foundBare',
+      values: { credential: 'gone' },
+    });
   });
 });

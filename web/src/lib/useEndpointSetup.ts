@@ -5,17 +5,19 @@
 //
 // A hook, not a component: each surface lays the cell out itself (a grid track on one, an opened
 // row on the other). The judgement it calls — what a scan answered, what fills the dropdowns, what
-// name to import under — lives in `pages/discoveredEndpoints.ts`, where Vitest reaches it.
+// name to import under, how long a Detect polls, what sentence it ends in — lives in
+// `pages/discoveredEndpoints.ts`, where Vitest reaches it.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import type { CredentialSummary, ProfileSummary } from '../types/api';
 import {
-  detectedDevice,
   detectedSelection,
+  detectLineOf,
   detectResultOf,
   importNameAfterDetect,
+  pollDetect,
   type DetectResult,
 } from '../pages/discoveredEndpoints';
 import { MAX_POLL_FAILURES, POLL_INTERVAL_MS } from '../pages/discoveryScans';
@@ -35,11 +37,6 @@ export interface SetupSelection {
 }
 
 const EMPTY: SetupSelection = { profile_id: '', credential_id: '' };
-
-/** How many reads one Detect may take before it reads as lost. Bounded: a probe no poller ever
- *  takes (a pool whose pollers are all gone) must not spin forever. At the 2 s spacing this is five
- *  minutes, which covers a long credential list at the sweep's own pacing. */
-const MAX_DETECT_READS = 150;
 
 export interface EndpointSetup {
   selection: (id: string) => SetupSelection;
@@ -109,20 +106,13 @@ export function useEndpointSetup({
     };
     try {
       const { scan_id } = await api.probeDiscoveredEndpoint(target.id, probeCredIds);
-      let failures = 0;
-      for (let i = 0; i < MAX_DETECT_READS && alive.current; i++) {
-        await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
-        if (!alive.current) return;
-        try {
-          const r = detectResultOf(await api.getDiscoveryScan(scan_id), target.ip);
-          failures = 0;
-          if (r) return finish(r);
-        } catch {
-          failures += 1;
-          if (failures >= MAX_POLL_FAILURES) break;
-        }
-      }
-      finish({ kind: 'lost' });
+      const r = await pollDetect({
+        read: async () => detectResultOf(await api.getDiscoveryScan(scan_id), target.ip),
+        wait: () => new Promise((res) => setTimeout(res, POLL_INTERVAL_MS)),
+        alive: () => alive.current,
+        maxFailures: MAX_POLL_FAILURES,
+      });
+      if (r) finish(r);
     } catch (err: unknown) {
       if (!alive.current) return;
       setDetect((cur) => {
@@ -135,15 +125,9 @@ export function useEndpointSetup({
   };
 
   const detectLine = (id: string): string | null => {
-    const r = detect[id];
-    if (r === undefined || r === 'running') return null;
-    if (r.kind === 'silent') return t('discovery.seen.detect.silent');
-    if (r.kind === 'lost') return t('discovery.seen.detect.lost');
-    const credential = creds.find((c) => c.id === r.credentialId)?.name ?? r.credentialId;
-    const device = detectedDevice(r);
-    return device
-      ? t('discovery.seen.detect.found', { device, credential })
-      : t('discovery.seen.detect.foundBare', { credential });
+    const line = detectLineOf(detect[id], creds);
+    if (!line) return null;
+    return 'values' in line ? t(line.key, line.values) : t(line.key);
   };
 
   const monitor = async (target: SetupTarget): Promise<boolean> => {

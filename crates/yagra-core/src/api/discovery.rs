@@ -1043,7 +1043,9 @@ pub(crate) struct DiscoveredEndpointRow {
     pub ip: String,
     /// Its hardware address, lowercase colon-separated hex; `null` for an incomplete ARP entry.
     pub mac: Option<String>,
-    /// Which monitored node resolved it; `null` once that node has been deleted.
+    /// The row's one representative observer: the lowest-id monitored node among its evidence
+    /// (every observer is listed in `evidence`). `null` when no monitored node saw it — a
+    /// syslog/trap sender only — or once that node has been deleted.
     pub via_node: Option<Uuid>,
     /// The SNMP ifIndex it was resolved on — the port it is behind.
     pub via_ifindex: Option<u32>,
@@ -1103,7 +1105,8 @@ pub(crate) struct DiscoveredEndpointPage {
 pub(super) struct EndpointsQuery {
     #[serde(default)]
     limit: Option<i64>,
-    /// Only endpoints seen by this node.
+    /// Only rows whose representative observer (`via_node`, the lowest-id observing node) is
+    /// this node. A row this node also saw, but a lower-id node saw too, is not returned.
     #[serde(default)]
     via_node: Option<Uuid>,
     /// Include endpoints that have since become monitored nodes. Default `false`.
@@ -1200,7 +1203,7 @@ pub(crate) async fn discovered_endpoint_page(
     let limit = limit
         .unwrap_or(ENDPOINT_DEFAULT_LIMIT)
         .clamp(1, ENDPOINT_MAX_LIMIT);
-    let rows = admin
+    let mut rows = admin
         .discovered
         .list_page(
             scope.group_filter(),
@@ -1217,6 +1220,30 @@ pub(crate) async fn discovered_endpoint_page(
                 "failed to list discovered endpoints",
             )
         })?;
+    // The row is visible through its lowest observer; the evidence names every observer, and a
+    // scoped caller must not read the ones outside its folders (ADR-179 増分 4, ADR-014).
+    if let Some(groups) = scope.group_filter() {
+        let observers: Vec<Uuid> = rows
+            .iter()
+            .flat_map(|r| r.evidence.iter().filter_map(|e| e.via_node))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let visible = admin
+            .discovered
+            .visible_observers(&observers, groups)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "resolve discovered endpoint observers",
+                    "failed to list discovered endpoints",
+                )
+            })?;
+        for r in &mut rows {
+            crate::arp::drop_hidden_evidence(&mut r.evidence, &visible);
+        }
+    }
     // A cursor only when the page came back full — a short page is the end of the list, and handing
     // one back there makes a client fetch an empty page to discover that.
     let next = rows
@@ -2699,6 +2726,77 @@ mod tests {
         let (status, body) =
             send(&st, "POST", &path, &admin_tok, Some(serde_json::json!({}))).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    }
+
+    /// A folder-scoped caller sees a row through its lowest observer, and must not read the other
+    /// observers' evidence when they sit outside its folders (ADR-179 増分 4, ADR-014).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_reads_no_evidence_from_a_node_it_cannot_see(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let near = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let far = crate::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
+        let evidence = serde_json::json!([
+            { "source": "arp", "via_node": near, "via_ifindex": 3 },
+            { "source": "lldp", "via_node": far, "via_ifindex": 12, "port": "Gi1/0/12", "detail": "C9300-48P" },
+            { "source": "syslog", "detail": "host-a" }
+        ]);
+        sqlx::query(
+            "INSERT INTO l3_discovered (ip, via_node, evidence) VALUES ('192.0.2.44', $1, $2)",
+        )
+        .bind(near)
+        .bind(&evidence)
+        .execute(&pool)
+        .await
+        .expect("endpoint");
+
+        let observers = |body: &serde_json::Value| -> Vec<(String, Option<String>)> {
+            body["endpoints"][0]["evidence"]
+                .as_array()
+                .expect("evidence")
+                .iter()
+                .map(|e| {
+                    (
+                        e["source"].as_str().unwrap_or_default().to_owned(),
+                        e["via_node"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect()
+        };
+        let path = "/api/v1/discovered-endpoints";
+
+        let (status, body) = send(&st, "GET", path, &scoped_token(&st, &[mine]), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            observers(&body),
+            vec![
+                ("arp".to_owned(), Some(near.to_string())),
+                ("syslog".to_owned(), None)
+            ],
+            "the other folder's LLDP observation is gone, the sender's own evidence stays: {body}"
+        );
+        assert!(
+            !body.to_string().contains("Gi1/0/12"),
+            "nothing of the hidden observation survives anywhere in the page: {body}"
+        );
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            path,
+            &token(&st, yagra_common::Role::Admin),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            observers(&body).len(),
+            3,
+            "an unrestricted caller still reads every observer: {body}"
+        );
     }
 
     /// What a probe classified travels with the import (ADR-179 増分 2), so the node carries its

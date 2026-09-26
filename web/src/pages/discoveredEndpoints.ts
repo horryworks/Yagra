@@ -171,3 +171,61 @@ export function detectPhase(d: 'running' | DetectResult | undefined): DetectPhas
   if (d === 'running') return 'running';
   return d.kind === 'found' ? 'found' : 'manual';
 }
+
+/** How many reads one Detect may take before it reads as lost. Bounded: a probe no poller ever
+ *  takes (a pool whose pollers are all gone) must not spin forever. At the 2 s spacing this is five
+ *  minutes, which covers a long credential list at the sweep's own pacing. */
+export const MAX_DETECT_READS = 150;
+
+/** The read loop behind one Detect: one read outstanding at a time, a successful read resets the
+ *  failure count, `maxFailures` failures in a row stop it, and `maxReads` reads without an answer
+ *  read as `lost`. Resolves `null` when the surface went away (`alive()` false) — nothing is to be
+ *  written then, not even `lost`. */
+export async function pollDetect({
+  read,
+  wait,
+  alive,
+  maxReads = MAX_DETECT_READS,
+  maxFailures,
+}: {
+  read: () => Promise<DetectResult | null>;
+  wait: () => Promise<void>;
+  alive: () => boolean;
+  maxReads?: number;
+  maxFailures: number;
+}): Promise<DetectResult | null> {
+  let failures = 0;
+  for (let i = 0; i < maxReads && alive(); i++) {
+    await wait();
+    if (!alive()) return null;
+    try {
+      const r = await read();
+      failures = 0;
+      if (r) return r;
+    } catch {
+      failures += 1;
+      if (failures >= maxFailures) break;
+    }
+  }
+  return alive() ? { kind: 'lost' } : null;
+}
+
+/** The sentence over the dropdowns once a Detect has answered, as a locale key and its values —
+ *  `null` before an answer. A credential the list no longer offers is named by its id. */
+export function detectLineOf(
+  d: 'running' | DetectResult | undefined,
+  creds: readonly { id: string; name: string }[],
+):
+  | { key: 'discovery.seen.detect.silent' | 'discovery.seen.detect.lost' }
+  | { key: 'discovery.seen.detect.found'; values: { device: string; credential: string } }
+  | { key: 'discovery.seen.detect.foundBare'; values: { credential: string } }
+  | null {
+  if (d === undefined || d === 'running') return null;
+  if (d.kind === 'silent') return { key: 'discovery.seen.detect.silent' };
+  if (d.kind === 'lost') return { key: 'discovery.seen.detect.lost' };
+  const credential = creds.find((c) => c.id === d.credentialId)?.name ?? d.credentialId;
+  const device = detectedDevice(d);
+  return device
+    ? { key: 'discovery.seen.detect.found', values: { device, credential } }
+    : { key: 'discovery.seen.detect.foundBare', values: { credential } };
+}
