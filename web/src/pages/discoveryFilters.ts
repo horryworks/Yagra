@@ -16,7 +16,7 @@ import {
   type ColumnFilterSpec,
   type FilterableColumn,
 } from '../lib/columnFilter';
-import { isUnmonitored } from './discoveredEndpoints';
+import { isUnmonitored, sourcesOf } from './discoveredEndpoints';
 import type { DiscoveredEndpoint, DiscoveryCandidate } from '../types/api';
 import type { TFunction } from 'i18next';
 
@@ -98,7 +98,7 @@ export const ENDPOINT_MONITORED = ['unmonitored', 'monitored'] as const;
 export const ENDPOINT_DEFAULT_MONITORED = 'unmonitored';
 
 /** URL-key prefixes for the page's two tables (ADR-153 決定 3). Both live on `/nodes/discovery`
- *  beside the page's own `?scan=` and `?group=`, and the route ledger in
+ *  beside the page's own `?scan=`, `?group=` and `?tab=`, and the route ledger in
  *  `filterSpecRegistry.test.ts` checks the four are disjoint. */
 export const CANDIDATE_FILTER_PREFIX = 'candidates.';
 export const ENDPOINT_FILTER_PREFIX = 'endpoints.';
@@ -117,7 +117,8 @@ export function endpointFilters(
       kind: 'text',
       modes: TEXT_MODES,
       not: true,
-      readText: (e) => [e.ip],
+      // The name sits under the address in the same cell, so a term on screen finds its row.
+      readText: (e) => [e.ip, e.name],
       containsSemantics: 'substring',
       placeholder: t('discovery.seen.cols.address'),
     },
@@ -133,7 +134,12 @@ export function endpointFilters(
       kind: 'text',
       modes: TEXT_MODES,
       not: true,
-      readText: (e) => [e.via_node],
+      // What the cell shows: the sources' labels, and each observer's port and what it said.
+      readText: (e) => [
+        e.via_node,
+        ...sourcesOf(e).map((s) => t(`discovery.seen.source.${s}`)),
+        ...e.evidence.flatMap((ev) => [ev.port, ev.detail]),
+      ],
       containsSemantics: 'substring',
       placeholder: t('discovery.seen.cols.seenBy'),
     },

@@ -121,9 +121,16 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     // `nodes` only to ask which node a queued event names still exists, after the batch INSERT fails
     // on a foreign key (ADR-141). It reads no inventory: one `SELECT id … WHERE id = ANY` on the
     // failure path.
+    // `event_senders`: the senders no node claimed, which the discovery sweep reads (ADR-179).
     (
         "repo.rs",
-        &["events", "event_rules", "event_sources", "nodes"],
+        &[
+            "events",
+            "event_rules",
+            "event_sources",
+            "event_senders",
+            "nodes",
+        ],
     ),
     // A stored rule becomes a matcher. Reading the rules is `repo.rs`'s job.
     ("rules.rs", &[]),

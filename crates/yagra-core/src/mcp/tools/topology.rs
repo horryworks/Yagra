@@ -154,16 +154,22 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "IP addresses seen on the network that Yagra does **not** monitor, derived \
-                       from the ARP\\IPv6-neighbour caches of the routers it does. Use this to \
-                       answer \"what is on this segment that we are not watching\". Each row names \
-                       the address, its MAC where known, and which monitored node saw it on which \
-                       ifIndex — so `via_node` plus `via_ifindex` is the port the host is behind. \
+        description = "IP addresses seen on the network that Yagra does **not** monitor, from what \
+                       the devices it does monitor report: ARP\\IPv6-neighbour caches, LLDP/CDP \
+                       neighbours advertising a management address (phones and end stations left \
+                       out), OSPF neighbours and BGP peers — plus syslog/trap senders no node \
+                       claimed. Use this to answer \"what is out there that we are not watching\". \
+                       Each row names the address, a `name` when a neighbour or a syslog header gave \
+                       one, its MAC where ARP knows it, and `evidence`: every source that saw it, \
+                       with the observing node, its ifIndex and port name. `via_node` plus \
+                       `via_ifindex` is the lowest observer and the port the host is behind. \
                        `limit` is 1–500 (default 100); page with `before_last_seen` (RFC 3339) and \
-                       `before_id` from `next`, both together or neither. Filter to one router with \
-                       `via_node`. Empty when ARP discovery is switched off, which is the default. \
-                       ⚠️ Check `summary.truncated_nodes`: above zero, at least one router's cache \
-                       exceeded its row budget and this list is a sample, not the whole segment. \
+                       `before_id` from `next`, both together or neither. Filter to one observer \
+                       with `via_node`. `summary.unmonitored_total` counts every unmonitored row \
+                       you can see. A sender behind NAT shows the translator's address. \
+                       ⚠️ Check `summary.truncated_nodes`: above zero, at least one router's ARP \
+                       cache exceeded its row budget and the ARP half is a sample. ARP discovery is \
+                       off by default; the other sources are not. \
                        These endpoints are deliberately not topology vertices — they have no \
                        monitored state — so get_topology will not show them."
     )]

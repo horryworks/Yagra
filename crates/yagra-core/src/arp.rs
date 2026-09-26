@@ -31,7 +31,10 @@ use sqlx::{PgPool, Row};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{ArpSummary, NodeId};
+use yagra_common::{
+    ArpSummary, NeighborCapability, NeighborProto, NeighborSet, NodeId, RoutingProto,
+    RoutingSnapshot,
+};
 
 /// Default cadence for the ARP walk: six hours.
 ///
@@ -59,15 +62,162 @@ pub const DISCOVERED_RETENTION_SECS: i64 = 7 * 86_400;
 /// How often the endpoint sweep runs when there is anything to sweep.
 pub const ENDPOINT_SWEEP_INTERVAL_SECS: u64 = 300;
 
+/// How many pieces of evidence one endpoint keeps (ADR-179 決定 5).
+///
+/// Enough to show every source and a couple of observers for each; a host every router on a campus
+/// has in its ARP cache would otherwise carry dozens of identical "ARP on …" lines.
+pub const MAX_EVIDENCE_PER_ENDPOINT: usize = 8;
+
+/// The longest name or evidence text kept from a device (the `name` column's CHECK).
+const MAX_DEVICE_TEXT: usize = 255;
+
+/// Where an unmonitored endpoint was seen (ADR-179).
+///
+/// The declaration order is the order evidence is listed in, so `Ord` is derived from it on
+/// purpose: ARP first because it is what this list always showed, then what a device says about its
+/// neighbour, then routing, then what reached Yagra on its own.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointSource {
+    /// A monitored router's ARP or IPv6 neighbour cache.
+    Arp,
+    /// A monitored device's LLDP neighbour, by its advertised management address.
+    Lldp,
+    /// A monitored device's CDP neighbour, by its advertised address.
+    Cdp,
+    /// An OSPF neighbour of a monitored router.
+    Ospf,
+    /// A BGP peer of a monitored router.
+    Bgp,
+    /// It sent syslog to Yagra and no node claimed it.
+    Syslog,
+    /// It sent an SNMP trap to Yagra and no node claimed it.
+    Trap,
+}
+
+// Test-only: the production path serializes through serde, and this is what the token test compares
+// it against.
+#[cfg(test)]
+impl EndpointSource {
+    /// Every source, in listing order.
+    pub const ALL: [EndpointSource; 7] = [
+        EndpointSource::Arp,
+        EndpointSource::Lldp,
+        EndpointSource::Cdp,
+        EndpointSource::Ospf,
+        EndpointSource::Bgp,
+        EndpointSource::Syslog,
+        EndpointSource::Trap,
+    ];
+
+    /// The stable token — the serde tag, stored inside `l3_discovered.evidence`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            EndpointSource::Arp => "arp",
+            EndpointSource::Lldp => "lldp",
+            EndpointSource::Cdp => "cdp",
+            EndpointSource::Ospf => "ospf",
+            EndpointSource::Bgp => "bgp",
+            EndpointSource::Syslog => "syslog",
+            EndpointSource::Trap => "trap",
+        }
+    }
+}
+
+/// One observation that made an address a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct EndpointEvidence {
+    /// What saw it.
+    pub source: EndpointSource,
+    /// The monitored node that reported it; `null` for a syslog or trap sender, which reported
+    /// itself.
+    #[serde(default)]
+    pub via_node: Option<Uuid>,
+    /// The reporting node's ifIndex, when the source names one.
+    #[serde(default)]
+    pub via_ifindex: Option<u32>,
+    /// The reporting node's own port name, as its LLDP/CDP table names it.
+    #[serde(default)]
+    pub port: Option<String>,
+    /// What the source said about the endpoint: its platform or system description (LLDP/CDP), or
+    /// the hostname it put in its syslog messages. Device-supplied text.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// The two passive-event kinds that carry a sender address worth discovering (ADR-179 決定 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SenderKind {
+    Syslog,
+    Trap,
+}
+
+impl SenderKind {
+    /// The stable token stored in `event_senders.kind`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            SenderKind::Syslog => "syslog",
+            SenderKind::Trap => "trap",
+        }
+    }
+
+    /// Parse a stored token back.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s {
+            "syslog" => Some(SenderKind::Syslog),
+            "trap" => Some(SenderKind::Trap),
+            _ => None,
+        }
+    }
+
+    /// The evidence source a sender of this kind becomes.
+    #[must_use]
+    pub const fn source(self) -> EndpointSource {
+        match self {
+            SenderKind::Syslog => EndpointSource::Syslog,
+            SenderKind::Trap => EndpointSource::Trap,
+        }
+    }
+}
+
+/// A passive-event sender no node claimed, as `event_senders` holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderObservation {
+    pub ip: IpAddr,
+    pub kind: SenderKind,
+    pub hostname: Option<String>,
+}
+
 /// One endpoint the fleet has seen but does not monitor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredEndpoint {
     pub id: Uuid,
     pub ip: IpAddr,
     pub mac: Option<String>,
-    /// Which monitored node resolved it; `None` once that node has been deleted.
+    /// Which monitored node resolved it; `None` once that node has been deleted, and for an
+    /// endpoint only a syslog or trap sender vouches for.
     pub via_node: Option<NodeId>,
     pub via_ifindex: Option<u32>,
+    /// The best name any source gave it.
+    pub name: Option<String>,
+    /// Where it was seen. Never empty on a row read back: a row written before evidence existed
+    /// reads as the one ARP observation it was.
+    pub evidence: Vec<EndpointEvidence>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     /// Set once the address became an inventory node — imported from here or added by hand.
@@ -79,53 +229,275 @@ pub struct DiscoveredEndpoint {
 pub struct EndpointObservation {
     pub ip: IpAddr,
     pub mac: Option<String>,
-    pub via_node: NodeId,
-    pub via_ifindex: u32,
+    pub via_node: Option<NodeId>,
+    pub via_ifindex: Option<u32>,
+    pub name: Option<String>,
+    pub evidence: Vec<EndpointEvidence>,
 }
 
-/// Every endpoint the fleet observed that is **not** already an inventory address.
-///
-/// Pure: summaries and the known-address set in, findings out. No clock, no database.
-///
-/// `known` must carry both `nodes.address` **and** every address in `node_l3`. Using only the node
-/// addresses looks equivalent and is not: a router monitored on its management address answers ARP
-/// for its LAN interface too, so its own `192.168.1.1` would be reported as an unmonitored endpoint
-/// on every segment it terminates. That is the false positive that would make the list unreadable
-/// on day one, and it is why this takes a set rather than a node list.
-///
-/// When several nodes see the same endpoint the lowest node id wins, so the attribution does not
-/// flip between sweeps as the map's redundancy shifts — a row whose `via_node` changed every five
-/// minutes would look like the endpoint was moving.
+/// Everything the sweep reads, fleet-wide (ADR-179 決定 2).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Signals<'a> {
+    pub arp: &'a [(NodeId, ArpSummary)],
+    pub neighbors: &'a [(NodeId, NeighborSet)],
+    pub routing: &'a [(NodeId, RoutingSnapshot)],
+    pub senders: &'a [SenderObservation],
+}
+
+#[cfg(test)]
+/// Every endpoint the fleet observed through ARP alone that is **not** already an inventory
+/// address — [`candidates`] with the other three signals empty.
 #[must_use]
 pub fn unmonitored(
     summaries: &[(NodeId, ArpSummary)],
     known: &BTreeSet<IpAddr>,
 ) -> Vec<EndpointObservation> {
-    let mut by_ip: BTreeMap<IpAddr, EndpointObservation> = BTreeMap::new();
-    for (node, summary) in summaries {
-        for entry in &summary.entries {
-            if known.contains(&entry.ip) {
-                continue;
-            }
-            let candidate = EndpointObservation {
-                ip: entry.ip,
-                mac: entry.mac.clone(),
-                via_node: *node,
-                via_ifindex: entry.ifindex,
-            };
-            by_ip
-                .entry(entry.ip)
-                .and_modify(|held| {
-                    if candidate.via_node.as_uuid() < held.via_node.as_uuid() {
-                        *held = candidate.clone();
-                    }
-                })
-                .or_insert(candidate);
+    candidates(
+        &Signals {
+            arp: summaries,
+            ..Signals::default()
+        },
+        known,
+    )
+}
+
+/// Whether an address can name a device of its own. `0.0.0.0` is what an agent reports for a
+/// neighbour it has not resolved, and every device's loopback would match every other's.
+fn identifies_a_device(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !v4.is_unspecified()
+                && !v4.is_loopback()
+                && !v4.is_link_local()
+                && !v4.is_multicast()
+                && !v4.is_broadcast()
+        }
+        IpAddr::V6(v6) => {
+            !v6.is_unspecified()
+                && !v6.is_loopback()
+                && !v6.is_multicast()
+                && (v6.segments()[0] & 0xffc0) != 0xfe80
         }
     }
+}
+
+/// Whether a neighbour capability describes an end station rather than network equipment.
+fn is_end_station(c: NeighborCapability) -> bool {
+    match c {
+        NeighborCapability::Phone | NeighborCapability::Host => true,
+        NeighborCapability::Router
+        | NeighborCapability::Bridge
+        | NeighborCapability::Switch
+        | NeighborCapability::WlanAp
+        | NeighborCapability::Repeater
+        | NeighborCapability::CableDevice
+        | NeighborCapability::Igmp
+        | NeighborCapability::Other => false,
+    }
+}
+
+/// Device text trimmed, bounded, and dropped when empty.
+fn device_text(s: Option<&str>) -> Option<String> {
+    let t = s?.trim();
+    if t.is_empty() {
+        return None;
+    }
+    Some(t.chars().take(MAX_DEVICE_TEXT).collect())
+}
+
+/// One address while the sweep is still gathering what it knows about it.
+#[derive(Default)]
+struct Gathered {
+    /// `(observer, MAC)` from every ARP sighting — the lowest observer's wins.
+    macs: Vec<(Uuid, String)>,
+    /// `(rank, observer, name)` — lower rank wins, then the lower observer.
+    names: Vec<(u8, Option<Uuid>, String)>,
+    evidence: Vec<EndpointEvidence>,
+}
+
+/// Every endpoint any signal names that is **not** already an inventory address (ADR-179).
+///
+/// Pure: observations and the known-address set in, findings out. No clock, no database.
+///
+/// `known` must carry both `nodes.address` **and** every address in `node_l3`. Using only the node
+/// addresses looks equivalent and is not: a router monitored on its management address answers ARP
+/// for its LAN interface too, so its own `192.168.1.1` would be reported as an unmonitored endpoint
+/// on every segment it terminates. That is the false positive that would make the list unreadable
+/// on day one, and it is why this takes a set rather than a node list. The same set is what drops an
+/// LLDP management address or a syslog sender that is some monitored device's *other* interface.
+///
+/// The row's `via_node` is the lowest observing node id across all its evidence, so the attribution
+/// does not flip between sweeps as the map's redundancy shifts — a row whose `via_node` changed every
+/// five minutes would look like the endpoint was moving. Evidence is ordered by source, then
+/// observer, and capped at [`MAX_EVIDENCE_PER_ENDPOINT`].
+///
+/// What each signal contributes, and what it does not:
+/// * **LLDP/CDP** — only a neighbour that advertised a management address (the table is keyed by
+///   address), and never one whose capabilities are all end-station ones: the phones behind an
+///   access switch would bury everything else. A neighbour that advertises no capabilities is kept.
+/// * **Routing** — OSPF neighbours and BGP peers. The connected-route probe is not discovery: core
+///   chose the addresses it asks about.
+/// * **Senders** — syslog/trap sources no node claimed. Behind NAT that address is the translator's,
+///   which is why this is evidence for a person to weigh and never an automatic import.
+#[must_use]
+pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<EndpointObservation> {
+    fn admit<'m>(
+        by_ip: &'m mut BTreeMap<IpAddr, Gathered>,
+        known: &BTreeSet<IpAddr>,
+        ip: IpAddr,
+    ) -> Option<&'m mut Gathered> {
+        if known.contains(&ip) || !identifies_a_device(ip) {
+            return None;
+        }
+        Some(by_ip.entry(ip).or_default())
+    }
+    let mut by_ip: BTreeMap<IpAddr, Gathered> = BTreeMap::new();
+
+    for (node, summary) in signals.arp {
+        for entry in &summary.entries {
+            let Some(g) = admit(&mut by_ip, known, entry.ip) else {
+                continue;
+            };
+            if let Some(mac) = &entry.mac {
+                g.macs.push((node.as_uuid(), mac.clone()));
+            }
+            g.evidence.push(EndpointEvidence {
+                source: EndpointSource::Arp,
+                via_node: Some(node.as_uuid()),
+                via_ifindex: Some(entry.ifindex),
+                port: None,
+                detail: None,
+            });
+        }
+    }
+
+    for (node, set) in signals.neighbors {
+        for nb in &set.neighbors {
+            if !nb.capabilities.is_empty() && nb.capabilities.iter().all(|c| is_end_station(*c)) {
+                continue;
+            }
+            let Some(ip) = nb
+                .remote_mgmt_addr
+                .as_deref()
+                .and_then(|a| a.trim().parse::<IpAddr>().ok())
+            else {
+                continue;
+            };
+            let Some(g) = admit(&mut by_ip, known, ip) else {
+                continue;
+            };
+            let (source, name, rank) = match nb.proto {
+                NeighborProto::Lldp => (
+                    EndpointSource::Lldp,
+                    device_text(nb.remote_sys_name.as_deref()),
+                    0,
+                ),
+                // CDP has no separate system name: its device id is the name.
+                NeighborProto::Cdp => (
+                    EndpointSource::Cdp,
+                    device_text(nb.remote_sys_name.as_deref())
+                        .or_else(|| device_text(Some(&nb.remote_chassis))),
+                    1,
+                ),
+            };
+            if let Some(name) = name {
+                g.names.push((rank, Some(node.as_uuid()), name));
+            }
+            g.evidence.push(EndpointEvidence {
+                source,
+                via_node: Some(node.as_uuid()),
+                via_ifindex: nb.local_ifindex,
+                port: device_text(Some(&nb.local_port)),
+                detail: device_text(nb.remote_platform.as_deref()).or_else(|| {
+                    // The first line of a system description is the useful one; the rest is
+                    // copyright boilerplate on most platforms.
+                    device_text(nb.remote_sys_desc.as_deref().and_then(|d| d.lines().next()))
+                }),
+            });
+        }
+    }
+
+    for (node, snapshot) in signals.routing {
+        for adj in &snapshot.adjacencies {
+            let source = match adj.proto {
+                RoutingProto::Ospf => EndpointSource::Ospf,
+                RoutingProto::Bgp => EndpointSource::Bgp,
+                RoutingProto::Route => continue,
+            };
+            let Some(g) = admit(&mut by_ip, known, adj.peer) else {
+                continue;
+            };
+            g.evidence.push(EndpointEvidence {
+                source,
+                via_node: Some(node.as_uuid()),
+                via_ifindex: adj.local_ifindex,
+                port: None,
+                detail: None,
+            });
+        }
+    }
+
+    for sender in signals.senders {
+        let Some(g) = admit(&mut by_ip, known, sender.ip) else {
+            continue;
+        };
+        let hostname = device_text(sender.hostname.as_deref());
+        if let Some(h) = &hostname {
+            g.names.push((2, None, h.clone()));
+        }
+        g.evidence.push(EndpointEvidence {
+            source: sender.kind.source(),
+            via_node: None,
+            via_ifindex: None,
+            port: None,
+            detail: hostname,
+        });
+    }
+
     // Truncated after the map is built, so which endpoints survive does not depend on the order the
-    // summaries were read in. Ordered by address, which is also the order an operator scans.
-    by_ip.into_values().take(MAX_DISCOVERED_ENDPOINTS).collect()
+    // inputs were read in. Ordered by address, which is also the order an operator scans.
+    by_ip
+        .into_iter()
+        .take(MAX_DISCOVERED_ENDPOINTS)
+        .map(|(ip, mut g)| {
+            // `None` sorts after every observer, so a sender's line follows the nodes' lines of the
+            // same source — and there are none, since only senders lack an observer.
+            g.evidence.sort_by(|a, b| {
+                (
+                    a.source,
+                    a.via_node.is_none(),
+                    a.via_node,
+                    a.via_ifindex,
+                    &a.port,
+                )
+                    .cmp(&(
+                        b.source,
+                        b.via_node.is_none(),
+                        b.via_node,
+                        b.via_ifindex,
+                        &b.port,
+                    ))
+            });
+            g.evidence.dedup();
+            g.evidence.truncate(MAX_EVIDENCE_PER_ENDPOINT);
+            // The lowest observer across every source, and the port it saw the endpoint on.
+            let via = g
+                .evidence
+                .iter()
+                .filter_map(|e| e.via_node.map(|n| (n, e.via_ifindex)))
+                .min_by_key(|(n, _)| *n);
+            g.macs.sort();
+            g.names.sort_by_key(|n| (n.0, n.1.is_none(), n.1));
+            EndpointObservation {
+                ip,
+                mac: g.macs.into_iter().next().map(|(_, m)| m),
+                via_node: via.map(|(n, _)| NodeId(n)),
+                via_ifindex: via.and_then(|(_, i)| i),
+                name: g.names.into_iter().next().map(|(_, _, n)| n),
+                evidence: g.evidence,
+            }
+        })
+        .collect()
 }
 
 /// PostgreSQL-backed store for per-node ARP observations.
@@ -198,7 +570,7 @@ impl ArpRepo {
     /// check's `arp_mac` evidence (ADR-148).
     ///
     /// Read from these per-node summaries and **not** from `l3_discovered`: that table keeps only the
-    /// endpoints nobody monitors ([`unmonitored`] drops every known address), so the MAC behind a
+    /// endpoints nobody monitors ([`candidates`] drops every known address), so the MAC behind a
     /// monitored address is never in it. Each summary is a bounded sample, so an address that fell
     /// out of it is simply not reported.
     pub async fn macs_for(&self, addresses: &[String]) -> anyhow::Result<Vec<(IpAddr, String)>> {
@@ -311,26 +683,40 @@ impl DiscoveredRepo {
         }
         let ips: Vec<String> = rows.iter().map(|r| r.ip.to_string()).collect();
         let macs: Vec<Option<String>> = rows.iter().map(|r| r.mac.clone()).collect();
-        let vias: Vec<Uuid> = rows.iter().map(|r| r.via_node.as_uuid()).collect();
-        let ifs: Vec<i32> = rows
+        let vias: Vec<Option<Uuid>> = rows
             .iter()
-            .map(|r| i32::try_from(r.via_ifindex).unwrap_or(0))
+            .map(|r| r.via_node.map(|n| n.as_uuid()))
             .collect();
+        let ifs: Vec<Option<i32>> = rows
+            .iter()
+            .map(|r| r.via_ifindex.and_then(|i| i32::try_from(i).ok()))
+            .collect();
+        let names: Vec<Option<String>> = rows.iter().map(|r| r.name.clone()).collect();
+        // As JSON text and cast in SQL: one array of documents, bound like every other column.
+        let evidence: Vec<String> = rows
+            .iter()
+            .map(|r| serde_json::to_string(&r.evidence))
+            .collect::<Result<_, _>>()?;
         let res = sqlx::query(
-            "INSERT INTO l3_discovered (ip, mac, via_node, via_ifindex, first_seen, last_seen) \
-             SELECT u.ip::INET, u.mac, u.via, u.ifidx, now(), now() \
-             FROM UNNEST($1::TEXT[], $2::TEXT[], $3::UUID[], $4::INT[]) \
-                  AS u(ip, mac, via, ifidx) \
+            "INSERT INTO l3_discovered \
+                 (ip, mac, via_node, via_ifindex, name, evidence, first_seen, last_seen) \
+             SELECT u.ip::INET, u.mac, u.via, u.ifidx, u.name, u.ev::JSONB, now(), now() \
+             FROM UNNEST($1::TEXT[], $2::TEXT[], $3::UUID[], $4::INT[], $5::TEXT[], $6::TEXT[]) \
+                  AS u(ip, mac, via, ifidx, name, ev) \
              ON CONFLICT (ip) DO UPDATE SET \
                  mac = EXCLUDED.mac, \
                  via_node = EXCLUDED.via_node, \
                  via_ifindex = EXCLUDED.via_ifindex, \
+                 name = EXCLUDED.name, \
+                 evidence = EXCLUDED.evidence, \
                  last_seen = now()",
         )
         .bind(&ips)
         .bind(&macs)
         .bind(&vias)
         .bind(&ifs)
+        .bind(&names)
+        .bind(&evidence)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -411,8 +797,8 @@ impl DiscoveredRepo {
         // One statement with nullable bind parameters rather than four assembled shapes: the filters
         // are independent, and a builder would put caller-supplied values next to a format string.
         let rows = sqlx::query(
-            "SELECT d.id, host(d.ip) AS ip, d.mac, d.via_node, d.via_ifindex, \
-                    d.first_seen, d.last_seen, d.promoted_node_id \
+            "SELECT d.id, host(d.ip) AS ip, d.mac, d.via_node, d.via_ifindex, d.name, \
+                    d.evidence, d.first_seen, d.last_seen, d.promoted_node_id \
              FROM l3_discovered d \
              LEFT JOIN nodes n ON n.id = d.via_node \
              WHERE ($1::UUID[] IS NULL OR n.group_id = ANY($1)) \
@@ -430,67 +816,87 @@ impl DiscoveredRepo {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter()
-            .map(|row| {
-                let ip: String = row.try_get("ip")?;
-                Ok(DiscoveredEndpoint {
-                    id: row.try_get("id")?,
-                    // A row whose address will not parse should not fail the page; `0.0.0.0` is
-                    // visibly wrong rather than silently absent, and the column is INET so this is
-                    // unreachable short of a manual edit.
-                    //
-                    // 🚨 It was reachable on **every** row until the projection above became
-                    // `host(ip)`: `ip::TEXT` renders an `inet` with its masklen, which does not
-                    // parse, so the whole list read `0.0.0.0`. See `known_addresses`.
-                    ip: ip
-                        .parse()
-                        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
-                    mac: row.try_get("mac")?,
-                    via_node: row.try_get::<Option<Uuid>, _>("via_node")?.map(NodeId),
-                    via_ifindex: row
-                        .try_get::<Option<i32>, _>("via_ifindex")?
-                        .and_then(|v| u32::try_from(v).ok()),
-                    first_seen: row.try_get("first_seen")?,
-                    last_seen: row.try_get("last_seen")?,
-                    promoted_node_id: row
-                        .try_get::<Option<Uuid>, _>("promoted_node_id")?
-                        .map(NodeId),
-                })
-            })
-            .collect()
+        rows.iter().map(endpoint_from_row).collect()
+    }
+
+    /// How many endpoints the caller can see that are still unmonitored — the Discovery tab's count
+    /// (ADR-179 決定 8). The same scope predicate as [`Self::list_page`], so the number and the list
+    /// cannot disagree about what the caller may see.
+    pub async fn unmonitored_total(&self, groups: Option<&[Uuid]>) -> anyhow::Result<i64> {
+        let row = sqlx::query(
+            "SELECT count(*)::BIGINT AS n \
+             FROM l3_discovered d \
+             LEFT JOIN nodes n ON n.id = d.via_node \
+             WHERE ($1::UUID[] IS NULL OR n.group_id = ANY($1)) \
+               AND d.promoted_node_id IS NULL",
+        )
+        .bind(groups.map(<[Uuid]>::to_vec))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("n")?)
     }
 
     /// One endpoint by id — what the import handler reads before creating a node from it.
     pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<DiscoveredEndpoint>> {
         let row = sqlx::query(
-            "SELECT id, host(ip) AS ip, mac, via_node, via_ifindex, first_seen, last_seen, \
-                    promoted_node_id \
+            "SELECT id, host(ip) AS ip, mac, via_node, via_ifindex, name, evidence, \
+                    first_seen, last_seen, promoted_node_id \
              FROM l3_discovered WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let ip: String = row.try_get("ip")?;
-        Ok(Some(DiscoveredEndpoint {
-            id: row.try_get("id")?,
-            ip: ip
-                .parse()
-                .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
-            mac: row.try_get("mac")?,
-            via_node: row.try_get::<Option<Uuid>, _>("via_node")?.map(NodeId),
-            via_ifindex: row
-                .try_get::<Option<i32>, _>("via_ifindex")?
-                .and_then(|v| u32::try_from(v).ok()),
-            first_seen: row.try_get("first_seen")?,
-            last_seen: row.try_get("last_seen")?,
-            promoted_node_id: row
-                .try_get::<Option<Uuid>, _>("promoted_node_id")?
-                .map(NodeId),
-        }))
+        row.as_ref().map(endpoint_from_row).transpose()
     }
+}
+
+/// One `l3_discovered` row, as both readers project it.
+fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DiscoveredEndpoint> {
+    let ip: String = row.try_get("ip")?;
+    let via_node: Option<Uuid> = row.try_get("via_node")?;
+    let via_ifindex = row
+        .try_get::<Option<i32>, _>("via_ifindex")?
+        .and_then(|v| u32::try_from(v).ok());
+    // A document that will not parse reads as no evidence rather than failing the page: only the
+    // sweep writes the column, so such a row came from a newer core naming a source this one does
+    // not know — and the fallback below still says truthfully how rows were first found.
+    let mut evidence: Vec<EndpointEvidence> = row
+        .try_get::<Json<Vec<EndpointEvidence>>, _>("evidence")
+        .map(|j| j.0)
+        .unwrap_or_default();
+    if evidence.is_empty() {
+        // Written before ADR-179, or by an older core's sweep, which only ever read ARP.
+        evidence.push(EndpointEvidence {
+            source: EndpointSource::Arp,
+            via_node,
+            via_ifindex,
+            port: None,
+            detail: None,
+        });
+    }
+    Ok(DiscoveredEndpoint {
+        id: row.try_get("id")?,
+        // A row whose address will not parse should not fail the page; `0.0.0.0` is visibly wrong
+        // rather than silently absent, and the column is INET so this is unreachable short of a
+        // manual edit.
+        //
+        // 🚨 It was reachable on **every** row until the projection became `host(ip)`: `ip::TEXT`
+        // renders an `inet` with its masklen, which does not parse, so the whole list read
+        // `0.0.0.0`. See `known_addresses`.
+        ip: ip
+            .parse()
+            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+        mac: row.try_get("mac")?,
+        via_node: via_node.map(NodeId),
+        via_ifindex,
+        name: row.try_get("name")?,
+        evidence,
+        first_seen: row.try_get("first_seen")?,
+        last_seen: row.try_get("last_seen")?,
+        promoted_node_id: row
+            .try_get::<Option<Uuid>, _>("promoted_node_id")?
+            .map(NodeId),
+    })
 }
 
 #[cfg(test)]
@@ -542,7 +948,7 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].ip, ip("192.168.1.50"));
-        assert_eq!(found[0].via_ifindex, 8);
+        assert_eq!(found[0].via_ifindex, Some(8));
     }
 
     #[test]
@@ -575,8 +981,8 @@ mod tests {
         assert_eq!(found.len(), 1);
         // Lowest node id wins, so attribution does not flip between sweeps and make the endpoint
         // look like it is moving around the network.
-        assert_eq!(found[0].via_node, node(1));
-        assert_eq!(found[0].via_ifindex, 2);
+        assert_eq!(found[0].via_node, Some(node(1)));
+        assert_eq!(found[0].via_ifindex, Some(2));
     }
 
     #[test]
@@ -725,6 +1131,276 @@ mod tests {
         }
     }
 
+    // --- The other signals (ADR-179) ------------------------------------------------------------
+
+    fn lldp(
+        local_port: &str,
+        mgmt: Option<&str>,
+        sys_name: Option<&str>,
+    ) -> yagra_common::Neighbor {
+        let mut n = yagra_common::Neighbor::new(
+            NeighborProto::Lldp,
+            local_port,
+            "00:11:22:00:00:01",
+            "Gi1/0/48",
+        );
+        n.remote_mgmt_addr = mgmt.map(str::to_owned);
+        n.remote_sys_name = sys_name.map(str::to_owned);
+        n
+    }
+
+    fn neighbors(node_id: NodeId, list: Vec<yagra_common::Neighbor>) -> (NodeId, NeighborSet) {
+        (node_id, NeighborSet::new(list))
+    }
+
+    fn routing(node_id: NodeId, list: &[(RoutingProto, &str)]) -> (NodeId, RoutingSnapshot) {
+        (
+            node_id,
+            RoutingSnapshot::new(
+                list.iter()
+                    .map(|(p, a)| yagra_common::RoutingAdjacency::new(*p, ip(a)))
+                    .collect(),
+                false,
+            ),
+        )
+    }
+
+    #[test]
+    fn an_lldp_neighbour_with_a_management_address_is_a_candidate_with_its_name_and_port() {
+        let mut nb = lldp("Gi1/0/1", Some("192.0.2.20"), Some("sw-07"));
+        nb.remote_platform = Some("C9300-48P".to_owned());
+        let nbs = [neighbors(node(1), vec![nb])];
+        let found = candidates(
+            &Signals {
+                neighbors: &nbs,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found.len(), 1);
+        let e = &found[0];
+        assert_eq!(e.ip, ip("192.0.2.20"));
+        assert_eq!(e.name.as_deref(), Some("sw-07"));
+        assert_eq!(e.via_node, Some(node(1)));
+        assert_eq!(e.mac, None, "a MAC comes from ARP only");
+        assert_eq!(
+            e.evidence,
+            vec![EndpointEvidence {
+                source: EndpointSource::Lldp,
+                via_node: Some(node(1).as_uuid()),
+                via_ifindex: None,
+                port: Some("Gi1/0/1".to_owned()),
+                detail: Some("C9300-48P".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_neighbour_that_is_only_a_phone_or_a_host_is_not_a_candidate() {
+        let mut phone = lldp("Gi1/0/2", Some("192.0.2.31"), None);
+        phone.capabilities = vec![NeighborCapability::Phone];
+        let mut host = lldp("Gi1/0/3", Some("192.0.2.32"), None);
+        host.capabilities = vec![NeighborCapability::Host];
+        // A phone that is also a bridge is network equipment enough to keep; one that says
+        // nothing about itself is kept too, because silence is not evidence of an end station.
+        let mut phone_bridge = lldp("Gi1/0/4", Some("192.0.2.33"), None);
+        phone_bridge.capabilities = vec![NeighborCapability::Phone, NeighborCapability::Bridge];
+        let silent = lldp("Gi1/0/5", Some("192.0.2.34"), None);
+        let nbs = [neighbors(node(1), vec![phone, host, phone_bridge, silent])];
+        let found: Vec<IpAddr> = candidates(
+            &Signals {
+                neighbors: &nbs,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        )
+        .into_iter()
+        .map(|e| e.ip)
+        .collect();
+        assert_eq!(found, vec![ip("192.0.2.33"), ip("192.0.2.34")]);
+    }
+
+    #[test]
+    fn a_neighbour_with_no_usable_address_or_a_known_one_is_not_a_candidate() {
+        let known: BTreeSet<IpAddr> = [ip("192.0.2.40")].into_iter().collect();
+        let nbs = [neighbors(
+            node(1),
+            vec![
+                lldp("Gi1/0/1", None, Some("no-address")),
+                lldp("Gi1/0/2", Some("not an address"), None),
+                lldp("Gi1/0/3", Some("0.0.0.0"), None),
+                lldp("Gi1/0/4", Some("127.0.0.1"), None),
+                // Another interface of a monitored device: `known` carries node_l3 for this.
+                lldp("Gi1/0/5", Some("192.0.2.40"), None),
+            ],
+        )];
+        assert!(candidates(
+            &Signals {
+                neighbors: &nbs,
+                ..Signals::default()
+            },
+            &known,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_cdp_neighbour_is_named_by_its_device_id() {
+        let mut nb = yagra_common::Neighbor::new(
+            NeighborProto::Cdp,
+            "GigabitEthernet0/1",
+            "rt-02.example.com",
+            "GigabitEthernet0/0",
+        );
+        nb.remote_mgmt_addr = Some("192.0.2.50".to_owned());
+        nb.local_ifindex = Some(3);
+        let nbs = [neighbors(node(2), vec![nb])];
+        let found = candidates(
+            &Signals {
+                neighbors: &nbs,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found[0].name.as_deref(), Some("rt-02.example.com"));
+        assert_eq!(found[0].evidence[0].source, EndpointSource::Cdp);
+        assert_eq!(found[0].via_ifindex, Some(3));
+    }
+
+    #[test]
+    fn ospf_and_bgp_peers_are_candidates_and_the_route_probe_is_not() {
+        let rts = [routing(
+            node(1),
+            &[
+                (RoutingProto::Ospf, "198.51.100.1"),
+                (RoutingProto::Bgp, "198.51.100.2"),
+                (RoutingProto::Route, "198.51.100.3"),
+                (RoutingProto::Ospf, "0.0.0.0"),
+            ],
+        )];
+        let found = candidates(
+            &Signals {
+                routing: &rts,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        let got: Vec<(IpAddr, EndpointSource)> =
+            found.iter().map(|e| (e.ip, e.evidence[0].source)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (ip("198.51.100.1"), EndpointSource::Ospf),
+                (ip("198.51.100.2"), EndpointSource::Bgp),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sender_has_no_observing_node_and_is_named_by_its_hostname() {
+        let senders = [
+            SenderObservation {
+                ip: ip("203.0.113.9"),
+                kind: SenderKind::Syslog,
+                hostname: Some("fw-01".to_owned()),
+            },
+            SenderObservation {
+                ip: ip("203.0.113.9"),
+                kind: SenderKind::Trap,
+                hostname: None,
+            },
+        ];
+        let found = candidates(
+            &Signals {
+                senders: &senders,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].via_node, None);
+        assert_eq!(found[0].name.as_deref(), Some("fw-01"));
+        let sources: Vec<EndpointSource> = found[0].evidence.iter().map(|e| e.source).collect();
+        assert_eq!(sources, vec![EndpointSource::Syslog, EndpointSource::Trap]);
+    }
+
+    #[test]
+    fn one_address_seen_several_ways_is_one_row_with_every_piece_of_evidence() {
+        let arp = [(node(5), {
+            let mut s = summary(&[(7, "192.0.2.60")]);
+            s.entries[0].mac = Some("00:11:22:33:44:55".to_owned());
+            s
+        })];
+        let nbs = [neighbors(
+            node(3),
+            vec![lldp("Gi1/0/9", Some("192.0.2.60"), Some("sw-09"))],
+        )];
+        let senders = [SenderObservation {
+            ip: ip("192.0.2.60"),
+            kind: SenderKind::Syslog,
+            hostname: Some("from-syslog".to_owned()),
+        }];
+        let found = candidates(
+            &Signals {
+                arp: &arp,
+                neighbors: &nbs,
+                senders: &senders,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found.len(), 1);
+        let e = &found[0];
+        let sources: Vec<EndpointSource> = e.evidence.iter().map(|v| v.source).collect();
+        assert_eq!(
+            sources,
+            vec![
+                EndpointSource::Arp,
+                EndpointSource::Lldp,
+                EndpointSource::Syslog
+            ],
+            "listed in source order, whatever order the inputs came in"
+        );
+        // The lowest observer across every source — node 3 saw it by LLDP, node 5 by ARP.
+        assert_eq!(e.via_node, Some(node(3)));
+        assert_eq!(e.mac.as_deref(), Some("00:11:22:33:44:55"));
+        assert_eq!(
+            e.name.as_deref(),
+            Some("sw-09"),
+            "LLDP's name outranks a syslog hostname"
+        );
+    }
+
+    #[test]
+    fn evidence_is_capped_per_endpoint() {
+        let arp: Vec<(NodeId, ArpSummary)> = (1..=20u128)
+            .map(|n| (node(n), summary(&[(1, "192.0.2.70")])))
+            .collect();
+        let found = candidates(
+            &Signals {
+                arp: &arp,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found[0].evidence.len(), MAX_EVIDENCE_PER_ENDPOINT);
+        assert_eq!(found[0].evidence[0].via_node, Some(node(1).as_uuid()));
+    }
+
+    #[test]
+    fn every_source_token_is_its_serde_tag() {
+        for s in EndpointSource::ALL {
+            assert_eq!(
+                serde_json::to_value(s).unwrap(),
+                serde_json::Value::String(s.as_str().to_owned())
+            );
+        }
+        for k in [SenderKind::Syslog, SenderKind::Trap] {
+            assert_eq!(SenderKind::from_token(k.as_str()), Some(k));
+            assert_eq!(k.source().as_str(), k.as_str());
+        }
+    }
+
     // --- Running the SQL, not reading it (ADR-114/116) -----------------------------------------
     //
     // Everything above is either the pure rule (`unmonitored`) or a reading of this module's text.
@@ -747,8 +1423,16 @@ mod tests {
         EndpointObservation {
             ip: ip(addr),
             mac: Some("aa:bb:cc:dd:ee:ff".to_owned()),
-            via_node: NodeId(via),
-            via_ifindex: ifindex,
+            via_node: Some(NodeId(via)),
+            via_ifindex: Some(ifindex),
+            name: None,
+            evidence: vec![EndpointEvidence {
+                source: EndpointSource::Arp,
+                via_node: Some(via),
+                via_ifindex: Some(ifindex),
+                port: None,
+                detail: None,
+            }],
         }
     }
 
@@ -1166,6 +1850,136 @@ mod tests {
         assert_eq!(
             descending, seen,
             "the page did not come back newest-seen first, or a row came back twice: {seen:?}"
+        );
+    }
+
+    /// Evidence and a name go in through the sweep's writer and come back through both readers; a
+    /// row written before ADR-179 reads as the ARP observation it was; and the tab's count uses the
+    /// list's scope (ADR-179 決定 1, 8).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn evidence_and_a_name_round_trip_and_the_count_follows_the_scope(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let ours = pgtest::node(&pool, "ours", 1, Some(mine)).await;
+        let alien = pgtest::node(&pool, "alien", 2, Some(theirs)).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+
+        let lldp_row = EndpointObservation {
+            ip: ip("192.0.2.20"),
+            mac: None,
+            via_node: Some(NodeId(ours)),
+            via_ifindex: None,
+            name: Some("sw-07".to_owned()),
+            evidence: vec![EndpointEvidence {
+                source: EndpointSource::Lldp,
+                via_node: Some(ours),
+                via_ifindex: None,
+                port: Some("Gi1/0/1".to_owned()),
+                detail: Some("C9300-48P".to_owned()),
+            }],
+        };
+        let sender_row = EndpointObservation {
+            ip: ip("203.0.113.9"),
+            mac: None,
+            via_node: None,
+            via_ifindex: None,
+            name: Some("fw-01".to_owned()),
+            evidence: vec![EndpointEvidence {
+                source: EndpointSource::Syslog,
+                via_node: None,
+                via_ifindex: None,
+                port: None,
+                detail: Some("fw-01".to_owned()),
+            }],
+        };
+        repo.upsert_batch(&[
+            lldp_row.clone(),
+            sender_row,
+            observation("192.168.60.10", alien, 8),
+        ])
+        .await
+        .expect("upsert");
+        // A row as an older core writes it: no name, no evidence.
+        sqlx::query(
+            "INSERT INTO l3_discovered (ip, via_node, via_ifindex) VALUES ('192.168.50.99', $1, 4)",
+        )
+        .bind(ours)
+        .execute(&pool)
+        .await
+        .expect("legacy row");
+
+        let all = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(
+            all.len(),
+            4,
+            "every row must be listed to an unrestricted caller"
+        );
+        let by_ip = |a: &str| all.iter().find(|e| e.ip == ip(a)).expect("row").clone();
+
+        let got = by_ip("192.0.2.20");
+        assert_eq!(got.name.as_deref(), Some("sw-07"));
+        assert_eq!(
+            got.evidence, lldp_row.evidence,
+            "evidence did not round-trip"
+        );
+        let fetched = repo.get(got.id).await.expect("get").expect("row");
+        assert_eq!(
+            fetched.evidence, lldp_row.evidence,
+            "`get` projects differently from the list"
+        );
+
+        let legacy = by_ip("192.168.50.99");
+        assert_eq!(
+            legacy.evidence,
+            vec![EndpointEvidence {
+                source: EndpointSource::Arp,
+                via_node: Some(ours),
+                via_ifindex: Some(4),
+                port: None,
+                detail: None,
+            }],
+            "a row with no evidence must read as the ARP observation it was"
+        );
+
+        assert_eq!(repo.unmonitored_total(None).await.expect("count"), 4);
+        // Scoped to `mine`: the LLDP row and the legacy row. The sender has no observer, so a
+        // scoped caller cannot see it (決定 7); the alien row is outside the scope.
+        assert_eq!(
+            repo.unmonitored_total(Some(&[mine])).await.expect("count"),
+            2
+        );
+        let scoped = repo
+            .list_page(Some(&[mine]), None, false, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(
+            scoped.len(),
+            2,
+            "the count and the list disagree about the scope"
+        );
+        assert_eq!(repo.unmonitored_total(Some(&[])).await.expect("count"), 0);
+
+        // A second sweep that no longer sees the name keeps the row and clears the name: the
+        // columns are last-observation-wins, like `mac`.
+        let mut renamed = lldp_row;
+        renamed.name = None;
+        repo.upsert_batch(&[renamed]).await.expect("upsert");
+        let again = repo
+            .list_page(None, None, false, None, 10)
+            .await
+            .expect("list");
+        let row = again
+            .iter()
+            .find(|e| e.ip == ip("192.0.2.20"))
+            .expect("row");
+        assert_eq!(row.name, None);
+        assert_eq!(
+            row.first_seen, got.first_seen,
+            "first_seen must survive the upsert"
         );
     }
 }

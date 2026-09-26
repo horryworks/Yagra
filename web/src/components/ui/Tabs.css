@@ -1,0 +1,56 @@
+/* Page tab bar (Tabs.tsx). All values are design tokens (ui-conventions). */
+.ui-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  margin: 4px 0 12px;
+}
+.ui-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+.ui-tab:hover {
+  color: var(--text-primary);
+}
+.ui-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+  font-weight: var(--weight-medium);
+}
+.ui-tab-count {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+}
+
+/* On a phone the bar scrolls sideways rather than wrapping or crushing its labels. */
+html[data-viewport='mobile'] .ui-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+html[data-viewport='mobile'] .ui-tabs::-webkit-scrollbar {
+  display: none;
+}
+html[data-viewport='mobile'] .ui-tab {
+  flex: 0 0 auto;
+}
+
+/* Touch: a real tap target, whatever the layout mode. */
+@media (hover: none) {
+  .ui-tab {
+    min-height: var(--touch-target);
+  }
+}

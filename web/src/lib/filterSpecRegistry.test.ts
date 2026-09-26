@@ -458,7 +458,7 @@ const ROUTES: readonly Route[] = [
   { path: '/nodes/collection-templates', own: [], tables: [{ entries: ['metricSetFilters'], prefix: '' }] },
   {
     path: '/nodes/discovery',
-    own: ['scan', 'group'],
+    own: ['scan', 'group', 'tab'],
     tables: [
       {
         entries: ['candidateFilters'],

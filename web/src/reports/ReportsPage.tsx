@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Tabs } from '../components/ui/Tabs';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -323,20 +324,7 @@ export function ReportsPage() {
         note={t('page.note')}
       />
 
-      <div className="rp-tabs" role="tablist">
-        {tabs.map((tb) => (
-          <button
-            key={tb.key}
-            role="tab"
-            aria-selected={tab === tb.key}
-            className={tab === tb.key ? 'rp-tab active' : 'rp-tab'}
-            onClick={() => setTab(tb.key)}
-          >
-            {tb.label}
-            <span className="rp-tab-count">{tb.count}</span>
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
       {runError && (
         <p className="form-error" role="alert">

@@ -39,6 +39,8 @@ const ep = (over: Partial<DiscoveredEndpoint> = {}): DiscoveredEndpoint => ({
   mac: 'aa:bb:cc:dd:ee:ff',
   via_node: 'sw-core',
   via_ifindex: 3,
+  name: null,
+  evidence: [{ source: 'arp', via_node: 'sw-core', via_ifindex: 3 }],
   promoted_node_id: null,
   first_seen: '2026-08-01T00:00:00.000Z',
   last_seen: '2026-08-13T00:00:00.000Z',

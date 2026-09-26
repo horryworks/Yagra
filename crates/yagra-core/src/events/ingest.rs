@@ -87,7 +87,50 @@ async fn flush_persist(
         metrics::counter!("yagra_events_persisted_total", "store" => "victorialogs")
             .increment(buf.len() as u64);
     }
+    // Here and not in either store's branch: which store holds the rows depends on configuration,
+    // and "who sent something no node claimed" must not (ADR-179 決定 3).
+    let senders = unattributed_senders(buf);
+    if let Err(e) = repo.record_unattributed_senders(&senders).await {
+        tracing::warn!(error = %e, "recording unattributed event senders failed");
+    }
     buf.clear();
+}
+
+/// The senders in one batch that no node claimed, one entry per `(address, kind)`.
+///
+/// Webhooks carry no sender address worth discovering and are left out by kind, not by accident.
+/// The last hostname in the batch wins, and one message without a hostname does not erase an
+/// earlier one's. The text is device-supplied and is bounded to the column's limit here.
+pub(crate) fn unattributed_senders(buf: &[PersistRecord]) -> Vec<crate::arp::SenderObservation> {
+    use crate::arp::{SenderKind, SenderObservation};
+    let mut by_key: std::collections::BTreeMap<(std::net::IpAddr, SenderKind), Option<String>> =
+        std::collections::BTreeMap::new();
+    for r in buf {
+        if r.node_id.is_some() {
+            continue;
+        }
+        let Some(ip) = r.msg.source_ip else { continue };
+        let kind = match r.msg.kind {
+            EventKind::Syslog => SenderKind::Syslog,
+            EventKind::Trap => SenderKind::Trap,
+            EventKind::Webhook => continue,
+        };
+        let hostname = r
+            .msg
+            .hostname
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(|h| h.chars().take(255).collect::<String>());
+        let held = by_key.entry((ip, kind)).or_default();
+        if hostname.is_some() {
+            *held = hostname;
+        }
+    }
+    by_key
+        .into_iter()
+        .map(|((ip, kind), hostname)| SenderObservation { ip, kind, hostname })
+        .collect()
 }
 
 /// Async batch persist writer (ADR-024): drains the bounded persist queue and fans each batch out
@@ -238,6 +281,51 @@ mod tests {
     use super::*;
     use crate::alerts::check_id;
     use yagra_common::{NodeId, NodeState};
+
+    /// Only syslog and traps no node claimed, once per (address, kind), keeping a hostname that a
+    /// later message in the batch left out (ADR-179 決定 3).
+    #[test]
+    fn a_batch_yields_each_unclaimed_sender_once() {
+        use crate::arp::{SenderKind, SenderObservation};
+        let unclaimed = |kind: EventKind, addr: &str, host: Option<&str>| {
+            let mut r = persist_record(EventAction::None);
+            r.node_id = None;
+            r.msg.kind = kind;
+            r.msg.source_ip = Some(addr.parse().unwrap());
+            r.msg.hostname = host.map(str::to_owned);
+            r
+        };
+        let buf = vec![
+            unclaimed(EventKind::Syslog, "192.0.2.5", Some("fw-01")),
+            unclaimed(EventKind::Syslog, "192.0.2.5", None),
+            unclaimed(EventKind::Trap, "192.0.2.5", None),
+            unclaimed(EventKind::Webhook, "192.0.2.6", None),
+            unclaimed(EventKind::Syslog, "192.0.2.7", Some("   ")),
+            // Claimed by a node: not a discovery.
+            persist_record(EventAction::None),
+        ];
+        let ip = |s: &str| s.parse().unwrap();
+        assert_eq!(
+            unattributed_senders(&buf),
+            vec![
+                SenderObservation {
+                    ip: ip("192.0.2.5"),
+                    kind: SenderKind::Syslog,
+                    hostname: Some("fw-01".to_owned()),
+                },
+                SenderObservation {
+                    ip: ip("192.0.2.5"),
+                    kind: SenderKind::Trap,
+                    hostname: None,
+                },
+                SenderObservation {
+                    ip: ip("192.0.2.7"),
+                    kind: SenderKind::Syslog,
+                    hostname: None,
+                },
+            ]
+        );
+    }
 
     fn lazy_repo() -> Arc<EventRepo> {
         let pool = sqlx::postgres::PgPoolOptions::new()

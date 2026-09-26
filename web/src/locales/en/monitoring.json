@@ -335,7 +335,7 @@
     }
   },
   "discovery": {
-    "note": "Sweep a subnet for live + SNMP devices, then import the ones you want.",
+    "note": "Find devices to monitor: sweep an address range, or review the devices your monitored equipment has already seen.",
     "scans": {
       "title": "Recent sweeps",
       "note": "Sweeps this core is holding. Pick one to see its progress or its results.",
@@ -392,16 +392,16 @@
     },
     "seen": {
       "title": "Seen on the network",
-      "note": "Addresses your monitored routers have actually spoken to that Yagra is not monitoring. Nothing here needs a scan — it comes from the ARP and IPv6 neighbor caches of the devices you already have.",
+      "note": "Devices your monitored equipment has seen that Yagra is not monitoring yet: hosts in a router’s ARP / IPv6 neighbor cache, LLDP and CDP neighbors that advertise a management address, OSPF neighbors and BGP peers, and senders of syslog or SNMP traps that no node claimed. No scan is needed. Phones and end stations behind a switch are left out of the LLDP / CDP half.",
       "coverage": {
-        "off": "No device has reported an ARP cache yet. Turn on the ARP / IPv6 neighbor cache walk under Settings ▸ System settings ▸ Discovery walks — until then this list is empty because nobody has looked, not because there is nothing to find.",
-        "complete": "{{nodes}} device(s) reporting, {{observed}} address(es) resolved in total.",
-        "sampled": "{{nodes}} device(s) reporting, {{observed}} address(es) resolved — but {{truncated}} of them hit the row budget, so this list is a sample of what is out there, not all of it."
+        "off": "The ARP cache walk is off, so this list comes only from LLDP / CDP neighbors, routing peers and syslog / trap senders. Turn on the ARP / IPv6 neighbor cache walk under Settings ▸ System settings ▸ Discovery walks to add every host your routers have spoken to.",
+        "complete": "ARP: {{nodes}} device(s) reporting, {{observed}} address(es) resolved in total.",
+        "sampled": "ARP: {{nodes}} device(s) reporting, {{observed}} address(es) resolved — but {{truncated}} of them hit the row budget, so the ARP half of this list is a sample of what is out there, not all of it."
       },
       "cols": {
         "address": "Address",
         "mac": "MAC",
-        "seenBy": "Seen by"
+        "seenBy": "Seen via"
       },
       "noMac": "not resolved",
       "viaGone": "device removed",
@@ -418,6 +418,15 @@
           "unmonitored": "Not yet monitored",
           "monitored": "Already monitored"
         }
+      },
+      "source": {
+        "arp": "ARP",
+        "lldp": "LLDP",
+        "cdp": "CDP",
+        "ospf": "OSPF",
+        "bgp": "BGP",
+        "syslog": "Syslog",
+        "trap": "Trap"
       }
     },
     "scanTitle": "Scan a subnet",
@@ -506,6 +515,10 @@
         "wouldMatch": "would go to {{folder}} ({{prefix}})"
       },
       "auto": "Auto: {{folder}}"
+    },
+    "tabs": {
+      "scan": "Scan a range",
+      "unregistered": "Unregistered devices"
     }
   }
 }

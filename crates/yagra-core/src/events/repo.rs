@@ -687,6 +687,87 @@ impl EventRepo {
         .rows_affected();
         Ok((matched, unmatched))
     }
+
+    /// Remember one persisted batch's senders that no node claimed (ADR-179 決定 3).
+    ///
+    /// `senders` must hold each `(address, kind)` once — [`super::ingest::unattributed_senders`]
+    /// builds it that way — because one `INSERT … ON CONFLICT` cannot touch the same row twice. A
+    /// hostname is kept when a later message carries none: a device that names itself in some
+    /// messages and not others still has a name.
+    pub async fn record_unattributed_senders(
+        &self,
+        senders: &[crate::arp::SenderObservation],
+    ) -> anyhow::Result<u64> {
+        if senders.is_empty() {
+            return Ok(0);
+        }
+        let ips: Vec<String> = senders.iter().map(|s| s.ip.to_string()).collect();
+        let kinds: Vec<&str> = senders.iter().map(|s| s.kind.as_str()).collect();
+        let hosts: Vec<Option<String>> = senders.iter().map(|s| s.hostname.clone()).collect();
+        let res = sqlx::query(
+            "INSERT INTO event_senders (ip, kind, hostname, first_seen, last_seen) \
+             SELECT u.ip::INET, u.kind, u.host, now(), now() \
+             FROM UNNEST($1::TEXT[], $2::TEXT[], $3::TEXT[]) AS u(ip, kind, host) \
+             ON CONFLICT (ip, kind) DO UPDATE SET \
+                 hostname = COALESCE(EXCLUDED.hostname, event_senders.hostname), \
+                 last_seen = now()",
+        )
+        .bind(&ips)
+        .bind(&kinds)
+        .bind(&hosts)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Every remembered sender — the discovery sweep's fourth input. Bounded by
+    /// [`Self::prune_senders`], which the same sweep runs.
+    pub async fn unattributed_senders(&self) -> anyhow::Result<Vec<crate::arp::SenderObservation>> {
+        let rows = sqlx::query("SELECT host(ip) AS ip, kind, hostname FROM event_senders")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                // A row that will not parse is skipped, not fatal: one bad row must not stop
+                // discovery for the whole fleet (the same rule `known_addresses` follows).
+                let ip = row.try_get::<String, _>("ip").ok()?.parse().ok()?;
+                let kind =
+                    crate::arp::SenderKind::from_token(&row.try_get::<String, _>("kind").ok()?)?;
+                let hostname = row.try_get::<Option<String>, _>("hostname").ok()?;
+                Some(crate::arp::SenderObservation { ip, kind, hostname })
+            })
+            .collect())
+    }
+
+    /// The newest sighting of any sender, or `None` when nothing unattributed has ever arrived —
+    /// one of the four marks the sweep triggers on.
+    pub async fn senders_watermark(&self) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let row = sqlx::query("SELECT max(last_seen) AS w FROM event_senders")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get("w")?)
+    }
+
+    /// Drop senders not heard from inside the retention window, then keep the newest `cap`.
+    pub async fn prune_senders(&self, retention_secs: i64, cap: usize) -> anyhow::Result<u64> {
+        let aged = sqlx::query(
+            "DELETE FROM event_senders WHERE last_seen < now() - make_interval(secs => $1)",
+        )
+        .bind(retention_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        let over = sqlx::query(
+            "DELETE FROM event_senders s USING ( \
+                 SELECT ip, kind, row_number() OVER (ORDER BY last_seen DESC, ip, kind) AS rn \
+                 FROM event_senders \
+             ) r WHERE s.ip = r.ip AND s.kind = r.kind AND r.rn > $1",
+        )
+        .bind(i64::try_from(cap).unwrap_or(i64::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(aged.rows_affected() + over.rows_affected())
+    }
 }
 
 #[cfg(test)]
@@ -1182,5 +1263,64 @@ mod tests {
         assert_eq!(repo.prune_old(259_200, 86_400).await.unwrap(), (0, 1));
         assert_eq!(repo.prune_old(86_400, 86_400).await.unwrap(), (1, 0));
         assert_eq!(crate::pgtest::rows(&pool, "events").await, 2);
+    }
+
+    /// The senders table keeps one row per (address, kind), keeps a hostname a later batch left
+    /// out, moves the watermark, and prunes by age then by the ceiling (ADR-179 決定 3).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn unattributed_senders_are_remembered_merged_and_pruned(pool: sqlx::PgPool) {
+        use crate::arp::{SenderKind, SenderObservation};
+        let repo = EventRepo::new(pool.clone());
+        assert_eq!(repo.senders_watermark().await.unwrap(), None);
+        let sender = |addr: &str, kind, host: Option<&str>| SenderObservation {
+            ip: addr.parse().unwrap(),
+            kind,
+            hostname: host.map(str::to_owned),
+        };
+        assert_eq!(
+            repo.record_unattributed_senders(&[
+                sender("192.0.2.5", SenderKind::Syslog, Some("fw-01")),
+                sender("192.0.2.5", SenderKind::Trap, None),
+                sender("2001:db8::5", SenderKind::Syslog, None),
+            ])
+            .await
+            .unwrap(),
+            3
+        );
+        repo.record_unattributed_senders(&[sender("192.0.2.5", SenderKind::Syslog, None)])
+            .await
+            .unwrap();
+        assert!(repo.senders_watermark().await.unwrap().is_some());
+
+        let mut got = repo.unattributed_senders().await.unwrap();
+        got.sort_by_key(|s| (s.ip, s.kind));
+        assert_eq!(
+            got,
+            vec![
+                sender("192.0.2.5", SenderKind::Syslog, Some("fw-01")),
+                sender("192.0.2.5", SenderKind::Trap, None),
+                sender("2001:db8::5", SenderKind::Syslog, None),
+            ],
+            "a later message with no hostname must not erase the name, and v6 must read back"
+        );
+
+        sqlx::query(
+            "UPDATE event_senders SET last_seen = now() - interval '10 days' WHERE kind = 'trap'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.prune_senders(7 * 86_400, 10).await.unwrap(),
+            1,
+            "the aged row"
+        );
+        assert_eq!(
+            repo.prune_senders(7 * 86_400, 1).await.unwrap(),
+            1,
+            "the ceiling"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "event_senders").await, 1);
     }
 }

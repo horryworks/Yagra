@@ -1,42 +1,5 @@
-/* Reports feature styles (page tabs, builder, schedule modal, viewer overlay). All colors/space
+/* Reports feature styles (builder, schedule modal, viewer overlay). All colors/space
    reference design tokens (ui-conventions: no hardcoded values). */
-
-/* ── Tab bar ── */
-.rp-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: var(--border-width) solid var(--border-color);
-  margin: 4px 0 12px;
-}
-.rp-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  color: var(--text-secondary);
-  font-size: var(--font-md);
-  cursor: pointer;
-  transition: color var(--transition);
-}
-.rp-tab:hover {
-  color: var(--text-primary);
-}
-.rp-tab.active {
-  color: var(--accent-color);
-  border-bottom-color: var(--accent-color);
-  font-weight: var(--weight-medium);
-}
-.rp-tab-count {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-  padding: 0 6px;
-}
 
 /* ── Row action clusters (tables, builder section header) ── */
 .rp-actions {
@@ -246,30 +209,14 @@
    already a bottom-sheet on mobile — these rules only fix what the sheet can't: cramped side-by-side
    setting fields and mouse-sized hit targets. */
 
-/* The three report tabs scroll sideways rather than wrap/crush on a narrow phone. */
-html[data-viewport='mobile'] .rp-tabs {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-html[data-viewport='mobile'] .rp-tabs::-webkit-scrollbar {
-  display: none;
-}
-html[data-viewport='mobile'] .rp-tab {
-  flex: 0 0 auto;
-}
-
 /* Builder section settings sit side-by-side (min-width:140px) on desktop; on a phone sheet give each
    its own full-width row so the number/select controls aren't squeezed. */
 html[data-viewport='mobile'] .rb-setting {
   min-width: 100%;
 }
 
-/* Touch: the report tab strip and the builder's dense ↑/↓/× icon buttons need real tap targets. */
+/* Touch: the builder's dense ↑/↓/× icon buttons need real tap targets. */
 @media (hover: none) {
-  .rp-tab {
-    min-height: var(--touch-target);
-  }
   .rb-icon {
     width: var(--touch-target);
     height: var(--touch-target);

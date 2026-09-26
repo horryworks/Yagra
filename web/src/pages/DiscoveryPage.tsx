@@ -66,7 +66,16 @@ import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
-import { coverageOf, isUnmonitored } from './discoveredEndpoints';
+import {
+  coverageOf,
+  importName,
+  isUnmonitored,
+  portName,
+  sourcesOf,
+  DISCOVERY_TABS,
+} from './discoveredEndpoints';
+import { Tabs } from '../components/ui/Tabs';
+import { useEnumParam } from '../lib/useEnumParam';
 import { existingByAddress, importableCandidates, selectedForImport } from './discoveryExisting';
 import {
   candidateColumns,
@@ -122,6 +131,21 @@ export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const [searchParams, setSearchParams] = useSearchParams();
+  // Two views, one page (ADR-179 決定 9). The sweep form is the default, so a bare URL — and every
+  // link made before the tabs existed — opens where it always did.
+  const [tab, setTab] = useEnumParam('tab', DISCOVERY_TABS, 'scan');
+  // The unregistered list is read here, not inside its tab: the tab's label carries the count, so
+  // it has to be known while the sweep tab is the one on screen.
+  const [endpointPage, setEndpointPage] = useState<DiscoveredEndpointPage | null>(null);
+  const loadEndpoints = useCallback(() => {
+    api
+      .listDiscoveredEndpoints({ limit: 100 })
+      .then(setEndpointPage)
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    loadEndpoints();
+  }, [loadEndpoints]);
   /** The last sweep this browser started (ADR-134), read once. A ref, not a subscription: these
    *  values seed form fields, and re-reading them after `startScan` writes would reset the form
    *  under the operator while their own sweep was still running. */
@@ -748,6 +772,31 @@ export function DiscoveryPage() {
         note={t('discovery.note')}
       />
 
+      <Tabs
+        tabs={[
+          { key: 'scan', label: t('discovery.tabs.scan') },
+          {
+            key: 'unregistered',
+            label: t('discovery.tabs.unregistered'),
+            count: endpointPage?.summary?.unmonitored_total,
+          },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+
+      {tab === 'unregistered' && (
+        <SeenOnNetworkCard
+          canConfig={canConfig}
+          profiles={profiles}
+          creds={creds}
+          page={endpointPage}
+          reload={loadEndpoints}
+        />
+      )}
+
+      {tab === 'scan' && (
+      <>
       <Card title={t('discovery.scanTitle')}>
         {canConfig ? (
           <>
@@ -1255,18 +1304,21 @@ export function DiscoveryPage() {
           )}
         </Card>
       )}
-
-      <SeenOnNetworkCard canConfig={canConfig} profiles={profiles} creds={creds} />
+      </>
+      )}
     </div>
   );
 }
 
-/** Discovery ▸ Seen on the network (ADR-043 Increment 3).
+/** Discovery ▸ Unregistered devices (ADR-043 Increment 3, widened by ADR-179).
  *
- *  The passive half of discovery: addresses monitored routers have resolved on the wire that Yagra
- *  does not monitor. It needs no operator action to produce results and no scan to be running — but
- *  it does need ARP discovery switched on, which it is not by default, so the empty state has to say
- *  which kind of empty it is. That judgement is `coverageOf` in `discoveredEndpoints.ts`.
+ *  The passive half of discovery: addresses the fleet has seen that Yagra does not monitor — in a
+ *  router's ARP cache, as an LLDP/CDP neighbour's management address, as an OSPF/BGP peer, or as the
+ *  sender of syslog/traps no node claimed. It needs no operator action and no scan. ARP is the one
+ *  source that ships switched off, so the coverage line still says which kind of ARP answer this is
+ *  (`coverageOf` in `discoveredEndpoints.ts`); the other sources are collected by default.
+ *
+ *  The list itself is read by the page, which needs its count for the tab label.
  *
  *  Importing goes through the same node writer the scan import uses, so classification happens on the
  *  new node's first identity probe exactly as it does for a scanned device. */
@@ -1274,16 +1326,19 @@ function SeenOnNetworkCard({
   canConfig,
   profiles,
   creds,
+  page,
+  reload: load,
 }: {
   canConfig: boolean;
   profiles: ProfileSummary[];
   creds: CredentialSummary[];
+  page: DiscoveredEndpointPage | null;
+  reload: () => void;
 }) {
   const { t } = useTranslation('monitoring');
   // The node an endpoint was seen by, and the one it already is, as names. `EntityName` renders a
   // name it is handed and resolves nothing, so passing it the id showed a raw UUID.
   const { nodeName } = useEntityNames();
-  const [page, setPage] = useState<DiscoveredEndpointPage | null>(null);
   const [rows, setRows] = useState<Record<string, { profile_id: string; credential_id: string }>>(
     {},
   );
@@ -1299,17 +1354,9 @@ function SeenOnNetworkCard({
   // hides rows.
   const { filters: epFilters, setFilters: setEpFilters } = useFilterParams(epCols, ENDPOINT_FILTER_PREFIX);
   const [epSheet, setEpSheet] = useState(false);
-
-  const load = useCallback(() => {
-    api
-      .listDiscoveredEndpoints({ limit: 100 })
-      .then(setPage)
-      .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  // The observer's port as it named it, or its ifIndex when no neighbour table named one.
+  const viaPort = (e: DiscoveredEndpoint): string | null =>
+    portName(e) ?? (e.via_ifindex != null ? t('discovery.seen.port', { n: e.via_ifindex }) : null);
 
   const promote = (e: DiscoveredEndpoint) => {
     const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
@@ -1318,6 +1365,8 @@ function SeenOnNetworkCard({
     setError(null);
     api
       .importDiscoveredEndpoint(e.id, {
+        // The name a neighbour or a syslog header gave it; without one the backend uses the address.
+        name: importName(e),
         profile_id: r.profile_id || undefined,
         credential_id: r.credential_id || undefined,
       })
@@ -1415,16 +1464,33 @@ function SeenOnNetworkCard({
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
             return (
               <div className="disco-seen-row" key={e.id}>
-                <span className="mono">{e.ip}</span>
+                <span className="disco-seen-addr">
+                  <span className="mono">{e.ip}</span>
+                  {/* Device-supplied (an LLDP system name, a syslog hostname): rendered as text. */}
+                  {e.name && (
+                    <span className="muted disco-seen-name" title={e.name}>
+                      {e.name}
+                    </span>
+                  )}
+                </span>
                 <span className="mono muted">{e.mac ?? t('discovery.seen.noMac')}</span>
                 <span className="disco-seen-via">
+                  <span className="disco-seen-sources">
+                    {sourcesOf(e).map((s) => (
+                      <Badge key={s} tone="neutral">
+                        {t(`discovery.seen.source.${s}`)}
+                      </Badge>
+                    ))}
+                  </span>
                   {e.via_node ? (
-                    <EntityName name={nodeName(e.via_node)} id={e.via_node} />
-                  ) : (
+                    <span>
+                      <EntityName name={nodeName(e.via_node)} id={e.via_node} />
+                      {viaPort(e) != null && <span className="muted mono"> · {viaPort(e)}</span>}
+                    </span>
+                  ) : e.evidence.every((ev) => ev.via_node == null) ? null : (
+                    // Seen by a node that has since been deleted. A row only a syslog or trap
+                    // sender vouches for never had one, and says nothing here.
                     <span className="muted">{t('discovery.seen.viaGone')}</span>
-                  )}
-                  {e.via_ifindex != null && (
-                    <span className="muted mono"> · {t('discovery.seen.port', { n: e.via_ifindex })}</span>
                   )}
                 </span>
                 {isUnmonitored(e) ? (

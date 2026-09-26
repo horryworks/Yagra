@@ -720,13 +720,17 @@ export interface paths {
         };
         /**
          * Addresses seen on the network that Yagra does not monitor.
-         * @description Built from the ARP / IPv6-neighbour caches of the nodes that *are* monitored, so an endpoint
-         *     appears here only if some monitored router has spoken to it. Requires the ARP walk to be enabled
-         *     (Settings ▸ System settings ▸ Discovery walks); with it off the list is empty, which is an answer
-         *     rather than an outage.
+         * @description Built from what the monitored nodes report and what reaches Yagra on its own: ARP / IPv6
+         *     neighbour caches, LLDP and CDP neighbours that advertise a management address (phones and end
+         *     stations left out), OSPF neighbours and BGP peers, and syslog/trap senders that match no node.
+         *     `evidence` says which of those saw each one. The ARP half needs the ARP walk enabled (Settings ▸
+         *     System settings ▸ Discovery walks); the others are collected by default.
          *
-         *     `summary.truncated_nodes > 0` means at least one router's cache exceeded its row budget and this
-         *     list is a **sample**, not a complete inventory of the segment.
+         *     An endpoint only a syslog or trap sender vouches for has no observing node, so it is listed only
+         *     to a caller whose scope is unrestricted.
+         *
+         *     `summary.truncated_nodes > 0` means at least one router's ARP cache exceeded its row budget and
+         *     the ARP half of this list is a **sample**, not a complete inventory of the segment.
          */
         get: operations["list_discovered_endpoints"];
         put?: never;
@@ -6807,6 +6811,11 @@ export interface components {
         };
         /** @description One address the fleet has resolved on the wire but does not monitor. */
         DiscoveredEndpointRow: {
+            /**
+             * @description Where it was seen, ordered by source (ARP, LLDP, CDP, OSPF, BGP, syslog, trap) and capped
+             *     at eight. Never empty.
+             */
+            evidence: components["schemas"]["EndpointEvidence"][];
             /** @description When it was first seen anywhere in the fleet (RFC 3339). */
             first_seen: string;
             /** Format: uuid */
@@ -6817,6 +6826,11 @@ export interface components {
             last_seen: string;
             /** @description Its hardware address, lowercase colon-separated hex; `null` for an incomplete ARP entry. */
             mac?: string | null;
+            /**
+             * @description The best name any source gave it: the LLDP system name, then the CDP device id, then the
+             *     hostname in its syslog messages. `null` when none did. Device-supplied text.
+             */
+            name?: string | null;
             /**
              * Format: uuid
              * @description The node this address became, once it is monitored; `null` while it is still unmonitored.
@@ -6850,6 +6864,11 @@ export interface components {
              * @description How many of those hit a cap, making their contribution a sample rather than a total.
              */
             truncated_nodes: number;
+            /**
+             * Format: int64
+             * @description How many endpoints the caller can see that are still unmonitored, across every page.
+             */
+            unmonitored_total: number;
         };
         /**
          * @description Where a scan is in its life (ADR-068).
@@ -7200,6 +7219,38 @@ export interface components {
         EnabledBody: {
             enabled: boolean;
         };
+        /** @description One observation that made an address a candidate. */
+        EndpointEvidence: {
+            /**
+             * @description What the source said about the endpoint: its platform or system description (LLDP/CDP), or
+             *     the hostname it put in its syslog messages. Device-supplied text.
+             */
+            detail?: string | null;
+            /** @description The reporting node's own port name, as its LLDP/CDP table names it. */
+            port?: string | null;
+            /** @description What saw it. */
+            source: components["schemas"]["EndpointSource"];
+            /**
+             * Format: int32
+             * @description The reporting node's ifIndex, when the source names one.
+             */
+            via_ifindex?: number | null;
+            /**
+             * Format: uuid
+             * @description The monitored node that reported it; `null` for a syslog or trap sender, which reported
+             *     itself.
+             */
+            via_node?: string | null;
+        };
+        /**
+         * @description Where an unmonitored endpoint was seen (ADR-179).
+         *
+         *     The declaration order is the order evidence is listed in, so `Ord` is derived from it on
+         *     purpose: ARP first because it is what this list always showed, then what a device says about its
+         *     neighbour, then routing, then what reached Yagra on its own.
+         * @enum {string}
+         */
+        EndpointSource: "arp" | "lldp" | "cdp" | "ospf" | "bgp" | "syslog" | "trap";
         ErrorDetail: {
             /** @description Stable machine-readable code. Clients branch on this, never on the message. */
             code: string;

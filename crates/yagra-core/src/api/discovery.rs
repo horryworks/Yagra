@@ -1042,6 +1042,12 @@ pub(crate) struct DiscoveredEndpointRow {
     pub via_node: Option<Uuid>,
     /// The SNMP ifIndex it was resolved on — the port it is behind.
     pub via_ifindex: Option<u32>,
+    /// The best name any source gave it: the LLDP system name, then the CDP device id, then the
+    /// hostname in its syslog messages. `null` when none did. Device-supplied text.
+    pub name: Option<String>,
+    /// Where it was seen, ordered by source (ARP, LLDP, CDP, OSPF, BGP, syslog, trap) and capped
+    /// at eight. Never empty.
+    pub evidence: Vec<crate::arp::EndpointEvidence>,
     /// When it was first seen anywhere in the fleet (RFC 3339).
     pub first_seen: String,
     /// When it was last confirmed still present (RFC 3339).
@@ -1074,6 +1080,8 @@ pub(crate) struct DiscoveredEndpointSummary {
     pub nodes_reporting: i64,
     /// How many of those hit a cap, making their contribution a sample rather than a total.
     pub truncated_nodes: i64,
+    /// How many endpoints the caller can see that are still unmonitored, across every page.
+    pub unmonitored_total: i64,
 }
 
 /// One page of discovered endpoints, most recently seen first.
@@ -1104,13 +1112,17 @@ pub(super) struct EndpointsQuery {
 
 /// Addresses seen on the network that Yagra does not monitor.
 ///
-/// Built from the ARP / IPv6-neighbour caches of the nodes that *are* monitored, so an endpoint
-/// appears here only if some monitored router has spoken to it. Requires the ARP walk to be enabled
-/// (Settings ▸ System settings ▸ Discovery walks); with it off the list is empty, which is an answer
-/// rather than an outage.
+/// Built from what the monitored nodes report and what reaches Yagra on its own: ARP / IPv6
+/// neighbour caches, LLDP and CDP neighbours that advertise a management address (phones and end
+/// stations left out), OSPF neighbours and BGP peers, and syslog/trap senders that match no node.
+/// `evidence` says which of those saw each one. The ARP half needs the ARP walk enabled (Settings ▸
+/// System settings ▸ Discovery walks); the others are collected by default.
 ///
-/// `summary.truncated_nodes > 0` means at least one router's cache exceeded its row budget and this
-/// list is a **sample**, not a complete inventory of the segment.
+/// An endpoint only a syslog or trap sender vouches for has no observing node, so it is listed only
+/// to a caller whose scope is unrestricted.
+///
+/// `summary.truncated_nodes > 0` means at least one router's ARP cache exceeded its row budget and
+/// the ARP half of this list is a **sample**, not a complete inventory of the segment.
 #[utoipa::path(
     get, path = "/api/v1/discovered-endpoints", tag = "discovery",
     params(EndpointsQuery),
@@ -1211,6 +1223,17 @@ pub(crate) async fn discovered_endpoint_page(
         });
     let (observed_total, nodes_reporting, truncated_nodes) =
         admin.arp.totals().await.unwrap_or((0, 0, 0));
+    let unmonitored_total = admin
+        .discovered
+        .unmonitored_total(scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "count discovered endpoints",
+                "failed to count discovered endpoints",
+            )
+        })?;
     Ok(DiscoveredEndpointPage {
         endpoints: rows
             .into_iter()
@@ -1220,6 +1243,8 @@ pub(crate) async fn discovered_endpoint_page(
                 mac: r.mac,
                 via_node: r.via_node.map(|n| n.as_uuid()),
                 via_ifindex: r.via_ifindex,
+                name: r.name,
+                evidence: r.evidence,
                 first_seen: r.first_seen.to_rfc3339(),
                 last_seen: r.last_seen.to_rfc3339(),
                 promoted_node_id: r.promoted_node_id.map(|n| n.as_uuid()),
@@ -1230,6 +1255,7 @@ pub(crate) async fn discovered_endpoint_page(
             observed_total,
             nodes_reporting,
             truncated_nodes,
+            unmonitored_total,
         },
     })
 }

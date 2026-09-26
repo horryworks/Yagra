@@ -1563,7 +1563,13 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            run_endpoint_discovery(self.arp.clone(), self.discovered.clone()),
+            run_endpoint_discovery(EndpointSweepStores {
+                arp: self.arp.clone(),
+                neighbors: self.neighbors.clone(),
+                routing: self.routing.clone(),
+                events: self.events.clone(),
+                discovered: self.discovered.clone(),
+            }),
         );
         spawn_cancellable(
             &self.shutdown,
@@ -2007,53 +2013,97 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
     }
 }
 
-/// Leader-only loop: turn the fleet's ARP observations into the discovered-endpoint table
-/// (ADR-043 Increment 3).
+/// The stores one endpoint sweep reads and writes (ADR-179).
+struct EndpointSweepStores {
+    arp: Arc<arp::ArpRepo>,
+    neighbors: Arc<neighbors::NeighborRepo>,
+    routing: Arc<l3_routing::RoutingRepo>,
+    events: Arc<events::EventRepo>,
+    discovered: Arc<arp::DiscoveredRepo>,
+}
+
+/// Leader-only loop: turn what the fleet has seen — ARP caches, LLDP/CDP neighbours, OSPF/BGP
+/// peers and syslog/trap senders no node claimed — into the discovered-endpoint table (ADR-043
+/// Increment 3, widened by ADR-179).
 ///
 /// **Leader-only** for the same reason the derivation is: a whole-fleet read followed by a
 /// whole-table write, idempotent but pure waste if two cores do it.
 ///
-/// **Free when nobody opted in.** ARP discovery ships off, so the usual state of this loop is "no
-/// observation watermark ⇒ return before reading anything". That ordering is the point: the
-/// inventory read and the address projection below are the expensive part, and a deployment that
-/// never enabled the walk must not pay for them every five minutes.
+/// **No longer free on a deployment that never enabled ARP** (ADR-179 決定 6). Neighbours are
+/// walked by default, so a watermark is almost always present and the sweep reads the same tables
+/// the topology derivation already reads on the same five-minute cycle. Nothing observed at all
+/// still returns before reading anything.
 ///
-/// **The trigger is the watermark alone**, unlike the derivation, which also watches `config_gen`.
-/// Both were considered; `config_gen` would fire this on every unrelated configuration edit, and the
-/// thing it would catch — a node created by hand, so that an endpoint is no longer unmonitored — is
+/// **The trigger is the four watermarks alone**, unlike the derivation, which also watches
+/// `config_gen`. `config_gen` would fire this on every unrelated configuration edit, and the thing
+/// it would catch — a node created by hand, so that an endpoint is no longer unmonitored — is
 /// already handled by [`arp::DiscoveredRepo::reconcile_promotions`], which the sweep runs every pass
 /// and the import handler runs immediately.
-async fn run_endpoint_discovery(arp: Arc<arp::ArpRepo>, discovered: Arc<arp::DiscoveredRepo>) {
-    let mut last_mark: Option<chrono::DateTime<chrono::Utc>> = None;
+async fn run_endpoint_discovery(stores: EndpointSweepStores) {
+    type Watermark = Option<chrono::DateTime<chrono::Utc>>;
+    let mut last_signal: Option<(Watermark, Watermark, Watermark, Watermark)> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(arp::ENDPOINT_SWEEP_INTERVAL_SECS)).await;
 
-        let Ok(Some(mark)) = arp.observation_watermark().await else {
+        let signal = (
+            stores.arp.observation_watermark().await.unwrap_or(None),
+            stores
+                .neighbors
+                .observation_watermark()
+                .await
+                .unwrap_or(None),
+            stores.routing.observation_watermark().await.unwrap_or(None),
+            stores.events.senders_watermark().await.unwrap_or(None),
+        );
+        if signal == (None, None, None, None) {
             continue;
-        };
-        // `reconcile_promotions` still runs on an unchanged watermark: a node added by hand does
-        // not move it, and an endpoint that quietly became monitored must stop being listed as
-        // unmonitored without waiting for the next ARP walk.
-        if let Err(e) = discovered.reconcile_promotions().await {
+        }
+        // `reconcile_promotions` still runs on an unchanged signal: a node added by hand does not
+        // move it, and an endpoint that quietly became monitored must stop being listed as
+        // unmonitored without waiting for the next walk.
+        if let Err(e) = stores.discovered.reconcile_promotions().await {
             tracing::warn!(error = %e, "endpoint discovery: reconciling promotions failed");
         }
-        if last_mark == Some(mark) {
+        if last_signal == Some(signal) {
             metrics::counter!("yagra_endpoint_sweep_skipped_total").increment(1);
             continue;
         }
 
         let started = std::time::Instant::now();
-        let summaries = match arp.all_current().await {
+        // Every input is read in full or the cycle does nothing: the prune below deletes by age, so
+        // a cycle built from a partial input would age out what it could not read.
+        let summaries = match stores.arp.all_current().await {
             Ok(rows) => rows,
             Err(e) => {
                 tracing::warn!(error = %e, "endpoint discovery: reading ARP observations failed");
                 continue;
             }
         };
+        let neighbors = match stores.neighbors.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "endpoint discovery: reading adjacency failed");
+                continue;
+            }
+        };
+        let routing = match stores.routing.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "endpoint discovery: reading routing adjacency failed");
+                continue;
+            }
+        };
+        let senders = match stores.events.unattributed_senders().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "endpoint discovery: reading event senders failed");
+                continue;
+            }
+        };
         // A failed address read must **skip the cycle**, never fall back to an empty set: an empty
         // "known" set means every monitored device's own addresses are reported as unmonitored
         // endpoints, which is a wrong answer written to a table an operator then reviews.
-        let known = match discovered.known_addresses().await {
+        let known = match stores.discovered.known_addresses().await {
             Ok(set) => set,
             Err(e) => {
                 tracing::warn!(error = %e, "endpoint discovery: reading known addresses failed");
@@ -2061,13 +2111,22 @@ async fn run_endpoint_discovery(arp: Arc<arp::ArpRepo>, discovered: Arc<arp::Dis
             }
         };
 
-        let found = arp::unmonitored(&summaries, &known);
-        if let Err(e) = discovered.upsert_batch(&found).await {
+        let found = arp::candidates(
+            &arp::Signals {
+                arp: &summaries,
+                neighbors: &neighbors,
+                routing: &routing,
+                senders: &senders,
+            },
+            &known,
+        );
+        if let Err(e) = stores.discovered.upsert_batch(&found).await {
             tracing::warn!(error = %e, "endpoint discovery: writing endpoints failed");
             continue;
         }
         // Only prune once the write succeeded, so a failed cycle never ages out a live table.
-        match discovered
+        match stores
+            .discovered
             .prune(
                 arp::DISCOVERED_RETENTION_SECS,
                 arp::MAX_DISCOVERED_ENDPOINTS,
@@ -2078,14 +2137,29 @@ async fn run_endpoint_discovery(arp: Arc<arp::ArpRepo>, discovered: Arc<arp::Dis
             Ok(_) => {}
             Err(e) => tracing::warn!(error = %e, "endpoint discovery: pruning failed"),
         }
+        // The senders table is this sweep's input, so it is bounded here — with the same window
+        // and ceiling as the table it feeds.
+        if let Err(e) = stores
+            .events
+            .prune_senders(
+                arp::DISCOVERED_RETENTION_SECS,
+                arp::MAX_DISCOVERED_ENDPOINTS,
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "endpoint discovery: pruning event senders failed");
+        }
 
-        last_mark = Some(mark);
+        last_signal = Some(signal);
         metrics::gauge!("yagra_discovered_endpoints_total").set(found.len() as f64);
         metrics::histogram!("yagra_endpoint_sweep_seconds").record(started.elapsed().as_secs_f64());
         tracing::debug!(
             endpoints = found.len(),
-            nodes = summaries.len(),
-            "swept the fleet's ARP observations for unmonitored endpoints"
+            arp_nodes = summaries.len(),
+            neighbor_nodes = neighbors.len(),
+            routing_nodes = routing.len(),
+            senders = senders.len(),
+            "swept the fleet's observations for unmonitored endpoints"
         );
     }
 }

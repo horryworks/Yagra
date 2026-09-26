@@ -95,7 +95,7 @@ import { MERAKI_TIERS } from './pages/merakiTiers';
 import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
-import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
+import { ENDPOINT_COVERAGE, ENDPOINT_SOURCES } from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { DESTINATION_KINDS } from './pages/importFiling';
 import {
@@ -1116,6 +1116,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enMonitoring, ja: jaMonitoring },
       'discovery.seen.coverage.',
       ENDPOINT_COVERAGE,
+    );
+  });
+
+  it('every place an endpoint can be seen has a label (monitoring:discovery.seen.source.*)', () => {
+    // Built from the generated union by `sourcesOf` (ADR-179). A source the backend gains fails the
+    // type check in discoveredEndpoints.ts first; this is the half that proves it has words.
+    expectKeys(
+      'endpoint source',
+      { en: enMonitoring, ja: jaMonitoring },
+      'discovery.seen.source.',
+      ENDPOINT_SOURCES,
     );
   });
 
