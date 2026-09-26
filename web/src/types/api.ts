@@ -967,6 +967,7 @@ export const MERAKI_LISTINGS = [
   'switch_port_statuses',
   'switch_port_usage',
   'switch_port_config',
+  'switch_port_topology',
   'wireless_clients',
   'wireless_channel_utilization',
   'wireless_ssid_statuses',

@@ -31,7 +31,7 @@
 
 use super::*;
 use yagra_bus::{MerakiCollectReport, RadioReadings, RowName};
-use yagra_common::{MerakiTier, METRIC_MERAKI_DEVICE_UP};
+use yagra_common::{MerakiTier, NeighborSet, METRIC_MERAKI_DEVICE_UP};
 
 /// What an availability result says about the device, read from the sample the transport made.
 ///
@@ -138,6 +138,20 @@ pub async fn execute_meraki(
             .chain(radios.iter().flat_map(RadioReadings::samples))
             .collect();
         let (outcome, observational, judge_samples) = tier_verdict(check.tier, &samples);
+        // A switch's neighbours (ADR-181), canonicalized and capped exactly as a walked set is.
+        // No `snmp_neighbor_count` beside them: that reading means "the last SNMP walk" (決定 6).
+        let neighbors = obs.neighbors.map(|rows| {
+            let set = NeighborSet::new(rows);
+            if set.truncated {
+                metrics::counter!("yagra_neighbor_rows_truncated_total").increment(1);
+                tracing::warn!(
+                    job_id = %job.job_id,
+                    kept = set.len(),
+                    "neighbour set exceeded the per-node cap; the excess was dropped"
+                );
+            }
+            set
+        });
         let interfaces = obs
             .uplinks
             .into_iter()
@@ -174,7 +188,7 @@ pub async fn execute_meraki(
             hardware_model: None,
             sys_object_id: None,
             dns_chain: None,
-            neighbors: None,
+            neighbors,
             l3: None,
             arp: None,
             routing: None,
@@ -206,6 +220,7 @@ fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiColle
         port_names: check.port_names,
         ssid_statuses: check.ssid_statuses,
         ssid_only: check.ssid_only,
+        neighbors: check.neighbors,
     }
 }
 
@@ -356,6 +371,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            neighbors: None,
             radios: vec![],
             samples: vec![MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
@@ -381,6 +397,7 @@ mod tests {
             port_names: false,
             ssid_statuses: false,
             ssid_only: false,
+            neighbors: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
         device_results(execute_meraki(&job, &transport, 42).await)
@@ -418,6 +435,7 @@ mod tests {
             port_names: false,
             ssid_statuses: false,
             ssid_only: false,
+            neighbors: false,
         };
         let job = PollJob::meraki_collect(Uuid::from_u128(7), check, 300);
         execute_meraki(&job, transport, 42).await
@@ -427,6 +445,7 @@ mod tests {
         vec![yagra_transport::MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            neighbors: None,
             radios: vec![],
             samples: vec![yagra_transport::MerakiSample {
                 metric: METRIC_MERAKI_DEVICE_UP.into(),
@@ -478,6 +497,7 @@ mod tests {
             port_names: false,
             ssid_statuses: false,
             ssid_only: false,
+            neighbors: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check.clone(), 1_800);
         let spec = spec_for(&job, &check);
@@ -494,6 +514,85 @@ mod tests {
         };
         let job = PollJob::meraki_collect(Uuid::nil(), names.clone(), 300);
         assert!(spec_for(&job, &names).port_names);
+
+        // ADR-181: so does "read the neighbours this time".
+        let neighbours = yagra_bus::MerakiCollectCheck {
+            tier: MerakiTier::SwitchPorts,
+            neighbors: true,
+            ..names
+        };
+        let job = PollJob::meraki_collect(Uuid::nil(), neighbours.clone(), 300);
+        assert!(spec_for(&job, &neighbours).neighbors);
+    }
+
+    /// ADR-181. A switch the neighbour listing named gets its set, canonicalized as a walked one is
+    /// and with no `snmp_neighbor_count` beside it (決定 6); a switch it did not name gets `None`,
+    /// which leaves the stored set alone (決定 4).
+    #[tokio::test]
+    async fn a_listed_switch_carries_its_neighbours_and_an_unlisted_one_carries_none() {
+        use yagra_common::{Neighbor, NeighborProto};
+        use yagra_transport::MerakiObservation;
+        let observation = |serial: &str, neighbors: Option<Vec<Neighbor>>| MerakiObservation {
+            serial: serial.into(),
+            samples: vec![],
+            uplinks: vec![],
+            ports: vec![],
+            radios: vec![],
+            neighbors,
+        };
+        // Out of order on purpose: the set arrives sorted.
+        let rows = vec![
+            Neighbor::new(NeighborProto::Lldp, "9", "00:18:0a:00:00:09", "Gi1/0/9"),
+            Neighbor::new(NeighborProto::Cdp, "1", "core-sw", "Gi1/0/1"),
+        ];
+        let transport = FakeTransport::reachable(1.0).with_meraki(vec![
+            observation("Q2-A", Some(rows)),
+            observation("Q2-B", None),
+        ]);
+        let job = PollJob::meraki_collect(
+            Uuid::from_u128(4),
+            yagra_bus::MerakiCollectCheck {
+                devices: vec![
+                    yagra_bus::MerakiDeviceRef {
+                        serial: "Q2-A".into(),
+                        node_id: NodeId::from(Uuid::from_u128(1)),
+                    },
+                    yagra_bus::MerakiDeviceRef {
+                        serial: "Q2-B".into(),
+                        node_id: NodeId::from(Uuid::from_u128(2)),
+                    },
+                ],
+                org_id: "1".into(),
+                meraki_org_uuid: Uuid::from_u128(4),
+                tier: MerakiTier::SwitchPorts,
+                base_url: "https://api.meraki.com".into(),
+                api_key: "k".into(),
+                network_ids: vec![],
+                per_page: 1000,
+                target_rps: 2.0,
+                timeout_ms: 30_000,
+                port_names: false,
+                ssid_statuses: false,
+                ssid_only: false,
+                neighbors: true,
+            },
+            300,
+        );
+        let results = device_results(execute_meraki(&job, &transport, 42).await);
+        assert_eq!(results.len(), 2);
+        let set = results[0].neighbors.as_ref().expect("Q2-A was listed");
+        assert_eq!(
+            set.neighbors
+                .iter()
+                .map(|n| n.local_port.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "9"]
+        );
+        assert!(results[0]
+            .samples
+            .iter()
+            .all(|s| s.metric != yagra_common::METRIC_SNMP_NEIGHBOR_COUNT));
+        assert_eq!(results[1].neighbors, None);
     }
 
     /// ADR-167. A switch's ports become `interfaces` rows the way an SNMP switch's ifTable walk makes
@@ -518,6 +617,7 @@ mod tests {
                 sample("meraki_port_out_bps", 1, 32_300.0),
             ],
             uplinks: vec![],
+            neighbors: None,
             radios: vec![],
             ports: vec![
                 MerakiPort {
@@ -583,6 +683,7 @@ mod tests {
             }],
             uplinks: vec![],
             ports: vec![],
+            neighbors: None,
             radios: vec![
                 MerakiRadio {
                     slot: 1,
@@ -669,6 +770,7 @@ mod tests {
         let transport = FakeTransport::reachable(1.0).with_meraki(vec![MerakiObservation {
             serial: "Q2-A".into(),
             ports: vec![],
+            neighbors: None,
             radios: vec![],
             samples: vec![
                 sample("meraki_uplink_sent_bps", Some(1)),
@@ -896,6 +998,7 @@ mod tests {
             MerakiObservation {
                 serial: "Q2-A".into(),
                 ports: vec![],
+                neighbors: None,
                 radios: vec![],
                 samples: vec![
                     MerakiSample {
@@ -918,6 +1021,7 @@ mod tests {
             MerakiObservation {
                 serial: "Q2-UNMAPPED".into(),
                 ports: vec![],
+                neighbors: None,
                 radios: vec![],
                 samples: vec![MerakiSample {
                     metric: "meraki_device_up".into(),
@@ -945,6 +1049,7 @@ mod tests {
             port_names: false,
             ssid_statuses: false,
             ssid_only: false,
+            neighbors: false,
         };
         let job = PollJob::meraki_collect(Uuid::nil(), check, 300);
 

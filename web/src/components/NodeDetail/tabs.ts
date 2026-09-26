@@ -113,13 +113,18 @@ const DEVICE_ONLY: readonly NodeKind[] = ['device'];
  *
  *  An AP node is never polled itself, so it has no ifTable walk of its own — but its controller's
  *  radio walk writes `interfaces` rows for it, one per radio, and those are as real as any port. A
- *  Meraki switch is not walked either, and its ports are read from the Dashboard. Only the
- *  Interfaces tab is in this position: neighbours and flow have no equivalent from either, so they
- *  stay [`DEVICE_ONLY`] and stay hidden.
+ *  Meraki switch is not walked either, and its ports are read from the Dashboard. Neighbours have a
+ *  Dashboard source for a Meraki switch only ([`NEIGHBOR_KINDS`], ADR-181); flow has none.
  *
  *  ⚠️ Necessary and **not sufficient** for a Meraki node: only a switch has ports and only an access
  *  point has radios. An MX passes this list, and [`interfacesFed`] is what keeps the tab off it. */
 const INTERFACE_KINDS: readonly NodeKind[] = ['device', 'wireless_ap', 'meraki'];
+
+/** Every kind whose `node_neighbors` row something writes: an ordinary device (its own CDP/LLDP
+ *  walk) and a Meraki node — whose switch-port collect reads each port's LLDP/CDP from the
+ *  Dashboard (ADR-181). Necessary, not sufficient: only a Meraki **switch** is read, and
+ *  [`neighborsFed`] is what keeps the tab off an MR or an MX. */
+const NEIGHBOR_KINDS: readonly NodeKind[] = ['device', 'meraki'];
 
 /**
  * What the tab rules ask about a node. Both facts come off the `NodeDetail` the pane has already
@@ -238,9 +243,11 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   },
   // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
   // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
+  // `needsSnmp` is answered by [`neighborsFed`] for this tab, not [`interfacesFed`]: a Meraki
+  // access point has radios but no neighbour source (ADR-181 決定 9).
   neighbors: {
     labelKey: 'tabs.neighbors',
-    kinds: DEVICE_ONLY,
+    kinds: NEIGHBOR_KINDS,
     needsSnmp: true,
     needsWlanController: false,
   },
@@ -334,12 +341,33 @@ export function interfacesFed(node: NodeDetailSubject): boolean {
   }
 }
 
+/** Whether something reads this node's CDP/LLDP neighbours — what the Neighbors tab is fed by
+ *  (ADR-181 決定 9). A device: its own SNMP walk, when it has one. A Meraki node: its organization's
+ *  switch-port collect, so a switch only — the listing it reads has no access point or MX in it.
+ *  Nothing else. Exhaustive, so the next kind has to answer it. */
+export function neighborsFed(node: NodeDetailSubject): boolean {
+  switch (node.kind) {
+    case 'device':
+      return node.snmpConfigured;
+    case 'meraki':
+      return node.merakiProductType?.trim().toLowerCase() === 'switch';
+    case 'wireless_ap':
+    case 'url':
+    case 'dns':
+      return false;
+    default: {
+      const unreachable: never = node.kind;
+      return unreachable;
+    }
+  }
+}
+
 export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
   return NODE_DETAIL_TABS.filter((tab) => {
     const meta = NODE_DETAIL_TAB_META[tab];
     return (
       meta.kinds.includes(node.kind) &&
-      (interfacesFed(node) || !meta.needsSnmp) &&
+      (!meta.needsSnmp || (tab === 'neighbors' ? neighborsFed(node) : interfacesFed(node))) &&
       (node.isWlanController || !meta.needsWlanController)
     );
   });

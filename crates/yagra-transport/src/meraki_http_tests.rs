@@ -162,6 +162,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
         port_names: false,
         ssid_statuses: false,
         ssid_only: false,
+        neighbors: false,
     }
 }
 
@@ -965,6 +966,107 @@ async fn a_500_on_the_second_status_page_keeps_the_first() {
     assert_eq!(serials(&got), vec!["Q2SW-0001"]);
     assert_eq!(got.stopped, Some(MerakiFetchError::Status(500)));
     assert_eq!(got.failure(), None);
+}
+
+// ── Switch-port neighbours (ADR-181) ────────────────────────────────────────────────────────
+
+/// One switch's LLDP/CDP listing row. \`ports\` is the raw JSON array of ports.
+fn topology_row(serial: &str, network: &str, ports: &str) -> String {
+    format!(r#"{{"serial":"{serial}","network":{{"id":"{network}"}},"ports":{ports}}}"#)
+}
+
+const PORT_1_HEARS_CORE: &str = r#"[{"portId":"1","lastUpdatedAt":"2026-09-26T00:00:00Z",
+    "lldp":[{"name":"Chassis ID","value":"00:18:0a:00:00:09"},{"name":"Port ID","value":"Gi1/0/1"},
+            {"name":"System name","value":"core-sw"},{"name":"Management address","value":"192.0.2.1"}],
+    "cdp":[]}]"#;
+
+fn neighbour_spec(port_names: bool) -> MerakiCollectSpec {
+    MerakiCollectSpec {
+        neighbors: true,
+        ..switch_ports_spec(port_names)
+    }
+}
+
+/// 決定 2–4 and 8, through HTTP: asked for, the neighbours are read after the traffic and BEFORE the
+/// names, at the page size the listing accepts; a listed switch with no other reading still gets an
+/// observation, and an unlisted one keeps \`None\`.
+#[tokio::test]
+async fn the_neighbours_are_read_before_the_names_and_handed_to_the_listed_switches() {
+    let statuses = status_page(&format!(
+        "{},{}",
+        switch_status("Q2SW-0001", "N_1", PORT_1_UP),
+        switch_status("Q2SW-0002", "N_1", PORT_1_UP),
+    ));
+    let topology = status_page(&format!(
+        "{},{}",
+        topology_row("Q2SW-0001", "N_1", PORT_1_HEARS_CORE),
+        // Not on the spine (no port Connected), and listed: it still hears something.
+        topology_row("Q2SW-0003", "N_1", PORT_1_HEARS_CORE),
+    ));
+    let (origin, _, seen) = serve(vec![
+        Reply::ok(&statuses),
+        Reply::ok(&usage_page("Q2SW-0001", "N_1")),
+        Reply::ok(&topology),
+        Reply::ok("[]"),
+    ])
+    .await;
+
+    let got = collect(&neighbour_spec(true), TIMEOUT, Some(&origin))
+        .await
+        .expect("a collect");
+
+    assert_eq!(got.failure(), None);
+    let of = |serial: &str| {
+        got.observations
+            .iter()
+            .find(|o| o.serial == serial)
+            .unwrap_or_else(|| panic!("{serial}"))
+    };
+    let one = of("Q2SW-0001").neighbors.as_ref().expect("read");
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].local_port, "1");
+    assert_eq!(one[0].local_ifindex, Some(1));
+    assert_eq!(one[0].remote_chassis, "00:18:0a:00:00:09");
+    assert_eq!(one[0].remote_mgmt_addr.as_deref(), Some("192.0.2.1"));
+    assert!(of("Q2SW-0003").neighbors.is_some());
+    assert_eq!(of("Q2SW-0002").neighbors, None, "not listed ⇒ left alone");
+
+    let sent = lines(&seen);
+    assert_eq!(sent.len(), 4, "{sent:?}");
+    assert_eq!(
+        sent[2],
+        "GET /api/v1/organizations/1/switch/ports/topology/discovery/byDevice?perPage=20 HTTP/1.1"
+    );
+    assert!(sent[3].contains("/switch/ports/bySwitch"), "{}", sent[3]);
+}
+
+/// 決定 3: a neighbour read cut short hands no switch a set — not even the ones on the pages that
+/// did arrive — and names itself; the port readings of the same collect still arrive.
+#[tokio::test]
+async fn a_neighbour_read_cut_short_hands_out_nothing() {
+    let page_two = format!(
+        "{BASE}/api/v1/organizations/1/switch/ports/topology/discovery/byDevice?perPage=20&startingAfter=Q2SW-0001"
+    );
+    let statuses = status_page(&switch_status("Q2SW-0001", "N_1", PORT_1_UP));
+    let topology = status_page(&topology_row("Q2SW-0001", "N_1", PORT_1_HEARS_CORE));
+    let (origin, _, _) = serve(vec![
+        Reply::ok(&statuses),
+        Reply::ok(&usage_page("Q2SW-0001", "N_1")),
+        Reply::ok(&topology).next(&page_two),
+        Reply::json(500, r#"{"errors":["mock"]}"#),
+    ])
+    .await;
+
+    let got = collect(&neighbour_spec(false), TIMEOUT, Some(&origin))
+        .await
+        .expect("the collect still answers");
+
+    assert!(got.observations.iter().all(|o| o.neighbors.is_none()));
+    assert_eq!(got.stopped, Some(MerakiFetchError::Status(500)));
+    assert!(got.observations[0]
+        .samples
+        .iter()
+        .any(|s| s.metric == "if_oper_status"));
 }
 
 // ── The wireless tier (ADR-168) ───────────────────────────────────────────────────────────────

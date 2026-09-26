@@ -2240,6 +2240,15 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
         if !settings.get_meraki_polling_enabled().await {
             continue;
         }
+        // A switch's LLDP/CDP neighbours follow the deployment's neighbour settings, the ones an SNMP
+        // node's neighbour walk follows (ADR-181 決定 2). Read every tick so a change applies within
+        // one; a failed read answers the defaults (on, hourly), never "off".
+        let adjacency = settings.get_adjacency_settings().await;
+        schedule.set_neighbor_interval(
+            adjacency
+                .neighbors_enabled
+                .then(|| Duration::from_secs(u64::from(adjacency.neighbors_interval_secs))),
+        );
         let orgs = match orgs_repo.list_enabled().await {
             Ok(o) => o,
             Err(e) => {

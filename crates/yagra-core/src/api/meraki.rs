@@ -2338,7 +2338,7 @@ mod tests {
             .iter()
             .map(|l| l.as_str())
             .collect();
-        assert_eq!(ours.len(), 11, "the listings a collect reads today");
+        assert_eq!(ours.len(), 12, "the listings a collect reads today");
         assert_eq!(
             listed, ours,
             "types/api.ts lists exactly these, in this order"

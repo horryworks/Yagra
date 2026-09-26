@@ -23,6 +23,7 @@
 //! * **Bounded.** Pagination is capped; a transient network/5xx failure returns the partial results
 //!   collected so far rather than hammering.
 
+use crate::meraki_neighbors::{parse_switch_port_topology, SWITCH_PORT_TOPOLOGY_PER_PAGE};
 use crate::{
     MerakiCollectSpec, MerakiCollected, MerakiObservation, MerakiPort, MerakiRadio, MerakiSample,
     MerakiUplink, TransportError,
@@ -832,6 +833,8 @@ pub(crate) async fn collect(
     let mut data: Vec<DeviceDatum> = Vec::new();
     // A switch's ports, by serial — the switch-port tier's interface inventory (ADR-167).
     let mut ports: BTreeMap<String, BTreeMap<u32, MerakiPort>> = BTreeMap::new();
+    // A switch's LLDP/CDP neighbours, by serial — only from a complete read (ADR-181 決定 3).
+    let mut neighbors: Option<BTreeMap<String, Vec<yagra_common::Neighbor>>> = None;
     // An access point's radios, by serial then slot — the wireless tier's (ADR-168).
     let mut radios: BTreeMap<String, BTreeMap<u32, MerakiRadio>> = BTreeMap::new();
     match spec.tier {
@@ -971,6 +974,33 @@ pub(crate) async fn collect(
             listings.note(MerakiListing::SwitchPortUsage, stop, admitted);
             data.extend(parse_switch_port_usage(&items, &ports));
 
+            // Each port's LLDP/CDP neighbours, when core asks (ADR-181). Read BEFORE the names:
+            // a neighbour read cut short is thrown away whole (決定 3), while names read part of
+            // the way still name the ports they reached — so this is the read that must not be the
+            // one the budget cuts. Measured: 854 switches, 43 pages, 25 s.
+            if spec.neighbors {
+                let topology_path = format!(
+                    "{API_PREFIX}/organizations/{}/switch/ports/topology/discovery/byDevice",
+                    spec.org_id
+                );
+                let (items, stop) = contained(
+                    session
+                        .get_paged_reported(
+                            &topology_path,
+                            &no_query,
+                            Paging::Upto(SWITCH_PORT_TOPOLOGY_PER_PAGE),
+                            Shape::Items,
+                        )
+                        .await,
+                );
+                let kept = watched.keep(items);
+                let complete = stop.is_none();
+                listings.note(MerakiListing::SwitchPortTopology, stop, kept.len());
+                if complete {
+                    neighbors = Some(parse_switch_port_topology(&kept));
+                }
+            }
+
             if spec.port_names {
                 let config_path = format!(
                     "{API_PREFIX}/organizations/{}/switch/ports/bySwitch",
@@ -1091,6 +1121,9 @@ pub(crate) async fn collect(
     let mut observations = fold(data);
     attach_ports(&mut observations, ports);
     attach_radios(&mut observations, radios);
+    if let Some(neighbors) = neighbors {
+        attach_neighbors(&mut observations, neighbors);
+    }
     Ok(MerakiCollected {
         observations,
         stopped: listings.stopped,
@@ -1353,6 +1386,19 @@ fn attach_ports(
     }
 }
 
+/// Hand each switch the listing named its neighbours, creating the observation for a switch that
+/// has no other reading this time (ADR-181 決定 4). A switch the listing did not name keeps
+/// `None`, so its stored neighbours stay.
+fn attach_neighbors(
+    observations: &mut Vec<MerakiObservation>,
+    by_serial: BTreeMap<String, Vec<yagra_common::Neighbor>>,
+) {
+    let mut at = ObservationIndex::of(observations);
+    for (serial, neighbors) in by_serial {
+        at.observation(observations, serial).neighbors = Some(neighbors);
+    }
+}
+
 /// Where each device's observation sits in the collect's list, so attaching the switch ports or the
 /// radios is one lookup per device. Each used to scan the list per device — quadratic in the
 /// organization's switches or access points, on the poller's async worker, every collect.
@@ -1385,6 +1431,7 @@ impl ObservationIndex {
                     uplinks: Vec::new(),
                     ports: Vec::new(),
                     radios: Vec::new(),
+                    neighbors: None,
                 });
                 i
             }
@@ -1820,6 +1867,7 @@ fn fold(data: Vec<DeviceDatum>) -> Vec<MerakiObservation> {
                 uplinks: Vec::new(),
                 ports: Vec::new(),
                 radios: Vec::new(),
+                neighbors: None,
             });
         obs.samples.push(d.sample);
         if let Some(u) = d.uplink {
@@ -2522,6 +2570,7 @@ mod tests {
             uplinks: Vec::new(),
             ports: Vec::new(),
             radios: Vec::new(),
+            neighbors: None,
         };
         let port = |ifindex: u32| MerakiPort {
             ifindex,
@@ -3673,6 +3722,7 @@ mod tests {
             uplinks: Vec::new(),
             ports: Vec::new(),
             radios: Vec::new(),
+            neighbors: None,
         }
     }
 

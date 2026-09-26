@@ -55,8 +55,8 @@ describe('node-detail tabs', () => {
 
 // Which nodes see which tabs. A URL or DNS monitor produces one HTTP/DNS job and nothing else
 // (scheduler/assemble.rs::assemble_node_jobs returns before the ICMP and SNMP branches), and a Meraki node
-// emits no per-node job at all — so Interfaces / Neighbors / Flow are structurally unreachable for
-// them, not merely empty today. A ping-only device is the same argument on the other axis: it is a
+// emits no per-node job at all — so Flow is structurally unreachable for them, and Interfaces /
+// Neighbors are reachable only where the org collector reads a source (ADR-167, ADR-181). A ping-only device is the same argument on the other axis: it is a
 // device, but with no SNMP auth resolved it gets an ICMP job and nothing else (ADR-119).
 
 /** Every node the rules can be asked about: each kind, with SNMP configured and without.
@@ -122,8 +122,13 @@ describe('node-detail tab visibility', () => {
       for (const other of ['appliance', 'camera', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
       }
-      // Neighbours and flow have no Meraki source at all.
-      expect(visibleNodeDetailTabs(node('switch'))).not.toContain('neighbors');
+      // ADR-181: a switch's neighbours are read from the Dashboard — an AP's and an MX's are not.
+      expect(visibleNodeDetailTabs(node('switch'))).toContain('neighbors');
+      expect(visibleNodeDetailTabs(node(' Switch '))).toContain('neighbors');
+      for (const other of ['wireless', 'appliance', 'camera', null]) {
+        expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('neighbors');
+      }
+      // Flow has no Meraki source at all.
       expect(visibleNodeDetailTabs(node('switch'))).not.toContain('flow');
     }
   });
@@ -211,6 +216,7 @@ describe('node-detail tab visibility', () => {
     expect(tabs('meraki', false, false, 'switch')).toEqual([
       'overview',
       'interfaces',
+      'neighbors',
       'collection',
       'events',
     ]);

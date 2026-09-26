@@ -25,6 +25,7 @@ mod icmp;
 mod meraki;
 #[cfg(test)]
 mod meraki_http_tests;
+mod meraki_neighbors;
 #[cfg(test)]
 mod module_source;
 mod snmp;
@@ -299,6 +300,9 @@ pub struct MerakiCollectSpec {
     /// on the radios (ADR-169 決定 2, `yagra_bus::MerakiCollectCheck::ssid_only`). Implies
     /// `ssid_statuses`.
     pub ssid_only: bool,
+    /// The switch-port tier only: also read each port's LLDP/CDP neighbours this time (ADR-181,
+    /// `yagra_bus::MerakiCollectCheck::neighbors`).
+    pub neighbors: bool,
 }
 
 /// Raw per-device observations from a Meraki collect. The poller maps these to per-node
@@ -319,6 +323,11 @@ pub struct MerakiObservation {
     /// each, built on the poller by `yagra_bus::RadioReadings` so a Meraki radio publishes exactly
     /// what a controller-walked one does. Empty on every other device and every other tier.
     pub radios: Vec<MerakiRadio>,
+    /// A switch's LLDP/CDP neighbours (ADR-181) → its `node_neighbors` row, replacing the stored
+    /// set. `None` unless this collect read them **completely** and the listing named this switch:
+    /// a read cut short says nothing about the switches it did not reach, and an empty set would
+    /// erase theirs (決定 3, 4). `Some(vec![])` is a switch that was read and hears nothing.
+    pub neighbors: Option<Vec<yagra_common::Neighbor>>,
 }
 
 /// One radio of a Meraki access point seen on a wireless collect (ADR-168 決定 2): its slot on the

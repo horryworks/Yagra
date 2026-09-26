@@ -28,8 +28,8 @@ use uuid::Uuid;
 use yagra_common::MerakiTier;
 
 use crate::meraki::{
-    pool_can_run, port_names_due, ssid_statuses_due, MerakiLane, MerakiOrg, PoolCaps, SlowReads,
-    SSID_STATUSES_EVERY,
+    neighbors_due, pool_can_run, port_names_due, ssid_statuses_due, MerakiLane, MerakiOrg,
+    PoolCaps, SlowReads, SSID_STATUSES_EVERY,
 };
 
 /// How long an SSID read holds the slow lane, with room to spare: about 80 s measured on a real
@@ -91,6 +91,12 @@ pub struct MerakiSchedule {
     port_names_at: HashMap<Uuid, Instant>,
     // When each organization's SSIDs and radio settings were last read (ADR-168 決定 1).
     ssid_statuses_at: HashMap<Uuid, Instant>,
+    // When each organization's switch-port collect last asked for the ports' neighbours (ADR-181).
+    neighbors_at: HashMap<Uuid, Instant>,
+    // How often the neighbours are read — the deployment's neighbour interval — or `None` while
+    // neighbour discovery is off. Set by the loop every tick from the settings it reads
+    // ([`Self::set_neighbor_interval`]); off until then.
+    neighbor_every: Option<Duration>,
     // When a tier was last counted as failed for a reason **core itself** knows about — its key
     // could not be opened, its imported devices could not be read, or which networks it watches
     // could not be read. No job is sent for any of the three, so no poller can report them (ADR-164
@@ -160,14 +166,31 @@ impl MerakiSchedule {
         plan
     }
 
+    /// How often the switch ports' neighbours are read (ADR-181 決定 2): the deployment's neighbour
+    /// interval, or `None` while neighbour discovery is off.
+    pub fn set_neighbor_interval(&mut self, every: Option<Duration>) {
+        self.neighbor_every = every;
+    }
+
     fn slow_work(&self, org: &MerakiOrg, tiers: &[MerakiTier], now: Instant) -> Option<MerakiWork> {
         let switch_ports = tiers.contains(&MerakiTier::SwitchPorts);
         if switch_ports && self.is_due(org, MerakiTier::SwitchPorts, now) {
+            let port_names = port_names_due(self.port_names_at.get(&org.id).copied(), now);
             return Some(MerakiWork {
                 tier: MerakiTier::SwitchPorts,
                 slow: SlowReads {
-                    port_names: port_names_due(self.port_names_at.get(&org.id).copied(), now),
+                    port_names,
                     ssid_statuses: false,
+                    // Never in the same collect as the names (ADR-181): the two together would
+                    // hold the lane about 25 s past the 220 s the longest collect holds it today.
+                    // The neighbours wait one switch-port interval instead — after a restart the
+                    // names go first, the neighbours with the next collect.
+                    neighbors: !port_names
+                        && neighbors_due(
+                            self.neighbors_at.get(&org.id).copied(),
+                            now,
+                            self.neighbor_every,
+                        ),
                 },
             });
         }
@@ -187,6 +210,7 @@ impl MerakiSchedule {
             slow: SlowReads {
                 port_names: false,
                 ssid_statuses: true,
+                neighbors: false,
             },
         })
     }
@@ -225,6 +249,9 @@ impl MerakiSchedule {
         self.last.insert((org, work.tier), now);
         if work.slow.port_names {
             self.port_names_at.insert(org, now);
+        }
+        if work.slow.neighbors {
+            self.neighbors_at.insert(org, now);
         }
     }
 
@@ -320,8 +347,73 @@ mod tests {
         slow: SlowReads {
             port_names: false,
             ssid_statuses: true,
+            neighbors: false,
         },
     };
+
+    /// The switch-port work a plan offers, after a restart with every lane free.
+    fn switch_ports_now(s: &MerakiSchedule, now: Instant) -> MerakiWork {
+        s.plan(&org(&["switch_ports"]), now, ALL_CAPS, both_free)
+            .slow
+            .expect("the switch ports are due")
+    }
+
+    /// ADR-181 決定 2: with neighbour discovery off the switch ports never ask for neighbours.
+    #[test]
+    fn the_neighbours_are_never_read_while_neighbour_discovery_is_off() {
+        let mut s = MerakiSchedule::new();
+        let t0 = Instant::now();
+        let first = switch_ports_now(&s, t0);
+        s.dispatched(Uuid::from_u128(0x169), &first, t0);
+        let later = t0 + Duration::from_secs(301);
+        assert!(!switch_ports_now(&s, later).slow.neighbors);
+        s.set_neighbor_interval(None);
+        assert!(!switch_ports_now(&s, later).slow.neighbors);
+    }
+
+    /// ADR-181: never in the same collect as the names — after a restart the names go first and the
+    /// neighbours with the next switch-port collect; then each keeps its own hour.
+    #[test]
+    fn the_neighbours_wait_for_the_collect_after_the_names() {
+        let mut s = MerakiSchedule::new();
+        s.set_neighbor_interval(Some(Duration::from_secs(3600)));
+        let t0 = Instant::now();
+        let first = switch_ports_now(&s, t0);
+        assert!(first.slow.port_names && !first.slow.neighbors);
+        s.dispatched(Uuid::from_u128(0x169), &first, t0);
+
+        let t1 = t0 + Duration::from_secs(300);
+        let second = switch_ports_now(&s, t1);
+        assert!(!second.slow.port_names && second.slow.neighbors);
+        s.dispatched(Uuid::from_u128(0x169), &second, t1);
+
+        let t2 = t1 + Duration::from_secs(300);
+        assert!(!switch_ports_now(&s, t2).slow.neighbors, "read 300 s ago");
+        // An hour on, the names are due again and go first; the neighbours take the next collect.
+        let t3 = t0 + Duration::from_secs(3600);
+        let names = switch_ports_now(&s, t3);
+        assert!(names.slow.port_names && !names.slow.neighbors);
+        s.dispatched(Uuid::from_u128(0x169), &names, t3);
+        let t4 = t1 + Duration::from_secs(3600);
+        assert!(
+            switch_ports_now(&s, t4).slow.neighbors,
+            "an hour after the last read"
+        );
+    }
+
+    /// Only a switch-port check carries the flag onto the bus, whatever `SlowReads` says.
+    #[test]
+    fn only_a_switch_port_check_asks_the_poller_for_neighbours() {
+        let slow = SlowReads {
+            neighbors: true,
+            ..SlowReads::default()
+        };
+        let o = org(&["switch_ports", "availability"]);
+        let check =
+            |tier| crate::meraki::build_collect_check(&o, tier, "k".into(), vec![], vec![], slow);
+        assert!(check(MerakiTier::SwitchPorts).neighbors);
+        assert!(!check(MerakiTier::Availability).neighbors);
+    }
 
     /// 決定 5 / ADR-164 決定 18: after a restart everything is due at once; the fast lane starts
     /// with availability — the one tier whose failures raise the organization's alert — whatever
@@ -583,6 +675,8 @@ mod tests {
     fn holds(w: &MerakiWork) -> Duration {
         Duration::from_secs(match (w.tier, w.slow.port_names, w.slow.ssid_statuses) {
             (MerakiTier::SwitchPorts, true, _) => 220,
+            // ADR-181: 43 pages in 25 s on a real organization of 854 switches.
+            (MerakiTier::SwitchPorts, false, _) if w.slow.neighbors => 165,
             (MerakiTier::SwitchPorts, false, _) => 140,
             (MerakiTier::Wireless, _, true) => 90,
             (MerakiTier::Wireless, _, false) => 5,
@@ -605,6 +699,7 @@ mod tests {
         let o = every_tier();
         let t0 = Instant::now();
         let mut s = MerakiSchedule::new();
+        s.set_neighbor_interval(Some(Duration::from_secs(3600)));
         let f = MerakiInflight::new();
         let mut running: Vec<(Instant, Uuid)> = Vec::new(); // (ends, job)
         let mut sent: HashMap<&'static str, Vec<u64>> = HashMap::new();
@@ -648,6 +743,13 @@ mod tests {
                 sent.entry(key).or_default().push(at(now));
                 if w.slow.port_names {
                     sent.entry("port_names").or_default().push(at(now));
+                }
+                if w.slow.neighbors {
+                    assert!(
+                        !w.slow.port_names,
+                        "names and neighbours in one collect: {w:?}"
+                    );
+                    sent.entry("neighbors").or_default().push(at(now));
                 }
                 if w.tier == MerakiTier::Wireless && !w.is_ssid_read() {
                     // Every wireless round publishes the client count; the SSID read on its own
@@ -721,6 +823,13 @@ mod tests {
                 .iter()
                 .all(|&g| g >= PORT_NAMES_EVERY.as_secs() && g <= PORT_NAMES_EVERY.as_secs() + 400),
             "{names:?}"
+        );
+        // ADR-181: the neighbours hourly too, a collect behind the names, and never in their way.
+        let neighbours = gaps("neighbors");
+        assert_eq!(neighbours.len(), 2, "{neighbours:?}");
+        assert!(
+            neighbours.iter().all(|&g| (3600..=3600 + 400).contains(&g)),
+            "{neighbours:?}"
         );
     }
 }

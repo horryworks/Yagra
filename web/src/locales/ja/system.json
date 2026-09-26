@@ -490,6 +490,7 @@
       "switch_port_statuses": "スイッチのポートの状態",
       "switch_port_usage": "スイッチのポートの通信量",
       "switch_port_config": "スイッチのポート名",
+      "switch_port_topology": "スイッチのポートの隣接（LLDP/CDP）",
       "wireless_clients": "AP の接続端末",
       "wireless_channel_utilization": "電波のチャネル使用率",
       "wireless_ssid_statuses": "SSID と電波の設定"

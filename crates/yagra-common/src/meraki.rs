@@ -147,6 +147,9 @@ pub enum MerakiListing {
     SwitchPortUsage,
     /// `switch/ports/bySwitch` — the ports' configured names, read once an hour (ADR-167 決定 1).
     SwitchPortConfig,
+    /// `switch/ports/topology/discovery/byDevice` — each port's LLDP/CDP neighbours, read at the
+    /// deployment's neighbour interval (ADR-181).
+    SwitchPortTopology,
     /// `wireless/clients/overview/byDevice` — the wireless tier's first read: each access point's
     /// clients online (ADR-168).
     WirelessClients,
@@ -160,7 +163,7 @@ pub enum MerakiListing {
 
 impl MerakiListing {
     /// Every listing.
-    pub const ALL: [MerakiListing; 11] = [
+    pub const ALL: [MerakiListing; 12] = [
         MerakiListing::Availabilities,
         MerakiListing::UplinksLossAndLatency,
         MerakiListing::ApplianceUplinkStatuses,
@@ -169,6 +172,7 @@ impl MerakiListing {
         MerakiListing::SwitchPortStatuses,
         MerakiListing::SwitchPortUsage,
         MerakiListing::SwitchPortConfig,
+        MerakiListing::SwitchPortTopology,
         MerakiListing::WirelessClients,
         MerakiListing::WirelessChannelUtilization,
         MerakiListing::WirelessSsidStatuses,
@@ -186,6 +190,7 @@ impl MerakiListing {
             MerakiListing::SwitchPortStatuses => "switch_port_statuses",
             MerakiListing::SwitchPortUsage => "switch_port_usage",
             MerakiListing::SwitchPortConfig => "switch_port_config",
+            MerakiListing::SwitchPortTopology => "switch_port_topology",
             MerakiListing::WirelessClients => "wireless_clients",
             MerakiListing::WirelessChannelUtilization => "wireless_channel_utilization",
             MerakiListing::WirelessSsidStatuses => "wireless_ssid_statuses",

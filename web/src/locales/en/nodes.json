@@ -992,8 +992,8 @@
     "historyEmpty": "No changes recorded. Neighbors are only written down when they actually change, so a rack nobody is repatching stays empty here.",
     "empty": {
       "disabled": "Neighbor discovery is switched off for this deployment. Turn it on in Settings ▸ System settings.",
-      "unrecorded": "Nothing recorded yet. Only SNMP devices are walked, and a device that speaks neither LLDP nor CDP never reports any.",
-      "none": "This device was walked and reports no neighbors."
+      "unrecorded": "Nothing recorded yet. Neighbors are read from SNMP devices and from Meraki switches; a device that speaks neither LLDP nor CDP never reports any.",
+      "none": "This device was read and reports no neighbors."
     },
     "proto": {
       "lldp": "LLDP",

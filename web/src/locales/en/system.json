@@ -502,6 +502,7 @@
       "switch_port_statuses": "switch port statuses",
       "switch_port_usage": "switch port traffic",
       "switch_port_config": "switch port names",
+      "switch_port_topology": "switch port neighbors (LLDP/CDP)",
       "wireless_clients": "access point clients",
       "wireless_channel_utilization": "radio channel utilization",
       "wireless_ssid_statuses": "SSIDs and radio settings"

@@ -414,7 +414,9 @@ impl YagraMcp {
                        credential bound to it, or the deployment-wide fallback community — and NOT \
                        whether the device is answering. False means no ifTable or CDP/LLDP walk \
                        ever runs, so an empty `interfaces` is the design and there are no \
-                       neighbours to ask get_neighbors for; do not report either as a fault. True \
+                       neighbours to ask get_neighbors for; do not report either as a fault. A \
+                       Meraki switch is the exception: its ports and its LLDP/CDP neighbours are \
+                       read from the Meraki Dashboard whatever this says. True \
                        with nothing arriving is the case worth investigating, and \
                        list_node_metrics is what tells the two apart. `notes` is free text an \
                        operator wrote about this node — standing context such as \"this link \

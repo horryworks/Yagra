@@ -2165,6 +2165,16 @@ pub struct MerakiCollectCheck {
     /// is upgraded.
     #[serde(default)]
     pub ssid_only: bool,
+    /// The switch-port tier only (ADR-181): also read each port's LLDP/CDP neighbours
+    /// (`switch/ports/topology/discovery/byDevice`) this time, so each listed switch's
+    /// `PollResult.neighbors` is filled. Core asks at the deployment's neighbour interval
+    /// (`neighbor_interval_secs`, an hour by default) and never while neighbour discovery is off.
+    ///
+    /// A poller from before it ignores the flag and reads no neighbours: its results carry
+    /// `neighbors: None`, which leaves every stored set as it was — the switches' neighbours are
+    /// an interval late until that poller is upgraded, and nothing is erased (決定 7).
+    #[serde(default)]
+    pub neighbors: bool,
 }
 
 const fn default_meraki_per_page() -> u32 {
@@ -3307,6 +3317,7 @@ mod tests {
                 port_names: false,
                 ssid_statuses: false,
                 ssid_only: false,
+                neighbors: false,
             },
             300,
         );
@@ -3358,6 +3369,29 @@ mod tests {
         let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
         assert_eq!(c.tier, MerakiTier::SwitchPorts);
         assert!(c.port_names);
+        assert!(
+            !c.neighbors,
+            "a core from before ADR-181 asks for no neighbours"
+        );
+        let back: MerakiCollectCheck =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+    }
+
+    /// ADR-181. The neighbour flag travels with the switch-port tier.
+    #[test]
+    fn a_switch_port_collect_carries_the_neighbour_flag() {
+        let json = r#"{
+            "org_id":"123456",
+            "meraki_org_uuid":"00000000-0000-0000-0000-000000000000",
+            "tier":"switch_ports",
+            "base_url":"https://api.meraki.com",
+            "api_key":"x",
+            "neighbors":true
+        }"#;
+        let c: MerakiCollectCheck = serde_json::from_str(json).unwrap();
+        assert!(c.neighbors);
+        assert!(!c.port_names);
         let back: MerakiCollectCheck =
             serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);

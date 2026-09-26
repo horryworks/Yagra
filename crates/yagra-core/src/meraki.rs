@@ -262,6 +262,9 @@ pub struct SlowReads {
     /// ([`ssid_statuses_due`], ADR-168 決定 1) — since ADR-169 決定 2 **instead of** a round's
     /// clients and utilization: the SSID read is a job of its own, in the slow lane.
     pub ssid_statuses: bool,
+    /// A switch-port collect also reads each port's LLDP/CDP neighbours ([`neighbors_due`],
+    /// ADR-181).
+    pub neighbors: bool,
 }
 
 /// Build the collect-job check for `(org, tier)` given the resolved key, the serial→node_id map,
@@ -292,6 +295,7 @@ pub fn build_collect_check(
         // Every SSID read is a job of its own since ADR-169 決定 2: no client counts and no
         // utilization between two wireless rounds.
         ssid_only: tier == MerakiTier::Wireless && slow.ssid_statuses,
+        neighbors: tier == MerakiTier::SwitchPorts && slow.neighbors,
     }
 }
 
@@ -394,6 +398,15 @@ pub const SSID_STATUSES_EVERY: Duration = Duration::from_secs(1200);
 #[must_use]
 pub fn ssid_statuses_due(last: Option<Instant>, now: Instant) -> bool {
     due_every(last, now, SSID_STATUSES_EVERY)
+}
+
+/// Whether this switch-port collect should read the ports' LLDP/CDP neighbours too (ADR-181 決定 2):
+/// never while neighbour discovery is off (`every` is `None`), otherwise the deployment's
+/// neighbour interval — the one an SNMP node's neighbour walk runs at — has passed, or they were
+/// never read in this process.
+#[must_use]
+pub fn neighbors_due(last: Option<Instant>, now: Instant, every: Option<Duration>) -> bool {
+    every.is_some_and(|every| due_every(last, now, every))
 }
 
 /// A slow read is due when it has never been made in this process, or not for `every`.
@@ -1689,6 +1702,7 @@ mod tests {
             SlowReads {
                 port_names: true,
                 ssid_statuses: false,
+                neighbors: false,
             },
         );
         assert!(names.port_names && !names.ssid_statuses);
@@ -1701,6 +1715,7 @@ mod tests {
             SlowReads {
                 port_names: false,
                 ssid_statuses: true,
+                neighbors: false,
             },
         );
         assert!(ssids.ssid_statuses && !ssids.port_names);
@@ -2042,6 +2057,7 @@ mod tests {
                 let slow = SlowReads {
                     port_names,
                     ssid_statuses,
+                    neighbors: false,
                 };
                 let expected = match tier {
                     MerakiTier::SwitchPorts => MerakiLane::Slow,
