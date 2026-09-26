@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.32 — Deleting a folder deletes everything beneath it, the whole inventory or one folder can be sorted by IP range, the inventory tree's filters sit behind one button, Discovery sweeps a /20 in one scan, NetBox Sync now and AI root-cause explanations finish after the tab closes, 22 Meraki integration fixes**
+> Status: **v0.3.33 — Discovery lists the unregistered devices your network already sees (LLDP/CDP neighbors, OSPF/BGP peers, syslog/trap senders) and detects their profile and credential, the Neighbors tab shows each neighbor's address, model / OS and maker and adds an unmonitored one in place, Meraki switches get the Neighbors tab, open screens follow other people's changes**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
