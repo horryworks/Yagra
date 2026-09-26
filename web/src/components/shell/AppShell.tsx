@@ -13,6 +13,9 @@
 // The alert stream is mounted here for the same reason (ADR-019 増分 1): the top-bar bell reads the
 // alert store on every screen, and while only four pages subscribed it read zero everywhere else,
 // or froze at whatever it was when the operator left a dashboard.
+//
+// And the configuration change feed (ADR-019 増分 2): one subscription, whose counter every screen
+// that shows inventory or configuration reads to re-read when someone else changes it.
 
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
@@ -26,6 +29,7 @@ import { useViewportMode } from '../../lib/viewport';
 import { useTroubleshootStream } from '../../troubleshoot/useTroubleshootStream';
 import { TroubleshootToast } from '../../troubleshoot/TroubleshootToast';
 import { useAlertStream } from '../../hooks/useAlertStream';
+import { useConfigChangeStream } from '../../lib/configChanges';
 import './AppShell.css';
 
 export function AppShell() {
@@ -35,6 +39,7 @@ export function AppShell() {
   const rememberRoute = useSectionRouteStore((s) => s.rememberRoute);
   useTroubleshootStream();
   useAlertStream();
+  useConfigChangeStream();
 
   // Close the drawer on any route change — covers the browser Back button and a tap on the
   // already-current route (which wouldn't change the pathname otherwise).

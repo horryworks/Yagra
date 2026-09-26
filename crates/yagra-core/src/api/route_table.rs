@@ -256,7 +256,7 @@ const NO_MCP_WRITE: Mcp = Exempt(
 // since ADR-057. The numbers now live in `folded.rs` alone, where a test compares them against
 // the table itself (ADR-079 決定 3). A third copy of a count is a third thing to forget.
 
-/// The four SSE streams. Recorded as a gap rather than an exemption on purpose — `/mcp` declares
+/// The five SSE streams. Recorded as a gap rather than an exemption on purpose — `/mcp` declares
 /// `enable_tools()` only, so there is no subscription transport, and that is a missing capability
 /// rather than a decision. The polling tools answer the same questions one snapshot at a time.
 const PENDING_STREAM: Mcp = Pending(
@@ -1877,6 +1877,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/stream/config",
+        Refused(
+            "the change feed says only that something changed anywhere in the configuration, and              for a group-scoped account that includes its outside (ADR-014); refused, not filtered",
+        ),
+        PENDING_STREAM,
+    ),
+    (
+        "GET",
         "/api/v1/stream/node-states",
         PostFiltered,
         PENDING_STREAM,
@@ -2773,13 +2781,14 @@ mod tests {
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
     ///
-    /// **Since I3b the remaining four are the `/stream/*` SSE routes, and they are a different kind
+    /// **Since I3b the remaining ones are the `/stream/*` SSE routes (five since ADR-019 増分 2 added
+    /// `/stream/config`), and they are a different kind
     /// of number.** Every earlier value was a backlog that the next increment would spend down;
     /// this one is not, because MCP declares `enable_tools()` and there is no subscription
     /// transport to write a tool against. It stays `Pending` rather than becoming `Exempt` because
     /// it is a missing capability rather than a decision — but nothing is planned to move it, so a
     /// reader should not take a non-zero count as work in flight.
-    const MCP_PENDING: usize = 4;
+    const MCP_PENDING: usize = 5;
 
     #[test]
     fn every_named_mcp_tool_exists() {

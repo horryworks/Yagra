@@ -70,6 +70,11 @@ export interface LazyGroupMembers {
    *  lands. For "the states on screen may be stale" (the live stream missed frames) — never after a
    *  write, which can move a node between groups and so needs `invalidate` (ADR-133 増分 7 決定 4). */
   refresh: () => void;
+  /** Someone ELSE changed the inventory (ADR-019 増分 2): re-read every loaded folder and swap them
+   *  ALL AT ONCE, when the last answer is in. Unlike `refresh` this is safe after a move — each
+   *  folder swapped as its own answer landed would show a moved node in two folders, or in none, for
+   *  a round trip. Unlike `invalidate` nothing leaves the screen: a failure keeps what is there. */
+  reconcile: () => void;
   /** Clear one group's failure so it is fetched again. The ONLY automatic retry is `invalidate`;
    *  everything else goes through here, driven by the operator pressing the failed row's control. */
   retry: (key: string) => void;
@@ -379,6 +384,35 @@ export function useLazyGroupMembers(opts: {
     pump();
   }, [pump]);
 
+  /** Bumped by each `reconcile`, so an older one still in flight never swaps over a newer one. */
+  const reconcileToken = useRef(0);
+
+  const reconcile = useCallback(() => {
+    const q = queue.current;
+    // Folders still loading were asked BEFORE the change and would land the old membership:
+    // disown them and ask again, exactly as `refresh` does.
+    const pending = [...new Set([...q.waiting, ...q.inflight])];
+    generation.current += 1;
+    q.waiting = pending;
+    q.inflight = new Set();
+    q.rereads = new Set(pending.filter((k) => q.rereads.has(k)));
+    pump();
+
+    const keys = [...loaded.current];
+    if (keys.length === 0) return;
+    const mine = ++reconcileToken.current;
+    const askedIn = generation.current;
+    readMembersTogether(keys, batchSupported.current)
+      .then((byGroup) => {
+        // A newer reconcile, or an `invalidate` (the operator's own write), has the last word.
+        if (mine !== reconcileToken.current || askedIn !== generation.current) return;
+        setLoadedNodes((prev) => ({ ...prev, ...byGroup }));
+      })
+      .catch(() => {
+        /* the previous answer stands — a passing failure must not empty folders that work */
+      });
+  }, [pump]);
+
   const retry = useCallback((key: string) => {
     setFailedGroups((prev) => {
       if (!prev.has(key)) return prev;
@@ -399,6 +433,42 @@ export function useLazyGroupMembers(opts: {
     anyTruncated,
     invalidate,
     refresh,
+    reconcile,
     retry,
   };
+}
+
+/** Every folder in `keys`, read in as few requests as the batch form allows, as one answer.
+ *
+ *  Resolves only when ALL of them have answered, so the caller can swap them together; rejects if
+ *  any request fails, so the caller keeps what it had. A folder the batch echo does not claim (it
+ *  was deleted, or is no longer visible to this account) comes back empty — it is gone. A batch
+ *  answer with no echo at all is an older core answering a different question (see `pump`), so it
+ *  rejects rather than being believed. */
+export async function readMembersTogether(
+  keys: string[],
+  batch: boolean,
+): Promise<Record<string, NodeSummary[]>> {
+  const singles = batch ? keys.filter((k) => k === UNGROUPED) : keys;
+  const batched = batch ? keys.filter((k) => k !== UNGROUPED) : [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < batched.length; i += BY_GROUP_BATCH_MAX) {
+    chunks.push(batched.slice(i, i + BY_GROUP_BATCH_MAX));
+  }
+  const out: Record<string, NodeSummary[]> = {};
+  await Promise.all([
+    ...singles.map(async (k) => {
+      const res = await api.getGroupNodes(k === UNGROUPED ? null : k);
+      out[k] = res.nodes;
+    }),
+    ...chunks.map(async (chunk) => {
+      const res = await api.getGroupNodesBatch(chunk);
+      if (!res.answered) throw new Error('batch answer without an echo');
+      for (const k of chunk) out[k] = [];
+      for (const n of res.nodes) {
+        if (n.group_id && out[n.group_id]) out[n.group_id].push(n);
+      }
+    }),
+  ]);
+  return out;
 }

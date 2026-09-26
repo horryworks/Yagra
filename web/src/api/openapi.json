@@ -20755,6 +20755,44 @@
         }
       }
     },
+    "/api/v1/stream/config": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Live configuration change feed (SSE): each event's `data` is `{\"revision\": N}`.",
+        "description": "Sent once on connect and again, at most once a second, whenever the revision moves. Compare it\nwith the last one seen: a different number means inventory or configuration changed, so re-read\nwhat is on screen. The number is process-local and restarts from 0 with the process.",
+        "operationId": "stream_config",
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream; each `data` is `{\"revision\": N}`, sent on connect and whenever configuration changes",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stream/node-states": {
       "get": {
         "tags": [

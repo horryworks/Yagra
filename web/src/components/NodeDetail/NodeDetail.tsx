@@ -7,6 +7,7 @@
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useConfigChanges } from '../../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
@@ -157,7 +158,9 @@ export function NodeDetail({
   const [deleting, setDeleting] = useState(false);
 
   // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump) —
-  // and quietly after a Poll now, whose identity read (ADR-149) lands on this same document.
+  // and quietly after a Poll now, whose identity read (ADR-149) lands on this same document, or
+  // when someone else changes the configuration (ADR-019 増分 2).
+  const configChanges = useConfigChanges();
   const blankedFor = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -174,7 +177,7 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce, quietNonce]);
+  }, [nodeId, refreshNonce, quietNonce, configChanges]);
 
   // Blank the live panes when the node changes (or after an edit) so a switch never flashes the
   // previous node's readings. A periodic refresh must NOT blank — that would flicker every tick —

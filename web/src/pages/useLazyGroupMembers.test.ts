@@ -503,4 +503,108 @@ describe('useLazyGroupMembers', () => {
     });
     await waitFor(() => expect(getGroupNodes.mock.calls.length).toBeGreaterThan(before));
   });
+
+  describe('reconcile — someone else changed the inventory (ADR-019 増分 2)', () => {
+    const member = (id: string, group_id: string | null) =>
+      ({ id, name: id, group_id }) as unknown as NodeSummary;
+
+    it('swaps every loaded folder together, so a moved node is never in two folders or none', async () => {
+      getGroupNodesBatch.mockImplementation((ids: string[]) =>
+        Promise.resolve({ nodes: [member('n1', 'g1')], truncated: false, answered: ids }),
+      );
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']));
+
+      // n1 moved from g1 to g2. Hold both answers so the in-between states can be looked at.
+      const batch = deferred<{ nodes: NodeSummary[]; truncated: boolean; answered: string[] }>();
+      const ungrouped = deferred<{ nodes: NodeSummary[]; truncated: boolean }>();
+      getGroupNodesBatch.mockImplementation(() => batch.promise);
+      getGroupNodes.mockImplementation(() => ungrouped.promise);
+      act(() => result.current.reconcile());
+
+      // Nothing leaves the screen while it is asked again.
+      expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']);
+      await act(async () => {
+        batch.resolve({ nodes: [member('n1', 'g2')], truncated: false, answered: ['g1', 'g2'] });
+      });
+      // One answer in, one still out: the swap waits.
+      expect(result.current.nodes.map((n) => n.group_id)).toEqual(['g1']);
+      await act(async () => {
+        ungrouped.resolve({ nodes: [], truncated: false });
+      });
+      await waitFor(() => expect(result.current.nodes.map((n) => n.group_id)).toEqual(['g2']));
+      expect(result.current.nodes).toHaveLength(1);
+    });
+
+    it('a failure keeps what is on screen', async () => {
+      getGroupNodesBatch.mockImplementation((ids: string[]) =>
+        Promise.resolve({ nodes: [member('n1', 'g1')], truncated: false, answered: ids }),
+      );
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']));
+
+      getGroupNodesBatch.mockRejectedValue(new Error('503'));
+      await act(async () => {
+        result.current.reconcile();
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']);
+      expect(result.current.failedGroups.size).toBe(0);
+    });
+
+    it('an invalidate after it has the last word (this tab wrote)', async () => {
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.loadedGroups.size).toBeGreaterThan(0));
+
+      const late = deferred<{ nodes: NodeSummary[]; truncated: boolean; answered: string[] }>();
+      getGroupNodesBatch.mockImplementationOnce(() => late.promise);
+      act(() => result.current.reconcile());
+      await act(async () => {
+        result.current.invalidate();
+      });
+      await act(async () => {
+        late.resolve({ nodes: [member('stale', 'g1')], truncated: false, answered: ['g1', 'g2'] });
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(result.current.nodes.map((n) => n.id)).not.toContain('stale');
+    });
+  });
+
+  describe('readMembersTogether', () => {
+    it('sends the ungrouped bucket alone and the folders in one batch', async () => {
+      getGroupNodesBatch.mockImplementation((ids: string[]) =>
+        Promise.resolve({
+          nodes: [{ id: 'a', group_id: 'g1' }, { id: 'b', group_id: 'g2' }],
+          truncated: false,
+          answered: ids,
+        }),
+      );
+      getGroupNodes.mockResolvedValue({ nodes: [{ id: 'u', group_id: null }], truncated: false });
+      const { readMembersTogether } = await import('./useLazyGroupMembers');
+      const { UNGROUPED } = await import('../lib/nodeTree');
+      const out = await readMembersTogether([UNGROUPED, 'g1', 'g2'], true);
+      expect(getGroupNodes).toHaveBeenCalledWith(null);
+      expect(getGroupNodesBatch).toHaveBeenCalledWith(['g1', 'g2']);
+      expect(Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.map((n) => n.id)]))).toEqual({
+        [UNGROUPED]: ['u'],
+        g1: ['a'],
+        g2: ['b'],
+      });
+    });
+
+    it('a folder the echo does not claim is gone — it comes back empty', async () => {
+      getGroupNodesBatch.mockResolvedValue({ nodes: [], truncated: false, answered: ['g1'] });
+      const { readMembersTogether } = await import('./useLazyGroupMembers');
+      expect(await readMembersTogether(['g1', 'deleted'], true)).toEqual({ g1: [], deleted: [] });
+    });
+
+    it('rejects an answer with no echo — an older core answering a different question', async () => {
+      getGroupNodesBatch.mockResolvedValue({ nodes: [], truncated: false });
+      const { readMembersTogether } = await import('./useLazyGroupMembers');
+      await expect(readMembersTogether(['g1'], true)).rejects.toThrow();
+    });
+  });
 });

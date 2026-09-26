@@ -14,6 +14,7 @@
 // filter row and the hand-rolled grid could not coexist (three grids share one template).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useOnConfigChange } from '../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
@@ -103,10 +104,15 @@ export function MutesPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     load();
     api.listNodeGroups().then(setGroups).catch(() => undefined);
   }, [load]);
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+  // Someone else added or lifted a mute (ADR-019 増分 2).
+  useOnConfigChange(loadAll);
 
   // Resolve a mute's node target by name across the whole fleet (not just the first list page —
   // the old nodes.find() capped at 100 and showed a raw UUID for the 101st+ node, S12).

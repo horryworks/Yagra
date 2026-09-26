@@ -31,9 +31,13 @@ fn changed_signal() -> &'static Notify {
 
 /// Signal that some monitoring config changed (nodes / thresholds / maintenance / groups /
 /// profiles / collection / credentials / URL checks). Called from the API audit middleware.
+///
+/// Also moves the browsers' [`crate::change_feed`], so every writer that reaches this — the API and
+/// the NetBox, Meraki and wireless importers alike — is seen by an open inventory tree too.
 pub fn bump() {
     CONFIG_GENERATION.fetch_add(1, Ordering::Relaxed);
     changed_signal().notify_one();
+    crate::change_feed::publish();
 }
 
 /// Resolves after the next [`bump`] — or at once, if one happened since the last wait.
@@ -67,6 +71,20 @@ mod tests {
         let before = current();
         bump();
         assert!(current() > before);
+    }
+
+    #[tokio::test]
+    async fn a_bump_reaches_the_browsers_change_feed() {
+        // The importers call `bump()` and nothing else, so this is the only thing that puts their
+        // changes in front of an open inventory tree (ADR-019 増分 2).
+        let mut rx = crate::change_feed::subscribe();
+        let before = crate::change_feed::current();
+        bump();
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a bump publishes on the change feed")
+            .expect("the sender lives for the process");
+        assert!(got > before);
     }
 
     #[tokio::test]

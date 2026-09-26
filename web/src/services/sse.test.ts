@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   dataFromEventBlock,
   isResyncBlock,
+  parseConfigRevision,
   parseAlertEvent,
   parseAnalysisJob,
   parseNodeStateEvent,
   parseReportRun,
   subscribeAlerts,
   subscribeAnalysis,
+  subscribeConfigChanges,
   subscribeReportRuns,
 } from './sse';
 import { setToken } from './api';
@@ -266,5 +268,60 @@ describe('the resync hint reaches every stream that asks for it', () => {
     await vi.waitFor(() => expect(onResync).toHaveBeenCalled());
     unsubscribe();
     expect(onRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseConfigRevision', () => {
+  it('reads the revision off the change feed', () => {
+    expect(parseConfigRevision('{"revision":42}')).toBe(42);
+    expect(parseConfigRevision('{"revision":0}')).toBe(0);
+  });
+
+  it('refuses anything that is not a non-negative integer, rather than comparing it', () => {
+    for (const bad of ['{}', '{"revision":"42"}', '{"revision":-1}', '{"revision":1.5}', '12', 'null', 'nope']) {
+      expect(parseConfigRevision(bad)).toBeNull();
+    }
+  });
+});
+
+describe('the change feed over fetch (ADR-019 増分 2)', () => {
+  afterEach(() => {
+    setToken(null);
+    vi.restoreAllMocks();
+  });
+
+  it('hands each revision to the caller', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(streamOf('data: {"revision":7}\n\n'), {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          }),
+        ),
+      ),
+    );
+    const revs: number[] = [];
+    const unsubscribe = subscribeConfigChanges((r) => revs.push(r));
+    await vi.waitFor(() => expect(revs).toEqual([7]));
+    unsubscribe();
+  });
+
+  it('stops on a 403 instead of asking again every few seconds (a folder-scoped account)', async () => {
+    setToken('scoped');
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response('{"error":{"code":"scope_unsupported"}}', { status: 403 }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const onError = vi.fn();
+    const unsubscribe = subscribeConfigChanges(() => {}, onError);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    // The reconnect delay is 3 s; a retry would already be scheduled. Give it room to show.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 });

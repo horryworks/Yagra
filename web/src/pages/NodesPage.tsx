@@ -66,6 +66,7 @@ import {
   useNodeStateResyncs,
   useNodeStates,
 } from '../dashboard/useNodeStates';
+import { useOnConfigChange } from '../lib/configChanges';
 import {
   buildSuppressionIndex,
   nextSuppressionExpiry,
@@ -794,6 +795,31 @@ export function NodesPage() {
       .then((r) => setPools(r.pools))
       .catch(() => undefined);
   }, []);
+
+  // Someone ELSE changed the inventory (ADR-019 増分 2) — or this operator did, and `reload` has
+  // run already; a second quiet read costs one round trip and is harmless. Everything the tree
+  // draws from the server is read again, and nothing is emptied first:
+  //
+  // 🚨 **Not `reload`.** `reload` is for after this tab's own write: it drops the member cache,
+  // so every loaded row vanished for a round trip and the tree flashed "Loading…" (ADR-133 増分 7
+  // 決定 4) — on every change anyone made, that would be all the time. And **not `refresh`**: a
+  // remote change can be a move, and folders swapped one answer at a time would draw the moved
+  // node twice or not at all. `reconcile` swaps every loaded folder together.
+  //
+  // It does not touch `error`/`loading` either: a passing failure keeps what is on screen.
+  const reconcileMembers = members.reconcile;
+  const refreshAfterRemoteChange = useCallback(() => {
+    refreshRollups();
+    api
+      .listNodeGroups()
+      .then(setGroups)
+      .catch(() => undefined);
+    reconcileMembers();
+    refetchSearch();
+    reloadSuppression();
+    reloadPools();
+  }, [refreshRollups, reconcileMembers, refetchSearch, reloadSuppression, reloadPools]);
+  useOnConfigChange(refreshAfterRemoteChange);
 
   useEffect(() => {
     reloadPools();

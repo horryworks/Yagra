@@ -13,6 +13,7 @@
 // and keeps redundant links, so the tidy-tree that served the dependency map could not draw it.
 
 import { useMemo, useRef } from 'react';
+import { useConfigChanges } from '../lib/configChanges';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -34,6 +35,8 @@ import './TopologyMapPage.css';
 
 export function TopologyMapPage() {
   const { t } = useTranslation('topology');
+  // A node added, removed or re-parented is on the map at once, not at the next 60 s tick.
+  const configChanges = useConfigChanges();
   const { data, loading, error } = usePolled(
     async () => {
       const [topology, links] = await Promise.all([
@@ -42,7 +45,7 @@ export function TopologyMapPage() {
       ]);
       return { nodes: topology.nodes, ...links };
     },
-    [],
+    [configChanges],
     LIVE_RECONCILE_MS,
   );
   const live = useNodeStates();

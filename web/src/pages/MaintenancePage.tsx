@@ -9,6 +9,7 @@
 // Add and delete both go through modals; enable/disable is an immediate row action.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useOnConfigChange } from '../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
@@ -124,11 +125,16 @@ export function MaintenancePage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     load();
     api.listNodeGroups().then(setGroups).catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, [load]);
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+  // Someone else opened, edited or closed a window (ADR-019 増分 2).
+  useOnConfigChange(loadAll);
 
   const setEnabled = (id: string, enabled: boolean) =>
     api

@@ -108,6 +108,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::dashboard::Doc::openapi(),
         super::public_dashboard::Doc::openapi(),
         super::preferences::Doc::openapi(),
+        super::changes::Doc::openapi(),
         super::pins::Doc::openapi(),
         super::mib::Doc::openapi(),
         super::api_tokens::Doc::openapi(),

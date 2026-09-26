@@ -17,6 +17,7 @@
 // is markup and pointer plumbing, which tsc and the build cover.
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useConfigChanges } from '../lib/configChanges';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
@@ -71,7 +72,9 @@ export function GeoMapPage() {
   } | null>(null);
 
   const { summary, loading, error } = useGroupSummary();
-  const groups = usePolled(() => api.listNodeGroups(), []);
+  // Re-read at once when someone changes a folder (its location lives on it), not only on the tick.
+  const configChanges = useConfigChanges();
+  const groups = usePolled(() => api.listNodeGroups(), [configChanges]);
 
   // Pane height: the operator's stored preference, or one derived from this window. Re-clamped on
   // read so a height saved on a big monitor cannot swallow a laptop screen.

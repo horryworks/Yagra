@@ -35,6 +35,7 @@ pub(crate) mod analysis;
 mod api_tokens;
 pub(crate) mod audit;
 mod bus;
+mod changes;
 pub(crate) mod checks;
 mod classification;
 pub(crate) mod collection;
@@ -453,6 +454,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(public_dashboard::routes())
         // Per-account WebUI preferences (ADR-058), in `api/preferences.rs`.
         .merge(preferences::routes())
+        // The change feed browsers follow to re-read inventory (ADR-019 増分 2), in `api/changes.rs`.
+        .merge(changes::routes())
         // Per-account pins on the inventory tree (ADR-146), in `api/pins.rs`.
         .merge(pins::routes())
         .merge(mib::routes())
@@ -554,8 +557,15 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
         // A successful config mutation bumps the process-wide config generation so background
         // rebuilders (alert-config reloader, scheduler spec resolution) skip their full-fleet
         // rebuild when nothing changed (S2/S6). Coarse but safe: any config write invalidates.
-        if resp.status().is_success() && changes_monitoring_config(&path) {
-            crate::config_gen::bump();
+        if resp.status().is_success() {
+            if changes_monitoring_config(&path) {
+                // Moves the browsers' change feed as well (`config_gen::bump`).
+                crate::config_gen::bump();
+            } else if changes_what_the_tree_draws(&path) {
+                // Nothing a poller reads, so no config generation — but an open inventory tree
+                // draws it, so the browsers are told (ADR-019 増分 2).
+                crate::change_feed::publish();
+            }
         }
         if let Some(admin) = st.admin.as_ref() {
             let user = username.as_deref().unwrap_or(AUDIT_ANONYMOUS);
@@ -731,6 +741,16 @@ fn changes_monitoring_config(path: &str) -> bool {
         // response in this product that carries secrets.
         || path == "/api/v1/system/relocation"
         || path == "/api/v1/system/relocation/archive")
+}
+
+/// Whether a write the config generation deliberately ignores still changes what the inventory
+/// tree draws, so open tabs must hear about it (ADR-019 増分 2).
+///
+/// Only folder sorting today: it writes `sort_order`, which no rebuild reads (hence its exemption
+/// above) and which is exactly the order the tree lists a folder's children in. An allow-list, not
+/// a deny-list like its neighbour, because the default for an exempt path is "nobody else sees it".
+fn changes_what_the_tree_draws(path: &str) -> bool {
+    path.starts_with("/api/v1/node-groups/") && path.ends_with("/sort")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
@@ -1830,6 +1850,20 @@ mod tests {
     /// handler demands `ManageConfig`. The difference is that this one genuinely writes — so the
     /// only thing keeping it exempt is the fact that no rebuilder reads `sort_order`, and the only
     /// thing recording that fact is this test.
+    /// Sorting skips the config generation but not the browsers: the tree's order is what it
+    /// changes (ADR-019 増分 2). Every other exempt path stays silent on the change feed.
+    #[test]
+    fn sorting_a_folder_still_tells_the_open_trees() {
+        assert!(changes_what_the_tree_draws("/api/v1/node-groups/abc/sort"));
+        assert!(!changes_what_the_tree_draws("/api/v1/preferences"));
+        assert!(!changes_what_the_tree_draws("/api/v1/nodes/poll"));
+        assert!(!changes_what_the_tree_draws(
+            "/api/v1/netbox/servers/abc/sync"
+        ));
+        // Never both: a path that bumps the generation already publishes through `bump()`.
+        assert!(!changes_monitoring_config("/api/v1/node-groups/abc/sort"));
+    }
+
     #[test]
     fn sorting_a_folder_does_not_dirty_the_config_generation() {
         assert!(

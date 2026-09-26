@@ -4228,6 +4228,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stream/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live configuration change feed (SSE): each event's `data` is `{"revision": N}`.
+         * @description Sent once on connect and again, at most once a second, whenever the revision moves. Compare it
+         *     with the last one seen: a different number means inventory or configuration changed, so re-read
+         *     what is on screen. The number is process-local and restarts from 0 with the process.
+         */
+        get: operations["stream_config"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stream/node-states": {
         parameters: {
             query?: never;
@@ -29798,6 +29820,44 @@ export interface operations {
             };
             /** @description This deployment has no runner */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    stream_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent event stream; each `data` is `{"revision": N}`, sent on connect and whenever configuration changes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View, or the account is restricted to folders (`scope_unsupported`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

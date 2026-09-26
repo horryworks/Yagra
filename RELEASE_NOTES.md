@@ -10,9 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **Open screens follow other people's changes.** When anyone moves a node, edits or reorders a folder, opens a maintenance window, adds a mute, or an integration sync changes the inventory, every open Nodes tree updates within a couple of seconds, with no reload and no "Loading…" flash. The Maintenance and Mutes screens, the two maps and the node detail's settings re-read the same way. A new stream, `GET /api/v1/stream/config`, sends `{"revision": N}` on connect and whenever the configuration changes (at most once a second); a client re-reads when the number differs from the last one it saw. An account restricted to certain folders is refused it with `403 scope_unsupported`, because it would learn that something changed outside its folders; its screens behave as before. Changes made through `/mcp` (such as `open_maintenance`) are not announced yet.
+
 ### Bug Fixes
 
 - **The alert bell is live on every screen, and a resolved alert no longer stays on screen until a reload.** The WebUI subscribed to the alert stream only on Active alerts and the three dashboards, so elsewhere the bell read zero or kept the count from the last dashboard visited. The subscription now lives in the app shell. The active-alert list is also re-read whenever the stream reconnects or the server says frames were dropped, and that read replaces the list rather than adding to it — an alert resolved while the connection was down used to stay listed. The Troubleshoot runs list and Saved reports re-read on reconnect the same way.
+- **A live stream that answers `403` is no longer asked again every three seconds.** A folder-scoped account on Saved reports kept retrying the report-run stream for as long as the page was open.
 
 ## v0.3.32 — Deleting a folder deletes everything beneath it, the whole inventory or one folder can be sorted by IP range, the inventory tree's filters sit behind one button, Discovery sweeps a /20 in one scan, NetBox Sync now and AI root-cause explanations finish after the tab closes, 22 Meraki integration fixes
 

@@ -94,6 +94,19 @@ export function parseReportRun(data: string): ReportRun | null {
   }
 }
 
+/** Parse one change-feed payload (`/api/v1/stream/config`, ADR-019 増分 2) into its revision, or
+ *  null if malformed. The revision is a counter, so anything but a non-negative integer is refused
+ *  rather than compared. */
+export function parseConfigRevision(data: string): number | null {
+  try {
+    const obj = JSON.parse(data) as { revision?: unknown };
+    const rev = obj?.revision;
+    return typeof rev === 'number' && Number.isInteger(rev) && rev >= 0 ? rev : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether an event block is the streams' `resync` hint — `event: resync`, sent when this
  * subscriber fell behind and frames were dropped for it (`sse_with_resync` in `api/alerts.rs`).
@@ -181,6 +194,13 @@ function subscribeSSE(
             notifyAuthFailure(); // stale/dropped session — let the app re-prompt; don't retry
             return;
           }
+          // A refusal is an answer, not an outage: a role without the permission, or a folder-scoped
+          // account on a fleet-wide stream (report runs, the change feed). Retrying every
+          // RECONNECT_MS asked the same question forever and got the same 403 (ADR-019 増分 2).
+          if (res.status === 403) {
+            onError?.(new Error(`stream ${path} refused with status 403`));
+            return;
+          }
           throw new Error(`stream ${path} failed with status ${res.status}`);
         }
         opened += 1;
@@ -265,6 +285,27 @@ export function subscribeNodeStates(
     },
     onError,
     onResync,
+  );
+}
+
+/**
+ * Subscribe to the change feed (ADR-019 増分 2): each event is the configuration's current revision,
+ * sent once on connect and again whenever it moves. Compare it with the last one seen — the stream
+ * replays nothing and needs no resync, because the number itself says whether anything was missed.
+ * A group-scoped account is refused (403) and the subscription stops. Returns an unsubscribe
+ * function.
+ */
+export function subscribeConfigChanges(
+  onRevision: (revision: number) => void,
+  onError?: (err: unknown) => void,
+): () => void {
+  return subscribeSSE(
+    '/api/v1/stream/config',
+    (data) => {
+      const rev = parseConfigRevision(data);
+      if (rev !== null) onRevision(rev);
+    },
+    onError,
   );
 }
 

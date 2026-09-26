@@ -32,6 +32,7 @@ mod bigquery;
 mod bus_callout;
 mod bus_cert;
 mod cadence;
+mod change_feed;
 mod classification;
 mod collection;
 mod config;
