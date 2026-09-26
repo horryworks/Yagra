@@ -902,6 +902,7 @@ export type NeighborPeerState = (typeof NEIGHBOR_PEER_STATES)[number];
 
 /** One advertised management address and the node it belongs to (ADR-180). */
 export type NeighborPeer = components['schemas']['NeighborPeer'];
+export type NeighborManagedBy = components['schemas']['NeighborManagedBy'];
 
 /** The IEEE-registered maker of a MAC-address chassis or port id (ADR-180). */
 export type MacVendor = components['schemas']['MacVendor'];

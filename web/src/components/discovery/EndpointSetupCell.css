@@ -1,0 +1,80 @@
+/* The "Monitoring setup" cell (ADR-179 増分 2 決定 7): Detect alone, then the form it fills. Shared
+   by Discovery ▸ Unregistered devices and the Node ▸ Neighbors tab; each places the cell itself. */
+.ep-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ep-setup-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+/* A button never wraps its label onto two lines to make room for the text beside it. */
+.ep-setup-actions .btn,
+.ep-setup-form .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ep-setup-hint {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.ep-setup-hint.warn {
+  color: var(--status-warning);
+}
+
+/* What Detect found, or why it found nothing: a mark paired with words, above the inputs it
+   explains. */
+.ep-setup-detect {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--font-xs);
+}
+
+.ep-setup-detect svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ep-setup-detect.ok {
+  color: var(--status-ok);
+}
+
+.ep-setup-detect.warn {
+  color: var(--status-warning);
+}
+
+.ep-setup-form {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+/* A dropdown with its label above it — neither surface has column headers for these. */
+.ep-setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+/* Filled by Detect: the border says so as well as the label. */
+.ep-setup-field.detected select {
+  border-color: var(--status-ok);
+}

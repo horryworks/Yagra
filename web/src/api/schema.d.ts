@@ -9769,12 +9769,47 @@ export interface components {
          * @enum {string}
          */
         NeighborIdKind: "mac" | "network_address" | "text" | "hex" | "unknown";
+        /**
+         * @description Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such
+         *     a device by hand would leave a second node for it once its controller or organization imports
+         *     it, so the Neighbors tab sends the operator there instead.
+         */
+        NeighborManagedBy: {
+            /**
+             * Format: uuid
+             * @description The access point, for `POST /api/v1/wireless/aps/{ap_id}/import`.
+             */
+            ap_id: string;
+            controller_name: string;
+            /** Format: uuid */
+            controller_node_id: string;
+            /** @description The access point is already a node, at another address. */
+            imported: boolean;
+            /** @enum {string} */
+            kind: "controller";
+        } | {
+            /** @enum {string} */
+            kind: "controller_hidden";
+        } | {
+            /** @enum {string} */
+            kind: "meraki";
+            /** Format: uuid */
+            org_id: string;
+            org_name: string;
+        };
         /** @description One neighbour management address and the node it belongs to. */
         NeighborPeer: {
             /** @description The address exactly as the neighbour row carries it in `remote_mgmt_addr`. */
             address: string;
+            /**
+             * Format: uuid
+             * @description That list's row for the address, when `discovery_listed` — the id the endpoint probe and
+             *     import act on (ADR-179 増分 3).
+             */
+            discovery_id?: string | null;
             /** @description Whether the address is on the caller's Discovery ▸ Unregistered list. */
             discovery_listed: boolean;
+            managed_by?: null | components["schemas"]["NeighborManagedBy"];
             /**
              * Format: uuid
              * @description Present only when `state` is `node`.

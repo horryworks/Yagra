@@ -1020,6 +1020,22 @@
       "searchAria": "隣接ノードを検索",
       "allProtos": "LLDP・CDP の両方",
       "protoAria": "プロトコルで絞り込む"
+    },
+    "setup": {
+      "open": "監視を設定",
+      "title": "監視の設定",
+      "credsHint": "自動検出はこの順に試します。最初の中身は Discovery の「範囲をスキャン」で前回使ったものです。ここでの変更は、このページを開いている間だけ有効です。<lnk>認証情報を管理 →</lnk>",
+      "controller": "この AP は {{controller}} が管理しています。ノードが 2 つにならないよう、コントローラーの AP として追加します。",
+      "controllerImported": "この AP は {{controller}} が管理していて、別のアドレスですでにノードになっています。",
+      "addFromController": "{{controller}} の AP として追加",
+      "meraki": "この機器は Meraki 組織 {{org}} にあります。組織のページから追加します。どのネットワークを見張るかもそこで決めます。",
+      "openOrg": "{{org}} を開く →",
+      "apHint": "この隣人は無線 AP だと名乗っています。コントローラーや Meraki が管理する AP は、そちらから追加します。ここで追加できるのはスタンドアロン AP だけで、SNMP が答えたときだけです。",
+      "apNoAnswer": "どの認証情報にも応答しませんでした。コントローラーが管理する AP は、コントローラーから追加します。<ctl>無線コントローラーをノードとして追加</ctl>するか、<mer>Meraki 組織を登録</mer>してください。",
+      "done": "{{name}} として監視を開始しました。",
+      "doneBare": "監視を開始しました。",
+      "openNode": "ノードを開く →",
+      "errAp": "AP を追加できませんでした。"
     }
   },
   "select": {

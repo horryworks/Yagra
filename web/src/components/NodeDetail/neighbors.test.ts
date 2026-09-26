@@ -20,6 +20,9 @@ import {
   peerSecondary,
   platformCell,
   portVendor,
+  merakiOrgPath,
+  setupMode,
+  setupName,
 } from './neighbors';
 import { decodeCondition } from '../../lib/filterCondition';
 import type { Neighbor, NeighborPeer, NeighborSet } from '../../types/api';
@@ -364,5 +367,85 @@ describe('the opened row', () => {
   it('adds nothing that counts as a change: the id kind is not part of the payload', () => {
     const after = set(n({ remote_chassis_kind: 'mac', remote_port_kind: 'text' }));
     expect(diffNeighbors(set(n()), after)).toEqual([]);
+  });
+});
+
+// ── ADR-179 増分 3: adding an unmonitored neighbour from the tab ────────────────────────────────
+
+describe('which setup a row offers', () => {
+  const at = (p: Partial<NeighborPeer>) =>
+    neighborLookups({
+      peers: [peer({ address: '192.0.2.9', state: 'unregistered', node_id: null, node_name: null, ...p })],
+      mac_vendors: [],
+    });
+  const row = (over: Partial<Neighbor> = {}) => n({ remote_mgmt_addr: '192.0.2.9', ...over });
+  const listed = { discovery_listed: true, discovery_id: 'd-1' };
+
+  it('sends an AP a visible controller reports to that controller, not to Detect', () => {
+    const lookups = at({
+      ...listed,
+      managed_by: {
+        kind: 'controller',
+        ap_id: 'ap-1',
+        controller_node_id: 'wlc-1',
+        controller_name: 'wlc01',
+        imported: false,
+      },
+    });
+    expect(setupMode(row({ capabilities: ['wlan_ap'] }), lookups)).toEqual({
+      kind: 'controller',
+      apId: 'ap-1',
+      controllerId: 'wlc-1',
+      controllerName: 'wlc01',
+      imported: false,
+    });
+  });
+
+  it('sends a device a Meraki organization lists to that organization', () => {
+    const lookups = at({ ...listed, managed_by: { kind: 'meraki', org_id: 'o-1', org_name: 'Acme' } });
+    expect(setupMode(row(), lookups)).toEqual({ kind: 'meraki', orgId: 'o-1', orgName: 'Acme' });
+  });
+
+  it('offers nothing for an AP only a controller outside the caller’s folders reports', () => {
+    const lookups = at({ ...listed, managed_by: { kind: 'controller_hidden' } });
+    expect(setupMode(row({ capabilities: ['wlan_ap'] }), lookups)).toBeNull();
+  });
+
+  it('runs Detect for a self-declared AP nothing manages, as a standalone AP', () => {
+    expect(setupMode(row({ capabilities: ['wlan_ap'] }), at(listed))).toEqual({
+      kind: 'standalone_ap',
+      discoveryId: 'd-1',
+    });
+    // A router with a radio says both, and nothing manages it: still the AP path.
+    expect(setupMode(row({ capabilities: ['router', 'wlan_ap'] }), at(listed))?.kind).toBe(
+      'standalone_ap',
+    );
+  });
+
+  it('runs Discovery’s own flow for any other device', () => {
+    expect(setupMode(row(), at(listed))).toEqual({ kind: 'device', discoveryId: 'd-1' });
+  });
+
+  it('offers nothing where there is nothing to act on', () => {
+    // Monitored, or owned outside the caller's scope.
+    expect(setupMode(row(), at({ ...listed, state: 'node', node_id: 'n-1' }))).toBeNull();
+    expect(setupMode(row(), at({ ...listed, state: 'outside_scope' }))).toBeNull();
+    // Not on the Unregistered list, or listed by an older core that sends no id.
+    expect(setupMode(row(), at({ discovery_listed: false }))).toBeNull();
+    expect(setupMode(row(), at({ discovery_listed: true }))).toBeNull();
+    // No address advertised.
+    expect(setupMode(n(), at(listed))).toBeNull();
+  });
+});
+
+describe('the name a neighbour is added under', () => {
+  it('is its system name, never its chassis id', () => {
+    expect(setupName(n({ remote_sys_name: 'sw-07' }))).toBe('sw-07');
+    expect(setupName(n({ remote_sys_name: null }))).toBeNull();
+    expect(setupName(n({ remote_sys_name: '  ' }))).toBeNull();
+  });
+
+  it('links a Meraki organization to its page', () => {
+    expect(merakiOrgPath('o-1')).toBe('/settings/integrations/meraki/o-1');
   });
 });

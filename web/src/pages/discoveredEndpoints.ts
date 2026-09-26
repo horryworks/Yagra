@@ -67,7 +67,7 @@ export function portName(e: DiscoveredEndpoint): string | null {
 
 /** The name an import should give the new node: the name a source reported, or nothing (the backend
  *  then uses the address). Whitespace-only counts as nothing. */
-export function importName(e: DiscoveredEndpoint): string | undefined {
+export function importName(e: { name?: string | null }): string | undefined {
   const n = e.name?.trim();
   return n ? n : undefined;
 }
@@ -136,7 +136,10 @@ export function detectedDevice(r: Extract<DetectResult, { kind: 'found' }>): str
 
 /** The name an import after a Detect should give: the row's own name first (a neighbour or a
  *  syslog header named it deliberately), then what the device calls itself. */
-export function importNameAfterDetect(e: DiscoveredEndpoint, r: DetectResult | undefined): string | undefined {
+export function importNameAfterDetect(
+  e: { name?: string | null },
+  r: DetectResult | undefined,
+): string | undefined {
   return importName(e) ?? (r?.kind === 'found' ? r.sysname : undefined);
 }
 

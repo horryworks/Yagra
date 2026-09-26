@@ -94,7 +94,9 @@ impl YagraMcp {
                        different from a device that reports no neighbours. \
                        `current.peers` says, per advertised management address, whether one \
                        monitored node owns it (with its id and name), one outside your scope does \
-                       (no name), several do (a shared or duplicate address), or none does. \
+                       (no name), several do (a shared or duplicate address), or none does; for \
+                       an address no node owns, `managed_by` names the wireless controller or \
+                       Meraki organization that already lists the device there. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
                        labelled a MAC address — the maker of the network interface, which is not \
                        necessarily who made the device or its software."

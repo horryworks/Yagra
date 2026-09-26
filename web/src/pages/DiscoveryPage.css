@@ -282,86 +282,16 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   font-size: var(--font-sm);
 }
 
-/* The last three tracks as one cell (ADR-179 増分 2 決定 7): Detect alone, then the form it fills.
-   The header's cell spans the same tracks, so the filter row below it keeps its six. */
+/* The last three tracks as one cell (ADR-179 増分 2 決定 7). What goes in it, and its look, is
+   the shared `EndpointSetupCell` — the Neighbors tab draws the same one. */
 .disco-seen-setup {
   grid-column: 4 / -1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   min-width: 0;
-}
-
-.disco-seen-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-/* A button never wraps its label onto two lines to make room for the text beside it. */
-.disco-seen-actions .btn,
-.disco-seen-form .btn {
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 
 /* The credentials Detect tries, above the table and sized like the Scan tab's field. */
 .disco-seen-creds {
   max-width: 760px;
-}
-
-.disco-seen-detect-hint {
-  font-size: var(--font-xs);
-}
-
-/* What Detect found, or why it found nothing: a mark paired with words, above the inputs it
-   explains. */
-.disco-seen-detect {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  font-size: var(--font-xs);
-}
-
-.disco-seen-detect svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.disco-seen-detect.ok {
-  color: var(--status-ok);
-}
-
-.disco-seen-detect.warn {
-  color: var(--status-warning);
-}
-
-.disco-seen-form {
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-
-/* A dropdown with its label above it — the row has no column headers for these any more. */
-.disco-seen-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1 1 0;
-  min-width: 0;
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-}
-
-/* Filled by Detect: the border says so as well as the label. */
-.disco-seen-field.detected select {
-  border-color: var(--status-ok);
 }
 
 .disco-seen-row:last-child {

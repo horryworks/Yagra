@@ -284,3 +284,62 @@ html[data-viewport='mobile'] .nd-nb-table {
   min-height: 0;
   padding: 0 var(--space-2);
 }
+
+/* ADR-179 増分 3: adding an unmonitored neighbour. The shortcut sits under the address state; the
+   panel opens above the row's record. */
+.nd-nb-setup-open {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0 6px;
+  height: 22px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  color: var(--accent-color);
+  background: transparent;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nd-nb-setup-open:hover {
+  border-color: var(--accent-color);
+}
+
+.nd-nb-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  cursor: default;
+}
+
+.nd-nb-setup p {
+  margin: 0;
+  font-size: var(--font-sm);
+  white-space: normal;
+}
+
+.nd-nb-setup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+}
+
+.nd-nb-setup-title {
+  font-weight: var(--weight-medium);
+}
+
+.nd-nb-setup-creds {
+  max-width: 760px;
+}
+
+.nd-nb-setup-done {
+  color: var(--status-ok);
+}

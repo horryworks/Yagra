@@ -672,6 +672,40 @@ impl MerakiInventoryRepo {
         Self { pool }
     }
 
+    /// The organization whose inventory lists a device at each of `addresses` (ADR-179 増分 3), with
+    /// its name, so the Neighbors tab can point a Meraki device at the organization page instead of
+    /// registering it by hand. A device the last listing no longer contained (`missing_since`) is
+    /// left out: the organization can no longer import it. The organization's name is what
+    /// Settings ▸ Integrations shows every viewer, so it is not narrowed by scope.
+    pub async fn devices_at(
+        &self,
+        addresses: &[IpAddr],
+    ) -> anyhow::Result<HashMap<IpAddr, (Uuid, String)>> {
+        if addresses.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // `lan_ip` is written from an `IpAddr`'s own text, so the same spelling finds it.
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let rows = sqlx::query(
+            "SELECT i.lan_ip, o.id, o.name \
+             FROM meraki_inventory i JOIN meraki_orgs o ON o.id = i.org_id \
+             WHERE i.lan_ip = ANY($1) AND i.missing_since IS NULL \
+             ORDER BY o.name, o.id",
+        )
+        .bind(&text)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let lan: Option<String> = r.try_get("lan_ip")?;
+            if let Some(ip) = lan.and_then(|s| s.parse::<IpAddr>().ok()) {
+                out.entry(ip)
+                    .or_insert((r.try_get("id")?, r.try_get("name")?));
+            }
+        }
+        Ok(out)
+    }
+
     /// An organization's stored rows, for the planner.
     pub async fn stored(&self, org: Uuid) -> anyhow::Result<Vec<StoredDevice>> {
         let rows = sqlx::query(
@@ -1805,5 +1839,42 @@ mod tests {
             networks_with_an_mx(&inv).into_iter().collect::<Vec<_>>(),
             ["N_1", "N_2", "N_3"]
         );
+    }
+
+    /// ADR-179 増分 3: a device's LAN address names its organization — until the listing stops
+    /// containing it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_address_names_its_organization(pool: sqlx::PgPool) {
+        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+            .create("123456", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        let repo = MerakiInventoryRepo::new(pool.clone());
+        let plan = SyncPlan {
+            writes: vec![DeviceWrite {
+                device: seen("Q2AA-0001", true),
+                first_online: true,
+                imported_at: None,
+            }],
+            newly_missing: vec![],
+            follows: vec![],
+        };
+        repo.apply(org, &plan).await.expect("apply");
+        let lan: IpAddr = "10.0.0.1".parse().expect("ip");
+        let other: IpAddr = "10.0.0.2".parse().expect("ip");
+
+        let found = repo.devices_at(&[lan, other]).await.expect("devices");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[&lan], (org, "Acme".to_owned()));
+
+        let gone = SyncPlan {
+            writes: vec![],
+            newly_missing: vec!["Q2AA-0001".into()],
+            follows: vec![],
+        };
+        repo.apply(org, &gone).await.expect("apply");
+        assert!(repo.devices_at(&[lan]).await.expect("devices").is_empty());
     }
 }

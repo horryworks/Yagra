@@ -348,3 +348,73 @@ export function discoveryPath(peer: NeighborPeer | null): string | null {
   );
   return `/nodes/discovery?${params.toString()}`;
 }
+
+// ───────────────────────────────── adding an unmonitored neighbour from here (ADR-179 増分 3)
+
+/** What the "Monitoring setup" panel of one row offers — or `null` for a row it is not drawn on.
+ *
+ *  - `controller`: a controller the caller can see reports an access point here; it is added as
+ *    that controller's AP, never by hand (a hand-made node would be a second one for the same AP
+ *    once the controller imports it).
+ *  - `meraki`: a Meraki organization lists the device; it is added from the organization page,
+ *    where watching its network is decided too.
+ *  - `standalone_ap`: says it is an access point and nothing manages it that this deployment knows
+ *    of; Detect runs, and only an answer (a standalone AP speaks SNMP) offers Monitor.
+ *  - `device`: everything else — Discovery's own flow.
+ *
+ *  `null` for a row whose address is monitored, ambiguous, outside the caller's scope, not on the
+ *  Unregistered list, or reported only by a controller the caller cannot see. */
+export type NeighborSetupMode =
+  | {
+      kind: 'controller';
+      apId: string;
+      controllerId: string;
+      controllerName: string;
+      imported: boolean;
+    }
+  | { kind: 'meraki'; orgId: string; orgName: string }
+  | { kind: 'standalone_ap'; discoveryId: string }
+  | { kind: 'device'; discoveryId: string };
+
+export function setupMode(n: Neighbor, lookups: NeighborLookups): NeighborSetupMode | null {
+  const peer = peerOf(n, lookups);
+  if (!peer || peer.state !== 'unregistered') return null;
+  const m = peer.managed_by;
+  if (m) {
+    switch (m.kind) {
+      case 'controller':
+        return {
+          kind: 'controller',
+          apId: m.ap_id,
+          controllerId: m.controller_node_id,
+          controllerName: m.controller_name,
+          imported: m.imported,
+        };
+      case 'meraki':
+        return { kind: 'meraki', orgId: m.org_id, orgName: m.org_name };
+      case 'controller_hidden':
+        return null;
+      default: {
+        const never: never = m;
+        return never;
+      }
+    }
+  }
+  const id = peer.discovery_listed ? peer.discovery_id : null;
+  if (!id) return null;
+  return (n.capabilities ?? []).includes('wlan_ap')
+    ? { kind: 'standalone_ap', discoveryId: id }
+    : { kind: 'device', discoveryId: id };
+}
+
+/** The name a neighbour gave itself, for the node it becomes — its system name, never the chassis
+ *  id (often a bare MAC, which is not a name). `null` leaves the choice to Detect's sysName, then to
+ *  the address. */
+export function setupName(n: Neighbor): string | null {
+  return peerLabelIsChassis(n) ? null : peerLabel(n);
+}
+
+/** Where a Meraki organization's devices are imported from. */
+export function merakiOrgPath(orgId: string): string {
+  return `/settings/integrations/meraki/${encodeURIComponent(orgId)}`;
+}

@@ -228,10 +228,84 @@ pub struct WirelessRepo {
     pool: PgPool,
 }
 
+/// What a neighbour's management address is to the AP inventory (ADR-179 増分 3): the AP some
+/// controller reports at that address, and a controller the caller can see that reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApAtAddress {
+    pub ap_id: Uuid,
+    /// A controller node reporting this AP that the caller may see, with its name — the AP's
+    /// current owner when that one is visible. `None`: every controller reporting it is outside
+    /// the caller's scope.
+    pub controller: Option<(Uuid, String)>,
+    /// The AP is already a node (at an address other than this one, or the neighbour would have
+    /// matched that node).
+    pub imported: bool,
+}
+
 impl WirelessRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// The AP a controller reports at each of `addresses` (ADR-179 増分 3), so the Neighbors tab can
+    /// send an access point to the controller that manages it instead of registering it by hand —
+    /// which would leave a second node for the same AP once the controller imports it.
+    ///
+    /// Only APs some controller still reports (a sighting exists); the controller named is one the
+    /// caller could see, by the same rule as [`Self::list_page`]. When two APs share an address,
+    /// the one seen last wins, unless only the other has a visible controller.
+    pub async fn aps_at(
+        &self,
+        addresses: &[IpAddr],
+        groups: Option<&[Uuid]>,
+    ) -> anyhow::Result<HashMap<IpAddr, ApAtAddress>> {
+        if addresses.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let rows = sqlx::query(
+            "SELECT a.ap_id, host(a.ip) AS ip, a.node_id IS NOT NULL AS imported, \
+                    v.id AS ctl_id, v.name AS ctl_name \
+             FROM wireless_aps a \
+             LEFT JOIN LATERAL ( \
+                 SELECT n.id, n.name FROM wireless_ap_sightings s \
+                 JOIN wireless_controllers c ON c.id = s.controller_id \
+                 JOIN nodes n ON n.id = c.node_id \
+                 WHERE s.ap_id = a.ap_id AND ($1::UUID[] IS NULL OR n.group_id = ANY($1)) \
+                 ORDER BY (c.id = a.owner_controller_id) DESC NULLS LAST, n.name, n.id \
+                 LIMIT 1) v ON TRUE \
+             WHERE a.ip = ANY($2::text[]::inet[]) \
+               AND EXISTS (SELECT 1 FROM wireless_ap_sightings s WHERE s.ap_id = a.ap_id) \
+             ORDER BY a.last_seen DESC, a.ap_id",
+        )
+        .bind(groups.map(<[Uuid]>::to_vec))
+        .bind(&text)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out: HashMap<IpAddr, ApAtAddress> = HashMap::new();
+        for r in rows {
+            let Some(ip) = r
+                .try_get::<Option<String>, _>("ip")?
+                .and_then(|s| s.parse::<IpAddr>().ok())
+            else {
+                continue;
+            };
+            let ctl_id: Option<Uuid> = r.try_get("ctl_id")?;
+            let ctl_name: Option<String> = r.try_get("ctl_name")?;
+            let found = ApAtAddress {
+                ap_id: r.try_get("ap_id")?,
+                controller: ctl_id.zip(ctl_name),
+                imported: r.try_get("imported")?,
+            };
+            match out.get(&ip) {
+                Some(kept) if kept.controller.is_some() || found.controller.is_none() => {}
+                _ => {
+                    out.insert(ip, found);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Record one controller's complete inventory (ADR-064).
@@ -1828,5 +1902,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read(pool).await.0, "lobby");
+    }
+
+    /// ADR-179 増分 3: an address a controller reports an AP at names that AP and the controller —
+    /// and a caller who cannot see the controller learns only that one exists.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_ap_address_names_the_ap_and_a_controller_the_caller_can_see(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let wlc = pgtest::node(&pool, "wlc01", 1, Some(mine)).await;
+        let repo = WirelessRepo::new(pool.clone());
+        let mac = [0, 0x5d, 0x73, 0, 0, 9];
+        repo.record_inventory(
+            wlc,
+            &cisco_inventory(
+                vec![observation(
+                    mac,
+                    "ap09",
+                    "associated",
+                    WlanApState::Associated,
+                    1,
+                )],
+                None,
+            ),
+            at(0),
+        )
+        .await
+        .expect("inventory");
+        let at_ap: IpAddr = "10.0.0.27".parse().unwrap();
+        let elsewhere: IpAddr = "10.0.0.28".parse().unwrap();
+
+        let all = repo.aps_at(&[at_ap, elsewhere], None).await.expect("aps");
+        assert_eq!(all.len(), 1, "only the address an AP is reported at");
+        let found = &all[&at_ap];
+        assert_eq!(found.ap_id, yagra_common::ap_id(ApMac::new(mac)));
+        assert_eq!(found.controller, Some((wlc, "wlc01".to_owned())));
+        assert!(!found.imported);
+
+        let scoped = repo.aps_at(&[at_ap], Some(&[mine])).await.expect("aps");
+        assert_eq!(scoped[&at_ap].controller, Some((wlc, "wlc01".to_owned())));
+        let hidden = repo.aps_at(&[at_ap], Some(&[theirs])).await.expect("aps");
+        assert_eq!(
+            hidden[&at_ap].controller, None,
+            "the controller is not named"
+        );
+        assert_eq!(hidden[&at_ap].ap_id, found.ap_id);
     }
 }

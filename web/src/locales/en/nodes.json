@@ -1025,6 +1025,22 @@
       "searchAria": "Search neighbours",
       "allProtos": "LLDP and CDP",
       "protoAria": "Filter by protocol"
+    },
+    "setup": {
+      "open": "Set up monitoring",
+      "title": "Monitoring setup",
+      "credsHint": "Detect tries these in this order. The list starts from the one Discovery ▸ Scan a range last used; a change here lasts while this page is open. <lnk>Manage credentials →</lnk>",
+      "controller": "{{controller}} manages this access point. Add it as that controller’s AP, so it stays one node.",
+      "controllerImported": "{{controller}} manages this access point, and it is already a node at another address.",
+      "addFromController": "Add as {{controller}}’s AP",
+      "meraki": "The Meraki organization {{org}} lists this device. Add it from the organization, where you also choose which networks to watch.",
+      "openOrg": "Open {{org}} →",
+      "apHint": "This neighbor says it is an access point. An AP a wireless controller or Meraki manages is added from there; only a standalone AP is added here, and only once it answers SNMP.",
+      "apNoAnswer": "No credential got an answer. An access point a controller manages is added from it: add the <ctl>wireless controller as a node</ctl>, or register the <mer>Meraki organization</mer>.",
+      "done": "Now monitored as {{name}}.",
+      "doneBare": "Now monitored.",
+      "openNode": "Open node →",
+      "errAp": "Could not add the access point."
     }
   },
   "select": {

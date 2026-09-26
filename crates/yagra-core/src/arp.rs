@@ -838,18 +838,19 @@ impl DiscoveredRepo {
 
     /// Which of `addresses` the caller would find on the Discovery ▸ Unregistered list (ADR-180) —
     /// the same scope predicate and the same "not yet imported" rule as [`Self::list_page`], so the
-    /// Neighbors tab never links to a row the list will not show.
+    /// Neighbors tab never links to a row the list will not show. Each address comes back with its
+    /// row's id — `ip` is unique on the table — so the tab can act on the row too (ADR-179 増分 3).
     pub async fn listed_among(
         &self,
         addresses: &[IpAddr],
         groups: Option<&[Uuid]>,
-    ) -> anyhow::Result<BTreeSet<IpAddr>> {
+    ) -> anyhow::Result<BTreeMap<IpAddr, Uuid>> {
         if addresses.is_empty() {
-            return Ok(BTreeSet::new());
+            return Ok(BTreeMap::new());
         }
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
         let rows = sqlx::query(
-            "SELECT host(d.ip) AS ip \
+            "SELECT d.id, host(d.ip) AS ip \
              FROM l3_discovered d \
              LEFT JOIN nodes n ON n.id = d.via_node \
              WHERE ($1::UUID[] IS NULL OR n.group_id = ANY($1)) \
@@ -860,11 +861,15 @@ impl DiscoveredRepo {
         .bind(&text)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|r| r.try_get::<Option<String>, _>("ip").ok().flatten())
-            .filter_map(|s| s.parse::<IpAddr>().ok())
-            .collect())
+        let mut out = BTreeMap::new();
+        for r in rows {
+            let id: Uuid = r.try_get("id")?;
+            let ip: Option<String> = r.try_get("ip")?;
+            if let Some(ip) = ip.and_then(|s| s.parse::<IpAddr>().ok()) {
+                out.insert(ip, id);
+            }
+        }
+        Ok(out)
     }
 
     /// One endpoint by id, if the caller can see it — what the import and probe handlers read
@@ -1829,18 +1834,32 @@ mod tests {
         let asked = [ip("192.0.2.10"), ip("192.0.2.11"), ip("192.0.2.12")];
 
         let all = repo.listed_among(&asked, None).await.expect("listed");
-        assert_eq!(all, BTreeSet::from([ip("192.0.2.10"), ip("192.0.2.11")]));
+        assert_eq!(
+            all.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([ip("192.0.2.10"), ip("192.0.2.11")])
+        );
+        // Each id is the row that address is listed as — what probe and import act on.
+        for (addr, id) in &all {
+            let row = repo.get(*id, None).await.expect("get").expect("row exists");
+            assert_eq!(row.ip, *addr, "{addr} answered another row's id");
+        }
         let scoped = repo
             .listed_among(&asked, Some(&[mine]))
             .await
             .expect("listed");
-        assert_eq!(scoped, BTreeSet::from([ip("192.0.2.10")]));
+        assert_eq!(
+            scoped.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([ip("192.0.2.10")])
+        );
 
         // Imported: a node now stands at the address, and promotion points the row at it.
         node_at(&pool, "now-a-node", "192.0.2.10").await;
         repo.reconcile_promotions().await.expect("reconcile");
         let after = repo.listed_among(&asked, None).await.expect("listed");
-        assert_eq!(after, BTreeSet::from([ip("192.0.2.11")]));
+        assert_eq!(
+            after.keys().copied().collect::<BTreeSet<_>>(),
+            BTreeSet::from([ip("192.0.2.11")])
+        );
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

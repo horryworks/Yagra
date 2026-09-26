@@ -26,7 +26,7 @@ use crate::repo::AddressMatch;
 use axum::extract::{Path, Query};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{NeighborIdKind, NeighborSet};
@@ -108,6 +108,59 @@ pub(crate) struct NeighborPeer {
     node_name: Option<String>,
     /// Whether the address is on the caller's Discovery ▸ Unregistered list.
     discovery_listed: bool,
+    /// That list's row for the address, when `discovery_listed` — the id the endpoint probe and
+    /// import act on (ADR-179 増分 3).
+    discovery_id: Option<Uuid>,
+    /// Who adds this device instead of a hand registration: a wireless controller or a Meraki
+    /// organization that already lists it. Present only when `state` is `unregistered`.
+    managed_by: Option<NeighborManagedBy>,
+}
+
+/// Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such
+/// a device by hand would leave a second node for it once its controller or organization imports
+/// it, so the Neighbors tab sends the operator there instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum NeighborManagedBy {
+    /// A wireless controller the caller can see reports an access point at this address.
+    Controller {
+        /// The access point, for `POST /api/v1/wireless/aps/{ap_id}/import`.
+        ap_id: Uuid,
+        controller_node_id: Uuid,
+        controller_name: String,
+        /// The access point is already a node, at another address.
+        imported: bool,
+    },
+    /// Only controllers outside the caller's folders report an access point at this address.
+    ControllerHidden,
+    /// A Meraki organization's inventory lists a device at this address.
+    Meraki { org_id: Uuid, org_name: String },
+}
+
+/// One address's manager, from what the two inventories answered: a controller the caller can
+/// see first (one click imports it), then a Meraki organization (a page to go to), then a
+/// controller the caller cannot see (nothing to offer, but still not the caller's to add by hand).
+fn managed_by(
+    ap: Option<&crate::wireless::ApAtAddress>,
+    meraki: Option<&(Uuid, String)>,
+) -> Option<NeighborManagedBy> {
+    match (ap, meraki) {
+        (Some(a), _) if a.controller.is_some() => {
+            let (id, name) = a.controller.clone()?;
+            Some(NeighborManagedBy::Controller {
+                ap_id: a.ap_id,
+                controller_node_id: id,
+                controller_name: name,
+                imported: a.imported,
+            })
+        }
+        (_, Some((org_id, org_name))) => Some(NeighborManagedBy::Meraki {
+            org_id: *org_id,
+            org_name: org_name.clone(),
+        }),
+        (Some(_), None) => Some(NeighborManagedBy::ControllerHidden),
+        (None, None) => None,
+    }
 }
 
 /// The registered maker of one MAC address.
@@ -267,8 +320,34 @@ pub(crate) async fn current_neighbors(
                 "failed to read discovered endpoints",
             )
         })?;
+    let aps = admin
+        .wireless
+        .aps_at(&addresses, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match neighbours to access points",
+                "failed to read the access point inventory",
+            )
+        })?;
+    let meraki = admin
+        .meraki_inventory
+        .devices_at(&addresses)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match neighbours to Meraki devices",
+                "failed to read the Meraki inventory",
+            )
+        })?;
+    let managed: HashMap<IpAddr, NeighborManagedBy> = addresses
+        .iter()
+        .filter_map(|ip| managed_by(aps.get(ip), meraki.get(ip)).map(|m| (*ip, m)))
+        .collect();
     Ok(CurrentNeighbors {
-        peers: classify_peers(&advertised, &claims, &listed),
+        peers: classify_peers(&advertised, &claims, &listed, &managed),
         mac_vendors: mac_vendors(&current.set),
         neighbors: current.set,
         first_seen: current.first_seen.to_rfc3339(),
@@ -293,7 +372,8 @@ fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
 fn classify_peers(
     advertised: &BTreeMap<String, IpAddr>,
     claims: &[AddressMatch],
-    listed: &BTreeSet<IpAddr>,
+    listed: &BTreeMap<IpAddr, Uuid>,
+    managed: &HashMap<IpAddr, NeighborManagedBy>,
 ) -> Vec<NeighborPeer> {
     let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, &AddressMatch>> = BTreeMap::new();
     for c in claims {
@@ -314,12 +394,15 @@ fn classify_peers(
                 None if ids.is_empty() => (NeighborPeerState::Unregistered, None, None),
                 None => (NeighborPeerState::Ambiguous, None, None),
             };
+            let unregistered = state == NeighborPeerState::Unregistered;
             NeighborPeer {
                 address: text.clone(),
                 state,
                 node_id,
                 node_name,
-                discovery_listed: listed.contains(ip),
+                discovery_listed: listed.contains_key(ip),
+                discovery_id: listed.get(ip).copied(),
+                managed_by: managed.get(ip).filter(|_| unregistered).cloned(),
             }
         })
         .collect()
@@ -819,11 +902,13 @@ mod peer_tests {
             claim("192.0.2.3", vip_a, "fw-a", true),
             claim("192.0.2.3", vip_b, "fw-b", true),
         ];
-        let listed = BTreeSet::from(["192.0.2.4".parse().unwrap()]);
+        let row = Uuid::from_u128(9);
+        let listed = BTreeMap::from([("192.0.2.4".parse().unwrap(), row)]);
         let peers = classify_peers(
             &advertised(&["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"]),
             &claims,
             &listed,
+            &HashMap::new(),
         );
         let states: Vec<(&str, NeighborPeerState)> = peers
             .iter()
@@ -841,7 +926,76 @@ mod peer_tests {
         assert_eq!(peers[0].node_id, Some(seen));
         assert_eq!(peers[0].node_name.as_deref(), Some("rtr-a"));
         assert!(peers[3].discovery_listed);
+        assert_eq!(peers[3].discovery_id, Some(row));
         assert!(!peers[0].discovery_listed);
+        assert_eq!(peers[0].discovery_id, None);
+    }
+
+    fn ap(controller: Option<(Uuid, &str)>) -> crate::wireless::ApAtAddress {
+        crate::wireless::ApAtAddress {
+            ap_id: Uuid::from_u128(70),
+            controller: controller.map(|(id, n)| (id, n.to_owned())),
+            imported: false,
+        }
+    }
+
+    /// ADR-179 増分 3: a controller the caller can see wins, then a Meraki organization, then a
+    /// controller it cannot see — which names nothing.
+    #[test]
+    fn a_managed_address_names_who_adds_it() {
+        let wlc = Uuid::from_u128(71);
+        let org = (Uuid::from_u128(72), "Acme".to_owned());
+        assert_eq!(
+            managed_by(Some(&ap(Some((wlc, "wlc01")))), Some(&org)),
+            Some(NeighborManagedBy::Controller {
+                ap_id: Uuid::from_u128(70),
+                controller_node_id: wlc,
+                controller_name: "wlc01".into(),
+                imported: false,
+            })
+        );
+        assert_eq!(
+            managed_by(Some(&ap(None)), Some(&org)),
+            Some(NeighborManagedBy::Meraki {
+                org_id: org.0,
+                org_name: "Acme".into()
+            })
+        );
+        assert_eq!(
+            managed_by(Some(&ap(None)), None),
+            Some(NeighborManagedBy::ControllerHidden)
+        );
+        assert_eq!(managed_by(None, None), None);
+    }
+
+    /// Only an unregistered address carries a manager: one a node already owns is that node.
+    #[test]
+    fn only_an_unregistered_address_carries_its_manager() {
+        let owner = Uuid::from_u128(1);
+        let claims = [claim("192.0.2.1", owner, "ap-node", true)];
+        let managed = HashMap::from([
+            (
+                "192.0.2.1".parse().unwrap(),
+                NeighborManagedBy::ControllerHidden,
+            ),
+            (
+                "192.0.2.2".parse().unwrap(),
+                NeighborManagedBy::ControllerHidden,
+            ),
+        ]);
+        let peers = classify_peers(
+            &advertised(&["192.0.2.1", "192.0.2.2"]),
+            &claims,
+            &BTreeMap::new(),
+            &managed,
+        );
+        assert_eq!(peers[0].state, NeighborPeerState::Node);
+        assert_eq!(peers[0].managed_by, None);
+        assert_eq!(peers[1].state, NeighborPeerState::Unregistered);
+        assert_eq!(
+            peers[1].managed_by,
+            Some(NeighborManagedBy::ControllerHidden)
+        );
     }
 
     /// The rule the whole scope design rests on: a claimant the caller may not see never lends
@@ -856,7 +1010,8 @@ mod peer_tests {
         let peers = classify_peers(
             &advertised(&["192.0.2.2", "192.0.2.3"]),
             &claims,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
         );
         for p in &peers {
             assert_eq!(p.node_id, None, "{}", p.address);
@@ -878,7 +1033,12 @@ mod peer_tests {
             claim("192.0.2.9", id, "rtr", true),
             claim("192.0.2.9", id, "rtr", true),
         ];
-        let peers = classify_peers(&advertised(&["192.0.2.9"]), &claims, &BTreeSet::new());
+        let peers = classify_peers(
+            &advertised(&["192.0.2.9"]),
+            &claims,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
     }
 
@@ -890,7 +1050,8 @@ mod peer_tests {
         let peers = classify_peers(
             &advertised(&["2001:0db8:0:0:0:0:0:6"]),
             &claims,
-            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
         );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
         assert_eq!(peers[0].address, "2001:0db8:0:0:0:0:0:6");

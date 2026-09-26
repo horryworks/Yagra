@@ -33688,6 +33688,85 @@
           "unknown"
         ]
       },
+      "NeighborManagedBy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A wireless controller the caller can see reports an access point at this address.",
+            "required": [
+              "ap_id",
+              "controller_node_id",
+              "controller_name",
+              "imported",
+              "kind"
+            ],
+            "properties": {
+              "ap_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The access point, for `POST /api/v1/wireless/aps/{ap_id}/import`."
+              },
+              "controller_name": {
+                "type": "string"
+              },
+              "controller_node_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "imported": {
+                "type": "boolean",
+                "description": "The access point is already a node, at another address."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "controller"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Only controllers outside the caller's folders report an access point at this address.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "controller_hidden"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A Meraki organization's inventory lists a device at this address.",
+            "required": [
+              "org_id",
+              "org_name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "meraki"
+                ]
+              },
+              "org_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "org_name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such\na device by hand would leave a second node for it once its controller or organization imports\nit, so the Neighbors tab sends the operator there instead."
+      },
       "NeighborPeer": {
         "type": "object",
         "description": "One neighbour management address and the node it belongs to.",
@@ -33701,9 +33780,28 @@
             "type": "string",
             "description": "The address exactly as the neighbour row carries it in `remote_mgmt_addr`."
           },
+          "discovery_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "That list's row for the address, when `discovery_listed` — the id the endpoint probe and\nimport act on (ADR-179 増分 3)."
+          },
           "discovery_listed": {
             "type": "boolean",
             "description": "Whether the address is on the caller's Discovery ▸ Unregistered list."
+          },
+          "managed_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NeighborManagedBy",
+                "description": "Who adds this device instead of a hand registration: a wireless controller or a Meraki\norganization that already lists it. Present only when `state` is `unregistered`."
+              }
+            ]
           },
           "node_id": {
             "type": [

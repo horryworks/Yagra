@@ -7,22 +7,37 @@
 // adjacency is recorded append-on-change, so a rack nobody is repatching writes nothing. That is
 // the feature, not a gap, and the empty state says so.
 //
+// An unmonitored neighbour can be added from its opened row (ADR-179 増分 3): the same Detect →
+// Monitor cell as Discovery ▸ Unregistered devices, or — for a device a wireless controller or a
+// Meraki organization already lists — the way that manager adds it. `setupMode` decides which.
+//
 // All judgement (what counts as a change, why the table is empty, how a peer is labelled) lives in
 // the neighbors.ts beside this file: Vitest only runs `src/**/*.test.ts`, so a test written here
 // would never execute (testing.md).
 
-import { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
 import { relativeTime } from '../../lib/format';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
+  CredentialSummary,
   CurrentNeighbors,
   Neighbor,
   NeighborChange,
   NodeDetail as NodeDetailData,
+  ProfileSummary,
 } from '../../types/api';
+import { useCan } from '../../store';
+import { usePrefsStore } from '../../prefs';
+import { isSnmpCredentialKind } from '../../lib/credentialKinds';
+import { initialCredentialIds } from '../../pages/discoveryScans';
+import { useEndpointSetup, type SetupTarget } from '../../lib/useEndpointSetup';
+import { EndpointSetupCell } from '../discovery/EndpointSetupCell';
+import { CredentialPicker } from '../ui/CredentialPicker';
+import { FieldHint } from '../ui/Field';
+import { Button } from '../ui/Button';
 import { DataTable, type Column } from '../ui/DataTable';
 import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
 import { ClearFilters } from '../ui/ClearFilters';
@@ -33,6 +48,9 @@ import { nodeTabFilterPrefix } from './tabs';
 import {
   diffNeighbors,
   discoveryPath,
+  merakiOrgPath,
+  setupMode,
+  setupName,
   emptyReason,
   neighborAddressState,
   neighborDetails,
@@ -45,6 +63,7 @@ import {
   platformCell,
   type NeighborDiffRow,
   type NeighborLookups,
+  type NeighborSetupMode,
 } from './neighbors';
 import './NeighborsTab.css';
 
@@ -65,6 +84,8 @@ export function NeighborsTab({ node }: Props) {
   const [collectionEnabled, setCollectionEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after a neighbour is added, so its row reads as monitored without waiting for the tick.
+  const [reloads, setReloads] = useState(0);
   // Client-side: one device has neighbours in the dozens, and the tab already has them all.
   const [sheet, setSheet] = useState(false);
 
@@ -89,7 +110,7 @@ export function NeighborsTab({ node }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [node.id, tick, t]);
+  }, [node.id, tick, reloads, t]);
 
   // Whether collection is on is a deployment-wide fact, so it is fetched once rather than on every
   // refresh tick — and a failure here must not blank the tab, only make the empty state vaguer.
@@ -113,6 +134,84 @@ export function NeighborsTab({ node }: Props) {
   // One row open at a time; clicking it again closes it (ADR-073's "anything selected can be
   // un-selected").
   const [openKey, setOpenKey] = useState<string | null>(null);
+
+  // ── Adding an unmonitored neighbour (ADR-179 増分 3) ──
+  // Every control is a write, so none is drawn without the permission (ADR-056).
+  const canConfig = useCan('manage_config');
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [creds, setCreds] = useState<CredentialSummary[]>([]);
+  const [probeCredIds, setProbeCredIds] = useState<string[]>([]);
+  const [catalogAsked, setCatalogAsked] = useState(false);
+  // Rows added from here, by neighbour key → the name they were added under.
+  const [added, setAdded] = useState<Record<string, string | null>>({});
+  const [apBusy, setApBusy] = useState<string | null>(null);
+  const [apError, setApError] = useState<string | null>(null);
+  const setup = useEndpointSetup({ profiles, creds, probeCredIds });
+
+  // Profiles and credentials are read the first time a row is opened, not with the tab: most visits
+  // add nothing. A credential list this caller may not read degrades to "nothing to try", as on
+  // Discovery.
+  useEffect(() => {
+    if (!canConfig || openKey == null || catalogAsked) return;
+    setCatalogAsked(true);
+    api.listProfiles().then(setProfiles).catch(() => undefined);
+    api
+      .listCredentials()
+      .then((list) => {
+        setCreds(list);
+        // Discovery's own starting point: the credentials the last range scan tried, else every
+        // SNMP credential. A change made here is not remembered (ADR-179 増分 3 決定 5).
+        setProbeCredIds(initialCredentialIds(usePrefsStore.getState().discoveryScan, list));
+      })
+      .catch(() => undefined);
+  }, [canConfig, openKey, catalogAsked]);
+  const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
+
+  const markAdded = (key: string, name: string | null) => {
+    setAdded((cur) => ({ ...cur, [key]: name }));
+    setReloads((r) => r + 1);
+  };
+
+  const importAp = (key: string, apId: string, name: string | null) => {
+    setApBusy(key);
+    setApError(null);
+    api
+      .importWirelessAp(apId)
+      .then(() => markAdded(key, name))
+      .catch((e: unknown) => setApError(errMsg(e, t('neighbors.setup.errAp'))))
+      .finally(() => setApBusy(null));
+  };
+
+  /** The opened row's "Monitoring setup" panel, or `null` when the row has none. */
+  const setupPanel = (n: Neighbor): ReactNode => {
+    const key = neighborKey(n);
+    const mode = setupMode(n, lookups);
+    if (!canConfig || (mode == null && !(key in added))) return null;
+    return (
+      <SetupPanel
+        neighbor={n}
+        mode={mode}
+        added={key in added ? { name: added[key] } : null}
+        peerPath={peerNodePath(peerOf(n, lookups))}
+        discovery={discoveryPath(peerOf(n, lookups))}
+        profiles={profiles}
+        creds={creds}
+        snmpCreds={snmpCreds}
+        probeCredIds={probeCredIds}
+        onProbeCredsChange={setProbeCredIds}
+        setup={setup}
+        apBusy={apBusy === key}
+        apError={apError}
+        onImportAp={(apId) => importAp(key, apId, setupName(n))}
+        onMonitor={async (target) => {
+          if (await setup.monitor(target)) markAdded(key, target.name ?? null);
+        }}
+      />
+    );
+  };
+  // The address cell's shortcut into the panel: shown only where the panel has something to offer.
+  const canSetUp = (n: Neighbor) =>
+    canConfig && setupMode(n, lookups) != null && !(neighborKey(n) in added);
 
   const specs = neighborFilters(t, lookups);
   const columns: Column<Neighbor>[] = [
@@ -153,7 +252,13 @@ export function NeighborsTab({ node }: Props) {
       key: 'address',
       header: t('neighbors.colAddress'),
       width: '1.1fr',
-      render: (n) => <AddressCell neighbor={n} lookups={lookups} />,
+      render: (n) => (
+        <AddressCell
+          neighbor={n}
+          lookups={lookups}
+          onSetup={canSetUp(n) ? () => setOpenKey(neighborKey(n)) : undefined}
+        />
+      ),
     },
     {
       key: 'platform',
@@ -230,10 +335,19 @@ export function NeighborsTab({ node }: Props) {
                 setOpenKey((cur) => (cur === key ? null : key));
               }}
               expanded={(n) =>
-                neighborKey(n) === openKey ? <Details neighbor={n} lookups={lookups} /> : null
+                neighborKey(n) === openKey ? (
+                  <Details neighbor={n} lookups={lookups} setup={setupPanel(n)} />
+                ) : null
               }
               expandedKey={openKey}
-              renderCard={(n) => <NeighborCard neighbor={n} lookups={lookups} />}
+              renderCard={(n) => (
+                <NeighborCard
+                  neighbor={n}
+                  lookups={lookups}
+                  setup={setupPanel(n)}
+                  canSetUp={canSetUp(n)}
+                />
+              )}
             />
           </div>
           {sheet && (
@@ -295,7 +409,16 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
 }
 
 /** The management address and what it is to this deployment. */
-function AddressCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+function AddressCell({
+  neighbor: n,
+  lookups,
+  onSetup,
+}: {
+  neighbor: Neighbor;
+  lookups: NeighborLookups;
+  /** Opens the row's setup panel; absent where there is nothing to set up. */
+  onSetup?: () => void;
+}) {
   const { t } = useTranslation('nodes');
   const state = neighborAddressState(n, lookups);
   const discovery = discoveryPath(peerOf(n, lookups));
@@ -322,6 +445,19 @@ function AddressCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Ne
           )}
         </span>
       )}
+      {onSetup && (
+        <button
+          type="button"
+          className="nd-nb-setup-open"
+          onClick={(e) => {
+            // The row's own click toggles it; this one only ever opens it.
+            e.stopPropagation();
+            onSetup();
+          }}
+        >
+          {t('neighbors.setup.open')}
+        </button>
+      )}
     </span>
   );
 }
@@ -345,10 +481,20 @@ function PlatformCell({ neighbor: n }: { neighbor: Neighbor }) {
 }
 
 /** Everything the neighbour sent, in full and wrapped — what the ellipsized cells above leave out. */
-function Details({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+function Details({
+  neighbor: n,
+  lookups,
+  setup,
+}: {
+  neighbor: Neighbor;
+  lookups: NeighborLookups;
+  /** The setup panel, drawn above the record when the row has one. */
+  setup?: ReactNode;
+}) {
   const { t } = useTranslation('nodes');
   return (
     <div className="nd-nb-details">
+      {setup}
       <dl className="nd-nb-dl">
         {neighborDetails(n, lookups).map((d) => (
           <div key={d.labelKey} className="nd-nb-dl-row">
@@ -364,7 +510,17 @@ function Details({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neighb
 
 /** The phone layout: the four facts in reading order, and the full record behind a disclosure —
  *  a phone has no hover to read an ellipsized cell with. */
-function NeighborCard({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+function NeighborCard({
+  neighbor: n,
+  lookups,
+  setup,
+  canSetUp,
+}: {
+  neighbor: Neighbor;
+  lookups: NeighborLookups;
+  setup?: ReactNode;
+  canSetUp: boolean;
+}) {
   const { t } = useTranslation('nodes');
   const [open, setOpen] = useState(false);
   const { primary } = platformCell(n);
@@ -374,7 +530,11 @@ function NeighborCard({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: N
       <span className="mono nd-nb-card-ports">
         {n.local_port} → {n.remote_port || '—'}
       </span>
-      <AddressCell neighbor={n} lookups={lookups} />
+      <AddressCell
+        neighbor={n}
+        lookups={lookups}
+        onSetup={canSetUp ? () => setOpen(true) : undefined}
+      />
       {primary && <span className="nd-nb-card-platform">{primary}</span>}
       <span className="nd-nb-card-chips">
         <Capabilities neighbor={n} />
@@ -391,8 +551,170 @@ function NeighborCard({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: N
       >
         {open ? t('neighbors.detail.hide') : t('neighbors.detail.show')}
       </button>
-      {open && <Details neighbor={n} lookups={lookups} />}
+      {open && <Details neighbor={n} lookups={lookups} setup={setup} />}
     </div>
+  );
+}
+
+/** "Monitoring setup" for one unmonitored neighbour (ADR-179 増分 3 決定 2): the way its manager
+ *  adds it, or Discovery's Detect → Monitor cell over the same `useEndpointSetup` state. */
+function SetupPanel({
+  neighbor: n,
+  mode,
+  added,
+  peerPath,
+  discovery,
+  profiles,
+  creds,
+  snmpCreds,
+  probeCredIds,
+  onProbeCredsChange,
+  setup,
+  apBusy,
+  apError,
+  onImportAp,
+  onMonitor,
+}: {
+  neighbor: Neighbor;
+  mode: NeighborSetupMode | null;
+  /** Added from here in this visit, under this name. */
+  added: { name: string | null } | null;
+  /** The node the address now belongs to, once the list has been read again. */
+  peerPath: string | null;
+  discovery: string | null;
+  profiles: ProfileSummary[];
+  creds: CredentialSummary[];
+  snmpCreds: CredentialSummary[];
+  probeCredIds: string[];
+  onProbeCredsChange: (ids: string[]) => void;
+  setup: ReturnType<typeof useEndpointSetup>;
+  apBusy: boolean;
+  apError: string | null;
+  onImportAp: (apId: string) => void;
+  onMonitor: (target: SetupTarget) => Promise<void>;
+}) {
+  const { t } = useTranslation('nodes');
+  const { t: tm } = useTranslation('monitoring');
+  const head = (
+    <div className="nd-nb-setup-head">
+      <span className="nd-nb-setup-title">{t('neighbors.setup.title')}</span>
+      {discovery && !added && (
+        <Link to={discovery} className="nd-nb-link">
+          {t('neighbors.peer.inDiscovery')} →
+        </Link>
+      )}
+    </div>
+  );
+
+  if (added) {
+    return (
+      <section className="nd-nb-setup" onClick={(e) => e.stopPropagation()}>
+        {head}
+        <p className="nd-nb-setup-done">
+          ✓{' '}
+          {added.name
+            ? t('neighbors.setup.done', { name: added.name })
+            : t('neighbors.setup.doneBare')}{' '}
+          {peerPath && (
+            <Link to={peerPath} className="nd-nb-link">
+              {t('neighbors.setup.openNode')}
+            </Link>
+          )}
+        </p>
+      </section>
+    );
+  }
+  if (mode == null) return null;
+
+  let body: ReactNode;
+  switch (mode.kind) {
+    case 'controller':
+      body = mode.imported ? (
+        <p className="nd-muted">
+          {t('neighbors.setup.controllerImported', { controller: mode.controllerName })}
+        </p>
+      ) : (
+        <>
+          <p className="nd-muted">{t('neighbors.setup.controller', { controller: mode.controllerName })}</p>
+          <div>
+            <Button variant="primary" disabled={apBusy} onClick={() => onImportAp(mode.apId)}>
+              {t('neighbors.setup.addFromController', { controller: mode.controllerName })}
+            </Button>
+          </div>
+          {apError && <p className="form-error">{apError}</p>}
+        </>
+      );
+      break;
+    case 'meraki':
+      body = (
+        <>
+          <p className="nd-muted">{t('neighbors.setup.meraki', { org: mode.orgName })}</p>
+          <Link to={merakiOrgPath(mode.orgId)} className="nd-nb-link">
+            {t('neighbors.setup.openOrg', { org: mode.orgName })}
+          </Link>
+        </>
+      );
+      break;
+    case 'standalone_ap':
+    case 'device': {
+      const ap = mode.kind === 'standalone_ap';
+      const target: SetupTarget = {
+        id: mode.discoveryId,
+        ip: n.remote_mgmt_addr ?? '',
+        name: setupName(n),
+      };
+      body = (
+        <>
+          {ap && <p className="nd-muted">{t('neighbors.setup.apHint')}</p>}
+          <label className="form-label nd-nb-setup-creds">
+            {tm('discovery.credsLabel')}
+            <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
+            <FieldHint>
+              <Trans
+                t={t}
+                i18nKey="neighbors.setup.credsHint"
+                components={{ lnk: <Link to="/nodes/credentials" /> }}
+              />
+            </FieldHint>
+          </label>
+          <EndpointSetupCell
+            target={target}
+            setup={setup}
+            profiles={profiles}
+            creds={creds}
+            probeCredCount={probeCredIds.length}
+            onMonitor={() => void onMonitor(target)}
+            noAnswer={
+              ap ? (
+                <span>
+                  <Trans
+                    t={t}
+                    i18nKey="neighbors.setup.apNoAnswer"
+                    components={{
+                      ctl: <Link to="/nodes" />,
+                      mer: <Link to="/settings/integrations/meraki" />,
+                    }}
+                  />
+                </span>
+              ) : undefined
+            }
+          />
+          {setup.error && <p className="form-error">{setup.error}</p>}
+        </>
+      );
+      break;
+    }
+    default: {
+      const never: never = mode;
+      return never;
+    }
+  }
+  return (
+    // Controls inside an opened row must not also close it.
+    <section className="nd-nb-setup" onClick={(e) => e.stopPropagation()}>
+      {head}
+      {body}
+    </section>
   );
 }
 
