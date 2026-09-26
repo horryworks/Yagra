@@ -836,6 +836,37 @@ impl DiscoveredRepo {
         Ok(row.try_get("n")?)
     }
 
+    /// Which of `addresses` the caller would find on the Discovery ▸ Unregistered list (ADR-180) —
+    /// the same scope predicate and the same "not yet imported" rule as [`Self::list_page`], so the
+    /// Neighbors tab never links to a row the list will not show.
+    pub async fn listed_among(
+        &self,
+        addresses: &[IpAddr],
+        groups: Option<&[Uuid]>,
+    ) -> anyhow::Result<BTreeSet<IpAddr>> {
+        if addresses.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        let rows = sqlx::query(
+            "SELECT host(d.ip) AS ip \
+             FROM l3_discovered d \
+             LEFT JOIN nodes n ON n.id = d.via_node \
+             WHERE ($1::UUID[] IS NULL OR n.group_id = ANY($1)) \
+               AND d.promoted_node_id IS NULL \
+               AND d.ip = ANY($2::text[]::inet[])",
+        )
+        .bind(groups.map(<[Uuid]>::to_vec))
+        .bind(&text)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| r.try_get::<Option<String>, _>("ip").ok().flatten())
+            .filter_map(|s| s.parse::<IpAddr>().ok())
+            .collect())
+    }
+
     /// One endpoint by id — what the import handler reads before creating a node from it.
     pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<DiscoveredEndpoint>> {
         let row = sqlx::query(
@@ -1118,10 +1149,11 @@ mod tests {
     #[test]
     fn an_address_is_read_through_host_and_never_cast_to_text() {
         let src = production_source();
+        // Four since ADR-180 added `listed_among`.
         assert_eq!(
             src.matches("host(").count(),
-            3,
-            "the three address projections are no longer reading through `host()`"
+            4,
+            "the four address projections are no longer reading through `host()`"
         );
         for needle in ["address::TEXT", "ip::TEXT"] {
             assert!(
@@ -1768,6 +1800,39 @@ mod tests {
     /// The predicate joins through `via_node`, so an endpoint seen only by a node the caller cannot
     /// see must not be listed — otherwise the list leaks the existence of segments outside the
     /// scope.
+    /// The Neighbors tab's "listed as unregistered" (ADR-180) answers exactly what the list shows:
+    /// the same scope, and an imported row no longer counts.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn listed_among_follows_the_list_scope_and_drops_imported_rows(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let ours = pgtest::node(&pool, "ours", 1, Some(mine)).await;
+        let alien = pgtest::node(&pool, "alien", 2, Some(theirs)).await;
+        let repo = DiscoveredRepo::new(pool.clone());
+        repo.upsert_batch(&[
+            observation("192.0.2.10", ours, 8),
+            observation("192.0.2.11", alien, 8),
+        ])
+        .await
+        .expect("upsert");
+        let asked = [ip("192.0.2.10"), ip("192.0.2.11"), ip("192.0.2.12")];
+
+        let all = repo.listed_among(&asked, None).await.expect("listed");
+        assert_eq!(all, BTreeSet::from([ip("192.0.2.10"), ip("192.0.2.11")]));
+        let scoped = repo
+            .listed_among(&asked, Some(&[mine]))
+            .await
+            .expect("listed");
+        assert_eq!(scoped, BTreeSet::from([ip("192.0.2.10")]));
+
+        // Imported: a node now stands at the address, and promotion points the row at it.
+        node_at(&pool, "now-a-node", "192.0.2.10").await;
+        repo.reconcile_promotions().await.expect("reconcile");
+        let after = repo.listed_among(&asked, None).await.expect("listed");
+        assert_eq!(after, BTreeSet::from([ip("192.0.2.11")]));
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_listing_is_scoped_by_the_observing_node_and_pages_by_cursor(pool: sqlx::PgPool) {

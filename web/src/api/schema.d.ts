@@ -6716,8 +6716,20 @@ export interface components {
             first_seen: string;
             /** @description When it was last confirmed unchanged (RFC 3339). */
             last_seen: string;
+            /**
+             * @description The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
+             *     labelled as MAC addresses are looked up. This names who made the network interface, which is
+             *     not necessarily who made the device or its software.
+             */
+            mac_vendors: components["schemas"]["MacVendor"][];
             /** @description The adjacencies the node last reported. */
             neighbors: components["schemas"]["NeighborSet"];
+            /**
+             * @description For each distinct management address the neighbours advertise, which monitored node it
+             *     belongs to. Matched on the address alone — an inventory address or any address one of a
+             *     node's interfaces carries — never on a name or chassis id.
+             */
+            peers: components["schemas"]["NeighborPeer"][];
         };
         /** @description A save's acknowledgement. The layout is not echoed back — the client already has it. */
         DashboardSaved: {
@@ -8828,6 +8840,12 @@ export interface components {
             /** @description The bearer token for subsequent requests. */
             token: string;
         };
+        /** @description The registered maker of one MAC address. */
+        MacVendor: {
+            /** @description The MAC exactly as the neighbour row carries it. */
+            mac: string;
+            vendor: string;
+        };
         /** @description The rule behind a proposal, as the classification-rules screen shows it. */
         MatchedRule: {
             /** Format: uuid */
@@ -9573,6 +9591,7 @@ export interface components {
             proto: components["schemas"]["NeighborProto"];
             /** @description The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`. */
             remote_chassis: string;
+            remote_chassis_kind?: null | components["schemas"]["NeighborIdKind"];
             /**
              * @description The peer's management address, from `cdpCacheAddress` for CDP and from `lldpRemManAddrTable`
              *     for LLDP. `None` when the peer advertised none.
@@ -9584,7 +9603,11 @@ export interface components {
             remote_port: string;
             /** @description `lldpRemPortDesc` — the peer's own description of its port. */
             remote_port_desc?: string | null;
-            /** @description `lldpRemSysDesc`. */
+            remote_port_kind?: null | components["schemas"]["NeighborIdKind"];
+            /**
+             * @description The peer's own description of itself: `lldpRemSysDesc` for LLDP, `cdpCacheVersion` for CDP.
+             *     Control characters (line breaks included) are removed and the text is cut at 255 characters.
+             */
             remote_sys_desc?: string | null;
             /** @description `lldpRemSysName`. CDP has no separate system name (its device id serves both). */
             remote_sys_name?: string | null;
@@ -9695,6 +9718,35 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /**
+         * @description How a neighbour's chassis or port id was actually rendered (ADR-180).
+         *
+         *     Recorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]
+         *     took — never inferred from how the stored text looks, because a text id can look like a MAC and
+         *     the hex fallback always does.
+         * @enum {string}
+         */
+        NeighborIdKind: "mac" | "network_address" | "text" | "hex" | "unknown";
+        /** @description One neighbour management address and the node it belongs to. */
+        NeighborPeer: {
+            /** @description The address exactly as the neighbour row carries it in `remote_mgmt_addr`. */
+            address: string;
+            /** @description Whether the address is on the caller's Discovery ▸ Unregistered list. */
+            discovery_listed: boolean;
+            /**
+             * Format: uuid
+             * @description Present only when `state` is `node`.
+             */
+            node_id?: string | null;
+            /** @description Present only when `state` is `node`. */
+            node_name?: string | null;
+            state: components["schemas"]["NeighborPeerState"];
+        };
+        /**
+         * @description What a neighbour's management address is to this deployment.
+         * @enum {string}
+         */
+        NeighborPeerState: "node" | "outside_scope" | "ambiguous" | "unregistered";
         /**
          * @description Which discovery protocol reported an adjacency.
          *

@@ -91,7 +91,13 @@ impl YagraMcp {
                        1–200 (default 10); page further back with `before_at` (RFC 3339) and \
                        `before_id` taken from `next` — both together or neither. Returns an \
                        availability note when no walk has recorded anything for the node, which is \
-                       different from a device that reports no neighbours."
+                       different from a device that reports no neighbours. \
+                       `current.peers` says, per advertised management address, whether one \
+                       monitored node owns it (with its id and name), one outside your scope does \
+                       (no name), several do (a shared or duplicate address), or none does. \
+                       `current.mac_vendors` names the IEEE-registered maker of each id the device \
+                       labelled a MAC address — the maker of the network interface, which is not \
+                       necessarily who made the device or its software."
     )]
     async fn get_neighbors(
         &self,
@@ -129,7 +135,8 @@ impl YagraMcp {
         // Current and history are one question, so this returns both rather than branching on a
         // mode param — a result whose shape depends on an argument is harder for a model than two
         // tools would be, and buys nothing.
-        let current = match crate::api::neighbors::current_neighbors(admin, p.node_id).await {
+        let current = match crate::api::neighbors::current_neighbors(admin, scope, p.node_id).await
+        {
             Ok(c) => c,
             // 404 here means "never walked", which `tool_api_error` renders as an availability note
             // rather than an error. Inventing an empty set instead would assert the device has no

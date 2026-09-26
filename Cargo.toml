@@ -21,6 +21,7 @@ resolver = "2"
 members = [
     "crates/yagra-common",
     "crates/yagra-hoststats",
+    "crates/yagra-oui",
     "crates/yagra-telemetry",
     "crates/yagra-secrets",
     "crates/yagra-transport",

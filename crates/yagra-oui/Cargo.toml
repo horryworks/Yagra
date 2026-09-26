@@ -1,0 +1,12 @@
+[package]
+name = "yagra-oui"
+description = "Yagra-oui — the IEEE MAC-address registry (MA-L/MA-M/MA-S), for naming the maker behind a MAC. Display only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# No dependencies, deliberately: only yagra-core links this, and the table is data, not code.
+[dependencies]

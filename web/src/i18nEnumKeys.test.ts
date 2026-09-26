@@ -73,6 +73,7 @@ import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
 import { PREFIX_PROBLEMS } from './components/GroupModal/prefixFields';
 import { AP_IMPORT_STATES } from './components/NodeDetail/tabFilters';
+import { NEIGHBOR_ADDRESS_STATES, NEIGHBOR_DETAIL_KEYS } from './components/NodeDetail/neighbors';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
@@ -1036,6 +1037,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'none',
     ]);
     expectKeys('neighbor diff kind', locales, 'neighbors.diff.', ['added', 'removed', 'changed']);
+    // ADR-180: the address state is the chip, the filter option and its explanation.
+    expectKeys('neighbor address state', locales, 'neighbors.peer.state.', NEIGHBOR_ADDRESS_STATES);
+    expectKeys('neighbor address explain', locales, 'neighbors.peer.explain.', NEIGHBOR_ADDRESS_STATES);
+    expectKeys('neighbor detail label', locales, 'neighbors.detail.', NEIGHBOR_DETAIL_KEYS);
   });
 
   it('every access-point state and monitoring state has strings (nodes:ap.*)', () => {

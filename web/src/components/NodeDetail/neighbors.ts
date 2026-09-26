@@ -6,7 +6,16 @@
 // how a row is labelled, whether the empty state means "nothing recorded" or "nothing connected" —
 // lives on this side of that line (testing.md).
 
-import type { Neighbor, NeighborSet } from '../../types/api';
+import { encodeCondition } from '../../lib/filterCondition';
+import {
+  NEIGHBOR_PEER_STATES,
+  type CurrentNeighbors,
+  type Neighbor,
+  type NeighborPeer,
+  type NeighborSet,
+} from '../../types/api';
+import { DISCOVERY_TABS } from '../../pages/discoveredEndpoints';
+import { ENDPOINT_FILTER_PREFIX } from '../../pages/discoveryFilters';
 
 /** How one adjacency differs between two consecutive observations. */
 export type NeighborDiffKind = 'added' | 'removed' | 'changed';
@@ -32,7 +41,11 @@ function identity(n: Neighbor): string {
   return [n.proto, n.local_port, n.remote_chassis, n.remote_port].join(KEY_SEP);
 }
 
-/** Everything except the identity — what makes a link "changed" rather than replaced. */
+/** Everything except the identity — what makes a link "changed" rather than replaced.
+ *
+ *  Mirrors the backend's content key, which is why `remote_chassis_kind` / `remote_port_kind` are
+ *  **not** here: they say how an id was rendered, not what it is, and the key leaves them out so the
+ *  first walk after an upgrade is not a change (ADR-180 決定 4). */
 function payload(n: Neighbor): string {
   return JSON.stringify([
     n.local_ifindex ?? null,
@@ -188,4 +201,150 @@ export function neighborCellText(list: readonly Neighbor[] | undefined): Neighbo
       .map((n) => (n.remote_port ? `${peerLabel(n)} ${n.remote_port}` : peerLabel(n)))
       .join('\n'),
   };
+}
+
+// ─────────────────────────────────────────── what the tab adds to a row (ADR-180)
+
+/** What the server said about each advertised address and each MAC-labelled id, keyed by the text
+ *  the rows carry. Built once per response so every cell is a map lookup. */
+export interface NeighborLookups {
+  peers: ReadonlyMap<string, NeighborPeer>;
+  vendors: ReadonlyMap<string, string>;
+}
+
+export const NO_LOOKUPS: NeighborLookups = { peers: new Map(), vendors: new Map() };
+
+/** Index the two per-response lists. Absent lists (an older core) read as "nothing known", which
+ *  shows every row exactly as it looked before this was added. */
+export function neighborLookups(
+  current: Pick<CurrentNeighbors, 'peers' | 'mac_vendors'> | null | undefined,
+): NeighborLookups {
+  if (!current) return NO_LOOKUPS;
+  return {
+    peers: new Map((current.peers ?? []).map((p) => [p.address, p])),
+    vendors: new Map((current.mac_vendors ?? []).map((v) => [v.mac, v.vendor])),
+  };
+}
+
+/** The server's verdict on this row's management address, or `null` when it advertised none. */
+export function peerOf(n: Neighbor, lookups: NeighborLookups): NeighborPeer | null {
+  const addr = n.remote_mgmt_addr;
+  return addr ? (lookups.peers.get(addr) ?? null) : null;
+}
+
+/** What the Address column says about a row: the server's verdict on its address, or `none` when
+ *  the neighbour advertised no address at all — a state worth filtering for on its own, since such a
+ *  peer can never be matched to anything. */
+export const NEIGHBOR_ADDRESS_STATES = [...NEIGHBOR_PEER_STATES, 'none'] as const;
+export type NeighborAddressState = (typeof NEIGHBOR_ADDRESS_STATES)[number];
+
+/** A row's address state. An address the server did not classify (an older core, or text that is
+ *  not an address) reads as `null` — no state rather than a guessed one. */
+export function neighborAddressState(
+  n: Neighbor,
+  lookups: NeighborLookups,
+): NeighborAddressState | null {
+  if (!n.remote_mgmt_addr) return 'none';
+  return peerOf(n, lookups)?.state ?? null;
+}
+
+/** The registered maker of the chassis id — only when the device labelled it a MAC. The server
+ *  already refuses anything else; asking the kind here as well means a row whose chassis happens to
+ *  equal another row's MAC-labelled port id cannot borrow its vendor. */
+export function chassisVendor(n: Neighbor, lookups: NeighborLookups): string | null {
+  return n.remote_chassis_kind === 'mac' ? (lookups.vendors.get(n.remote_chassis) ?? null) : null;
+}
+
+/** The registered maker of the port id, on the same rule as [`chassisVendor`]. */
+export function portVendor(n: Neighbor, lookups: NeighborLookups): string | null {
+  return n.remote_port_kind === 'mac' ? (lookups.vendors.get(n.remote_port) ?? null) : null;
+}
+
+/** The Neighbor cell's second line: the chassis id when the first line is a name, plus its maker. */
+export function peerSecondary(n: Neighbor, lookups: NeighborLookups): string | null {
+  const parts: string[] = [];
+  if (!peerLabelIsChassis(n)) parts.push(n.remote_chassis);
+  const vendor = chassisVendor(n, lookups);
+  if (vendor) parts.push(vendor);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/** The Model / OS cell. CDP has a short platform string and, since ADR-180, its version banner in
+ *  `remote_sys_desc`; LLDP has only the sysDescr. So the platform leads when there is one and the
+ *  banner goes underneath; otherwise the description stands alone. */
+export function platformCell(n: Neighbor): { primary: string | null; secondary: string | null } {
+  const platform = n.remote_platform?.trim() || null;
+  const desc = n.remote_sys_desc?.trim() || null;
+  if (platform) return { primary: platform, secondary: desc };
+  return { primary: desc, secondary: null };
+}
+
+/** One labelled line of the opened row. `labelKey` is under `nodes:neighbors.detail.`. */
+export interface NeighborDetail {
+  labelKey: NeighborDetailKey;
+  value: string;
+  mono: boolean;
+}
+
+export const NEIGHBOR_DETAIL_KEYS = [
+  'sysName',
+  'chassis',
+  'chassisVendor',
+  'port',
+  'portVendor',
+  'portDesc',
+  'mgmtAddr',
+  'platform',
+  'sysDesc',
+  'localIfindex',
+] as const;
+export type NeighborDetailKey = (typeof NEIGHBOR_DETAIL_KEYS)[number];
+
+/** Every field the row carries, in reading order, leaving out the ones the device did not send.
+ *  The opened row shows these in full and wrapped — the table cells above it ellipsize. */
+export function neighborDetails(n: Neighbor, lookups: NeighborLookups): NeighborDetail[] {
+  const rows: [NeighborDetailKey, string | null | undefined, boolean][] = [
+    ['sysName', n.remote_sys_name, false],
+    ['chassis', n.remote_chassis, true],
+    ['chassisVendor', chassisVendor(n, lookups), false],
+    ['port', n.remote_port, true],
+    ['portVendor', portVendor(n, lookups), false],
+    ['portDesc', n.remote_port_desc, false],
+    ['mgmtAddr', n.remote_mgmt_addr, true],
+    ['platform', n.remote_platform, false],
+    ['sysDesc', n.remote_sys_desc, false],
+    ['localIfindex', n.local_ifindex == null ? null : String(n.local_ifindex), true],
+  ];
+  return rows
+    .filter(([, v]) => v != null && v.trim() !== '')
+    .map(([labelKey, value, mono]) => ({ labelKey, value: value as string, mono }));
+}
+
+/** Where the peer's inventory entry is, when exactly one visible node owns its address. */
+export function peerNodePath(peer: NeighborPeer | null): string | null {
+  return peer?.state === 'node' && peer.node_id ? `/nodes/${peer.node_id}` : null;
+}
+
+/** Escape a string for use as a literal inside a regular expression. */
+function regexLiteral(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Discovery ▸ Unregistered, filtered to this address — or `null` when the list would not show it.
+ *
+ * The filter is an **anchored regex**, not a plain term: the address column matches substrings, so
+ * `192.0.2.1` would also keep `192.0.2.10`. It goes through the list's own codec and URL prefix, so
+ * the page reads it back as if the operator had typed it.
+ */
+export function discoveryPath(peer: NeighborPeer | null): string | null {
+  if (!peer || peer.state !== 'unregistered' || !peer.discovery_listed) return null;
+  const params = new URLSearchParams();
+  const tab: (typeof DISCOVERY_TABS)[number] = 'unregistered';
+  params.set('tab', tab);
+  params.set(
+    `${ENDPOINT_FILTER_PREFIX}ip`,
+    encodeCondition({ term: `^${regexLiteral(peer.address)}$`, mode: 'regex', not: false }),
+  );
+  return `/nodes/discovery?${params.toString()}`;
 }

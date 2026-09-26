@@ -13,6 +13,7 @@ import {
   neighborFilters,
   type FilterableInterface,
 } from './tabFilters';
+import { neighborLookups } from './neighbors';
 import {
   defaultFilters,
   isAnyFiltered,
@@ -165,6 +166,64 @@ describe('the neighbours filter row', () => {
     for (const key of Object.keys(NB_DEFAULTS)) {
       expect(isAnyFiltered(NB_COLS, nbf({ [key]: 'x' }))).toBe(true);
     }
+  });
+
+  // ADR-180: the address is filtered by what it IS to this deployment, and the peer filter reads
+  // what the peer cell now shows — the chassis maker and the node the address belongs to.
+  describe('with what the server said about addresses and MACs', () => {
+    const lookups = neighborLookups({
+      peers: [
+        {
+          address: '192.0.2.1',
+          state: 'node',
+          node_id: 'n-1',
+          node_name: 'rtr-a',
+          discovery_listed: false,
+        },
+        {
+          address: '192.0.2.9',
+          state: 'unregistered',
+          node_id: null,
+          node_name: null,
+          discovery_listed: true,
+        },
+      ],
+      mac_vendors: [{ mac: '00:00:0c:12:34:56', vendor: 'Cisco Systems, Inc' }],
+    });
+    const COLS: FilterableColumn<Neighbor>[] = Object.entries(neighborFilters(t, lookups)).map(
+      ([key, filter]) => ({ key, filter }),
+    );
+    const DEFAULTS = defaultFilters(COLS);
+    const f = (over: Record<string, string>): FilterState => ({ ...DEFAULTS, ...over });
+    const hit = (row: Neighbor, state: FilterState) => matchesFilters(row, COLS, state, NOW);
+
+    it('filters by address state, with "none" for a neighbour that advertised no address', () => {
+      const known = nb({ remote_mgmt_addr: '192.0.2.1' });
+      const stranger = nb({ remote_mgmt_addr: '192.0.2.9' });
+      const silent = nb({ remote_mgmt_addr: null });
+      expect(hit(known, f({ address: 'node' }))).toBe(true);
+      expect(hit(stranger, f({ address: 'node' }))).toBe(false);
+      expect(hit(stranger, f({ address: 'unregistered' }))).toBe(true);
+      expect(hit(silent, f({ address: 'none' }))).toBe(true);
+      expect(hit(silent, f({ address: 'unregistered,node' }))).toBe(false);
+    });
+
+    it('finds a peer by the node its address belongs to and by its chassis maker', () => {
+      const row = nb({
+        remote_mgmt_addr: '192.0.2.1',
+        remote_chassis: '00:00:0c:12:34:56',
+        remote_chassis_kind: 'mac',
+      });
+      expect(hit(row, f({ peer: 'rtr-a' }))).toBe(true);
+      expect(hit(row, f({ peer: 'cisco systems' }))).toBe(true);
+      expect(hit(row, f({ peer: 'juniper' }))).toBe(false);
+    });
+
+    it('filters the model / OS column on the platform or the description', () => {
+      expect(hit(nb({ remote_sys_desc: 'Cisco IOS' }), f({ platform: 'ios' }))).toBe(true);
+      expect(hit(nb({ remote_platform: 'cisco WS-C2960' }), f({ platform: '2960' }))).toBe(true);
+      expect(hit(nb({ remote_sys_desc: 'Linux' }), f({ platform: 'ios' }))).toBe(false);
+    });
   });
 });
 

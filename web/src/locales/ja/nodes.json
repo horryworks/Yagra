@@ -944,6 +944,42 @@
     "colRemotePort": "対向ポート",
     "colCapabilities": "機能",
     "colProto": "プロトコル",
+    "colAddress": "アドレス",
+    "colPlatform": "機種 / OS",
+    "rowHint": "行をクリックすると、対向機器が送ってきた内容をすべて表示します。",
+    "peer": {
+      "state": {
+        "node": "監視中",
+        "outside_scope": "監視中（見えないフォルダ）",
+        "ambiguous": "複数のノード",
+        "unregistered": "未登録",
+        "none": "アドレスなし"
+      },
+      "explain": {
+        "node": "Yagra が監視しているノードがこのアドレスを持っています。",
+        "outside_scope": "Yagra が監視しているノードがこのアドレスを持っています。そのノードはあなたが見られないフォルダにあります。",
+        "ambiguous": "このアドレスを持つノードが複数あります（共有の仮想アドレスか重複）。どのノードかは決められません。",
+        "unregistered": "このアドレスを持つノードは Yagra にありません。",
+        "none": "対向機器が管理アドレスを送っていません。"
+      },
+      "hint": "突き合わせは管理アドレスだけで行います。ノード自身のアドレスか、そのノードのインターフェースにあるアドレスと一致したものを数えます。",
+      "inDiscovery": "Discovery で見る"
+    },
+    "detail": {
+      "sysName": "システム名",
+      "chassis": "シャーシ ID",
+      "chassisVendor": "シャーシのメーカー（MAC）",
+      "port": "ポート ID",
+      "portVendor": "ポートのメーカー（MAC）",
+      "portDesc": "ポートの説明",
+      "mgmtAddr": "管理アドレス",
+      "platform": "プラットフォーム",
+      "sysDesc": "説明",
+      "localIfindex": "ローカル ifIndex",
+      "note": "機器から届いた文字は改行を除き、255 文字まで保存します。メーカーは IEEE の MAC アドレス登録簿から引いた値です。ネットワークインターフェースを作ったメーカーを指すので、機器そのもののメーカーとは限りません。",
+      "show": "詳細",
+      "hide": "詳細を閉じる"
+    },
     "summary_other": "隣接 {{count}} 件",
     "lastConfirmed": "最終確認 {{when}}",
     "truncated": "隣接が多すぎるため一部を記録できませんでした。",

@@ -85,6 +85,7 @@ const schemaEnumPins: {
   DuplicateConfidence: AssertEqual<DuplicateConfidence, components['schemas']['DuplicateConfidence']>;
   DuplicateContradiction: AssertEqual<DuplicateContradiction, components['schemas']['DuplicateContradiction']>;
   NeighborCapability: AssertEqual<NeighborCapability, components['schemas']['NeighborCapability']>;
+  NeighborPeerState: AssertEqual<NeighborPeerState, components['schemas']['NeighborPeerState']>;
   LinkSource: AssertEqual<LinkSource, components['schemas']['LinkSource']>;
   LinkOverrideAction: AssertEqual<LinkOverrideAction, components['schemas']['LinkOverrideAction']>;
   LinkDirection: AssertEqual<LinkDirection, components['schemas']['LinkDirection']>;
@@ -136,6 +137,7 @@ const schemaEnumPins: {
   TokenSurface: true,
   NeighborProto: true,
   NeighborCapability: true,
+  NeighborPeerState: true,
   LinkSource: true,
   LinkOverrideAction: true,
   LinkDirection: true,
@@ -891,6 +893,18 @@ export const NEIGHBOR_CAPABILITIES = [
   'other',
 ] as const;
 export type NeighborCapability = (typeof NEIGHBOR_CAPABILITIES)[number];
+
+/** What a neighbour's management address is to this deployment (ADR-180): one visible node, one
+ *  node outside the caller's folders, several nodes, or none. Iterated by the filter and the i18n
+ *  coverage test, so an `as const` like the two above. */
+export const NEIGHBOR_PEER_STATES = ['node', 'outside_scope', 'ambiguous', 'unregistered'] as const;
+export type NeighborPeerState = (typeof NEIGHBOR_PEER_STATES)[number];
+
+/** One advertised management address and the node it belongs to (ADR-180). */
+export type NeighborPeer = components['schemas']['NeighborPeer'];
+
+/** The IEEE-registered maker of a MAC-address chassis or port id (ADR-180). */
+export type MacVendor = components['schemas']['MacVendor'];
 
 // ── Node detail ─────────────────────────────────────────────────────────────────────────────────
 

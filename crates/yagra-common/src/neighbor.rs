@@ -43,10 +43,12 @@ pub const MAX_NEIGHBORS_PER_NODE: usize = 256;
 
 /// Row budget for the adjacency walk itself, across all of its columns.
 ///
-/// Distinct from [`MAX_NEIGHBORS_PER_NODE`], which caps the *assembled* result: nineteen columns
-/// describe one neighbour, so the walk legitimately reads far more rows than it keeps. Sized at
-/// `256 × 19` rounded up, so a device at the entity cap is never truncated by the row cap first —
-/// the two limits would otherwise interact in a way that made the reported `truncated` flag lie.
+/// Distinct from [`MAX_NEIGHBORS_PER_NODE`], which caps the *assembled* result: twenty columns
+/// describe one neighbour (the nineteen of [`builtin_neighbor_columns`] plus the one of
+/// [`poller_neighbor_columns`]), so the walk legitimately reads far more rows than it keeps. Sized
+/// above `256 × 20`, so a device at the entity cap is never truncated by the row cap first — the two
+/// limits would otherwise interact in a way that made the reported `truncated` flag lie. A test pins
+/// the arithmetic.
 pub const MAX_NEIGHBOR_WALK_ROWS: usize = 8192;
 
 /// Cap on any single device-supplied string, in characters. `sysDescr` in particular runs to
@@ -82,6 +84,9 @@ const OID_CDP_CACHE_DEVICE_ID: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.6";
 const OID_CDP_CACHE_DEVICE_PORT: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.7";
 const OID_CDP_CACHE_PLATFORM: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.8";
 const OID_CDP_CACHE_CAPABILITIES: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.9";
+/// `cdpCacheVersion` — walked by the poller on its own initiative (ADR-180), see
+/// [`poller_neighbor_columns`].
+const OID_CDP_CACHE_VERSION: &str = "1.3.6.1.4.1.9.9.23.1.2.1.1.5";
 
 /// Which discovery protocol reported an adjacency.
 ///
@@ -242,7 +247,8 @@ pub struct Neighbor {
     /// `lldpRemSysName`. CDP has no separate system name (its device id serves both).
     #[serde(default)]
     pub remote_sys_name: Option<String>,
-    /// `lldpRemSysDesc`.
+    /// The peer's own description of itself: `lldpRemSysDesc` for LLDP, `cdpCacheVersion` for CDP.
+    /// Control characters (line breaks included) are removed and the text is cut at 255 characters.
     #[serde(default)]
     pub remote_sys_desc: Option<String>,
     /// The peer's management address, from `cdpCacheAddress` for CDP and from `lldpRemManAddrTable`
@@ -264,6 +270,17 @@ pub struct Neighbor {
     /// What the peer says it is, normalized across both protocols.
     #[serde(default)]
     pub capabilities: Vec<NeighborCapability>,
+    /// How `remote_chassis` was rendered: `mac` only when the device labelled it a MAC address and
+    /// it was six octets long. Absent on records collected before this was recorded.
+    //
+    // Deliberately NOT part of `NeighborSet::content_key` (ADR-180 決定 4): it is a fact about the
+    // rendering, never a change on the wire, and adding it to the key would have written one history
+    // row per node on the first walk after the upgrade.
+    #[serde(default)]
+    pub remote_chassis_kind: Option<NeighborIdKind>,
+    /// How `remote_port` was rendered, as for `remote_chassis_kind`.
+    #[serde(default)]
+    pub remote_port_kind: Option<NeighborIdKind>,
 }
 
 impl Neighbor {
@@ -287,6 +304,8 @@ impl Neighbor {
             remote_mgmt_addr: None,
             remote_platform: None,
             capabilities: Vec::new(),
+            remote_chassis_kind: None,
+            remote_port_kind: None,
         }
     }
 
@@ -415,7 +434,8 @@ impl NeighborSet {
     ///
     /// **Excludes** `lldpRemTimeMark` (moves on every agent refresh), `lldpRemIndex` (reassigned at
     /// the agent's discretion), row order, and any TTL/age counter — none of them are ever carried
-    /// into [`Neighbor`] in the first place, which is the real guarantee. **Includes** the identity
+    /// into [`Neighbor`] in the first place, which is the real guarantee. Also excludes the two
+    /// `*_kind` fields, which say how an id was rendered rather than what it is (ADR-180). **Includes** the identity
     /// and every payload field, so a peer that was renamed, reimaged or re-addressed registers as a
     /// change on that port.
     ///
@@ -468,6 +488,39 @@ fn push_field(out: &mut String, key: &str, value: Option<&str>) {
 
 // ── Rendering device-supplied ids ────────────────────────────────────────────────────
 
+/// How a neighbour's chassis or port id was actually rendered (ADR-180).
+///
+/// Recorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]
+/// took — never inferred from how the stored text looks, because a text id can look like a MAC and
+/// the hex fallback always does.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum NeighborIdKind {
+    /// Six octets the device labelled a MAC address, rendered `aa:bb:cc:dd:ee:ff`.
+    Mac,
+    /// An IPv4 or IPv6 address.
+    NetworkAddress,
+    /// Readable text (a name, an interface alias, a CDP device id).
+    Text,
+    /// Octets that were not valid text, rendered as colon-separated hex.
+    Hex,
+    /// A kind a newer poller sent that this version does not know.
+    #[serde(other)]
+    Unknown,
+}
+
 /// How an LLDP id column's octets should be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IdShape {
@@ -508,18 +561,39 @@ pub fn render_port_id(subtype: i64, bytes: &[u8]) -> String {
     render_id(port_id_shape(subtype), bytes)
 }
 
+/// [`render_chassis_id`], plus which rendering was actually used.
+#[must_use]
+pub fn render_chassis_id_kind(subtype: i64, bytes: &[u8]) -> (String, NeighborIdKind) {
+    render_id_kind(chassis_id_shape(subtype), bytes)
+}
+
+/// [`render_port_id`], plus which rendering was actually used.
+#[must_use]
+pub fn render_port_id_kind(subtype: i64, bytes: &[u8]) -> (String, NeighborIdKind) {
+    render_id_kind(port_id_shape(subtype), bytes)
+}
+
 fn render_id(shape: IdShape, bytes: &[u8]) -> String {
+    render_id_kind(shape, bytes).0
+}
+
+fn render_id_kind(shape: IdShape, bytes: &[u8]) -> (String, NeighborIdKind) {
     if bytes.is_empty() {
-        return String::new();
+        return (String::new(), NeighborIdKind::Text);
     }
     let rendered = match shape {
-        IdShape::Mac => render_mac(bytes),
-        IdShape::NetworkAddress => render_network_address(bytes),
+        IdShape::Mac => render_mac(bytes).map(|s| (s, NeighborIdKind::Mac)),
+        IdShape::NetworkAddress => {
+            render_network_address(bytes).map(|s| (s, NeighborIdKind::NetworkAddress))
+        }
         IdShape::Text => None,
     };
     // Every fallback lands on text-or-hex rather than failing: an agent that mislabels its own
     // subtype should still produce a stable, readable id instead of dropping the adjacency.
-    rendered.unwrap_or_else(|| render_text(bytes))
+    rendered.unwrap_or_else(|| match text_of(bytes) {
+        Some(text) => (text, NeighborIdKind::Text),
+        None => (render_hex(bytes), NeighborIdKind::Hex),
+    })
 }
 
 /// Six octets as lowercase colon-separated hex. `None` for any other length — that is not a MAC,
@@ -567,16 +641,15 @@ pub fn render_bare_address(bytes: &[u8]) -> Option<String> {
 /// are stripped so the value cannot forge a line in the content key.
 #[must_use]
 pub fn render_text(bytes: &[u8]) -> String {
-    let Ok(s) = std::str::from_utf8(bytes) else {
-        return render_hex(bytes);
-    };
+    text_of(bytes).unwrap_or_else(|| render_hex(bytes))
+}
+
+/// The octets as cleaned text, or `None` when [`render_text`] falls back to hex.
+fn text_of(bytes: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(bytes).ok()?;
     let cleaned: String = s.chars().filter(|c| !c.is_control()).collect();
     let trimmed = cleaned.trim();
-    if trimmed.is_empty() {
-        render_hex(bytes)
-    } else {
-        trimmed.to_owned()
-    }
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 /// Octets as lowercase colon-separated hex — the last-resort rendering, and the reason an
@@ -690,6 +763,14 @@ pub enum NeighborColumn {
     CdpCachePlatform,
     /// `cdpCacheCapabilities`
     CdpCacheCapabilities,
+    /// `cdpCacheVersion` — never sent by core; the poller adds it to its own walk
+    /// ([`poller_neighbor_columns`], ADR-180).
+    CdpCacheVersion,
+    /// A column a newer core named that this version does not know. Without it one unknown column
+    /// fails the whole job spec (`de_lenient_specs` decodes per spec, not per column), so every
+    /// neighbour walk would stop until the poller was upgraded. Rows for it are ignored.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The neighbour columns and their OID bases — LLDP-MIB and CISCO-CDP-MIB, both fixed standards.
@@ -701,7 +782,8 @@ pub enum NeighborColumn {
 /// but land in PostgreSQL — and for the same reason: these OIDs are standardised, so there is
 /// nothing here for an operator to configure.
 ///
-/// **This list is the bus contract**; keep it stable for N/N-1 compatibility.
+/// **This list is the bus contract**; keep it stable for N/N-1 compatibility. A column added since
+/// goes in [`poller_neighbor_columns`] instead, until every supported poller can decode it.
 #[must_use]
 pub fn builtin_neighbor_columns() -> Vec<(NeighborColumn, &'static str)> {
     vec![
@@ -749,6 +831,21 @@ pub fn builtin_neighbor_columns() -> Vec<(NeighborColumn, &'static str)> {
             OID_CDP_CACHE_CAPABILITIES,
         ),
     ]
+}
+
+/// Columns the poller walks **on its own initiative**, beside the ones core declares (ADR-180).
+///
+/// Each entry is `(column, OID base, the declared column that must be present for it to be
+/// walked)` — a CDP column only rides a job that already walks CDP. They stay off the bus because an
+/// N-1 poller could not decode a column core named that it has never heard of: `NeighborColumn` had
+/// no `Unknown` until the same release that added this list.
+#[must_use]
+pub fn poller_neighbor_columns() -> Vec<(NeighborColumn, &'static str, NeighborColumn)> {
+    vec![(
+        NeighborColumn::CdpCacheVersion,
+        OID_CDP_CACHE_VERSION,
+        NeighborColumn::CdpCacheDeviceId,
+    )]
 }
 
 #[cfg(test)]
@@ -1149,9 +1246,17 @@ mod tests {
     /// the poller's per-column bucketing would attribute a row to the wrong column.
     #[test]
     fn no_column_base_is_a_prefix_of_another() {
-        let cols = builtin_neighbor_columns();
-        for (_, a) in &cols {
-            for (_, b) in &cols {
+        // The columns the poller appends are bucketed by the same map, so they are covered too.
+        let mut cols: Vec<&str> = builtin_neighbor_columns().iter().map(|(_, o)| *o).collect();
+        cols.extend(poller_neighbor_columns().iter().map(|(_, o, _)| *o));
+        let set: std::collections::BTreeSet<&str> = cols.iter().copied().collect();
+        assert_eq!(
+            set.len(),
+            cols.len(),
+            "an appended column repeats a declared OID"
+        );
+        for a in &cols {
+            for b in &cols {
                 if a == b {
                     continue;
                 }
@@ -1161,5 +1266,104 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_walk_row_budget_covers_every_column_at_the_entity_cap() {
+        let columns = builtin_neighbor_columns().len() + poller_neighbor_columns().len();
+        assert!(
+            MAX_NEIGHBORS_PER_NODE * columns <= MAX_NEIGHBOR_WALK_ROWS,
+            "{columns} columns × {MAX_NEIGHBORS_PER_NODE} neighbours exceeds the row budget"
+        );
+    }
+
+    #[test]
+    fn every_appended_column_depends_on_a_declared_one_and_is_not_itself_declared() {
+        let declared: Vec<NeighborColumn> =
+            builtin_neighbor_columns().iter().map(|(c, _)| *c).collect();
+        for (col, _, needs) in poller_neighbor_columns() {
+            assert!(
+                declared.contains(&needs),
+                "{col:?} depends on undeclared {needs:?}"
+            );
+            assert!(!declared.contains(&col), "{col:?} is already on the bus");
+        }
+    }
+
+    #[test]
+    fn an_unknown_neighbor_column_or_id_kind_decodes_as_unknown() {
+        let c: NeighborColumn = serde_json::from_str(r#""lldp_rem_something_new""#).unwrap();
+        assert_eq!(c, NeighborColumn::Unknown);
+        let k: NeighborIdKind = serde_json::from_str(r#""eui64""#).unwrap();
+        assert_eq!(k, NeighborIdKind::Unknown);
+    }
+
+    // ── The id kind (ADR-180) ────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_kind_is_the_rendering_used_not_the_claimed_subtype() {
+        // 0xa0 cannot start a UTF-8 sequence, so read as text these octets fall back to hex.
+        let mac = [0xa0, 0x36, 0x9f, 0x12, 0x34, 0x56];
+        assert_eq!(render_chassis_id_kind(4, &mac).1, NeighborIdKind::Mac);
+        assert_eq!(render_port_id_kind(3, &mac).1, NeighborIdKind::Mac);
+        // Chassis subtype 3 is portComponent, not a MAC: the numbering differs from the port's.
+        assert_eq!(render_chassis_id_kind(3, &mac).1, NeighborIdKind::Hex);
+        // A "MAC" of the wrong length falls back, and so does its kind.
+        assert_eq!(render_chassis_id_kind(4, b"sw-01").1, NeighborIdKind::Text);
+        assert_eq!(
+            render_chassis_id_kind(7, b"sw-01"),
+            ("sw-01".to_owned(), NeighborIdKind::Text)
+        );
+        assert_eq!(
+            render_chassis_id_kind(5, &[1, 192, 0, 2, 1]),
+            ("192.0.2.1".to_owned(), NeighborIdKind::NetworkAddress)
+        );
+        // A text id that merely looks like a MAC stays text.
+        assert_eq!(
+            render_chassis_id_kind(7, b"aa:bb:cc:dd:ee:ff").1,
+            NeighborIdKind::Text
+        );
+    }
+
+    #[test]
+    fn the_kind_helpers_render_exactly_what_the_plain_ones_do() {
+        for (subtype, bytes) in [
+            (4, &[0u8, 1, 2, 3, 4, 5][..]),
+            (4, &b"abc"[..]),
+            (5, &[2u8; 17][..]),
+            (7, &[0xffu8, 0xfe][..]),
+            (7, &b"Gi0/1"[..]),
+        ] {
+            assert_eq!(
+                render_chassis_id_kind(subtype, bytes).0,
+                render_chassis_id(subtype, bytes)
+            );
+            assert_eq!(
+                render_port_id_kind(subtype, bytes).0,
+                render_port_id(subtype, bytes)
+            );
+        }
+    }
+
+    #[test]
+    fn content_key_ignores_the_id_kind() {
+        let before = key_of(sample());
+        let mut set = sample();
+        for n in &mut set.neighbors {
+            n.remote_chassis_kind = Some(NeighborIdKind::Mac);
+            n.remote_port_kind = Some(NeighborIdKind::Text);
+        }
+        assert_eq!(key_of(set), before);
+    }
+
+    #[test]
+    fn a_neighbor_tolerates_missing_and_unknown_fields() {
+        let n: Neighbor = serde_json::from_str(
+            r#"{"proto":"lldp","local_port":"Gi0/1","remote_chassis":"aa","remote_port":"e1",
+                "remote_chassis_kind":"mac","remote_port_kind":"something_new","later_field":1}"#,
+        )
+        .unwrap();
+        assert_eq!(n.remote_chassis_kind, Some(NeighborIdKind::Mac));
+        assert_eq!(n.remote_port_kind, Some(NeighborIdKind::Unknown));
     }
 }

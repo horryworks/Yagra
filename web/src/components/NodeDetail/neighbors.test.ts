@@ -1,15 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  chassisVendor,
   diffNeighbors,
+  discoveryPath,
   emptyReason,
+  NEIGHBOR_DETAIL_KEYS,
+  neighborAddressState,
   neighborCellText,
+  neighborDetails,
   neighborKey,
+  neighborLookups,
   neighborsByPort,
+  NO_LOOKUPS,
   peerLabel,
   peerLabelIsChassis,
+  peerNodePath,
+  peerOf,
+  peerSecondary,
+  platformCell,
+  portVendor,
 } from './neighbors';
-import type { Neighbor, NeighborSet } from '../../types/api';
+import { decodeCondition } from '../../lib/filterCondition';
+import type { Neighbor, NeighborPeer, NeighborSet } from '../../types/api';
 
 function n(over: Partial<Neighbor> = {}): Neighbor {
   return {
@@ -209,5 +222,147 @@ describe('neighborCellText', () => {
       // Every neighbour is in the title, because the cell itself ellipsizes.
       title: 'core-sw-01 Gi1/0/24\naa:bb:cc:dd:ee:02',
     });
+  });
+});
+
+// ── ADR-180: what the tab adds to a row ─────────────────────────────────────────────────────────
+
+const peer = (over: Partial<NeighborPeer> = {}): NeighborPeer =>
+  ({
+    address: '192.0.2.1',
+    state: 'node',
+    node_id: 'n-1',
+    node_name: 'rtr-a',
+    discovery_listed: false,
+    ...over,
+  }) as NeighborPeer;
+
+const CISCO = { mac: '00:00:0c:12:34:56', vendor: 'Cisco Systems, Inc' };
+
+describe('the lookups built from one response', () => {
+  const lookups = neighborLookups({
+    peers: [
+      peer(),
+      peer({
+        address: '192.0.2.9',
+        state: 'unregistered',
+        node_id: null,
+        node_name: null,
+        discovery_listed: true,
+      }),
+      peer({ address: '192.0.2.5', state: 'outside_scope', node_id: null, node_name: null }),
+    ],
+    mac_vendors: [CISCO],
+  });
+
+  it('reads an absent response, or an older core without the lists, as nothing known', () => {
+    expect(neighborLookups(null)).toBe(NO_LOOKUPS);
+    const old = neighborLookups({} as Parameters<typeof neighborLookups>[0]);
+    expect(old.peers.size).toBe(0);
+    expect(old.vendors.size).toBe(0);
+  });
+
+  it('finds the verdict for a row by the address text it carries', () => {
+    expect(peerOf(n({ remote_mgmt_addr: '192.0.2.1' }), lookups)?.node_name).toBe('rtr-a');
+    expect(peerOf(n({ remote_mgmt_addr: null }), lookups)).toBeNull();
+  });
+
+  it('names the address state, and "none" only when the neighbour advertised no address', () => {
+    expect(neighborAddressState(n({ remote_mgmt_addr: '192.0.2.5' }), lookups)).toBe(
+      'outside_scope',
+    );
+    expect(neighborAddressState(n({ remote_mgmt_addr: null }), lookups)).toBe('none');
+    // An address the server did not classify is no state, never a guessed one.
+    expect(neighborAddressState(n({ remote_mgmt_addr: '192.0.2.77' }), NO_LOOKUPS)).toBeNull();
+  });
+
+  it('gives a maker only to an id the device labelled a MAC', () => {
+    const mac = n({ remote_chassis: CISCO.mac, remote_chassis_kind: 'mac' });
+    expect(chassisVendor(mac, lookups)).toBe(CISCO.vendor);
+    // The same text, labelled otherwise, borrows nothing.
+    expect(chassisVendor({ ...mac, remote_chassis_kind: 'text' }, lookups)).toBeNull();
+    expect(chassisVendor({ ...mac, remote_chassis_kind: null }, lookups)).toBeNull();
+    const port = n({ remote_port: CISCO.mac, remote_port_kind: 'mac' });
+    expect(portVendor(port, lookups)).toBe(CISCO.vendor);
+  });
+
+  it('puts the chassis id and its maker under a name, and only the maker under a bare chassis', () => {
+    const named = n({ remote_chassis: CISCO.mac, remote_chassis_kind: 'mac' });
+    expect(peerSecondary(named, lookups)).toBe(`${CISCO.mac} · ${CISCO.vendor}`);
+    expect(peerSecondary({ ...named, remote_sys_name: null }, lookups)).toBe(CISCO.vendor);
+    expect(peerSecondary(n({ remote_sys_name: null }), NO_LOOKUPS)).toBeNull();
+  });
+
+  it('links a peer only when exactly one visible node owns its address', () => {
+    expect(peerNodePath(peer())).toBe('/nodes/n-1');
+    expect(peerNodePath(peer({ state: 'outside_scope', node_id: null }))).toBeNull();
+    expect(peerNodePath(peer({ state: 'ambiguous', node_id: null }))).toBeNull();
+    expect(peerNodePath(null)).toBeNull();
+  });
+
+  it('links to Discovery only for a listed unregistered address, with an anchored filter', () => {
+    const listed = peer({ state: 'unregistered', node_id: null, discovery_listed: true });
+    const path = discoveryPath(listed);
+    expect(path).not.toBeNull();
+    const url = new URL(path as string, 'http://x');
+    expect(url.pathname).toBe('/nodes/discovery');
+    expect(url.searchParams.get('tab')).toBe('unregistered');
+    // Anchored and escaped, so .1 does not also keep .10 — read back through the list's own codec.
+    const cond = decodeCondition(url.searchParams.get('endpoints.ip') ?? '');
+    expect(cond.mode).toBe('regex');
+    const re = new RegExp(cond.term);
+    expect(re.test('192.0.2.1')).toBe(true);
+    expect(re.test('192.0.2.10')).toBe(false);
+    expect(re.test('192x0y2z1')).toBe(false);
+    expect(discoveryPath({ ...listed, discovery_listed: false })).toBeNull();
+    expect(discoveryPath(peer())).toBeNull();
+  });
+});
+
+describe('the model / OS cell', () => {
+  it('leads with the CDP platform and puts its version banner underneath', () => {
+    const cdp = n({ proto: 'cdp', remote_platform: 'cisco WS-C2960', remote_sys_desc: 'IOS 15.0' });
+    expect(platformCell(cdp)).toEqual({ primary: 'cisco WS-C2960', secondary: 'IOS 15.0' });
+  });
+
+  it('shows the LLDP description alone, and nothing when neither was sent', () => {
+    expect(platformCell(n({ remote_sys_desc: 'Linux 6.1' }))).toEqual({
+      primary: 'Linux 6.1',
+      secondary: null,
+    });
+    expect(platformCell(n({ remote_sys_desc: '  ' }))).toEqual({ primary: null, secondary: null });
+  });
+});
+
+describe('the opened row', () => {
+  it('lists every field the device sent, in reading order, and leaves out the rest', () => {
+    const row = n({
+      remote_chassis: CISCO.mac,
+      remote_chassis_kind: 'mac',
+      remote_mgmt_addr: '192.0.2.1',
+      remote_sys_desc: 'Cisco IOS Software, Version 15.2',
+      local_ifindex: 7,
+    });
+    const lookups = neighborLookups({ peers: [], mac_vendors: [CISCO] });
+    const details = neighborDetails(row, lookups);
+    expect(details.map((d) => d.labelKey)).toEqual([
+      'sysName',
+      'chassis',
+      'chassisVendor',
+      'port',
+      'mgmtAddr',
+      'sysDesc',
+      'localIfindex',
+    ]);
+    expect(details.find((d) => d.labelKey === 'localIfindex')?.value).toBe('7');
+  });
+
+  it('has no repeated detail key', () => {
+    expect(new Set(NEIGHBOR_DETAIL_KEYS).size).toBe(NEIGHBOR_DETAIL_KEYS.length);
+  });
+
+  it('adds nothing that counts as a change: the id kind is not part of the payload', () => {
+    const after = set(n({ remote_chassis_kind: 'mac', remote_port_kind: 'text' }));
+    expect(diffNeighbors(set(n()), after)).toEqual([]);
   });
 });

@@ -55,6 +55,7 @@ use sqlx::Row;
 use uuid::Uuid;
 use yagra_common::{CredentialId, GroupId, Node, NodeId, ProfileId};
 
+mod address_owners;
 mod defaults;
 mod interfaces;
 mod listing;

@@ -37,6 +37,9 @@ pub(super) async fn execute_neighbors(
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
+    // The declared columns plus the ones this poller walks on its own (ADR-180). Both the walk and
+    // the assembly read the widened list, or the appended rows would be walked and then ignored.
+    let columns = &crate::neighbors::with_poller_columns(columns);
     let bases: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
     let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
     r.observational = true;

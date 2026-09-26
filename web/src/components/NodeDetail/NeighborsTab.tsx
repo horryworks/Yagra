@@ -11,8 +11,9 @@
 // the neighbors.ts beside this file: Vitest only runs `src/**/*.test.ts`, so a test written here
 // would never execute (testing.md).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
 import { relativeTime } from '../../lib/format';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -31,11 +32,19 @@ import { neighborFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
 import {
   diffNeighbors,
+  discoveryPath,
   emptyReason,
+  neighborAddressState,
+  neighborDetails,
   neighborKey,
+  neighborLookups,
   peerLabel,
-  peerLabelIsChassis,
+  peerNodePath,
+  peerOf,
+  peerSecondary,
+  platformCell,
   type NeighborDiffRow,
+  type NeighborLookups,
 } from './neighbors';
 import './NeighborsTab.css';
 
@@ -99,42 +108,69 @@ export function NeighborsTab({ node }: Props) {
 
   const neighbors = current?.neighbors.neighbors ?? [];
   const reason = loaded ? emptyReason(collectionEnabled, current) : null;
+  // What the server said about each address and MAC (ADR-180), indexed once per response.
+  const lookups = useMemo(() => neighborLookups(current), [current]);
+  // One row open at a time; clicking it again closes it (ADR-073's "anything selected can be
+  // un-selected").
+  const [openKey, setOpenKey] = useState<string | null>(null);
 
-  const specs = neighborFilters(t);
+  const specs = neighborFilters(t, lookups);
   const columns: Column<Neighbor>[] = [
     {
       key: 'local',
       header: t('neighbors.colLocalPort'),
-      width: '1.1fr',
-      render: (n) => <span className="mono">{n.local_port}</span>,
+      width: '1fr',
+      render: (n) => (
+        <span className="mono nd-nb-line" title={n.local_port}>
+          {n.local_port}
+        </span>
+      ),
     },
     {
       key: 'peer',
       header: t('neighbors.colPeer'),
-      width: '1.4fr',
-      render: (n) => (
-        <span className="nd-nb-peer">
-          <span className="nd-nb-peername">{peerLabel(n)}</span>
-          {!peerLabelIsChassis(n) && <span className="mono nd-muted">{n.remote_chassis}</span>}
-        </span>
-      ),
+      width: '1.6fr',
+      render: (n) => <PeerCell neighbor={n} lookups={lookups} />,
     },
     {
       key: 'remote_port',
       header: t('neighbors.colRemotePort'),
       width: '1.1fr',
-      render: (n) => <span className="mono">{n.remote_port || '—'}</span>,
+      render: (n) => (
+        <span className="nd-nb-stack">
+          <span className="mono nd-nb-line" title={n.remote_port || undefined}>
+            {n.remote_port || '—'}
+          </span>
+          {n.remote_port_desc && (
+            <span className="nd-muted nd-nb-sub" title={n.remote_port_desc}>
+              {n.remote_port_desc}
+            </span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'address',
+      header: t('neighbors.colAddress'),
+      width: '1.1fr',
+      render: (n) => <AddressCell neighbor={n} lookups={lookups} />,
+    },
+    {
+      key: 'platform',
+      header: t('neighbors.colPlatform'),
+      width: '1.4fr',
+      render: (n) => <PlatformCell neighbor={n} />,
     },
     {
       key: 'caps',
       header: t('neighbors.colCapabilities'),
-      width: '1.2fr',
+      width: '1fr',
       render: (n) => <Capabilities neighbor={n} />,
     },
     {
       key: 'proto',
       header: t('neighbors.colProto'),
-      width: '80px',
+      width: '64px',
       render: (n) => (
         <span className="nd-nb-proto" title={t(`neighbors.proto.${n.proto}`)}>
           {t(`neighbors.proto.${n.proto}`)}
@@ -167,6 +203,7 @@ export function NeighborsTab({ node }: Props) {
             {current?.neighbors.truncated && (
               <span className="nd-nb-truncated">{t('neighbors.truncated')}</span>
             )}
+            {neighbors.length > 0 && <span className="nd-muted">{t('neighbors.rowHint')}</span>}
           </div>
           <TableToolbar>
             <FilterButton
@@ -188,6 +225,15 @@ export function NeighborsTab({ node }: Props) {
               rowKey={neighborKey}
               loading={!loaded}
               empty={anyFiltered ? t('common:filter.noMatch') : t('neighbors.empty.none')}
+              onRowClick={(n) => {
+                const key = neighborKey(n);
+                setOpenKey((cur) => (cur === key ? null : key));
+              }}
+              expanded={(n) =>
+                neighborKey(n) === openKey ? <Details neighbor={n} lookups={lookups} /> : null
+              }
+              expandedKey={openKey}
+              renderCard={(n) => <NeighborCard neighbor={n} lookups={lookups} />}
             />
           </div>
           {sheet && (
@@ -200,6 +246,8 @@ export function NeighborsTab({ node }: Props) {
                 local: t('neighbors.colLocalPort'),
                 peer: t('neighbors.colPeer'),
                 remote_port: t('neighbors.colRemotePort'),
+                address: t('neighbors.colAddress'),
+                platform: t('neighbors.colPlatform'),
                 proto: t('neighbors.colProto'),
               }}
               onClose={() => setSheet(false)}
@@ -209,6 +257,141 @@ export function NeighborsTab({ node }: Props) {
       )}
 
       <History changes={history} loaded={loaded} />
+    </div>
+  );
+}
+
+/** Who the neighbour is: its name — a link when exactly one visible node owns its address — then the
+ *  chassis id and the chassis maker underneath (ADR-180). */
+function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const peer = peerOf(n, lookups);
+  const path = peerNodePath(peer);
+  const label = peerLabel(n);
+  const secondary = peerSecondary(n, lookups);
+  return (
+    <span className="nd-nb-stack">
+      {path ? (
+        <Link
+          to={path}
+          className="nd-nb-line nd-nb-link"
+          title={peer?.node_name ?? label}
+          // A link inside a clickable row must not also open or close the row.
+          onClick={(e) => e.stopPropagation()}
+        >
+          {label}
+        </Link>
+      ) : (
+        <span className="nd-nb-line" title={label}>
+          {label}
+        </span>
+      )}
+      {secondary && (
+        <span className="nd-muted nd-nb-sub" title={secondary}>
+          {secondary}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The management address and what it is to this deployment. */
+function AddressCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const { t } = useTranslation('nodes');
+  const state = neighborAddressState(n, lookups);
+  const discovery = discoveryPath(peerOf(n, lookups));
+  return (
+    <span className="nd-nb-stack">
+      <span className="mono nd-nb-line" title={n.remote_mgmt_addr ?? undefined}>
+        {n.remote_mgmt_addr ?? '—'}
+      </span>
+      {state && state !== 'none' && (
+        <span className="nd-nb-sub">
+          <span
+            className={`nd-nb-state ${state}`}
+            title={t(`neighbors.peer.explain.${state}`)}
+          >
+            {t(`neighbors.peer.state.${state}`)}
+          </span>
+          {discovery && (
+            <>
+              {' '}
+              <Link to={discovery} className="nd-nb-link" onClick={(e) => e.stopPropagation()}>
+                {t('neighbors.peer.inDiscovery')}
+              </Link>
+            </>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The model / OS: CDP's platform over its version banner, or LLDP's system description. */
+function PlatformCell({ neighbor: n }: { neighbor: Neighbor }) {
+  const { primary, secondary } = platformCell(n);
+  if (!primary) return <span className="nd-muted">—</span>;
+  return (
+    <span className="nd-nb-stack">
+      <span className="nd-nb-line" title={primary}>
+        {primary}
+      </span>
+      {secondary && (
+        <span className="nd-muted nd-nb-sub" title={secondary}>
+          {secondary}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Everything the neighbour sent, in full and wrapped — what the ellipsized cells above leave out. */
+function Details({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const { t } = useTranslation('nodes');
+  return (
+    <div className="nd-nb-details">
+      <dl className="nd-nb-dl">
+        {neighborDetails(n, lookups).map((d) => (
+          <div key={d.labelKey} className="nd-nb-dl-row">
+            <dt>{t(`neighbors.detail.${d.labelKey}`)}</dt>
+            <dd className={d.mono ? 'mono' : undefined}>{d.value}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="nd-muted nd-nb-note">{t('neighbors.detail.note')}</p>
+    </div>
+  );
+}
+
+/** The phone layout: the four facts in reading order, and the full record behind a disclosure —
+ *  a phone has no hover to read an ellipsized cell with. */
+function NeighborCard({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const { t } = useTranslation('nodes');
+  const [open, setOpen] = useState(false);
+  const { primary } = platformCell(n);
+  return (
+    <div className="nd-nb-card">
+      <PeerCell neighbor={n} lookups={lookups} />
+      <span className="mono nd-nb-card-ports">
+        {n.local_port} → {n.remote_port || '—'}
+      </span>
+      <AddressCell neighbor={n} lookups={lookups} />
+      {primary && <span className="nd-nb-card-platform">{primary}</span>}
+      <span className="nd-nb-card-chips">
+        <Capabilities neighbor={n} />
+        <span className="nd-nb-proto">{t(`neighbors.proto.${n.proto}`)}</span>
+      </span>
+      <button
+        type="button"
+        className="nd-nb-card-toggle"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        {open ? t('neighbors.detail.hide') : t('neighbors.detail.show')}
+      </button>
+      {open && <Details neighbor={n} lookups={lookups} />}
     </div>
   );
 }

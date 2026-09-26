@@ -948,6 +948,42 @@
     "colRemotePort": "Remote port",
     "colCapabilities": "Capabilities",
     "colProto": "Via",
+    "colAddress": "Address",
+    "colPlatform": "Model / OS",
+    "rowHint": "Click a row to see everything the neighbor sent.",
+    "peer": {
+      "state": {
+        "node": "Monitored",
+        "outside_scope": "Monitored (outside your folders)",
+        "ambiguous": "Several nodes",
+        "unregistered": "Not monitored",
+        "none": "No address"
+      },
+      "explain": {
+        "node": "A node Yagra monitors has this address.",
+        "outside_scope": "A node Yagra monitors has this address, in a folder you cannot see.",
+        "ambiguous": "More than one node has this address (a shared virtual address or a duplicate), so it does not identify one of them.",
+        "unregistered": "No node Yagra monitors has this address.",
+        "none": "The neighbor did not advertise a management address."
+      },
+      "hint": "Matched on the management address alone: a node's own address or any address on one of its interfaces.",
+      "inDiscovery": "Show in Discovery"
+    },
+    "detail": {
+      "sysName": "System name",
+      "chassis": "Chassis ID",
+      "chassisVendor": "Chassis maker (MAC)",
+      "port": "Port ID",
+      "portVendor": "Port maker (MAC)",
+      "portDesc": "Port description",
+      "mgmtAddr": "Management address",
+      "platform": "Platform",
+      "sysDesc": "Description",
+      "localIfindex": "Local ifIndex",
+      "note": "Text from the device is stored without line breaks, up to 255 characters. The maker comes from the IEEE MAC-address registry and names who made the network interface, which may not be who made the device.",
+      "show": "Details",
+      "hide": "Hide details"
+    },
     "summary_one": "{{count}} neighbor",
     "summary_other": "{{count}} neighbors",
     "lastConfirmed": "last confirmed {{when}}",

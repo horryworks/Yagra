@@ -18,14 +18,18 @@
 //! device data (a chassis id, a port name, a peer's sysDescr), untrusted and rendered as such.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
+use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
+use super::scope::NodeScope;
 use super::ApiState;
 use crate::neighbors::{self, AdjacencySettings};
+use crate::repo::AddressMatch;
 use axum::extract::{Path, Query};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::NeighborSet;
+use yagra_common::{NeighborIdKind, NeighborSet};
 
 /// Default page size for the change history.
 const HISTORY_DEFAULT_LIMIT: i64 = 50;
@@ -67,6 +71,51 @@ pub(crate) struct CurrentNeighbors {
     first_seen: String,
     /// When it was last confirmed unchanged (RFC 3339).
     last_seen: String,
+    /// For each distinct management address the neighbours advertise, which monitored node it
+    /// belongs to. Matched on the address alone — an inventory address or any address one of a
+    /// node's interfaces carries — never on a name or chassis id.
+    peers: Vec<NeighborPeer>,
+    /// The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
+    /// labelled as MAC addresses are looked up. This names who made the network interface, which is
+    /// not necessarily who made the device or its software.
+    mac_vendors: Vec<MacVendor>,
+}
+
+/// What a neighbour's management address is to this deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NeighborPeerState {
+    /// Exactly one monitored node claims the address, and the caller may see it.
+    Node,
+    /// Exactly one monitored node claims the address, outside the caller's folders.
+    OutsideScope,
+    /// More than one node claims the address (a shared virtual address, or a duplicate), so it
+    /// identifies none of them.
+    Ambiguous,
+    /// No monitored node claims the address.
+    Unregistered,
+}
+
+/// One neighbour management address and the node it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct NeighborPeer {
+    /// The address exactly as the neighbour row carries it in `remote_mgmt_addr`.
+    address: String,
+    state: NeighborPeerState,
+    /// Present only when `state` is `node`.
+    node_id: Option<Uuid>,
+    /// Present only when `state` is `node`.
+    node_name: Option<String>,
+    /// Whether the address is on the caller's Discovery ▸ Unregistered list.
+    discovery_listed: bool,
+}
+
+/// The registered maker of one MAC address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct MacVendor {
+    /// The MAC exactly as the neighbour row carries it.
+    mac: String,
+    vendor: String,
 }
 
 /// One append-on-change history row.
@@ -159,10 +208,11 @@ pub(crate) fn parse_history_cursor(
 async fn get_neighbors(
     _perm: RequireView,
     _visible: VisibleNode,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<CurrentNeighbors>> {
-    Ok(Json(current_neighbors(&admin, node_id).await?))
+    Ok(Json(current_neighbors(&admin, &scope, node_id).await?))
 }
 
 /// One node's current adjacency, with the "nothing recorded" rule.
@@ -172,8 +222,12 @@ async fn get_neighbors(
 /// has a recorded empty set, which is a real answer; a node that was never walked has nothing, and
 /// answering `[]` for it would tell an operator — or a model — that the device has no adjacency
 /// when what is true is that nobody has looked.
+///
+/// `scope` decides what `peers` may name: a claimant outside it is reported as `outside_scope`
+/// with no id and no name (ADR-180 決定 3, the disclosure ADR-139 already accepted).
 pub(crate) async fn current_neighbors(
     admin: &super::AdminState,
+    scope: &NodeScope,
     node_id: Uuid,
 ) -> ApiResult<CurrentNeighbors> {
     let current = admin
@@ -189,11 +243,108 @@ pub(crate) async fn current_neighbors(
                 format!("no adjacency recorded for node {node_id}"),
             )
         })?;
+    let advertised = advertised_addresses(&current.set);
+    let addresses: Vec<IpAddr> = advertised.values().copied().collect();
+    let claims = admin
+        .repo
+        .address_claims(&addresses, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match neighbours to nodes",
+                "failed to read the inventory",
+            )
+        })?;
+    let listed = admin
+        .discovered
+        .listed_among(&addresses, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match neighbours to discovered endpoints",
+                "failed to read discovered endpoints",
+            )
+        })?;
     Ok(CurrentNeighbors {
+        peers: classify_peers(&advertised, &claims, &listed),
+        mac_vendors: mac_vendors(&current.set),
         neighbors: current.set,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),
     })
+}
+
+/// Every distinct management address the set advertises, keyed by the text the row carries.
+/// A value that does not parse as an address is left out — it cannot be matched to anything.
+fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
+    set.neighbors
+        .iter()
+        .filter_map(|n| n.remote_mgmt_addr.as_deref())
+        .filter_map(|a| a.parse::<IpAddr>().ok().map(|ip| (a.to_owned(), ip)))
+        .collect()
+}
+
+/// Each advertised address against the nodes that claim it (ADR-180 決定 2/3).
+///
+/// Pure, so the two rules a mistake here would break — one claimant or none, and a hidden
+/// claimant's name never leaves — are tested without a database.
+fn classify_peers(
+    advertised: &BTreeMap<String, IpAddr>,
+    claims: &[AddressMatch],
+    listed: &BTreeSet<IpAddr>,
+) -> Vec<NeighborPeer> {
+    let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, &AddressMatch>> = BTreeMap::new();
+    for c in claims {
+        by_address.entry(c.address).or_default().insert(c.id, c);
+    }
+    advertised
+        .iter()
+        .map(|(text, ip)| {
+            let owners = by_address.get(ip);
+            let ids: BTreeSet<Uuid> = owners
+                .map(|o| o.keys().copied().collect())
+                .unwrap_or_default();
+            let sole = yagra_topology::derive::sole_claimant(&ids)
+                .and_then(|id| owners.and_then(|o| o.get(&id)).copied());
+            let (state, node_id, node_name) = match sole {
+                Some(m) if m.visible => (NeighborPeerState::Node, Some(m.id), Some(m.name.clone())),
+                Some(_) => (NeighborPeerState::OutsideScope, None, None),
+                None if ids.is_empty() => (NeighborPeerState::Unregistered, None, None),
+                None => (NeighborPeerState::Ambiguous, None, None),
+            };
+            NeighborPeer {
+                address: text.clone(),
+                state,
+                node_id,
+                node_name,
+                discovery_listed: listed.contains(ip),
+            }
+        })
+        .collect()
+}
+
+/// The registered maker of every chassis or port id the device labelled a MAC address (ADR-180
+/// 決定 4/5). An id rendered any other way is not looked up, however much it looks like a MAC.
+fn mac_vendors(set: &NeighborSet) -> Vec<MacVendor> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for n in &set.neighbors {
+        for (id, kind) in [
+            (&n.remote_chassis, n.remote_chassis_kind),
+            (&n.remote_port, n.remote_port_kind),
+        ] {
+            if kind != Some(NeighborIdKind::Mac) || out.contains_key(id) {
+                continue;
+            }
+            if let Some(vendor) = yagra_oui::parse_mac(id).and_then(yagra_oui::vendor) {
+                out.insert(id.clone(), vendor.to_owned());
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(mac, vendor)| MacVendor { mac, vendor })
+        .collect()
 }
 
 /// The node's adjacency change history, newest first.
@@ -631,5 +782,146 @@ mod tests {
         let settings = admin.repo.get_adjacency_settings().await;
         assert!(settings.neighbors_enabled);
         assert_eq!(settings.neighbors_interval_secs, 1800);
+    }
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::*;
+    use yagra_common::{Neighbor, NeighborProto};
+
+    fn claim(address: &str, id: Uuid, name: &str, visible: bool) -> AddressMatch {
+        AddressMatch {
+            address: address.parse().unwrap(),
+            id,
+            name: name.to_owned(),
+            visible,
+        }
+    }
+
+    fn advertised(addrs: &[&str]) -> BTreeMap<String, IpAddr> {
+        addrs
+            .iter()
+            .map(|a| ((*a).to_owned(), a.parse().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn each_address_gets_the_state_its_claimants_give_it() {
+        let seen = Uuid::from_u128(1);
+        let hidden = Uuid::from_u128(2);
+        let (vip_a, vip_b) = (Uuid::from_u128(3), Uuid::from_u128(4));
+        let claims = [
+            claim("192.0.2.1", seen, "rtr-a", true),
+            claim("192.0.2.2", hidden, "rtr-hidden", false),
+            claim("192.0.2.3", vip_a, "fw-a", true),
+            claim("192.0.2.3", vip_b, "fw-b", true),
+        ];
+        let listed = BTreeSet::from(["192.0.2.4".parse().unwrap()]);
+        let peers = classify_peers(
+            &advertised(&["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"]),
+            &claims,
+            &listed,
+        );
+        let states: Vec<(&str, NeighborPeerState)> = peers
+            .iter()
+            .map(|p| (p.address.as_str(), p.state))
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                ("192.0.2.1", NeighborPeerState::Node),
+                ("192.0.2.2", NeighborPeerState::OutsideScope),
+                ("192.0.2.3", NeighborPeerState::Ambiguous),
+                ("192.0.2.4", NeighborPeerState::Unregistered),
+            ]
+        );
+        assert_eq!(peers[0].node_id, Some(seen));
+        assert_eq!(peers[0].node_name.as_deref(), Some("rtr-a"));
+        assert!(peers[3].discovery_listed);
+        assert!(!peers[0].discovery_listed);
+    }
+
+    /// The rule the whole scope design rests on: a claimant the caller may not see never lends
+    /// the answer its id or its name — and neither does either half of an ambiguous pair.
+    #[test]
+    fn a_hidden_or_ambiguous_claimant_gives_away_no_id_and_no_name() {
+        let claims = [
+            claim("192.0.2.2", Uuid::from_u128(2), "rtr-hidden", false),
+            claim("192.0.2.3", Uuid::from_u128(3), "fw-a", true),
+            claim("192.0.2.3", Uuid::from_u128(4), "fw-b", false),
+        ];
+        let peers = classify_peers(
+            &advertised(&["192.0.2.2", "192.0.2.3"]),
+            &claims,
+            &BTreeSet::new(),
+        );
+        for p in &peers {
+            assert_eq!(p.node_id, None, "{}", p.address);
+            assert_eq!(p.node_name, None, "{}", p.address);
+        }
+        let json = serde_json::to_string(&peers).unwrap();
+        assert!(
+            !json.contains("rtr-hidden") && !json.contains("fw-"),
+            "{json}"
+        );
+    }
+
+    /// One node claiming an address twice (by inventory address and by an interface) is still one
+    /// claimant, not an ambiguity.
+    #[test]
+    fn the_same_node_claiming_an_address_twice_is_one_claimant() {
+        let id = Uuid::from_u128(9);
+        let claims = [
+            claim("192.0.2.9", id, "rtr", true),
+            claim("192.0.2.9", id, "rtr", true),
+        ];
+        let peers = classify_peers(&advertised(&["192.0.2.9"]), &claims, &BTreeSet::new());
+        assert_eq!(peers[0].state, NeighborPeerState::Node);
+    }
+
+    #[test]
+    fn an_ipv6_address_matches_by_value_not_by_spelling() {
+        let id = Uuid::from_u128(6);
+        // The row spells it one way; the claim was parsed from another.
+        let claims = [claim("2001:db8::6", id, "rtr6", true)];
+        let peers = classify_peers(
+            &advertised(&["2001:0db8:0:0:0:0:0:6"]),
+            &claims,
+            &BTreeSet::new(),
+        );
+        assert_eq!(peers[0].state, NeighborPeerState::Node);
+        assert_eq!(peers[0].address, "2001:0db8:0:0:0:0:0:6");
+    }
+
+    fn neighbor(chassis: &str, kind: Option<NeighborIdKind>) -> Neighbor {
+        let mut n = Neighbor::new(NeighborProto::Lldp, "Gi0/1", chassis, "Gi0/2");
+        n.remote_chassis_kind = kind;
+        n
+    }
+
+    #[test]
+    fn only_ids_the_device_labelled_as_macs_are_looked_up() {
+        let set = NeighborSet::new(vec![
+            neighbor("00:00:0c:12:34:56", Some(NeighborIdKind::Mac)),
+            // Looks like a MAC, but was text on the wire.
+            neighbor("00:50:56:ab:cd:ef", Some(NeighborIdKind::Text)),
+            // Collected before the kind was recorded.
+            neighbor("00:50:56:ab:cd:00", None),
+        ]);
+        let found = mac_vendors(&set);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].mac, "00:00:0c:12:34:56");
+        assert!(found[0].vendor.starts_with("Cisco"), "{}", found[0].vendor);
+    }
+
+    #[test]
+    fn an_address_that_does_not_parse_is_not_asked_about() {
+        let mut n = neighbor("sw-01", Some(NeighborIdKind::Text));
+        n.remote_mgmt_addr = Some("not-an-address".to_owned());
+        let mut m = neighbor("sw-02", Some(NeighborIdKind::Text));
+        m.remote_mgmt_addr = Some("192.0.2.5".to_owned());
+        let got = advertised_addresses(&NeighborSet::new(vec![n, m]));
+        assert_eq!(got.keys().collect::<Vec<_>>(), vec!["192.0.2.5"]);
     }
 }

@@ -80,10 +80,18 @@ mod tests {
         let mut rx = crate::change_feed::subscribe();
         let before = crate::change_feed::current();
         bump();
-        let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-            .await
-            .expect("a bump publishes on the change feed")
-            .expect("the sender lives for the process");
+        // Other tests bump in parallel, and one landing between `subscribe` and `current` puts a
+        // value equal to `before` in the channel first — so read until a newer one arrives.
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let v = rx.recv().await.expect("the sender lives for the process");
+                if v > before {
+                    return v;
+                }
+            }
+        })
+        .await
+        .expect("a bump publishes on the change feed");
         assert!(got > before);
     }
 

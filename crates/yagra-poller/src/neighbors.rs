@@ -19,13 +19,36 @@
 use std::collections::BTreeMap;
 use yagra_bus::SnmpNeighborColumn;
 use yagra_common::{
-    cdp_capabilities, lldp_capabilities, render_bare_address, render_chassis_id, render_port_id,
-    render_text, Neighbor, NeighborColumn, NeighborProto, NeighborSet,
+    cdp_capabilities, lldp_capabilities, poller_neighbor_columns, render_bare_address,
+    render_chassis_id_kind, render_port_id, render_port_id_kind, render_text, Neighbor,
+    NeighborColumn, NeighborIdKind, NeighborProto, NeighborSet,
 };
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
 /// The columns of one table row, keyed by which field they carry.
 type Row<'a> = BTreeMap<NeighborColumn, &'a SnmpValue>;
+
+/// The columns this walk actually reads: the job's declared list, plus every column the poller
+/// appends on its own (ADR-180) whose prerequisite the job declares — `cdpCacheVersion` only rides a
+/// job that already walks CDP. A column the job already names is never appended twice.
+///
+/// Core never sends these: an N-1 poller could not decode a column it has never heard of, and would
+/// drop the whole neighbour job rather than one field of it.
+#[must_use]
+pub fn with_poller_columns(declared: &[SnmpNeighborColumn]) -> Vec<SnmpNeighborColumn> {
+    let mut out = declared.to_vec();
+    for (field, oid, needs) in poller_neighbor_columns() {
+        let wanted = declared.iter().any(|c| c.field == needs);
+        let present = out.iter().any(|c| c.field == field || c.oid == oid);
+        if wanted && !present {
+            out.push(SnmpNeighborColumn {
+                field,
+                oid: oid.to_owned(),
+            });
+        }
+    }
+    out
+}
 
 /// Build the node's neighbour set from every walked row.
 ///
@@ -116,12 +139,12 @@ fn lldp_neighbor(
         return None;
     };
     let chassis_bytes = bytes(row, NeighborColumn::LldpRemChassisId)?;
-    let chassis = render_chassis_id(
+    let (chassis, chassis_kind) = render_chassis_id_kind(
         int(row, NeighborColumn::LldpRemChassisIdSubtype).unwrap_or(0),
         chassis_bytes,
     );
-    let port = bytes(row, NeighborColumn::LldpRemPortId).map_or_else(String::new, |b| {
-        render_port_id(
+    let port = bytes(row, NeighborColumn::LldpRemPortId).map(|b| {
+        render_port_id_kind(
             int(row, NeighborColumn::LldpRemPortIdSubtype).unwrap_or(0),
             b,
         )
@@ -133,7 +156,14 @@ fn lldp_neighbor(
         .cloned()
         .unwrap_or_else(|| format!("port {local_port_num}"));
 
+    let (port, port_kind) = match port {
+        Some((text, kind)) if !text.is_empty() => (text, Some(kind)),
+        _ => (String::new(), None),
+    };
     let mut n = Neighbor::new(NeighborProto::Lldp, local_port, chassis, port);
+    // How each id was rendered, so core can tell a real MAC from text that looks like one (ADR-180).
+    n.remote_chassis_kind = Some(chassis_kind);
+    n.remote_port_kind = port_kind;
     n.remote_port_desc = text(row, NeighborColumn::LldpRemPortDesc);
     n.remote_sys_name = text(row, NeighborColumn::LldpRemSysName);
     n.remote_sys_desc = text(row, NeighborColumn::LldpRemSysDesc);
@@ -215,6 +245,11 @@ fn cdp_neighbor(
     // Unlike LLDP, CDP's cache *is* indexed by ifIndex, so this one is exact rather than a guess.
     n.local_ifindex = Some(ifindex);
     n.remote_platform = text(row, NeighborColumn::CdpCachePlatform);
+    // CDP's counterpart of `lldpRemSysDesc` — the peer's software version banner (ADR-180).
+    n.remote_sys_desc = text(row, NeighborColumn::CdpCacheVersion);
+    // CDP names its peer by device id and port name — text, never an octet string with a subtype.
+    n.remote_chassis_kind = Some(NeighborIdKind::Text);
+    n.remote_port_kind = (!n.remote_port.is_empty()).then_some(NeighborIdKind::Text);
     n.remote_mgmt_addr = bytes(row, NeighborColumn::CdpCacheAddress).and_then(render_bare_address);
     n.capabilities = bytes(row, NeighborColumn::CdpCacheCapabilities)
         .map(cdp_capabilities)
@@ -265,6 +300,11 @@ mod tests {
     fn base_of(field: NeighborColumn) -> String {
         builtin_neighbor_columns()
             .into_iter()
+            .chain(
+                poller_neighbor_columns()
+                    .into_iter()
+                    .map(|(f, oid, _)| (f, oid)),
+            )
             .find(|(f, _)| *f == field)
             .map(|(_, oid)| oid.to_owned())
             .expect("every column has a base")
@@ -603,5 +643,74 @@ mod tests {
         let set = assemble(&columns(), &rows);
         assert_eq!(set.len(), yagra_common::MAX_NEIGHBORS_PER_NODE);
         assert!(set.truncated);
+    }
+
+    // ── ADR-180: the id kind and the CDP version ─────────────────────────────────────
+
+    #[test]
+    fn an_lldp_mac_chassis_is_marked_mac_and_a_named_port_text() {
+        let set = assemble(&columns(), &lldp_rows(1000, 1));
+        let n = &set.neighbors[0];
+        assert_eq!(n.remote_chassis_kind, Some(NeighborIdKind::Mac));
+        assert_eq!(n.remote_port_kind, Some(NeighborIdKind::Text));
+    }
+
+    #[test]
+    fn an_lldp_row_with_no_port_id_claims_no_port_kind() {
+        let rows: Vec<SnmpInstanceRow> = lldp_rows(1000, 1)
+            .into_iter()
+            .filter(|r| r.oid_base != base_of(NeighborColumn::LldpRemPortId))
+            .collect();
+        let set = assemble(&columns(), &rows);
+        assert_eq!(set.neighbors[0].remote_port, "");
+        assert_eq!(set.neighbors[0].remote_port_kind, None);
+    }
+
+    #[test]
+    fn a_cdp_row_is_marked_text_and_carries_its_version_as_the_description() {
+        let mut rows = cdp_rows();
+        rows.push(b(
+            NeighborColumn::CdpCacheVersion,
+            &[7, 2],
+            b"Cisco IOS Software, C2960 Software, Version 15.0(2)SE",
+        ));
+        let set = assemble(&with_poller_columns(&columns()), &rows);
+        let n = &set.neighbors[0];
+        assert_eq!(n.remote_chassis_kind, Some(NeighborIdKind::Text));
+        assert_eq!(n.remote_port_kind, Some(NeighborIdKind::Text));
+        assert_eq!(
+            n.remote_sys_desc.as_deref(),
+            Some("Cisco IOS Software, C2960 Software, Version 15.0(2)SE")
+        );
+    }
+
+    /// Without the widened list the version rows are walked and then dropped by the bucketing —
+    /// the silent failure an appended column has, and why the worker must pass the same list to both.
+    #[test]
+    fn the_cdp_version_is_read_only_through_the_widened_column_list() {
+        let mut rows = cdp_rows();
+        rows.push(b(NeighborColumn::CdpCacheVersion, &[7, 2], b"IOS 15.0"));
+        let declared_only = assemble(&columns(), &rows);
+        assert_eq!(declared_only.neighbors[0].remote_sys_desc, None);
+    }
+
+    #[test]
+    fn the_cdp_version_is_walked_though_core_does_not_declare_it() {
+        let widened = with_poller_columns(&columns());
+        assert_eq!(widened.len(), columns().len() + 1);
+        assert!(widened
+            .iter()
+            .any(|c| c.field == NeighborColumn::CdpCacheVersion));
+        // Not twice, even when a later core does declare it.
+        assert_eq!(with_poller_columns(&widened).len(), widened.len());
+    }
+
+    #[test]
+    fn a_job_without_cdp_does_not_walk_the_cdp_version() {
+        let lldp_only: Vec<SnmpNeighborColumn> = columns()
+            .into_iter()
+            .filter(|c| c.field != NeighborColumn::CdpCacheDeviceId)
+            .collect();
+        assert_eq!(with_poller_columns(&lldp_only).len(), lldp_only.len());
     }
 }

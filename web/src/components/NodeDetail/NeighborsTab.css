@@ -58,6 +58,128 @@
   white-space: nowrap;
 }
 
+/* ADR-180: two-line cells — the headline, then a smaller provenance line. Every line ellipsizes and
+   carries a `title`; the opened row below shows the same text in full. */
+.nd-nb-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.nd-nb-line,
+.nd-nb-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.nd-nb-sub {
+  font-size: var(--font-xs);
+}
+
+.nd-nb-link {
+  color: var(--accent-color);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nd-nb-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* What the address is to this deployment. Colour is paired with the word, never alone. */
+.nd-nb-state {
+  font-size: var(--font-xs);
+  padding: 0 5px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.nd-nb-state.node {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+}
+
+.nd-nb-state.ambiguous {
+  color: var(--status-warning);
+  border-color: var(--status-warning);
+}
+
+.nd-nb-state.unregistered {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+/* The opened row: every field, in full, wrapped. */
+.nd-nb-details {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  border-top: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.nd-nb-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.nd-nb-dl-row {
+  display: contents;
+}
+
+.nd-nb-dl dt {
+  color: var(--text-secondary);
+}
+
+.nd-nb-dl dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nd-nb-note {
+  font-size: var(--font-xs);
+  margin: var(--space-2) 0 0;
+}
+
+.nd-nb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nd-nb-card-ports,
+.nd-nb-card-platform {
+  font-size: var(--font-sm);
+  overflow-wrap: anywhere;
+}
+
+.nd-nb-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nd-nb-card-toggle {
+  align-self: flex-start;
+  min-height: var(--touch-target);
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-color);
+  cursor: pointer;
+  font-size: var(--font-sm);
+}
+
 .nd-nb-proto {
   font-size: var(--font-xs);
   text-transform: uppercase;

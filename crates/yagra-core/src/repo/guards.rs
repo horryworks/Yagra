@@ -81,6 +81,9 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
             "dns_checks",
         ],
     ),
+    // Which nodes claim an address, by inventory address or by an interface address (ADR-180).
+    // Both tables are the claim; neither half is a second answer to what the other file owns.
+    ("address_owners.rs", &["nodes", "node_l3"]),
     // `NodeListing for NodeRepo`. Separate from `nodes.rs` because this file is the *mirror*:
     // the SQL scope predicate and `StaticNodeList`'s in-memory twin, with the tests that pin them.
     ("listing.rs", &["nodes"]),

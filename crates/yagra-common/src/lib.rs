@@ -96,9 +96,10 @@ pub use metric::{
     METRIC_SNMP_WALK_COMPLETE,
 };
 pub use neighbor::{
-    builtin_neighbor_columns, cdp_capabilities, lldp_capabilities, render_bare_address,
-    render_chassis_id, render_hex, render_mac, render_network_address, render_port_id, render_text,
-    Neighbor, NeighborCapability, NeighborColumn, NeighborProto, NeighborSet,
+    builtin_neighbor_columns, cdp_capabilities, lldp_capabilities, poller_neighbor_columns,
+    render_bare_address, render_chassis_id, render_chassis_id_kind, render_hex, render_mac,
+    render_network_address, render_port_id, render_port_id_kind, render_text, Neighbor,
+    NeighborCapability, NeighborColumn, NeighborIdKind, NeighborProto, NeighborSet,
     MAX_NEIGHBORS_PER_NODE, MAX_NEIGHBOR_WALK_ROWS, METRIC_SNMP_NEIGHBOR_COUNT,
 };
 pub use node::Node;

@@ -27426,7 +27426,9 @@
         "required": [
           "neighbors",
           "first_seen",
-          "last_seen"
+          "last_seen",
+          "peers",
+          "mac_vendors"
         ],
         "properties": {
           "first_seen": {
@@ -27437,9 +27439,23 @@
             "type": "string",
             "description": "When it was last confirmed unchanged (RFC 3339)."
           },
+          "mac_vendors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MacVendor"
+            },
+            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up. This names who made the network interface, which is\nnot necessarily who made the device or its software."
+          },
           "neighbors": {
             "$ref": "#/components/schemas/NeighborSet",
             "description": "The adjacencies the node last reported."
+          },
+          "peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeighborPeer"
+            },
+            "description": "For each distinct management address the neighbours advertise, which monitored node it\nbelongs to. Matched on the address alone — an inventory address or any address one of a\nnode's interfaces carries — never on a name or chassis id."
           }
         }
       },
@@ -31901,6 +31917,23 @@
           }
         }
       },
+      "MacVendor": {
+        "type": "object",
+        "description": "The registered maker of one MAC address.",
+        "required": [
+          "mac",
+          "vendor"
+        ],
+        "properties": {
+          "mac": {
+            "type": "string",
+            "description": "The MAC exactly as the neighbour row carries it."
+          },
+          "vendor": {
+            "type": "string"
+          }
+        }
+      },
       "MatchedRule": {
         "type": "object",
         "description": "The rule behind a proposal, as the classification-rules screen shows it.",
@@ -33278,6 +33311,17 @@
             "type": "string",
             "description": "The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`."
           },
+          "remote_chassis_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NeighborIdKind",
+                "description": "How `remote_chassis` was rendered: `mac` only when the device labelled it a MAC address and\nit was six octets long. Absent on records collected before this was recorded."
+              }
+            ]
+          },
           "remote_mgmt_addr": {
             "type": [
               "string",
@@ -33303,12 +33347,23 @@
             ],
             "description": "`lldpRemPortDesc` — the peer's own description of its port."
           },
+          "remote_port_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NeighborIdKind",
+                "description": "How `remote_port` was rendered, as for `remote_chassis_kind`."
+              }
+            ]
+          },
           "remote_sys_desc": {
             "type": [
               "string",
               "null"
             ],
-            "description": "`lldpRemSysDesc`."
+            "description": "The peer's own description of itself: `lldpRemSysDesc` for LLDP, `cdpCacheVersion` for CDP.\nControl characters (line breaks included) are removed and the text is cut at 255 characters."
           },
           "remote_sys_name": {
             "type": [
@@ -33503,6 +33558,64 @@
             "format": "int64"
           }
         }
+      },
+      "NeighborIdKind": {
+        "type": "string",
+        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.",
+        "enum": [
+          "mac",
+          "network_address",
+          "text",
+          "hex",
+          "unknown"
+        ]
+      },
+      "NeighborPeer": {
+        "type": "object",
+        "description": "One neighbour management address and the node it belongs to.",
+        "required": [
+          "address",
+          "state",
+          "discovery_listed"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address exactly as the neighbour row carries it in `remote_mgmt_addr`."
+          },
+          "discovery_listed": {
+            "type": "boolean",
+            "description": "Whether the address is on the caller's Discovery ▸ Unregistered list."
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Present only when `state` is `node`."
+          },
+          "node_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when `state` is `node`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NeighborPeerState"
+          }
+        }
+      },
+      "NeighborPeerState": {
+        "type": "string",
+        "description": "What a neighbour's management address is to this deployment.",
+        "enum": [
+          "node",
+          "outside_scope",
+          "ambiguous",
+          "unregistered"
+        ]
       },
       "NeighborProto": {
         "type": "string",

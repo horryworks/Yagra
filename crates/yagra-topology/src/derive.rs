@@ -61,6 +61,20 @@ pub struct DeriveOutput {
     pub summary: TopologyLinkSummary,
 }
 
+/// The one node an address identifies, or `None` when it identifies nobody.
+///
+/// An address claimed by more than one node — by inventory address or by an interface address —
+/// identifies neither: it is a VRRP/HSRP virtual IP or a duplicate-address misconfiguration, and
+/// picking one claimant would be a guess (ADR-043 決定 2). The map's links and the Neighbors tab's
+/// "which node is this peer" (ADR-180) both ask this, so the two cannot disagree.
+#[must_use]
+pub fn sole_claimant<T: Copy + Ord>(claimants: &BTreeSet<T>) -> Option<T> {
+    match claimants.len() {
+        1 => claimants.iter().next().copied(),
+        _ => None,
+    }
+}
+
 /// Derive every link from one snapshot of the fleet's observations.
 ///
 /// Deterministic: the output depends only on the *content* of the input, never on its order. Two
@@ -111,8 +125,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         u32::try_from(contested.intersection(&edge_eligible).count()).unwrap_or(u32::MAX);
     let owner: BTreeMap<IpAddr, NodeId> = claimants
         .iter()
-        .filter(|(_, owners)| owners.len() == 1)
-        .filter_map(|(ip, owners)| owners.iter().next().map(|n| (*ip, *n)))
+        .filter_map(|(ip, owners)| sole_claimant(owners).map(|n| (*ip, n)))
         .collect();
 
     // ── Subnet membership, and how many networks each node has a foot in ─────
@@ -423,6 +436,13 @@ fn apply_overrides(links: &mut BTreeMap<String, DerivedLink>, overrides: &[LinkO
 mod tests {
     use super::*;
     use yagra_common::{L3Address, Neighbor, RoutingProto};
+
+    #[test]
+    fn one_claimant_identifies_it_and_two_or_none_identify_nobody() {
+        assert_eq!(sole_claimant(&BTreeSet::from([7u8])), Some(7));
+        assert_eq!(sole_claimant(&BTreeSet::from([7u8, 9])), None);
+        assert_eq!(sole_claimant::<u8>(&BTreeSet::new()), None);
+    }
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()

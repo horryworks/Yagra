@@ -5173,6 +5173,7 @@ dependencies = [
  "yagra-forward",
  "yagra-hoststats",
  "yagra-ingest",
+ "yagra-oui",
  "yagra-secrets",
  "yagra-telemetry",
  "yagra-topology",
@@ -5221,6 +5222,10 @@ dependencies = [
  "snmp2",
  "thiserror 2.0.18",
 ]
+
+[[package]]
+name = "yagra-oui"
+version = "0.3.32"
 
 [[package]]
 name = "yagra-poller"

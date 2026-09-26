@@ -30,6 +30,14 @@ import {
 } from '../../types/api';
 import { AP_STATE_UNKNOWN, apSearchText, apStateKey, isImported } from './apRows';
 import { addressesOf, formatAddress } from './interfaceAddresses';
+import {
+  chassisVendor,
+  NEIGHBOR_ADDRESS_STATES,
+  neighborAddressState,
+  NO_LOOKUPS,
+  peerOf,
+  type NeighborLookups,
+} from './neighbors';
 import { DUPLEX_STATES, duplexState, mediaText, SPEED_TIERS, speedTier } from './linkMode';
 
 // ───────────────────────────────────────────────────────────────── interfaces
@@ -184,8 +192,16 @@ export function interfaceColumns(t: TFunction): FilterableColumn<FilterableInter
  * remote port description. Split per column that is three controls, and the one that changes
  * meaning is the peer: its cell renders the system name *or* the chassis id, so the column filter
  * reads both. Typing what is on screen has to find the row, whichever of the two is showing.
+ *
+ * ADR-180 widened that rule rather than breaking it: the peer cell now also shows the chassis maker
+ * and — as its link — the node the address belongs to, so the peer filter reads those too. `lookups`
+ * is what the server said about each address and MAC; it defaults to "nothing known", which is also
+ * what an older core answers.
  */
-export function neighborFilters(t: TFunction): Record<string, ColumnFilterSpec<Neighbor>> {
+export function neighborFilters(
+  t: TFunction,
+  lookups: NeighborLookups = NO_LOOKUPS,
+): Record<string, ColumnFilterSpec<Neighbor>> {
   return {
     local: {
       kind: 'text',
@@ -199,9 +215,35 @@ export function neighborFilters(t: TFunction): Record<string, ColumnFilterSpec<N
       kind: 'text',
       modes: ['contains', 'regex'],
       not: true,
-      readText: (n) => [n.remote_sys_name, n.remote_chassis],
+      readText: (n) => [
+        n.remote_sys_name,
+        n.remote_chassis,
+        chassisVendor(n, lookups),
+        peerOf(n, lookups)?.node_name,
+      ],
       containsSemantics: 'substring',
       placeholder: t('neighbors.colPeer'),
+    },
+    // By what the address IS to this deployment, not by its text: "which of these are not monitored
+    // yet" is the question, and an address is typed rarely enough that the opened row serves it.
+    address: {
+      kind: 'enum',
+      options: NEIGHBOR_ADDRESS_STATES.map((s) => ({
+        value: s,
+        label: t(`neighbors.peer.state.${s}`),
+      })),
+      readValue: (n) => neighborAddressState(n, lookups),
+      allLabel: t('neighbors.colAddress'),
+      counts: 'client',
+      hint: t('neighbors.peer.hint'),
+    },
+    platform: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (n) => [n.remote_platform, n.remote_sys_desc],
+      containsSemantics: 'substring',
+      placeholder: t('neighbors.colPlatform'),
     },
     remote_port: {
       kind: 'text',
