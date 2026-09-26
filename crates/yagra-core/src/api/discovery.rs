@@ -66,7 +66,8 @@ const ENDPOINT_MAX_LIMIT: i64 = 500;
     preview_discovery_import,
     discovery_candidates,
     list_discovered_endpoints,
-    import_discovered_endpoint
+    import_discovered_endpoint,
+    probe_discovered_endpoint
 ))]
 pub(super) struct Doc;
 
@@ -99,6 +100,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/discovered-endpoints/:id/import",
             post(import_discovered_endpoint),
+        )
+        .route(
+            "/api/v1/discovered-endpoints/:id/probe",
+            post(probe_discovered_endpoint),
         )
 }
 
@@ -1268,6 +1273,151 @@ pub(super) struct ImportEndpoint {
     name: Option<String>,
     profile_id: Option<String>,
     credential_id: Option<String>,
+    /// Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 増分 2). Omitted
+    /// when nothing was probed; the node's first identity read fills it then, as before.
+    #[serde(default)]
+    vendor: Option<String>,
+    /// Model, from the same probe as `vendor`.
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// Which stored credentials to try when probing one endpoint.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ProbeEndpoint {
+    /// Stored credential ids, tried in this order; the first that answers wins, as in a range
+    /// scan. Empty means "ICMP and nothing else", which is allowed but tells the caller little.
+    #[serde(default)]
+    credential_ids: Vec<String>,
+}
+
+/// A probe accepted: read its result from `GET /api/v1/discovery/scan/{scan_id}`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct StartedProbe {
+    scan_id: Uuid,
+    /// The pool whose pollers were asked, or absent when the probe went to the global discovery
+    /// subject — the observing node's pool had no live poller, or no node observed the address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pool: Option<String>,
+}
+
+/// Read a discovered endpoint the caller can see, or answer 404 / 409.
+async fn visible_unmonitored_endpoint(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    id: Uuid,
+) -> Result<crate::arp::DiscoveredEndpoint, ApiError> {
+    let endpoint = admin
+        .discovered
+        .get(id, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "read discovered endpoint",
+                "failed to read the discovered endpoint",
+            )
+        })?
+        .ok_or_else(|| {
+            ApiError::not_found("endpoint_not_found", format!("no discovered endpoint {id}"))
+        })?;
+    if endpoint.promoted_node_id.is_some() {
+        return Err(ApiError::conflict(
+            "already_monitored",
+            format!("{} is already a monitored node", endpoint.ip),
+        ));
+    }
+    Ok(endpoint)
+}
+
+/// Probe one discovered endpoint with the range scan's own machinery (ADR-179 増分 2).
+///
+/// A one-address scan: the credentials are tried in order on the poller, the first that answers is
+/// reported as `matched_credential_id`, and core classifies the device into `suggested_profile_id`
+/// — so the Unregistered tab fills its two dropdowns by exactly the rule the Scan tab does. Nothing
+/// is imported; the operator reads the answer and decides.
+///
+/// Silent addresses are still asked over SNMP (`SilentTargets::ProbeSnmp`): this row exists because
+/// a neighbour, a peer or a sender vouched for the device, so a dropped ping is not evidence that
+/// nobody is there.
+///
+/// Routed to the observing node's pool when that pool has a live poller — the poller that can
+/// reach the node that saw the address is the likeliest to reach the address — and to the global
+/// subject otherwise, the range scan's own fallback.
+#[utoipa::path(
+    post, path = "/api/v1/discovered-endpoints/{id}/probe", tag = "discovery",
+    params(("id" = Uuid, Path, description = "Discovered-endpoint id")),
+    request_body = ProbeEndpoint,
+    responses(
+        (status = 202, description = "Probe accepted; poll its result by scan id", body = StartedProbe),
+        (status = 400, description = "A named credential that is not a UUID, missing, or unusable", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such discovered endpoint, or not one the caller can see", body = super::error::ErrorBody),
+        (status = 409, description = "That address is already a monitored node", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side, or this core is not the HA leader", body = super::error::ErrorBody),
+    ),
+)]
+async fn probe_discovered_endpoint(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    // Leader-gated for the reason the range scan is: only the leader consumes discovery results,
+    // so a standby would send real SNMP at the device and never see the answer.
+    _leader: Leader,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ProbeEndpoint>,
+) -> ApiResult<(StatusCode, Json<StartedProbe>)> {
+    let endpoint = visible_unmonitored_endpoint(&admin, &scope, id).await?;
+    let credentials = resolve_scan_credentials(&admin.creds, &body.credential_ids).await?;
+    let observer_pool = match endpoint.via_node {
+        Some(via) => match admin.repo.get_node(via.as_uuid()).await {
+            Ok(Some(node)) => Some(
+                super::util::pool_resolver(&admin)
+                    .await
+                    .resolve_pool(&node)
+                    .to_owned(),
+            ),
+            // A vanished observer or a failed read both mean "no pool to prefer"; the global
+            // subject is the documented fallback, so neither is worth failing the probe over.
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "reading the observing node failed; probing globally");
+                None
+            }
+        },
+        None => None,
+    };
+    let pool_route = observer_pool.filter(|p| {
+        admin
+            .coordinator
+            .live_pools(Instant::now())
+            .contains(p.as_str())
+    });
+    let scan_id = admin
+        .discovery
+        .start(
+            vec![endpoint.ip],
+            Vec::new(),
+            credentials,
+            pool_route.as_deref(),
+            crate::discovery::SilentTargets::ProbeSnmp,
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "probe discovered endpoint",
+                "failed to start the probe",
+            )
+        })?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(StartedProbe {
+            scan_id,
+            pool: pool_route,
+        }),
+    ))
 }
 
 /// Promote a discovered endpoint to a monitored node.
@@ -1288,37 +1438,19 @@ pub(super) struct ImportEndpoint {
         (status = 400, description = "A binding id that is not a UUID", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such discovered endpoint", body = super::error::ErrorBody),
+        (status = 404, description = "No such discovered endpoint, or not one the caller can see", body = super::error::ErrorBody),
         (status = 409, description = "That address is already a monitored node", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
 async fn import_discovered_endpoint(
     _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<ImportEndpoint>,
 ) -> ApiResult<(StatusCode, Json<ImportResult>)> {
-    let endpoint = admin
-        .discovered
-        .get(id)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "read discovered endpoint",
-                "failed to read the discovered endpoint",
-            )
-        })?
-        .ok_or_else(|| {
-            ApiError::not_found("endpoint_not_found", format!("no discovered endpoint {id}"))
-        })?;
-    if endpoint.promoted_node_id.is_some() {
-        return Err(ApiError::conflict(
-            "already_monitored",
-            format!("{} is already a monitored node", endpoint.ip),
-        ));
-    }
+    let endpoint = visible_unmonitored_endpoint(&admin, &scope, id).await?;
     let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
         match s {
             None => Ok(None),
@@ -1348,12 +1480,20 @@ async fn import_discovered_endpoint(
             address: endpoint.ip,
             profile,
             credential,
-            // Deliberately blank. A MAC's OUI names the *chassis* vendor, which for a monitored
-            // device is routinely not the vendor whose MIBs it answers — a whitebox switch, a VM's
-            // virtual NIC. `sysDescr` classification fills these correctly on the first poll, and a
-            // wrong pre-fill would outlive the guess by being an operator-set value.
-            vendor: None,
-            model: None,
+            // Only what a probe classified from `sysDescr` (ADR-179 増分 2), never a MAC's OUI: the
+            // OUI names the *chassis* vendor, which for a monitored device is routinely not the
+            // vendor whose MIBs it answers — a whitebox switch, a VM's virtual NIC. Absent a probe
+            // both stay blank and the first identity read fills them, as for any other node.
+            vendor: body
+                .vendor
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            model: body
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
             // No folder, on purpose. This is the *passive* path (ADR-043 Inc.3): the row is an
             // address a router mentioned, with no site behind it. The scan import files into a
             // folder because the operator aimed the sweep at one; here there is nothing to aim.
@@ -1520,8 +1660,15 @@ mod tests {
     #[tokio::test]
     async fn promoting_an_endpoint_is_closed_to_a_viewer() {
         // The import creates a node, so it is `ManageConfig` — the same gate the scan import has,
-        // reached from the other of the two discovery paths.
-        let path = format!("/api/v1/discovered-endpoints/{ID}/import");
+        // reached from the other of the two discovery paths. Probing one (ADR-179 増分 2) sends
+        // credentials at the address and is gated exactly as the import it precedes.
+        for action in ["import", "probe"] {
+            closed_to_a_viewer(&format!("/api/v1/discovered-endpoints/{ID}/{action}")).await;
+        }
+    }
+
+    async fn closed_to_a_viewer(path: &str) {
+        let path = path.to_owned();
         assert_eq!(
             status_of(private_state(), "POST", &path, None).await,
             StatusCode::UNAUTHORIZED
@@ -2470,5 +2617,119 @@ mod tests {
                 .await
                 .expect("the endpoint row");
         assert_eq!(promoted, Some(node), "the stale row was not reconciled");
+    }
+
+    /// Probing an endpoint (ADR-179 増分 2) is accepted as a one-address scan the Scan tab's own
+    /// status read can follow; a row the caller's scope hides is 404 and an imported one is 409.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn probing_an_endpoint_starts_a_one_address_scan_within_the_callers_scope(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin_tok = token(&st, yagra_common::Role::Admin);
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let observer = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let endpoint: Uuid = sqlx::query_scalar(
+            "INSERT INTO l3_discovered (ip, via_node) VALUES ('192.0.2.44', $1) RETURNING id",
+        )
+        .bind(observer)
+        .fetch_one(&pool)
+        .await
+        .expect("endpoint");
+        let path = format!("/api/v1/discovered-endpoints/{endpoint}/probe");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &path,
+            &admin_tok,
+            Some(serde_json::json!({ "credential_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let scan_id: Uuid = body["scan_id"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .expect("scan_id");
+        let scan = st
+            .admin
+            .as_ref()
+            .expect("live")
+            .discovery
+            .get(scan_id)
+            .expect("the probe is a scan the status read can find");
+        assert_eq!(scan.total, 1, "one address, not a range");
+        assert!(
+            body.get("pool").is_none(),
+            "no live poller serves the observer's pool, so the probe went to the global subject: {body}"
+        );
+
+        let (status, _) = send(
+            &st,
+            "POST",
+            &path,
+            &scoped_token(&st, &[theirs]),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "a row seen only from outside the caller's scope must read as absent"
+        );
+        let (status, _) = send(
+            &st,
+            "POST",
+            &path,
+            &scoped_token(&st, &[mine]),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "in scope, so actionable");
+
+        sqlx::query("UPDATE l3_discovered SET promoted_node_id = $1 WHERE id = $2")
+            .bind(observer)
+            .bind(endpoint)
+            .execute(&pool)
+            .await
+            .expect("promote");
+        let (status, body) =
+            send(&st, "POST", &path, &admin_tok, Some(serde_json::json!({}))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    }
+
+    /// What a probe classified travels with the import (ADR-179 増分 2), so the node carries its
+    /// maker from the start instead of waiting for its first identity read.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn promoting_an_endpoint_keeps_the_maker_a_probe_found(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let endpoint: Uuid =
+            sqlx::query_scalar("INSERT INTO l3_discovered (ip) VALUES ('192.0.2.45') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .expect("endpoint");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{endpoint}/import"),
+            &tok,
+            Some(serde_json::json!({ "name": "sw-02", "vendor": "Cisco", "model": " C9300 " })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let (vendor, model): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT vendor, model FROM nodes WHERE name = 'sw-02'")
+                .fetch_one(&pool)
+                .await
+                .expect("the node");
+        assert_eq!(vendor.as_deref(), Some("Cisco"));
+        assert_eq!(model.as_deref(), Some("C9300"), "trimmed at the edge");
     }
 }

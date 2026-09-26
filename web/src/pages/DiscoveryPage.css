@@ -280,6 +280,20 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   font-size: var(--font-sm);
 }
 
+/* Detect and Monitor side by side in the last track (ADR-179 増分 2). */
+.disco-seen-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* What Detect found, or why it found nothing — under the whole row rather than in one cell, so a
+   sentence is not squeezed into a column sized for a button. */
+.disco-seen-detect {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+}
+
 .disco-seen-row:last-child {
   border-bottom: none;
 }
@@ -329,7 +343,7 @@ html[data-viewport='mobile'] .disco-seen-table {
 
 html[data-viewport='mobile'] .disco-seen-head,
 html[data-viewport='mobile'] .disco-seen-row {
-  grid-template-columns: 150px 150px 200px 150px 150px 120px;
+  grid-template-columns: 150px 150px 200px 150px 150px 220px;
   width: max-content;
 }
 

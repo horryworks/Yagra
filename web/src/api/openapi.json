@@ -3660,7 +3660,7 @@
             }
           },
           "404": {
-            "description": "No such discovered endpoint",
+            "description": "No such discovered endpoint, or not one the caller can see",
             "content": {
               "application/json": {
                 "schema": {
@@ -3681,6 +3681,110 @@
           },
           "503": {
             "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovered-endpoints/{id}/probe": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Probe one discovered endpoint with the range scan's own machinery (ADR-179 増分 2).",
+        "description": "A one-address scan: the credentials are tried in order on the poller, the first that answers is\nreported as `matched_credential_id`, and core classifies the device into `suggested_profile_id`\n— so the Unregistered tab fills its two dropdowns by exactly the rule the Scan tab does. Nothing\nis imported; the operator reads the answer and decides.\n\nSilent addresses are still asked over SNMP (`SilentTargets::ProbeSnmp`): this row exists because\na neighbour, a peer or a sender vouched for the device, so a dropped ping is not evidence that\nnobody is there.\n\nRouted to the observing node's pool when that pool has a live poller — the poller that can\nreach the node that saw the address is the likeliest to reach the address — and to the global\nsubject otherwise, the range scan's own fallback.",
+        "operationId": "probe_discovered_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Discovered-endpoint id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeEndpoint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Probe accepted; poll its result by scan id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedProbe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A named credential that is not a UUID, missing, or unusable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such discovered endpoint, or not one the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That address is already a monitored node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side, or this core is not the HA leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -30562,6 +30666,13 @@
               "null"
             ]
           },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model, from the same probe as `vendor`."
+          },
           "name": {
             "type": [
               "string",
@@ -30574,6 +30685,13 @@
               "string",
               "null"
             ]
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 増分 2). Omitted\nwhen nothing was probed; the node's first identity read fills it then, as before."
           }
         }
       },
@@ -35873,6 +35991,19 @@
           }
         }
       },
+      "ProbeEndpoint": {
+        "type": "object",
+        "description": "Which stored credentials to try when probing one endpoint.",
+        "properties": {
+          "credential_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Stored credential ids, tried in this order; the first that answers wins, as in a range\nscan. Empty means \"ICMP and nothing else\", which is allowed but tells the caller little."
+          }
+        }
+      },
       "ProfileBody": {
         "type": "object",
         "description": "Create/update body. `category` is optional on create (defaults to generic SNMP).",
@@ -38459,6 +38590,26 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "StartedProbe": {
+        "type": "object",
+        "description": "A probe accepted: read its result from `GET /api/v1/discovery/scan/{scan_id}`.",
+        "required": [
+          "scan_id"
+        ],
+        "properties": {
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool whose pollers were asked, or absent when the probe went to the global discovery\nsubject — the observing node's pool had no live poller, or no node observed the address."
+          },
+          "scan_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

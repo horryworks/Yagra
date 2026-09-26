@@ -867,14 +867,24 @@ impl DiscoveredRepo {
             .collect())
     }
 
-    /// One endpoint by id — what the import handler reads before creating a node from it.
-    pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<DiscoveredEndpoint>> {
+    /// One endpoint by id, if the caller can see it — what the import and probe handlers read
+    /// before acting on a row (ADR-179 増分 2). The same scope predicate as [`Self::list_page`], so
+    /// an id is actionable exactly when its row is listable: a row outside the scope reads as
+    /// absent, never as "exists, but not yours".
+    pub async fn get(
+        &self,
+        id: Uuid,
+        groups: Option<&[Uuid]>,
+    ) -> anyhow::Result<Option<DiscoveredEndpoint>> {
         let row = sqlx::query(
-            "SELECT id, host(ip) AS ip, mac, via_node, via_ifindex, name, evidence, \
-                    first_seen, last_seen, promoted_node_id \
-             FROM l3_discovered WHERE id = $1",
+            "SELECT d.id, host(d.ip) AS ip, d.mac, d.via_node, d.via_ifindex, d.name, \
+                    d.evidence, d.first_seen, d.last_seen, d.promoted_node_id \
+             FROM l3_discovered d \
+             LEFT JOIN nodes n ON n.id = d.via_node \
+             WHERE d.id = $1 AND ($2::UUID[] IS NULL OR n.group_id = ANY($2))",
         )
         .bind(id)
+        .bind(groups.map(<[Uuid]>::to_vec))
         .fetch_optional(&self.pool)
         .await?;
         row.as_ref().map(endpoint_from_row).transpose()
@@ -1706,13 +1716,13 @@ mod tests {
         assert_eq!(promoted.promoted_node_id, Some(NodeId(host)));
 
         let fetched = repo
-            .get(promoted.id)
+            .get(promoted.id, None)
             .await
             .expect("get")
             .expect("the row just listed");
         assert_eq!(&fetched, promoted, "get and list disagree about one row");
         assert!(
-            repo.get(Uuid::new_v4()).await.expect("get").is_none(),
+            repo.get(Uuid::new_v4(), None).await.expect("get").is_none(),
             "an unknown id returned an endpoint"
         );
     }
@@ -1991,7 +2001,7 @@ mod tests {
             got.evidence, lldp_row.evidence,
             "evidence did not round-trip"
         );
-        let fetched = repo.get(got.id).await.expect("get").expect("row");
+        let fetched = repo.get(got.id, None).await.expect("get").expect("row");
         assert_eq!(
             fetched.evidence, lldp_row.evidence,
             "`get` projects differently from the list"
@@ -2027,6 +2037,24 @@ mod tests {
             "the count and the list disagree about the scope"
         );
         assert_eq!(repo.unmonitored_total(Some(&[])).await.expect("count"), 0);
+        // `get` answers exactly what the list shows (ADR-179 増分 2): a row the scope hides reads
+        // as absent, so an id copied from somebody else's list cannot be acted on.
+        let alien_row = by_ip("192.168.60.10");
+        assert!(repo
+            .get(got.id, Some(&[mine]))
+            .await
+            .expect("get")
+            .is_some());
+        assert!(repo
+            .get(alien_row.id, Some(&[mine]))
+            .await
+            .expect("get")
+            .is_none());
+        assert!(repo
+            .get(by_ip("203.0.113.9").id, Some(&[mine]))
+            .await
+            .expect("get")
+            .is_none());
 
         // A second sweep that no longer sees the name keeps the row and clears the name: the
         // columns are last-observation-wins, like `mac`.

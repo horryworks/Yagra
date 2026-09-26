@@ -767,6 +767,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discovered-endpoints/{id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe one discovered endpoint with the range scan's own machinery (ADR-179 増分 2).
+         * @description A one-address scan: the credentials are tried in order on the poller, the first that answers is
+         *     reported as `matched_credential_id`, and core classifies the device into `suggested_profile_id`
+         *     — so the Unregistered tab fills its two dropdowns by exactly the rule the Scan tab does. Nothing
+         *     is imported; the operator reads the answer and decides.
+         *
+         *     Silent addresses are still asked over SNMP (`SilentTargets::ProbeSnmp`): this row exists because
+         *     a neighbour, a peer or a sender vouched for the device, so a dropped ping is not evidence that
+         *     nobody is there.
+         *
+         *     Routed to the observing node's pool when that pool has a live poller — the poller that can
+         *     reach the node that saw the address is the likeliest to reach the address — and to the global
+         *     subject otherwise, the range scan's own fallback.
+         */
+        post: operations["probe_discovered_endpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discovery/candidates": {
         parameters: {
             query?: never;
@@ -8236,9 +8267,16 @@ export interface components {
         /** @description What to call the endpoint, and what to bind it to, when promoting it to a node. */
         ImportEndpoint: {
             credential_id?: string | null;
+            /** @description Model, from the same probe as `vendor`. */
+            model?: string | null;
             /** @description Node name. Defaults to the address when omitted or blank. */
             name?: string | null;
             profile_id?: string | null;
+            /**
+             * @description Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 増分 2). Omitted
+             *     when nothing was probed; the node's first identity read fills it then, as before.
+             */
+            vendor?: string | null;
         };
         /** @description One discovered device the operator chose to add. */
         ImportNode: {
@@ -10988,6 +11026,14 @@ export interface components {
              */
             subject: string;
         };
+        /** @description Which stored credentials to try when probing one endpoint. */
+        ProbeEndpoint: {
+            /**
+             * @description Stored credential ids, tried in this order; the first that answers wins, as in a range
+             *     scan. Empty means "ICMP and nothing else", which is allowed but tells the caller little.
+             */
+            credential_ids?: string[];
+        };
         /** @description Create/update body. `category` is optional on create (defaults to generic SNMP). */
         ProfileBody: {
             category?: string | null;
@@ -12162,6 +12208,16 @@ export interface components {
              */
             snmp_when_unreachable?: boolean;
             targets: string[];
+        };
+        /** @description A probe accepted: read its result from `GET /api/v1/discovery/scan/{scan_id}`. */
+        StartedProbe: {
+            /**
+             * @description The pool whose pollers were asked, or absent when the probe went to the global discovery
+             *     subject — the observing node's pool had no live poller, or no node observed the address.
+             */
+            pool?: string | null;
+            /** Format: uuid */
+            scan_id: string;
         };
         /** @description The accepted scan's id, for polling its status. */
         StartedScan: {
@@ -16322,7 +16378,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such discovered endpoint */
+            /** @description No such discovered endpoint, or not one the caller can see */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -16341,6 +16397,87 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    probe_discovered_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Discovered-endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeEndpoint"];
+            };
+        };
+        responses: {
+            /** @description Probe accepted; poll its result by scan id */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedProbe"];
+                };
+            };
+            /** @description A named credential that is not a UUID, missing, or unusable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such discovered endpoint, or not one the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description That address is already a monitored node */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side, or this core is not the HA leader */
             503: {
                 headers: {
                     [name: string]: unknown;

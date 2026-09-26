@@ -407,6 +407,16 @@
       "viaGone": "device removed",
       "port": "ifIndex {{n}}",
       "monitor": "Monitor",
+      "detect": {
+        "button": "Detect",
+        "hint": "Try your SNMP credentials on this device and pick a profile from what it answers",
+        "running": "Detecting…",
+        "found": "{{device}} · answered with {{credential}}",
+        "foundBare": "Answered with {{credential}}",
+        "silent": "No credential got an answer. Pick one by hand, or monitor by ping only.",
+        "lost": "The detection ended before it finished. Try again.",
+        "err": "failed to detect that endpoint"
+      },
       "imported": "{{addr}} is now a monitored node.",
       "err": {
         "import": "failed to start monitoring that endpoint"

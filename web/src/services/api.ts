@@ -1006,9 +1006,21 @@ export const api = {
   /** Promote a discovered endpoint to a monitored node. `409` ⇒ the address became a node already. */
   importDiscoveredEndpoint: (
     id: string,
-    body: { name?: string; profile_id?: string | null; credential_id?: string | null },
+    body: {
+      name?: string;
+      profile_id?: string | null;
+      credential_id?: string | null;
+      /** Maker and model a Detect classified (ADR-179 増分 2); omitted when nothing was probed. */
+      vendor?: string;
+      model?: string;
+    },
   ): Promise<ImportResult> =>
     apiPost('/api/v1/discovered-endpoints/{id}/import', { path: { id }, body }),
+
+  /** Detect one endpoint's profile and credential (ADR-179 増分 2): a one-address range scan, sent
+   *  through the observing node's pool. Read the answer with `getDiscoveryScan(scan_id)`. */
+  probeDiscoveredEndpoint: (id: string, credentialIds: string[]) =>
+    apiPost('/api/v1/discovered-endpoints/{id}/probe', { path: { id }, body: { credential_ids: credentialIds } }),
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
   /** List the orgs an API key can access (nothing is persisted). Read-only.

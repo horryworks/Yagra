@@ -4,7 +4,7 @@
 // In a .ts, not the .tsx, because Vitest only runs `src/**/*.test.ts` — a test written in a .tsx is
 // a file nothing runs (testing.md).
 
-import type { DiscoveredEndpoint, DiscoveredEndpointPage } from '../types/api';
+import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
 
 /** How much of the fleet the endpoint list actually speaks for.
  *
@@ -80,4 +80,75 @@ export function importName(e: DiscoveredEndpoint): string | undefined {
  */
 export function isUnmonitored(e: DiscoveredEndpoint): boolean {
   return e.promoted_node_id == null;
+}
+
+/** What pressing Detect on one row found (ADR-179 増分 2). The probe is a one-address range scan, so
+ *  this reads the same `ScanView` the Scan tab polls.
+ *
+ *  - `found` — a stored credential answered SNMP. The profile is the classifier's suggestion (empty
+ *    when it had none), and the maker, model and sysName travel with the import.
+ *  - `silent` — the sweep finished and no credential answered. Not an error: the device may drop
+ *    SNMP from this poller, or not speak it. The operator can still pick by hand or monitor by ping.
+ *  - `lost` — the sweep ended without finishing (cancelled), so nothing can be said either way. */
+export type DetectResult =
+  | {
+      kind: 'found';
+      profileId: string;
+      credentialId: string;
+      vendor?: string;
+      model?: string;
+      sysname?: string;
+    }
+  | { kind: 'silent' }
+  | { kind: 'lost' };
+
+const present = (s: string | null | undefined): string | undefined => {
+  const t = s?.trim();
+  return t ? t : undefined;
+};
+
+/** The row's answer, or `null` while the sweep is still going.
+ *
+ *  Only a *matched credential* counts as found. A candidate can be `reachable` by ICMP alone, and the
+ *  classifier needs SNMP to suggest anything, so a reachable host with no credential is `silent` —
+ *  which is what the operator needs to hear before pressing Monitor. */
+export function detectResultOf(scan: DiscoveryScan, ip: string): DetectResult | null {
+  if (!scan.done) return null;
+  if (scan.state !== 'done') return { kind: 'lost' };
+  const c = scan.candidates.find((x) => x.address === ip);
+  if (!c?.matched_credential_id) return { kind: 'silent' };
+  return {
+    kind: 'found',
+    profileId: c.suggested_profile_id ?? '',
+    credentialId: c.matched_credential_id,
+    vendor: present(c.vendor),
+    model: present(c.model),
+    sysname: present(c.sysname),
+  };
+}
+
+/** How the result line names the device: maker and model when the classifier read them, else the
+ *  name it reported, else nothing (the line then says only which credential answered). */
+export function detectedDevice(r: Extract<DetectResult, { kind: 'found' }>): string {
+  const made = [r.vendor, r.model].filter(Boolean).join(' ');
+  return made || r.sysname || '';
+}
+
+/** The name an import after a Detect should give: the row's own name first (a neighbour or a
+ *  syslog header named it deliberately), then what the device calls itself. */
+export function importNameAfterDetect(e: DiscoveredEndpoint, r: DetectResult | undefined): string | undefined {
+  return importName(e) ?? (r?.kind === 'found' ? r.sysname : undefined);
+}
+
+/** The two dropdowns a found result fills. An id the lists no longer offer (deleted, or outside what
+ *  this caller may read) is left empty rather than selected invisibly. */
+export function detectedSelection(
+  r: Extract<DetectResult, { kind: 'found' }>,
+  profileIds: readonly string[],
+  credentialIds: readonly string[],
+): { profile_id: string; credential_id: string } {
+  return {
+    profile_id: profileIds.includes(r.profileId) ? r.profileId : '',
+    credential_id: credentialIds.includes(r.credentialId) ? r.credentialId : '',
+  };
 }

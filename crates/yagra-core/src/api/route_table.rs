@@ -572,7 +572,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/discovered-endpoints/:id/import",
-        ADMIN_CFG,
+        // `GroupFiltered` since ADR-179 増分 2, where it used to claim `ADMIN_CFG`: `manage_config`
+        // is held by a group-scoped Operator too, and the row is read through the list's own scope
+        // predicate, so an id is actionable exactly when its row is listable.
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/discovered-endpoints/:id/probe",
+        // The same predicate as the import beside it — probing sends credentials at the address,
+        // which is no less an action on the row than importing it.
+        GroupFiltered,
         NO_MCP_WRITE,
     ),
     (

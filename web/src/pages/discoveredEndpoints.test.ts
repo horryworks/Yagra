@@ -2,14 +2,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   coverageOf,
+  detectResultOf,
+  detectedDevice,
+  detectedSelection,
   importName,
+  importNameAfterDetect,
   isUnmonitored,
   sourcesOf,
   DISCOVERY_TABS,
   ENDPOINT_COVERAGE,
   ENDPOINT_SOURCES,
 } from './discoveredEndpoints';
-import type { DiscoveredEndpoint } from '../types/api';
+import type { DiscoveredEndpoint, DiscoveryScan } from '../types/api';
 
 function endpoint(over: Partial<DiscoveredEndpoint> = {}): DiscoveredEndpoint {
   return {
@@ -104,5 +108,95 @@ describe('importName', () => {
 describe('DISCOVERY_TABS', () => {
   it('opens on the sweep form, so links made before the tabs existed land where they did', () => {
     expect(DISCOVERY_TABS[0]).toBe('scan');
+  });
+});
+
+function scan(over: Partial<DiscoveryScan> = {}): DiscoveryScan {
+  return {
+    scan_id: 's1',
+    done: true,
+    state: 'done',
+    probed: 1,
+    total: 1,
+    scanning: null,
+    started_at: '2026-09-26T00:00:00Z',
+    candidates: [],
+    existing: [],
+    ...over,
+  } as DiscoveryScan;
+}
+
+const answered = {
+  address: '192.0.2.44',
+  reachable: true,
+  sysdescr: 'Cisco IOS Software',
+  sysname: 'sw-07',
+  sysobjectid: '1.3.6.1.4.1.9.1.1',
+  suggested_profile_id: 'p-cisco',
+  vendor: 'Cisco',
+  model: 'C2960X',
+  matched_credential_id: 'c-corp',
+};
+
+describe('detectResultOf', () => {
+  it('says nothing while the sweep is still running', () => {
+    expect(detectResultOf(scan({ done: false, state: 'running' }), '192.0.2.44')).toBeNull();
+  });
+
+  it('reads the matched credential and the suggested profile as found', () => {
+    expect(detectResultOf(scan({ candidates: [answered] }), '192.0.2.44')).toEqual({
+      kind: 'found',
+      profileId: 'p-cisco',
+      credentialId: 'c-corp',
+      vendor: 'Cisco',
+      model: 'C2960X',
+      sysname: 'sw-07',
+    });
+  });
+
+  it('calls a host that only answered ping silent, not found', () => {
+    const pingOnly = { ...answered, suggested_profile_id: null, matched_credential_id: null };
+    expect(detectResultOf(scan({ candidates: [pingOnly] }), '192.0.2.44')).toEqual({ kind: 'silent' });
+    expect(detectResultOf(scan(), '192.0.2.44')).toEqual({ kind: 'silent' });
+  });
+
+  it('does not read another address as this one', () => {
+    expect(detectResultOf(scan({ candidates: [answered] }), '192.0.2.45')).toEqual({ kind: 'silent' });
+  });
+
+  it('says a cancelled sweep proved nothing', () => {
+    expect(detectResultOf(scan({ state: 'cancelled' }), '192.0.2.44')).toEqual({ kind: 'lost' });
+  });
+});
+
+describe('detected results', () => {
+  const found = {
+    kind: 'found' as const,
+    profileId: 'p-cisco',
+    credentialId: 'c-corp',
+    vendor: 'Cisco',
+    model: 'C2960X',
+    sysname: 'sw-07',
+  };
+
+  it('names the device by maker and model, then by its own name', () => {
+    expect(detectedDevice(found)).toBe('Cisco C2960X');
+    expect(detectedDevice({ ...found, vendor: undefined, model: undefined })).toBe('sw-07');
+    expect(detectedDevice({ ...found, vendor: undefined, model: undefined, sysname: undefined })).toBe('');
+  });
+
+  it('fills only ids the dropdowns can show', () => {
+    expect(detectedSelection(found, ['p-cisco'], ['c-corp'])).toEqual({
+      profile_id: 'p-cisco',
+      credential_id: 'c-corp',
+    });
+    expect(detectedSelection(found, [], ['c-corp'])).toEqual({ profile_id: '', credential_id: 'c-corp' });
+  });
+
+  it('keeps the name a neighbour gave over the one the device reports', () => {
+    expect(importNameAfterDetect(endpoint({ name: 'sw-edge' }), found)).toBe('sw-edge');
+    expect(importNameAfterDetect(endpoint(), found)).toBe('sw-07');
+    expect(importNameAfterDetect(endpoint(), { kind: 'silent' })).toBeUndefined();
+    expect(importNameAfterDetect(endpoint(), undefined)).toBeUndefined();
   });
 });
