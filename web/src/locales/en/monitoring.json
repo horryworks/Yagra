@@ -417,12 +417,14 @@
         "silent": "No credential got an answer. Pick them by hand, or monitor by ping only.",
         "lost": "The detection ended before it finished. Try again.",
         "err": "failed to detect that endpoint",
-        "idle": "Tries your SNMP credentials and picks a profile from the answer.",
+        "idle": "Tries the {{count}} credentials above and picks a profile from the answer.",
         "trying": "Trying your SNMP credentials ({{count}}), about 2 s each.",
         "retry": "Try again",
         "profileDetected": "Profile · detected",
         "credentialAnswered": "Credential · answered",
-        "noProfile": "(none — ping only)"
+        "noProfile": "(none — ping only)",
+        "noCreds": "No credential chosen above — Detect would only ping.",
+        "credsHint": "Detect tries these in this order — the same list as Scan a range, so a change here is a change there. <lnk>Manage credentials →</lnk>"
       },
       "imported": "{{addr}} is now a monitored node.",
       "err": {

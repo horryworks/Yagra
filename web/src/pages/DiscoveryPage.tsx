@@ -796,8 +796,11 @@ export function DiscoveryPage() {
           profiles={profiles}
           creds={creds}
           // The Scan tab's own ticked set — remembered from the last sweep, else every SNMP
-          // credential (`initialCredentialIds`) — so Detect tries what a range scan would.
+          // credential (`initialCredentialIds`) — so Detect tries what a range scan would. One
+          // list for both tabs: a credential added here is added there, and the reverse.
+          snmpCreds={snmpCreds}
           probeCredIds={selectedCredIds}
+          onProbeCredsChange={setSelectedCredIds}
           page={endpointPage}
           reload={loadEndpoints}
         />
@@ -1334,14 +1337,18 @@ function SeenOnNetworkCard({
   canConfig,
   profiles,
   creds,
+  snmpCreds,
   probeCredIds,
+  onProbeCredsChange,
   page,
   reload: load,
 }: {
   canConfig: boolean;
   profiles: ProfileSummary[];
   creds: CredentialSummary[];
+  snmpCreds: CredentialSummary[];
   probeCredIds: string[];
+  onProbeCredsChange: (ids: string[]) => void;
   page: DiscoveredEndpointPage | null;
   reload: () => void;
 }) {
@@ -1480,6 +1487,21 @@ function SeenOnNetworkCard({
   return (
     <Card title={t('discovery.seen.title')}>
       <p className="sys-setting-help muted">{t('discovery.seen.note')}</p>
+      {/* What Detect tries, in order — the Scan tab's picker, over the same list. Drawn only with
+          the permission Detect needs (ADR-056): without it there is nothing to try them with. */}
+      {canConfig && (
+        <label className="form-label disco-seen-creds">
+          {t('discovery.credsLabel')}
+          <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
+          <FieldHint>
+            <Trans
+              t={t}
+              i18nKey="discovery.seen.detect.credsHint"
+              components={{ lnk: <Link to="/nodes/credentials" /> }}
+            />
+          </FieldHint>
+        </label>
+      )}
       <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
         {t(`discovery.seen.coverage.${coverage}`, {
           observed: page?.summary?.observed_total ?? 0,
@@ -1603,10 +1625,18 @@ function SeenOnNetworkCard({
                             ? t('discovery.seen.detect.running')
                             : t('discovery.seen.detect.button')}
                         </Button>
-                        <span className="muted disco-seen-detect-hint">
+                        <span
+                          className={
+                            probeCredIds.length === 0
+                              ? 'disco-seen-detect-hint disco-seen-warn'
+                              : 'muted disco-seen-detect-hint'
+                          }
+                        >
                           {phase === 'running'
                             ? t('discovery.seen.detect.trying', { count: probeCredIds.length })
-                            : t('discovery.seen.detect.idle')}
+                            : probeCredIds.length === 0
+                              ? t('discovery.seen.detect.noCreds')
+                              : t('discovery.seen.detect.idle', { count: probeCredIds.length })}
                         </span>
                       </div>
                     )}

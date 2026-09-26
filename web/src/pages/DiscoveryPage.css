@@ -305,6 +305,11 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   white-space: nowrap;
 }
 
+/* The credentials Detect tries, above the table and sized like the Scan tab's field. */
+.disco-seen-creds {
+  max-width: 760px;
+}
+
 .disco-seen-detect-hint {
   font-size: var(--font-xs);
 }
