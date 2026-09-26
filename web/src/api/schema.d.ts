@@ -16419,7 +16419,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or (`out_of_scope`) the caller is folder-scoped: an endpoint is imported into no folder, which such a caller cannot see */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16437,7 +16437,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description That address is already a monitored node */
+            /** @description That address is already a monitored node, or (`sender_only`) only a syslog or trap sender vouches for it — a sender's address can be forged, so it is never imported */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16518,7 +16518,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description That address is already a monitored node */
+            /** @description That address is already a monitored node, or (`sender_only`) only a syslog or trap sender vouches for it — a sender's address can be forged, so it is never probed */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16618,7 +16618,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageConfig, or (`out_of_scope`) a folder-scoped caller left a row bound for the tree root, which it cannot see — name a folder; nothing is written */
             403: {
                 headers: {
                     [name: string]: unknown;

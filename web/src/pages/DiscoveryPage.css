@@ -516,3 +516,10 @@ html[data-viewport='mobile'] .disco-scan {
 .disco-dest-why {
   font-size: var(--font-xs);
 }
+
+/* "Load more" under the unregistered list (ADR-179 増分 6). */
+.disco-seen-more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-3);
+}

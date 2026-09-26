@@ -107,6 +107,31 @@ pub enum EndpointSource {
     Trap,
 }
 
+impl EndpointSource {
+    /// Whether the address is only the endpoint's own say-so: a syslog or trap source address, which
+    /// anyone can forge over UDP. Every other source is a monitored device reporting what it saw.
+    #[must_use]
+    pub fn is_self_reported(self) -> bool {
+        match self {
+            EndpointSource::Syslog | EndpointSource::Trap => true,
+            EndpointSource::Arp
+            | EndpointSource::Lldp
+            | EndpointSource::Cdp
+            | EndpointSource::Ospf
+            | EndpointSource::Bgp => false,
+        }
+    }
+}
+
+/// Whether nothing but a syslog or trap sender vouches for this address (ADR-179 増分 5 決定 2).
+///
+/// Such a row is listed but never probed or imported: its address may be forged, and probing it
+/// would send every chosen credential to whoever forged it.
+#[must_use]
+pub fn only_senders_vouch(evidence: &[EndpointEvidence]) -> bool {
+    !evidence.is_empty() && evidence.iter().all(|e| e.source.is_self_reported())
+}
+
 // Test-only: the production path serializes through serde, and this is what the token test compares
 // it against.
 #[cfg(test)]
@@ -466,10 +491,20 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
     }
 
     // Truncated after the map is built, so which endpoints survive does not depend on the order the
-    // inputs were read in. Ordered by address, which is also the order an operator scans.
-    by_ip
+    // inputs were read in. Rows a monitored device saw are kept before rows only a sender vouches
+    // for (ADR-179 増分 5 決定 3): a sender's address can be forged, and ten thousand forged low
+    // addresses must not push a real device off the list. Listed by address, which is also the
+    // order an operator scans.
+    let (observed, senders): (Vec<_>, Vec<_>) = by_ip
         .into_iter()
+        .partition(|(_, g)| !only_senders_vouch(&g.evidence));
+    let mut kept: Vec<_> = observed
+        .into_iter()
+        .chain(senders)
         .take(MAX_DISCOVERED_ENDPOINTS)
+        .collect();
+    kept.sort_by_key(|(ip, _)| *ip);
+    kept.into_iter()
         .map(|(ip, mut g)| {
             // `None` sorts after every observer, so a sender's line follows the nodes' lines of the
             // same source — and there are none, since only senders lack an observer.
@@ -778,7 +813,8 @@ impl DiscoveredRepo {
         // ADR-019's rule against it is about exactly that instability.
         let over = sqlx::query(
             "DELETE FROM l3_discovered d USING ( \
-                 SELECT id, row_number() OVER (ORDER BY last_seen DESC, id DESC) AS rn \
+                 SELECT id, \
+                        row_number() OVER (ORDER BY (via_node IS NULL), last_seen DESC, id DESC) AS rn \
                  FROM l3_discovered \
              ) r WHERE d.id = r.id AND r.rn > $1",
         )
@@ -1479,6 +1515,62 @@ mod tests {
             none_visible.is_empty(),
             "nothing about a hidden observer is kept"
         );
+    }
+
+    #[test]
+    fn forged_senders_cannot_push_an_observed_endpoint_off_the_list() {
+        // More low-address senders than the list holds, and one real device a router saw at a
+        // higher address. Ordered by address alone, the senders filled the list and the device
+        // was cut (ADR-179 増分 5 決定 3).
+        let senders: Vec<SenderObservation> = (0..=MAX_DISCOVERED_ENDPOINTS as u32)
+            .map(|i| SenderObservation {
+                ip: IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000 + i)),
+                kind: SenderKind::Syslog,
+                hostname: None,
+            })
+            .collect();
+        let arp = [(node(1), summary(&[(1, "192.0.2.70")]))];
+        let found = candidates(
+            &Signals {
+                arp: &arp,
+                senders: &senders,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found.len(), MAX_DISCOVERED_ENDPOINTS);
+        assert!(
+            found.iter().any(|e| e.ip.to_string() == "192.0.2.70"),
+            "the device a router saw survives the flood"
+        );
+        assert!(
+            found.windows(2).all(|w| w[0].ip < w[1].ip),
+            "the list is still in address order"
+        );
+    }
+
+    #[test]
+    fn only_a_sender_vouching_is_what_makes_a_row_untouchable() {
+        let ev = |source, via: Option<u128>| EndpointEvidence {
+            source,
+            via_node: via.map(|n| node(n).as_uuid()),
+            via_ifindex: None,
+            port: None,
+            detail: None,
+        };
+        assert!(only_senders_vouch(&[ev(EndpointSource::Syslog, None)]));
+        assert!(only_senders_vouch(&[
+            ev(EndpointSource::Syslog, None),
+            ev(EndpointSource::Trap, None)
+        ]));
+        assert!(!only_senders_vouch(&[
+            ev(EndpointSource::Lldp, Some(1)),
+            ev(EndpointSource::Syslog, None)
+        ]));
+        // An observation whose node has since been deleted is still a device's report, not the
+        // address's own say-so.
+        assert!(!only_senders_vouch(&[ev(EndpointSource::Arp, None)]));
+        assert!(!only_senders_vouch(&[]));
     }
 
     #[test]

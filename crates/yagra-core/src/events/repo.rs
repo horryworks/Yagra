@@ -720,12 +720,22 @@ impl EventRepo {
         Ok(res.rows_affected())
     }
 
-    /// Every remembered sender — the discovery sweep's fourth input. Bounded by
-    /// [`Self::prune_senders`], which the same sweep runs.
-    pub async fn unattributed_senders(&self) -> anyhow::Result<Vec<crate::arp::SenderObservation>> {
-        let rows = sqlx::query("SELECT host(ip) AS ip, kind, hostname FROM event_senders")
-            .fetch_all(&self.pool)
-            .await?;
+    /// The `limit` most recently heard senders — the discovery sweep's fourth input.
+    ///
+    /// Bounded here and not only by [`Self::prune_senders`]: the sweep reads before it prunes,
+    /// and between two sweeps a flood of forged source addresses can grow the table without limit
+    /// (ADR-179 増分 5). The sweep could never keep more than `limit` of them anyway.
+    pub async fn unattributed_senders(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<crate::arp::SenderObservation>> {
+        let rows = sqlx::query(
+            "SELECT host(ip) AS ip, kind, hostname FROM event_senders \
+             ORDER BY last_seen DESC, ip, kind LIMIT $1",
+        )
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows
             .into_iter()
             .filter_map(|row| {
@@ -1293,7 +1303,7 @@ mod tests {
             .unwrap();
         assert!(repo.senders_watermark().await.unwrap().is_some());
 
-        let mut got = repo.unattributed_senders().await.unwrap();
+        let mut got = repo.unattributed_senders(100).await.unwrap();
         got.sort_by_key(|s| (s.ip, s.kind));
         assert_eq!(
             got,
@@ -1311,6 +1321,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        let newest = repo.unattributed_senders(2).await.unwrap();
+        assert_eq!(
+            newest.len(),
+            2,
+            "the read is bounded, whatever the table holds"
+        );
+        assert!(
+            newest.iter().all(|s| s.kind == SenderKind::Syslog),
+            "and it keeps the most recently heard: the aged trap is the one left out"
+        );
         assert_eq!(
             repo.prune_senders(7 * 86_400, 10).await.unwrap(),
             1,

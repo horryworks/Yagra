@@ -446,6 +446,11 @@
         "bgp": "BGP",
         "syslog": "Syslog",
         "trap": "Trap"
+      },
+      "senderOnly": "Only a syslog or trap sender vouches for this address, and a sender's address can be forged — so it is not detected or monitored from here. If it is yours, add it with Add node.",
+      "more": {
+        "button": "Load {{n}} more",
+        "loaded": "{{loaded}} of {{total}} unregistered devices loaded. Filters search only the loaded rows."
       }
     },
     "scanTitle": "Scan a subnet",

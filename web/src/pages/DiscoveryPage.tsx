@@ -70,6 +70,10 @@ import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
 import {
   coverageOf,
+  appendEndpointPage,
+  ENDPOINT_PAGE_SIZE,
+  isSenderOnly,
+  withoutImported,
   isUnmonitored,
   portName,
   sourcesOf,
@@ -140,10 +144,27 @@ export function DiscoveryPage() {
   const [endpointPage, setEndpointPage] = useState<DiscoveredEndpointPage | null>(null);
   const loadEndpoints = useCallback(() => {
     api
-      .listDiscoveredEndpoints({ limit: 100 })
+      .listDiscoveredEndpoints({ limit: ENDPOINT_PAGE_SIZE })
       .then(setEndpointPage)
       .catch(() => undefined);
   }, []);
+  // The next page after the rows already on screen (ADR-179 増分 6). Keyset, so a row that moves
+  // while the list is read is not skipped twice or shown twice (`appendEndpointPage`).
+  const [endpointMoreBusy, setEndpointMoreBusy] = useState(false);
+  const loadMoreEndpoints = useCallback(() => {
+    const next = endpointPage?.next;
+    if (!next) return;
+    setEndpointMoreBusy(true);
+    api
+      .listDiscoveredEndpoints({ limit: ENDPOINT_PAGE_SIZE, beforeLastSeen: next.last_seen, beforeId: next.id })
+      .then((page) => setEndpointPage((prev) => appendEndpointPage(prev, page)))
+      .catch(() => undefined)
+      .finally(() => setEndpointMoreBusy(false));
+  }, [endpointPage]);
+  const endpointImported = useCallback(
+    (id: string) => setEndpointPage((prev) => (prev ? withoutImported(prev, id) : prev)),
+    [],
+  );
   useEffect(() => {
     loadEndpoints();
   }, [loadEndpoints]);
@@ -798,7 +819,9 @@ export function DiscoveryPage() {
           probeCredIds={selectedCredIds}
           onProbeCredsChange={setSelectedCredIds}
           page={endpointPage}
-          reload={loadEndpoints}
+          loadMore={loadMoreEndpoints}
+          loadingMore={endpointMoreBusy}
+          onImported={endpointImported}
         />
       )}
 
@@ -1337,7 +1360,9 @@ function SeenOnNetworkCard({
   probeCredIds,
   onProbeCredsChange,
   page,
-  reload: load,
+  loadMore,
+  loadingMore,
+  onImported,
 }: {
   canConfig: boolean;
   profiles: ProfileSummary[];
@@ -1346,7 +1371,9 @@ function SeenOnNetworkCard({
   probeCredIds: string[];
   onProbeCredsChange: (ids: string[]) => void;
   page: DiscoveredEndpointPage | null;
-  reload: () => void;
+  loadMore: () => void;
+  loadingMore: boolean;
+  onImported: (id: string) => void;
 }) {
   const { t } = useTranslation('monitoring');
   // The node an endpoint was seen by, and the one it already is, as names. `EntityName` renders a
@@ -1373,7 +1400,7 @@ function SeenOnNetworkCard({
     setNote(null);
     if (await setup.monitor(e)) {
       setNote(t('discovery.seen.imported', { addr: e.ip }));
-      load();
+      onImported(e.id);
     }
   };
 
@@ -1433,6 +1460,16 @@ function SeenOnNetworkCard({
             noun={t('discovery.seen.filter.endpointNoun')}
           />
         </TableToolbar>
+      )}
+      {/* While more pages remain, say how much of the list is on screen and that the filters only
+          search that much (ADR-179 増分 6 決定 2). */}
+      {page?.next && (
+        <p className="muted">
+          {t('discovery.seen.more.loaded', {
+            loaded: all.length,
+            total: page.summary.unmonitored_total,
+          })}
+        </p>
       )}
       {epSheet && (
         <MobileFilterSheet
@@ -1513,7 +1550,11 @@ function SeenOnNetworkCard({
                   // something, empty to pick by hand when it did not. Not drawn without the
                   // permission (ADR-056): every control in it is a write.
                   <div className="disco-seen-setup">
-                    {canConfig && (
+                    {canConfig && isSenderOnly(e) ? (
+                      // A forgeable address: listed as information, never probed or imported
+                      // (ADR-179 増分 5).
+                      <span className="muted">{t('discovery.seen.senderOnly')}</span>
+                    ) : canConfig && (
                       <EndpointSetupCell
                         target={e}
                         setup={setup}
@@ -1555,6 +1596,13 @@ function SeenOnNetworkCard({
       )}
       {setup.error && <p className="form-error">{setup.error}</p>}
       {note && <p className="disco-import-ok">✓ {note}</p>}
+      {page?.next && (
+        <div className="disco-seen-more">
+          <Button onClick={loadMore} disabled={loadingMore}>
+            {t('discovery.seen.more.button', { n: ENDPOINT_PAGE_SIZE })}
+          </Button>
+        </div>
+      )}
     </Card>
   );
 }

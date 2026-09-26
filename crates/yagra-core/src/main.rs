@@ -2093,7 +2093,11 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
                 continue;
             }
         };
-        let senders = match stores.events.unattributed_senders().await {
+        let senders = match stores
+            .events
+            .unattributed_senders(arp::MAX_DISCOVERED_ENDPOINTS)
+            .await
+        {
             Ok(rows) => rows,
             Err(e) => {
                 tracing::warn!(error = %e, "endpoint discovery: reading event senders failed");

@@ -732,6 +732,12 @@ fn changes_monitoring_config(path: &str) -> bool {
         // nothing else, and the sync loop bumps the generation itself when a folder actually
         // changes (ADR-178 決定 7). Counted, every press re-resolved the whole fleet for nothing.
         || (path.starts_with("/api/v1/netbox/servers/") && path.ends_with("/sync"))
+        // Detect on one unregistered device (ADR-179 増分 2): a one-address scan held in memory,
+        // like a range sweep's. It writes nothing a rebuild reads — the import that may follow is
+        // `POST /discovered-endpoints/{id}/import`, which is **not** listed here and does bump.
+        // Counted, every press re-resolved the whole fleet (ADR-179 増分 5). Invisible to the
+        // mechanical check for the same reason as the previews: the handler demands ManageConfig.
+        || (path.starts_with("/api/v1/discovered-endpoints/") && path.ends_with("/probe"))
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1803,6 +1809,19 @@ mod tests {
     /// ManageConfig — the operator is deciding a move — so it is invisible there. Forgetting the
     /// exemption costs a full-fleet re-resolution on every press of the preview button, silently
     /// and with nothing in the log (ADR-124 決定 8).
+    #[test]
+    fn detecting_an_endpoint_does_not_dirty_the_config_generation_but_importing_it_does() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        assert!(
+            !changes_monitoring_config(&format!("/api/v1/discovered-endpoints/{id}/probe")),
+            "Detect writes nothing a rebuild reads and must not invalidate"
+        );
+        assert!(
+            changes_monitoring_config(&format!("/api/v1/discovered-endpoints/{id}/import")),
+            "an import creates a node"
+        );
+    }
+
     #[test]
     fn proposing_a_move_does_not_dirty_the_config_generation_but_making_one_does() {
         assert!(

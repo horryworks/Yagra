@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  appendEndpointPage,
   coverageOf,
   detectLineOf,
   detectPhase,
@@ -9,15 +10,17 @@ import {
   detectedSelection,
   importName,
   importNameAfterDetect,
+  isSenderOnly,
   isUnmonitored,
   pollDetect,
+  withoutImported,
   MAX_DETECT_READS,
   sourcesOf,
   DISCOVERY_TABS,
   ENDPOINT_COVERAGE,
   ENDPOINT_SOURCES,
 } from './discoveredEndpoints';
-import type { DiscoveredEndpoint, DiscoveryScan } from '../types/api';
+import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
 
 function endpoint(over: Partial<DiscoveredEndpoint> = {}): DiscoveredEndpoint {
   return {
@@ -338,5 +341,45 @@ describe('detectLineOf', () => {
       key: 'discovery.seen.detect.foundBare',
       values: { credential: 'gone' },
     });
+  });
+});
+
+describe('isSenderOnly', () => {
+  it('is true only when every piece of evidence is a sender\'s own', () => {
+    expect(isSenderOnly(endpoint({ evidence: [{ source: 'syslog' }] }))).toBe(true);
+    expect(isSenderOnly(endpoint({ evidence: [{ source: 'syslog' }, { source: 'trap' }] }))).toBe(true);
+    expect(
+      isSenderOnly(endpoint({ evidence: [{ source: 'lldp', via_node: 'n1' }, { source: 'syslog' }] })),
+    ).toBe(false);
+    // A device's report whose node has since been deleted is still not the address's own say-so.
+    expect(isSenderOnly(endpoint({ evidence: [{ source: 'arp' }] }))).toBe(false);
+    expect(isSenderOnly(endpoint({ evidence: [] }))).toBe(false);
+  });
+});
+
+describe('appendEndpointPage / withoutImported', () => {
+  const pageOf = (ids: string[], unmonitored: number, next: DiscoveredEndpointPage['next'] = null) =>
+    ({
+      endpoints: ids.map((id) => endpoint({ id })),
+      next,
+      summary: { observed_total: 0, nodes_reporting: 0, truncated_nodes: 0, unmonitored_total: unmonitored },
+    }) as DiscoveredEndpointPage;
+
+  it('adds the next page after the rows on screen, once each, with the newer cursor and count', () => {
+    const cursor = { last_seen: '2026-09-27T00:00:00Z', id: 'c' };
+    const merged = appendEndpointPage(pageOf(['a', 'b'], 5, { last_seen: 'x', id: 'b' }), pageOf(['b', 'c'], 6, cursor));
+    expect(merged.endpoints.map((e) => e.id)).toEqual(['a', 'b', 'c']);
+    expect(merged.next).toEqual(cursor);
+    expect(merged.summary.unmonitored_total).toBe(6);
+    expect(appendEndpointPage(null, pageOf(['a'], 1)).endpoints.map((e) => e.id)).toEqual(['a']);
+  });
+
+  it('takes an imported row off the list and the count down, keeping every page read so far', () => {
+    const after = withoutImported(pageOf(['a', 'b', 'c'], 3), 'b');
+    expect(after.endpoints.map((e) => e.id)).toEqual(['a', 'c']);
+    expect(after.summary.unmonitored_total).toBe(2);
+    const same = pageOf(['a'], 1);
+    expect(withoutImported(same, 'zz')).toBe(same);
+    expect(withoutImported(pageOf(['a'], 0), 'a').summary.unmonitored_total).toBe(0);
   });
 });

@@ -82,6 +82,26 @@ export function isUnmonitored(e: DiscoveredEndpoint): boolean {
   return e.promoted_node_id == null;
 }
 
+/** Whether a source is only the address's own say-so: a syslog or trap source address, which anyone
+ *  can forge over UDP. Keyed by every source, so a new one has to be decided here too. Mirrors
+ *  `EndpointSource::is_self_reported` in `arp.rs`. */
+const SELF_REPORTED: Record<EndpointSource, boolean> = {
+  arp: false,
+  lldp: false,
+  cdp: false,
+  ospf: false,
+  bgp: false,
+  syslog: true,
+  trap: true,
+};
+
+/** Whether only a syslog or trap sender vouches for this row (ADR-179 増分 5). The server refuses to
+ *  probe or import such a row (409 `sender_only`) — probing it would send the chosen credentials to
+ *  whoever forged the address — so the screen offers neither button and says why. */
+export function isSenderOnly(e: DiscoveredEndpoint): boolean {
+  return e.evidence.length > 0 && e.evidence.every((ev) => SELF_REPORTED[ev.source]);
+}
+
 /** What pressing Detect on one row found (ADR-179 増分 2). The probe is a one-address range scan, so
  *  this reads the same `ScanView` the Scan tab polls.
  *
@@ -228,4 +248,30 @@ export function detectLineOf(
   return device
     ? { key: 'discovery.seen.detect.found', values: { device, credential } }
     : { key: 'discovery.seen.detect.foundBare', values: { credential } };
+}
+
+/** How many unregistered devices one read asks for (ADR-179 増分 6). */
+export const ENDPOINT_PAGE_SIZE = 100;
+
+/** The list after one more page has arrived (ADR-179 増分 6 決定 1): the new rows after the old,
+ *  a row already on screen not repeated (the list moves while it is read — a row seen again jumps
+ *  to the front), and the newer page's cursor and summary. */
+export function appendEndpointPage(
+  prev: DiscoveredEndpointPage | null,
+  next: DiscoveredEndpointPage,
+): DiscoveredEndpointPage {
+  if (!prev) return next;
+  const seen = new Set(prev.endpoints.map((e) => e.id));
+  return { ...next, endpoints: [...prev.endpoints, ...next.endpoints.filter((e) => !seen.has(e.id))] };
+}
+
+/** The list after one of its rows was imported (ADR-179 増分 6 決定 3): the row gone and the count
+ *  one lower, without reading the list again — which would drop every page read past the first. */
+export function withoutImported(page: DiscoveredEndpointPage, id: string): DiscoveredEndpointPage {
+  if (!page.endpoints.some((e) => e.id === id)) return page;
+  return {
+    ...page,
+    endpoints: page.endpoints.filter((e) => e.id !== id),
+    summary: { ...page.summary, unmonitored_total: Math.max(0, page.summary.unmonitored_total - 1) },
+  };
 }

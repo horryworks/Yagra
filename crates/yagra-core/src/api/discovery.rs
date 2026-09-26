@@ -649,7 +649,7 @@ pub(super) struct ImportDiscovered {
         (status = 201, description = "Nodes created, in one transaction", body = ImportResult),
         (status = 400, description = "More nodes than one sweep can find, an unparseable address, an empty name, a binding id that is not a UUID, or a group_id no folder has", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or (`out_of_scope`) a folder-scoped caller left a row bound for the tree root, which it cannot see — name a folder; nothing is written", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -828,6 +828,15 @@ async fn import_discovered(
         }
     }
 
+    // Decided after every rule has run — the row's own folder, then the IP range, then the
+    // request's — so this sees where each row would really land. A folder-scoped caller cannot see
+    // the root, so a row bound there is refused before anything is written (ADR-179 増分 5 決定 1).
+    if !scope.allows_group(None) && prepared.iter().any(|row| row.group.is_none()) {
+        return Err(ApiError::forbidden_code(
+            "out_of_scope",
+            "this token cannot see ungrouped nodes; choose a folder for every row",
+        ));
+    }
     let outcome = admin.repo.import_nodes(&prepared).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -1354,6 +1363,18 @@ async fn visible_unmonitored_endpoint(
             format!("{} is already a monitored node", endpoint.ip),
         ));
     }
+    // A syslog or trap source address can be forged, so a row only a sender vouches for is never
+    // probed (that would send the chosen credentials to the forger) nor imported (ADR-179 増分 5).
+    if crate::arp::only_senders_vouch(&endpoint.evidence) {
+        return Err(ApiError::conflict(
+            "sender_only",
+            format!(
+                "only a syslog or trap sender vouches for {}; a sender's address can be forged, \
+                 so add it by hand if it is yours",
+                endpoint.ip
+            ),
+        ));
+    }
     Ok(endpoint)
 }
 
@@ -1381,7 +1402,7 @@ async fn visible_unmonitored_endpoint(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such discovered endpoint, or not one the caller can see", body = super::error::ErrorBody),
-        (status = 409, description = "That address is already a monitored node", body = super::error::ErrorBody),
+        (status = 409, description = "That address is already a monitored node, or (`sender_only`) only a syslog or trap sender vouches for it — a sender's address can be forged, so it is never probed", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side, or this core is not the HA leader", body = super::error::ErrorBody),
     ),
 )]
@@ -1464,9 +1485,9 @@ async fn probe_discovered_endpoint(
         (status = 201, description = "The endpoint is now a monitored node", body = ImportResult),
         (status = 400, description = "A binding id that is not a UUID", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or (`out_of_scope`) the caller is folder-scoped: an endpoint is imported into no folder, which such a caller cannot see", body = super::error::ErrorBody),
         (status = 404, description = "No such discovered endpoint, or not one the caller can see", body = super::error::ErrorBody),
-        (status = 409, description = "That address is already a monitored node", body = super::error::ErrorBody),
+        (status = 409, description = "That address is already a monitored node, or (`sender_only`) only a syslog or trap sender vouches for it — a sender's address can be forged, so it is never imported", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -1478,6 +1499,14 @@ async fn import_discovered_endpoint(
     Json(body): Json<ImportEndpoint>,
 ) -> ApiResult<(StatusCode, Json<ImportResult>)> {
     let endpoint = visible_unmonitored_endpoint(&admin, &scope, id).await?;
+    // The node is created with no folder (below), and a folder-scoped caller cannot see the root:
+    // it would create a node it can never see again (ADR-179 増分 5 決定 1).
+    if !scope.allows_group(None) {
+        return Err(ApiError::forbidden_code(
+            "out_of_scope",
+            "this token cannot see ungrouped nodes, and an endpoint is imported into no folder",
+        ));
+    }
     let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
         match s {
             None => Ok(None),
@@ -2726,6 +2755,105 @@ mod tests {
         let (status, body) =
             send(&st, "POST", &path, &admin_tok, Some(serde_json::json!({}))).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    }
+
+    /// ADR-179 増分 5: a row only a syslog or trap sender vouches for is neither probed nor imported,
+    /// and a folder-scoped caller cannot create a node at the tree root through either import.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn forged_or_invisible_destinations_are_refused_before_anything_is_written(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin_tok = token(&st, yagra_common::Role::Admin);
+        let nodes_now = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        };
+
+        // ⑴ A sender-only row: 409 for Detect and for Monitor, even to an unrestricted caller.
+        let sender_row: Uuid = sqlx::query_scalar(
+            "INSERT INTO l3_discovered (ip, evidence) VALUES ('192.0.2.99', $1) RETURNING id",
+        )
+        .bind(serde_json::json!([{ "source": "syslog", "detail": "host-a" }]))
+        .fetch_one(&pool)
+        .await
+        .expect("sender row");
+        let before = nodes_now().await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{sender_row}/probe"),
+            &admin_tok,
+            Some(serde_json::json!({ "credential_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "sender_only", "{body}");
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{sender_row}/import"),
+            &admin_tok,
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(nodes_now().await, before, "nothing was imported");
+
+        // ⑵ An observed row a scoped caller can see: importing it would land at the root.
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let observer = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let seen_row: Uuid = sqlx::query_scalar(
+            "INSERT INTO l3_discovered (ip, via_node) VALUES ('192.0.2.44', $1) RETURNING id",
+        )
+        .bind(observer)
+        .fetch_one(&pool)
+        .await
+        .expect("seen row");
+        let scoped = scoped_token(&st, &[mine]);
+        let before = nodes_now().await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{seen_row}/import"),
+            &scoped,
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "out_of_scope", "{body}");
+        assert_eq!(
+            nodes_now().await,
+            before,
+            "no node was created where its creator cannot see it"
+        );
+
+        // ⑶ The scan import with no folder: refused whole for the scoped caller …
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &scoped,
+            Some(serde_json::json!({ "nodes": [{ "address": "192.0.2.45", "name": "host-b" }] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(nodes_now().await, before);
+        // … and accepted into a folder it can see.
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import",
+            &scoped,
+            Some(serde_json::json!({ "nodes": [{ "address": "192.0.2.45", "name": "host-b" }], "group_id": mine })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(nodes_now().await, before + 1);
     }
 
     /// A folder-scoped caller sees a row through its lowest observer, and must not read the other
