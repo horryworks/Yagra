@@ -265,7 +265,9 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
 .disco-seen-filters,
 .disco-seen-row {
   display: grid;
-  grid-template-columns: 1.3fr 1.3fr 1.8fr 1.2fr 1.2fr auto;
+  /* The last three tracks carry the monitoring-setup cell (Detect, then two labelled dropdowns and
+     up to two buttons), so they get the room; the MAC is a fixed-width string. */
+  grid-template-columns: 1.1fr 0.9fr 1.4fr 1.4fr 1.4fr auto;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -294,6 +296,13 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+/* A button never wraps its label onto two lines to make room for the text beside it. */
+.disco-seen-actions .btn,
+.disco-seen-form .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .disco-seen-detect-hint {
