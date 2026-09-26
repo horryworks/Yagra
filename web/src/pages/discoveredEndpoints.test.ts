@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   coverageOf,
+  detectPhase,
   detectResultOf,
   detectedDevice,
   detectedSelection,
@@ -198,5 +199,20 @@ describe('detected results', () => {
     expect(importNameAfterDetect(endpoint(), found)).toBe('sw-07');
     expect(importNameAfterDetect(endpoint(), { kind: 'silent' })).toBeUndefined();
     expect(importNameAfterDetect(endpoint(), undefined)).toBeUndefined();
+  });
+});
+
+describe('detectPhase', () => {
+  it('shows the dropdowns only once a Detect has answered', () => {
+    expect(detectPhase(undefined)).toBe('idle');
+    expect(detectPhase('running')).toBe('running');
+    expect(
+      detectPhase({ kind: 'found', profileId: 'p', credentialId: 'c' }),
+    ).toBe('found');
+  });
+
+  it('turns both kinds of no-answer into picking by hand', () => {
+    expect(detectPhase({ kind: 'silent' })).toBe('manual');
+    expect(detectPhase({ kind: 'lost' })).toBe('manual');
   });
 });

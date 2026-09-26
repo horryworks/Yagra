@@ -70,6 +70,7 @@ import {
   coverageOf,
   detectedDevice,
   detectedSelection,
+  detectPhase,
   detectResultOf,
   importNameAfterDetect,
   isUnmonitored,
@@ -1526,9 +1527,10 @@ function SeenOnNetworkCard({
             <div className="disco-h">{t('discovery.seen.cols.address')}</div>
             <div className="disco-h">{t('discovery.seen.cols.mac')}</div>
             <div className="disco-h">{t('discovery.seen.cols.seenBy')}</div>
-            <div className="disco-h">{t('discovery.cols.profile')}</div>
-            <div className="disco-h">{t('discovery.cols.credential')}</div>
-            <div className="disco-h" />
+            {/* One header over the last three tracks: the profile and credential inputs only
+                appear once a Detect has answered (ADR-179 増分 2 決定 7), so naming them over an
+                empty column would label nothing. */}
+            <div className="disco-h disco-seen-setup">{t('discovery.seen.cols.setup')}</div>
           </div>
           {/* Same CSS grid rule as the header and every row, and the same mobile story as the
               candidates table above — this one is hidden on a phone for the same reason. The
@@ -1550,7 +1552,8 @@ function SeenOnNetworkCard({
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
             const d = detect[e.id];
             const line = detectLine(d);
-            const found = d !== undefined && d !== 'running' && d.kind === 'found';
+            const phase = detectPhase(d);
+            const found = phase === 'found';
             return (
               <div className="disco-seen-row" key={e.id}>
                 <span className="disco-seen-addr">
@@ -1583,71 +1586,105 @@ function SeenOnNetworkCard({
                   )}
                 </span>
                 {isUnmonitored(e) ? (
-                  <>
-                    <Select
-                      value={r.profile_id}
-                      disabled={!canConfig || busyId != null}
-                      onChange={(ev) =>
-                        setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
-                      }
-                    >
-                      <option value="">{t('discovery.none')}</option>
-                      {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </Select>
-                    <Select
-                      value={r.credential_id}
-                      disabled={!canConfig || busyId != null}
-                      onChange={(ev) =>
-                        setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
-                      }
-                    >
-                      <option value="">{t('discovery.none')}</option>
-                      {creds.map((cr) => (
-                        <option key={cr.id} value={cr.id}>
-                          {cr.name}
-                        </option>
-                      ))}
-                    </Select>
-                    {/* Not drawn without the permission (ADR-056): the grid keeps its last track.
-                        Detect leads until it has found something; then Monitor does, because the
-                        next step is to accept what it filled in. */}
-                    {canConfig ? (
-                      <span className="disco-seen-actions">
+                  // One cell over the last three tracks, whose face follows `detectPhase`: Detect
+                  // alone until it has answered, then the two dropdowns — filled when it found
+                  // something, empty to pick by hand when it did not. Not drawn without the
+                  // permission (ADR-056): every control in it is a write.
+                  <div className="disco-seen-setup">
+                    {canConfig && (phase === 'idle' || phase === 'running') && (
+                      <div className="disco-seen-actions">
                         <Button
-                          variant={found ? 'outline' : 'primary'}
-                          disabled={d === 'running' || busyId != null}
+                          variant="primary"
+                          disabled={phase === 'running' || busyId != null}
                           title={t('discovery.seen.detect.hint')}
                           onClick={() => void detectOne(e)}
                         >
-                          {d === 'running'
+                          {phase === 'running'
                             ? t('discovery.seen.detect.running')
                             : t('discovery.seen.detect.button')}
                         </Button>
-                        <Button
-                          variant={found ? 'primary' : 'outline'}
-                          disabled={busyId != null}
-                          onClick={() => promote(e)}
-                        >
-                          {t('discovery.seen.monitor')}
-                        </Button>
-                      </span>
-                    ) : (
-                      <span />
+                        <span className="muted disco-seen-detect-hint">
+                          {phase === 'running'
+                            ? t('discovery.seen.detect.trying', { count: probeCredIds.length })
+                            : t('discovery.seen.detect.idle')}
+                        </span>
+                      </div>
                     )}
-                    {line != null && (
-                      // Spans the whole row, under the form. Maker and model are device-supplied:
-                      // rendered as text.
-                      <span
-                        className={found ? 'disco-seen-detect muted' : 'disco-seen-detect disco-seen-warn'}
-                      >
-                        {line}
-                      </span>
+                    {canConfig && (phase === 'found' || phase === 'manual') && (
+                      <>
+                        {line != null && (
+                          // Maker and model are device-supplied: rendered as text. The mark is
+                          // paired with words, never colour alone.
+                          <span className={found ? 'disco-seen-detect ok' : 'disco-seen-detect warn'}>
+                            {found ? (
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M20 6 9 17l-5-5" />
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 9v4" />
+                                <path d="M12 17h.01" />
+                                <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                              </svg>
+                            )}
+                            {line}
+                          </span>
+                        )}
+                        <div className="disco-seen-form">
+                          <label className={found ? 'disco-seen-field detected' : 'disco-seen-field'}>
+                            {found
+                              ? t('discovery.seen.detect.profileDetected')
+                              : t('discovery.cols.profile')}
+                            <Select
+                              value={r.profile_id}
+                              disabled={busyId != null}
+                              onChange={(ev) =>
+                                setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
+                              }
+                            >
+                              <option value="">{t('discovery.seen.detect.noProfile')}</option>
+                              {profiles.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </Select>
+                          </label>
+                          <label className={found ? 'disco-seen-field detected' : 'disco-seen-field'}>
+                            {found
+                              ? t('discovery.seen.detect.credentialAnswered')
+                              : t('discovery.cols.credential')}
+                            <Select
+                              value={r.credential_id}
+                              disabled={busyId != null}
+                              onChange={(ev) =>
+                                setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
+                              }
+                            >
+                              <option value="">{t('discovery.none')}</option>
+                              {creds.map((cr) => (
+                                <option key={cr.id} value={cr.id}>
+                                  {cr.name}
+                                </option>
+                              ))}
+                            </Select>
+                          </label>
+                          {!found && (
+                            <Button disabled={busyId != null} onClick={() => void detectOne(e)}>
+                              {t('discovery.seen.detect.retry')}
+                            </Button>
+                          )}
+                          <Button
+                            variant={found ? 'primary' : 'outline'}
+                            disabled={busyId != null}
+                            onClick={() => promote(e)}
+                          >
+                            {t('discovery.seen.monitor')}
+                          </Button>
+                        </div>
+                      </>
                     )}
-                  </>
+                  </div>
                 ) : (
                   // Already a device node (ADR-139). The form and the button are not drawn: pressing
                   // Monitor here could only be refused, and the list offers this row only when the

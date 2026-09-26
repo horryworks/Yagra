@@ -401,7 +401,8 @@
       "cols": {
         "address": "Address",
         "mac": "MAC",
-        "seenBy": "Seen via"
+        "seenBy": "Seen via",
+        "setup": "Monitoring setup"
       },
       "noMac": "not resolved",
       "viaGone": "device removed",
@@ -413,9 +414,15 @@
         "running": "Detecting…",
         "found": "{{device}} · answered with {{credential}}",
         "foundBare": "Answered with {{credential}}",
-        "silent": "No credential got an answer. Pick one by hand, or monitor by ping only.",
+        "silent": "No credential got an answer. Pick them by hand, or monitor by ping only.",
         "lost": "The detection ended before it finished. Try again.",
-        "err": "failed to detect that endpoint"
+        "err": "failed to detect that endpoint",
+        "idle": "Tries your SNMP credentials and picks a profile from the answer.",
+        "trying": "Trying your SNMP credentials ({{count}}), about 2 s each.",
+        "retry": "Try again",
+        "profileDetected": "Profile · detected",
+        "credentialAnswered": "Credential · answered",
+        "noProfile": "(none — ping only)"
       },
       "imported": "{{addr}} is now a monitored node.",
       "err": {

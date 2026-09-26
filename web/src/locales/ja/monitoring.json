@@ -391,7 +391,8 @@
       "cols": {
         "address": "アドレス",
         "mac": "MAC",
-        "seenBy": "見つけた経路"
+        "seenBy": "見つけた経路",
+        "setup": "監視の設定"
       },
       "noMac": "未解決",
       "viaGone": "機器が削除済み",
@@ -405,7 +406,13 @@
         "foundBare": "認証情報 {{credential}} が応答",
         "silent": "どの認証情報にも応答しませんでした。手で選ぶか、ping だけで監視できます。",
         "lost": "検出が最後まで終わりませんでした。もう一度試してください。",
-        "err": "この機器の検出に失敗しました"
+        "err": "この機器の検出に失敗しました",
+        "idle": "登録済みの SNMP 認証情報を試し、応答した機種からプロファイルを選びます。",
+        "trying": "SNMP 認証情報を試しています（{{count}} 個・1 つ約 2 秒）。",
+        "retry": "もう一度",
+        "profileDetected": "プロファイル · 検出",
+        "credentialAnswered": "認証情報 · 応答",
+        "noProfile": "（なし — ping だけ）"
       },
       "imported": "{{addr}} を監視対象ノードにしました。",
       "err": {

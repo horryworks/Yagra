@@ -152,3 +152,19 @@ export function detectedSelection(
     credential_id: credentialIds.includes(r.credentialId) ? r.credentialId : '',
   };
 }
+
+/** Which face an unmonitored row shows (ADR-179 増分 2, 決定 7). The two dropdowns are not drawn
+ *  until a Detect has answered: before that they only invite a guess the probe is about to make.
+ *
+ *  - `idle` — never detected: Detect alone.
+ *  - `running` — the probe is out: Detect is busy.
+ *  - `found` — the dropdowns appear already filled, and Monitor leads.
+ *  - `manual` — nothing answered, or the sweep did not finish: empty dropdowns to pick by hand,
+ *    plus Try again. */
+export type DetectPhase = 'idle' | 'running' | 'found' | 'manual';
+
+export function detectPhase(d: 'running' | DetectResult | undefined): DetectPhase {
+  if (d === undefined) return 'idle';
+  if (d === 'running') return 'running';
+  return d.kind === 'found' ? 'found' : 'manual';
+}
