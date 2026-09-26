@@ -343,3 +343,7 @@ html[data-viewport='mobile'] .nd-nb-table {
 .nd-nb-setup-done {
   color: var(--status-ok);
 }
+
+.nd-nb-table-setup {
+  min-height: 560px;
+}

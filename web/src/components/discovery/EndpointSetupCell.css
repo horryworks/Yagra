@@ -78,3 +78,10 @@
 .ep-setup-field.detected select {
   border-color: var(--status-ok);
 }
+
+/* A link inside the explanation (where an access point is added instead) must read as one, not
+   as more of the warning's text. */
+.ep-setup-detect a {
+  color: var(--accent-color);
+  text-decoration: underline;
+}

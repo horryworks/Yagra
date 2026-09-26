@@ -209,6 +209,11 @@ export function NeighborsTab({ node }: Props) {
       />
     );
   };
+  const openRow = openKey == null ? undefined : neighbors.find((x) => neighborKey(x) === openKey);
+  const openSetup =
+    openRow != null &&
+    canConfig &&
+    (setupMode(openRow, lookups) != null || neighborKey(openRow) in added);
   // The address cell's shortcut into the panel: shown only where the panel has something to offer.
   const canSetUp = (n: Neighbor) =>
     canConfig && setupMode(n, lookups) != null && !(neighborKey(n) in added);
@@ -319,7 +324,13 @@ export function NeighborsTab({ node }: Props) {
             <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
           </TableToolbar>
-          <div className="nd-nb-table">
+          {/* Taller while an opened row holds a setup panel: at the tab's usual 40vh the panel sat
+              in a scroll box a few lines high. */}
+          <div
+            className={
+              openSetup ? 'nd-nb-table nd-nb-table-setup' : 'nd-nb-table'
+            }
+          >
             <DataTable
               tableId="node.neighbors"
               // An unmonitored address carries a third line, its "Set up monitoring" button
