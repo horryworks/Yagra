@@ -168,8 +168,9 @@ describe('the neighbours filter row', () => {
     }
   });
 
-  // ADR-180: the address is filtered by what it IS to this deployment, and the peer filter reads
-  // what the peer cell now shows — the chassis maker and the node the address belongs to.
+  // ADR-180: an address is filtered by what it IS to this deployment — on the Monitoring column
+  // since ADR-179 増分 3 — and the peer filter reads what the peer cell shows: the chassis maker and
+  // the node the address belongs to.
   describe('with what the server said about addresses and MACs', () => {
     const lookups = neighborLookups({
       peers: [
@@ -197,15 +198,22 @@ describe('the neighbours filter row', () => {
     const f = (over: Record<string, string>): FilterState => ({ ...DEFAULTS, ...over });
     const hit = (row: Neighbor, state: FilterState) => matchesFilters(row, COLS, state, NOW);
 
-    it('filters by address state, with "none" for a neighbour that advertised no address', () => {
+    it('filters by monitoring state, with "none" for a neighbour that advertised no address', () => {
       const known = nb({ remote_mgmt_addr: '192.0.2.1' });
       const stranger = nb({ remote_mgmt_addr: '192.0.2.9' });
       const silent = nb({ remote_mgmt_addr: null });
-      expect(hit(known, f({ address: 'node' }))).toBe(true);
-      expect(hit(stranger, f({ address: 'node' }))).toBe(false);
-      expect(hit(stranger, f({ address: 'unregistered' }))).toBe(true);
-      expect(hit(silent, f({ address: 'none' }))).toBe(true);
-      expect(hit(silent, f({ address: 'unregistered,node' }))).toBe(false);
+      expect(hit(known, f({ monitoring: 'node' }))).toBe(true);
+      expect(hit(stranger, f({ monitoring: 'node' }))).toBe(false);
+      expect(hit(stranger, f({ monitoring: 'unregistered' }))).toBe(true);
+      expect(hit(silent, f({ monitoring: 'none' }))).toBe(true);
+      expect(hit(silent, f({ monitoring: 'unregistered,node' }))).toBe(false);
+    });
+
+    it('finds a neighbour by the text of its address', () => {
+      const stranger = nb({ remote_mgmt_addr: '192.0.2.9' });
+      expect(hit(stranger, f({ address: '192.0.2' }))).toBe(true);
+      expect(hit(stranger, f({ address: '198.51' }))).toBe(false);
+      expect(hit(nb({ remote_mgmt_addr: null }), f({ address: '192' }))).toBe(false);
     });
 
     it('finds a peer by the node its address belongs to and by its chassis maker', () => {

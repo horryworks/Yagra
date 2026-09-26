@@ -256,11 +256,9 @@ export function NeighborsTab({ node }: Props) {
       header: t('neighbors.colAddress'),
       width: '1.1fr',
       render: (n) => (
-        <AddressCell
-          neighbor={n}
-          lookups={lookups}
-          onSetup={canSetUp(n) ? () => setOpenKey(neighborKey(n)) : undefined}
-        />
+        <span className="mono nd-nb-line" title={n.remote_mgmt_addr ?? undefined}>
+          {n.remote_mgmt_addr ?? '—'}
+        </span>
       ),
     },
     {
@@ -284,6 +282,16 @@ export function NeighborsTab({ node }: Props) {
           {t(`neighbors.proto.${n.proto}`)}
         </span>
       ),
+    },
+    {
+      // Where a row is acted on, as on every other list: the button on the rows there is something
+      // to set up, and the "is it monitored" filter over all of them (ADR-179 増分 3). The state
+      // itself is the badge beside the neighbour's name.
+      key: 'monitoring',
+      header: t('neighbors.colMonitoring'),
+      width: '150px',
+      render: (n) =>
+        canSetUp(n) ? <SetupButton onOpen={() => setOpenKey(neighborKey(n))} /> : null,
     },
   ];
   for (const c of columns) c.filter = specs[c.key];
@@ -374,6 +382,7 @@ export function NeighborsTab({ node }: Props) {
                 peer: t('neighbors.colPeer'),
                 remote_port: t('neighbors.colRemotePort'),
                 address: t('neighbors.colAddress'),
+                monitoring: t('neighbors.colMonitoring'),
                 platform: t('neighbors.colPlatform'),
                 proto: t('neighbors.colProto'),
               }}
@@ -391,12 +400,23 @@ export function NeighborsTab({ node }: Props) {
 /** Who the neighbour is: its name — a link when exactly one visible node owns its address — then the
  *  chassis id and the chassis maker underneath (ADR-180). */
 function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const { t } = useTranslation('nodes');
   const peer = peerOf(n, lookups);
   const path = peerNodePath(peer);
   const label = peerLabel(n);
   const secondary = peerSecondary(n, lookups);
+  // Whether this device is monitored, beside its name (ADR-179 増分 3) — matched on the management
+  // address alone, which the badge's own explanation says. No badge where no address was sent.
+  const state = neighborAddressState(n, lookups);
+  const badge =
+    state && state !== 'none' ? (
+      <span className={`nd-nb-state ${state}`} title={t(`neighbors.peer.explain.${state}`)}>
+        {t(`neighbors.peer.badge.${state}`)}
+      </span>
+    ) : null;
   return (
     <span className="nd-nb-stack">
+      <span className="nd-nb-peerline">
       {path ? (
         <Link
           to={path}
@@ -412,6 +432,8 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
           {label}
         </span>
       )}
+      {badge}
+      </span>
       {secondary && (
         <span className="nd-muted nd-nb-sub" title={secondary}>
           {secondary}
@@ -421,48 +443,20 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   );
 }
 
-/** The management address and what it is to this deployment. */
-function AddressCell({
-  neighbor: n,
-  lookups,
-  onSetup,
-}: {
-  neighbor: Neighbor;
-  lookups: NeighborLookups;
-  /** Opens the row's setup panel; absent where there is nothing to set up. */
-  onSetup?: () => void;
-}) {
+/** Opens a row's "Monitoring setup" panel. The row's own click toggles the row; this only opens it. */
+function SetupButton({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation('nodes');
-  const state = neighborAddressState(n, lookups);
   return (
-    <span className="nd-nb-stack">
-      <span className="mono nd-nb-line" title={n.remote_mgmt_addr ?? undefined}>
-        {n.remote_mgmt_addr ?? '—'}
-      </span>
-      {state && state !== 'none' && (
-        <span className="nd-nb-sub">
-          <span
-            className={`nd-nb-state ${state}`}
-            title={t(`neighbors.peer.explain.${state}`)}
-          >
-            {t(`neighbors.peer.state.${state}`)}
-          </span>
-        </span>
-      )}
-      {onSetup && (
-        <button
-          type="button"
-          className="nd-nb-setup-open"
-          onClick={(e) => {
-            // The row's own click toggles it; this one only ever opens it.
-            e.stopPropagation();
-            onSetup();
-          }}
-        >
-          {t('neighbors.setup.open')}
-        </button>
-      )}
-    </span>
+    <button
+      type="button"
+      className="nd-nb-setup-open"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {t('neighbors.setup.open')}
+    </button>
   );
 }
 
@@ -534,11 +528,8 @@ function NeighborCard({
       <span className="mono nd-nb-card-ports">
         {n.local_port} → {n.remote_port || '—'}
       </span>
-      <AddressCell
-        neighbor={n}
-        lookups={lookups}
-        onSetup={canSetUp ? () => setOpen(true) : undefined}
-      />
+      {n.remote_mgmt_addr && <span className="mono nd-nb-line">{n.remote_mgmt_addr}</span>}
+      {canSetUp && <SetupButton onOpen={() => setOpen(true)} />}
       {primary && <span className="nd-nb-card-platform">{primary}</span>}
       <span className="nd-nb-card-chips">
         <Capabilities neighbor={n} />

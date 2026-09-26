@@ -106,6 +106,7 @@ import {
   MERAKI_HA_ROLES,
   MERAKI_PAIR_STATES,
   MERAKI_SYNC_FAILURES,
+  NEIGHBOR_PEER_STATES,
   PREFIX_SOURCES,
 } from './types/api';
 import { SEVERITY_ORDER } from './lib/nodeState';
@@ -1040,6 +1041,8 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // ADR-180: the address state is the chip, the filter option and its explanation.
     expectKeys('neighbor address state', locales, 'neighbors.peer.state.', NEIGHBOR_ADDRESS_STATES);
     expectKeys('neighbor address explain', locales, 'neighbors.peer.explain.', NEIGHBOR_ADDRESS_STATES);
+    // The badge beside a neighbour's name (ADR-179 増分 3): every state but "none", which draws none.
+    expectKeys('neighbor monitored badge', locales, 'neighbors.peer.badge.', NEIGHBOR_PEER_STATES);
     expectKeys('neighbor detail label', locales, 'neighbors.detail.', NEIGHBOR_DETAIL_KEYS);
   });
 

@@ -290,10 +290,21 @@ html[data-viewport='mobile'] .nd-nb-table {
 
 /* ADR-179 増分 3: adding an unmonitored neighbour. The shortcut sits under the address state; the
    panel opens above the row's record. */
+/* The name and its monitored badge on one line: the name gives way, the badge never does. */
+.nd-nb-peerline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nd-nb-peerline .nd-nb-state {
+  flex-shrink: 0;
+}
+
 .nd-nb-setup-open {
   align-self: flex-start;
-  margin-top: 2px;
-  padding: 0 6px;
+  padding: 0 8px;
   height: 22px;
   font-family: var(--ui-font-family);
   font-size: var(--font-xs);

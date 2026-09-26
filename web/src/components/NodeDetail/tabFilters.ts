@@ -224,16 +224,25 @@ export function neighborFilters(
       containsSemantics: 'substring',
       placeholder: t('neighbors.colPeer'),
     },
-    // By what the address IS to this deployment, not by its text: "which of these are not monitored
-    // yet" is the question, and an address is typed rarely enough that the opened row serves it.
     address: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (n) => [n.remote_mgmt_addr],
+      containsSemantics: 'substring',
+      placeholder: t('neighbors.colAddress'),
+    },
+    // By what the address IS to this deployment: "which of these are not monitored yet" is the
+    // question. On the column that acts on the answer (ADR-179 増分 3); the badge beside the name
+    // shows it row by row.
+    monitoring: {
       kind: 'enum',
       options: NEIGHBOR_ADDRESS_STATES.map((s) => ({
         value: s,
         label: t(`neighbors.peer.state.${s}`),
       })),
       readValue: (n) => neighborAddressState(n, lookups),
-      allLabel: t('neighbors.colAddress'),
+      allLabel: t('neighbors.colMonitoring'),
       counts: 'client',
       hint: t('neighbors.peer.hint'),
     },
