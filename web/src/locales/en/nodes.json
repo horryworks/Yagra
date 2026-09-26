@@ -966,8 +966,7 @@
         "unregistered": "No node Yagra monitors has this address.",
         "none": "The neighbor did not advertise a management address."
       },
-      "hint": "Matched on the management address alone: a node's own address or any address on one of its interfaces.",
-      "inDiscovery": "Show in Discovery"
+      "hint": "Matched on the management address alone: a node's own address or any address on one of its interfaces."
     },
     "detail": {
       "sysName": "System name",

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   chassisVendor,
   diffNeighbors,
-  discoveryPath,
   emptyReason,
   NEIGHBOR_DETAIL_KEYS,
   neighborAddressState,
@@ -24,7 +23,6 @@ import {
   setupMode,
   setupName,
 } from './neighbors';
-import { decodeCondition } from '../../lib/filterCondition';
 import type { Neighbor, NeighborPeer, NeighborSet } from '../../types/api';
 
 function n(over: Partial<Neighbor> = {}): Neighbor {
@@ -301,24 +299,6 @@ describe('the lookups built from one response', () => {
     expect(peerNodePath(peer({ state: 'outside_scope', node_id: null }))).toBeNull();
     expect(peerNodePath(peer({ state: 'ambiguous', node_id: null }))).toBeNull();
     expect(peerNodePath(null)).toBeNull();
-  });
-
-  it('links to Discovery only for a listed unregistered address, with an anchored filter', () => {
-    const listed = peer({ state: 'unregistered', node_id: null, discovery_listed: true });
-    const path = discoveryPath(listed);
-    expect(path).not.toBeNull();
-    const url = new URL(path as string, 'http://x');
-    expect(url.pathname).toBe('/nodes/discovery');
-    expect(url.searchParams.get('tab')).toBe('unregistered');
-    // Anchored and escaped, so .1 does not also keep .10 — read back through the list's own codec.
-    const cond = decodeCondition(url.searchParams.get('endpoints.ip') ?? '');
-    expect(cond.mode).toBe('regex');
-    const re = new RegExp(cond.term);
-    expect(re.test('192.0.2.1')).toBe(true);
-    expect(re.test('192.0.2.10')).toBe(false);
-    expect(re.test('192x0y2z1')).toBe(false);
-    expect(discoveryPath({ ...listed, discovery_listed: false })).toBeNull();
-    expect(discoveryPath(peer())).toBeNull();
   });
 });
 

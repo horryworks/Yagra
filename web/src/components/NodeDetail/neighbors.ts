@@ -6,7 +6,6 @@
 // how a row is labelled, whether the empty state means "nothing recorded" or "nothing connected" —
 // lives on this side of that line (testing.md).
 
-import { encodeCondition } from '../../lib/filterCondition';
 import {
   NEIGHBOR_PEER_STATES,
   type CurrentNeighbors,
@@ -14,8 +13,6 @@ import {
   type NeighborPeer,
   type NeighborSet,
 } from '../../types/api';
-import { DISCOVERY_TABS } from '../../pages/discoveredEndpoints';
-import { ENDPOINT_FILTER_PREFIX } from '../../pages/discoveryFilters';
 
 /** How one adjacency differs between two consecutive observations. */
 export type NeighborDiffKind = 'added' | 'removed' | 'changed';
@@ -323,30 +320,6 @@ export function neighborDetails(n: Neighbor, lookups: NeighborLookups): Neighbor
 /** Where the peer's inventory entry is, when exactly one visible node owns its address. */
 export function peerNodePath(peer: NeighborPeer | null): string | null {
   return peer?.state === 'node' && peer.node_id ? `/nodes/${peer.node_id}` : null;
-}
-
-/** Escape a string for use as a literal inside a regular expression. */
-function regexLiteral(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Discovery ▸ Unregistered, filtered to this address — or `null` when the list would not show it.
- *
- * The filter is an **anchored regex**, not a plain term: the address column matches substrings, so
- * `192.0.2.1` would also keep `192.0.2.10`. It goes through the list's own codec and URL prefix, so
- * the page reads it back as if the operator had typed it.
- */
-export function discoveryPath(peer: NeighborPeer | null): string | null {
-  if (!peer || peer.state !== 'unregistered' || !peer.discovery_listed) return null;
-  const params = new URLSearchParams();
-  const tab: (typeof DISCOVERY_TABS)[number] = 'unregistered';
-  params.set('tab', tab);
-  params.set(
-    `${ENDPOINT_FILTER_PREFIX}ip`,
-    encodeCondition({ term: `^${regexLiteral(peer.address)}$`, mode: 'regex', not: false }),
-  );
-  return `/nodes/discovery?${params.toString()}`;
 }
 
 // ───────────────────────────────── adding an unmonitored neighbour from here (ADR-179 増分 3)

@@ -47,7 +47,6 @@ import { neighborFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
 import {
   diffNeighbors,
-  discoveryPath,
   merakiOrgPath,
   setupMode,
   setupName,
@@ -193,7 +192,6 @@ export function NeighborsTab({ node }: Props) {
         mode={mode}
         added={key in added ? { name: added[key] } : null}
         peerPath={peerNodePath(peerOf(n, lookups))}
-        discovery={discoveryPath(peerOf(n, lookups))}
         profiles={profiles}
         creds={creds}
         snmpCreds={snmpCreds}
@@ -436,7 +434,6 @@ function AddressCell({
 }) {
   const { t } = useTranslation('nodes');
   const state = neighborAddressState(n, lookups);
-  const discovery = discoveryPath(peerOf(n, lookups));
   return (
     <span className="nd-nb-stack">
       <span className="mono nd-nb-line" title={n.remote_mgmt_addr ?? undefined}>
@@ -450,14 +447,6 @@ function AddressCell({
           >
             {t(`neighbors.peer.state.${state}`)}
           </span>
-          {discovery && (
-            <>
-              {' '}
-              <Link to={discovery} className="nd-nb-link" onClick={(e) => e.stopPropagation()}>
-                {t('neighbors.peer.inDiscovery')}
-              </Link>
-            </>
-          )}
         </span>
       )}
       {onSetup && (
@@ -578,7 +567,6 @@ function SetupPanel({
   mode,
   added,
   peerPath,
-  discovery,
   profiles,
   creds,
   snmpCreds,
@@ -596,7 +584,6 @@ function SetupPanel({
   added: { name: string | null } | null;
   /** The node the address now belongs to, once the list has been read again. */
   peerPath: string | null;
-  discovery: string | null;
   profiles: ProfileSummary[];
   creds: CredentialSummary[];
   snmpCreds: CredentialSummary[];
@@ -613,11 +600,6 @@ function SetupPanel({
   const head = (
     <div className="nd-nb-setup-head">
       <span className="nd-nb-setup-title">{t('neighbors.setup.title')}</span>
-      {discovery && !added && (
-        <Link to={discovery} className="nd-nb-link">
-          {t('neighbors.peer.inDiscovery')} →
-        </Link>
-      )}
     </div>
   );
 
