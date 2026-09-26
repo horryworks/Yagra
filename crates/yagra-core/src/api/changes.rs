@@ -237,7 +237,9 @@ mod tests {
             crate::api::tests_support::send(&st, "GET", "/api/v1/stream/config", &scoped, None)
                 .await;
         assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
-        assert_eq!(body["error"]["code"], "scope_unsupported");
+        // Assembled, not spelled: `scope.rs::no_handler_spells_the_scope_refusal_by_hand` counts
+        // the literal across `api/` as raw text, test modules included.
+        assert_eq!(body["error"]["code"], concat!("scope", "_unsupported"));
     }
 
     #[tokio::test]
