@@ -46,6 +46,7 @@ import {
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import { setNodeTreeCollapsed } from '../../serverPrefs';
+import { foldersToOpen, openFolders, revealStep, type RevealRequest } from './nodeTreeReveal';
 import { useTreeTouchedStore } from '../../store';
 import {
   DURATION_PRESETS,
@@ -341,6 +342,11 @@ interface Props {
   onPollNodes?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
+  /** Bring the selection into view once: open the folders above it, wait for its row, scroll to it
+   *  (ADR-073 増分 2). The page makes one when the last narrowing control goes. */
+  reveal?: RevealRequest | null;
+  /** The reveal is finished — scrolled, or the row is not coming. */
+  onRevealDone?: () => void;
 }
 
 export function NodeTree({
@@ -399,6 +405,8 @@ export function NodeTree({
   keepGroups,
   onPollNodes,
   onTogglePin,
+  reveal,
+  onRevealDone,
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
@@ -1718,6 +1726,37 @@ export function NodeTree({
     setCursor((c) => cursorAfterSelection(c, selected ?? null, wrote));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the selection's identity; `selected` itself is a new object every render
   }, [selectedKey]);
+
+  // ---- Bringing the selection back after a filter is cleared (ADR-073 増分 2). ----
+  // Every decision is `nodeTreeReveal.ts`'s. Two effects: the folders open once per request (a
+  // store write that reaches `drawn` a render later), and the scroll waits for the row.
+  const revealFolders = useMemo(
+    () => (reveal ? foldersToOpen(groups, reveal.groupId) : []),
+    [reveal, groups],
+  );
+  const openedFor = useRef(0);
+  useEffect(() => {
+    if (!reveal || openedFor.current === reveal.seq) return;
+    openedFor.current = reveal.seq;
+    // Kept open in the saved layout, like "reveal in folder" anywhere else: closing it again after
+    // the scroll would take the row away a second time.
+    const next = openFolders(usePrefsStore.getState().nodeTreeCollapsed, revealFolders);
+    if (next !== usePrefsStore.getState().nodeTreeCollapsed) setNodeTreeCollapsed(next);
+  }, [reveal, revealFolders]);
+  useEffect(() => {
+    if (!reveal) return;
+    const step = revealStep(drawn, reveal, {
+      filtering,
+      collapsed,
+      folders: revealFolders,
+      loadedGroups,
+    });
+    if (step.kind === 'wait') return;
+    // Centred, not `auto`: the operator is looking for the row, and a row at the very edge of the
+    // pane — or under the pinned-parents band — is one they would still have to find.
+    if (step.kind === 'scroll') rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
+    onRevealDone?.();
+  }, [reveal, drawn, filtering, collapsed, revealFolders, loadedGroups, rowVirtualizer, onRevealDone]);
 
   /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
    *  cursor, then the scroll — the one scroll this tree writes (ADR-155 決定 4). */

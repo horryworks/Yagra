@@ -116,7 +116,10 @@ import {
   groupDeletionImpact,
   groupDeletionNeedsTypedName,
   groupDeletionReach,
+  UNGROUPED,
 } from '../lib/nodeTree';
+import { revealRequestFor, type RevealRequest } from '../components/NodeTree/nodeTreeReveal';
+import { sameSelection } from '../components/NodeTree/nodeTreeKeys';
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
@@ -484,12 +487,16 @@ export function NodesPage() {
   const commitTerm = term.commit;
   const settledTerm = search.settledTerm;
   useEffect(() => commitTerm(settledTerm), [commitTerm, settledTerm]);
+  /** Bring the selection back into view when the last narrowing control goes (ADR-073 増分 2).
+   *  Made below, once the node rows are known; read here because its folder has to load. */
+  const [reveal, setReveal] = useState<RevealRequest | null>(null);
   const members = useLazyGroupMembers({
     groups,
     visibleGroupKeys,
     ready: !loading,
     browsing: !filtering,
     selectedGroupId: selected?.kind === 'group' ? selected.id : null,
+    revealGroupId: reveal?.sel.kind === 'node' ? (reveal.groupId ?? UNGROUPED) : null,
     filterTerm: search.appliedTerm,
   });
   const invalidateMembers = members.invalidate;
@@ -1033,6 +1040,49 @@ export function NodesPage() {
   // members that was three linear scans per flush for three single-row answers.
   const nodeById = useMemo(() => new Map(treeNodes.map((n) => [n.id, n])), [treeNodes]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
+
+  // Keep the selected node in view when the filter is cleared (ADR-073 増分 2). Clearing a filter
+  // never touched `?sel=`, but the ROW went: browsing loads a folder only once it is on screen, the
+  // saved layout closes what the search had opened, and nothing scrolled — so the pane still showed
+  // the node while the tree no longer had it, which reads as a lost selection.
+  //
+  // The folder a node lives in is remembered while its row is loaded, because the moment it is
+  // needed — narrowing just ended — is exactly when the search page carrying that row goes away.
+  const selectedHome = useRef<{ id: string; groupId: string | null } | null>(null);
+  const selectedNode = selected?.kind === 'node' ? nodeById.get(selected.id) : undefined;
+  useEffect(() => {
+    if (selectedNode) selectedHome.current = { id: selectedNode.id, groupId: selectedNode.group_id ?? null };
+  }, [selectedNode]);
+  // Every control that hides rows, not only the four `filtering` counts: Pinned only and Folders
+  // with nodes only hide the selection just as well. A reveal fires only when the LAST one goes —
+  // clearing one of two would otherwise scroll a tree the operator is still narrowing.
+  const narrowedAny = filtering || pinnedOnly || withNodesOnly;
+  const wasNarrowed = useRef(narrowedAny);
+  const revealSeq = useRef(0);
+  useEffect(() => {
+    const was = wasNarrowed.current;
+    wasNarrowed.current = narrowedAny;
+    if (narrowedAny) {
+      setReveal(null);
+      return;
+    }
+    if (!was) return;
+    const cur = parseSelection(searchParams.get('sel'));
+    const home = cur?.kind === 'node' && selectedHome.current?.id === cur.id ? selectedHome.current.groupId : undefined;
+    revealSeq.current += 1;
+    setReveal(revealRequestFor(cur, groups, home, revealSeq.current));
+    // Keyed on the transition alone: the selection and the folder list are read as they stand at
+    // that moment, and a later change to either must not fire a second reveal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrowedAny]);
+  // Picking another row ends a reveal still waiting for the old one.
+  const selectedKey = selected ? `${selected.kind}:${selected.id}` : '';
+  useEffect(() => {
+    setReveal((r) => (r && !sameSelection(r.sel, selected) ? null : r));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `selected` is a new object every render
+  }, [selectedKey]);
+  const endReveal = useCallback(() => setReveal(null), []);
+
   const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
   // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
   const addTarget = addMenuTarget(selected, groupById, nodeById);
@@ -1320,6 +1370,8 @@ export function NodesPage() {
             keepGroups={createdGroups}
             // Not permission-gated: pinning is the account's own navigation (ADR-146).
             onTogglePin={pinsReady ? togglePin : undefined}
+            reveal={reveal}
+            onRevealDone={endReveal}
           />
           {/* The working set's own row (ADR-124 決定 3, moved below the tree by 増分 5). It appears
               only once something is checked, so it costs nothing until it is needed — and it

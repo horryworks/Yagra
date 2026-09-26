@@ -98,6 +98,11 @@ export function useLazyGroupMembers(opts: {
   /** The selected group, if any. Its direct members load so the detail pane can list them —
    *  independent of `browsing`, since a group stays selected while the operator types a filter. */
   selectedGroupId: string | null;
+  /** The folder a selected NODE lives in, while the tree is bringing that node back into view
+   *  after a filter was cleared (ADR-073 増分 2). Loaded like the selected group: without it the
+   *  row would exist only once the operator scrolled the folder on screen themselves — which they
+   *  cannot do, because they do not know where it is. `UNGROUPED` for a node with no folder. */
+  revealGroupId?: string | null;
   /** The APPLIED (debounced) inventory filter. A term matching a group's NAME reveals that group's
    *  whole subtree: its members load so the operator sees the folder's contents rather than an empty
    *  folder. Loaded independently of `browsing`, like the selected subtree — filter mode is exactly
@@ -105,7 +110,8 @@ export function useLazyGroupMembers(opts: {
    *  (not a precomputed array) so a re-render cannot churn the effect on identity alone. */
   filterTerm: string;
 }): LazyGroupMembers {
-  const { groups, ready, browsing, visibleGroupKeys, selectedGroupId, filterTerm } = opts;
+  const { groups, ready, browsing, visibleGroupKeys, selectedGroupId, revealGroupId, filterTerm } =
+    opts;
 
   const [loadedNodes, setLoadedNodes] = useState<Record<string, NodeSummary[]>>({});
   const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
@@ -327,6 +333,12 @@ export function useLazyGroupMembers(opts: {
     if (!ready || !selectedGroupId) return;
     loadMissing([selectedGroupId]);
   }, [ready, selectedGroupId, loadMissing]);
+
+  // The folder a reveal is waiting on (ADR-073 増分 2) — the same one-key load as the selected group.
+  useEffect(() => {
+    if (!ready || !revealGroupId) return;
+    loadMissing([revealGroupId]);
+  }, [ready, revealGroupId, loadMissing]);
 
   const revealedGroups = useMemo(
     () => new Set(revealedGroupKeys(groups, filterTerm, REVEAL_GROUP_CAP)),
