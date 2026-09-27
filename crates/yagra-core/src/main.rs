@@ -1325,6 +1325,7 @@ impl LeaderTasks {
                 arp: self.arp.clone(),
                 routing: self.routing.clone(),
                 wireless: self.wireless.clone(),
+                classifier: self.classifier.clone(),
             },
             self.history.clone(),
             self.shutdown.clone(),

@@ -347,21 +347,13 @@ impl ScanState {
                 // Authoritative profile suggestion from the classification rules (sysObjectID
                 // first, then sysDescr, then the Generic-SNMP fallback when SNMP answered).
                 let matched = classifier.classify(d.sysobjectid.as_deref(), d.sysdescr.as_deref());
-                // Maker/model: a matching rule may pin them; otherwise fall back to the
-                // best-effort sysDescr parse (editable by the operator on import).
-                let parsed = d
-                    .sysdescr
-                    .as_deref()
-                    .map(yagra_discovery::identify)
-                    .unwrap_or_default();
-                let vendor = matched
-                    .as_ref()
-                    .and_then(|m| m.vendor.clone())
-                    .or(parsed.vendor);
-                let model = matched
-                    .as_ref()
-                    .and_then(|m| m.model.clone())
-                    .or(parsed.model);
+                // Maker/model: a matching rule may pin them; otherwise the best-effort sysDescr
+                // parse (editable by the operator on import). The same answer the poll path fills.
+                let (vendor, model) = crate::classification::identity_of(
+                    classifier,
+                    d.sysobjectid.as_deref(),
+                    d.sysdescr.as_deref(),
+                );
                 Candidate {
                     address: d.address.to_string(),
                     reachable: d.reachable,

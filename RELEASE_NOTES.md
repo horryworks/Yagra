@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The maker and model a node gets from polling now follow your classification rules, as Discovery already did.** A rule under Settings ▸ Classification that names a vendor or a model was used when a device was found by a scan, but the hourly identity read of a monitored node ignored it and used only the guess from `sysDescr`. Both now ask the rules first and fall back to the guess. As before, polling fills the maker and model only on a node that has none, so a value already stored or typed by an operator does not change.
+
 ### Bug Fixes
 
 - **A metrics query that VictoriaMetrics refuses is no longer read as "no data", and is logged.** Yagra used to look at the HTTP status on only two of its reads; on the others a refused query (for example one longer than the server accepts) came back as an empty chart, an empty ranking or a missing value, with no log line. Every read now checks the status and the reply, and core logs a warning that names the read and the server's reason. What each screen shows when a read fails is unchanged: it shows nothing rather than a wrong value.

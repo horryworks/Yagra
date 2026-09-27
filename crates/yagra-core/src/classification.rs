@@ -206,6 +206,31 @@ fn match_of(rule: &CompiledRule) -> ClassificationMatch {
     }
 }
 
+/// **What maker and model a device is** (ADR-184): a matching classification rule first, then the
+/// best-effort `sysDescr` parse.
+///
+/// Two paths answered this and disagreed. Discovery asked the rules first; the poll path — which
+/// fills a node's maker and model from its hourly identity probe — asked only the `sysDescr` parse,
+/// so a rule an operator wrote to name a vendor was honoured when a device was found and ignored
+/// every hour after. Both call this now.
+///
+/// It decides a vendor and a model and nothing else: which address anything is sent to is not its
+/// business (ADR-183 is untouched by it).
+pub(crate) fn identity_of(
+    classifier: &Classifier,
+    sys_object_id: Option<&str>,
+    sys_descr: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let matched = classifier.classify(sys_object_id, sys_descr);
+    let parsed = sys_descr.map(yagra_discovery::identify).unwrap_or_default();
+    let vendor = matched
+        .as_ref()
+        .and_then(|m| m.vendor.clone())
+        .or(parsed.vendor);
+    let model = matched.and_then(|m| m.model).or(parsed.model);
+    (vendor, model)
+}
+
 /// PostgreSQL-backed store for the operator-editable classification rules.
 pub struct ClassificationRepo {
     pool: PgPool,
@@ -357,6 +382,82 @@ mod tests {
     const CISCO: u128 = 0xC15C0;
     const HUAWEI: u128 = 0x4A1;
     const GENERIC: u128 = 0x9E2E61C;
+
+    /// ADR-184: an operator's rule names the maker, and the `sysDescr` guess fills only what no
+    /// rule said.
+    #[test]
+    fn a_rule_that_names_a_vendor_beats_the_sysdescr_guess() {
+        let mut named = rule(50, Some("1.3.6.1.4.1.9."), None, CISCO);
+        named.vendor = Some("Example Networks".to_owned());
+        let c = Classifier::from_rules(vec![named], Some(Uuid::from_u128(GENERIC)));
+        let ios = "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.0(2a)EX5";
+        let (vendor, model) = identity_of(&c, Some("1.3.6.1.4.1.9.1.516"), Some(ios));
+        assert_eq!(vendor.as_deref(), Some("Example Networks"));
+        assert!(
+            model.is_some(),
+            "no rule named a model, so the guess still fills it"
+        );
+        // No rule matches: the guess decides both.
+        let (vendor, _) = identity_of(&c, Some("1.3.6.1.4.1.2011.2.1"), Some(ios));
+        assert_eq!(vendor.as_deref(), Some("Cisco"));
+        // Nothing to go on.
+        assert_eq!(identity_of(&Classifier::empty(), None, None), (None, None));
+    }
+
+    /// ADR-184: every vendor `yagra_discovery::identify` can name is spelled the way a built-in
+    /// rule spells it.
+    ///
+    /// The two answer the same question and are now consulted in one order — a rule first, then the
+    /// guess. A guess spelled differently from the rule for the same maker (`PaloAlto` against
+    /// `Palo Alto`) would file one maker under two names depending on which answered. Read from the
+    /// source rather than listed here, so a new branch in `identify` is checked without anyone
+    /// remembering to add it.
+    #[test]
+    fn every_vendor_identify_can_name_is_a_vendor_a_rule_can_name() {
+        let src = crate::module_source::code("../yagra-discovery/src", "lib");
+        let body = src
+            .split_once("pub fn identify(")
+            .expect("yagra-discovery still defines identify")
+            .1;
+        let body = &body[..body.find("\n}\n").expect("identify ends")];
+        let open = format!("(Some({}", '"');
+        let guessed: Vec<&str> = body
+            .match_indices(&open)
+            .filter_map(|(at, _)| body[at + open.len()..].split('"').next())
+            .collect();
+        assert!(
+            guessed.len() >= 8,
+            "only {} vendors were read out of identify(): {guessed:?}",
+            guessed.len()
+        );
+        let ruled: Vec<&str> = yagra_common::builtin_classification_rules()
+            .iter()
+            .filter_map(|r| r.vendor)
+            .collect();
+        let strays: Vec<&&str> = guessed.iter().filter(|v| !ruled.contains(v)).collect();
+        assert!(
+            strays.is_empty(),
+            "identify() can name {strays:?}, which no built-in rule spells that way; a node would be \
+             filed under two makers depending on which of the two answered"
+        );
+    }
+
+    /// ADR-184: the `sysDescr` guess is consulted in one place in this crate, behind the rules.
+    #[test]
+    fn identify_is_asked_only_through_identity_of() {
+        let needle = format!("yagra_discovery::{}", "identify");
+        let callers: Vec<String> = crate::module_source::crate_code()
+            .into_iter()
+            .filter(|(_, code)| code.contains(&needle))
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            callers,
+            ["classification.rs"],
+            "the sysDescr guess is asked outside `classification::identity_of`, so that path \
+             ignores the operator's rules"
+        );
+    }
 
     fn classifier() -> Classifier {
         let rules = vec![

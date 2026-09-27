@@ -494,7 +494,10 @@ type OwnedIface = repo::InterfaceUpsert;
 pub(crate) struct MetaRecord {
     node_id: Uuid,
     interfaces: Vec<OwnedIface>,
-    identity: Option<(Option<String>, Option<String>)>,
+    /// The model the device named at its OS row's OID (ADR-147 Increment 6), cleaned on this edge.
+    /// It beats the model `sysDescr` would give — see [`record_identity`], which turns this record
+    /// into the `(vendor, model)` the writer fills.
+    hardware_model: Option<String>,
     /// The OS version the device reported on this poll, sanitized again here (ADR-138) — the poller
     /// already caps it, but this is the edge a value from an older or misbehaving poller crosses.
     /// `None` means nothing was read and nothing is written, never "the device has no version".
@@ -718,11 +721,6 @@ fn persist_metrics_and_meta(
         .hardware_model
         .as_deref()
         .and_then(yagra_discovery::os_version::sanitize);
-    let identity = result.sys_descr.as_deref().and_then(|descr| {
-        let id = yagra_discovery::identify(descr);
-        let model = hardware_model.or(id.model);
-        (id.vendor.is_some() || model.is_some()).then_some((id.vendor, model))
-    });
     let os_version = result
         .os_version
         .as_deref()
@@ -774,7 +772,7 @@ fn persist_metrics_and_meta(
         .collect();
     if !row_names.is_empty()
         || !interfaces.is_empty()
-        || identity.is_some()
+        || hardware_model.is_some()
         || os_version.is_some()
         || os_version_without_patch.is_some()
         || sys_object_id.is_some()
@@ -790,7 +788,7 @@ fn persist_metrics_and_meta(
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
             interfaces,
-            identity,
+            hardware_model,
             os_version,
             os_version_without_patch,
             sys_object_id,
@@ -1133,6 +1131,31 @@ pub(crate) struct MetaStores {
     pub(crate) arp: Arc<arp::ArpRepo>,
     pub(crate) routing: Arc<l3_routing::RoutingRepo>,
     pub(crate) wireless: Arc<crate::wireless::WirelessRepo>,
+    /// The classification rules, for the maker and model a node's identity probe fills (ADR-184).
+    pub(crate) classifier: Arc<crate::classification::Classifier>,
+}
+
+/// The `(vendor, model)` a record fills, or `None` when it says nothing about either.
+///
+/// Decided here, in the PG writer, rather than on the ingest path: the rules sit behind a lock and a
+/// regex loop, and this tier is the shed-able one. A device's own model beats both the rules and the
+/// `sysDescr` guess — an AireOS controller's `sysDescr` is only `Cisco Controller` (ADR-147 Inc.6).
+/// Nothing is decided without a `sysDescr` or a `sysObjectID`, which is what the identity probe
+/// sends; the PG fill writes only into a node that has no value, so an operator's own value stays.
+fn record_identity(
+    classifier: &crate::classification::Classifier,
+    rec: &MetaRecord,
+) -> Option<(Option<String>, Option<String>)> {
+    if rec.sys_descr.is_none() && rec.sys_object_id.is_none() {
+        return None;
+    }
+    let (vendor, model) = crate::classification::identity_of(
+        classifier,
+        rec.sys_object_id.as_deref(),
+        rec.sys_descr.as_deref(),
+    );
+    let model = rec.hardware_model.clone().or(model);
+    (vendor.is_some() || model.is_some()).then_some((vendor, model))
 }
 
 pub(crate) async fn run_pg_writer(
@@ -1214,6 +1237,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         arp,
         routing,
         wireless,
+        classifier,
     } = stores;
     if buf.is_empty() {
         return;
@@ -1233,13 +1257,15 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut wlan_rows: Vec<(Uuid, yagra_common::WlanInventory)> = Vec::new();
     let mut row_name_rows: Vec<repo::RowNameRow> = Vec::new();
     for rec in buf.drain(..) {
+        // Before anything is moved out of the record: it reads the identity fields.
+        let identity = record_identity(classifier, &rec);
         for (metric, row, name) in rec.row_names {
             row_name_rows.push((rec.node_id, metric, row, name));
         }
         for iface in rec.interfaces {
             iface_rows.push((rec.node_id, iface));
         }
-        if let Some((vendor, model)) = rec.identity {
+        if let Some((vendor, model)) = identity {
             ident_rows.push((rec.node_id, vendor, model));
         }
         if let Some(version) = rec.os_version {
@@ -1637,10 +1663,10 @@ mod tests {
             result.sys_descr = Some(sys_descr.to_owned());
             result.hardware_model = hardware_model.map(str::to_owned);
             persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
-            meta_rx
+            let rec = meta_rx
                 .try_recv()
-                .expect("the record reaches the PG writer")
-                .identity
+                .expect("the record reaches the PG writer");
+            record_identity(&crate::classification::Classifier::empty(), &rec)
         };
         assert_eq!(
             record("Cisco Controller", Some(" AIR-CT3504-K9\r\n")),
