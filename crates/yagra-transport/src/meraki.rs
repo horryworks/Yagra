@@ -205,6 +205,11 @@ pub struct MerakiDeviceInfo {
     /// sites into another site's folder. Core takes an MX's address from its VLANs instead
     /// ([`fetch_network_lans`], ADR-164 決定 28).
     pub lan_ip: Option<String>,
+    /// `mac`, rendered `aa:bb:cc:dd:ee:ff` — what a neighbour's LLDP chassis id names this device
+    /// by, so core can match a neighbour row with no management address to it (ADR-180 増分 3).
+    /// Measured on a real organization: all 3,252 devices carried one. `None` when absent or not
+    /// shaped like a MAC.
+    pub mac: Option<String>,
 }
 
 // ── Session: one per collect / control call ─────────────────────────────────────────────────
@@ -2546,6 +2551,10 @@ fn parse_device_info(it: &Value) -> Option<MerakiDeviceInfo> {
             .unwrap_or("")
             .to_owned(),
         lan_ip: it.get("lanIp").and_then(Value::as_str).map(str::to_owned),
+        mac: it
+            .get("mac")
+            .and_then(Value::as_str)
+            .and_then(crate::meraki_neighbors::canonical_mac),
     })
 }
 

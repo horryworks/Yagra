@@ -58,6 +58,7 @@ import {
   neighborLookups,
   peerLabel,
   peerNodePath,
+  peerMatchedBy,
   peerOf,
   peerSecondary,
   platformCell,
@@ -420,11 +421,16 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   const label = peerLabel(n);
   const secondary = peerSecondary(n, lookups);
   // Whether this device is monitored, beside its name (ADR-179 増分 3) — matched on the management
-  // address alone, which the badge's own explanation says. No badge where no address was sent.
+  // address, or for a Meraki device that sends none, on the MAC its organization lists (ADR-180
+  // 増分 3); the badge's explanation says which. No badge where neither matched.
   const state = neighborAddressState(n, lookups);
+  const byMac = peerMatchedBy(n, lookups) === 'mac';
   const badge =
     state && state !== 'none' ? (
-      <span className={`nd-nb-state ${state}`} title={t(`neighbors.peer.explain.${state}`)}>
+      <span
+        className={`nd-nb-state ${state}`}
+        title={t(byMac ? `neighbors.peer.explainMac.${state}` : `neighbors.peer.explain.${state}`)}
+      >
         {t(`neighbors.peer.badge.${state}`)}
       </span>
     ) : null;

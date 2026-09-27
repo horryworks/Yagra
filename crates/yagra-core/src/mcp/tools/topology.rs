@@ -99,6 +99,11 @@ impl YagraMcp {
                        (no name), several do (a shared or duplicate address), or none does; for \
                        an address no node owns, `managed_by` names the wireless controller or \
                        Meraki organization that already lists the device there. \
+                       `current.chassis_peers` answers the same for a row that advertises no \
+                       management address (an MR or MX heard by a Meraki switch): its MAC chassis \
+                       id is matched to the device a Meraki organization lists under that MAC — \
+                       a monitored node, one outside your scope, or a listed device not yet \
+                       imported (with `managed_by` naming the organization). \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
                        labelled a MAC address (on a Meraki switch, which reports no label, each id \
                        shaped like one — six octets, or twelve bare hex digits for a CDP device \

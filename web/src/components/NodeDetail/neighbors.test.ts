@@ -15,6 +15,7 @@ import {
   peerLabel,
   peerLabelIsChassis,
   peerNodePath,
+  peerMatchedBy,
   peerOf,
   peerSecondary,
   platformCell,
@@ -446,5 +447,50 @@ describe('shouldLoadSetupCatalog', () => {
     expect(shouldLoadSetupCatalog(base)).toBe(false);
     expect(shouldLoadSetupCatalog({ ...base, rowOpen: true, alreadyAsked: true })).toBe(false);
     expect(shouldLoadSetupCatalog({ ...base, setupShown: true, canConfig: false })).toBe(false);
+  });
+});
+
+describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)', () => {
+  const mx = '0c:8d:db:00:00:01';
+  const lookups = neighborLookups({
+    peers: [peer({ address: '192.0.2.1' })],
+    mac_vendors: [],
+    chassis_peers: [
+      { chassis: mx, state: 'node', node_id: 'n-9', node_name: 'mx-01', managed_by: null },
+      {
+        chassis: '0c:8d:db:00:00:02',
+        state: 'unregistered',
+        node_id: null,
+        node_name: null,
+        managed_by: { kind: 'meraki', org_id: 'o-1', org_name: 'Acme' },
+      },
+    ],
+  });
+  const row = (over: Partial<Neighbor> = {}) =>
+    n({ remote_chassis: mx, remote_chassis_kind: 'mac', remote_mgmt_addr: null, ...over });
+
+  it('takes the state, the node and the link from the Meraki device listed under the MAC', () => {
+    expect(neighborAddressState(row(), lookups)).toBe('node');
+    expect(peerOf(row(), lookups)?.node_id).toBe('n-9');
+    expect(peerNodePath(peerOf(row(), lookups))).not.toBeNull();
+    expect(peerMatchedBy(row(), lookups)).toBe('mac');
+  });
+
+  it('offers the organization for a listed device that is not imported', () => {
+    const listed = row({ remote_chassis: '0c:8d:db:00:00:02' });
+    expect(neighborAddressState(listed, lookups)).toBe('unregistered');
+    expect(setupMode(listed, lookups)).toEqual({ kind: 'meraki', orgId: 'o-1', orgName: 'Acme' });
+  });
+
+  it('never matches a MAC the row did not label as one, or a row that sent an address', () => {
+    expect(neighborAddressState(row({ remote_chassis_kind: 'text' }), lookups)).toBe('none');
+    expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.1' }), lookups)).toBe('address');
+    expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.77' }), lookups)).toBeNull();
+    expect(neighborAddressState(row({ remote_chassis: '0c:8d:db:00:00:03' }), lookups)).toBe('none');
+  });
+
+  it('reads a core that predates the list as nothing matched', () => {
+    const old = neighborLookups({ peers: [], mac_vendors: [] });
+    expect(neighborAddressState(row(), old)).toBe('none');
   });
 });

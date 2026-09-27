@@ -209,6 +209,17 @@ fn id_with_kind(raw: &str) -> (String, NeighborIdKind) {
     }
 }
 
+/// A MAC in any spelling the Dashboard uses — six `:`/`-`-separated octets or twelve bare hex
+/// digits, either case — rendered the way a neighbour row carries one, so a device's `mac` and a
+/// neighbour's chassis id compare as text (ADR-180 増分 3).
+pub(crate) fn canonical_mac(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    parse_mac(raw)
+        .or_else(|| bare_hex_mac(raw))
+        .as_deref()
+        .and_then(render_mac)
+}
+
 /// A CDP device id as the Dashboard rendered it, and what it is (ADR-181 増分 2 決定 B). A Meraki
 /// peer names itself by its MAC as twelve bare hex digits (`0c8ddb000002`) — measured on a real
 /// organization, 2,571 of 2,873 CDP rows, every one a Meraki device or a Cisco CBS — so those are
@@ -428,6 +439,27 @@ mod tests {
             ("0C-8D-DB-00-00-02", NeighborIdKind::Mac),
         ] {
             assert_eq!(cdp_device_id(raw).1, kind, "{raw}");
+        }
+    }
+
+    /// ADR-180 増分 3: a device's `mac` and a neighbour's chassis compare as text only if both are
+    /// rendered one way, whatever spelling each arrived in.
+    #[test]
+    fn every_mac_spelling_the_dashboard_uses_renders_as_a_neighbour_row_carries_it() {
+        for raw in [
+            "0c:8d:db:00:00:02",
+            "0C-8D-DB-00-00-02",
+            "0c8ddb000002",
+            " 0C8DDB000002 ",
+        ] {
+            assert_eq!(
+                canonical_mac(raw).as_deref(),
+                Some("0c:8d:db:00:00:02"),
+                "{raw}"
+            );
+        }
+        for raw in ["", "sw-01", "0c:8d:db:00:00", "0c8ddb00000g"] {
+            assert_eq!(canonical_mac(raw), None, "{raw}");
         }
     }
 

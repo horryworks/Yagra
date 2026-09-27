@@ -75,6 +75,13 @@ pub(crate) struct CurrentNeighbors {
     /// belongs to. Matched on the address alone — an inventory address or any address one of a
     /// node's interfaces carries — never on a name or chassis id.
     peers: Vec<NeighborPeer>,
+    /// For each distinct MAC-address chassis id on a row that advertises **no** usable management
+    /// address, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180
+    /// 増分 3). The Dashboard reports no management address for an MR or an MX, so this is how
+    /// those rows say whether the device is monitored. Only MACs a Meraki device listing states are
+    /// matched; any other chassis id is absent here, as is a row that has an address — that one is
+    /// answered in `peers`.
+    chassis_peers: Vec<NeighborChassisPeer>,
     /// The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
     /// labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
     /// no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
@@ -115,6 +122,22 @@ pub(crate) struct NeighborPeer {
     discovery_id: Option<Uuid>,
     /// Who adds this device instead of a hand registration: a wireless controller or a Meraki
     /// organization that already lists it. Present only when `state` is `unregistered`.
+    managed_by: Option<NeighborManagedBy>,
+}
+
+/// One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct NeighborChassisPeer {
+    /// The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`).
+    chassis: String,
+    /// `node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device.
+    state: NeighborPeerState,
+    /// Present only when `state` is `node`.
+    node_id: Option<Uuid>,
+    /// Present only when `state` is `node`.
+    node_name: Option<String>,
+    /// The organization that lists the device, when it has not been imported (`unregistered`):
+    /// always `kind: meraki`.
     managed_by: Option<NeighborManagedBy>,
 }
 
@@ -348,7 +371,20 @@ pub(crate) async fn current_neighbors(
         .iter()
         .filter_map(|ip| managed_by(aps.get(ip), meraki.get(ip)).map(|m| (*ip, m)))
         .collect();
+    let unaddressed = unaddressed_mac_chassis(&current.set);
+    let by_mac = admin
+        .meraki_inventory
+        .devices_with_mac(&unaddressed.iter().cloned().collect::<Vec<_>>())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match neighbour chassis to Meraki devices",
+                "failed to read the Meraki inventory",
+            )
+        })?;
     Ok(CurrentNeighbors {
+        chassis_peers: classify_chassis(&unaddressed, &by_mac, scope),
         peers: classify_peers(&advertised, &claims, &listed, &managed),
         mac_vendors: mac_vendors(&current.set),
         neighbors: current.set,
@@ -406,6 +442,63 @@ fn classify_peers(
                 discovery_id: listed.get(ip).copied(),
                 managed_by: managed.get(ip).filter(|_| unregistered).cloned(),
             }
+        })
+        .collect()
+}
+
+/// Every distinct MAC-address chassis id on a row with no usable management address (ADR-180
+/// 増分 3 決定 2): a row that has one is decided by its address alone, so the two rules never both
+/// answer for one row.
+fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
+    set.neighbors
+        .iter()
+        .filter(|n| n.remote_chassis_kind == Some(NeighborIdKind::Mac))
+        .filter(|n| {
+            n.remote_mgmt_addr
+                .as_deref()
+                .is_none_or(|a| a.parse::<IpAddr>().is_err())
+        })
+        .map(|n| n.remote_chassis.clone())
+        .collect()
+}
+
+/// Each such chassis against the Meraki device listed under it. Pure, for the same reason as
+/// [`classify_peers`]: a node outside the caller's folders is `outside_scope` with no id and no
+/// name, and a chassis no organization lists is left out.
+fn classify_chassis(
+    chassis: &BTreeSet<String>,
+    by_mac: &HashMap<String, crate::meraki_inventory::DeviceWithMac>,
+    scope: &NodeScope,
+) -> Vec<NeighborChassisPeer> {
+    chassis
+        .iter()
+        .filter_map(|mac| {
+            let d = by_mac.get(mac)?;
+            let (state, node_id, node_name, managed_by) = match &d.node {
+                Some(n) if scope.allows_group(n.group_id) => (
+                    NeighborPeerState::Node,
+                    Some(n.id),
+                    Some(n.name.clone()),
+                    None,
+                ),
+                Some(_) => (NeighborPeerState::OutsideScope, None, None, None),
+                None => (
+                    NeighborPeerState::Unregistered,
+                    None,
+                    None,
+                    Some(NeighborManagedBy::Meraki {
+                        org_id: d.org_id,
+                        org_name: d.org_name.clone(),
+                    }),
+                ),
+            };
+            Some(NeighborChassisPeer {
+                chassis: mac.clone(),
+                state,
+                node_id,
+                node_name,
+                managed_by,
+            })
         })
         .collect()
 }
@@ -1078,6 +1171,77 @@ mod peer_tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mac, "00:00:0c:12:34:56");
         assert!(found[0].vendor.starts_with("Cisco"), "{}", found[0].vendor);
+    }
+
+    /// ADR-180 増分 3 決定 2: only a MAC chassis on a row with no usable address is matched by MAC.
+    #[test]
+    fn only_a_mac_chassis_with_no_usable_address_is_matched_by_mac() {
+        let bare = neighbor("0c:8d:db:00:00:01", Some(NeighborIdKind::Mac));
+        let mut junk = neighbor("0c:8d:db:00:00:02", Some(NeighborIdKind::Mac));
+        junk.remote_mgmt_addr = Some("not-an-address".to_owned());
+        let mut addressed = neighbor("0c:8d:db:00:00:03", Some(NeighborIdKind::Mac));
+        addressed.remote_mgmt_addr = Some("192.0.2.7".to_owned());
+        let named = neighbor("sw-01", Some(NeighborIdKind::Text));
+        let got = unaddressed_mac_chassis(&NeighborSet::new(vec![bare, junk, addressed, named]));
+        assert_eq!(
+            got.into_iter().collect::<Vec<_>>(),
+            ["0c:8d:db:00:00:01", "0c:8d:db:00:00:02"]
+        );
+    }
+
+    #[test]
+    fn a_chassis_mac_gets_the_state_of_the_meraki_device_listed_under_it() {
+        use crate::meraki_inventory::{DeviceWithMac, MacNode};
+        let org = Uuid::from_u128(9);
+        let folder = Uuid::from_u128(7);
+        let node = Uuid::from_u128(5);
+        let listed = |node: Option<MacNode>| DeviceWithMac {
+            org_id: org,
+            org_name: "org-a".to_owned(),
+            node,
+        };
+        let by_mac = HashMap::from([
+            (
+                "0c:8d:db:00:00:01".to_owned(),
+                listed(Some(MacNode {
+                    id: node,
+                    name: "mx-01".to_owned(),
+                    group_id: Some(folder),
+                })),
+            ),
+            ("0c:8d:db:00:00:02".to_owned(), listed(None)),
+        ]);
+        let chassis: BTreeSet<String> = [
+            "0c:8d:db:00:00:01",
+            "0c:8d:db:00:00:02",
+            "0c:8d:db:00:00:03",
+        ]
+        .map(str::to_owned)
+        .into();
+
+        let got = classify_chassis(&chassis, &by_mac, &NodeScope::All);
+        // A MAC no organization lists is left out.
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].state, NeighborPeerState::Node);
+        assert_eq!(got[0].node_id, Some(node));
+        assert_eq!(got[0].node_name.as_deref(), Some("mx-01"));
+        assert_eq!(got[0].managed_by, None);
+        assert_eq!(got[1].state, NeighborPeerState::Unregistered);
+        assert_eq!(
+            got[1].managed_by,
+            Some(NeighborManagedBy::Meraki {
+                org_id: org,
+                org_name: "org-a".to_owned()
+            })
+        );
+
+        // A node outside the caller's folders gives away no id and no name.
+        let hidden = classify_chassis(&chassis, &by_mac, &NodeScope::sees_nothing());
+        assert_eq!(hidden[0].state, NeighborPeerState::OutsideScope);
+        assert_eq!(
+            (hidden[0].node_id, hidden[0].node_name.as_deref()),
+            (None, None)
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@
 ### Improvements
 
 - **Node ▸ Neighbors on a Meraki switch: a Meraki peer's CDP row no longer shows a lone "1" under the model, and gets a maker name.** The Dashboard reports a Meraki peer's CDP version as `1`, which is now left out; a real version (an IOS banner, a phone's firmware) is still shown. It names a Meraki peer by its MAC as twelve bare hex digits, which is now read as a MAC, written `aa:bb:cc:dd:ee:ff` like the peer's LLDP row, and looked up for its maker. Each Meraki switch records one neighbor change on the first read after the upgrade, because those rows now read differently.
+- **Node ▸ Neighbors: a Meraki access point or appliance heard with no management address now says whether it is monitored.** The Dashboard sends no management address for an MR or an MX, so those rows had no badge. They are now matched on the MAC the Meraki organization's device list gives each device: the badge says Monitored and links to the node, or Not monitored with the button that goes to the organization. Only MACs from a Meraki device list are matched this way; every other row is still matched on its management address alone. The API's neighbors response carries this as the new `chassis_peers` list, and the inventory sync fills in the MACs on its first run after the upgrade.
 
 ### Bug Fixes
 

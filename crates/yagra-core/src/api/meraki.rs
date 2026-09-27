@@ -3516,6 +3516,7 @@ mod tests {
                 network_id: "N_1".to_owned(),
                 lan_ip: ip.map(|a| a.parse().expect("ip")),
                 online: true,
+                mac: None,
             },
             first_online: true,
             imported_at: None,

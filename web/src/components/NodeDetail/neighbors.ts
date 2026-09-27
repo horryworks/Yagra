@@ -10,6 +10,7 @@ import {
   NEIGHBOR_PEER_STATES,
   type CurrentNeighbors,
   type Neighbor,
+  type NeighborChassisPeer,
   type NeighborPeer,
   type NeighborSet,
 } from '../../types/api';
@@ -207,26 +208,66 @@ export function neighborCellText(list: readonly Neighbor[] | undefined): Neighbo
 export interface NeighborLookups {
   peers: ReadonlyMap<string, NeighborPeer>;
   vendors: ReadonlyMap<string, string>;
+  /** By chassis MAC, for rows with no management address (ADR-180 増分 3). */
+  chassis: ReadonlyMap<string, NeighborChassisPeer>;
 }
 
-export const NO_LOOKUPS: NeighborLookups = { peers: new Map(), vendors: new Map() };
+export const NO_LOOKUPS: NeighborLookups = {
+  peers: new Map(),
+  vendors: new Map(),
+  chassis: new Map(),
+};
 
 /** Index the two per-response lists. Absent lists (an older core) read as "nothing known", which
  *  shows every row exactly as it looked before this was added. */
 export function neighborLookups(
-  current: Pick<CurrentNeighbors, 'peers' | 'mac_vendors'> | null | undefined,
+  current:
+    | (Pick<CurrentNeighbors, 'peers' | 'mac_vendors'> &
+        Partial<Pick<CurrentNeighbors, 'chassis_peers'>>)
+    | null
+    | undefined,
 ): NeighborLookups {
   if (!current) return NO_LOOKUPS;
   return {
     peers: new Map((current.peers ?? []).map((p) => [p.address, p])),
     vendors: new Map((current.mac_vendors ?? []).map((v) => [v.mac, v.vendor])),
+    chassis: new Map((current.chassis_peers ?? []).map((c) => [c.chassis, c])),
   };
 }
 
-/** The server's verdict on this row's management address, or `null` when it advertised none. */
+/** The Meraki device a row with no management address is, found by its chassis MAC (ADR-180
+ *  増分 3), or `null`. A row that advertised an address is never matched this way — its address
+ *  decides. */
+export function chassisPeerOf(n: Neighbor, lookups: NeighborLookups): NeighborChassisPeer | null {
+  if (n.remote_mgmt_addr || n.remote_chassis_kind !== 'mac') return null;
+  return lookups.chassis.get(n.remote_chassis) ?? null;
+}
+
+/** How a row was matched to what it is: by its management address, by its chassis MAC (a Meraki
+ *  device with no address), or not at all. The badge's explanation says which. */
+export function peerMatchedBy(n: Neighbor, lookups: NeighborLookups): 'address' | 'mac' | null {
+  if (n.remote_mgmt_addr) return lookups.peers.has(n.remote_mgmt_addr) ? 'address' : null;
+  return chassisPeerOf(n, lookups) ? 'mac' : null;
+}
+
+/** The server's verdict on this row — on its management address, or for a row with none, on the
+ *  Meraki device listed under its chassis MAC. `null` when neither says anything. */
 export function peerOf(n: Neighbor, lookups: NeighborLookups): NeighborPeer | null {
   const addr = n.remote_mgmt_addr;
-  return addr ? (lookups.peers.get(addr) ?? null) : null;
+  if (addr) return lookups.peers.get(addr) ?? null;
+  const c = chassisPeerOf(n, lookups);
+  if (!c) return null;
+  // The same shape as an address verdict, so the badge, the link and the setup button read one
+  // thing. Never on the Unregistered list: a device with no address cannot be swept onto it.
+  return {
+    address: '',
+    state: c.state,
+    node_id: c.node_id ?? null,
+    node_name: c.node_name ?? null,
+    discovery_listed: false,
+    discovery_id: null,
+    managed_by: c.managed_by ?? null,
+  };
 }
 
 /** What the Address column says about a row: the server's verdict on its address, or `none` when
@@ -241,7 +282,7 @@ export function neighborAddressState(
   n: Neighbor,
   lookups: NeighborLookups,
 ): NeighborAddressState | null {
-  if (!n.remote_mgmt_addr) return 'none';
+  if (!n.remote_mgmt_addr) return chassisPeerOf(n, lookups)?.state ?? 'none';
   return peerOf(n, lookups)?.state ?? null;
 }
 

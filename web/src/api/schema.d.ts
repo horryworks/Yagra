@@ -6743,6 +6743,15 @@ export interface components {
         };
         /** @description A node's current adjacency and how long it has held. */
         CurrentNeighbors: {
+            /**
+             * @description For each distinct MAC-address chassis id on a row that advertises **no** usable management
+             *     address, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180
+             *     増分 3). The Dashboard reports no management address for an MR or an MX, so this is how
+             *     those rows say whether the device is monitored. Only MACs a Meraki device listing states are
+             *     matched; any other chassis id is absent here, as is a row that has an address — that one is
+             *     answered in `peers`.
+             */
+            chassis_peers: components["schemas"]["NeighborChassisPeer"][];
             /** @description When this exact set was first seen (RFC 3339). */
             first_seen: string;
             /** @description When it was last confirmed unchanged (RFC 3339). */
@@ -9674,6 +9683,21 @@ export interface components {
             neighbors: components["schemas"]["NeighborSet"];
             /** @description The content key this replaced; `null` marks the first observation ever recorded for the node. */
             prev_neighbor_key?: string | null;
+        };
+        /** @description One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3). */
+        NeighborChassisPeer: {
+            /** @description The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`). */
+            chassis: string;
+            managed_by?: null | components["schemas"]["NeighborManagedBy"];
+            /**
+             * Format: uuid
+             * @description Present only when `state` is `node`.
+             */
+            node_id?: string | null;
+            /** @description Present only when `state` is `node`. */
+            node_name?: string | null;
+            /** @description `node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device. */
+            state: components["schemas"]["NeighborPeerState"];
         };
         /** @description How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses. */
         NeighborConfig: {

@@ -1561,6 +1561,7 @@ mod tests {
                         product_type: "appliance".into(),
                         network_id: "N_1".into(),
                         lan_ip: Some("10.0.0.1".into()),
+                        mac: None,
                     },
                     availability: *availability,
                 })
@@ -1727,6 +1728,7 @@ mod tests {
                 product_type: product.into(),
                 network_id: net.into(),
                 lan_ip: Some("10.0.0.1".into()),
+                mac: None,
             },
             availability: UP,
         };
@@ -2393,6 +2395,7 @@ mod tests {
                     product_type: "wireless".into(),
                     network_id: network.into(),
                     lan_ip: lan_ip.map(str::to_owned),
+                    mac: None,
                 },
                 availability: UP,
             }],
@@ -2553,6 +2556,7 @@ mod tests {
                 network_id: format!("N_{serial}"),
                 lan_ip: lan_ip.map(|ip| ip.parse().expect("ip")),
                 online: true,
+                mac: None,
             };
         let bound_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("in range");
         let first = SyncPlan {
@@ -2934,6 +2938,7 @@ mod tests {
                 product_type: "appliance".into(),
                 network_id: network.into(),
                 lan_ip: None,
+                mac: None,
             },
             availability: UP,
         };
@@ -2981,6 +2986,7 @@ mod tests {
                     product_type: product_type.into(),
                     network_id: network.into(),
                     lan_ip: Some("10.9.0.5".into()),
+                    mac: None,
                 },
                 availability: UP,
             };
@@ -3043,6 +3049,7 @@ mod tests {
                         product_type: "appliance".into(),
                         network_id: format!("N_{i:03}"),
                         lan_ip: None,
+                        mac: None,
                     },
                     availability: UP,
                 })
@@ -3135,6 +3142,7 @@ mod tests {
                 product_type: "wireless".into(),
                 network_id: "N_000".into(),
                 lan_ip: Some("10.0.9.9".into()),
+                mac: None,
             },
             availability: UP,
         });

@@ -43,6 +43,9 @@ pub struct SeenDevice {
     /// The device's LAN address, if a usable one is known. See [`usable_address`], and for an MX
     /// [`choose_lan_address`].
     pub lan_ip: Option<IpAddr>,
+    /// The device's MAC as the Dashboard lists it, rendered `aa:bb:cc:dd:ee:ff` — what a
+    /// neighbour row with no management address is matched by (ADR-180 増分 3).
+    pub mac: Option<String>,
     /// Whether Meraki reports the device up *in this listing* (online or alerting).
     pub online: bool,
 }
@@ -65,6 +68,7 @@ impl SeenDevice {
             product_type: d.info.product_type.clone(),
             network_id: d.info.network_id.clone(),
             lan_ip,
+            mac: d.info.mac.clone(),
             online: d.availability.is_some_and(|a| a.is_up()),
         }
     }
@@ -305,6 +309,7 @@ pub struct StoredDevice {
     pub product_type: String,
     pub network_id: String,
     pub lan_ip: Option<IpAddr>,
+    pub mac: Option<String>,
     pub first_online_at: Option<DateTime<Utc>>,
     pub missing_since: Option<DateTime<Utc>>,
     pub imported_at: Option<DateTime<Utc>>,
@@ -322,7 +327,7 @@ pub struct DeviceWrite {
     pub imported_at: Option<DateTime<Utc>>,
 }
 
-/// How many rows one inventory statement carries. The rows travel as eight arrays, so the bind
+/// How many rows one inventory statement carries. The rows travel as nine arrays, so the bind
 /// count does not grow with it; the chunk only bounds how much one statement holds in memory for
 /// an organization at the 50,000-device cap.
 const WRITE_CHUNK: usize = 5_000;
@@ -490,6 +495,7 @@ pub fn plan_sync(
                 && r.product_type == device.product_type
                 && r.network_id == device.network_id
                 && r.lan_ip == device.lan_ip
+                && r.mac == device.mac
         });
         let came_back = row.is_some_and(|r| r.missing_since.is_some());
         if !described_the_same || first_online || came_back || imported_at.is_some() {
@@ -661,6 +667,24 @@ pub struct HaPartner {
     pub node_id: Option<Uuid>,
 }
 
+/// A listed Meraki device found by its MAC ([`MerakiInventoryRepo::devices_with_mac`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceWithMac {
+    pub org_id: Uuid,
+    pub org_name: String,
+    /// Its node, when it has been imported.
+    pub node: Option<MacNode>,
+}
+
+/// The node a listed Meraki device was imported as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacNode {
+    pub id: Uuid,
+    pub name: String,
+    /// Its folder, which decides whether a scoped caller may be told which node it is.
+    pub group_id: Option<Uuid>,
+}
+
 /// PostgreSQL-backed store for `meraki_inventory`.
 pub struct MerakiInventoryRepo {
     pool: PgPool,
@@ -706,10 +730,57 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
+    /// The device the organizations list under each of `macs` (ADR-180 増分 3), with its node when
+    /// it has been imported — so a neighbour row with no management address (every MR and MX row
+    /// the Dashboard answers) can say whether the device on that port is monitored. `macs` are in
+    /// the form [`SeenDevice::mac`] is stored in. A device the last listing no longer contained is
+    /// left out, as in [`Self::devices_at`]. Not narrowed by scope: the caller decides from
+    /// [`DeviceWithMac::node_group`] what it may show.
+    pub async fn devices_with_mac(
+        &self,
+        macs: &[String],
+    ) -> anyhow::Result<HashMap<String, DeviceWithMac>> {
+        if macs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT i.mac, o.id AS org_id, o.name AS org_name, \
+                    n.id AS node_id, n.name AS node_name, n.group_id \
+             FROM meraki_inventory i \
+             JOIN meraki_orgs o ON o.id = i.org_id \
+             LEFT JOIN meraki_devices d ON d.serial = i.serial AND d.org_id = i.org_id \
+             LEFT JOIN nodes n ON n.id = d.node_id \
+             WHERE i.mac = ANY($1) AND i.missing_since IS NULL \
+             ORDER BY o.name, o.id, i.serial",
+        )
+        .bind(macs)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let mac: String = r.try_get("mac")?;
+            let node_id: Option<Uuid> = r.try_get("node_id")?;
+            let node = match node_id {
+                Some(id) => Some(MacNode {
+                    id,
+                    name: r.try_get("node_name")?,
+                    group_id: r.try_get("group_id")?,
+                }),
+                None => None,
+            };
+            out.entry(mac).or_insert(DeviceWithMac {
+                org_id: r.try_get("org_id")?,
+                org_name: r.try_get("org_name")?,
+                node,
+            });
+        }
+        Ok(out)
+    }
+
     /// An organization's stored rows, for the planner.
     pub async fn stored(&self, org: Uuid) -> anyhow::Result<Vec<StoredDevice>> {
         let rows = sqlx::query(
-            "SELECT serial, name, model, product_type, network_id, lan_ip, first_online_at, \
+            "SELECT serial, name, model, product_type, network_id, lan_ip, mac, first_online_at, \
                     missing_since, imported_at \
              FROM meraki_inventory WHERE org_id = $1",
         )
@@ -726,6 +797,7 @@ impl MerakiInventoryRepo {
                     product_type: r.try_get("product_type")?,
                     network_id: r.try_get("network_id")?,
                     lan_ip: lan_ip.as_deref().and_then(usable_address),
+                    mac: r.try_get("mac")?,
                     first_online_at: r.try_get("first_online_at")?,
                     missing_since: r.try_get("missing_since")?,
                     imported_at: r.try_get("imported_at")?,
@@ -793,18 +865,18 @@ impl MerakiInventoryRepo {
                 .collect();
             touched += sqlx::query(
                 "INSERT INTO meraki_inventory \
-                   (org_id, serial, name, model, product_type, network_id, lan_ip, \
+                   (org_id, serial, name, model, product_type, network_id, lan_ip, mac, \
                     first_online_at, imported_at) \
                  SELECT $1, w.serial, w.name, w.model, w.product_type, w.network_id, w.lan_ip, \
-                        CASE WHEN w.first_online THEN now() END, w.imported_at \
+                        w.mac, CASE WHEN w.first_online THEN now() END, w.imported_at \
                  FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], \
-                             $7::text[], $8::bool[], $9::timestamptz[]) \
+                             $7::text[], $8::bool[], $9::timestamptz[], $10::text[]) \
                    AS w(serial, name, model, product_type, network_id, lan_ip, \
-                        first_online, imported_at) \
+                        first_online, imported_at, mac) \
                  ON CONFLICT (org_id, serial) DO UPDATE SET \
                    name = EXCLUDED.name, model = EXCLUDED.model, \
                    product_type = EXCLUDED.product_type, network_id = EXCLUDED.network_id, \
-                   lan_ip = EXCLUDED.lan_ip, \
+                   lan_ip = EXCLUDED.lan_ip, mac = EXCLUDED.mac, \
                    first_online_at = \
                      COALESCE(meraki_inventory.first_online_at, EXCLUDED.first_online_at), \
                    imported_at = COALESCE(meraki_inventory.imported_at, EXCLUDED.imported_at), \
@@ -819,6 +891,7 @@ impl MerakiInventoryRepo {
             .bind(lan_ips)
             .bind(column(rows, |w| w.first_online))
             .bind(column(rows, |w| w.imported_at))
+            .bind(column(rows, |w| w.device.mac.as_deref()))
             .execute(&mut *tx)
             .await?
             .rows_affected();
@@ -1104,6 +1177,7 @@ mod tests {
             product_type: "appliance".into(),
             network_id: "N_1".into(),
             lan_ip: Some("10.0.0.1".parse().expect("ip")),
+            mac: None,
             online,
         }
     }
@@ -1145,6 +1219,7 @@ mod tests {
             product_type: d.product_type.clone(),
             network_id: d.network_id.clone(),
             lan_ip: d.lan_ip,
+            mac: d.mac.clone(),
             first_online_at: d.online.then(|| at(0)),
             missing_since: None,
             imported_at: None,
@@ -1177,6 +1252,23 @@ mod tests {
 
     fn bound_as(d: &SeenDevice, node: BoundNode) -> HashMap<String, BoundNode> {
         HashMap::from([(d.serial.clone(), node)])
+    }
+
+    /// ADR-180 増分 3: a row stored before migration 0140 has no MAC, so the first sync after the
+    /// upgrade writes it once — nothing else would ever fill the column.
+    #[test]
+    fn a_row_stored_without_its_mac_is_written_once_to_fill_it() {
+        let listed = SeenDevice {
+            mac: Some("0c:8d:db:00:00:01".into()),
+            ..seen("Q2-A", true)
+        };
+        let before = StoredDevice {
+            mac: None,
+            ..stored_as(&listed)
+        };
+        let plan = plan_sync(&[before], std::slice::from_ref(&listed), &nobody());
+        assert_eq!(plan.writes.len(), 1);
+        assert!(plan_sync(&[stored_as(&listed)], &[listed], &nobody()).is_empty());
     }
 
     /// ADR-164 決定 4. The sync runs every five minutes; the ordinary sync finds what it found last
@@ -1592,6 +1684,7 @@ mod tests {
                 product_type: "switch".into(),
                 network_id: "N_1".into(),
                 lan_ip: Some("0.0.0.0".into()),
+                mac: None,
             },
             availability,
         };
@@ -1805,6 +1898,7 @@ mod tests {
                     product_type: product_type.into(),
                     network_id: network.into(),
                     lan_ip: lan_ip.map(str::to_owned),
+                    mac: None,
                 },
                 availability: Some(MerakiAvailability::Online),
             }
@@ -1876,6 +1970,82 @@ mod tests {
         };
         repo.apply(org, &gone).await.expect("apply");
         assert!(repo.devices_at(&[lan]).await.expect("devices").is_empty());
+    }
+
+    /// ADR-180 増分 3: a listed device is found by the MAC the listing gave it, with its node once
+    /// it has one; a device the last listing no longer contained is not.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_mac_names_its_organization_and_its_node(pool: sqlx::PgPool) {
+        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+            .create("123456", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        let repo = MerakiInventoryRepo::new(pool.clone());
+        let device = |serial: &str, mac: &str| DeviceWrite {
+            device: SeenDevice {
+                mac: Some(mac.to_owned()),
+                ..seen(serial, true)
+            },
+            first_online: true,
+            imported_at: None,
+        };
+        let plan = SyncPlan {
+            writes: vec![
+                device("Q2AA-0001", "0c:8d:db:00:00:01"),
+                device("Q2AA-0002", "0c:8d:db:00:00:02"),
+            ],
+            newly_missing: vec![],
+            follows: vec![],
+        };
+        repo.apply(org, &plan).await.expect("apply");
+        let folder = crate::pgtest::group(&pool, "site-a").await;
+        let node = crate::pgtest::node(&pool, "mx-01", 1, Some(folder)).await;
+        sqlx::query(
+            "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+             VALUES ($1, $2, 'Q2AA-0001', 'N_1', 'appliance')",
+        )
+        .bind(node)
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("bind");
+
+        let asked = [
+            "0c:8d:db:00:00:01".to_owned(),
+            "0c:8d:db:00:00:02".to_owned(),
+            "0c:8d:db:00:00:03".to_owned(),
+        ];
+        let found = repo.devices_with_mac(&asked).await.expect("lookup");
+        assert_eq!(found.len(), 2);
+        let imported = &found["0c:8d:db:00:00:01"];
+        assert_eq!((imported.org_id, imported.org_name.as_str()), (org, "Acme"));
+        assert_eq!(
+            imported.node,
+            Some(MacNode {
+                id: node,
+                name: "mx-01".to_owned(),
+                group_id: Some(folder)
+            })
+        );
+        assert_eq!(found["0c:8d:db:00:00:02"].node, None);
+
+        // The stored MAC reads back, so the next sync of the same listing writes nothing.
+        let stored = repo.stored(org).await.expect("stored");
+        let seen_again: Vec<SeenDevice> = plan.writes.iter().map(|w| w.device.clone()).collect();
+        assert!(plan_sync(&stored, &seen_again, &HashMap::new())
+            .writes
+            .is_empty());
+
+        let gone = SyncPlan {
+            writes: vec![],
+            newly_missing: vec!["Q2AA-0002".into()],
+            follows: vec![],
+        };
+        repo.apply(org, &gone).await.expect("apply");
+        let found = repo.devices_with_mac(&asked).await.expect("lookup");
+        assert!(!found.contains_key("0c:8d:db:00:00:02"));
     }
 
     /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a scan. Sequential scans are switched off for the statement so a tiny test table cannot hide a

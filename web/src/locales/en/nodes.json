@@ -967,7 +967,12 @@
         "unregistered": "No node Yagra monitors has this address.",
         "none": "The neighbor did not advertise a management address."
       },
-      "hint": "Matched on the management address alone: a node's own address or any address on one of its interfaces.",
+      "explainMac": {
+        "node": "A Meraki device Yagra monitors has this MAC address. The Dashboard sends no management address for it, so it is matched on the MAC its organization lists.",
+        "outside_scope": "A Meraki device Yagra monitors has this MAC address, in a folder you cannot see.",
+        "unregistered": "A Meraki organization lists a device with this MAC address, and it is not monitored yet."
+      },
+      "hint": "Matched on the management address: a node's own address or any address on one of its interfaces. A Meraki device that sends no address is matched on the MAC its organization lists.",
       "badge": {
         "node": "Monitored",
         "outside_scope": "Monitored (hidden)",

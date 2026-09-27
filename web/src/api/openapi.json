@@ -27532,9 +27532,17 @@
           "first_seen",
           "last_seen",
           "peers",
+          "chassis_peers",
           "mac_vendors"
         ],
         "properties": {
+          "chassis_peers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeighborChassisPeer"
+            },
+            "description": "For each distinct MAC-address chassis id on a row that advertises **no** usable management\naddress, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180\n増分 3). The Dashboard reports no management address for an MR or an MX, so this is how\nthose rows say whether the device is monitored. Only MACs a Meraki device listing states are\nmatched; any other chassis id is absent here, as is a row that has an address — that one is\nanswered in `peers`."
+          },
           "first_seen": {
             "type": "string",
             "description": "When this exact set was first seen (RFC 3339)."
@@ -33535,6 +33543,50 @@
               "null"
             ],
             "description": "The content key this replaced; `null` marks the first observation ever recorded for the node."
+          }
+        }
+      },
+      "NeighborChassisPeer": {
+        "type": "object",
+        "description": "One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).",
+        "required": [
+          "chassis",
+          "state"
+        ],
+        "properties": {
+          "chassis": {
+            "type": "string",
+            "description": "The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`)."
+          },
+          "managed_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NeighborManagedBy",
+                "description": "The organization that lists the device, when it has not been imported (`unregistered`):\nalways `kind: meraki`."
+              }
+            ]
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Present only when `state` is `node`."
+          },
+          "node_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when `state` is `node`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NeighborPeerState",
+            "description": "`node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device."
           }
         }
       },
