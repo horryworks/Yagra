@@ -23,6 +23,7 @@ import {
   saturationNodeBytes as nodeBytes,
   saturationRatio as ratioOf,
 } from '../findingFacts';
+import { severityColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -85,12 +86,7 @@ export function SaturationBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${f.node_name} · ${detailStr(f, 'src') ?? ''}→${detailStr(f, 'dst') ?? ''}`,
           value: ratioOf(f) * 100,
           valueText: formatUtil(ratioOf(f) * 100),
-          color:
-            sevOf(f) === 'crit'
-              ? 'var(--status-critical)'
-              : sevOf(f) === 'warn'
-                ? 'var(--status-warning)'
-                : 'var(--series-6)',
+          color: severityColor(f, 'var(--series-6)'),
         })),
     [findings],
   );

@@ -14,16 +14,8 @@ import { formatTimestamp } from '../../lib/format';
 import { eventFilters, type SearchSemantics } from './eventFilterSpec';
 import { MessageCell, type MessageHighlight } from './MessageCell';
 import { Marked } from '../ui/Marked';
+import { ACTION_TONE } from './eventTone';
 import './eventColumns.css';
-
-const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'neutral' | 'info'> = {
-  fired: 'critical',
-  refreshed: 'warning',
-  cleared: 'up',
-  suppressed: 'neutral',
-  info: 'info',
-  none: 'neutral',
-};
 
 /** Build the event-log columns. `nodeName` resolves a node_id → human name (from useEntityNames);
  *  `t` is the i18next translator from the calling component (rebuild the memo on language change so

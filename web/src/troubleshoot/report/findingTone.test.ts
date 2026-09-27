@@ -6,6 +6,8 @@
 // The other is that **each caller keeps its own `info` colour**: unifying four copies of a
 // three-way mapping is only safe if the thing that differed between them survives the unification,
 // and there is nothing in the type system to notice a report quietly re-coloured.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   TONES,
@@ -50,6 +52,26 @@ describe('severityColor', () => {
     expect(severityColor({ severity: 'catastrophic' }, 'var(--series-2)')).toBe('var(--series-2)');
     expect(severityColor({ severity: 'crit' }, 'var(--series-2)')).toBe('var(--status-critical)');
     expect(severityColor({ severity: 'warn' }, 'var(--series-2)')).toBe('var(--status-warning)');
+  });
+});
+
+describe('the info colour each caller shipped with (ADR-184 increment 7)', () => {
+  // Four more callers moved onto `toneColor` / `severityColor`. Each kept the `info` colour its own
+  // hand-written ternary or table had, and nothing but this would notice one of them re-coloured:
+  // the call sits in a `.tsx` Vitest never runs, so the pin reads the call out of the source.
+  const SRC = join(__dirname, '..', '..');
+  const CALLERS: [file: string, call: string, info: string][] = [
+    ['troubleshoot/report/bodies/EventFlapBody.tsx', 'toneColor(sevFor(g.score), ', 'var(--series-5)'],
+    ['troubleshoot/report/bodies/EventStormBody.tsx', 'severityColor(f, ', 'var(--series-5)'],
+    ['troubleshoot/report/bodies/SaturationBody.tsx', 'severityColor(f, ', 'var(--series-6)'],
+    ['troubleshoot/SavedFindingsPage.tsx', 'toneColor(sev, ', 'var(--text-tertiary)'],
+  ];
+
+  it.each(CALLERS)('%s calls %s%s)', (file, call, info) => {
+    const src = readFileSync(join(SRC, file), 'utf8');
+    expect(src, `${file} no longer colours its info tier with ${info}`).toContain(`${call}'${info}')`);
+    expect(toneColor('info', info)).toBe(info);
+    expect(severityColor({ severity: 'info' }, info)).toBe(info);
   });
 });
 

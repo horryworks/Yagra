@@ -35,7 +35,7 @@ import {
   eventFlapFires as firesOf,
   perHour as rateOf,
 } from '../findingFacts';
-import { scoreTone as sevFor } from '../findingTone';
+import { scoreTone as sevFor, toneColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -83,12 +83,7 @@ export function EventFlapBody({ findings }: ReportBodyProps) {
         label: `${i + 1}. ${g.ruleName}`,
         value: g.cycles,
         valueText: t('report.event_flap.cycles', { count: g.cycles }),
-        color:
-          sevFor(g.score) === 'crit'
-            ? 'var(--status-critical)'
-            : sevFor(g.score) === 'warn'
-              ? 'var(--status-warning)'
-              : 'var(--series-5)',
+        color: toneColor(sevFor(g.score), 'var(--series-5)'),
       })),
     [groups, t],
   );

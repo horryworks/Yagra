@@ -7,6 +7,7 @@
 
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { actionColorOf, actionToneOf, KIND_COLOR, kindColorOf } from '../../components/EventLog/eventTone';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
@@ -22,33 +23,6 @@ import { densifyTimeBuckets, eventKindOf as kindOf, trailingIso } from './util';
 
 /** Trailing window for every event widget (last 24h). */
 const SPAN_SECS = 86_400;
-
-/** `action` (pipeline outcome) → Badge tone. Mirrors the Events page "Result" column. */
-const ACTION_TONE: Record<string, 'critical' | 'warning' | 'up' | 'info' | 'neutral'> = {
-  fired: 'critical',
-  refreshed: 'warning',
-  cleared: 'up',
-  info: 'info',
-  suppressed: 'neutral',
-  none: 'neutral',
-};
-
-/** Event-kind segment colors (categorical — series channel, not status). */
-const KIND_COLOR: Record<string, string> = {
-  syslog: 'var(--series-1)',
-  trap: 'var(--series-2)',
-  webhook: 'var(--series-3)',
-};
-
-/** `action` segment colors: raised/cleared read on the status channel, the rest on series. */
-const ACTION_COLOR: Record<string, string> = {
-  fired: 'var(--status-critical)',
-  refreshed: 'var(--status-warning)',
-  cleared: 'var(--status-ok)',
-  info: 'var(--series-3)',
-  suppressed: 'var(--series-4)',
-  none: 'var(--series-5)',
-};
 
 // ── Event feed (live) ────────────────────────────────────────────────────────────────
 
@@ -67,7 +41,7 @@ export function EventFeedWidget({ instance }: WidgetProps) {
         const source = e.node_id ? nodeName(e.node_id) : (e.source_ip ?? e.hostname ?? '—');
         return (
           <li className="dwl-row" key={e.id}>
-            <Badge tone={ACTION_TONE[e.action] ?? 'neutral'} title={e.trap_oid ?? undefined}>
+            <Badge tone={actionToneOf(e.action) ?? 'neutral'} title={e.trap_oid ?? undefined}>
               {e.trap_name ?? e.kind}
             </Badge>
             <span className="dwl-name">{source}</span>
@@ -144,7 +118,7 @@ export function EventKindMixWidget() {
   const segments: DonutSegment[] = rows.map((r) => ({
     label: t(`widgets.eventFeed.${r.key}`, r.key),
     value: r.count,
-    color: KIND_COLOR[r.key] ?? 'var(--series-4)',
+    color: kindColorOf(r.key) ?? 'var(--series-4)',
   }));
   return <Donut segments={segments} centerValue={String(total)} centerSub={t('widgets.eventKind.events')} />;
 }
@@ -160,7 +134,7 @@ export function EventTriageMixWidget() {
   const segments: DonutSegment[] = rows.map((r) => ({
     label: t(`widgets.eventTriage.action.${r.key}`, r.key),
     value: r.count,
-    color: ACTION_COLOR[r.key] ?? 'var(--series-5)',
+    color: actionColorOf(r.key) ?? 'var(--series-5)',
   }));
   return <Donut segments={segments} centerValue={String(total)} centerSub={t('widgets.eventKind.events')} />;
 }
@@ -177,7 +151,8 @@ export function TopTrapTypesWidget() {
     label: r.label ?? r.key,
     value: r.count,
     valueText: String(r.count),
-    color: 'var(--series-2)',
+    // Every bar is a trap, so it takes the trap colour the kind donut and Troubleshoot use.
+    color: KIND_COLOR.trap,
   }));
   return <RankedBars rows={rows} empty={t('widgets.topTraps.empty')} />;
 }

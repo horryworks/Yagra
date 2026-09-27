@@ -16,6 +16,7 @@
 // (`ui-conventions.md`: "a node's status colour must be identical in the table, the map, and the
 // chart"), and a report that chose its own red would be the second answer.
 
+import { kindColorOf } from '../../components/EventLog/eventTone';
 import { capacityBucket, correlationDirection, sevOf } from './format';
 
 /** The three-step scale every report body ranks on. Matches `FindingSeverity`'s three values. */
@@ -68,18 +69,13 @@ export function capacityTone(tteDays: number): Tone {
   return 'info';
 }
 
-/** Categorical colours for the passive-event source kinds.
+/** A passive-event source kind as a colour. The colours are `KIND_COLOR`'s — the same ones the
+ *  dashboard's event widgets draw — so a trap cannot be one colour here and another there.
  *
- *  ⚠️ These are **not statuses** — a trap is not worse than a syslog line — so they come from the
- *  series palette and an unknown kind falls back to tertiary text rather than to a status colour. */
-const SOURCE_COLORS: Record<string, string> = {
-  trap: 'var(--series-5)',
-  syslog: 'var(--series-1)',
-  webhook: 'var(--series-3)',
-};
-
+ *  ⚠️ These are **not statuses** — a trap is not worse than a syslog line — so an unknown kind falls
+ *  back to tertiary text rather than to a status colour. */
 export function sourceColor(kind: string): string {
-  return SOURCE_COLORS[kind] ?? 'var(--text-tertiary)';
+  return kindColorOf(kind) ?? 'var(--text-tertiary)';
 }
 
 /** A correlation's direction as a colour, via `correlationDirection` so the bar and the label

@@ -30,6 +30,7 @@ import {
   stormPeak as peakOf,
   stormRatio as ratioOf,
 } from '../findingFacts';
+import { severityColor } from '../findingTone';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -85,12 +86,7 @@ export function EventStormBody({ findings }: ReportBodyProps) {
           label: `${i + 1}. ${f.node_name}`,
           value: peakOf(f),
           valueText: fmtCount(Math.round(peakOf(f))),
-          color:
-            sevOf(f) === 'crit'
-              ? 'var(--status-critical)'
-              : sevOf(f) === 'warn'
-                ? 'var(--status-warning)'
-                : 'var(--series-5)',
+          color: severityColor(f, 'var(--series-5)'),
         })),
     [findings],
   );

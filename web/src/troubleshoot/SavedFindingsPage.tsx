@@ -29,7 +29,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
-import { FINDING_SEVERITIES, type SavedFinding } from '../types/api';
+import type { SavedFinding } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -45,6 +45,7 @@ import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import { reportPathFor, toolById } from './data';
 import { sevOf } from './report/format';
+import { toneColor } from './report/findingTone';
 import {
   appendPage,
   findingFilters,
@@ -58,13 +59,6 @@ import {
   type FindingCursor,
 } from './findingsQuery';
 import './troubleshoot.css';
-
-/** Status colour per severity bucket — the domain's canonical set, never an ad-hoc red/amber. */
-const SEV_COLOR: Record<(typeof FINDING_SEVERITIES)[number], string> = {
-  crit: 'var(--status-critical)',
-  warn: 'var(--status-warning)',
-  info: 'var(--text-tertiary)',
-};
 
 /** Columns for the virtualized table. Built from the caller's `t` so a language switch rebuilds
  *  the headers and the tool names. */
@@ -82,7 +76,7 @@ function findingColumns(
         const sev = sevOf(f);
         return (
           <span className="ts-sf-sev">
-            <span className="ts-sf-dot" style={{ background: SEV_COLOR[sev] }} />
+            <span className="ts-sf-dot" style={{ background: toneColor(sev, 'var(--text-tertiary)') }} />
             {t(`findings.severity.${sev}`)}
           </span>
         );
