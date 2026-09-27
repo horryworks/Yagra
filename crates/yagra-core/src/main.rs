@@ -53,6 +53,9 @@ mod gcp;
 mod groups;
 mod history;
 mod host_collector;
+// The outbound HTTP client core builds for its own stores and integrations (ADR-184). Apart from
+// `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.
+mod http;
 mod interface_util;
 mod ipasn;
 mod l3;
@@ -272,10 +275,7 @@ async fn run_healthcheck() -> i32 {
     let addr = std::env::var("YAGRA_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
     let port = addr.rsplit(':').next().unwrap_or("8080");
     let url = format!("http://127.0.0.1:{port}/healthz");
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-    {
+    let client = match http::builder(Duration::from_secs(3), http::Redirects::Follow).build() {
         Ok(c) => c,
         Err(_) => return 1,
     };

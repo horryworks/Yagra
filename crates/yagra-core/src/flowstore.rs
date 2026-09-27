@@ -537,10 +537,10 @@ impl ChStore {
     /// retention (days).
     #[must_use]
     pub fn with_retention(base: impl Into<String>, retention_days: u32) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
+        let http = crate::http::client(
+            std::time::Duration::from_secs(15),
+            crate::http::Redirects::Follow,
+        );
         Self {
             http,
             base: base.into(),

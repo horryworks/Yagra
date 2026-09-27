@@ -773,12 +773,9 @@ impl NetboxClient {
     pub fn new(base_url: &str, token: &str, ca_pem: Option<&str>) -> anyhow::Result<Self> {
         let base = validate_base_url(base_url)
             .map_err(|e| anyhow::anyhow!("netbox base_url refused: {}", e.message()))?;
-        let mut builder = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            // No redirect following: a 302 is the classic way an allowed base URL becomes a
-            // request somewhere else, and `validate_base_url` only ever saw the first hop.
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent("Yagra-core");
+        // No redirect following: a 302 is the classic way an allowed base URL becomes a request
+        // somewhere else, and `validate_base_url` only ever saw the first hop.
+        let mut builder = crate::http::builder(REQUEST_TIMEOUT, crate::http::Redirects::None);
         if let Some(pem) = ca_pem {
             let cert = reqwest::Certificate::from_pem(pem.as_bytes())
                 .map_err(|_| anyhow::anyhow!("ca_cert_pem is not a valid PEM certificate"))?;

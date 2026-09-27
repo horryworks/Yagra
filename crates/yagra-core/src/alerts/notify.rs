@@ -38,17 +38,12 @@ pub struct WebhookChannel {
 impl WebhookChannel {
     #[must_use]
     pub fn new(url: String) -> Self {
-        // Hardened client: a bounded timeout and — importantly for SSRF — NO redirect following.
         // A webhook endpoint that 30x-redirects to a loopback/metadata address is an escalation
-        // vector, so core never follows a redirect on the notification path. (The config is static,
-        // so building the client cannot fail at runtime; the fallback keeps the no-redirect policy.)
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent("Yagra-core")
-            .build()
-            .unwrap_or_default();
-        Self { http, url }
+        // vector, so core never follows a redirect on the notification path.
+        Self {
+            http: hardened_client(),
+            url,
+        }
     }
 }
 
@@ -120,15 +115,14 @@ pub(crate) fn dedup_string(key: &yagra_alert::DedupKey) -> String {
     )
 }
 
-/// The hardened outbound client shared by the vendor channels: bounded timeout, **no
-/// redirect following** (SSRF — same policy as [`WebhookChannel`]).
+/// The outbound client every notification channel uses: bounded timeout, **no redirect
+/// following** (SSRF). A build failure keeps the no-redirect policy — see [`crate::http::client`],
+/// which is where that became true; the fallback that used to be written here followed redirects.
 fn hardened_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent("Yagra-core")
-        .build()
-        .unwrap_or_default()
+    crate::http::client(
+        std::time::Duration::from_secs(10),
+        crate::http::Redirects::None,
+    )
 }
 
 /// Map a vendor API response to the channel result. 429 waits out `Retry-After` (capped

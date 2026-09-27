@@ -238,10 +238,22 @@ route_agg!(
 
 // ─── VictoriaLogs (live) ──────────────────────────────────────────────────────────────
 
+/// How long a **query** may take. VictoriaLogs stops one itself at 30 s, and a regex search over a
+/// wide range really does take most of that (see [`msg_prefix`]), so the client waits a little
+/// longer than the server will and lets the server's own answer be the one that arrives.
+const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+
+/// How long a **write**, a health check or a flags read may take. The persist writer is one task:
+/// before ADR-184 this client had no timeout at all, so a socket that was accepted and then never
+/// answered held every later event behind it for as long as it stayed open.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A [`LogStore`] backed by VictoriaLogs over HTTP.
 pub struct VlStore {
     http: reqwest::Client,
     base: String,
+    /// [`WRITE_TIMEOUT`], held as a field so a test can shorten it.
+    write_timeout: std::time::Duration,
 }
 
 impl VlStore {
@@ -249,9 +261,18 @@ impl VlStore {
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::http::client(QUERY_TIMEOUT, crate::http::Redirects::Follow),
             base: base.into(),
+            write_timeout: WRITE_TIMEOUT,
         }
+    }
+
+    /// Give up on a write sooner. Test-only: a test of "a hung store is given up on" should not
+    /// take ten seconds to say so.
+    #[cfg(test)]
+    fn with_write_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.write_timeout = timeout;
+        self
     }
 
     /// Run a LogsQL query and return the NDJSON response body's lines (shared by search + stats).
@@ -766,7 +787,7 @@ fn parse_ndjson_row(line: &str) -> Option<EventRow> {
 impl LogStore for VlStore {
     async fn healthy(&self) -> bool {
         let url = format!("{}/health", self.base);
-        match self.http.get(&url).send().await {
+        match self.http.get(&url).timeout(self.write_timeout).send().await {
             Ok(resp) => resp.status().is_success(),
             Err(e) => {
                 tracing::warn!(error = %e, "VictoriaLogs health check failed");
@@ -777,7 +798,16 @@ impl LogStore for VlStore {
 
     async fn retention_flag(&self) -> Option<String> {
         let url = format!("{}/flags", self.base);
-        let body = self.http.get(&url).send().await.ok()?.text().await.ok()?;
+        let body = self
+            .http
+            .get(&url)
+            .timeout(self.write_timeout)
+            .send()
+            .await
+            .ok()?
+            .text()
+            .await
+            .ok()?;
         crate::retention::parse_retention_flag(&body)
     }
 
@@ -801,6 +831,7 @@ impl LogStore for VlStore {
             .post(&url)
             .header("Content-Type", "application/stream+json")
             .body(body)
+            .timeout(self.write_timeout)
             .send()
             .await
         {
@@ -2601,5 +2632,56 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    /// A VictoriaLogs stand-in that accepts a connection and then never answers it.
+    async fn silent_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_store_that_never_answers_is_given_up_on() {
+        // The shipped defect (ADR-184): this client had no timeout, and the persist writer is one
+        // task, so one hung socket held every later event behind it.
+        let store = VlStore::new(silent_server().await)
+            .with_write_timeout(std::time::Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        store
+            .ingest_batch(&[record(Uuid::nil(), "link down", 0, EventAction::None)])
+            .await;
+        assert!(!store.healthy().await);
+        assert_eq!(store.retention_flag().await, None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "three requests at 300 ms each took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_query_is_not_cut_at_the_write_timeout() {
+        // A regex search over a wide range takes most of VictoriaLogs' 30 s ceiling and is still an
+        // answer, so the short timeout belongs to writes only.
+        let app = axum::Router::new().fallback(|| async {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            "{\"_msg\":\"late but whole\"}\n"
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        let store = VlStore::new(format!("http://{addr}"))
+            .with_write_timeout(std::time::Duration::from_millis(200));
+        let lines = store.query_lines("*").await.expect("the query answered");
+        assert_eq!(lines.len(), 1);
     }
 }

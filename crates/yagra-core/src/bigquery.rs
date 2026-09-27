@@ -141,8 +141,7 @@ impl BigQueryClient {
     pub fn new(target: &str, service_account_json: Option<&str>) -> Result<Self, String> {
         let target = BigQueryTarget::parse(target)?;
         let tokens = TokenSource::new(SERVICE, crate::gcp::SCOPE_BIGQUERY, service_account_json)?;
-        let http = reqwest::Client::builder()
-            .timeout(HTTP_TIMEOUT)
+        let http = crate::http::builder(HTTP_TIMEOUT, crate::http::Redirects::Follow)
             .build()
             .map_err(|e| format!("HTTP client: {e}"))?;
         Ok(Self {

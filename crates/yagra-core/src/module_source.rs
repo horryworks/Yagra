@@ -38,6 +38,13 @@ pub(crate) fn code_no_comments(dir: &str, stem: &str) -> String {
     yagra_common::srcread::code_no_comments_in(Path::new(BASE), dir, stem)
 }
 
+/// Every production file of this crate — `(path under src/, code without comment lines)` — for a
+/// rule that holds across the crate rather than inside one module (ADR-184). Test-only modules are
+/// left out wherever they are declared; see [`yagra_common::srcread::crate_files_no_comments`].
+pub(crate) fn crate_code() -> Vec<(String, String)> {
+    yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join("src"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

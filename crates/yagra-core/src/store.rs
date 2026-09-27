@@ -577,12 +577,10 @@ impl VmStore {
         // A bounded timeout is load-bearing: `write`/`healthy`/`query_*` all run on the single
         // result-ingest task, so a hung VM socket (no timeout) would stall the entire fleet's
         // ingest indefinitely. Matches the 10s discipline on the notifier client (`WebhookChannel`).
-        // The base URL is static config, so the build cannot fail at runtime; the default fallback
-        // simply loses the timeout rather than panicking.
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
+        let http = crate::http::client(
+            std::time::Duration::from_secs(10),
+            crate::http::Redirects::Follow,
+        );
         Self {
             http,
             base: base.into(),

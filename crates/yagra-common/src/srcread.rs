@@ -362,6 +362,57 @@ pub fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// **A whole crate's production code**, one entry per file: the path relative to `src_dir` (with
+/// `/`, whatever the platform) and the code with whole-line comments dropped.
+///
+/// For a rule that holds across a crate rather than inside one module — "only `http.rs` builds an
+/// outbound client", "nobody reads a sealed column by hand" (ADR-184). [`files`] cannot serve
+/// those: it reads one module and refuses a nested directory, which is the right refusal for a
+/// module and the wrong one for a crate.
+///
+/// A module declared test-only is left out **wherever it is declared** — by a `mod.rs`, by a crate
+/// root, or by an `X.rs` that owns `X/guards.rs` — and so is everything beneath it. That is
+/// [`test_only_modules`] asked of every file, because a crate has no single `mod.rs` to ask.
+///
+/// ⚠️ The floor is the caller's, as everywhere in this module: how many files a crate *should*
+/// hold is a fact about that crate.
+pub fn crate_files_no_comments(src_dir: &Path) -> Vec<(String, String)> {
+    let mut paths = Vec::new();
+    rs_files(src_dir, &mut paths);
+    let mut test_only: Vec<PathBuf> = Vec::new();
+    for path in &paths {
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        // Where this file's child modules live: beside it for a `mod.rs` or a crate root, in a
+        // directory named after it otherwise.
+        let home = match file_name(path).as_str() {
+            "mod.rs" | "main.rs" | "lib.rs" => parent.to_path_buf(),
+            _ => path.with_extension(""),
+        };
+        for module in test_only_modules(path) {
+            let stem = module.trim_end_matches(".rs");
+            test_only.push(home.join(&module));
+            test_only.push(home.join(stem));
+        }
+    }
+    let mut out: Vec<(String, String)> = paths
+        .iter()
+        .filter(|p| !test_only.iter().any(|t| p.starts_with(t)))
+        .map(|p| {
+            let rel = p
+                .strip_prefix(src_dir)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let code = strip_comments(&strip_and_check(&rel, &read(p)));
+            (rel, code)
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 pub fn file_name(path: &Path) -> String {
     path.file_name()
         .and_then(|f| f.to_str())
@@ -767,6 +818,39 @@ mod tests {
              support.rs, so the reader has stopped seeing the directory case",
             read.len()
         );
+    }
+
+    /// The crate-wide reader descends, names files by path, and leaves out a test-only module
+    /// whichever file declared it.
+    ///
+    /// A real crate rather than a fabricated tree, for the reason given two tests up: it also
+    /// proves the workspace still holds each shape this is about.
+    #[test]
+    fn a_whole_crate_is_read_by_path_without_its_test_only_modules() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-core/src");
+        let read = crate_files_no_comments(&src);
+        let names: Vec<&str> = read.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            read.len() >= 150,
+            "yagra-core came back as {} files",
+            read.len()
+        );
+        // Descends, and spells the path with `/` on every platform.
+        for present in ["store.rs", "api/nodes.rs", "mcp/tools/mod.rs", "main.rs"] {
+            assert!(names.contains(&present), "{present} is production code");
+        }
+        // Declared test-only by a `mod.rs` two levels down, by a `mod.rs` one level down, and by
+        // the crate root.
+        for absent in ["mcp/tools/guards.rs", "api/guards.rs", "pgtest.rs"] {
+            assert!(
+                !names.contains(&absent),
+                "{absent} is test-only and must not be read as production code"
+            );
+        }
+        // Each file's own test items are gone too.
+        let store = &read.iter().find(|(n, _)| n == "store.rs").unwrap().1;
+        assert!(store.contains("impl MetricStore for VmStore"));
+        assert!(!store.contains("mod tests {"));
     }
 
     /// The exclusion is derived from `mod.rs`, and it excludes the file that would otherwise match

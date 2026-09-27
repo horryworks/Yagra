@@ -13,6 +13,7 @@
 ### Bug Fixes
 
 - **A metrics query that VictoriaMetrics refuses is no longer read as "no data", and is logged.** Yagra used to look at the HTTP status on only two of its reads; on the others a refused query (for example one longer than the server accepts) came back as an empty chart, an empty ranking or a missing value, with no log line. Every read now checks the status and the reply, and core logs a warning that names the read and the server's reason. What each screen shows when a read fails is unchanged: it shows nothing rather than a wrong value.
+- **Writing events to VictoriaLogs now gives up after 10 seconds instead of waiting for ever.** The event log's client had no timeout, so a VictoriaLogs that accepted a connection and never answered held every later event behind it. A write, a health check and the retention read now stop after 10 seconds and are logged; a search may still run up to VictoriaLogs' own 30-second limit. Core's own HTTP requests (to VictoriaMetrics, VictoriaLogs, ClickHouse, NetBox, BigQuery, the LLM providers, OIDC and the notification channels) now all send the `User-Agent: Yagra-core` header.
 
 ## v0.3.34 — Meraki MX and MR get the Neighbors tab, a device added from Discovery ▸ Unregistered or from Neighbors goes into a folder by IP range as a range scan does, a Meraki device's neighbors read like any other device's and say whether a peer with no address is monitored, a "Not monitored" neighbor says why it cannot be added, an upgrade that only changes how neighbors are written is marked as such in the history
 
