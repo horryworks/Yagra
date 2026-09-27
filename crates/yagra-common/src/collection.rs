@@ -363,15 +363,11 @@ pub fn resolve_scoped(items: &[ScopedCollectionItem]) -> Vec<&ScopedCollectionIt
 // metric_name here is a fixed identifier — the bounded set is what keeps TSDB cardinality
 // controlled.
 
-/// sysUpTime.0 — system uptime in hundredths of a second (scalar). Module-internal: used by the
-/// built-in catalog builder below; not part of the crate's public OID surface (cf. the re-exported
-/// [`OID_IF_HIGH_SPEED`], which the poller references directly).
-const OID_SYS_UPTIME: &str = "1.3.6.1.2.1.1.3.0";
-
 /// hrProcessorLoad — HOST-RESOURCES-MIB per-processor load %, walked as a table column.
 /// The standard cross-vendor CPU metric (net-snmp/host agents); network gear that lacks
-/// HOST-RESOURCES simply returns no rows for it (skipped by the poller). Module-internal (see
-/// [`OID_SYS_UPTIME`]).
+/// HOST-RESOURCES simply returns no rows for it (skipped by the poller). Module-internal: used by
+/// the built-in catalog builder below, not part of the crate's public OID surface (cf. the
+/// re-exported [`OID_IF_HIGH_SPEED`], which the poller references directly).
 const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
 
 /// ifHighSpeed — ifXTable interface speed in **units of 1,000,000 bits/sec** (Mbps). Required
@@ -411,10 +407,9 @@ const IFINDEX_INDEXED_TABLE_ROOTS: &[&str] = &[
 /// that constant for why the alternative (inspecting the row keys) is unsound.
 #[must_use]
 pub fn table_rows_are_interfaces(oid: &str) -> bool {
-    IFINDEX_INDEXED_TABLE_ROOTS.iter().any(|root| {
-        oid.strip_prefix(root)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-    })
+    IFINDEX_INDEXED_TABLE_ROOTS
+        .iter()
+        .any(|root| crate::oid::is_at_or_under(oid, root))
 }
 
 /// Whether one collection item's samples name an **interface**, so a reader may break them out per
@@ -486,7 +481,11 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         metric_kind: mk,
     };
     vec![
-        scalar("snmp_sys_uptime_ticks", OID_SYS_UPTIME, MetricKind::Gauge),
+        scalar(
+            "snmp_sys_uptime_ticks",
+            crate::oid::SYS_UPTIME_0,
+            MetricKind::Gauge,
+        ),
         // ifXTable high-capacity octet counters (64-bit) — preferred over ifInOctets.
         table(
             METRIC_IF_HC_IN_OCTETS,

@@ -5202,6 +5202,7 @@ dependencies = [
  "utoipa",
  "uuid",
  "yagra-bus",
+ "yagra-common",
  "yagra-ingest",
 ]
 
@@ -5221,6 +5222,7 @@ version = "0.3.34"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
+ "yagra-common",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ use crate::{
 use snmp2::{v3, AsyncSession, Oid, Value};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
+use yagra_common::oid::tail_subids;
 
 /// Standard SNMP agent port.
 const SNMP_PORT: u16 = 161;
@@ -510,17 +511,6 @@ async fn walk_column_v3<R>(
         }
     }
     ColumnStop::Ended(AGENT_ANSWERED)
-}
-
-/// Sub-identifiers of `oid_str` past the column `base_str`, or `None` when `oid_str` is not a
-/// strict descendant of `base_str` (a different subtree, or the base itself — no instance).
-/// Compared on the dotted-decimal form so this doesn't depend on the client's relative-OID API;
-/// requires a `.` boundary after the base so `…2` is not read as a prefix of `…20`.
-fn tail_subids(oid_str: &str, base_str: &str) -> Option<Vec<u32>> {
-    let rest = oid_str
-        .strip_prefix(base_str)
-        .and_then(|r| r.strip_prefix('.'))?;
-    rest.split('.').map(|p| p.parse::<u32>().ok()).collect()
 }
 
 /// Map job-level v3 params onto the `snmp2` USM security config. Key material flows

@@ -667,10 +667,7 @@ pub struct MauMedia {
 /// deployment rather than showing an operator the wrong medium.
 #[must_use]
 pub fn media_from_mau_oid(value: &str) -> Option<MauMedia> {
-    let tail = value
-        .trim()
-        .strip_prefix(DOT3_MAU_TYPE_ROOT)?
-        .strip_prefix('.')?;
+    let tail = crate::oid::tail_under(value.trim(), DOT3_MAU_TYPE_ROOT)?;
     // Exactly one sub-identifier below the arc — `…26.4.30.1` is not a registration.
     let subid: u32 = tail.parse().ok()?;
     MAU_TYPES
@@ -740,10 +737,7 @@ pub fn media_from_transceiver_text(text: &str) -> Option<&'static str> {
 /// number is what someone extending [`MAU_TYPES`] needs.
 #[must_use]
 pub fn mau_subid(value: &str) -> Option<u32> {
-    value
-        .trim()
-        .strip_prefix(DOT3_MAU_TYPE_ROOT)?
-        .strip_prefix('.')?
+    crate::oid::tail_under(value.trim(), DOT3_MAU_TYPE_ROOT)?
         .parse()
         .ok()
 }

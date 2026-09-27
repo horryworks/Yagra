@@ -95,24 +95,6 @@ pub fn vendor(mac: [u8; 6]) -> Option<&'static str> {
     None
 }
 
-/// Parse a MAC written as six hex octets separated by `:` or `-`, in either case. `None` for
-/// anything else — a text id that merely looks like a MAC is the caller's to rule out first.
-#[must_use]
-pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
-    let parts: Vec<&str> = s.trim().split([':', '-']).collect();
-    if parts.len() != 6 {
-        return None;
-    }
-    let mut out = [0u8; 6];
-    for (slot, part) in out.iter_mut().zip(&parts) {
-        if part.len() != 2 {
-            return None;
-        }
-        *slot = u8::from_str_radix(part, 16).ok()?;
-    }
-    Some(out)
-}
-
 /// The date the committed registry was fetched (`YYYY-MM-DD`), for saying how old an answer is.
 #[must_use]
 pub fn registry_fetched() -> &'static str {
@@ -223,17 +205,6 @@ mod tests {
         // 00:00:0c is Cisco's; the same octets with the local bit set are nobody's.
         assert_eq!(vendor([0x02, 0x00, 0x0c, 0x12, 0x34, 0x56]), None);
         assert_eq!(vendor([0x01, 0x00, 0x5e, 0x00, 0x00, 0x01]), None);
-    }
-
-    #[test]
-    fn parse_mac_accepts_both_separators_and_either_case_and_nothing_else() {
-        let want = Some([0x00, 0x1b, 0x54, 0xff, 0x00, 0x9a]);
-        assert_eq!(parse_mac("00:1b:54:ff:00:9a"), want);
-        assert_eq!(parse_mac("00-1B-54-FF-00-9A"), want);
-        assert_eq!(parse_mac("001b.54ff.009a"), None);
-        assert_eq!(parse_mac("00:1b:54:ff:00"), None);
-        assert_eq!(parse_mac("00:1b:54:ff:00:9g"), None);
-        assert_eq!(parse_mac("0:1b:54:ff:00:9a"), None);
     }
 
     #[test]

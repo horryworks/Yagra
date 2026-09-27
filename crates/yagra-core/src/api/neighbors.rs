@@ -639,7 +639,7 @@ fn mac_vendors(set: &NeighborSet) -> Vec<MacVendor> {
             if kind != Some(NeighborIdKind::Mac) || out.contains_key(id) {
                 continue;
             }
-            if let Some(vendor) = yagra_oui::parse_mac(id).and_then(yagra_oui::vendor) {
+            if let Some(vendor) = yagra_common::parse_mac(id).and_then(yagra_oui::vendor) {
                 out.insert(id.clone(), vendor.to_owned());
             }
         }

@@ -22,6 +22,7 @@
 use chrono::{TimeZone, Utc};
 use snmp2::{pdu, snmp, Oid, Value, Version};
 use yagra_bus::{EventKind, EventMsg};
+use yagra_common::oid::{SNMP_TRAP_OID_0, SYS_UPTIME_0};
 
 /// Community used for a re-encoded trap when the destination configures none.
 pub const DEFAULT_TRAP_COMMUNITY: &str = "public";
@@ -37,11 +38,6 @@ const NON_SYSLOG_SEVERITY: u8 = 5;
 /// RFC 5424 §6 length limits for the header fields we populate.
 const MAX_HOSTNAME: usize = 255;
 const MAX_APP_NAME: usize = 48;
-
-/// sysUpTime.0 — first varbind of a v2c trap.
-const SYS_UPTIME_0: &str = "1.3.6.1.2.1.1.3.0";
-/// snmpTrapOID.0 — identifies the trap in v2c.
-const SNMP_TRAP_OID_0: &str = "1.3.6.1.6.3.1.1.4.1.0";
 
 /// Render `ev` as an RFC 5424 syslog message.
 ///

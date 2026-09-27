@@ -17,6 +17,7 @@ use crate::clip_chars;
 use snmp2::{asn1, snmp, AsnReader, MessageType, Oid, Pdu, Value};
 use std::fmt::Write as _;
 use thiserror::Error;
+use yagra_common::oid::{SNMP_TRAP_OID_0, SYS_UPTIME_0};
 
 /// Cap on the number of varbinds kept from one trap.
 pub const MAX_VARBINDS: usize = 32;
@@ -25,11 +26,6 @@ pub(crate) const MAX_VALUE_CHARS: usize = 256;
 /// The most sub-identifiers an OID may have (SMIv2, RFC 2578 §3.5). Each is at most 32 bits, so a
 /// legal OID renders in under 1,400 characters.
 pub(crate) const MAX_OID_ARCS: usize = 128;
-
-/// snmpTrapOID.0 — identifies the trap in v2c (RFC 3416).
-const SNMP_TRAP_OID_0: &str = "1.3.6.1.6.3.1.1.4.1.0";
-/// sysUpTime.0 — the first varbind of a v2c trap.
-const SYS_UPTIME_0: &str = "1.3.6.1.2.1.1.3.0";
 
 /// Errors normalizing a trap datagram.
 #[derive(Debug, Error)]

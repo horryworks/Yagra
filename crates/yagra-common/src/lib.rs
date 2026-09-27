@@ -11,12 +11,15 @@
 
 pub mod arp;
 pub mod classification;
+pub mod clock;
 pub mod collection;
 pub mod dns_check;
+pub mod env;
 pub mod host;
 pub mod ids;
 pub mod l3;
 pub mod link_mode;
+pub mod mac;
 pub mod meraki;
 pub mod metric;
 pub mod neighbor;
@@ -24,11 +27,16 @@ pub mod no_reading;
 pub mod node;
 mod node_kind;
 mod notify_template;
+pub mod oid;
 pub mod profile;
+pub mod ratelimit;
 mod rbac;
+pub mod retry;
 pub mod routing;
 pub mod row_names;
 pub mod severity;
+#[cfg(test)]
+mod shared_guards;
 pub mod snmp_auth;
 /// Reading a module's own source text — see the module doc (ADR-091/099).
 ///
@@ -79,6 +87,7 @@ pub use link_mode::{
     OID_CISCO_PORT_IFINDEX, OID_CISCO_PORT_TYPE, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
     OID_HW_ETHERNET_PORT_TYPE, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE, OID_IF_TYPE,
 };
+pub use mac::parse_mac;
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,
     meraki_interface_metrics, meraki_port_name, switch_port_ifindex, switch_port_oper_status,

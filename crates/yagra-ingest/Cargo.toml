@@ -9,6 +9,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The token bucket and the two trap varbind OIDs are shared with core and the forwarder (ADR-184).
+yagra-common = { path = "../yagra-common" }
 # Trap PDU decoding only (the vendored crypto-rust patch build). The UDP listener I/O
 # lives in yagra-poller; this crate stays pure so parsers unit-test against byte fixtures.
 snmp2 = { workspace = true }

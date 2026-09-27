@@ -10,49 +10,20 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 
+use yagra_common::ratelimit::TokenBucket;
+
 /// Upper bound on tracked per-source buckets. Beyond this the oldest-inserted bucket is
 /// evicted (FIFO, not strict LRU — O(1) and good enough for abuse bounding; a re-inserted
 /// source simply starts with a fresh full bucket).
 pub(crate) const MAX_TRACKED_SOURCES: usize = 10_000;
-
-/// A single token bucket.
-#[derive(Debug, Clone, Copy)]
-struct Bucket {
-    tokens: f64,
-    last_refill_ms: i64,
-}
-
-impl Bucket {
-    fn new(burst: f64, now_ms: i64) -> Self {
-        Self {
-            tokens: burst,
-            last_refill_ms: now_ms,
-        }
-    }
-
-    /// Refill for elapsed time, then try to take one token.
-    fn allow(&mut self, rate_per_sec: f64, burst: f64, now_ms: i64) -> bool {
-        let elapsed_ms = (now_ms - self.last_refill_ms).max(0) as f64;
-        self.tokens = (self.tokens + rate_per_sec * elapsed_ms / 1000.0).min(burst);
-        self.last_refill_ms = now_ms;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
-    }
-}
 
 /// Rate limiter combining a per-source-IP bucket with a global bucket. An event passes
 /// only if both allow it.
 pub struct SourceLimiter {
     per_source_rate: f64,
     per_source_burst: f64,
-    global_rate: f64,
-    global_burst: f64,
-    global: Bucket,
-    sources: HashMap<IpAddr, Bucket>,
+    global: TokenBucket,
+    sources: HashMap<IpAddr, TokenBucket>,
     insertion_order: VecDeque<IpAddr>,
 }
 
@@ -69,9 +40,7 @@ impl SourceLimiter {
         Self {
             per_source_rate,
             per_source_burst,
-            global_rate,
-            global_burst,
-            global: Bucket::new(global_burst, now_ms),
+            global: TokenBucket::new(global_rate, global_burst, now_ms),
             sources: HashMap::new(),
             insertion_order: VecDeque::new(),
         }
@@ -86,19 +55,21 @@ impl SourceLimiter {
                     self.sources.remove(&oldest);
                 }
             }
-            self.sources
-                .insert(source, Bucket::new(self.per_source_burst, now_ms));
+            self.sources.insert(source, self.fresh_bucket(now_ms));
             self.insertion_order.push_back(source);
         }
         let bucket = self
             .sources
             .get_mut(&source)
             .expect("bucket inserted above");
-        if !bucket.allow(self.per_source_rate, self.per_source_burst, now_ms) {
+        if !bucket.take(now_ms) {
             return false;
         }
-        self.global
-            .allow(self.global_rate, self.global_burst, now_ms)
+        self.global.take(now_ms)
+    }
+
+    fn fresh_bucket(&self, now_ms: i64) -> TokenBucket {
+        TokenBucket::new(self.per_source_rate, self.per_source_burst, now_ms)
     }
 }
 

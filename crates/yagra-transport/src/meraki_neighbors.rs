@@ -31,7 +31,7 @@ use std::net::IpAddr;
 
 use serde_json::Value;
 use yagra_common::{
-    meraki_port_name, render_mac, switch_port_ifindex, Neighbor, NeighborCapability,
+    meraki_port_name, parse_mac, render_mac, switch_port_ifindex, Neighbor, NeighborCapability,
     NeighborIdKind, NeighborProto,
 };
 
@@ -340,7 +340,7 @@ fn cdp_neighbor(local: Local<'_>, f: &Fields<'_>) -> Option<Neighbor> {
 /// is rewritten the way the SNMP walk renders one, so the same peer seen both ways is one chassis
 /// and core can look its maker up (ADR-180 決定 4). Anything else is text.
 fn id_with_kind(raw: &str) -> (String, NeighborIdKind) {
-    match parse_mac(raw).as_deref().and_then(render_mac) {
+    match parse_mac(raw).and_then(|m| render_mac(&m)) {
         Some(mac) => (mac, NeighborIdKind::Mac),
         None => (raw.to_owned(), NeighborIdKind::Text),
     }
@@ -353,8 +353,7 @@ pub(crate) fn canonical_mac(raw: &str) -> Option<String> {
     let raw = raw.trim();
     parse_mac(raw)
         .or_else(|| bare_hex_mac(raw))
-        .as_deref()
-        .and_then(render_mac)
+        .and_then(|m| render_mac(&m))
 }
 
 /// A CDP device id as the Dashboard rendered it, and what it is (ADR-181 増分 2 決定 B). A Meraki
@@ -363,7 +362,7 @@ pub(crate) fn canonical_mac(raw: &str) -> Option<String> {
 /// read as a MAC too, which gives the row the same chassis as the peer's LLDP row and a maker
 /// name. Anything else is what [`id_with_kind`] makes of it: a CDP device id is usually a name.
 fn cdp_device_id(raw: &str) -> (String, NeighborIdKind) {
-    match bare_hex_mac(raw).as_deref().and_then(render_mac) {
+    match bare_hex_mac(raw).and_then(|m| render_mac(&m)) {
         Some(mac) => (mac, NeighborIdKind::Mac),
         None => id_with_kind(raw),
     }
@@ -372,13 +371,15 @@ fn cdp_device_id(raw: &str) -> (String, NeighborIdKind) {
 /// Twelve hex digits and nothing else. `None` for anything else — a name that happens to be
 /// twelve characters of `0-9a-f` is the one case read wrongly, and the cost is a maker name beside
 /// it (display only, ADR-180 決定 5).
-fn bare_hex_mac(raw: &str) -> Option<Vec<u8>> {
+fn bare_hex_mac(raw: &str) -> Option<[u8; 6]> {
     if raw.len() != 12 || !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
-    (0..6)
-        .map(|i| u8::from_str_radix(&raw[i * 2..i * 2 + 2], 16).ok())
-        .collect()
+    let mut out = [0u8; 6];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&raw[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 /// A CDP version string worth showing, or `None` (ADR-181 増分 2 決定 A). A Meraki peer answers
@@ -388,24 +389,6 @@ fn bare_hex_mac(raw: &str) -> Option<Vec<u8>> {
 fn cdp_version(raw: &str) -> Option<String> {
     let meaningless = raw.len() <= 2 && raw.bytes().all(|b| b.is_ascii_digit());
     (!meaningless).then(|| raw.to_owned())
-}
-
-/// Six `:`- or `-`-separated hex octets. `None` for anything else.
-fn parse_mac(raw: &str) -> Option<Vec<u8>> {
-    let parts: Vec<&str> = raw.split([':', '-']).collect();
-    if parts.len() != 6 {
-        return None;
-    }
-    parts
-        .iter()
-        .map(|p| {
-            if p.len() == 2 {
-                u8::from_str_radix(p, 16).ok()
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 /// The first IPv4 or IPv6 address in a value, as core compares it. A value may list several;

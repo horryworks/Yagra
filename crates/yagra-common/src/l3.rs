@@ -433,13 +433,7 @@ fn mask_octets(octets: &mut [u8], prefix_len: u8) {
 /// a length/type disagreement, or an octet that cannot be one.
 #[must_use]
 pub fn decode_prefix_pointer(oid: &str) -> Option<(u32, SubnetKey)> {
-    let rest = oid
-        .strip_prefix(OID_IP_ADDRESS_PREFIX_ENTRY)?
-        .strip_prefix('.')?;
-    let sub: Vec<u32> = rest
-        .split('.')
-        .map(|p| p.parse::<u32>().ok())
-        .collect::<Option<_>>()?;
+    let sub = crate::oid::tail_subids(oid, OID_IP_ADDRESS_PREFIX_ENTRY)?;
     // ifIndex, addrType, addrLen, <addrLen octets>, prefixLen
     let (&ifindex, &addr_type) = match sub.as_slice() {
         [a, b, ..] => (a, b),

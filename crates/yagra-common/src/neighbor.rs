@@ -623,18 +623,8 @@ fn render_id_kind(shape: IdShape, bytes: &[u8]) -> (String, NeighborIdKind) {
     })
 }
 
-/// Six octets as lowercase colon-separated hex. `None` for any other length — that is not a MAC,
-/// whatever the subtype claimed.
-#[must_use]
-pub fn render_mac(bytes: &[u8]) -> Option<String> {
-    let mac: &[u8; 6] = bytes.try_into().ok()?;
-    Some(
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":"),
-    )
-}
+/// Six octets as lowercase colon-separated hex — declared beside its parser in [`crate::mac`].
+pub use crate::mac::render_mac;
 
 /// An LLDP `networkAddress`: one IANA address-family octet followed by the address itself
 /// (RFC 3232 — 1 = IPv4, 2 = IPv6). `None` for any other family or a length mismatch.
