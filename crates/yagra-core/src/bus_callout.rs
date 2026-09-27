@@ -34,9 +34,10 @@
 use std::path::PathBuf;
 
 use sqlx::{PgPool, Row};
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
-use crate::bus_cert::write_atomically;
+use crate::atomic_file::write_atomically;
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 
 /// What `nats-server.conf` includes. Sits beside it on the bus volume, one level above `certs/`.
@@ -96,13 +97,7 @@ impl BusCalloutRepo {
         let Some(row) = sqlx::query(LOAD_SQL).fetch_optional(&self.pool).await? else {
             return Ok(None);
         };
-        let sealed = SealedSecret {
-            key_id: u32::try_from(row.get::<i32, _>("key_id")).unwrap_or(0),
-            wrapped_dek: row.get("wrapped_dek"),
-            dek_nonce: row.get("dek_nonce"),
-            ciphertext: row.get("ciphertext"),
-            ct_nonce: row.get("ct_nonce"),
-        };
+        let sealed = sealed_from_row(&row)?;
         let Ok(bytes) = self.cipher.open(&sealed) else {
             tracing::error!(
                 "the stored Auth Callout account key will not open with this KEK; per-poller \
@@ -163,11 +158,7 @@ impl BusCalloutRepo {
         // with ONE key. An upsert would let the loser overwrite the winner's, and the server would
         // then be told an issuer that the core answering callouts does not sign with.
         sqlx::query(SAVE_SQL)
-            .bind(i32::try_from(sealed.key_id).unwrap_or(0))
-            .bind(&sealed.wrapped_dek)
-            .bind(&sealed.dek_nonce)
-            .bind(&sealed.ciphertext)
-            .bind(&sealed.ct_nonce)
+            .bind_sealed(&sealed)
             .bind(&issuer)
             .bind(account)
             .execute(&self.pool)

@@ -14,10 +14,11 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
 use super::answer::RcaAnswer;
 use super::{ProviderConfig, ProviderKind, DEFAULT_MAX_OUTPUT_TOKENS};
+use crate::sealed_row::{sealed_from_row_opt, BindSealed};
 use crate::secrets::Kek;
 
 /// Bounds on `max_output_tokens`, matching the CHECK in migration 0053. Below the floor a model
@@ -241,17 +242,9 @@ impl RcaRepo {
 
         // The five sealed columns move together (enforced by a CHECK); a NULL ciphertext means
         // Vertex + Workload Identity, which is a valid configuration with no secret at all.
-        let secret = match row.try_get::<Option<Vec<u8>>, _>("ciphertext")? {
+        let secret = match sealed_from_row_opt(&row)? {
             None => None,
-            Some(ciphertext) => {
-                let key_id: i32 = row.try_get("key_id")?;
-                let sealed = SealedSecret {
-                    key_id: u32::try_from(key_id).unwrap_or(0),
-                    wrapped_dek: row.try_get("wrapped_dek")?,
-                    dek_nonce: row.try_get("dek_nonce")?,
-                    ciphertext,
-                    ct_nonce: row.try_get("ct_nonce")?,
-                };
+            Some(sealed) => {
                 let bytes = self
                     .cipher
                     .open(&sealed)
@@ -302,15 +295,9 @@ impl RcaRepo {
             ),
         };
 
-        let (key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce) = match &sealed {
-            Keep::Replace(s) => (
-                Some(i32::try_from(s.key_id).unwrap_or(0)),
-                Some(s.wrapped_dek.clone()),
-                Some(s.dek_nonce.clone()),
-                Some(s.ciphertext.clone()),
-                Some(s.ct_nonce.clone()),
-            ),
-            Keep::AsIs | Keep::Clear => (None, None, None, None, None),
+        let replacement = match &sealed {
+            Keep::Replace(s) => Some(s),
+            Keep::AsIs | Keep::Clear => None,
         };
         // On conflict: `AsIs` keeps the stored columns, the other two write what we bound (a fresh
         // seal, or NULLs to clear).
@@ -329,11 +316,7 @@ impl RcaRepo {
             .bind(input.location.trim())
             .bind(input.enabled)
             .bind(tokens)
-            .bind(key_id)
-            .bind(wrapped_dek)
-            .bind(dek_nonce)
-            .bind(ciphertext)
-            .bind(ct_nonce)
+            .bind_sealed_opt(replacement)
             .bind(keep)
             .execute(&self.pool)
             .await?;
@@ -661,5 +644,47 @@ mod tests {
                 "{forbidden} must not be returned"
             );
         }
+    }
+
+    /// The one database test this repository had none of (ADR-184): a credential stored through
+    /// `save` comes back out of `configured`, survives an edit that does not mention it, and does
+    /// not survive a change of vendor.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_stored_credential_is_read_back_kept_and_dropped_on_a_vendor_change(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = RcaRepo::new(pool, crate::pgtest::kek());
+        let secret = |c: Option<ActiveConfig>| c.expect("a row is stored").provider.secret;
+
+        let mut first = input("gemini");
+        first.api_key = Some("key-one".to_owned());
+        repo.save(&first).await.unwrap();
+        assert_eq!(
+            secret(repo.configured().await.unwrap()).as_deref(),
+            Some("key-one"),
+            "sealed on the way in, opened on the way out"
+        );
+
+        let mut edit = input("gemini");
+        edit.model = "another-model".to_owned();
+        edit.api_key = None;
+        repo.save(&edit).await.unwrap();
+        let kept = repo.configured().await.unwrap().unwrap();
+        assert_eq!(kept.provider.model, "another-model");
+        assert_eq!(
+            kept.provider.secret.as_deref(),
+            Some("key-one"),
+            "an edit keeps the key"
+        );
+
+        let mut switch = input("claude");
+        switch.api_key = None;
+        repo.save(&switch).await.unwrap();
+        assert_eq!(
+            secret(repo.configured().await.unwrap()),
+            None,
+            "a Gemini key is not carried over to Claude"
+        );
     }
 }

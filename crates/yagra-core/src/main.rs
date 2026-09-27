@@ -25,6 +25,7 @@ mod analysis;
 mod api;
 mod apitokens;
 mod arp;
+mod atomic_file;
 mod audit;
 mod auth;
 mod authcallout;
@@ -124,6 +125,7 @@ mod retention;
 mod retention_sweep;
 mod ring;
 mod scheduler;
+mod sealed_row;
 mod secrets;
 mod seed_ids;
 // The WebUI's own server certificate (ADR-044). Named apart from `tls`, which builds *client*

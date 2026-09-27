@@ -14,6 +14,7 @@ use uuid::Uuid;
 use yagra_forward::{DestKind, FilterExpr, SourceKind};
 use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
+use crate::sealed_row::{sealed_from_row_opt, BindSealed};
 use crate::secrets::Kek;
 
 /// Ceiling on configured destinations. Bounds both the forwarder's per-message fan-out cost and the
@@ -182,11 +183,7 @@ impl ForwardStore {
         .bind(input.verbatim)
         .bind(sqlx::types::Json(&input.filter))
         .bind(input.rate_limit_per_sec.map(i64::from))
-        .bind(sealed.as_ref().map(|s| i64::from(s.key_id)))
-        .bind(sealed.as_ref().map(|s| s.wrapped_dek.clone()))
-        .bind(sealed.as_ref().map(|s| s.dek_nonce.clone()))
-        .bind(sealed.as_ref().map(|s| s.ciphertext.clone()))
-        .bind(sealed.as_ref().map(|s| s.ct_nonce.clone()))
+        .bind_sealed_opt(sealed.as_ref())
         .bind(input.ca_cert.as_deref())
         .execute(&self.pool)
         .await?;
@@ -213,11 +210,7 @@ impl ForwardStore {
             .bind(input.verbatim)
             .bind(sqlx::types::Json(&input.filter))
             .bind(input.rate_limit_per_sec.map(i64::from))
-            .bind(sealed.as_ref().map(|s| i64::from(s.key_id)))
-            .bind(sealed.as_ref().map(|s| s.wrapped_dek.clone()))
-            .bind(sealed.as_ref().map(|s| s.dek_nonce.clone()))
-            .bind(sealed.as_ref().map(|s| s.ciphertext.clone()))
-            .bind(sealed.as_ref().map(|s| s.ct_nonce.clone()))
+            .bind_sealed_opt(sealed.as_ref())
             .bind(input.ca_cert.as_deref())
             .execute(&self.pool)
             .await?;
@@ -270,25 +263,15 @@ impl ForwardStore {
     }
 
     fn row_to_open(&self, row: sqlx::postgres::PgRow) -> anyhow::Result<OpenDestination> {
-        let key_id: Option<i32> = row.try_get("key_id")?;
-        let secret = match key_id {
-            None => None,
-            Some(key_id) => {
-                let sealed = SealedSecret {
-                    key_id: u32::try_from(key_id).unwrap_or(0),
-                    wrapped_dek: row.try_get("wrapped_dek")?,
-                    dek_nonce: row.try_get("dek_nonce")?,
-                    ciphertext: row.try_get("ciphertext")?,
-                    ct_nonce: row.try_get("ct_nonce")?,
-                };
-                self.cipher
-                    .open(&sealed)
-                    .ok()
-                    .and_then(|pt| serde_json::from_slice::<DestSecret>(&pt).ok())
-            }
-        };
+        let sealed = sealed_from_row_opt(&row)?;
+        let secret = sealed.as_ref().and_then(|sealed| {
+            self.cipher
+                .open(sealed)
+                .ok()
+                .and_then(|pt| serde_json::from_slice::<DestSecret>(&pt).ok())
+        });
         let dest = row_to_dest(row)?;
-        if key_id.is_some() && secret.is_none() {
+        if sealed.is_some() && secret.is_none() {
             tracing::warn!(destination = %dest.id, "forwarding destination secret decrypt failed; using defaults");
         }
         Ok(OpenDestination { dest, secret })

@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::Severity;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
 use crate::notify_render::ChannelTemplate;
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 
 /// A delivery channel kind.
@@ -212,11 +213,7 @@ impl NotificationRepo {
         .bind(id)
         .bind(name)
         .bind(config.kind().as_str())
-        .bind(i64::from(sealed.key_id))
-        .bind(&sealed.wrapped_dek)
-        .bind(&sealed.dek_nonce)
-        .bind(&sealed.ciphertext)
-        .bind(&sealed.ct_nonce)
+        .bind_sealed(&sealed)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -280,18 +277,11 @@ impl NotificationRepo {
         let mut out = Vec::new();
         for row in rows {
             let id: Uuid = row.try_get("id")?;
-            let key_id: i32 = row.try_get("key_id")?;
             let template = ChannelTemplate {
                 subject: row.try_get("subject_template")?,
                 body: row.try_get("body_template")?,
             };
-            let sealed = SealedSecret {
-                key_id: u32::try_from(key_id).unwrap_or(0),
-                wrapped_dek: row.try_get("wrapped_dek")?,
-                dek_nonce: row.try_get("dek_nonce")?,
-                ciphertext: row.try_get("ciphertext")?,
-                ct_nonce: row.try_get("ct_nonce")?,
-            };
+            let sealed = sealed_from_row(&row)?;
             match self
                 .cipher
                 .open(&sealed)

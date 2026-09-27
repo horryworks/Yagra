@@ -34,8 +34,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
+use crate::atomic_file::write_atomically;
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 use crate::server_cert::{self, ServerCert, RENEW_WITHIN_DAYS};
 use crate::stored_enum::token_enum;
@@ -231,13 +233,7 @@ impl WebTlsRepo {
         let source = TlsCertSource::from_stored(&row.try_get::<String, _>("source")?);
         let certificate: String = row.try_get("certificate")?;
 
-        let sealed = SealedSecret {
-            key_id: u32::try_from(row.try_get::<i32, _>("key_id")?).unwrap_or(0),
-            wrapped_dek: row.try_get("wrapped_dek")?,
-            dek_nonce: row.try_get("dek_nonce")?,
-            ciphertext: row.try_get("ciphertext")?,
-            ct_nonce: row.try_get("ct_nonce")?,
-        };
+        let sealed = sealed_from_row(&row)?;
         let Ok(key_bytes) = self.cipher.open(&sealed) else {
             return Ok(Stored::KeyUnreadable { source });
         };
@@ -309,11 +305,7 @@ impl WebTlsRepo {
         sqlx::query(SAVE_SQL)
             .bind(source.as_str())
             .bind(&cert.chain_pem)
-            .bind(i32::try_from(sealed.key_id).unwrap_or(0))
-            .bind(&sealed.wrapped_dek)
-            .bind(&sealed.dek_nonce)
-            .bind(&sealed.ciphertext)
-            .bind(&sealed.ct_nonce)
+            .bind_sealed(&sealed)
             .bind(&cert.meta.subject)
             .bind(&cert.meta.issuer)
             .bind(serde_json::to_value(&cert.meta.sans)?)
@@ -479,38 +471,9 @@ impl WebTlsRepo {
     }
 
     fn write_bundle(&self, dir: &std::path::Path, cert: &ServerCert) -> std::io::Result<()> {
-        use std::io::Write;
-
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join("server.pem.tmp");
-        let dst = dir.join(BUNDLE_FILE);
-
-        // Create restrictively and *then* write, so the private key is never briefly readable by
-        // anyone the final mode would exclude.
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(cert.bundle_pem().as_bytes())?;
-        // Durable before the rename: a crash between the two would otherwise leave nginx pointed at
-        // a file whose contents never reached the disk.
-        f.sync_all()?;
-        drop(f);
-
-        // 0640, not 0600: nginx runs as a different uid and reads this as a group member. Set
-        // explicitly rather than relying on the create mode, which umask can narrow.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o640))?;
-        }
-
-        std::fs::rename(&tmp, &dst)?;
-        Ok(())
+        // 0640, not 0600: nginx runs as a different uid and reads this as a group member.
+        write_atomically(&dir.join(BUNDLE_FILE), cert.bundle_pem().as_bytes(), 0o640)
     }
 }
 

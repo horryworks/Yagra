@@ -24,6 +24,8 @@ use std::time::Duration;
 use semver::Version;
 use sqlx::{PgPool, Row};
 
+use crate::atomic_file::write_atomically;
+
 /// How long the fleet-wide maintenance window opened by an apply may last.
 ///
 /// **Bounded before the run starts *and* closed when it ends** (ADR-050 decision 12). core is
@@ -1104,10 +1106,7 @@ impl UpgradeRepo {
             return;
         };
         let body = format!("{SETTINGS_ENABLED_KEY}={}\n", u8::from(enabled));
-        let tmp = dir.join("settings.tmp");
-        let write = std::fs::write(&tmp, body)
-            .and_then(|()| std::fs::rename(&tmp, dir.join(SETTINGS_FILE)));
-        if let Err(e) = write {
+        if let Err(e) = write_atomically(&dir.join(SETTINGS_FILE), body.as_bytes(), 0o644) {
             tracing::warn!(error = %e, "could not publish the upgrade switch to the updater");
         }
     }
@@ -1180,9 +1179,7 @@ impl UpgradeRepo {
             body.push_str(value);
             body.push('\n');
         }
-        let tmp = dir.join("request.tmp");
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(&tmp, dir.join("request"))?;
+        write_atomically(&dir.join("request"), body.as_bytes(), 0o644)?;
         Ok(())
     }
 
@@ -1348,9 +1345,7 @@ impl UpgradeRepo {
             run_id: run_id.to_owned(),
             pollers: pollers.to_vec(),
         })?;
-        let tmp = dir.join("poller-selection.tmp");
-        std::fs::write(&tmp, body)?;
-        std::fs::rename(&tmp, dir.join(POLLER_SELECTION_FILE))?;
+        write_atomically(&dir.join(POLLER_SELECTION_FILE), body.as_bytes(), 0o644)?;
         Ok(())
     }
 

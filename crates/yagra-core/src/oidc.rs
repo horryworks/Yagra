@@ -33,8 +33,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::Role;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 
 /// How long an in-flight authorization (state→nonce/PKCE) is honored before it's pruned.
@@ -634,11 +635,7 @@ impl OidcRepo {
         .bind(&input.name)
         .bind(&input.issuer)
         .bind(&input.client_id)
-        .bind(i64::from(sealed.key_id))
-        .bind(&sealed.wrapped_dek)
-        .bind(&sealed.dek_nonce)
-        .bind(&sealed.ciphertext)
-        .bind(&sealed.ct_nonce)
+        .bind_sealed(&sealed)
         .bind(&input.redirect_uri)
         .bind(&input.scopes)
         .bind(&input.groups_claim)
@@ -677,11 +674,7 @@ impl OidcRepo {
             .bind(&role_map)
             .bind(&input.default_role)
             .bind(input.enabled)
-            .bind(i64::from(sealed.key_id))
-            .bind(&sealed.wrapped_dek)
-            .bind(&sealed.dek_nonce)
-            .bind(&sealed.ciphertext)
-            .bind(&sealed.ct_nonce)
+            .bind_sealed(&sealed)
             .bind(input.kind.as_str())
             .execute(&self.pool)
             .await?
@@ -730,14 +723,7 @@ impl OidcRepo {
         let Some(row) = row else {
             return Ok(None);
         };
-        let key_id: i32 = row.try_get("key_id")?;
-        let sealed = SealedSecret {
-            key_id: u32::try_from(key_id).unwrap_or(0),
-            wrapped_dek: row.try_get("wrapped_dek")?,
-            dek_nonce: row.try_get("dek_nonce")?,
-            ciphertext: row.try_get("ciphertext")?,
-            ct_nonce: row.try_get("ct_nonce")?,
-        };
+        let sealed = sealed_from_row(&row)?;
         let secret_bytes = self
             .cipher
             .open(&sealed)

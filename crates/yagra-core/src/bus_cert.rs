@@ -46,8 +46,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
+use crate::atomic_file::write_atomically;
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 use crate::server_cert::{self, ServerCert};
 
@@ -209,13 +211,7 @@ impl BusTlsRepo {
             return Ok(Stored::Absent);
         };
         let certificate: String = row.try_get("certificate")?;
-        let sealed = SealedSecret {
-            key_id: u32::try_from(row.try_get::<i32, _>("key_id")?).unwrap_or(0),
-            wrapped_dek: row.try_get("wrapped_dek")?,
-            dek_nonce: row.try_get("dek_nonce")?,
-            ciphertext: row.try_get("ciphertext")?,
-            ct_nonce: row.try_get("ct_nonce")?,
-        };
+        let sealed = sealed_from_row(&row)?;
         let Ok(key_bytes) = self.cipher.open(&sealed) else {
             return Ok(Stored::KeyUnreadable);
         };
@@ -282,11 +278,7 @@ impl BusTlsRepo {
             .map_err(|e| anyhow::anyhow!("seal the bus TLS private key: {e}"))?;
         sqlx::query(SAVE_SQL)
             .bind(&cert.chain_pem)
-            .bind(i32::try_from(sealed.key_id).unwrap_or(0))
-            .bind(&sealed.wrapped_dek)
-            .bind(&sealed.dek_nonce)
-            .bind(&sealed.ciphertext)
-            .bind(&sealed.ct_nonce)
+            .bind_sealed(&sealed)
             .bind(&cert.meta.subject)
             .bind(&cert.meta.issuer)
             .bind(serde_json::to_value(&cert.meta.sans)?)
@@ -435,41 +427,6 @@ pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<BusTlsRepo> {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from),
     ))
-}
-
-/// Create restrictively, write, fsync, then rename — so no reader ever sees a partial file and the
-/// private key is never briefly readable by anyone the final mode would exclude.
-/// Write, fsync, then rename — shared with [`crate::bus_callout`], which materializes the other
-/// half of this volume from the same one-shot and must not carry a second copy of the durability
-/// rules (`extensibility.md` §3).
-pub(crate) fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let tmp = dst.with_extension("tmp");
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(mode);
-    }
-    let mut f = opts.open(&tmp)?;
-    f.write_all(body)?;
-    // Durable before the rename: a crash between the two would leave the bus pointed at a file
-    // whose contents never reached the disk.
-    f.sync_all()?;
-    drop(f);
-    // Set explicitly rather than relying on the create mode, which umask can narrow.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = mode;
-    }
-    std::fs::rename(&tmp, dst)
 }
 
 const VIEW_SQL: &str = "SELECT b.certificate, b.subject, b.issuer, b.sans, b.not_before, \

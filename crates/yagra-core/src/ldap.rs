@@ -33,8 +33,9 @@ use sqlx::{PgPool, Row};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 use yagra_common::Role;
-use yagra_secrets::{EnvelopeCipher, SealedSecret};
+use yagra_secrets::EnvelopeCipher;
 
+use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 
 // ── Limits ──────────────────────────────────────────────────────────────────────────────────────
@@ -631,14 +632,7 @@ impl LdapRepo {
         if require_enabled && !row.try_get::<bool, _>("enabled")? {
             return Ok(None);
         }
-        let key_id: i32 = row.try_get("key_id")?;
-        let sealed = SealedSecret {
-            key_id: u32::try_from(key_id).unwrap_or(0),
-            wrapped_dek: row.try_get("wrapped_dek")?,
-            dek_nonce: row.try_get("dek_nonce")?,
-            ciphertext: row.try_get("ciphertext")?,
-            ct_nonce: row.try_get("ct_nonce")?,
-        };
+        let sealed = sealed_from_row(&row)?;
         let bind_password = String::from_utf8(
             self.cipher
                 .open(&sealed)
@@ -722,16 +716,6 @@ impl LdapRepo {
             }
         }
         let keep = sealed.is_none();
-        let (key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce) = match &sealed {
-            Some(s) => (
-                Some(i32::try_from(s.key_id).unwrap_or(0)),
-                Some(s.wrapped_dek.clone()),
-                Some(s.dek_nonce.clone()),
-                Some(s.ciphertext.clone()),
-                Some(s.ct_nonce.clone()),
-            ),
-            None => (None, None, None, None, None),
-        };
 
         sqlx::query(SAVE_SQL)
             .bind(input.host.trim())
@@ -745,11 +729,7 @@ impl LdapRepo {
                     .filter(|s| !s.is_empty()),
             )
             .bind(input.bind_dn.trim())
-            .bind(key_id)
-            .bind(wrapped_dek)
-            .bind(dek_nonce)
-            .bind(ciphertext)
-            .bind(ct_nonce)
+            .bind_sealed_opt(sealed.as_ref())
             .bind(input.user_base_dn.trim())
             .bind(input.user_filter.trim())
             .bind(input.username_attribute.trim())
