@@ -609,83 +609,120 @@ impl VmStore {
         crate::poll_interval::rate_window_secs(floor, self.intervals.fleet_max())
     }
 
-    /// Run one interface-candidate query and parse its rows — or `None` for anything that is not a
-    /// successful answer. [`MetricStore::interface_candidates`] says why a partial answer must never
-    /// stand in for a whole one.
-    async fn candidate_batch(&self, url: &str, query: String) -> Option<Vec<(Uuid, i32, f64)>> {
-        let resp = match self.http.get(url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                // `None`, not an empty vector — see the trait doc. Treating a transport failure
-                // as "nothing is busy" would resolve every interface alert in the fleet.
-                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
-                return None;
-            }
-        };
-        // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics reports a
-        // malformed query as 4xx with a JSON body that parses fine and carries no `result`, so
-        // checking the status is what stops a bad query reading as a quiet fleet.
-        if !resp.status().is_success() {
-            tracing::warn!(
-                status = %resp.status(),
-                "VictoriaMetrics refused the interface-candidate query"
-            );
-            return None;
+    /// Send one read and judge the reply — transport, HTTP status, JSON, envelope, in that order.
+    /// **Every read this store makes goes through here** (ADR-184), and each way of not answering
+    /// is warned about once, naming the read.
+    ///
+    /// Before this there were thirteen reads and two of them looked at the status. VictoriaMetrics
+    /// reports a malformed or over-long query as a 4xx whose JSON body parses fine and carries no
+    /// `result`, so the other eleven read a refusal as "nothing matched", with no log line at all.
+    /// What "no answer" *means* stays with each caller: a partial candidate set is refused whole, a
+    /// freshness batch costs only its own nodes, a chart draws nothing.
+    async fn answer(
+        what: &'static str,
+        request: reqwest::RequestBuilder,
+    ) -> Result<serde_json::Value, VmReadError> {
+        let outcome = Self::judge(request).await;
+        if let Err(e) = &outcome {
+            e.warn(what);
         }
-        let json = match resp.json::<serde_json::Value>().await {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
-                return None;
-            }
-        };
-        // VictoriaMetrics reports a query-time error in the body with `status: "error"` and HTTP
-        // 200 in some configurations, so the envelope is checked too.
-        if json.get("status").and_then(|v| v.as_str()) != Some("success") {
-            tracing::warn!("VictoriaMetrics interface-candidate query returned a non-success body");
-            return None;
-        }
-        Some(parse_top_interfaces(&json))
+        outcome
     }
 
-    /// One freshness query: the node ids of the series it found, or `None` for no answer.
-    ///
-    /// Every way of not answering is warned about, never silent. The refusal that mattered was a
-    /// query over the server's length ceiling — a 422 whose body parses and carries no `result`, so
-    /// it used to read, with no log line at all, as "no node is fresh".
-    async fn fresh_batch(&self, url: &str, query: String) -> Option<Vec<Uuid>> {
-        let resp = match self.http.get(url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics freshness query failed");
-                return None;
-            }
-        };
+    /// [`Self::answer`] without the log line.
+    async fn judge(request: reqwest::RequestBuilder) -> Result<serde_json::Value, VmReadError> {
+        let resp = request.send().await.map_err(VmReadError::Transport)?;
         let status = resp.status();
         if !status.is_success() {
             // VictoriaMetrics says why in the body (`too long query; mustn't exceed …`). Only its
             // head is kept: the rest can repeat the query, which is node ids and nothing secret.
-            let reason: String = resp
+            let reason = resp
                 .text()
                 .await
                 .unwrap_or_default()
                 .chars()
                 .take(200)
                 .collect();
-            tracing::warn!(%status, %reason, "VictoriaMetrics refused a freshness query");
-            return None;
+            return Err(VmReadError::Refused { status, reason });
         }
-        let json = match resp.json::<serde_json::Value>().await {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics freshness response was not JSON");
-                return None;
-            }
-        };
+        let json = resp
+            .json::<serde_json::Value>()
+            .await
+            .map_err(VmReadError::NotJson)?;
+        // A query-time error can arrive as HTTP 200 with `status: "error"` in the body, so the
+        // envelope is checked too.
         if json.get("status").and_then(|v| v.as_str()) != Some("success") {
-            tracing::warn!("VictoriaMetrics freshness query returned a non-success body");
-            return None;
+            return Err(VmReadError::Envelope);
         }
+        Ok(json)
+    }
+
+    /// An instant query. The only place this store spells the endpoint.
+    async fn read_instant(
+        &self,
+        what: &'static str,
+        query: String,
+    ) -> Result<serde_json::Value, VmReadError> {
+        let url = format!("{}/api/v1/query", self.base);
+        Self::answer(what, self.http.get(&url).query(&[("query", query)])).await
+    }
+
+    /// A range query; `params` come from [`Self::range_params`]. The only place this store spells
+    /// the endpoint.
+    async fn read_range(
+        &self,
+        what: &'static str,
+        params: Vec<(&'static str, String)>,
+    ) -> Result<serde_json::Value, VmReadError> {
+        let url = format!("{}/api/v1/query_range", self.base);
+        Self::answer(what, self.http.get(&url).query(&params)).await
+    }
+
+    /// A series enumeration. The only place this store spells the endpoint.
+    async fn read_series(
+        &self,
+        what: &'static str,
+        params: &[(&str, String)],
+    ) -> Result<serde_json::Value, VmReadError> {
+        let url = format!("{}/api/v1/series", self.base);
+        Self::answer(what, self.http.get(&url).query(params)).await
+    }
+
+    /// Post exposition lines, and say whether the server took them. The only place this store
+    /// spells the endpoint. A write is judged on its status alone: the import endpoint answers 204
+    /// with no body.
+    async fn post_import(&self, what: &'static str, body: String) -> bool {
+        let url = format!("{}/api/v1/import/prometheus", self.base);
+        match self.http.post(&url).body(body).send().await {
+            Ok(resp) if resp.status().is_success() => true,
+            Ok(resp) => {
+                tracing::warn!(write = what, status = %resp.status(), "VictoriaMetrics refused an import");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(write = what, error = %e, "VictoriaMetrics import request failed");
+                false
+            }
+        }
+    }
+
+    /// Run one interface-candidate query and parse its rows — or `None` for anything that is not a
+    /// successful answer. [`MetricStore::interface_candidates`] says why a partial answer must never
+    /// stand in for a whole one.
+    async fn candidate_batch(&self, query: String) -> Option<Vec<(Uuid, i32, f64)>> {
+        // `None`, not an empty vector — see the trait doc. Treating a failure as "nothing is busy"
+        // would resolve every interface alert in the fleet.
+        let json = self.read_instant("interface-candidate", query).await.ok()?;
+        Some(parse_top_interfaces(&json))
+    }
+
+    /// One freshness query: the node ids of the series it found, or `None` for no answer.
+    ///
+    /// The refusal that mattered was a query over the server's length ceiling — a 422 whose body
+    /// parses and carries no `result`, so it used to read, with no log line at all, as "no node is
+    /// fresh". [`Self::answer`] is what warns about it now.
+    async fn fresh_batch(&self, query: String) -> Option<Vec<Uuid>> {
+        let json = self.read_instant("freshness", query).await.ok()?;
         // Reuse the node-label parser; only the ids are wanted, not the values.
         Some(
             parse_top_nodes(&json)
@@ -770,15 +807,7 @@ impl VmStore {
     }
 
     async fn fetch_range_points(&self, params: Vec<(&'static str, String)>) -> Vec<MetricPoint> {
-        let url = format!("{}/api/v1/query_range", self.base);
-        let resp = match self.http.get(&url).query(&params).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics query_range request failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
+        let Ok(json) = self.read_range("range", params).await else {
             return Vec::new();
         };
         // data.result[0].values is [[<ts_seconds>, "<value>"], …].
@@ -807,19 +836,66 @@ impl VmStore {
     /// Run a node-scoped instant query and demux the result into `ifindex → value`. Backs the
     /// batched node-detail interface list. Empty on any request/parse failure.
     async fn node_interface_values(&self, query: String) -> std::collections::HashMap<i32, f64> {
-        let url = format!("{}/api/v1/query", self.base);
-        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics node-interface query failed");
-                return std::collections::HashMap::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return std::collections::HashMap::new();
-        };
-        parse_ifindex_values(&json)
+        self.read_instant("node-interface", query)
+            .await
+            .map_or_else(
+                |_| std::collections::HashMap::new(),
+                |json| parse_ifindex_values(&json),
+            )
     }
+}
+
+/// Why a VictoriaMetrics read came back with no answer. [`VmStore::answer`] warns about each one
+/// once; what a caller does with "no answer" is the caller's own decision.
+#[derive(Debug)]
+enum VmReadError {
+    /// The request never completed — a refused connection, a timeout.
+    Transport(reqwest::Error),
+    /// A non-2xx. `reason` is the head of the body, which is where VictoriaMetrics says why.
+    Refused {
+        status: reqwest::StatusCode,
+        reason: String,
+    },
+    /// A 2xx whose body was not JSON.
+    NotJson(reqwest::Error),
+    /// A 2xx JSON body whose `status` was not `"success"`.
+    Envelope,
+}
+
+impl VmReadError {
+    /// One warning per failed read, naming which read it was.
+    fn warn(&self, what: &'static str) {
+        match self {
+            Self::Transport(error) => {
+                tracing::warn!(read = what, %error, "VictoriaMetrics read failed");
+            }
+            Self::Refused { status, reason } => {
+                tracing::warn!(read = what, %status, %reason, "VictoriaMetrics refused a read");
+            }
+            Self::NotJson(error) => {
+                tracing::warn!(read = what, %error, "VictoriaMetrics answered a read with something that is not JSON");
+            }
+            Self::Envelope => {
+                tracing::warn!(
+                    read = what,
+                    "VictoriaMetrics answered a read with a non-success body"
+                );
+            }
+        }
+    }
+}
+
+/// The value of the first series of an instant query: `data.result[0].value[1]`, which
+/// VictoriaMetrics sends as a string. `None` for an empty result.
+fn first_instant_value(json: &serde_json::Value) -> Option<f64> {
+    json.get("data")?
+        .get("result")?
+        .get(0)?
+        .get("value")?
+        .get(1)?
+        .as_str()?
+        .parse()
+        .ok()
 }
 
 /// The three fleet-wide reads whose `rate()` window follows the slowest poll interval in the fleet
@@ -1706,14 +1782,7 @@ impl MetricStore for VmStore {
         if body.is_empty() {
             return; // every sample was rejected — nothing to import
         }
-        let url = format!("{}/api/v1/import/prometheus", self.base);
-        match self.http.post(&url).body(body).send().await {
-            Ok(resp) if !resp.status().is_success() => {
-                tracing::warn!(status = %resp.status(), "VictoriaMetrics import non-2xx");
-            }
-            Err(e) => tracing::warn!(error = %e, "VictoriaMetrics import request failed"),
-            Ok(_) => {}
-        }
+        self.post_import("result", body).await;
     }
 
     async fn write_batch(&self, results: &[Arc<PollResult>]) -> bool {
@@ -1747,22 +1816,12 @@ impl MetricStore for VmStore {
             return true; // nothing to persist (all buffered results were sample-free or rejected)
         }
         metrics::counter!("yagra_vm_import_bytes_total").increment(body.len() as u64);
-        let url = format!("{}/api/v1/import/prometheus", self.base);
+        // Timed around the call, so the histogram still measures the round trip and nothing else.
         let post_started = std::time::Instant::now();
-        let sent = self.http.post(&url).body(body).send().await;
+        let taken = self.post_import("batch", body).await;
         metrics::histogram!(M_VM_IMPORT_SECONDS, "phase" => "post")
             .record(post_started.elapsed().as_secs_f64());
-        match sent {
-            Ok(resp) if resp.status().is_success() => true,
-            Ok(resp) => {
-                tracing::warn!(status = %resp.status(), "VictoriaMetrics batch import non-2xx");
-                false
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics batch import request failed");
-                false
-            }
-        }
+        taken
     }
 
     async fn write_host_sample(
@@ -1774,14 +1833,7 @@ impl MetricStore for VmStore {
         at_unix_ms: i64,
     ) {
         let body = host_prometheus_lines(instance, role, pool, sample, at_unix_ms);
-        let url = format!("{}/api/v1/import/prometheus", self.base);
-        match self.http.post(&url).body(body).send().await {
-            Ok(resp) if !resp.status().is_success() => {
-                tracing::warn!(status = %resp.status(), "VictoriaMetrics host import non-2xx");
-            }
-            Err(e) => tracing::warn!(error = %e, "VictoriaMetrics host import request failed"),
-            Ok(_) => {}
-        }
+        self.post_import("host", body).await;
     }
 
     async fn host_metric_range(
@@ -1845,24 +1897,8 @@ impl MetricStore for VmStore {
     }
 
     async fn latest(&self, key: &SeriesKey) -> Option<f64> {
-        let url = format!("{}/api/v1/query", self.base);
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[("query", latest_query(key))])
-            .send()
-            .await
-            .ok()?;
-        let json: serde_json::Value = resp.json().await.ok()?;
-        // data.result[0].value[1] is the sample value as a string.
-        let raw = json
-            .get("data")?
-            .get("result")?
-            .get(0)?
-            .get("value")?
-            .get(1)?
-            .as_str()?;
-        raw.parse().ok()
+        let json = self.read_instant("latest", latest_query(key)).await.ok()?;
+        first_instant_value(&json)
     }
 
     async fn range(
@@ -1929,40 +1965,20 @@ impl MetricStore for VmStore {
         nodes: Option<&[Uuid]>,
         within_secs: u64,
     ) -> std::collections::HashMap<(Uuid, i64), f64> {
-        let url = format!("{}/api/v1/query", self.base);
         let query = series_rows_query(metric, nodes, within_secs);
-        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, metric, "VictoriaMetrics series-rows query failed");
-                return std::collections::HashMap::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return std::collections::HashMap::new();
-        };
-        parse_node_row_values(&json)
+        self.read_instant("series-rows", query).await.map_or_else(
+            |_| std::collections::HashMap::new(),
+            |json| parse_node_row_values(&json),
+        )
     }
 
     async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {
-        let url = format!("{}/api/v1/query", self.base);
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[("query", aggregate_latest_query(key))])
-            .send()
+        let json = self
+            .read_instant("aggregate-latest", aggregate_latest_query(key))
             .await
             .ok()?;
-        let json: serde_json::Value = resp.json().await.ok()?;
-        // data.result[0].value[1] is the aggregated value as a string (empty result ⇒ None).
-        let raw = json
-            .get("data")?
-            .get("result")?
-            .get(0)?
-            .get("value")?
-            .get(1)?
-            .as_str()?;
-        raw.parse().ok()
+        // An empty result ⇒ `None`.
+        first_instant_value(&json)
     }
 
     async fn aggregate_range(
@@ -1977,24 +1993,9 @@ impl MetricStore for VmStore {
     }
 
     async fn top_nodes(&self, metric: &str, agg: TopAgg, limit: usize) -> Vec<(Uuid, f64)> {
-        let url = format!("{}/api/v1/query", self.base);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[("query", topk_query(metric, agg, limit))])
-            .send()
+        self.read_instant("topk", topk_query(metric, agg, limit))
             .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics topk query failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        parse_top_nodes(&json)
+            .map_or_else(|_| Vec::new(), |json| parse_top_nodes(&json))
     }
 
     async fn top_interfaces(
@@ -2003,23 +2004,13 @@ impl MetricStore for VmStore {
         agg: TopAgg,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
-        let url = format!("{}/api/v1/query", self.base);
         let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
         let query = topk_interface_query(metric, agg, limit, w);
+        // Timed around the call: a refused read still cost the round trip it measures.
         let started = std::time::Instant::now();
-        let json = async {
-            let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    tracing::warn!(error = %e, "VictoriaMetrics interface topk query failed");
-                    return None;
-                }
-            };
-            resp.json::<serde_json::Value>().await.ok()
-        }
-        .await;
+        let json = self.read_instant("interface-topk", query).await;
         record_fleet_read(FleetRead::InterfaceTop, w, started);
-        json.as_ref().map_or_else(Vec::new, parse_top_interfaces)
+        json.map_or_else(|_| Vec::new(), |json| parse_top_interfaces(&json))
     }
 
     async fn interface_candidates(
@@ -2041,7 +2032,6 @@ impl MetricStore for VmStore {
             .window_classes(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, nodes);
         // Only a split query can answer about a node twice, so only a split query is filtered.
         let owners = (classes.len() > 1).then(|| crate::poll_interval::ClassOwners::of(&classes));
-        let url = format!("{}/api/v1/query", self.base);
         let mut all = Vec::new();
         // 🚨 Every `return None` below abandons the **whole** call, not just this batch, and that
         // is deliberate. The caller reads "absent from the candidate set" as "below its bound", so
@@ -2069,7 +2059,7 @@ impl MetricStore for VmStore {
             };
             for sel in &selectors {
                 let query = interface_candidates_query(metric, floor_bps, sel, class.window_secs);
-                let rows = self.candidate_batch(&url, query).await?;
+                let rows = self.candidate_batch(query).await?;
                 // Batches within a class are disjoint by construction (one node is in exactly one
                 // chunk). Across classes they are not — the remainder, or a fleet-wide fallback,
                 // answers for named nodes too — so each row is kept by the class that owns it.
@@ -2089,14 +2079,13 @@ impl MetricStore for VmStore {
         if metrics.is_empty() {
             return Vec::new();
         }
-        let url = format!("{}/api/v1/query", self.base);
         // Every node series that has any sample in the window contributes its node label.
         let query = format!(
             "last_over_time({{{}}}[{}s])",
             name_selector(metrics),
             within_secs.max(1)
         );
-        dedup_ids(self.fresh_batch(&url, query).await.into_iter().flatten())
+        dedup_ids(self.fresh_batch(query).await.into_iter().flatten())
     }
 
     async fn fresh_node_ids_scoped(
@@ -2108,7 +2097,6 @@ impl MetricStore for VmStore {
         if scope.is_empty() || metrics.is_empty() {
             return Vec::new();
         }
-        let url = format!("{}/api/v1/query", self.base);
         // Push the page's node set into the selector so VM returns only those series, not the whole
         // fleet (S20) — in as many queries as the server's length ceiling needs.
         //
@@ -2119,7 +2107,7 @@ impl MetricStore for VmStore {
         // blank the others.
         let mut ids = Vec::new();
         for query in fresh_scoped_queries(metrics, within_secs, scope) {
-            ids.extend(self.fresh_batch(&url, query).await.into_iter().flatten());
+            ids.extend(self.fresh_batch(query).await.into_iter().flatten());
         }
         dedup_ids(ids.into_iter())
     }
@@ -2130,25 +2118,15 @@ impl MetricStore for VmStore {
         window_secs: u64,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
-        let url = format!("{}/api/v1/query", self.base);
         // The comparison window is also each rate's window, so it must hold two polls of the
         // slowest node or "now" and "then" are both empty for it (ADR-144).
         let w = self.fleet_window(window_secs);
         let query = interface_delta_query(direction, w, limit);
+        // Timed around the call: a refused read still cost the round trip it measures.
         let started = std::time::Instant::now();
-        let json = async {
-            let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    tracing::warn!(error = %e, "VictoriaMetrics interface-delta query failed");
-                    return None;
-                }
-            };
-            resp.json::<serde_json::Value>().await.ok()
-        }
-        .await;
+        let json = self.read_instant("interface-delta", query).await;
         record_fleet_read(FleetRead::InterfaceDelta, w, started);
-        let Some(json) = json else {
+        let Ok(json) = json else {
             return Vec::new();
         };
         let mut out = parse_top_interfaces(&json);
@@ -2221,34 +2199,20 @@ impl MetricStore for VmStore {
     }
 
     async fn node_series(&self, node: Uuid, within_secs: u64) -> Vec<NodeSeries> {
-        // VictoriaMetrics /api/v1/series lists the label sets of every series matching a selector.
+        // The series endpoint lists the label sets of every series matching a selector.
         // `node` is a UUID (bounded type), so it's safe to interpolate into the matcher.
-        let url = format!("{}/api/v1/series", self.base);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let start = now - i64::try_from(within_secs.max(1)).unwrap_or(i64::MAX);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[
-                ("match[]", format!("{{node=\"{node}\"}}")),
-                ("start", start.to_string()),
-                ("end", now.to_string()),
-            ])
-            .send()
+        let params = [
+            ("match[]", format!("{{node=\"{node}\"}}")),
+            ("start", start.to_string()),
+            ("end", now.to_string()),
+        ];
+        self.read_series("series", &params)
             .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics series enumeration failed");
-                return Vec::new();
-            }
-        };
-        let Ok(json) = resp.json::<serde_json::Value>().await else {
-            return Vec::new();
-        };
-        series_from_json(&json)
+            .map_or_else(|_| Vec::new(), |json| series_from_json(&json))
     }
 }
 
@@ -3635,5 +3599,164 @@ mod tests {
         // Not empty: the batches that answered are kept. Not the whole page either: the refused
         // batch's nodes are not fresh, which is `unknown` on a screen and closes nothing.
         assert_eq!(got, page[per_query..]);
+    }
+
+    /// A VictoriaMetrics stand-in that gives every request the same reply, whatever the path.
+    async fn canned_vm(status: u16, body: &'static str) -> String {
+        let reply = move || async move {
+            (
+                axum::http::StatusCode::from_u16(status).unwrap(),
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+        };
+        let app = axum::Router::new().fallback(reply);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        format!("http://{addr}")
+    }
+
+    /// What every read folds "no answer" into. None of them may turn it into a value.
+    async fn assert_every_read_answers_nothing(store: &VmStore) {
+        let key = SeriesKey::node(NodeId::from(Uuid::nil()), "icmp_rtt_ms");
+        assert_eq!(store.latest(&key).await, None);
+        assert_eq!(store.aggregate_latest(&key).await, None);
+        assert!(MetricStore::range(store, &key, 0, 60, 15).await.is_empty());
+        assert!(store
+            .top_nodes("icmp_rtt_ms", TopAgg::Now, 5)
+            .await
+            .is_empty());
+        assert!(store
+            .top_interfaces(InterfaceTopMetric::Throughput, TopAgg::Now, 5)
+            .await
+            .is_empty());
+        assert!(store
+            .interface_delta(DeltaDirection::Up, 300, 5)
+            .await
+            .is_empty());
+        assert!(store.series_rows("cpu_pct", None, 600).await.is_empty());
+        assert!(store.node_series(Uuid::nil(), 600).await.is_empty());
+        assert!(store.fresh_node_ids(&["icmp_rtt_ms"], 600).await.is_empty());
+        // The one read whose "no answer" is not "empty": an absent port reads as below its bound.
+        assert_eq!(
+            store
+                .interface_candidates(InterfaceTopMetric::Throughput, 1.0, None)
+                .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_read_is_no_answer_and_says_why() {
+        // The body VictoriaMetrics sends for a query it will not run: it parses, and it has no
+        // `result`. Eleven reads used to take that for "nothing matched".
+        let store = VmStore::new(
+            canned_vm(
+                422,
+                r#"{"status":"error","errorType":"422","error":"too long query"}"#,
+            )
+            .await,
+        );
+        match store.read_instant("test", "up".into()).await {
+            Err(VmReadError::Refused { status, reason }) => {
+                assert_eq!(status.as_u16(), 422);
+                assert!(reason.contains("too long query"), "{reason}");
+            }
+            other => panic!("a 422 must be a refusal, got {other:?}"),
+        }
+        assert_every_read_answers_nothing(&store).await;
+    }
+
+    #[tokio::test]
+    async fn a_200_that_reports_an_error_in_its_body_is_no_answer() {
+        let store = VmStore::new(canned_vm(200, r#"{"status":"error","error":"boom"}"#).await);
+        assert!(matches!(
+            store.read_instant("test", "up".into()).await,
+            Err(VmReadError::Envelope)
+        ));
+        assert_every_read_answers_nothing(&store).await;
+    }
+
+    #[tokio::test]
+    async fn a_200_that_is_not_json_is_no_answer() {
+        let store = VmStore::new(canned_vm(200, "<html>a proxy's error page</html>").await);
+        assert!(matches!(
+            store.read_instant("test", "up".into()).await,
+            Err(VmReadError::NotJson(_))
+        ));
+        assert_every_read_answers_nothing(&store).await;
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_there_is_no_answer() {
+        // Bind, note the port, and let go of it: nothing is listening there now.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let store = VmStore::new(format!("http://{addr}"));
+        assert!(matches!(
+            store.read_instant("test", "up".into()).await,
+            Err(VmReadError::Transport(_))
+        ));
+        assert_every_read_answers_nothing(&store).await;
+    }
+
+    #[tokio::test]
+    async fn an_answer_with_no_series_is_an_answer() {
+        // The accept side: a healthy, empty reply must not be mistaken for a refusal — for the
+        // candidate read that is the difference between "nothing is busy" and "nobody knows".
+        let store = VmStore::new(
+            canned_vm(
+                200,
+                r#"{"status":"success","data":{"resultType":"vector","result":[]}}"#,
+            )
+            .await,
+        );
+        assert!(store.read_instant("test", "up".into()).await.is_ok());
+        assert_eq!(
+            store
+                .interface_candidates(InterfaceTopMetric::Throughput, 1.0, None)
+                .await,
+            Some(Vec::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_import_is_judged_on_its_status() {
+        let taken = VmStore::new(canned_vm(204, "").await);
+        assert!(taken.post_import("test", "m 1\n".into()).await);
+        let refused = VmStore::new(canned_vm(400, "cannot parse").await);
+        assert!(!refused.post_import("test", "m 1\n".into()).await);
+    }
+
+    /// ADR-184: each VictoriaMetrics endpoint is spelled once, and one function judges a reply.
+    ///
+    /// Fifteen call sites used to build their own URL and thirteen judged their own reply, two of
+    /// them correctly. A sixteenth would compile, run, and read a refusal as an empty fleet.
+    #[test]
+    fn every_victoriametrics_url_is_built_once() {
+        let src = crate::module_source::code_no_comments("src", "store");
+        for endpoint in ["query", "query_range", "series", "import/prometheus"] {
+            // Closed by the quote that ends the literal, so `query` does not match `query_range`.
+            let needle = format!("/api/v1/{endpoint}\"");
+            assert_eq!(
+                src.matches(&needle).count(),
+                1,
+                "`{needle}` must be spelled in exactly one place — the helper that owns it"
+            );
+        }
+        let judged = format!(".json::<{}>()", "serde_json::Value");
+        assert_eq!(
+            src.matches(&judged).count(),
+            1,
+            "a reply is decoded in exactly one place, after its status has been read"
+        );
+        // The floor: the reads this file is known to make were found going through the helper, so
+        // the counts above were taken over the real module and not over an empty string.
+        let reads = src.matches(&format!(".{}(", "read_instant")).count();
+        assert!(reads >= 9, "only {reads} instant reads found in store.rs");
     }
 }
