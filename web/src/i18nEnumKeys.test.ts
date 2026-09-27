@@ -96,7 +96,11 @@ import { MERAKI_TIERS } from './pages/merakiTiers';
 import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
-import { ENDPOINT_COVERAGE, ENDPOINT_SOURCES } from './pages/discoveredEndpoints';
+import {
+  ENDPOINT_COVERAGE,
+  ENDPOINT_DEST_LINES,
+  ENDPOINT_SOURCES,
+} from './pages/discoveredEndpoints';
 import { UNSWEEPABLE_REASONS } from './pages/siteTargets';
 import { DESTINATION_KINDS } from './pages/importFiling';
 import {
@@ -573,6 +577,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // about to land — and EN/JA parity cannot catch it, because a key missing from both is "in
     // parity". `noRanges` is in the list but not in DESTINATION_KINDS: it is the deployment-wide
     // case (no folder has a range at all), not one of the three per-address answers.
+    // ADR-179 増分 8: the sentence over Monitor saying where an endpoint import lands.
+    expectKeys(
+      'endpoint import destination',
+      { en: enMonitoring, ja: jaMonitoring },
+      'discovery.seen.dest.line.',
+      ENDPOINT_DEST_LINES,
+    );
     expectKeys(
       'import destination',
       { en: enMonitoring, ja: jaMonitoring },

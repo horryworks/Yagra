@@ -1013,6 +1013,11 @@ export const api = {
       /** Maker and model a Detect classified (ADR-179 増分 2); omitted when nothing was probed. */
       vendor?: string;
       model?: string;
+      /** The folder, or the fallback when filing by range finds none (ADR-179 増分 8). Omitted:
+       *  the tree root. */
+      group_id?: string;
+      /** File into the folder whose IP range holds the address, as the range-scan import does. */
+      file_by_prefix?: boolean;
     },
   ): Promise<ImportResult> =>
     apiPost('/api/v1/discovered-endpoints/{id}/import', { path: { id }, body }),

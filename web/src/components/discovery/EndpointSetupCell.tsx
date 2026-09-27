@@ -6,7 +6,7 @@
 //
 // The caller draws it only with manage_config (ADR-056): every control in it is a write.
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CredentialSummary, ProfileSummary } from '../../types/api';
 import { detectPhase } from '../../pages/discoveredEndpoints';
@@ -47,6 +47,11 @@ export function EndpointSetupCell({
   const sel = setup.selection(target.id);
   const line = setup.detectLine(target.id);
   const root = className ? `ep-setup ${className}` : 'ep-setup';
+  const { ensureDestination } = setup;
+  useEffect(() => {
+    ensureDestination(target.ip);
+  }, [ensureDestination, target.ip]);
+  const dest = setup.destinationLine(target.ip);
 
   if (phase === 'idle' || phase === 'running') {
     return (
@@ -102,6 +107,14 @@ export function EndpointSetupCell({
             <WarnMark />
           )}
           {line}
+        </span>
+      )}
+      {/* Where Monitor will put it, before it is pressed (ADR-179 増分 8 決定 2) — with the mark
+          when no range took it although filing by range was asked for. */}
+      {dest != null && (
+        <span className={dest.warn ? 'ep-setup-dest warn' : 'ep-setup-dest'}>
+          {dest.warn && <WarnMark />}
+          {dest.text}
         </span>
       )}
       <div className="ep-setup-form">

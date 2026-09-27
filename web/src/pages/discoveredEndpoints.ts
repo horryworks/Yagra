@@ -5,6 +5,7 @@
 // a file nothing runs (testing.md).
 
 import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
+import type { RowDestination } from './importFiling';
 
 /** How much of the fleet the endpoint list actually speaks for.
  *
@@ -275,3 +276,88 @@ export function withoutImported(page: DiscoveredEndpointPage, id: string): Disco
     summary: { ...page.summary, unmonitored_total: Math.max(0, page.summary.unmonitored_total - 1) },
   };
 }
+
+// ─────────────────────────────────────────── where an import lands (ADR-179 増分 8)
+
+/** Where an unregistered endpoint goes when it is monitored: a folder (`''` is the tree root), and
+ *  whether a folder whose IP range holds the address takes it instead — the range-scan import's
+ *  two controls. Filing by range starts on, as there (ADR-131 決定 11). */
+export interface SetupDestination {
+  groupId: string;
+  fileByPrefix: boolean;
+}
+
+export const DEFAULT_SETUP_DESTINATION: SetupDestination = { groupId: '', fileByPrefix: true };
+
+/** The sentence over Monitor saying where the node will land. Each name is a key under
+ *  `discovery.seen.dest.line.`; the `Root` ones are for a fallback that is the tree root, which
+ *  reads as a sentence of its own in both languages.
+ *
+ *  ⚠️ `as const` because the key is built at runtime — `i18nEnumKeys.test.ts` iterates this. */
+export const ENDPOINT_DEST_LINES = [
+  'matched',
+  'unmatched',
+  'unmatchedRoot',
+  'ambiguous',
+  'ambiguousRoot',
+  'noRanges',
+  'noRangesRoot',
+  'chosen',
+  'chosenRoot',
+] as const;
+export type EndpointDestLine = (typeof ENDPOINT_DEST_LINES)[number];
+
+export interface EndpointDestinationLine {
+  line: EndpointDestLine;
+  values: Record<string, string | number>;
+  /** The node is about to land somewhere other than a range's folder while the operator asked for
+   *  one — said with the warning mark, so it is noticed before Monitor is pressed (ADR-179 増分 8
+   *  決定 2). */
+  warn: boolean;
+}
+
+/**
+ * Where one endpoint will land, from the server's answer for its address (`mergePreview`'s map
+ * entry), whether any folder the caller sees has a range at all, and the chosen destination.
+ * `null` while the answer has not come back — nothing is said rather than something guessed.
+ *
+ * The server decides which folder's range claims an address (`importFiling.ts` says why); this
+ * only words it.
+ */
+export function endpointDestinationLine(
+  dest: RowDestination | undefined,
+  anyPrefixes: boolean | undefined,
+  destination: SetupDestination,
+  pathOf: (groupId: string) => string,
+): EndpointDestinationLine | null {
+  const root = destination.groupId === '';
+  const fallback: Record<string, string | number> = root
+    ? {}
+    : { folder: pathOf(destination.groupId) };
+  const at = (base: 'unmatched' | 'ambiguous' | 'noRanges' | 'chosen'): EndpointDestLine =>
+    root ? `${base}Root` : base;
+  if (!destination.fileByPrefix) return { line: at('chosen'), values: fallback, warn: false };
+  if (anyPrefixes === false) return { line: at('noRanges'), values: fallback, warn: true };
+  if (!dest) return null;
+  switch (dest.kind) {
+    case 'matched':
+      return {
+        line: 'matched',
+        values: { folder: pathOf(dest.groupId), prefix: dest.prefix },
+        warn: false,
+      };
+    case 'ambiguous':
+      return {
+        line: at('ambiguous'),
+        values: { ...fallback, count: dest.groupIds.length },
+        warn: true,
+      };
+    case 'unmatched':
+      return { line: at('unmatched'), values: fallback, warn: true };
+    default: {
+      const unhandled: never = dest;
+      return unhandled;
+    }
+  }
+}
+

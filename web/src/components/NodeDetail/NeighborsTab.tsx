@@ -27,6 +27,7 @@ import type {
   Neighbor,
   NeighborChange,
   NodeDetail as NodeDetailData,
+  NodeGroup,
   ProfileSummary,
 } from '../../types/api';
 import { useCan } from '../../store';
@@ -37,6 +38,11 @@ import { useEndpointSetup, type SetupTarget } from '../../lib/useEndpointSetup';
 import { EndpointSetupCell } from '../discovery/EndpointSetupCell';
 import { CredentialPicker } from '../ui/CredentialPicker';
 import { FieldHint } from '../ui/Field';
+import { EndpointDestination } from '../discovery/EndpointDestination';
+import {
+  DEFAULT_SETUP_DESTINATION,
+  type SetupDestination,
+} from '../../pages/discoveredEndpoints';
 import { Button } from '../ui/Button';
 import { DataTable, type Column } from '../ui/DataTable';
 import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
@@ -143,6 +149,10 @@ export function NeighborsTab({ node }: Props) {
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [probeCredIds, setProbeCredIds] = useState<string[]>([]);
   const [catalogAsked, setCatalogAsked] = useState(false);
+  // Where Monitor puts a device, and the folders to choose from (ADR-179 増分 8). The root by
+  // default, as on Discovery — and the line over Monitor says so when no range took it (決定 2).
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
+  const [destination, setDestination] = useState<SetupDestination>(DEFAULT_SETUP_DESTINATION);
   // A setup panel has been drawn. On a phone it opens inside a card — from its button or from
   // "Show details" — and no table row is ever opened, so the open row alone cannot say it.
   const [setupShown, setSetupShown] = useState(false);
@@ -151,7 +161,7 @@ export function NeighborsTab({ node }: Props) {
   const [added, setAdded] = useState<Record<string, string | null>>({});
   const [apBusy, setApBusy] = useState<string | null>(null);
   const [apError, setApError] = useState<string | null>(null);
-  const setup = useEndpointSetup({ profiles, creds, probeCredIds });
+  const setup = useEndpointSetup({ profiles, creds, probeCredIds, destination, groups });
 
   // Profiles and credentials are read the first time a row is opened or a setup panel drawn, not
   // with the tab: most visits add nothing. A credential list this caller may not read degrades to
@@ -168,6 +178,7 @@ export function NeighborsTab({ node }: Props) {
       return;
     setCatalogAsked(true);
     api.listProfiles().then(setProfiles).catch(() => undefined);
+    api.listNodeGroups().then(setGroups).catch(() => undefined);
     api
       .listCredentials()
       .then((list) => {
@@ -211,6 +222,9 @@ export function NeighborsTab({ node }: Props) {
         snmpCreds={snmpCreds}
         probeCredIds={probeCredIds}
         onProbeCredsChange={setProbeCredIds}
+        groups={groups}
+        destination={destination}
+        onDestinationChange={setDestination}
         onShown={markSetupShown}
         setup={setup}
         apBusy={apBusy === key}
@@ -583,6 +597,9 @@ function SetupPanel({
   snmpCreds,
   probeCredIds,
   onProbeCredsChange,
+  groups,
+  destination,
+  onDestinationChange,
   onShown,
   setup,
   apBusy,
@@ -601,6 +618,9 @@ function SetupPanel({
   snmpCreds: CredentialSummary[];
   probeCredIds: string[];
   onProbeCredsChange: (ids: string[]) => void;
+  groups: NodeGroup[];
+  destination: SetupDestination;
+  onDestinationChange: (next: SetupDestination) => void;
   /** Called once drawn, so the tab reads the profiles and credentials this panel picks from —
    *  whichever row, card button or disclosure drew it (ADR-179 増分 7 決定 3). */
   onShown: () => void;
@@ -692,6 +712,12 @@ function SetupPanel({
               />
             </FieldHint>
           </label>
+          <EndpointDestination
+            groups={groups}
+            value={destination}
+            onChange={onDestinationChange}
+            className="nd-nb-setup-dest"
+          />
           <EndpointSetupCell
             target={target}
             setup={setup}

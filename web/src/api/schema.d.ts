@@ -8280,6 +8280,17 @@ export interface components {
         /** @description What to call the endpoint, and what to bind it to, when promoting it to a node. */
         ImportEndpoint: {
             credential_id?: string | null;
+            /**
+             * @description File the node into the folder whose IP range holds its address, as the range-scan import
+             *     does (ADR-131). Omitted: `false`, as before.
+             */
+            file_by_prefix?: boolean;
+            /**
+             * Format: uuid
+             * @description The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's
+             *     IP range claims its address (ADR-179 増分 8). Omitted: the tree root, as before.
+             */
+            group_id?: string | null;
             /** @description Model, from the same probe as `vendor`. */
             model?: string | null;
             /** @description Node name. Defaults to the address when omitted or blank. */
@@ -16427,7 +16438,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportResult"];
                 };
             };
-            /** @description A binding id that is not a UUID */
+            /** @description A binding id that is not a UUID, or a group_id no folder has */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -16445,7 +16456,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig, or (`out_of_scope`) the caller is folder-scoped: an endpoint is imported into no folder, which such a caller cannot see */
+            /** @description Role lacks ManageConfig, or (`out_of_scope`) a folder-scoped caller's node would land in the tree root, which it cannot see — name a folder, or one whose IP range holds the address; nothing is written */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16454,7 +16465,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such discovered endpoint, or not one the caller can see */
+            /** @description No such discovered endpoint, or not one the caller can see, or (`group_not_found`) a group_id outside the caller's folders */
             404: {
                 headers: {
                     [name: string]: unknown;

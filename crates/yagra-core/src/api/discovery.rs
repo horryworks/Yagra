@@ -170,13 +170,13 @@ pub(crate) struct ImportResult {
     /// and the device itself is still importable.
     skipped_existing: u32,
     /// Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent
-    /// otherwise, which is every endpoint promotion and every scan import that decided nothing per
-    /// row.
+    /// otherwise: an endpoint promotion without `file_by_prefix`, and every scan import that
+    /// decided nothing per row.
     ///
-    /// ⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is
-    /// shared with `import_discovered_endpoint`, where filing by range never happens and zeros
-    /// would be a lie; and with the field absent the wire shape is what every existing client
-    /// already parses. It counts the rows that were **created** — a skipped row was filed nowhere.
+    /// ⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by
+    /// range would read as one that filed zero rows, and with the field absent the wire shape is
+    /// what every existing client already parses. The endpoint import (ADR-179 増分 8) fills it
+    /// only when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.
     /// With `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it
     /// off, only `chosen` is counted and the rest went to `group_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -744,37 +744,8 @@ async fn import_discovered(
         });
     }
 
-    // Filing by IP range (ADR-131). `NodeRepo::import_nodes` already binds `group_id` per row and
-    // computes `sort_order` per destination folder inside its transaction, so a batch that lands in
-    // several folders needs nothing from the writer — only a different value in each row.
-    // The addresses the rule still has to decide: a row the operator named a folder for is already
-    // settled, and asking the matcher about it would only invite the answer to overwrite the
-    // choice. Collected before the rule runs so the two cannot disagree.
-    let chosen: HashSet<IpAddr> = body
-        .nodes
-        .iter()
-        .zip(prepared.iter())
-        .filter(|(n, _)| n.group_id.is_some())
-        .map(|(_, row)| row.address)
-        .collect();
-
-    /// Which part of the filing report one row counts towards.
-    ///
-    /// Decided per row before the insert and **counted after it** (ADR-139): a row the import skips
-    /// because its address is already a device node was filed nowhere, and counting the fold
-    /// instead would report it as filed.
-    enum Bucket {
-        /// The operator named this row's folder.
-        Chosen,
-        /// One folder's range claimed it.
-        Matched,
-        /// Two folders claimed it equally well; it fell back.
-        Ambiguous,
-        /// No range claimed it; it fell back.
-        Unmatched,
-        /// The rule was off, so nothing was decided about it.
-        Undecided,
-    }
+    // A row the operator named a folder for is already settled: the IP-range rule never sees it.
+    let any_chosen = body.nodes.iter().any(|n| n.group_id.is_some());
     let mut buckets: Vec<Bucket> = body
         .nodes
         .iter()
@@ -788,44 +759,7 @@ async fn import_discovered(
         .collect();
 
     if body.file_by_prefix {
-        let addrs: Vec<IpAddr> = prepared
-            .iter()
-            .filter(|n| !chosen.contains(&n.address))
-            .map(|n| n.address)
-            .collect();
-        let hits = admin
-            .groups
-            .match_address_prefixes(&addrs, scope.group_filter())
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "match discovered addresses",
-                    "failed to match prefixes",
-                )
-            })?;
-        let fold = crate::groups::fold_prefix_matches(&addrs, hits);
-        let by_address: HashMap<IpAddr, Uuid> = fold
-            .matched
-            .iter()
-            .map(|(addr, group, _)| (*addr, *group))
-            .collect();
-        let contested: HashSet<IpAddr> = fold.ambiguous.iter().map(|(addr, _)| *addr).collect();
-        for (row, bucket) in prepared.iter_mut().zip(buckets.iter_mut()) {
-            // `chosen` rows keep what the operator gave them; nothing here can reach them, because
-            // their addresses were never handed to the matcher.
-            if matches!(bucket, Bucket::Chosen) {
-                continue;
-            }
-            if let Some(group) = by_address.get(&row.address) {
-                row.group = Some(*group);
-                *bucket = Bucket::Matched;
-            } else if contested.contains(&row.address) {
-                *bucket = Bucket::Ambiguous;
-            } else {
-                *bucket = Bucket::Unmatched;
-            }
-        }
+        file_by_range(&admin, &scope, &mut prepared, &mut buckets).await?;
     }
 
     // Decided after every rule has run — the row's own folder, then the IP range, then the
@@ -844,7 +778,98 @@ async fn import_discovered(
             "failed to import discovered nodes",
         )
     })?;
-    let skipped: HashSet<usize> = outcome.skipped.iter().copied().collect();
+    let counts = filing_counts(&buckets, &outcome.skipped);
+    // Reported when the rule was asked for, and also when it was off but the operator still
+    // directed some rows — `None` there would say "nothing was decided per row", which is untrue.
+    let filed = (body.file_by_prefix || any_chosen).then_some(counts);
+    Ok((
+        StatusCode::CREATED,
+        Json(ImportResult {
+            created: outcome.created,
+            skipped_existing: u32::try_from(outcome.skipped.len()).unwrap_or(u32::MAX),
+            filed,
+        }),
+    ))
+}
+
+/// Which part of the filing report one row counts towards.
+///
+/// Decided per row before the insert and **counted after it** (ADR-139): a row the import skips
+/// because its address is already a device node was filed nowhere, and counting the fold instead
+/// would report it as filed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bucket {
+    /// The operator named this row's folder.
+    Chosen,
+    /// One folder's range claimed it.
+    Matched,
+    /// Two folders claimed it equally well; it fell back.
+    Ambiguous,
+    /// No range claimed it; it fell back.
+    Unmatched,
+    /// The rule was off, so nothing was decided about it.
+    Undecided,
+}
+
+/// Filing by IP range (ADR-131), for both imports — the range-scan's and the endpoint's (ADR-179
+/// 増分 8 決定 1), so a device lands in the same folder whichever way it was added.
+///
+/// Every row not `Chosen` is asked about: one folder's range claims it and it moves there, or it
+/// keeps the folder it came with (the request's) and its bucket says why. A `Chosen` row keeps
+/// what the operator gave it — its address is never handed to the matcher, so no answer can
+/// overwrite the choice. Only folders the caller can see are matched against.
+/// `NodeRepo::import_nodes` binds `group_id` per row and computes `sort_order` per destination
+/// inside its transaction, so a batch that lands in several folders needs nothing more.
+async fn file_by_range(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    rows: &mut [crate::repo::NewNode<'_>],
+    buckets: &mut [Bucket],
+) -> ApiResult<()> {
+    let addrs: Vec<IpAddr> = rows
+        .iter()
+        .zip(buckets.iter())
+        .filter(|(_, b)| **b != Bucket::Chosen)
+        .map(|(row, _)| row.address)
+        .collect();
+    let hits = admin
+        .groups
+        .match_address_prefixes(&addrs, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "match discovered addresses",
+                "failed to match prefixes",
+            )
+        })?;
+    let fold = crate::groups::fold_prefix_matches(&addrs, hits);
+    let by_address: HashMap<IpAddr, Uuid> = fold
+        .matched
+        .iter()
+        .map(|(addr, group, _)| (*addr, *group))
+        .collect();
+    let contested: HashSet<IpAddr> = fold.ambiguous.iter().map(|(addr, _)| *addr).collect();
+    for (row, bucket) in rows.iter_mut().zip(buckets.iter_mut()) {
+        if *bucket == Bucket::Chosen {
+            continue;
+        }
+        if let Some(group) = by_address.get(&row.address) {
+            row.group = Some(*group);
+            *bucket = Bucket::Matched;
+        } else if contested.contains(&row.address) {
+            *bucket = Bucket::Ambiguous;
+        } else {
+            *bucket = Bucket::Unmatched;
+        }
+    }
+    Ok(())
+}
+
+/// The filing report, counting only the rows the import created (`skipped` are indexes into the
+/// rows it was given).
+fn filing_counts(buckets: &[Bucket], skipped: &[usize]) -> PrefixFiling {
+    let skipped: HashSet<usize> = skipped.iter().copied().collect();
     let mut counts = PrefixFiling {
         matched: 0,
         ambiguous: 0,
@@ -863,17 +888,7 @@ async fn import_discovered(
             Bucket::Undecided => {}
         }
     }
-    // Reported when the rule was asked for, and also when it was off but the operator still
-    // directed some rows — `None` there would say "nothing was decided per row", which is untrue.
-    let filed = (body.file_by_prefix || !chosen.is_empty()).then_some(counts);
-    Ok((
-        StatusCode::CREATED,
-        Json(ImportResult {
-            created: outcome.created,
-            skipped_existing: u32::try_from(outcome.skipped.len()).unwrap_or(u32::MAX),
-            filed,
-        }),
-    ))
+    counts
 }
 
 /// Body for the import preview: the candidate addresses about to be imported.
@@ -1316,6 +1331,14 @@ pub(super) struct ImportEndpoint {
     /// Model, from the same probe as `vendor`.
     #[serde(default)]
     model: Option<String>,
+    /// The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's
+    /// IP range claims its address (ADR-179 増分 8). Omitted: the tree root, as before.
+    #[serde(default)]
+    group_id: Option<Uuid>,
+    /// File the node into the folder whose IP range holds its address, as the range-scan import
+    /// does (ADR-131). Omitted: `false`, as before.
+    #[serde(default)]
+    file_by_prefix: bool,
 }
 
 /// Which stored credentials to try when probing one endpoint.
@@ -1483,10 +1506,10 @@ async fn probe_discovered_endpoint(
     request_body = ImportEndpoint,
     responses(
         (status = 201, description = "The endpoint is now a monitored node", body = ImportResult),
-        (status = 400, description = "A binding id that is not a UUID", body = super::error::ErrorBody),
+        (status = 400, description = "A binding id that is not a UUID, or a group_id no folder has", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig, or (`out_of_scope`) the caller is folder-scoped: an endpoint is imported into no folder, which such a caller cannot see", body = super::error::ErrorBody),
-        (status = 404, description = "No such discovered endpoint, or not one the caller can see", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or (`out_of_scope`) a folder-scoped caller's node would land in the tree root, which it cannot see — name a folder, or one whose IP range holds the address; nothing is written", body = super::error::ErrorBody),
+        (status = 404, description = "No such discovered endpoint, or not one the caller can see, or (`group_not_found`) a group_id outside the caller's folders", body = super::error::ErrorBody),
         (status = 409, description = "That address is already a monitored node, or (`sender_only`) only a syslog or trap sender vouches for it — a sender's address can be forged, so it is never imported", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -1499,14 +1522,12 @@ async fn import_discovered_endpoint(
     Json(body): Json<ImportEndpoint>,
 ) -> ApiResult<(StatusCode, Json<ImportResult>)> {
     let endpoint = visible_unmonitored_endpoint(&admin, &scope, id).await?;
-    // The node is created with no folder (below), and a folder-scoped caller cannot see the root:
-    // it would create a node it can never see again (ADR-179 増分 5 決定 1).
-    if !scope.allows_group(None) {
-        return Err(ApiError::forbidden_code(
-            "out_of_scope",
-            "this token cannot see ungrouped nodes, and an endpoint is imported into no folder",
-        ));
+    // The destination is checked as the scan import checks its own: a folder the caller may not act
+    // on is refused, and one that is not there is a 400 rather than a foreign-key 500.
+    if let Some(group) = body.group_id {
+        super::scope::require_visible_group(&scope, group)?;
     }
+    super::groups::require_group_exists(&admin, body.group_id).await?;
     let parse_uuid = |s: &Option<String>| -> Result<Option<Uuid>, ()> {
         match s {
             None => Ok(None),
@@ -1529,40 +1550,49 @@ async fn import_discovered_endpoint(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(address.as_str());
-    let outcome = admin
-        .repo
-        .import_nodes(&[crate::repo::NewNode {
-            name,
-            address: endpoint.ip,
-            profile,
-            credential,
-            // Only what a probe classified from `sysDescr` (ADR-179 増分 2), never a MAC's OUI: the
-            // OUI names the *chassis* vendor, which for a monitored device is routinely not the
-            // vendor whose MIBs it answers — a whitebox switch, a VM's virtual NIC. Absent a probe
-            // both stay blank and the first identity read fills them, as for any other node.
-            vendor: body
-                .vendor
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-            model: body
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty()),
-            // No folder, on purpose. This is the *passive* path (ADR-043 Inc.3): the row is an
-            // address a router mentioned, with no site behind it. The scan import files into a
-            // folder because the operator aimed the sweep at one; here there is nothing to aim.
-            group: None,
-        }])
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "import discovered endpoint",
-                "failed to import the discovered endpoint",
-            )
-        })?;
+    let mut rows = [crate::repo::NewNode {
+        name,
+        address: endpoint.ip,
+        profile,
+        credential,
+        // Only what a probe classified from `sysDescr` (ADR-179 増分 2), never a MAC's OUI: the
+        // OUI names the *chassis* vendor, which for a monitored device is routinely not the
+        // vendor whose MIBs it answers — a whitebox switch, a VM's virtual NIC. Absent a probe
+        // both stay blank and the first identity read fills them, as for any other node.
+        vendor: body
+            .vendor
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        model: body
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        // The folder the operator chose, else the root, then the IP-range rule below — the scan
+        // import's order (ADR-179 増分 8 決定 1). Until 増分 8 this was always the root.
+        group: body.group_id,
+    }];
+    let mut buckets = [Bucket::Undecided];
+    if body.file_by_prefix {
+        file_by_range(&admin, &scope, &mut rows, &mut buckets).await?;
+    }
+    // Decided after the rule has run, so it sees where the node would really land: a folder-scoped
+    // caller cannot see the root, and would create a node it can never see again (ADR-179 増分 5
+    // 決定 1, narrowed by 増分 8 決定 4 to the case that actually lands there).
+    if !scope.allows_group(None) && rows[0].group.is_none() {
+        return Err(ApiError::forbidden_code(
+            "out_of_scope",
+            "this token cannot see ungrouped nodes; choose a folder, or one whose IP range holds the address",
+        ));
+    }
+    let outcome = admin.repo.import_nodes(&rows).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "import discovered endpoint",
+            "failed to import the discovered endpoint",
+        )
+    })?;
     // Runs the same reconcile the sweep does rather than stamping the column here — one rule, one
     // place. Best-effort: the sweep repeats it, so a failure costs a stale row for one cycle.
     //
@@ -1583,12 +1613,12 @@ async fn import_discovered_endpoint(
     }
     Ok((
         StatusCode::CREATED,
-        // Filing by IP range is a scan-import concept: this promotes one address a router
-        // mentioned, with no sweep and no folder behind it (see `group: None` above).
         Json(ImportResult {
             created: outcome.created,
             skipped_existing: 0,
-            filed: None,
+            filed: body
+                .file_by_prefix
+                .then(|| filing_counts(&buckets, &outcome.skipped)),
         }),
     ))
 }
@@ -2758,7 +2788,8 @@ mod tests {
     }
 
     /// ADR-179 増分 5: a row only a syslog or trap sender vouches for is neither probed nor imported,
-    /// and a folder-scoped caller cannot create a node at the tree root through either import.
+    /// and a folder-scoped caller cannot create a node at the tree root through either import — but
+    /// since 増分 8 it can import an endpoint into a folder it sees.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn forged_or_invisible_destinations_are_refused_before_anything_is_written(
@@ -2831,6 +2862,35 @@ mod tests {
             before,
             "no node was created where its creator cannot see it"
         );
+        // 増分 8: a folder outside its scope is not there, as far as it is concerned …
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{seen_row}/import"),
+            &scoped,
+            Some(serde_json::json!({ "group_id": theirs })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(nodes_now().await, before);
+        // … and one it sees takes the node.
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{seen_row}/import"),
+            &scoped,
+            Some(serde_json::json!({ "group_id": mine })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let filed: Option<Uuid> =
+            sqlx::query_scalar("SELECT group_id FROM nodes WHERE address = '192.0.2.44'")
+                .fetch_one(&pool)
+                .await
+                .expect("the node");
+        assert_eq!(filed, Some(mine));
+        let before = nodes_now().await;
 
         // ⑶ The scan import with no folder: refused whole for the scoped caller …
         let (status, body) = send(
@@ -2854,6 +2914,104 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         assert_eq!(nodes_now().await, before + 1);
+    }
+
+    /// ADR-179 増分 8: the endpoint import files a node as the range-scan import does — the folder
+    /// whose IP range holds its address, else the folder the request names, else the root — and a
+    /// body that names neither (an N-1 client) means what it always meant.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_endpoint_import_files_by_ip_range_then_by_the_folder_it_names(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = crate::pgtest::group(&pool, "site-a").await;
+        crate::pgtest::prefix(&pool, site, "198.51.100.0/24").await;
+        let fallback = crate::pgtest::group(&pool, "unsorted").await;
+        let observer = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let row = |ip: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO l3_discovered (ip, via_node) VALUES ($1::inet, $2) RETURNING id",
+                )
+                .bind(ip)
+                .bind(observer)
+                .fetch_one(&pool)
+                .await
+                .expect("row")
+            }
+        };
+        let folder_of = |ip: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<Uuid>>(
+                    "SELECT group_id FROM nodes WHERE address = $1::inet",
+                )
+                .bind(ip)
+                .fetch_one(&pool)
+                .await
+                .expect("the node")
+            }
+        };
+        let import = |id: Uuid, body: serde_json::Value| {
+            let st = st.clone();
+            let tok = tok.clone();
+            async move {
+                send(
+                    &st,
+                    "POST",
+                    &format!("/api/v1/discovered-endpoints/{id}/import"),
+                    &tok,
+                    Some(body),
+                )
+                .await
+            }
+        };
+
+        // Inside the range: the range's folder, whatever the request names.
+        let inside = row("198.51.100.7").await;
+        let (status, body) = import(
+            inside,
+            serde_json::json!({ "group_id": fallback, "file_by_prefix": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["filed"]["matched"], 1, "{body}");
+        assert_eq!(folder_of("198.51.100.7").await, Some(site));
+
+        // Outside every range: the folder the request names, and the report says it fell back.
+        let outside = row("203.0.113.7").await;
+        let (status, body) = import(
+            outside,
+            serde_json::json!({ "group_id": fallback, "file_by_prefix": true }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(body["filed"]["unmatched"], 1, "{body}");
+        assert_eq!(folder_of("203.0.113.7").await, Some(fallback));
+
+        // The rule off: the named folder even inside a range.
+        let off = row("198.51.100.8").await;
+        let (status, body) = import(off, serde_json::json!({ "group_id": fallback })).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert!(body.get("filed").is_none(), "{body}");
+        assert_eq!(folder_of("198.51.100.8").await, Some(fallback));
+
+        // An N-1 body: the root, as before 増分 8.
+        let old = row("198.51.100.9").await;
+        let (status, body) = import(old, serde_json::json!({ "name": "host-c" })).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(folder_of("198.51.100.9").await, None);
+
+        // A folder that does not exist: 400, and nothing written.
+        let ghost = row("203.0.113.8").await;
+        let (status, body) = import(
+            ghost,
+            serde_json::json!({ "group_id": Uuid::from_u128(0xdead) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 
     /// A folder-scoped caller sees a row through its lowest observer, and must not read the other

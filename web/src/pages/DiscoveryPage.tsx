@@ -47,6 +47,7 @@ import {
   type RowDestination,
 } from './importFiling';
 import { GroupPicker } from '../components/ui/GroupPicker';
+import { EndpointDestination } from '../components/discovery/EndpointDestination';
 import { groupOptions } from '../lib/nodeTree';
 import {
   defaultChecked,
@@ -78,6 +79,8 @@ import {
   portName,
   sourcesOf,
   DISCOVERY_TABS,
+  DEFAULT_SETUP_DESTINATION,
+  type SetupDestination,
 } from './discoveredEndpoints';
 import { Tabs } from '../components/ui/Tabs';
 import { useEnumParam } from '../lib/useEnumParam';
@@ -818,6 +821,7 @@ export function DiscoveryPage() {
           snmpCreds={snmpCreds}
           probeCredIds={selectedCredIds}
           onProbeCredsChange={setSelectedCredIds}
+          groups={groups}
           page={endpointPage}
           loadMore={loadMoreEndpoints}
           loadingMore={endpointMoreBusy}
@@ -1359,6 +1363,7 @@ function SeenOnNetworkCard({
   snmpCreds,
   probeCredIds,
   onProbeCredsChange,
+  groups,
   page,
   loadMore,
   loadingMore,
@@ -1370,6 +1375,8 @@ function SeenOnNetworkCard({
   snmpCreds: CredentialSummary[];
   probeCredIds: string[];
   onProbeCredsChange: (ids: string[]) => void;
+  /** The folders the caller can see — where "Monitor" may put a device (ADR-179 増分 8). */
+  groups: NodeGroup[];
   page: DiscoveredEndpointPage | null;
   loadMore: () => void;
   loadingMore: boolean;
@@ -1379,9 +1386,12 @@ function SeenOnNetworkCard({
   // The node an endpoint was seen by, and the one it already is, as names. `EntityName` renders a
   // name it is handed and resolves nothing, so passing it the id showed a raw UUID.
   const { nodeName } = useEntityNames();
+  // Where Monitor puts a device: one choice for the whole list, as a range scan has one for its
+  // sweep (ADR-179 増分 8 決定 3). Not remembered — the scan's site picker is not either.
+  const [destination, setDestination] = useState<SetupDestination>(DEFAULT_SETUP_DESTINATION);
   // Detect, the two dropdowns and Monitor for every row — the same state the Neighbors tab uses
   // (ADR-179 増分 3), so the two surfaces cannot drift apart.
-  const setup = useEndpointSetup({ profiles, creds, probeCredIds });
+  const setup = useEndpointSetup({ profiles, creds, probeCredIds, destination, groups });
   const [note, setNote] = useState<string | null>(null);
   const epCols = useMemo(() => endpointColumns(t), [t]);
   const epLabels = useMemo(() => endpointLabels(t), [t]);
@@ -1433,6 +1443,14 @@ function SeenOnNetworkCard({
             />
           </FieldHint>
         </label>
+      )}
+      {canConfig && (
+        <EndpointDestination
+          groups={groups}
+          value={destination}
+          onChange={setDestination}
+          className="disco-seen-dest"
+        />
       )}
       <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
         {t(`discovery.seen.coverage.${coverage}`, {

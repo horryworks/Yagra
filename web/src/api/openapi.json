@@ -3630,7 +3630,7 @@
             }
           },
           "400": {
-            "description": "A binding id that is not a UUID",
+            "description": "A binding id that is not a UUID, or a group_id no folder has",
             "content": {
               "application/json": {
                 "schema": {
@@ -3650,7 +3650,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig, or (`out_of_scope`) the caller is folder-scoped: an endpoint is imported into no folder, which such a caller cannot see",
+            "description": "Role lacks ManageConfig, or (`out_of_scope`) a folder-scoped caller's node would land in the tree root, which it cannot see — name a folder, or one whose IP range holds the address; nothing is written",
             "content": {
               "application/json": {
                 "schema": {
@@ -3660,7 +3660,7 @@
             }
           },
           "404": {
-            "description": "No such discovered endpoint, or not one the caller can see",
+            "description": "No such discovered endpoint, or not one the caller can see, or (`group_not_found`) a group_id outside the caller's folders",
             "content": {
               "application/json": {
                 "schema": {
@@ -30674,6 +30674,18 @@
               "null"
             ]
           },
+          "file_by_prefix": {
+            "type": "boolean",
+            "description": "File the node into the folder whose IP range holds its address, as the range-scan import\ndoes (ADR-131). Omitted: `false`, as before."
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's\nIP range claims its address (ADR-179 増分 8). Omitted: the tree root, as before."
+          },
           "model": {
             "type": [
               "string",
@@ -30850,7 +30862,7 @@
               },
               {
                 "$ref": "#/components/schemas/PrefixFiling",
-                "description": "Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent\notherwise, which is every endpoint promotion and every scan import that decided nothing per\nrow.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct, for two reasons. This type is\nshared with `import_discovered_endpoint`, where filing by range never happens and zeros\nwould be a lie; and with the field absent the wire shape is what every existing client\nalready parses. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
+                "description": "Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent\notherwise: an endpoint promotion without `file_by_prefix`, and every scan import that\ndecided nothing per row.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by\nrange would read as one that filed zero rows, and with the field absent the wire shape is\nwhat every existing client already parses. The endpoint import (ADR-179 増分 8) fills it\nonly when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
               }
             ]
           },

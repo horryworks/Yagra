@@ -8,18 +8,22 @@
 // name to import under, how long a Detect polls, what sentence it ends in — lives in
 // `pages/discoveredEndpoints.ts`, where Vitest reaches it.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import type { CredentialSummary, ProfileSummary } from '../types/api';
+import type { CredentialSummary, NodeGroup, ProfileSummary } from '../types/api';
 import {
   detectedSelection,
   detectLineOf,
   detectResultOf,
+  endpointDestinationLine,
   importNameAfterDetect,
   pollDetect,
   type DetectResult,
+  type SetupDestination,
 } from '../pages/discoveredEndpoints';
+import { mergePreview, type RowDestination } from '../pages/importFiling';
+import { groupOptions } from './nodeTree';
 import { MAX_POLL_FAILURES, POLL_INTERVAL_MS } from '../pages/discoveryScans';
 
 /** The row a setup acts on: an unregistered endpoint's id, its address, and the name a neighbour or
@@ -46,8 +50,13 @@ export interface EndpointSetup {
   detectOne: (target: SetupTarget) => Promise<void>;
   /** The sentence over the dropdowns once a Detect has answered, or `null` before. */
   detectLine: (id: string) => string | null;
-  /** Import the row with what the dropdowns hold. Resolves `true` once the node exists. */
+  /** Import the row with what the dropdowns hold, into the surface's destination. Resolves `true`
+   *  once the node exists. */
   monitor: (target: SetupTarget) => Promise<boolean>;
+  /** Ask the server, once per address, which folder's IP range holds it (ADR-179 増分 8). */
+  ensureDestination: (ip: string) => void;
+  /** The sentence over Monitor saying where the node will land, or `null` until it is known. */
+  destinationLine: (ip: string) => { text: string; warn: boolean } | null;
   /** The row an import is running for; every control is disabled meanwhile. */
   busyId: string | null;
   error: string | null;
@@ -58,11 +67,17 @@ export function useEndpointSetup({
   profiles,
   creds,
   probeCredIds,
+  destination,
+  groups,
 }: {
   profiles: ProfileSummary[];
   creds: CredentialSummary[];
   /** The credentials Detect tries, in order. */
   probeCredIds: string[];
+  /** Where an import lands (ADR-179 増分 8). */
+  destination: SetupDestination;
+  /** The folders the caller can see, to name a destination. */
+  groups: NodeGroup[];
 }): EndpointSetup {
   const { t } = useTranslation('monitoring');
   const [rows, setRows] = useState<Record<string, SetupSelection>>({});
@@ -78,6 +93,38 @@ export function useEndpointSetup({
       alive.current = false;
     };
   }, []);
+
+  // Which folder's range holds each address, as the server answered (`importFiling.ts`), and
+  // whether any folder has a range at all. Asked once per address; a failed ask says nothing.
+  const [destinations, setDestinations] = useState<Map<string, RowDestination>>(new Map());
+  const [anyPrefixes, setAnyPrefixes] = useState<boolean | undefined>(undefined);
+  const asked = useRef(new Set<string>());
+  const ensureDestination = useCallback((ip: string) => {
+    if (!ip || asked.current.has(ip)) return;
+    asked.current.add(ip);
+    api
+      .previewDiscoveryImport([ip])
+      .then((preview) => {
+        if (!alive.current) return;
+        setDestinations((cur) => mergePreview(cur, preview));
+        setAnyPrefixes(preview.any_prefixes);
+      })
+      .catch(() => undefined);
+  }, []);
+  const paths = useMemo(
+    () => new Map(groupOptions(groups).map((o) => [o.id, o.path])),
+    [groups],
+  );
+  const destinationLine = (ip: string) => {
+    const line = endpointDestinationLine(
+      destinations.get(ip),
+      anyPrefixes,
+      destination,
+      (id) => paths.get(id) ?? id,
+    );
+    if (!line) return null;
+    return { text: t(`discovery.seen.dest.line.${line.line}`, line.values), warn: line.warn };
+  };
 
   const selection = useCallback((id: string) => rows[id] ?? EMPTY, [rows]);
   const choose = useCallback((id: string, patch: Partial<SetupSelection>) => {
@@ -145,6 +192,8 @@ export function useEndpointSetup({
         credential_id: r.credential_id || undefined,
         vendor: result?.kind === 'found' ? result.vendor : undefined,
         model: result?.kind === 'found' ? result.model : undefined,
+        group_id: destination.groupId || undefined,
+        file_by_prefix: destination.fileByPrefix || undefined,
       });
       return true;
     } catch (err: unknown) {
@@ -162,6 +211,8 @@ export function useEndpointSetup({
     detectOne,
     detectLine,
     monitor,
+    ensureDestination,
+    destinationLine,
     busyId,
     error,
     clearError: () => setError(null),

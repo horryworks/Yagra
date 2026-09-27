@@ -392,6 +392,22 @@
     },
     "seen": {
       "title": "Seen on the network",
+      "dest": {
+        "label": "Add to folder",
+        "byRange": "File by IP range",
+        "byRangeHint": "A device goes into the folder whose IP range contains its address. One that no range covers — or that two folders claim equally well — goes into the folder chosen above.",
+        "line": {
+          "matched": "Goes into “{{folder}}” — its IP range {{prefix}} holds this address.",
+          "unmatched": "No folder’s IP range holds this address. It goes into “{{folder}}”.",
+          "unmatchedRoot": "No folder’s IP range holds this address. It goes into no folder, at the top of the tree.",
+          "ambiguous": "{{count}} folders’ IP ranges hold this address equally well. It goes into “{{folder}}”.",
+          "ambiguousRoot": "{{count}} folders’ IP ranges hold this address equally well. It goes into no folder, at the top of the tree.",
+          "noRanges": "No folder has an IP range yet. It goes into “{{folder}}”.",
+          "noRangesRoot": "No folder has an IP range yet. It goes into no folder, at the top of the tree.",
+          "chosen": "Goes into “{{folder}}”.",
+          "chosenRoot": "Goes into no folder, at the top of the tree."
+        }
+      },
       "note": "Devices your monitored equipment has seen that Yagra is not monitoring yet: hosts in a router’s ARP / IPv6 neighbor cache, LLDP and CDP neighbors that advertise a management address, OSPF neighbors and BGP peers, and senders of syslog or SNMP traps that no node claimed. No scan is needed. Phones and end stations behind a switch are left out of the LLDP / CDP half.",
       "coverage": {
         "off": "The ARP cache walk is off, so this list comes only from LLDP / CDP neighbors, routing peers and syslog / trap senders. Turn on the ARP / IPv6 neighbor cache walk under Settings ▸ System settings ▸ Discovery walks to add every host your routers have spoken to.",

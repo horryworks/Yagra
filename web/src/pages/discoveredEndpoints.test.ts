@@ -19,6 +19,8 @@ import {
   DISCOVERY_TABS,
   ENDPOINT_COVERAGE,
   ENDPOINT_SOURCES,
+  endpointDestinationLine,
+  DEFAULT_SETUP_DESTINATION,
 } from './discoveredEndpoints';
 import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
 
@@ -383,3 +385,70 @@ describe('appendEndpointPage / withoutImported', () => {
     expect(withoutImported(pageOf(['a'], 0), 'a').summary.unmonitored_total).toBe(0);
   });
 });
+
+describe('where an endpoint import lands (ADR-179 増分 8)', () => {
+  const pathOf = (id: string) => ({ g1: 'site-a', g2: 'site-a / floor-2' })[id] ?? id;
+  const root = DEFAULT_SETUP_DESTINATION;
+  const inG2 = { groupId: 'g2', fileByPrefix: true };
+
+  it('names the folder whose range holds the address, and the range', () => {
+    const line = endpointDestinationLine(
+      { kind: 'matched', groupId: 'g1', prefix: '198.51.100.0/24' },
+      true,
+      inG2,
+      pathOf,
+    );
+    expect(line).toEqual({
+      line: 'matched',
+      values: { folder: 'site-a', prefix: '198.51.100.0/24' },
+      warn: false,
+    });
+  });
+
+  it('warns, naming the fallback, when no range holds it — the root with its own sentence', () => {
+    expect(endpointDestinationLine({ kind: 'unmatched' }, true, inG2, pathOf)).toEqual({
+      line: 'unmatched',
+      values: { folder: 'site-a / floor-2' },
+      warn: true,
+    });
+    expect(endpointDestinationLine({ kind: 'unmatched' }, true, root, pathOf)).toEqual({
+      line: 'unmatchedRoot',
+      values: {},
+      warn: true,
+    });
+  });
+
+  it('says a contested address is contested, not uncovered', () => {
+    const line = endpointDestinationLine(
+      { kind: 'ambiguous', groupIds: ['g1', 'g2'] },
+      true,
+      root,
+      pathOf,
+    );
+    expect(line?.line).toBe('ambiguousRoot');
+    expect(line?.values).toEqual({ count: 2 });
+    expect(line?.warn).toBe(true);
+  });
+
+  it('says no folder has a range before the answer for the address, and warns', () => {
+    expect(endpointDestinationLine(undefined, false, root, pathOf)?.line).toBe('noRangesRoot');
+  });
+
+  it('says nothing until the server has answered', () => {
+    expect(endpointDestinationLine(undefined, undefined, root, pathOf)).toBeNull();
+    expect(endpointDestinationLine(undefined, true, inG2, pathOf)).toBeNull();
+  });
+
+  it('with filing by range off, names the chosen folder and does not warn', () => {
+    const off = { groupId: 'g1', fileByPrefix: false };
+    expect(endpointDestinationLine({ kind: 'unmatched' }, true, off, pathOf)).toEqual({
+      line: 'chosen',
+      values: { folder: 'site-a' },
+      warn: false,
+    });
+    expect(
+      endpointDestinationLine(undefined, undefined, { ...off, groupId: '' }, pathOf)?.line,
+    ).toBe('chosenRoot');
+  });
+});
+
