@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.33 — Discovery lists the unregistered devices your network already sees (LLDP/CDP neighbors, OSPF/BGP peers, syslog/trap senders) and detects their profile and credential, the Neighbors tab shows each neighbor's address, model / OS and maker and adds an unmonitored one in place, Meraki switches get the Neighbors tab, open screens follow other people's changes**
+> Status: **v0.3.34 — Meraki MX and MR get the Neighbors tab, a device added from Discovery ▸ Unregistered or from Neighbors goes into a folder by IP range as a range scan does, a Meraki device's neighbors read like any other device's and say whether a peer with no address is monitored, a "Not monitored" neighbor says why it cannot be added, an upgrade that only changes how neighbors are written is marked as such in the history**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,
