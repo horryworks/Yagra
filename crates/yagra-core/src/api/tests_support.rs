@@ -222,6 +222,21 @@ impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
     {
         Ok(Vec::new())
     }
+
+    /// Never asked: no MX of this fixture is a node.
+    async fn device_neighbors(
+        &self,
+        _org: &crate::meraki::MerakiOrg,
+        _api_key: &str,
+        _serials: &[String],
+        _budget: std::time::Duration,
+        _rps: f64,
+    ) -> Result<
+        Vec<(String, yagra_transport::MerakiDeviceNeighbors)>,
+        yagra_transport::MerakiFetchError,
+    > {
+        Ok(Vec::new())
+    }
 }
 
 /// [`live_state`], with a hand-off directory the upgrade and relocation mechanisms can use.
@@ -319,6 +334,7 @@ async fn live_state_with(
         dashboard.unwrap_or_else(|| Arc::new(EmptyDashboard)),
         Arc::new(crate::meraki::MerakiInflight::new()),
         meraki_import.clone(),
+        Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
     ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
     let audit_repo = Arc::new(crate::audit::AuditRepo::new(pool.clone()));

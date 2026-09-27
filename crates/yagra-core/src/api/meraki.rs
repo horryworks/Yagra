@@ -3741,6 +3741,21 @@ mod tests {
         > {
             Ok(Vec::new())
         }
+
+        /// Never asked: no MX of this fixture is a node.
+        async fn device_neighbors(
+            &self,
+            _org: &crate::meraki::MerakiOrg,
+            _api_key: &str,
+            _serials: &[String],
+            _budget: std::time::Duration,
+            _rps: f64,
+        ) -> Result<
+            Vec<(String, yagra_transport::MerakiDeviceNeighbors)>,
+            yagra_transport::MerakiFetchError,
+        > {
+            Ok(Vec::new())
+        }
     }
 
     /// The whole saved-key path, accepted (ADR-115): a typed key is sealed once, the organization

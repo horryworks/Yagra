@@ -777,6 +777,22 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
+    /// The organization's MX that are nodes here, `(serial, node)` — the appliances whose
+    /// neighbours the sync reads (ADR-181 増分 3). One not imported has nowhere to record them.
+    pub async fn appliance_nodes(&self, org: Uuid) -> anyhow::Result<Vec<(String, Uuid)>> {
+        let rows = sqlx::query(
+            "SELECT serial, node_id FROM meraki_devices \
+             WHERE org_id = $1 AND lower(product_type) = 'appliance' \
+             ORDER BY serial",
+        )
+        .bind(org)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("serial")?, r.try_get("node_id")?)))
+            .collect()
+    }
+
     /// An organization's stored rows, for the planner.
     pub async fn stored(&self, org: Uuid) -> anyhow::Result<Vec<StoredDevice>> {
         let rows = sqlx::query(

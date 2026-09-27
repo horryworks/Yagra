@@ -122,10 +122,12 @@ describe('node-detail tab visibility', () => {
       for (const other of ['appliance', 'camera', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
       }
-      // ADR-181: a switch's neighbours are read from the Dashboard — an AP's and an MX's are not.
+      // ADR-181: a switch's and (増分 3) an MX's neighbours are read from the Dashboard — an AP's
+      // are not.
       expect(visibleNodeDetailTabs(node('switch'))).toContain('neighbors');
       expect(visibleNodeDetailTabs(node(' Switch '))).toContain('neighbors');
-      for (const other of ['wireless', 'appliance', 'camera', null]) {
+      expect(visibleNodeDetailTabs(node('appliance'))).toContain('neighbors');
+      for (const other of ['wireless', 'camera', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('neighbors');
       }
       // Flow has no Meraki source at all.
@@ -212,7 +214,7 @@ describe('node-detail tab visibility', () => {
     expect(tabs('url', false)).toEqual(['overview', 'collection']);
     expect(tabs('dns', false)).toEqual(['overview', 'collection']);
     expect(tabs('meraki', false)).toEqual(['overview', 'collection', 'events']);
-    expect(tabs('meraki', true, false, 'appliance')).toEqual(['overview', 'collection', 'events']);
+    expect(tabs('meraki', true, false, 'appliance')).toEqual(['overview', 'neighbors', 'collection', 'events']);
     expect(tabs('meraki', false, false, 'switch')).toEqual([
       'overview',
       'interfaces',

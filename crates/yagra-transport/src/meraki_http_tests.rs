@@ -26,8 +26,9 @@ use tokio::net::TcpListener;
 
 use crate::meraki::collect;
 use crate::{
-    fetch_inventory, fetch_network_lans, list_organizations, MerakiAvailability, MerakiCollectSpec,
-    MerakiFetchError, MerakiLanAddress, MerakiTier, MerakiWireOrigin,
+    fetch_device_neighbors, fetch_inventory, fetch_network_lans, list_organizations,
+    MerakiAvailability, MerakiCollectSpec, MerakiFetchError, MerakiLanAddress, MerakiTier,
+    MerakiWireOrigin,
 };
 use yagra_common::MerakiListing;
 
@@ -1606,4 +1607,96 @@ async fn a_network_id_that_is_not_one_is_never_put_in_a_path() {
         lines(&seen),
         vec!["GET /api/v1/networks/N_2/appliance/vlans HTTP/1.1"]
     );
+}
+
+// ── An MX's LLDP/CDP neighbours, one device at a time (ADR-181 増分 3) ─────────────────────────
+
+#[tokio::test]
+async fn each_mx_answers_with_its_lan_side_neighbours_or_its_own_failure() {
+    let (origin, _, seen) = serve(vec![
+        // Q2MX-0001: one LAN neighbour and the upstream line, which is not kept.
+        Reply::ok(
+            r#"{"sourceMac":"0c:8d:db:00:00:10","ports":{"port3":{"lldp":{"chassisId":"00:00:0c:00:00:20","portId":"Gi0/1","managementAddress":"192.0.2.31"}},"wan1":{"lldp":{"chassisId":"0c:8d:db:00:00:40","portId":"0"}}}}"#,
+        ),
+        // Q2MX-0002: the Dashboard failed — this device's own error, and the read goes on.
+        Reply::json(500, r#"{"errors":["mock"]}"#),
+        // Q2MX-0003: hears nothing, which is an answer.
+        Reply::ok(r#"{"sourceMac":"0c:8d:db:00:00:11","ports":{}}"#),
+    ])
+    .await;
+    let got = fetch_device_neighbors(
+        BASE,
+        KEY,
+        &nets(&["Q2MX-0001", "Q2MX-0002", "Q2MX-0003"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(got.len(), 3);
+    let first = got[0].1.as_ref().expect("an answer");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].local_port, "port3");
+    assert_eq!(first[0].remote_mgmt_addr.as_deref(), Some("192.0.2.31"));
+    assert_eq!(got[1].1, Err(MerakiFetchError::Status(500)));
+    assert_eq!(got[2].1, Ok(vec![]));
+    assert_eq!(
+        lines(&seen),
+        vec![
+            "GET /api/v1/devices/Q2MX-0001/lldpCdp HTTP/1.1",
+            "GET /api/v1/devices/Q2MX-0002/lldpCdp HTTP/1.1",
+            "GET /api/v1/devices/Q2MX-0003/lldpCdp HTTP/1.1",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_refused_key_stops_the_neighbour_reads_after_one_request() {
+    let (origin, _, seen) = serve(vec![Reply::json(401, r#"{"errors":["mock"]}"#)]).await;
+    let got = fetch_device_neighbors(
+        BASE,
+        KEY,
+        &nets(&["Q2MX-0001", "Q2MX-0002"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(
+        got,
+        vec![("Q2MX-0001".to_owned(), Err(MerakiFetchError::Auth(401)))]
+    );
+    assert_eq!(
+        lines(&seen).len(),
+        1,
+        "every other device would say the same"
+    );
+}
+
+#[tokio::test]
+async fn a_serial_the_dashboard_would_never_issue_is_not_joined_into_a_path() {
+    let (origin, _, seen) = serve(vec![]).await;
+    let got = fetch_device_neighbors(
+        BASE,
+        KEY,
+        &nets(&["../organizations"]),
+        1000.0,
+        TIMEOUT,
+        TIMEOUT,
+        Some(&origin),
+    )
+    .await
+    .expect("a session");
+    assert_eq!(
+        got,
+        vec![(
+            "../organizations".to_owned(),
+            Err(MerakiFetchError::Malformed)
+        )]
+    );
+    assert!(lines(&seen).is_empty());
 }

@@ -2401,22 +2401,108 @@ pub async fn fetch_network_lans(
     let mut out = Vec::new();
     for network in network_ids {
         let answer = network_lan(&mut s, network).await;
-        // The budget stopped it — a request the deadline refused was never sent, and a 429 whose
-        // wait would outlast the budget was not waited (決定 37). Nothing was learned about this
-        // network, and the networks after it would be stopped the same way.
-        if matches!(answer, Err(MerakiFetchError::Truncated)) {
+        let step = one_at_a_time(&answer);
+        if step == Step::Stop {
             break;
         }
-        let same_for_every_network = matches!(
-            answer,
-            Err(MerakiFetchError::Auth(_) | MerakiFetchError::Host | MerakiFetchError::RateLimited)
-        );
         out.push((network.clone(), answer));
-        if same_for_every_network {
+        if step == Step::KeepAndStop {
             break;
         }
     }
     Ok(out)
+}
+
+/// What a read of many things one at a time does after one answer ([`fetch_network_lans`],
+/// [`fetch_device_neighbors`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// Keep the answer and read the next.
+    Keep,
+    /// Keep the answer and read no more: it would be the same for every one after it — a refused
+    /// key, a host outside the allow-list, 429s that outlast the retries — so one bad key costs one
+    /// request rather than hundreds.
+    KeepAndStop,
+    /// Read no more and drop the answer: the budget stopped it. A request the deadline refused was
+    /// never sent, and a 429 whose wait would outlast the budget was not waited (ADR-164 決定 37).
+    /// Nothing was learned about this one, and the ones after it would be stopped the same way.
+    Stop,
+}
+
+fn one_at_a_time<T>(answer: &Result<T, MerakiFetchError>) -> Step {
+    match answer {
+        Err(MerakiFetchError::Truncated) => Step::Stop,
+        Err(MerakiFetchError::Auth(_) | MerakiFetchError::Host | MerakiFetchError::RateLimited) => {
+            Step::KeepAndStop
+        }
+        _ => Step::Keep,
+    }
+}
+
+/// One device's LLDP/CDP neighbours, or why this read could not say.
+pub type MerakiDeviceNeighbors = Result<Vec<yagra_common::Neighbor>, MerakiFetchError>;
+
+/// Read each MX's LAN-side LLDP/CDP neighbours, one device at a time (ADR-181 増分 3):
+/// `GET /devices/{serial}/lldpCdp`. Read-only.
+///
+/// Per device because nothing wider answers it: the organization-wide listing the switches are read
+/// from covers switches only, and `topology/linkLayer` does not keep a link's ports straight when
+/// the far end is not a Meraki device, and keeps a link for up to 25 days after it goes. Measured on
+/// ten MX of a real organization: 0.34–0.41 s each.
+///
+/// Returns the devices it **reached**, in the order given, and stops as [`fetch_network_lans`] does:
+/// at `budget`, and at the first failure that would be the same for every device. A device's own
+/// failure is that device's `Err` — never an empty list, which would read as "hears nothing".
+///
+/// `Err` only when no session could be built (`Config`): then nothing was sent.
+pub async fn fetch_device_neighbors(
+    base_url: &str,
+    api_key: &str,
+    serials: &[String],
+    target_rps: f64,
+    timeout: Duration,
+    budget: Duration,
+    wire: Option<&MerakiWireOrigin>,
+) -> Result<Vec<(String, MerakiDeviceNeighbors)>, MerakiFetchError> {
+    let mut s = Session::new(base_url, api_key, target_rps, timeout, wire).map_err(|e| {
+        tracing::debug!(error = %e, "meraki session for the neighbour reads refused");
+        MerakiFetchError::Config
+    })?;
+    s.deadline = Some(Instant::now() + budget);
+    let mut out = Vec::new();
+    for serial in serials {
+        let answer = device_neighbors(&mut s, serial).await;
+        let step = one_at_a_time(&answer);
+        if step == Step::Stop {
+            break;
+        }
+        out.push((serial.clone(), answer));
+        if step == Step::KeepAndStop {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// One device's neighbours.
+async fn device_neighbors(s: &mut Session, serial: &str) -> MerakiDeviceNeighbors {
+    // The serial goes into the path. One the Dashboard would never issue is refused rather than
+    // joined, so a listing cannot steer a request to another resource.
+    if serial.is_empty()
+        || !serial
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err(MerakiFetchError::Malformed);
+    }
+    let path = format!("{API_PREFIX}/devices/{serial}/lldpCdp");
+    let bodies = s
+        .get_paged_strict(&path, &[], Paging::Unpaged, Shape::Object)
+        .await?;
+    Ok(bodies
+        .first()
+        .map(crate::meraki_neighbors::parse_device_lldp_cdp)
+        .unwrap_or_default())
 }
 
 /// One network's LAN addresses: the VLANs, else the single LAN, else none.

@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A Meraki switch's LLDP/CDP neighbours, from `switch/ports/topology/discovery/byDevice`
-//! (ADR-181) — the organization-wide listing that tells, per switch port, what the port hears.
+//! (ADR-181) — the organization-wide listing that tells, per switch port, what the port hears —
+//! and an MX's, from `devices/{serial}/lldpCdp`, one appliance at a time (ADR-181 増分 3).
+//!
+//! The two answer the same facts in two shapes: the listing as `{name, value}` pairs labelled
+//! the way the Dashboard displays them, the per-device read as camelCase fields. Both are read into
+//! one [`Fields`] keyed by the listing's labels, so a row is built by one function per protocol
+//! whichever endpoint it came from.
 //!
 //! Each port carries two lists of `{name, value}` pairs, one per protocol, labelled the way the
 //! Dashboard displays them ("System name", "Port ID", …). This module is the one place those labels
@@ -106,14 +112,70 @@ pub(crate) fn parse_switch_port_topology(items: &[Value]) -> BTreeMap<String, Ve
             else {
                 continue;
             };
+            let local = Local::switch_port(port_id);
             let lldp = Fields::of(port.get("lldp"));
-            if let Some(n) = lldp_neighbor(port_id, &lldp) {
+            if let Some(n) = lldp_neighbor(local, &lldp) {
                 neighbors.push(n);
             }
             let cdp = Fields::of(port.get("cdp"));
-            if let Some(n) = cdp_neighbor(port_id, &cdp) {
+            if let Some(n) = cdp_neighbor(local, &cdp) {
                 neighbors.push(n);
             }
+        }
+    }
+    out
+}
+
+/// A per-device read's LLDP fields → the listing's labels.
+const LLDP_FIELDS: &[(&str, &str)] = &[
+    ("chassisId", lldp::CHASSIS_ID),
+    ("portId", lldp::PORT_ID),
+    ("portDescription", lldp::PORT_DESCRIPTION),
+    ("systemName", lldp::SYSTEM_NAME),
+    ("systemDescription", lldp::SYSTEM_DESCRIPTION),
+    ("managementAddress", lldp::MANAGEMENT_ADDRESS),
+    ("systemCapabilities", lldp::CAPABILITIES),
+];
+
+/// A per-device read's CDP fields → the listing's labels.
+const CDP_FIELDS: &[(&str, &str)] = &[
+    ("deviceId", cdp::DEVICE_ID),
+    ("portId", cdp::PORT_ID),
+    ("platform", cdp::PLATFORM),
+    ("version", cdp::VERSION),
+    ("managementAddress", cdp::MANAGEMENT_ADDRESS),
+    ("address", cdp::ADDRESS),
+    ("capabilities", cdp::CAPABILITIES),
+];
+
+/// `devices/{serial}/lldpCdp` for an MX → its LAN-side neighbours (ADR-181 増分 3).
+///
+/// The body is `{"sourceMac": …, "ports": {"port3": {"lldp": {…}, "cdp": {…}, …}, "wan1": …}}`
+/// (recorded 2026-09-26 on ten MX). A `wan` port's peer is dropped (決定 3): it is the upstream
+/// line — measured, 11 of 14 were another Meraki device's internet port and the rest a carrier's
+/// equipment — and listing it would put a carrier's router on Discovery's Unregistered list. An
+/// empty or absent `ports` is an answer: the MX hears nothing.
+pub(crate) fn parse_device_lldp_cdp(body: &Value) -> Vec<Neighbor> {
+    let mut out = Vec::new();
+    for (key, port) in body
+        .get("ports")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let key = key.trim();
+        if key.is_empty() || key.to_ascii_lowercase().starts_with("wan") {
+            continue;
+        }
+        let local = Local {
+            port: key,
+            ifindex: None,
+        };
+        if let Some(n) = lldp_neighbor(local, &Fields::of_object(port.get("lldp"), LLDP_FIELDS)) {
+            out.push(n);
+        }
+        if let Some(n) = cdp_neighbor(local, &Fields::of_object(port.get("cdp"), CDP_FIELDS)) {
+            out.push(n);
         }
     }
     out
@@ -140,6 +202,23 @@ impl<'a> Fields<'a> {
         Self(map)
     }
 
+    /// A per-device read's protocol object (`lldp` or `cdp`), each camelCase field put under the
+    /// label the organization-wide listing uses for it. A field this module does not name, or one
+    /// that is not a string (`nativeVlan` is a number), is not read.
+    fn of_object(object: Option<&'a Value>, names: &[(&str, &'a str)]) -> Self {
+        let mut map = BTreeMap::new();
+        if let Some(object) = object.and_then(Value::as_object) {
+            for (field, label) in names {
+                if let Some(value) = object.get(*field).and_then(Value::as_str).map(str::trim) {
+                    if !value.is_empty() {
+                        map.insert(*label, value);
+                    }
+                }
+            }
+        }
+        Self(map)
+    }
+
     fn get(&self, name: &str) -> Option<&'a str> {
         self.0.get(name).copied()
     }
@@ -149,21 +228,39 @@ impl<'a> Fields<'a> {
     }
 }
 
-/// The local side both protocols share: the Dashboard's port id, which is the port's `if_name` on
-/// the Interfaces tab, and the ifIndex that tab keys it by (ADR-181 決定 8, ADR-167 決定 4).
-fn on_port(proto: NeighborProto, port_id: &str, chassis: String, port: String) -> Neighbor {
-    let mut n = Neighbor::new(proto, port_id, chassis, port);
-    n.local_ifindex = Some(switch_port_ifindex(port_id));
+/// The port a neighbour is heard on.
+#[derive(Clone, Copy)]
+struct Local<'a> {
+    /// The Dashboard's name for it: a switch port's id (`7`), an MX port's key (`port3`).
+    port: &'a str,
+    /// The ifIndex the Interfaces tab keys the port by — a switch's (ADR-181 決定 8, ADR-167
+    /// 決定 4). An MX has no Interfaces rows, so none (増分 3 決定 6).
+    ifindex: Option<u32>,
+}
+
+impl<'a> Local<'a> {
+    fn switch_port(port: &'a str) -> Self {
+        Self {
+            port,
+            ifindex: Some(switch_port_ifindex(port)),
+        }
+    }
+}
+
+/// The local side both protocols share.
+fn on_port(proto: NeighborProto, local: Local<'_>, chassis: String, port: String) -> Neighbor {
+    let mut n = Neighbor::new(proto, local.port, chassis, port);
+    n.local_ifindex = local.ifindex;
     n
 }
 
-fn lldp_neighbor(port_id: &str, f: &Fields<'_>) -> Option<Neighbor> {
+fn lldp_neighbor(local: Local<'_>, f: &Fields<'_>) -> Option<Neighbor> {
     let (chassis, chassis_kind) = id_with_kind(f.get(lldp::CHASSIS_ID)?);
     let (port, port_kind) = f.get(lldp::PORT_ID).map_or((String::new(), None), |p| {
         let (p, k) = id_with_kind(p);
         (p, Some(k))
     });
-    let mut n = on_port(NeighborProto::Lldp, port_id, chassis, port);
+    let mut n = on_port(NeighborProto::Lldp, local, chassis, port);
     n.remote_chassis_kind = Some(chassis_kind);
     n.remote_port_kind = port_kind;
     n.remote_port_desc = f.owned(lldp::PORT_DESCRIPTION);
@@ -177,10 +274,10 @@ fn lldp_neighbor(port_id: &str, f: &Fields<'_>) -> Option<Neighbor> {
     Some(n)
 }
 
-fn cdp_neighbor(port_id: &str, f: &Fields<'_>) -> Option<Neighbor> {
+fn cdp_neighbor(local: Local<'_>, f: &Fields<'_>) -> Option<Neighbor> {
     let (device_id, device_id_kind) = cdp_device_id(f.get(cdp::DEVICE_ID)?);
     let port = f.owned(cdp::PORT_ID).unwrap_or_default();
-    let mut n = on_port(NeighborProto::Cdp, port_id, device_id, port);
+    let mut n = on_port(NeighborProto::Cdp, local, device_id, port);
     n.remote_chassis_kind = Some(device_id_kind);
     // CDP names its peer's port by name — text, as the SNMP walk records it.
     n.remote_port_kind = (!n.remote_port.is_empty()).then_some(NeighborIdKind::Text);
@@ -487,7 +584,7 @@ mod tests {
             {"name": "Address", "value": "198.51.100.1"},
             {"name": "Management address", "value": "198.51.100.9"}
         ]);
-        let n = cdp_neighbor("1", &Fields::of(Some(&port))).expect("a row");
+        let n = cdp_neighbor(Local::switch_port("1"), &Fields::of(Some(&port))).expect("a row");
         assert_eq!(n.remote_mgmt_addr.as_deref(), Some("198.51.100.9"));
     }
 
@@ -502,7 +599,7 @@ mod tests {
         assert!(eight.capabilities.is_empty());
         assert_eq!(eight.remote_mgmt_addr, None);
         let no_chassis = serde_json::json!([{"name": "System name", "value": "x"}]);
-        assert!(lldp_neighbor("1", &Fields::of(Some(&no_chassis))).is_none());
+        assert!(lldp_neighbor(Local::switch_port("1"), &Fields::of(Some(&no_chassis))).is_none());
     }
 
     /// 決定 4: a listed switch with no neighbours is an answer (empty); an unlisted one is absent.
@@ -520,6 +617,107 @@ mod tests {
         let set = NeighborSet::new(got["Q2SW-0001"].clone());
         assert_eq!(set.neighbors.len(), 3);
         assert!(!set.truncated);
+    }
+
+    /// One MX in the shape `devices/{serial}/lldpCdp` answers (field names and value shapes as
+    /// recorded 2026-09-26; every value is made up).
+    fn mx_body() -> Value {
+        serde_json::json!({
+            "sourceMac": "0c:8d:db:00:00:10",
+            "ports": {
+                "port3": {
+                    "cdp": {
+                        "sourcePort": "0c:8d:db:00:00:13",
+                        "platform": "cisco WS-C2960CX-8PC-L",
+                        "deviceId": "sw-02.example.com",
+                        "address": "192.0.2.30",
+                        "portId": "GigabitEthernet0/1",
+                        "nativeVlan": 1,
+                        "version": "Cisco IOS Software, C2960CX Software, Version 15.2(7)E",
+                        "capabilities": "Switch, IGMP",
+                        "managementAddress": "192.0.2.31"
+                    },
+                    "lldp": {
+                        "sourcePort": "0c:8d:db:00:00:13",
+                        "systemName": "sw-02",
+                        "systemDescription": "Cisco IOS Software",
+                        "chassisId": "00:00:0c:00:00:20",
+                        "managementVlan": 1,
+                        "portVlan": 1,
+                        "managementAddress": "192.0.2.31",
+                        "portId": "Gi0/1",
+                        "portDescription": "GigabitEthernet0/1",
+                        "systemCapabilities": "Bridge, Router"
+                    },
+                    "deviceMac": "00:00:0c:00:00:20",
+                    "device": {"url": "https://example.com/"}
+                },
+                "port5": {
+                    "cdp": {"deviceId": "0c8ddb000030", "portId": "Port 1", "version": "1"},
+                    "deviceMac": "0c:8d:db:00:00:30"
+                },
+                "wan1": {
+                    "lldp": {
+                        "systemName": "mx-02",
+                        "systemDescription": "Meraki MX68 Cloud Managed Security Appliance",
+                        "chassisId": "0c:8d:db:00:00:40",
+                        "portId": "0"
+                    },
+                    "deviceMac": "0c:8d:db:00:00:40"
+                }
+            }
+        })
+    }
+
+    /// 増分 3: the LAN ports' peers, read by the same builders as a switch's; the `wan` port's is
+    /// dropped (決定 3), and an MX port has no ifIndex (決定 6).
+    #[test]
+    fn an_mx_answer_yields_its_lan_side_through_the_same_builders() {
+        let rows = parse_device_lldp_cdp(&mx_body());
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(rows.iter().all(|n| n.local_port != "wan1"));
+        assert!(rows.iter().all(|n| n.local_ifindex.is_none()));
+
+        let lldp = rows
+            .iter()
+            .find(|n| n.proto == NeighborProto::Lldp)
+            .expect("port3's LLDP row");
+        assert_eq!(lldp.local_port, "port3");
+        assert_eq!(lldp.remote_chassis, "00:00:0c:00:00:20");
+        assert_eq!(lldp.remote_chassis_kind, Some(NeighborIdKind::Mac));
+        assert_eq!(lldp.remote_sys_name.as_deref(), Some("sw-02"));
+        assert_eq!(lldp.remote_mgmt_addr.as_deref(), Some("192.0.2.31"));
+        assert_eq!(
+            lldp.capabilities,
+            [NeighborCapability::Router, NeighborCapability::Bridge]
+        );
+
+        let cdp = rows
+            .iter()
+            .find(|n| n.proto == NeighborProto::Cdp && n.local_port == "port3")
+            .expect("port3's CDP row");
+        assert_eq!(cdp.remote_chassis, "sw-02.example.com");
+        assert_eq!(
+            cdp.remote_platform.as_deref(),
+            Some("cisco WS-C2960CX-8PC-L")
+        );
+        assert_eq!(cdp.remote_mgmt_addr.as_deref(), Some("192.0.2.31"));
+
+        // 増分 2 applies here too: a Meraki peer's bare-hex id is a MAC and its "1" is dropped.
+        let meraki = rows
+            .iter()
+            .find(|n| n.local_port == "port5")
+            .expect("port5's CDP row");
+        assert_eq!(meraki.remote_chassis, "0c:8d:db:00:00:30");
+        assert_eq!(meraki.remote_sys_desc, None);
+    }
+
+    #[test]
+    fn an_mx_that_hears_nothing_answers_an_empty_list() {
+        assert!(
+            parse_device_lldp_cdp(&serde_json::json!({"sourceMac": "x", "ports": {}})).is_empty()
+        );
+        assert!(parse_device_lldp_cdp(&serde_json::json!({})).is_empty());
     }
 
     #[test]

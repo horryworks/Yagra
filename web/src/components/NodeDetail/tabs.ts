@@ -342,15 +342,16 @@ export function interfacesFed(node: NodeDetailSubject): boolean {
 }
 
 /** Whether something reads this node's CDP/LLDP neighbours — what the Neighbors tab is fed by
- *  (ADR-181 決定 9). A device: its own SNMP walk, when it has one. A Meraki node: its organization's
- *  switch-port collect, so a switch only — the listing it reads has no access point or MX in it.
- *  Nothing else. Exhaustive, so the next kind has to answer it. */
+ *  (ADR-181 決定 9). A device: its own SNMP walk, when it has one. A Meraki node: a switch, from its
+ *  organization's switch-port collect, and an MX, read one appliance at a time by the inventory sync
+ *  (ADR-181 増分 3). An access point's are not read. Nothing else. Exhaustive, so the next kind has
+ *  to answer it. */
 export function neighborsFed(node: NodeDetailSubject): boolean {
   switch (node.kind) {
     case 'device':
       return node.snmpConfigured;
     case 'meraki':
-      return node.merakiProductType?.trim().toLowerCase() === 'switch';
+      return ['switch', 'appliance'].includes(node.merakiProductType?.trim().toLowerCase() ?? '');
     case 'wireless_ap':
     case 'url':
     case 'dns':

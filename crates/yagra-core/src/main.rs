@@ -675,6 +675,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         Arc::new(meraki_sync::DashboardApi::new(meraki_wire)),
         meraki_inflight.clone(),
         meraki_import.clone(),
+        Arc::new(neighbors::NeighborRepo::new(repo.pool())),
     ));
 
     // SNMP v2c (ADR-021): community is resolved per node from its bound credential; an env
