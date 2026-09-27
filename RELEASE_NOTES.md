@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Node ▸ Neighbors on a Meraki switch: a Meraki peer's CDP row no longer shows a lone "1" under the model, and gets a maker name.** The Dashboard reports a Meraki peer's CDP version as `1`, which is now left out; a real version (an IOS banner, a phone's firmware) is still shown. It names a Meraki peer by its MAC as twelve bare hex digits, which is now read as a MAC, written `aa:bb:cc:dd:ee:ff` like the peer's LLDP row, and looked up for its maker. Each Meraki switch records one neighbor change on the first read after the upgrade, because those rows now read differently.
+
 ### Bug Fixes
 
 - **Discovery ▸ Unregistered devices: a row seen by many devices could be hidden from a folder-scoped user who should see it.** The row is shown to whoever can see its lowest-id observer, and that observer was picked after the evidence list was cut to eight lines. With eight ARP sightings from other nodes, the observer that saw it over BGP or LLDP was cut first. The observer is now picked from all the evidence, and it keeps its own line in the list. Existing rows correct themselves at the next sweep (within five minutes). The same rule can also take a row away: a folder-scoped user whose folder held only one of the higher-id observers stops seeing it.

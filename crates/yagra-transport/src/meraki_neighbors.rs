@@ -178,15 +178,15 @@ fn lldp_neighbor(port_id: &str, f: &Fields<'_>) -> Option<Neighbor> {
 }
 
 fn cdp_neighbor(port_id: &str, f: &Fields<'_>) -> Option<Neighbor> {
-    let device_id = f.owned(cdp::DEVICE_ID)?;
+    let (device_id, device_id_kind) = cdp_device_id(f.get(cdp::DEVICE_ID)?);
     let port = f.owned(cdp::PORT_ID).unwrap_or_default();
     let mut n = on_port(NeighborProto::Cdp, port_id, device_id, port);
-    // CDP names its peer by device id and port name — text, as the SNMP walk records it.
-    n.remote_chassis_kind = Some(NeighborIdKind::Text);
+    n.remote_chassis_kind = Some(device_id_kind);
+    // CDP names its peer's port by name — text, as the SNMP walk records it.
     n.remote_port_kind = (!n.remote_port.is_empty()).then_some(NeighborIdKind::Text);
     n.remote_platform = f.owned(cdp::PLATFORM);
     // CDP's counterpart of an LLDP system description, as on the SNMP walk (ADR-180 決定 6).
-    n.remote_sys_desc = f.owned(cdp::VERSION);
+    n.remote_sys_desc = f.get(cdp::VERSION).and_then(cdp_version);
     n.remote_sys_name = f.owned(cdp::SYSTEM_NAME);
     n.remote_mgmt_addr = f
         .get(cdp::MANAGEMENT_ADDRESS)
@@ -207,6 +207,39 @@ fn id_with_kind(raw: &str) -> (String, NeighborIdKind) {
         Some(mac) => (mac, NeighborIdKind::Mac),
         None => (raw.to_owned(), NeighborIdKind::Text),
     }
+}
+
+/// A CDP device id as the Dashboard rendered it, and what it is (ADR-181 増分 2 決定 B). A Meraki
+/// peer names itself by its MAC as twelve bare hex digits (`0c8ddb000002`) — measured on a real
+/// organization, 2,571 of 2,873 CDP rows, every one a Meraki device or a Cisco CBS — so those are
+/// read as a MAC too, which gives the row the same chassis as the peer's LLDP row and a maker
+/// name. Anything else is what [`id_with_kind`] makes of it: a CDP device id is usually a name.
+fn cdp_device_id(raw: &str) -> (String, NeighborIdKind) {
+    match bare_hex_mac(raw).as_deref().and_then(render_mac) {
+        Some(mac) => (mac, NeighborIdKind::Mac),
+        None => id_with_kind(raw),
+    }
+}
+
+/// Twelve hex digits and nothing else. `None` for anything else — a name that happens to be
+/// twelve characters of `0-9a-f` is the one case read wrongly, and the cost is a maker name beside
+/// it (display only, ADR-180 決定 5).
+fn bare_hex_mac(raw: &str) -> Option<Vec<u8>> {
+    if raw.len() != 12 || !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..6)
+        .map(|i| u8::from_str_radix(&raw[i * 2..i * 2 + 2], 16).ok())
+        .collect()
+}
+
+/// A CDP version string worth showing, or `None` (ADR-181 増分 2 決定 A). A Meraki peer answers
+/// `"1"` — measured on a real organization, 2,569 of 2,873 CDP rows, every one a Meraki peer, and
+/// no other value of one or two characters — which put a lone "1" under the model on the
+/// Neighbors tab. A version that says something (an IOS banner, `SCCP 9.4.1.3.SR3`) is kept.
+fn cdp_version(raw: &str) -> Option<String> {
+    let meaningless = raw.len() <= 2 && raw.bytes().all(|b| b.is_ascii_digit());
+    (!meaningless).then(|| raw.to_owned())
 }
 
 /// Six `:`- or `-`-separated hex octets. `None` for anything else.
@@ -356,14 +389,11 @@ mod tests {
             .find(|n| n.proto == NeighborProto::Cdp)
             .expect("the CDP row");
         assert_eq!(n.local_port, "7");
-        assert_eq!(n.remote_chassis, "0c8ddb000002");
-        assert_eq!(n.remote_chassis_kind, Some(NeighborIdKind::Text));
         assert_eq!(n.remote_port, "Port 0");
         assert_eq!(
             n.remote_platform.as_deref(),
             Some("Meraki MR36 Cloud Managed AP")
         );
-        assert_eq!(n.remote_sys_desc.as_deref(), Some("1"));
         assert_eq!(n.remote_mgmt_addr.as_deref(), Some("192.0.2.21"));
         assert_eq!(
             n.capabilities,
@@ -373,6 +403,49 @@ mod tests {
                 NeighborCapability::Igmp
             ]
         );
+    }
+
+    /// 増分 2 決定 B: a Meraki peer's bare-hex CDP device id is its MAC — the same chassis its LLDP
+    /// row on the same port carries.
+    #[test]
+    fn a_meraki_peers_bare_hex_device_id_is_read_as_the_mac_its_lldp_row_names() {
+        let got = parsed();
+        let rows = &got["Q2SW-0001"];
+        let cdp = rows.iter().find(|n| n.proto == NeighborProto::Cdp).unwrap();
+        let lldp = rows
+            .iter()
+            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "7")
+            .unwrap();
+        assert_eq!(cdp.remote_chassis, "0c:8d:db:00:00:02");
+        assert_eq!(cdp.remote_chassis_kind, Some(NeighborIdKind::Mac));
+        assert_eq!(cdp.remote_chassis, lldp.remote_chassis);
+        // A name stays a name, and so does anything that is not exactly twelve hex digits.
+        for (raw, kind) in [
+            ("rtr-01.example.com", NeighborIdKind::Text),
+            ("0c8ddb00000", NeighborIdKind::Text),
+            ("0c8ddb0000020", NeighborIdKind::Text),
+            ("0c8ddb00000g", NeighborIdKind::Text),
+            ("0C-8D-DB-00-00-02", NeighborIdKind::Mac),
+        ] {
+            assert_eq!(cdp_device_id(raw).1, kind, "{raw}");
+        }
+    }
+
+    /// 増分 2 決定 A: a Meraki peer's `"1"` is not shown; a version that says something is.
+    #[test]
+    fn a_cdp_version_of_one_or_two_digits_is_dropped_and_a_real_one_kept() {
+        let got = parsed();
+        let n = got["Q2SW-0001"]
+            .iter()
+            .find(|n| n.proto == NeighborProto::Cdp)
+            .unwrap();
+        assert_eq!(n.remote_sys_desc, None);
+        for kept in ["SCCP 9.4.1.3.SR3", "3.2.1.1", "123", "v1"] {
+            assert_eq!(cdp_version(kept).as_deref(), Some(kept));
+        }
+        for dropped in ["1", "12"] {
+            assert_eq!(cdp_version(dropped), None);
+        }
     }
 
     #[test]

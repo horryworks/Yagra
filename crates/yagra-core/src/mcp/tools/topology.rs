@@ -101,7 +101,8 @@ impl YagraMcp {
                        Meraki organization that already lists the device there. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
                        labelled a MAC address (on a Meraki switch, which reports no label, each id \
-                       shaped like one) — the maker of the network interface, which is not \
+                       shaped like one — six octets, or twelve bare hex digits for a CDP device \
+                       id) — the maker of the network interface, which is not \
                        necessarily who made the device or its software."
     )]
     async fn get_neighbors(

@@ -496,8 +496,9 @@ fn push_field(out: &mut String, key: &str, value: Option<&str>) {
 ///
 /// ⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing
 /// carries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
-/// it reads as six octets. The cost of guessing wrong is a maker name beside a name that happens to
-/// look like a MAC — display only (ADR-180 決定 5).
+/// it reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a
+/// Meraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name
+/// beside a name that happens to look like a MAC — display only (ADR-180 決定 5).
 #[derive(
     Debug,
     Clone,
@@ -514,7 +515,8 @@ fn push_field(out: &mut String, key: &str, value: Option<&str>) {
 #[serde(rename_all = "snake_case")]
 pub enum NeighborIdKind {
     /// Six octets the device labelled a MAC address, rendered `aa:bb:cc:dd:ee:ff`. On a Meraki
-    /// switch, which reports no label, an id shaped like six octets.
+    /// switch, which reports no label, an id shaped like six octets (or, on CDP, twelve bare hex
+    /// digits).
     Mac,
     /// An IPv4 or IPv6 address.
     NetworkAddress,

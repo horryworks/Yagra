@@ -27548,7 +27548,7 @@
             "items": {
               "$ref": "#/components/schemas/MacVendor"
             },
-            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports\nno label, where an id shaped like a MAC address is. This names who made the network\ninterface, which is not necessarily who made the device or its software."
+            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports\nno label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits\nfor a CDP device id). This names who made the network\ninterface, which is not necessarily who made the device or its software."
           },
           "neighbors": {
             "$ref": "#/components/schemas/NeighborSet",
@@ -33679,7 +33679,7 @@
       },
       "NeighborIdKind": {
         "type": "string",
-        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.\n\n⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing\ncarries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets. The cost of guessing wrong is a maker name beside a name that happens to\nlook like a MAC — display only (ADR-180 決定 5).",
+        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.\n\n⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing\ncarries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a\nMeraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name\nbeside a name that happens to look like a MAC — display only (ADR-180 決定 5).",
         "enum": [
           "mac",
           "network_address",

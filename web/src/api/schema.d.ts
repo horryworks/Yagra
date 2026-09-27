@@ -6750,7 +6750,8 @@ export interface components {
             /**
              * @description The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
              *     labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
-             *     no label, where an id shaped like a MAC address is. This names who made the network
+             *     no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
+             *     for a CDP device id). This names who made the network
              *     interface, which is not necessarily who made the device or its software.
              */
             mac_vendors: components["schemas"]["MacVendor"][];
@@ -9772,8 +9773,9 @@ export interface components {
          *
          *     ⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing
          *     carries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
-         *     it reads as six octets. The cost of guessing wrong is a maker name beside a name that happens to
-         *     look like a MAC — display only (ADR-180 決定 5).
+         *     it reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a
+         *     Meraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name
+         *     beside a name that happens to look like a MAC — display only (ADR-180 決定 5).
          * @enum {string}
          */
         NeighborIdKind: "mac" | "network_address" | "text" | "hex" | "unknown";
