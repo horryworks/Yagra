@@ -169,9 +169,9 @@ pub(crate) struct ImportResult {
     /// A URL or DNS monitor at the same address does not count: those store a resolved address,
     /// and the device itself is still importable.
     skipped_existing: u32,
-    /// Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent
-    /// otherwise: an endpoint promotion without `file_by_prefix`, and every scan import that
-    /// decided nothing per row.
+    /// Present when the request set `file_by_prefix`, or — on a scan import — named a folder for
+    /// any row itself. Absent otherwise: an endpoint promotion without `file_by_prefix` (a
+    /// `group_id` alone does not bring it), and every scan import that decided nothing per row.
     ///
     /// ⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by
     /// range would read as one that filed zero rows, and with the field absent the wire shape is

@@ -508,12 +508,13 @@ fn push_field(out: &mut String, key: &str, value: Option<&str>) {
 
 /// How a neighbour's chassis or port id was actually rendered (ADR-180).
 ///
-/// Recorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]
-/// took — never inferred from how the stored text looks, because a text id can look like a MAC and
-/// the hex fallback always does.
+/// Recorded by whoever read the neighbours — the poller's SNMP walk, from the branch
+/// [`render_chassis_id_kind`] / [`render_port_id_kind`] took — never inferred from how the stored
+/// text looks, because a text id can look like a MAC and the hex fallback always does.
 ///
-/// ⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing
-/// carries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
+/// ⚠️ **One exception: a Meraki device's rows** — a switch's (ADR-181 決定 13), read by the poller,
+/// and an MX's or MR's (増分 3/5), read by core's Meraki sync. The Dashboard's LLDP/CDP answers
+/// carry no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
 /// it reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a
 /// Meraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name
 /// beside a name that happens to look like a MAC — display only (ADR-180 決定 5).

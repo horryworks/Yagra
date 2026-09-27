@@ -27556,7 +27556,7 @@
             "items": {
               "$ref": "#/components/schemas/MacVendor"
             },
-            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports\nno label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits\nfor a CDP device id). This names who made the network\ninterface, which is not necessarily who made the device or its software."
+            "description": "The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device\nlabelled as MAC addresses are looked up — except on a Meraki switch, MX or MR, whose Dashboard\nreports no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits\nfor a CDP device id). This names who made the network\ninterface, which is not necessarily who made the device or its software."
           },
           "neighbors": {
             "$ref": "#/components/schemas/NeighborSet",
@@ -30862,7 +30862,7 @@
               },
               {
                 "$ref": "#/components/schemas/PrefixFiling",
-                "description": "Present when the request set `file_by_prefix`, or named a folder for any row itself. Absent\notherwise: an endpoint promotion without `file_by_prefix`, and every scan import that\ndecided nothing per row.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by\nrange would read as one that filed zero rows, and with the field absent the wire shape is\nwhat every existing client already parses. The endpoint import (ADR-179 増分 8) fills it\nonly when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
+                "description": "Present when the request set `file_by_prefix`, or — on a scan import — named a folder for\nany row itself. Absent otherwise: an endpoint promotion without `file_by_prefix` (a\n`group_id` alone does not bring it), and every scan import that decided nothing per row.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by\nrange would read as one that filed zero rows, and with the field absent the wire shape is\nwhat every existing client already parses. The endpoint import (ADR-179 増分 8) fills it\nonly when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
               }
             ]
           },
@@ -33611,7 +33611,7 @@
           },
           "state": {
             "$ref": "#/components/schemas/NeighborPeerState",
-            "description": "`node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device."
+            "description": "`node`, `outside_scope` or `unregistered` — never `ambiguous`. When two organizations list\nthe same MAC (a device moving between them), the first by organization name answers."
           }
         }
       },
@@ -33646,7 +33646,7 @@
           "interval_secs": {
             "type": "integer",
             "format": "int32",
-            "description": "How often each SNMP node's neighbour tables are walked, and each Meraki switch's, MX's and\nMR's neighbours are read, in seconds.",
+            "description": "How often each SNMP node's neighbour tables are walked, and each Meraki switch's, MX's and\nMR's neighbours are read, in seconds. An MX or MR is read a share per inventory sync within\nthe organization's API rate, so across a large organization a round can take longer than\nthis interval.",
             "minimum": 0
           },
           "l3_enabled": {
@@ -33756,7 +33756,7 @@
       },
       "NeighborIdKind": {
         "type": "string",
-        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]\ntook — never inferred from how the stored text looks, because a text id can look like a MAC and\nthe hex fallback always does.\n\n⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing\ncarries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a\nMeraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name\nbeside a name that happens to look like a MAC — display only (ADR-180 決定 5).",
+        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by whoever read the neighbours — the poller's SNMP walk, from the branch\n[`render_chassis_id_kind`] / [`render_port_id_kind`] took — never inferred from how the stored\ntext looks, because a text id can look like a MAC and the hex fallback always does.\n\n⚠️ **One exception: a Meraki device's rows** — a switch's (ADR-181 決定 13), read by the poller,\nand an MX's or MR's (増分 3/5), read by core's Meraki sync. The Dashboard's LLDP/CDP answers\ncarry no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a\nMeraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name\nbeside a name that happens to look like a MAC — display only (ADR-180 決定 5).",
         "enum": [
           "mac",
           "network_address",

@@ -38,7 +38,9 @@
   font-size: var(--font-xs);
 }
 
-.ep-setup-detect svg {
+/* The one warning mark both lines draw (`WarnMark`). */
+.ep-setup-detect svg,
+.ep-setup-dest svg {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
@@ -65,17 +67,6 @@
   align-items: center;
   font-size: var(--font-xs);
   color: var(--text-secondary);
-}
-
-.ep-setup-dest svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .ep-setup-dest.warn {

@@ -402,8 +402,6 @@
           "unmatchedRoot": "No folder’s IP range holds this address. It goes into no folder, at the top of the tree.",
           "ambiguous": "{{count}} folders’ IP ranges hold this address equally well. It goes into “{{folder}}”.",
           "ambiguousRoot": "{{count}} folders’ IP ranges hold this address equally well. It goes into no folder, at the top of the tree.",
-          "noRanges": "No folder has an IP range yet. It goes into “{{folder}}”.",
-          "noRangesRoot": "No folder has an IP range yet. It goes into no folder, at the top of the tree.",
           "chosen": "Goes into “{{folder}}”.",
           "chosenRoot": "Goes into no folder, at the top of the tree."
         }

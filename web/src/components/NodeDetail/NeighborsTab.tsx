@@ -741,7 +741,7 @@ function SetupPanel({
             groups={groups}
             value={destination}
             onChange={onDestinationChange}
-            className="nd-nb-setup-dest"
+            offerFilingByRange={setup.offerFilingByRange}
           />
           <EndpointSetupCell
             target={target}

@@ -18,14 +18,22 @@ interface Props {
   value: SetupDestination;
   onChange: (next: SetupDestination) => void;
   disabled?: boolean;
-  className?: string;
+  /** Whether to draw "File by IP range" at all — not once no folder holds a range (the scan
+   *  import's rule: a control that explains nothing is not drawn). */
+  offerFilingByRange: boolean;
 }
 
-export function EndpointDestination({ groups, value, onChange, disabled, className }: Props) {
+export function EndpointDestination({
+  groups,
+  value,
+  onChange,
+  disabled,
+  offerFilingByRange,
+}: Props) {
   const { t } = useTranslation('monitoring');
   const options = useMemo(() => groupOptions(groups), [groups]);
   return (
-    <div className={className ? `ep-dest ${className}` : 'ep-dest'}>
+    <div className="ep-dest">
       <label className="form-label">
         {t('discovery.seen.dest.label')}
         <GroupPicker
@@ -37,16 +45,20 @@ export function EndpointDestination({ groups, value, onChange, disabled, classNa
         />
       </label>
       {/* Hint outside the label, for the reason the scan import's is. */}
-      <label className="form-label form-check">
-        <input
-          type="checkbox"
-          checked={value.fileByPrefix}
-          disabled={disabled}
-          onChange={(e) => onChange({ ...value, fileByPrefix: e.target.checked })}
-        />
-        {t('discovery.seen.dest.byRange')}
-      </label>
-      <FieldHint>{t('discovery.seen.dest.byRangeHint')}</FieldHint>
+      {offerFilingByRange && (
+        <>
+          <label className="form-label form-check">
+            <input
+              type="checkbox"
+              checked={value.fileByPrefix}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...value, fileByPrefix: e.target.checked })}
+            />
+            {t('discovery.seen.dest.byRange')}
+          </label>
+          <FieldHint>{t('discovery.seen.dest.byRangeHint')}</FieldHint>
+        </>
+      )}
     </div>
   );
 }

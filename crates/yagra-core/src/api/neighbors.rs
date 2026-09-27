@@ -83,8 +83,8 @@ pub(crate) struct CurrentNeighbors {
     /// answered in `peers`.
     chassis_peers: Vec<NeighborChassisPeer>,
     /// The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
-    /// labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
-    /// no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
+    /// labelled as MAC addresses are looked up — except on a Meraki switch, MX or MR, whose Dashboard
+    /// reports no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
     /// for a CDP device id). This names who made the network
     /// interface, which is not necessarily who made the device or its software.
     mac_vendors: Vec<MacVendor>,
@@ -163,7 +163,8 @@ fn setup_blocked(ip: IpAddr, only_end_stations: bool, listed_elsewhere: bool) ->
 pub(crate) struct NeighborChassisPeer {
     /// The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`).
     chassis: String,
-    /// `node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device.
+    /// `node`, `outside_scope` or `unregistered` — never `ambiguous`. When two organizations list
+    /// the same MAC (a device moving between them), the first by organization name answers.
     state: NeighborPeerState,
     /// Present only when `state` is `node`.
     node_id: Option<Uuid>,
@@ -740,7 +741,9 @@ pub(crate) struct NeighborConfig {
     /// reads (a switch's, an MX's and an MR's) alike.
     pub enabled: bool,
     /// How often each SNMP node's neighbour tables are walked, and each Meraki switch's, MX's and
-    /// MR's neighbours are read, in seconds.
+    /// MR's neighbours are read, in seconds. An MX or MR is read a share per inventory sync within
+    /// the organization's API rate, so across a large organization a round can take longer than
+    /// this interval.
     pub interval_secs: u32,
     /// Whether interface-address walks are issued at all. Omitted on update leaves it unchanged.
     #[serde(default)]

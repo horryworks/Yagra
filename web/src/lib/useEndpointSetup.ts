@@ -18,6 +18,7 @@ import {
   detectResultOf,
   endpointDestinationLine,
   importNameAfterDetect,
+  offersFilingByRange,
   pollDetect,
   type DetectResult,
   type SetupDestination,
@@ -58,6 +59,9 @@ export interface EndpointSetup {
   ensureDestination: (ip: string) => void;
   /** The sentence over Monitor saying where the node will land, or `null` until it is known. */
   destinationLine: (ip: string) => { text: string; warn: boolean } | null;
+  /** Whether "File by IP range" is worth offering (`offersFilingByRange`): not once the server
+   *  has said no folder the caller sees holds a range. */
+  offerFilingByRange: boolean;
   /** The row an import is running for; every control is disabled meanwhile. */
   busyId: string | null;
   error: string | null;
@@ -234,6 +238,7 @@ export function useEndpointSetup({
     monitor,
     ensureDestination,
     destinationLine,
+    offerFilingByRange: offersFilingByRange(anyPrefixes),
     busyId,
     error,
     clearError: () => setError(null),

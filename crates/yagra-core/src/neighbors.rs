@@ -166,11 +166,12 @@ impl NeighborRepo {
     /// serializes concurrent cores, so a transition can be neither double-appended nor lost; that
     /// is also why this is not leader-gated.
     ///
-    /// The caller must pass a canonicalized set (the poller canonicalizes before publish);
-    /// otherwise agent row ordering alone would register as a change.
+    /// The caller must pass a canonicalized set (the poller canonicalizes before publish, and
+    /// core's Meraki sync before it records an MX's or MR's); otherwise agent row ordering alone
+    /// would register as a change.
     ///
-    /// Only ever called with a set the poller actually observed. A *failed* walk sends no set at
-    /// all, so this is never reached with an empty stand-in — which is what stops one timed-out
+    /// Only ever called with a set that was actually observed. A *failed* walk or read sends no set
+    /// at all, so this is never reached with an empty stand-in — which is what stops one timed-out
     /// walk from erasing a node's adjacency.
     ///
     /// **A change of spelling is not a change of adjacency** (ADR-182). When the key moved and so

@@ -114,7 +114,7 @@ impl YagraMcp {
                        wired port reads `wired0`). A Meraki switch's, MX's and MR's neighbours \
                        are all read from the Meraki Dashboard. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
-                       labelled a MAC address (on a Meraki switch, which reports no label, each id \
+                       labelled a MAC address (on a Meraki switch, MX or MR, which report no label, each id \
                        shaped like one — six octets, or twelve bare hex digits for a CDP device \
                        id) — the maker of the network interface, which is not \
                        necessarily who made the device or its software."

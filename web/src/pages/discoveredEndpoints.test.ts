@@ -20,6 +20,7 @@ import {
   ENDPOINT_COVERAGE,
   ENDPOINT_SOURCES,
   endpointDestinationLine,
+  offersFilingByRange,
   DEFAULT_SETUP_DESTINATION,
 } from './discoveredEndpoints';
 import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
@@ -430,8 +431,22 @@ describe('where an endpoint import lands (ADR-179 増分 8)', () => {
     expect(line?.warn).toBe(true);
   });
 
-  it('says no folder has a range before the answer for the address, and warns', () => {
-    expect(endpointDestinationLine(undefined, false, root, pathOf)?.line).toBe('noRangesRoot');
+  it('with no folder holding a range, names the chosen folder without a warning', () => {
+    // The box is hidden then (as the scan import hides it), so the answer is the folder picker's,
+    // and a warning on every row would be about a choice the operator was never offered.
+    const r = endpointDestinationLine(undefined, false, root, pathOf);
+    expect(r?.line).toBe('chosenRoot');
+    expect(r?.warn).toBe(false);
+    expect(endpointDestinationLine(undefined, false, inG2, pathOf)).toMatchObject({
+      line: 'chosen',
+      warn: false,
+    });
+  });
+
+  it('offers filing by range only once a folder is known to hold one', () => {
+    expect(offersFilingByRange(true)).toBe(true);
+    expect(offersFilingByRange(undefined)).toBe(true);
+    expect(offersFilingByRange(false)).toBe(false);
   });
 
   it('says nothing until the server has answered', () => {

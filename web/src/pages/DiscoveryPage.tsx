@@ -1449,7 +1449,7 @@ function SeenOnNetworkCard({
           groups={groups}
           value={destination}
           onChange={setDestination}
-          className="disco-seen-dest"
+          offerFilingByRange={setup.offerFilingByRange}
         />
       )}
       <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>

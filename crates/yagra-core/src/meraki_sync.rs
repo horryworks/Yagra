@@ -100,9 +100,10 @@ const LAN_READ_BUDGET: Duration = Duration::from_secs(60);
 /// the networks it did not reach.
 const FULL_READ_CEILING: Duration = Duration::from_secs(30 * 60);
 /// How long one sync may spend reading MX and MR neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 3).
-/// The share a sync reads ([`neighbor_reads_per_sync`]) is 201 for about 690 MX and 1,710 MR synced
-/// every 300 s against an hourly neighbour interval — about 75 s at the 0.34–0.41 s a read measured
-/// — so this is headroom, and what is left over is read by the next sync.
+/// The share a sync asks for ([`neighbor_reads_per_sync`]) is 201 for about 690 MX and 1,710 MR
+/// synced every 300 s against an hourly neighbour interval, but the reads are paced at the lane's
+/// rate, so at the default 1 a second this budget reaches about 90 of them and the rest wait for the
+/// next sync — a round of 2,329 devices takes about 2 h 10 min (増分 5 決定 6, accepted).
 const NEIGHBOR_READ_BUDGET: Duration = Duration::from_secs(90);
 /// How many networks the LAN stage reads between two progress writes and two `record_network_lans`.
 const LAN_READ_CHUNK: usize = 25;
@@ -439,6 +440,8 @@ pub struct MerakiSync {
     /// When this process last asked each MX or MR node for its neighbours — asked, not answered, so
     /// a device whose read fails every time waits an interval like the rest rather than taking a
     /// place in every sync. A restarted core has none and reads its share of the oldest first.
+    /// Written when the reads come back, so the backstop timeout past the read budget, which
+    /// discards the whole batch, leaves that batch to be asked again by the next sync.
     neighbors_asked_at: std::sync::Mutex<HashMap<Uuid, Instant>>,
 }
 
@@ -1469,8 +1472,9 @@ impl RunningSyncs {
 
 /// How many MX and MR one sync reads for neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 2): each
 /// device's share if every one is read once per neighbour interval, rounded up, plus one — the
-/// shape of [`lan_rereads_per_sync`], for the same reason. Rounding up guarantees a whole round per
-/// interval at any sync cadence, and the one extra lets a round catch up on reads that failed. About
+/// shape of [`lan_rereads_per_sync`], for the same reason. Rounding up gives a whole round per
+/// interval at any sync cadence as long as [`NEIGHBOR_READ_BUDGET`] reaches the share — past that
+/// the round simply takes longer — and the one extra lets a round catch up on reads that failed. About
 /// 690 MX and 1,710 MR synced every 300 s against an hourly interval read 201 a sync.
 #[must_use]
 pub fn neighbor_reads_per_sync(devices: usize, sync_every_secs: u32, every: Duration) -> usize {

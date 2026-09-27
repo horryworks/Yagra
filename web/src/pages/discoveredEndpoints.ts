@@ -300,8 +300,6 @@ export const ENDPOINT_DEST_LINES = [
   'unmatchedRoot',
   'ambiguous',
   'ambiguousRoot',
-  'noRanges',
-  'noRangesRoot',
   'chosen',
   'chosenRoot',
 ] as const;
@@ -314,6 +312,15 @@ export interface EndpointDestinationLine {
    *  one — said with the warning mark, so it is noticed before Monitor is pressed (ADR-179 増分 8
    *  決定 2). */
   warn: boolean;
+}
+
+/**
+ * Whether "File by IP range" is offered: not once the server has said no folder the caller sees
+ * holds a range — the scan import's rule (a control that explains nothing is not drawn). Offered
+ * while the answer is still coming, since asking is what the box being on does.
+ */
+export function offersFilingByRange(anyPrefixes: boolean | undefined): boolean {
+  return anyPrefixes !== false;
 }
 
 /**
@@ -334,10 +341,13 @@ export function endpointDestinationLine(
   const fallback: Record<string, string | number> = root
     ? {}
     : { folder: pathOf(destination.groupId) };
-  const at = (base: 'unmatched' | 'ambiguous' | 'noRanges' | 'chosen'): EndpointDestLine =>
+  const at = (base: 'unmatched' | 'ambiguous' | 'chosen'): EndpointDestLine =>
     root ? `${base}Root` : base;
-  if (!destination.fileByPrefix) return { line: at('chosen'), values: fallback, warn: false };
-  if (anyPrefixes === false) return { line: at('noRanges'), values: fallback, warn: true };
+  // With no folder holding a range the box is not offered (`offersFilingByRange`), so the folder
+  // picker alone decides — the same answer, and no warning about a choice nobody was shown.
+  if (!destination.fileByPrefix || !offersFilingByRange(anyPrefixes)) {
+    return { line: at('chosen'), values: fallback, warn: false };
+  }
   if (!dest) return null;
   switch (dest.kind) {
     case 'matched':

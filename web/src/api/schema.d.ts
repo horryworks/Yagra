@@ -6758,8 +6758,8 @@ export interface components {
             last_seen: string;
             /**
              * @description The maker the IEEE registered each MAC-address chassis or port id to. Only ids the device
-             *     labelled as MAC addresses are looked up — except on a Meraki switch, whose Dashboard reports
-             *     no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
+             *     labelled as MAC addresses are looked up — except on a Meraki switch, MX or MR, whose Dashboard
+             *     reports no label, where an id shaped like a MAC address is (six octets, or twelve bare hex digits
              *     for a CDP device id). This names who made the network
              *     interface, which is not necessarily who made the device or its software.
              */
@@ -9719,7 +9719,10 @@ export interface components {
             node_id?: string | null;
             /** @description Present only when `state` is `node`. */
             node_name?: string | null;
-            /** @description `node`, `outside_scope` or `unregistered` — never `ambiguous`: one MAC names one device. */
+            /**
+             * @description `node`, `outside_scope` or `unregistered` — never `ambiguous`. When two organizations list
+             *     the same MAC (a device moving between them), the first by organization name answers.
+             */
             state: components["schemas"]["NeighborPeerState"];
         };
         /** @description How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses. */
@@ -9747,7 +9750,9 @@ export interface components {
             /**
              * Format: int32
              * @description How often each SNMP node's neighbour tables are walked, and each Meraki switch's, MX's and
-             *     MR's neighbours are read, in seconds.
+             *     MR's neighbours are read, in seconds. An MX or MR is read a share per inventory sync within
+             *     the organization's API rate, so across a large organization a round can take longer than
+             *     this interval.
              */
             interval_secs: number;
             /** @description Whether interface-address walks are issued at all. Omitted on update leaves it unchanged. */
@@ -9814,12 +9819,13 @@ export interface components {
         /**
          * @description How a neighbour's chassis or port id was actually rendered (ADR-180).
          *
-         *     Recorded by the poller from the branch [`render_chassis_id_kind`] / [`render_port_id_kind`]
-         *     took — never inferred from how the stored text looks, because a text id can look like a MAC and
-         *     the hex fallback always does.
+         *     Recorded by whoever read the neighbours — the poller's SNMP walk, from the branch
+         *     [`render_chassis_id_kind`] / [`render_port_id_kind`] took — never inferred from how the stored
+         *     text looks, because a text id can look like a MAC and the hex fallback always does.
          *
-         *     ⚠️ **One exception: a Meraki switch's rows** (ADR-181 決定 13). The Dashboard's LLDP/CDP listing
-         *     carries no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
+         *     ⚠️ **One exception: a Meraki device's rows** — a switch's (ADR-181 決定 13), read by the poller,
+         *     and an MX's or MR's (増分 3/5), read by core's Meraki sync. The Dashboard's LLDP/CDP answers
+         *     carry no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when
          *     it reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a
          *     Meraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name
          *     beside a name that happens to look like a MAC — display only (ADR-180 決定 5).
