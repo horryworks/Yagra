@@ -21,6 +21,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { applyItems, emptyState, pruneSelection, ruleSignature } from './reclassify';
+import { nodeHref } from '../lib/entityHref';
 import './ReclassifyPage.css';
 
 export function ReclassifyPage() {
@@ -85,7 +86,7 @@ export function ReclassifyPage() {
         header: t('reclassify.cols.node'),
         width: '1fr',
         render: (r) => (
-          <Link to={`/nodes/${r.node_id}`} title={r.node_name}>
+          <Link to={nodeHref(r.node_id)} title={r.node_name}>
             {r.node_name}
           </Link>
         ),

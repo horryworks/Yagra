@@ -66,6 +66,7 @@ import { BusPanel } from './BusPanel';
 import './PollersPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { nodesPageHref } from '../lib/entityHref';
 
 const REFRESH_MS = 10_000;
 
@@ -1239,7 +1240,7 @@ function PollerNodesSection({
               <div className="ytable-row" style={{ gridTemplateColumns: NODE_COLS }} key={n.id}>
                 {/* Human name is the primary; the uuid stays on hover (no raw UUIDs in tables). */}
                 <div className="ytable-cell" title={n.id}>
-                  <Link to={`/nodes?sel=${encodeURIComponent(`node:${n.id}`)}`}>{n.name}</Link>
+                  <Link to={nodesPageHref({ kind: 'node', id: n.id })}>{n.name}</Link>
                 </div>
                 <div className="ytable-cell">
                   <Badge tone="neutral">{data.pool ?? '—'}</Badge>

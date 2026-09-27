@@ -17,7 +17,7 @@ import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
-import { nodesPageHref } from '../../lib/treeSelection';
+import { nodesPageHref } from '../../lib/entityHref';
 import { api } from '../../services/api';
 import {
   alertWhatOf,

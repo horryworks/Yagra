@@ -9,6 +9,7 @@
 // the NodePicker work, so the control is now wired to it.
 
 import type { NodeSearchResult } from '../../types/api';
+import { nodeHref } from '../../lib/entityHref';
 
 /** Server search cap for the popover. Deliberately smaller than the NodePicker's 50: this is a
  *  drop-down under the top bar, not a dedicated picker, and a long list here covers the page. */
@@ -45,7 +46,7 @@ export function moveActive(current: number, delta: number, length: number): numb
 
 /** Where selecting a result navigates. Nodes are the only searchable entity today. */
 export function resultRoute(result: Pick<NodeSearchResult, 'id'>): string {
-  return `/nodes/${result.id}`;
+  return nodeHref(result.id);
 }
 
 /** A full page came back, so there are probably more matches than are shown. */

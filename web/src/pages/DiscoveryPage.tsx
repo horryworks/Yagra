@@ -102,6 +102,7 @@ import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
+import { nodeHref } from '../lib/entityHref';
 import './DiscoveryPage.css';
 
 /** A stable empty list, so `candidates` keeps its identity between renders when there is no scan
@@ -1267,7 +1268,7 @@ export function DiscoveryPage() {
                             {inTree.nodes.map((n, i) => (
                               <span key={n.id}>
                                 {i > 0 && ', '}
-                                <Link to={`/nodes/${n.id}`}>{n.name}</Link>
+                                <Link to={nodeHref(n.id)}>{n.name}</Link>
                               </span>
                             ))}
                           </span>

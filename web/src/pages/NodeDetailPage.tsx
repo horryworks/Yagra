@@ -14,7 +14,7 @@ import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
-import { nodesPageHref } from '../lib/treeSelection';
+import { nodesPageHref } from '../lib/entityHref';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();

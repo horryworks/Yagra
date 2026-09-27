@@ -22,7 +22,6 @@ import {
   platformCell,
   shouldLoadSetupCatalog,
   portVendor,
-  merakiOrgPath,
   setupBlockedReason,
   SETUP_BLOCKED_REASONS,
   setupMode,
@@ -428,10 +427,6 @@ describe('the name a neighbour is added under', () => {
     expect(setupName(n({ remote_sys_name: 'sw-07' }))).toBe('sw-07');
     expect(setupName(n({ remote_sys_name: null }))).toBeNull();
     expect(setupName(n({ remote_sys_name: '  ' }))).toBeNull();
-  });
-
-  it('links a Meraki organization to its page', () => {
-    expect(merakiOrgPath('o-1')).toBe('/settings/integrations/meraki/o-1');
   });
 });
 

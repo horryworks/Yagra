@@ -17,7 +17,7 @@
 // reason to give, and which sentence that makes are judgement, not layout.
 
 import { MERAKI_SYNC_FAILURES, type MerakiSyncFailure, type NodeStatus } from '../../types/api';
-import { merakiOrgPath } from '../../pages/integrations/merakiOrgRow';
+import { merakiOrgPath } from '../../lib/entityHref';
 
 /** What to render. `null` means the node's state is a current one and nothing is said. */
 export type CollectionFaultNotice =

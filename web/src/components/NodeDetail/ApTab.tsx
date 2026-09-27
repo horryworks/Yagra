@@ -22,7 +22,7 @@ import { api, errMsg } from '../../services/api';
 import { relativeTime } from '../../lib/format';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { groupOptions } from '../../lib/nodeTree';
-import { nodesPageHref } from '../../lib/treeSelection';
+import { nodesPageHref } from '../../lib/entityHref';
 import { useCan } from '../../store';
 import type {
   NodeDetail as NodeDetailData,

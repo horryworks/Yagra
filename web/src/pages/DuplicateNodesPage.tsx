@@ -37,6 +37,7 @@ import {
   selectAllButKeepers,
   type DuplicateRow,
 } from './duplicateNodes';
+import { nodeHref } from '../lib/entityHref';
 import './DuplicateNodesPage.css';
 
 export function DuplicateNodesPage() {
@@ -135,7 +136,7 @@ export function DuplicateNodesPage() {
         width: '1.3fr',
         render: (r) => (
           <span className="dup-node">
-            <Link to={`/nodes/${r.member.node_id}`} title={r.member.node_name}>
+            <Link to={nodeHref(r.member.node_id)} title={r.member.node_name}>
               {r.member.node_name}
             </Link>
             {r.member.suggested_keep && <Badge>{t('duplicates.keep')}</Badge>}

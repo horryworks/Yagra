@@ -55,7 +55,8 @@ import {
   unlistedRegion,
   type KeySourceKind,
 } from './merakiAddOrg';
-import { canSyncNow, merakiOrgPath, orgFullRead } from './merakiOrgRow';
+import { canSyncNow, orgFullRead } from './merakiOrgRow';
+import { merakiOrgPath } from '../../lib/entityHref';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
 import { useSyncWatch } from './useSyncWatch';
 import { useMerakiSync } from './useMerakiSync';

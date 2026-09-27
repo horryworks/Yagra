@@ -63,6 +63,7 @@ import {
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
 import { useSyncWatch } from './useSyncWatch';
 import { useMerakiSync } from './useMerakiSync';
+import { nodeHref } from '../../lib/entityHref';
 import './MerakiOrgPage.css';
 
 /** How the organization's devices become nodes: by themselves or not, filed by IP range or not,
@@ -356,7 +357,7 @@ export function MerakiOrgPage() {
               {d.node_id ? (
                 <Link
                   className="meraki-dev-line meraki-dev-link"
-                  to={`/nodes/${d.node_id}`}
+                  to={nodeHref(d.node_id)}
                   title={name}
                 >
                   {name}

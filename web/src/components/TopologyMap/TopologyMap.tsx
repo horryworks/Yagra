@@ -15,6 +15,7 @@ import { useStoredMapView } from '../../lib/storedMapView';
 import type { GraphLayout, PlacedNode } from './graphLayout';
 import { NODE_H, NODE_W } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
+import { nodeHref } from '../../lib/entityHref';
 import './TopologyMap.css';
 
 function NodeBox({
@@ -266,7 +267,7 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
             ),
           )}
           {layout.nodes.map((n) => (
-            <NodeBox key={n.id} node={n} onOpen={(id) => navigate(`/nodes/${id}`)} nameById={nameById} />
+            <NodeBox key={n.id} node={n} onOpen={(id) => navigate(nodeHref(id))} nameById={nameById} />
           ))}
         </g>
       </svg>

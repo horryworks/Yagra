@@ -32,6 +32,7 @@ import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
 import { SetParentModal } from '../components/SetParentModal/SetParentModal';
 import { classifyNodes, canEnableDerived, type DiffRow, type DiffVerdict } from './topologyDiff';
+import { nodeHref } from '../lib/entityHref';
 import './DependencyPage.css';
 
 /** Small status pill (dot + label, colored by the state variable — never color alone). */
@@ -374,7 +375,7 @@ export function DependencyPage() {
             onFiltersChange={setFilters}
             filterCounts={counts}
             rowKey={(r) => r.id}
-            onRowClick={(r) => navigate(`/nodes/${r.id}`)}
+            onRowClick={(r) => navigate(nodeHref(r.id))}
             loading={loading}
             empty={
               nodes.length === 0

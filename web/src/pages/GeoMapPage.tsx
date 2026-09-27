@@ -48,6 +48,7 @@ import {
   project,
 } from './geoProjection';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
+import { nodesPageHref } from '../lib/entityHref';
 import './GeoMapPage.css';
 
 export function GeoMapPage() {
@@ -322,11 +323,11 @@ export function GeoMapPage() {
                       // first colon and returns null without one, so a bare UUID landed on All
                       // nodes with nothing selected at all — the pin navigated, and then quietly
                       // did nothing. (`PollersPage` has always written the `node:` form.)
-                      onClick={() => navigate(`/nodes?sel=${encodeURIComponent(`group:${g.id}`)}`)}
+                      onClick={() => navigate(nodesPageHref({ kind: 'group', id: g.id }))}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
-                          navigate(`/nodes?sel=${encodeURIComponent(`group:${g.id}`)}`);
+                          navigate(nodesPageHref({ kind: 'group', id: g.id }));
                         }
                       }}
                     >

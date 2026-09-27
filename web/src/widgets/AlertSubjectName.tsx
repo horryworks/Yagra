@@ -15,7 +15,7 @@ import { alertSubject } from '../lib/alertSubject';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { EntityName } from '../components/ui/EntityName';
-import { merakiOrgPath } from '../pages/integrations/merakiOrgRow';
+import { merakiOrgPath } from '../lib/entityHref';
 
 /** Renders the alert's subject: a node's resolved name (UUID on hover), or the poller pool the
  *  alert is about. `nodeName` is the caller's `useEntityNames()` resolver, threaded in so the

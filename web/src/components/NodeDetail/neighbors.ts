@@ -15,6 +15,7 @@ import {
   type NeighborPeer,
   type NeighborSet,
 } from '../../types/api';
+import { nodeHref } from '../../lib/entityHref';
 
 /** How one adjacency differs between two consecutive observations. */
 export type NeighborDiffKind = 'added' | 'removed' | 'changed';
@@ -381,7 +382,7 @@ export function neighborDetails(n: Neighbor, lookups: NeighborLookups): Neighbor
 
 /** Where the peer's inventory entry is, when exactly one visible node owns its address. */
 export function peerNodePath(peer: NeighborPeer | null): string | null {
-  return peer?.state === 'node' && peer.node_id ? `/nodes/${peer.node_id}` : null;
+  return peer?.state === 'node' && peer.node_id ? nodeHref(peer.node_id) : null;
 }
 
 // ───────────────────────────────── adding an unmonitored neighbour from here (ADR-179 増分 3)
@@ -476,11 +477,6 @@ export function setupBlockedReason(
  *  the address. */
 export function setupName(n: Neighbor): string | null {
   return peerLabelIsChassis(n) ? null : peerLabel(n);
-}
-
-/** Where a Meraki organization's devices are imported from. */
-export function merakiOrgPath(orgId: string): string {
-  return `/settings/integrations/meraki/${encodeURIComponent(orgId)}`;
 }
 
 /**

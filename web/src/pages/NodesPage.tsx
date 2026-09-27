@@ -120,6 +120,7 @@ import {
 } from '../lib/nodeTree';
 import { revealRequestFor, type RevealRequest } from '../components/NodeTree/nodeTreeReveal';
 import { sameSelection } from '../components/NodeTree/nodeTreeKeys';
+import { nodeHref } from '../lib/entityHref';
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
@@ -1316,7 +1317,7 @@ export function NodesPage() {
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onSelectNone={() => select(null)}
-            onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
+            onOpenNode={(n) => navigate(nodeHref(n.id))}
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
@@ -1506,7 +1507,7 @@ export function NodesPage() {
               nodes={treeNodes}
               // The pane hands over the node it loaded by id — see `NodeDetail`'s `onMove`.
               onMove={(n) => setMoving([n])}
-              onOpenDetail={() => navigate(`/nodes/${selected.id}`)}
+              onOpenDetail={() => navigate(nodeHref(selected.id))}
               // The breadcrumb opens a folder the same way its tree row does (ADR-142), so Escape
               // and the dropped `tab` behave exactly as they do after a row click.
               onOpenGroup={(id) => select({ kind: 'group', id })}

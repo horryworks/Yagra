@@ -42,6 +42,7 @@ import {
   type AddNodeForm,
   type SameAddressNode,
 } from './addNodeRequest';
+import { nodeHref } from '../../lib/entityHref';
 
 export function AddNodeModal({
   groups,
@@ -401,7 +402,7 @@ export function AddNodeModal({
             <ul>
               {sameAddress.map((n) => (
                 <li key={n.id}>
-                  <Link to={'/nodes/' + n.id}>{n.name}</Link>
+                  <Link to={nodeHref(n.id)}>{n.name}</Link>
                 </li>
               ))}
             </ul>

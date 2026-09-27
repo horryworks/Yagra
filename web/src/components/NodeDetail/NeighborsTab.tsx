@@ -53,7 +53,6 @@ import { neighborFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
 import {
   diffNeighbors,
-  merakiOrgPath,
   setupMode,
   setupName,
   shouldLoadSetupCatalog,
@@ -75,6 +74,7 @@ import {
   type SetupBlockedReason,
   type NeighborSetupMode,
 } from './neighbors';
+import { merakiOrgPath } from '../../lib/entityHref';
 import './NeighborsTab.css';
 
 /** How many history rows to load. Adjacency changes are rare, so one page is almost always all of
