@@ -1025,7 +1025,7 @@ async fn the_neighbours_are_read_before_the_names_and_handed_to_the_listed_switc
     };
     let one = of("Q2SW-0001").neighbors.as_ref().expect("read");
     assert_eq!(one.len(), 1);
-    assert_eq!(one[0].local_port, "1");
+    assert_eq!(one[0].local_port, "Port 1");
     assert_eq!(one[0].local_ifindex, Some(1));
     assert_eq!(one[0].remote_chassis, "00:18:0a:00:00:09");
     assert_eq!(one[0].remote_mgmt_addr.as_deref(), Some("192.0.2.1"));
@@ -1638,7 +1638,7 @@ async fn each_mx_answers_with_its_lan_side_neighbours_or_its_own_failure() {
     assert_eq!(got.len(), 3);
     let first = got[0].1.as_ref().expect("an answer");
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].local_port, "port3");
+    assert_eq!(first[0].local_port, "Port 3");
     assert_eq!(first[0].remote_mgmt_addr.as_deref(), Some("192.0.2.31"));
     assert_eq!(got[1].1, Err(MerakiFetchError::Status(500)));
     assert_eq!(got[2].1, Ok(vec![]));

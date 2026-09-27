@@ -672,6 +672,9 @@ pub struct HaPartner {
 pub struct DeviceWithMac {
     pub org_id: Uuid,
     pub org_name: String,
+    /// The Dashboard's `productType` (`switch`, `wireless`, `appliance` …) — what the device is,
+    /// for a neighbour row whose own capabilities are blank (ADR-181 増分 4 決定 2).
+    pub product_type: String,
     /// Its node, when it has been imported.
     pub node: Option<MacNode>,
 }
@@ -744,7 +747,7 @@ impl MerakiInventoryRepo {
             return Ok(HashMap::new());
         }
         let rows = sqlx::query(
-            "SELECT i.mac, o.id AS org_id, o.name AS org_name, \
+            "SELECT i.mac, i.product_type, o.id AS org_id, o.name AS org_name, \
                     n.id AS node_id, n.name AS node_name, n.group_id \
              FROM meraki_inventory i \
              JOIN meraki_orgs o ON o.id = i.org_id \
@@ -771,6 +774,7 @@ impl MerakiInventoryRepo {
             out.entry(mac).or_insert(DeviceWithMac {
                 org_id: r.try_get("org_id")?,
                 org_name: r.try_get("org_name")?,
+                product_type: r.try_get("product_type")?,
                 node,
             });
         }
@@ -2037,6 +2041,8 @@ mod tests {
         assert_eq!(found.len(), 2);
         let imported = &found["0c:8d:db:00:00:01"];
         assert_eq!((imported.org_id, imported.org_name.as_str()), (org, "Acme"));
+        // ADR-181 増分 4 決定 2: the listed product, for a row whose capabilities are blank.
+        assert_eq!(imported.product_type, "appliance");
         assert_eq!(
             imported.node,
             Some(MacNode {

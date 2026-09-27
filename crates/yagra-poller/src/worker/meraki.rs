@@ -243,14 +243,15 @@ fn radio_readings(r: &yagra_transport::MerakiRadio) -> RadioReadings {
 }
 
 /// A switch port's `interfaces` row (ADR-167), filled as an SNMP switch's ifTable walk fills one:
-/// the port id as its name, the name an operator gave it as its alias, its line rate and duplex,
-/// and Ethernet as its type. A column the Dashboard said nothing about this time is `None`, which
+/// "Port N" as its name (ADR-181 増分 4), the name an operator gave it as its alias, its line rate
+/// and duplex, and Ethernet as its type. A column the Dashboard said nothing about this time is `None`, which
 /// the multi-writer upsert reads as "keep what is stored" — the alias between two hourly reads of
 /// the names, and the speed while the port has no link.
 fn switch_port_interface(p: yagra_transport::MerakiPort) -> DiscoveredInterface {
     DiscoveredInterface {
         ifindex: IfIndex(p.ifindex),
-        if_name: Some(p.port_id),
+        // "Port 7", as the Dashboard shows it (ADR-181 増分 4 決定 3); the row key is the ifindex.
+        if_name: Some(yagra_common::meraki_port_name(&p.port_id)),
         if_alias: p.alias,
         if_speed: p.speed_bps,
         if_duplex: p.duplex,
@@ -655,7 +656,7 @@ mod tests {
             && s.value == 2.0));
         let first = &r.interfaces[0];
         assert_eq!(first.ifindex, IfIndex(1));
-        assert_eq!(first.if_name.as_deref(), Some("1"));
+        assert_eq!(first.if_name.as_deref(), Some("Port 1"));
         assert_eq!(first.if_alias.as_deref(), Some("to core"));
         assert_eq!(first.if_speed, Some(1_000_000_000));
         assert_eq!(first.if_duplex, Some(yagra_common::Duplex::Full));

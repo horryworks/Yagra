@@ -59,6 +59,7 @@ import {
   shouldLoadSetupCatalog,
   emptyReason,
   neighborAddressState,
+  neighborCapabilities,
   neighborDetails,
   neighborKey,
   neighborLookups,
@@ -306,7 +307,7 @@ export function NeighborsTab({ node }: Props) {
       key: 'caps',
       header: t('neighbors.colCapabilities'),
       width: '1fr',
-      render: (n) => <Capabilities neighbor={n} />,
+      render: (n) => <Capabilities neighbor={n} lookups={lookups} />,
     },
     {
       key: 'proto',
@@ -590,7 +591,7 @@ function NeighborCard({
       {!canSetUp && blockedWhy && <SetupBlocked reason={blockedWhy} />}
       {primary && <span className="nd-nb-card-platform">{primary}</span>}
       <span className="nd-nb-card-chips">
-        <Capabilities neighbor={n} />
+        <Capabilities neighbor={n} lookups={lookups} />
         <span className="nd-nb-proto">{t(`neighbors.proto.${n.proto}`)}</span>
       </span>
       <button
@@ -786,12 +787,22 @@ function SetupPanel({
 /** The peer's advertised roles, as chips. Rendered from the tokens the backend normalized both
  *  protocols onto, so there is no per-protocol legend to keep in sync. Also drawn by the Interfaces
  *  list's neighbour popover (ADR-145), so the two surfaces cannot name a role differently. */
-export function Capabilities({ neighbor }: { neighbor: Neighbor }) {
+export function Capabilities({
+  neighbor,
+  lookups,
+}: {
+  neighbor: Neighbor;
+  /** When given, a row that advertised none shows what its Meraki device listing says it is. */
+  lookups?: NeighborLookups;
+}) {
   const { t } = useTranslation('nodes');
-  const caps = neighbor.capabilities ?? [];
+  const { caps, fromListing } = neighborCapabilities(neighbor, lookups);
   if (caps.length === 0) return <span className="nd-muted">—</span>;
   return (
-    <span className="nd-nb-caps">
+    <span
+      className="nd-nb-caps"
+      title={fromListing ? t('neighbors.capabilityFromListing') : undefined}
+    >
       {caps.map((c) => (
         <span key={c} className="nd-nb-cap">
           {t(`neighbors.capability.${c}`, { defaultValue: c })}

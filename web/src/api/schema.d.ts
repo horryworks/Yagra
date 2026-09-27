@@ -9697,6 +9697,12 @@ export interface components {
         };
         /** @description One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3). */
         NeighborChassisPeer: {
+            /**
+             * @description What the device is, from the kind of product the organization lists it as — `switch` for
+             *     an MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 増分 4 決定 2). For a row whose own
+             *     capabilities are blank; empty for a product with no such role.
+             */
+            capabilities: components["schemas"]["NeighborCapability"][];
             /** @description The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`). */
             chassis: string;
             managed_by?: null | components["schemas"]["NeighborManagedBy"];

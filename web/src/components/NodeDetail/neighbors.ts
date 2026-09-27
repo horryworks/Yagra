@@ -10,6 +10,7 @@ import {
   NEIGHBOR_PEER_STATES,
   type CurrentNeighbors,
   type Neighbor,
+  type NeighborCapability,
   type NeighborChassisPeer,
   type NeighborPeer,
   type NeighborSet,
@@ -241,6 +242,19 @@ export function neighborLookups(
 export function chassisPeerOf(n: Neighbor, lookups: NeighborLookups): NeighborChassisPeer | null {
   if (n.remote_mgmt_addr || n.remote_chassis_kind !== 'mac') return null;
   return lookups.chassis.get(n.remote_chassis) ?? null;
+}
+
+/** The roles to show for a row: its own, or — when it advertised none — what the Meraki device
+ *  listed under its chassis MAC is (ADR-181 増分 4 決定 2). `fromListing` says the second, so the
+ *  cell can say where the value came from rather than pass it off as advertised. */
+export function neighborCapabilities(
+  n: Neighbor,
+  lookups?: NeighborLookups,
+): { caps: readonly NeighborCapability[]; fromListing: boolean } {
+  const own = n.capabilities ?? [];
+  if (own.length > 0 || !lookups) return { caps: own, fromListing: false };
+  const listed = chassisPeerOf(n, lookups)?.capabilities ?? [];
+  return { caps: listed, fromListing: listed.length > 0 };
 }
 
 /** How a row was matched to what it is: by its management address, by its chassis MAC (a Meraki

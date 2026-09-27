@@ -12,6 +12,7 @@ import {
   neighborLookups,
   neighborsByPort,
   NO_LOOKUPS,
+  neighborCapabilities,
   peerLabel,
   peerLabelIsChassis,
   peerNodePath,
@@ -458,13 +459,21 @@ describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)',
     peers: [peer({ address: '192.0.2.1' })],
     mac_vendors: [],
     chassis_peers: [
-      { chassis: mx, state: 'node', node_id: 'n-9', node_name: 'mx-01', managed_by: null },
+      {
+        chassis: mx,
+        state: 'node',
+        node_id: 'n-9',
+        node_name: 'mx-01',
+        managed_by: null,
+        capabilities: ['router'],
+      },
       {
         chassis: '0c:8d:db:00:00:02',
         state: 'unregistered',
         node_id: null,
         node_name: null,
         managed_by: { kind: 'meraki', org_id: 'o-1', org_name: 'Acme' },
+        capabilities: [],
       },
     ],
   });
@@ -489,6 +498,22 @@ describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)',
     expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.1' }), lookups)).toBe('address');
     expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.77' }), lookups)).toBeNull();
     expect(neighborAddressState(row({ remote_chassis: '0c:8d:db:00:00:03' }), lookups)).toBe('none');
+  });
+
+  it('shows what the listing says the device is only where the row advertised nothing (ADR-181 増分 4)', () => {
+    expect(neighborCapabilities(row({ capabilities: [] }), lookups)).toEqual({
+      caps: ['router'],
+      fromListing: true,
+    });
+    expect(neighborCapabilities(row({ capabilities: ['switch'] }), lookups)).toEqual({
+      caps: ['switch'],
+      fromListing: false,
+    });
+    // A listed device with no role, a row matched by address, and a caller with no lookups.
+    const listed = row({ remote_chassis: '0c:8d:db:00:00:02', capabilities: [] });
+    expect(neighborCapabilities(listed, lookups).fromListing).toBe(false);
+    expect(neighborCapabilities(row({ capabilities: [], remote_mgmt_addr: '192.0.2.1' }), lookups).caps).toEqual([]);
+    expect(neighborCapabilities(row({ capabilities: [] })).caps).toEqual([]);
   });
 
   it('reads a core that predates the list as nothing matched', () => {

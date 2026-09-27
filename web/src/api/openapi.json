@@ -33563,9 +33563,17 @@
         "description": "One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).",
         "required": [
           "chassis",
-          "state"
+          "state",
+          "capabilities"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeighborCapability"
+            },
+            "description": "What the device is, from the kind of product the organization lists it as — `switch` for\nan MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 増分 4 決定 2). For a row whose own\ncapabilities are blank; empty for a product with no such role."
+          },
           "chassis": {
             "type": "string",
             "description": "The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`)."

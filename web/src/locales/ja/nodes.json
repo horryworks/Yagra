@@ -1005,6 +1005,7 @@
       "lldp": "LLDP",
       "cdp": "CDP"
     },
+    "capabilityFromListing": "相手は名乗っていません。Meraki の組織の機器一覧での種類です",
     "capability": {
       "router": "ルータ",
       "bridge": "ブリッジ",

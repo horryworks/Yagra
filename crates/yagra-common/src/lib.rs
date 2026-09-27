@@ -81,13 +81,13 @@ pub use link_mode::{
 };
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,
-    meraki_interface_metrics, switch_port_ifindex, switch_port_oper_status, switch_port_speed_bps,
-    uplink_ifindex, uplink_name, MerakiDeviceConfig, MerakiHaRole, MerakiListing, MerakiTier,
-    MerakiUplinkStatus, MERAKI_PORT_METRICS, MERAKI_RADIO_METRICS, MERAKI_UPLINK_ROW_METRICS,
-    METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS, METRIC_MERAKI_PORT_IN_BPS,
-    METRIC_MERAKI_PORT_OUT_BPS, METRIC_MERAKI_UPLINK_FAILED, METRIC_MERAKI_UPLINK_LATENCY_MS,
-    METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS, METRIC_MERAKI_UPLINK_SENT_BPS,
-    METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
+    meraki_interface_metrics, meraki_port_name, switch_port_ifindex, switch_port_oper_status,
+    switch_port_speed_bps, uplink_ifindex, uplink_name, MerakiDeviceConfig, MerakiHaRole,
+    MerakiListing, MerakiTier, MerakiUplinkStatus, MERAKI_PORT_METRICS, MERAKI_RADIO_METRICS,
+    MERAKI_UPLINK_ROW_METRICS, METRIC_MERAKI_DEVICE_UP, METRIC_MERAKI_LAST_SEEN_SECS,
+    METRIC_MERAKI_PORT_IN_BPS, METRIC_MERAKI_PORT_OUT_BPS, METRIC_MERAKI_UPLINK_FAILED,
+    METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_RECV_BPS,
+    METRIC_MERAKI_UPLINK_SENT_BPS, METRIC_MERAKI_UPLINK_STATUS, METRIC_MERAKI_VPN_HUBS_REACHABLE,
     METRIC_MERAKI_VPN_HUBS_UNREACHABLE, METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT,
     METRIC_MERAKI_VPN_SPOKES_UNREACHABLE,
 };

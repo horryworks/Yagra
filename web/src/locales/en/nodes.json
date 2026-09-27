@@ -1010,6 +1010,7 @@
       "lldp": "LLDP",
       "cdp": "CDP"
     },
+    "capabilityFromListing": "Not advertised by the neighbour: what the Meraki organization lists this device as",
     "capability": {
       "router": "Router",
       "bridge": "Bridge",

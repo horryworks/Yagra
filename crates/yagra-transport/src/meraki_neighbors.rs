@@ -30,7 +30,8 @@ use std::net::IpAddr;
 
 use serde_json::Value;
 use yagra_common::{
-    render_mac, switch_port_ifindex, Neighbor, NeighborCapability, NeighborIdKind, NeighborProto,
+    meraki_port_name, render_mac, switch_port_ifindex, Neighbor, NeighborCapability,
+    NeighborIdKind, NeighborProto,
 };
 
 /// The largest page `switch/ports/topology/discovery/byDevice` accepts: "The perPage parameter must
@@ -113,14 +114,11 @@ pub(crate) fn parse_switch_port_topology(items: &[Value]) -> BTreeMap<String, Ve
                 continue;
             };
             let local = Local::switch_port(port_id);
-            let lldp = Fields::of(port.get("lldp"));
-            if let Some(n) = lldp_neighbor(local, &lldp) {
-                neighbors.push(n);
-            }
-            let cdp = Fields::of(port.get("cdp"));
-            if let Some(n) = cdp_neighbor(local, &cdp) {
-                neighbors.push(n);
-            }
+            neighbors.extend(port_neighbors(
+                local,
+                &Fields::of(port.get("lldp")),
+                &Fields::of(port.get("cdp")),
+            ));
         }
     }
     out
@@ -171,12 +169,11 @@ pub(crate) fn parse_device_lldp_cdp(body: &Value) -> Vec<Neighbor> {
             port: key,
             ifindex: None,
         };
-        if let Some(n) = lldp_neighbor(local, &Fields::of_object(port.get("lldp"), LLDP_FIELDS)) {
-            out.push(n);
-        }
-        if let Some(n) = cdp_neighbor(local, &Fields::of_object(port.get("cdp"), CDP_FIELDS)) {
-            out.push(n);
-        }
+        out.extend(port_neighbors(
+            local,
+            &Fields::of_object(port.get("lldp"), LLDP_FIELDS),
+            &Fields::of_object(port.get("cdp"), CDP_FIELDS),
+        ));
     }
     out
 }
@@ -247,9 +244,38 @@ impl<'a> Local<'a> {
     }
 }
 
-/// The local side both protocols share.
+/// One port's LLDP and CDP rows, each filled from the other where it is blank (ADR-181 増分 4
+/// 決定 1). A Meraki peer is heard both ways: its LLDP row names it and its CDP row does not, and
+/// its CDP row says what it is while the Dashboard's LLDP capabilities are unreadable (決定 10). So
+/// a CDP row with no name takes the LLDP row's, and an LLDP row with no capabilities takes the CDP
+/// row's — only when both rows name the same chassis, i.e. the same peer. Measured on a lab copy of
+/// a real organization, that filled 560 of 638 CDP names and 560 of 854 LLDP capability lists.
+fn port_neighbors(local: Local<'_>, lldp: &Fields<'_>, cdp: &Fields<'_>) -> Vec<Neighbor> {
+    let mut lldp = lldp_neighbor(local, lldp);
+    let mut cdp = cdp_neighbor(local, cdp);
+    if let (Some(l), Some(c)) = (lldp.as_mut(), cdp.as_mut()) {
+        fill_from_sibling(l, c);
+    }
+    lldp.into_iter().chain(cdp).collect()
+}
+
+/// What each row of one peer lacks, from the other row. Nothing when the chassis ids differ.
+fn fill_from_sibling(lldp: &mut Neighbor, cdp: &mut Neighbor) {
+    if lldp.remote_chassis != cdp.remote_chassis {
+        return;
+    }
+    if cdp.remote_sys_name.is_none() {
+        cdp.remote_sys_name.clone_from(&lldp.remote_sys_name);
+    }
+    if lldp.capabilities.is_empty() {
+        lldp.capabilities.clone_from(&cdp.capabilities);
+    }
+}
+
+/// The local side both protocols share. The port reads as the Dashboard shows it, `Port 7`
+/// (ADR-181 増分 4 決定 3); the ifindex stays the raw id's.
 fn on_port(proto: NeighborProto, local: Local<'_>, chassis: String, port: String) -> Neighbor {
-    let mut n = Neighbor::new(proto, local.port, chassis, port);
+    let mut n = Neighbor::new(proto, meraki_port_name(local.port), chassis, port);
     n.local_ifindex = local.ifindex;
     n
 }
@@ -455,7 +481,7 @@ mod tests {
         let got = parsed();
         let n = got["Q2SW-0001"]
             .iter()
-            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "7")
+            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "Port 7")
             .expect("the LLDP row on port 7");
         assert_eq!(n.local_ifindex, Some(7));
         assert_eq!(n.remote_chassis, "0c:8d:db:00:00:02");
@@ -472,13 +498,16 @@ mod tests {
     }
 
     /// 決定 10: the two names the Dashboard puts on nearly every LLDP row are not guessed into a role.
+    /// A row with no CDP sibling (port 8) is left with none.
     #[test]
     fn the_dashboards_lldp_capability_names_are_not_guessed_into_roles() {
+        assert!(capabilities("S-VLAN Component of a VLAN Bridge, Two-port MAC Relay").is_empty());
         let got = parsed();
-        assert!(got["Q2SW-0001"]
+        let eight = got["Q2SW-0001"]
             .iter()
-            .filter(|n| n.proto == NeighborProto::Lldp)
-            .all(|n| n.capabilities.is_empty()));
+            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "Port 8")
+            .expect("port 8");
+        assert!(eight.capabilities.is_empty());
         assert_eq!(
             capabilities("Bridge, Router, Station Only"),
             [
@@ -496,7 +525,7 @@ mod tests {
             .iter()
             .find(|n| n.proto == NeighborProto::Cdp)
             .expect("the CDP row");
-        assert_eq!(n.local_port, "7");
+        assert_eq!(n.local_port, "Port 7");
         assert_eq!(n.remote_port, "Port 0");
         assert_eq!(
             n.remote_platform.as_deref(),
@@ -522,7 +551,7 @@ mod tests {
         let cdp = rows.iter().find(|n| n.proto == NeighborProto::Cdp).unwrap();
         let lldp = rows
             .iter()
-            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "7")
+            .find(|n| n.proto == NeighborProto::Lldp && n.local_port == "Port 7")
             .unwrap();
         assert_eq!(cdp.remote_chassis, "0c:8d:db:00:00:02");
         assert_eq!(cdp.remote_chassis_kind, Some(NeighborIdKind::Mac));
@@ -560,6 +589,48 @@ mod tests {
         }
     }
 
+    /// 増分 4 決定 1: one peer's two rows lend each other what each lacks — the CDP row its name,
+    /// the LLDP row its capabilities — and a port reads as the Dashboard shows it.
+    #[test]
+    fn one_peers_lldp_and_cdp_rows_fill_each_others_blanks() {
+        let got = parsed();
+        let rows = &got["Q2SW-0001"];
+        let on = |proto| {
+            rows.iter()
+                .find(|n| n.proto == proto && n.local_port == "Port 7")
+                .expect("port 7's row")
+        };
+        let (lldp, cdp) = (on(NeighborProto::Lldp), on(NeighborProto::Cdp));
+        assert_eq!(cdp.remote_sys_name.as_deref(), Some("ap-01"));
+        assert_eq!(lldp.capabilities, cdp.capabilities);
+        assert_eq!(
+            lldp.capabilities,
+            [
+                NeighborCapability::Router,
+                NeighborCapability::Switch,
+                NeighborCapability::Igmp
+            ]
+        );
+        assert_eq!(lldp.local_ifindex, Some(7));
+    }
+
+    /// Two rows on one port that name different chassis are two peers: neither lends the other
+    /// anything.
+    #[test]
+    fn rows_naming_different_chassis_lend_nothing() {
+        let rows = parse_device_lldp_cdp(&mx_body());
+        let on = |proto| {
+            rows.iter()
+                .find(|n| n.proto == proto && n.local_port == "Port 3")
+                .expect("port3's row")
+        };
+        assert_eq!(on(NeighborProto::Cdp).remote_sys_name, None);
+        assert_eq!(
+            on(NeighborProto::Lldp).capabilities,
+            [NeighborCapability::Router, NeighborCapability::Bridge]
+        );
+    }
+
     /// 増分 2 決定 A: a Meraki peer's `"1"` is not shown; a version that says something is.
     #[test]
     fn a_cdp_version_of_one_or_two_digits_is_dropped_and_a_real_one_kept() {
@@ -594,7 +665,10 @@ mod tests {
         let rows = &got["Q2SW-0001"];
         // Port 7: LLDP + CDP. Port 8: LLDP only (its CDP list is empty).
         assert_eq!(rows.len(), 3);
-        let eight = rows.iter().find(|n| n.local_port == "8").expect("port 8");
+        let eight = rows
+            .iter()
+            .find(|n| n.local_port == "Port 8")
+            .expect("port 8");
         assert_eq!(eight.remote_chassis_kind, Some(NeighborIdKind::Text));
         assert!(eight.capabilities.is_empty());
         assert_eq!(eight.remote_mgmt_addr, None);
@@ -682,7 +756,7 @@ mod tests {
             .iter()
             .find(|n| n.proto == NeighborProto::Lldp)
             .expect("port3's LLDP row");
-        assert_eq!(lldp.local_port, "port3");
+        assert_eq!(lldp.local_port, "Port 3");
         assert_eq!(lldp.remote_chassis, "00:00:0c:00:00:20");
         assert_eq!(lldp.remote_chassis_kind, Some(NeighborIdKind::Mac));
         assert_eq!(lldp.remote_sys_name.as_deref(), Some("sw-02"));
@@ -694,7 +768,7 @@ mod tests {
 
         let cdp = rows
             .iter()
-            .find(|n| n.proto == NeighborProto::Cdp && n.local_port == "port3")
+            .find(|n| n.proto == NeighborProto::Cdp && n.local_port == "Port 3")
             .expect("port3's CDP row");
         assert_eq!(cdp.remote_chassis, "sw-02.example.com");
         assert_eq!(
@@ -706,7 +780,7 @@ mod tests {
         // 増分 2 applies here too: a Meraki peer's bare-hex id is a MAC and its "1" is dropped.
         let meraki = rows
             .iter()
-            .find(|n| n.local_port == "port5")
+            .find(|n| n.local_port == "Port 5")
             .expect("port5's CDP row");
         assert_eq!(meraki.remote_chassis, "0c:8d:db:00:00:30");
         assert_eq!(meraki.remote_sys_desc, None);

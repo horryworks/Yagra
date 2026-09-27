@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{NeighborIdKind, NeighborSet};
+use yagra_common::{NeighborCapability, NeighborIdKind, NeighborSet};
 
 /// Default page size for the change history.
 const HISTORY_DEFAULT_LIMIT: i64 = 50;
@@ -172,6 +172,10 @@ pub(crate) struct NeighborChassisPeer {
     /// The organization that lists the device, when it has not been imported (`unregistered`):
     /// always `kind: meraki`.
     managed_by: Option<NeighborManagedBy>,
+    /// What the device is, from the kind of product the organization lists it as — `switch` for
+    /// an MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 増分 4 決定 2). For a row whose own
+    /// capabilities are blank; empty for a product with no such role.
+    capabilities: Vec<NeighborCapability>,
 }
 
 /// Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such
@@ -599,9 +603,21 @@ fn classify_chassis(
                 node_id,
                 node_name,
                 managed_by,
+                capabilities: product_capabilities(&d.product_type),
             })
         })
         .collect()
+}
+
+/// The role a Meraki product plays, as a neighbour row's capabilities name it (ADR-181 増分 4
+/// 決定 2). A product with no such role — a camera, a sensor — has none, never a guess.
+fn product_capabilities(product_type: &str) -> Vec<NeighborCapability> {
+    match product_type.trim().to_ascii_lowercase().as_str() {
+        "switch" => vec![NeighborCapability::Switch],
+        "wireless" => vec![NeighborCapability::WlanAp],
+        "appliance" | "cellulargateway" => vec![NeighborCapability::Router],
+        _ => Vec::new(),
+    }
 }
 
 /// The registered maker of every chassis or port id the device labelled a MAC address (ADR-180
@@ -1158,7 +1174,7 @@ mod tests {
 #[cfg(test)]
 mod peer_tests {
     use super::*;
-    use yagra_common::{Neighbor, NeighborCapability, NeighborProto};
+    use yagra_common::{Neighbor, NeighborProto};
 
     fn claim(address: &str, id: Uuid, name: &str, visible: bool) -> AddressMatch {
         AddressMatch {
@@ -1482,6 +1498,12 @@ mod peer_tests {
         let listed = |node: Option<MacNode>| DeviceWithMac {
             org_id: org,
             org_name: "org-a".to_owned(),
+            product_type: if node.is_some() {
+                "appliance"
+            } else {
+                "wireless"
+            }
+            .to_owned(),
             node,
         };
         let by_mac = HashMap::from([
@@ -1510,6 +1532,9 @@ mod peer_tests {
         assert_eq!(got[0].node_id, Some(node));
         assert_eq!(got[0].node_name.as_deref(), Some("mx-01"));
         assert_eq!(got[0].managed_by, None);
+        // 増分 4 決定 2: what each device is, from the product the organization lists it as.
+        assert_eq!(got[0].capabilities, [NeighborCapability::Router]);
+        assert_eq!(got[1].capabilities, [NeighborCapability::WlanAp]);
         assert_eq!(got[1].state, NeighborPeerState::Unregistered);
         assert_eq!(
             got[1].managed_by,
@@ -1518,6 +1543,15 @@ mod peer_tests {
                 org_name: "org-a".to_owned()
             })
         );
+
+        for (product, want) in [
+            ("switch", vec![NeighborCapability::Switch]),
+            ("cellularGateway", vec![NeighborCapability::Router]),
+            ("camera", vec![]),
+            ("sensor", vec![]),
+        ] {
+            assert_eq!(product_capabilities(product), want, "{product}");
+        }
 
         // A node outside the caller's folders gives away no id and no name.
         let hidden = classify_chassis(&chassis, &by_mac, &NodeScope::sees_nothing());

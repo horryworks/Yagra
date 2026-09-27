@@ -424,6 +424,26 @@ pub fn switch_port_ifindex(port_id: &str) -> u32 {
     FOLD_BASE + hash % (FOLD_BASE - 1)
 }
 
+/// A Meraki port's name as the Dashboard shows it (ADR-181 増分 4 決定 3): a switch port's plain
+/// decimal id (`"7"`) and an MX's port key (`"port3"`) both read `Port 7` / `Port 3`, the way an
+/// SNMP switch's interface carries its own name. Anything else — a module port such as
+/// `1_MA-MOD-8X10G_1`, a stack member's `2_10` — is returned as it came.
+///
+/// Display only: nothing is keyed by it. The row key stays [`switch_port_ifindex`] of the raw id.
+#[must_use]
+pub fn meraki_port_name(port_id: &str) -> String {
+    let id = port_id.trim();
+    let digits = id
+        .strip_prefix("port")
+        .or_else(|| id.strip_prefix("Port"))
+        .unwrap_or(id);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        format!("Port {digits}")
+    } else {
+        id.to_owned()
+    }
+}
+
 /// A switch port's link-state word from `switch/ports/statuses/bySwitch` (ADR-167 決定 5), as the
 /// value `if_oper_status` takes on an SNMP switch: `Connected` is up (1), `Disconnected` down (2).
 /// `None` for a word this build does not know — it says nothing rather than something invented.
@@ -542,6 +562,17 @@ pub struct MerakiDeviceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_port_is_named_the_way_the_dashboard_shows_it() {
+        assert_eq!(meraki_port_name("5"), "Port 5");
+        assert_eq!(meraki_port_name(" 48 "), "Port 48");
+        assert_eq!(meraki_port_name("port3"), "Port 3");
+        assert_eq!(meraki_port_name("1_MA-MOD-4X10G_1"), "1_MA-MOD-4X10G_1");
+        assert_eq!(meraki_port_name("2_10"), "2_10");
+        assert_eq!(meraki_port_name("wired0"), "wired0");
+        assert_eq!(meraki_port_name("port"), "port");
+    }
 
     #[test]
     fn tier_token_roundtrips() {

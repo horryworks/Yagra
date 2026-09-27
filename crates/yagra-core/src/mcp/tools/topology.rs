@@ -106,7 +106,11 @@ impl YagraMcp {
                        management address (an MR or MX heard by a Meraki switch): its MAC chassis \
                        id is matched to the device a Meraki organization lists under that MAC — \
                        a monitored node, one outside your scope, or a listed device not yet \
-                       imported (with `managed_by` naming the organization). \
+                       imported (with `managed_by` naming the organization) — and its \
+                       `capabilities` say what that product is (switch, wlan_ap, router) for a \
+                       row whose own capabilities are empty. On a Meraki device a CDP row with no \
+                       name carries the name its LLDP row gave the same chassis, and an LLDP row \
+                       the capabilities its CDP row did; local ports read `Port N`. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
                        labelled a MAC address (on a Meraki switch, which reports no label, each id \
                        shaped like one — six octets, or twelve bare hex digits for a CDP device \
