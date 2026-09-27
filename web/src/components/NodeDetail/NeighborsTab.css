@@ -377,3 +377,11 @@ html[data-viewport='mobile'] .nd-nb-table {
 .nd-nb-table .dt-row.dt-row-auto {
   align-items: center;
 }
+
+/* Why a "Not monitored" row has no setup button (ADR-179 増分 9), where the button would be. It
+   wraps rather than ellipsizing: the column is narrow and the sentence is the whole point. */
+.nd-nb-setup-why {
+  font-size: var(--font-xs);
+  line-height: 1.35;
+  white-space: normal;
+}

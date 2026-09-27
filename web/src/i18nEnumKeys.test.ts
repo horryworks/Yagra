@@ -73,7 +73,11 @@ import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
 import { PREFIX_PROBLEMS } from './components/GroupModal/prefixFields';
 import { AP_IMPORT_STATES } from './components/NodeDetail/tabFilters';
-import { NEIGHBOR_ADDRESS_STATES, NEIGHBOR_DETAIL_KEYS } from './components/NodeDetail/neighbors';
+import {
+  NEIGHBOR_ADDRESS_STATES,
+  NEIGHBOR_DETAIL_KEYS,
+  SETUP_BLOCKED_REASONS,
+} from './components/NodeDetail/neighbors';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
@@ -1052,6 +1056,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // ADR-180: the address state is the chip, the filter option and its explanation.
     expectKeys('neighbor address state', locales, 'neighbors.peer.state.', NEIGHBOR_ADDRESS_STATES);
     expectKeys('neighbor address explain', locales, 'neighbors.peer.explain.', NEIGHBOR_ADDRESS_STATES);
+    // ADR-180 増分 3: a row matched on its MAC is never ambiguous and always has a chassis.
+    expectKeys('neighbor explain by MAC', locales, 'neighbors.peer.explainMac.', [
+      'node',
+      'outside_scope',
+      'unregistered',
+    ]);
+    // ADR-179 増分 9: why a "Not monitored" row has no setup button.
+    expectKeys('neighbor setup blocked', locales, 'neighbors.setup.blocked.', SETUP_BLOCKED_REASONS);
     // The badge beside a neighbour's name (ADR-179 増分 3): every state but "none", which draws none.
     expectKeys('neighbor monitored badge', locales, 'neighbors.peer.badge.', NEIGHBOR_PEER_STATES);
     expectKeys('neighbor detail label', locales, 'neighbors.detail.', NEIGHBOR_DETAIL_KEYS);

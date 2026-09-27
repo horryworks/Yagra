@@ -33882,6 +33882,17 @@
             ],
             "description": "Present only when `state` is `node`."
           },
+          "setup_blocked": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SetupBlocked",
+                "description": "Why nothing adds this device from here (ADR-179 増分 9): present only when `state` is\n`unregistered`, it is not on the caller's Unregistered list, and nothing manages it."
+              }
+            ]
+          },
           "state": {
             "$ref": "#/components/schemas/NeighborPeerState"
           }
@@ -38555,6 +38566,16 @@
             "type": "string"
           }
         }
+      },
+      "SetupBlocked": {
+        "type": "string",
+        "description": "Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are\nthe Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what\nthis says cannot drift from what the list does.",
+        "enum": [
+          "not_a_device_address",
+          "end_station",
+          "found_outside_your_folders",
+          "not_listed_yet"
+        ]
       },
       "Severity": {
         "type": "string",

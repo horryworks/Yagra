@@ -9862,6 +9862,7 @@ export interface components {
             node_id?: string | null;
             /** @description Present only when `state` is `node`. */
             node_name?: string | null;
+            setup_blocked?: null | components["schemas"]["SetupBlocked"];
             state: components["schemas"]["NeighborPeerState"];
         };
         /**
@@ -12157,6 +12158,13 @@ export interface components {
             label: string;
             value: string;
         };
+        /**
+         * @description Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are
+         *     the Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what
+         *     this says cannot drift from what the list does.
+         * @enum {string}
+         */
+        SetupBlocked: "not_a_device_address" | "end_station" | "found_outside_your_folders" | "not_listed_yet";
         /**
          * @description How serious an alert is. Variants are declared low → high so the derived
          *     `Ord` ranks `Critical` above `Warning` above `Info`.

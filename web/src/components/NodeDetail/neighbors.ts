@@ -421,6 +421,35 @@ export function setupMode(n: Neighbor, lookups: NeighborLookups): NeighborSetupM
     : { kind: 'device', discoveryId: id };
 }
 
+/** Why a "Not monitored" row offers no setup (ADR-179 増分 9): the server's reason, or that only a
+ *  controller outside the caller's folders reports the access point. Each is a key under
+ *  `neighbors.setup.blocked.`.
+ *
+ *  ⚠️ `as const` because the key is built at runtime — `i18nEnumKeys.test.ts` iterates this, and
+ *  pins the server's four to the generated schema's. */
+export const SETUP_BLOCKED_REASONS = [
+  'not_a_device_address',
+  'end_station',
+  'found_outside_your_folders',
+  'not_listed_yet',
+  'controller_hidden',
+] as const;
+export type SetupBlockedReason = (typeof SETUP_BLOCKED_REASONS)[number];
+
+/** The reason for a row, or `null` when it has a setup, is not "Not monitored", or the server did
+ *  not say (an older core). Only an address row carries one: a device matched on its MAC is always
+ *  listed by an organization, which is a setup. */
+export function setupBlockedReason(
+  n: Neighbor,
+  lookups: NeighborLookups,
+): SetupBlockedReason | null {
+  if (setupMode(n, lookups) != null) return null;
+  const peer = peerOf(n, lookups);
+  if (!peer || peer.state !== 'unregistered') return null;
+  if (peer.managed_by?.kind === 'controller_hidden') return 'controller_hidden';
+  return peer.setup_blocked ?? null;
+}
+
 /** The name a neighbour gave itself, for the node it becomes — its system name, never the chassis
  *  id (often a bare MAC, which is not a name). `null` leaves the choice to Detect's sysName, then to
  *  the address. */

@@ -22,6 +22,8 @@ import {
   shouldLoadSetupCatalog,
   portVendor,
   merakiOrgPath,
+  setupBlockedReason,
+  SETUP_BLOCKED_REASONS,
   setupMode,
   setupName,
 } from './neighbors';
@@ -494,3 +496,44 @@ describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)',
     expect(neighborAddressState(row(), old)).toBe('none');
   });
 });
+
+describe('why a "Not monitored" row has no setup button (ADR-179 増分 9)', () => {
+  const unregistered = (over: Partial<NeighborPeer>) =>
+    peer({ state: 'unregistered', node_id: null, node_name: null, ...over });
+  const lookups = neighborLookups({
+    peers: [
+      unregistered({ address: '192.0.2.1', setup_blocked: 'not_listed_yet' }),
+      unregistered({ address: '192.0.2.2', managed_by: { kind: 'controller_hidden' } }),
+      unregistered({ address: '192.0.2.3', discovery_listed: true, discovery_id: 'd-3' }),
+      peer({ address: '192.0.2.4' }),
+      unregistered({ address: '192.0.2.5' }),
+    ],
+    mac_vendors: [],
+  });
+  const at = (addr: string) => n({ remote_mgmt_addr: addr });
+
+  it('passes on the reason the server gives, and names a hidden controller itself', () => {
+    expect(setupBlockedReason(at('192.0.2.1'), lookups)).toBe('not_listed_yet');
+    expect(setupBlockedReason(at('192.0.2.2'), lookups)).toBe('controller_hidden');
+  });
+
+  it('says nothing where there is a button, a node, or no reason from an older core', () => {
+    expect(setupBlockedReason(at('192.0.2.3'), lookups)).toBeNull();
+    expect(setupBlockedReason(at('192.0.2.4'), lookups)).toBeNull();
+    expect(setupBlockedReason(at('192.0.2.5'), lookups)).toBeNull();
+  });
+
+  it('lists every reason the server can send', () => {
+    // A compile-time pin: a fifth reason in the schema is a type error here.
+    const server: Record<NonNullable<NeighborPeer['setup_blocked']>, true> = {
+      not_a_device_address: true,
+      end_station: true,
+      found_outside_your_folders: true,
+      not_listed_yet: true,
+    };
+    for (const r of Object.keys(server)) {
+      expect(SETUP_BLOCKED_REASONS as readonly string[]).toContain(r);
+    }
+  });
+});
+

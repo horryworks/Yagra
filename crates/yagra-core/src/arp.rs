@@ -305,7 +305,10 @@ pub fn unmonitored(
 
 /// Whether an address can name a device of its own. `0.0.0.0` is what an agent reports for a
 /// neighbour it has not resolved, and every device's loopback would match every other's.
-fn identifies_a_device(ip: IpAddr) -> bool {
+///
+/// The Neighbors tab says so when it is why an address is not on the list (ADR-179 増分 9 決定 2),
+/// so the rule and its explanation are this one function.
+pub(crate) fn identifies_a_device(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             !v4.is_unspecified()
@@ -321,6 +324,13 @@ fn identifies_a_device(ip: IpAddr) -> bool {
                 && (v6.segments()[0] & 0xffc0) != 0xfe80
         }
     }
+}
+
+/// Whether a neighbour says it is only an end station — a phone, a host — and so is left off the
+/// list. One that advertises no capabilities is kept: silence is not a claim. Shared with the
+/// Neighbors tab's explanation for the same reason as [`identifies_a_device`].
+pub(crate) fn only_an_end_station(capabilities: &[NeighborCapability]) -> bool {
+    !capabilities.is_empty() && capabilities.iter().all(|c| is_end_station(*c))
 }
 
 /// Whether a neighbour capability describes an end station rather than network equipment.
@@ -416,7 +426,7 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
 
     for (node, set) in signals.neighbors {
         for nb in &set.neighbors {
-            if !nb.capabilities.is_empty() && nb.capabilities.iter().all(|c| is_end_station(*c)) {
+            if only_an_end_station(&nb.capabilities) {
                 continue;
             }
             let Some(ip) = nb

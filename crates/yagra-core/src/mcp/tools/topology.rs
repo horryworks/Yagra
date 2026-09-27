@@ -98,7 +98,10 @@ impl YagraMcp {
                        monitored node owns it (with its id and name), one outside your scope does \
                        (no name), several do (a shared or duplicate address), or none does; for \
                        an address no node owns, `managed_by` names the wireless controller or \
-                       Meraki organization that already lists the device there. \
+                       Meraki organization that already lists the device there, and for one \
+                       nothing adds, `setup_blocked` says why (not a device address, an end \
+                       station, on the Unregistered list only through nodes outside your scope, \
+                       or not listed yet). \
                        `current.chassis_peers` answers the same for a row that advertises no \
                        management address (an MR or MX heard by a Meraki switch): its MAC chassis \
                        id is matched to the device a Meraki organization lists under that MAC — \

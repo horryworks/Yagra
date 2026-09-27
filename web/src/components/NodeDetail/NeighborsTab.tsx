@@ -66,10 +66,12 @@ import {
   peerNodePath,
   peerMatchedBy,
   peerOf,
+  setupBlockedReason,
   peerSecondary,
   platformCell,
   type NeighborDiffRow,
   type NeighborLookups,
+  type SetupBlockedReason,
   type NeighborSetupMode,
 } from './neighbors';
 import './NeighborsTab.css';
@@ -244,6 +246,10 @@ export function NeighborsTab({ node }: Props) {
   // The address cell's shortcut into the panel: shown only where the panel has something to offer.
   const canSetUp = (n: Neighbor) =>
     canConfig && setupMode(n, lookups) != null && !(neighborKey(n) in added);
+  // Where the button would be, why it is not (ADR-179 増分 9). Only to someone who could press it:
+  // to anyone else the answer is the permission, which no button is drawn to say (ADR-056).
+  const blockedWhy = (n: Neighbor) =>
+    canConfig && !(neighborKey(n) in added) ? setupBlockedReason(n, lookups) : null;
 
   const specs = neighborFilters(t, lookups);
   const columns: Column<Neighbor>[] = [
@@ -319,8 +325,11 @@ export function NeighborsTab({ node }: Props) {
       key: 'monitoring',
       header: t('neighbors.colMonitoring'),
       width: '150px',
-      render: (n) =>
-        canSetUp(n) ? <SetupButton onOpen={() => setOpenKey(neighborKey(n))} /> : null,
+      render: (n) => {
+        if (canSetUp(n)) return <SetupButton onOpen={() => setOpenKey(neighborKey(n))} />;
+        const why = blockedWhy(n);
+        return why ? <SetupBlocked reason={why} /> : null;
+      },
     },
   ];
   for (const c of columns) c.filter = specs[c.key];
@@ -396,6 +405,7 @@ export function NeighborsTab({ node }: Props) {
                   lookups={lookups}
                   setup={setupPanel(n)}
                   canSetUp={canSetUp(n)}
+                  blockedWhy={blockedWhy(n)}
                 />
               )}
             />
@@ -477,6 +487,17 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   );
 }
 
+/** Why a "Not monitored" row has no setup button — said where the button would be. */
+function SetupBlocked({ reason }: { reason: SetupBlockedReason }) {
+  const { t } = useTranslation('nodes');
+  const text = t(`neighbors.setup.blocked.${reason}`);
+  return (
+    <span className="nd-muted nd-nb-setup-why" title={text}>
+      {text}
+    </span>
+  );
+}
+
 /** Opens a row's "Monitoring setup" panel. The row's own click toggles the row; this only opens it. */
 function SetupButton({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation('nodes');
@@ -547,11 +568,13 @@ function NeighborCard({
   lookups,
   setup,
   canSetUp,
+  blockedWhy,
 }: {
   neighbor: Neighbor;
   lookups: NeighborLookups;
   setup?: ReactNode;
   canSetUp: boolean;
+  blockedWhy: SetupBlockedReason | null;
 }) {
   const { t } = useTranslation('nodes');
   const [open, setOpen] = useState(false);
@@ -564,6 +587,7 @@ function NeighborCard({
       </span>
       {n.remote_mgmt_addr && <span className="mono nd-nb-line">{n.remote_mgmt_addr}</span>}
       {canSetUp && <SetupButton onOpen={() => setOpen(true)} />}
+      {!canSetUp && blockedWhy && <SetupBlocked reason={blockedWhy} />}
       {primary && <span className="nd-nb-card-platform">{primary}</span>}
       <span className="nd-nb-card-chips">
         <Capabilities neighbor={n} />

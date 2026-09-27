@@ -123,6 +123,39 @@ pub(crate) struct NeighborPeer {
     /// Who adds this device instead of a hand registration: a wireless controller or a Meraki
     /// organization that already lists it. Present only when `state` is `unregistered`.
     managed_by: Option<NeighborManagedBy>,
+    /// Why nothing adds this device from here (ADR-179 増分 9): present only when `state` is
+    /// `unregistered`, it is not on the caller's Unregistered list, and nothing manages it.
+    setup_blocked: Option<SetupBlocked>,
+}
+
+/// Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are
+/// the Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what
+/// this says cannot drift from what the list does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SetupBlocked {
+    /// Loopback, link-local, multicast… — an address that names no device of its own.
+    NotADeviceAddress,
+    /// Every row advertising it says it is only an end station (a phone, a host).
+    EndStation,
+    /// On the list, but seen by nodes outside the caller's folders only.
+    FoundOutsideYourFolders,
+    /// Not on the list yet. The list is rebuilt every five minutes, and holds at most 10,000 rows;
+    /// which of the two this is cannot be told, and the words say neither is ruled out.
+    NotListedYet,
+}
+
+/// Which reason applies, in the order the list's rules are applied.
+fn setup_blocked(ip: IpAddr, only_end_stations: bool, listed_elsewhere: bool) -> SetupBlocked {
+    if !crate::arp::identifies_a_device(ip) {
+        SetupBlocked::NotADeviceAddress
+    } else if only_end_stations {
+        SetupBlocked::EndStation
+    } else if listed_elsewhere {
+        SetupBlocked::FoundOutsideYourFolders
+    } else {
+        SetupBlocked::NotListedYet
+    }
 }
 
 /// One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).
@@ -371,6 +404,34 @@ pub(crate) async fn current_neighbors(
         .iter()
         .filter_map(|ip| managed_by(aps.get(ip), meraki.get(ip)).map(|m| (*ip, m)))
         .collect();
+    // Rows on the list the caller cannot see (ADR-179 増分 9): asked only for a scoped caller, and
+    // only about addresses nothing else explains — an unrestricted caller already sees every row.
+    let unexplained: Vec<IpAddr> = addresses
+        .iter()
+        .filter(|ip| !listed.contains_key(ip) && !managed.contains_key(ip))
+        .copied()
+        .collect();
+    let listed_elsewhere: BTreeSet<IpAddr> = if scope.is_all() || unexplained.is_empty() {
+        BTreeSet::new()
+    } else {
+        admin
+            .discovered
+            .listed_among(&unexplained, None)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "match neighbours to hidden discovered endpoints",
+                    "failed to read discovered endpoints",
+                )
+            })?
+            .into_keys()
+            .collect()
+    };
+    let blockers = Blockers {
+        end_station_only: end_station_only(&current.set),
+        listed_elsewhere,
+    };
     let unaddressed = unaddressed_mac_chassis(&current.set);
     let by_mac = admin
         .meraki_inventory
@@ -385,12 +446,42 @@ pub(crate) async fn current_neighbors(
         })?;
     Ok(CurrentNeighbors {
         chassis_peers: classify_chassis(&unaddressed, &by_mac, scope),
-        peers: classify_peers(&advertised, &claims, &listed, &managed),
+        peers: classify_peers(&advertised, &claims, &listed, &managed, &blockers),
         mac_vendors: mac_vendors(&current.set),
         neighbors: current.set,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),
     })
+}
+
+/// What the Unregistered list's rules say about the set's addresses, for [`SetupBlocked`].
+#[derive(Debug, Default)]
+struct Blockers {
+    /// Addresses every row advertising which says it is only an end station.
+    end_station_only: BTreeSet<IpAddr>,
+    /// Addresses on the list, whoever may see them.
+    listed_elsewhere: BTreeSet<IpAddr>,
+}
+
+/// The addresses every row advertising which is only an end station — the list skips a row, so an
+/// address it hears about from one row that is not is still admitted.
+fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
+    let mut verdict: BTreeMap<IpAddr, bool> = BTreeMap::new();
+    for n in &set.neighbors {
+        let Some(ip) = n
+            .remote_mgmt_addr
+            .as_deref()
+            .and_then(|a| a.trim().parse::<IpAddr>().ok())
+        else {
+            continue;
+        };
+        let only = crate::arp::only_an_end_station(&n.capabilities);
+        verdict.entry(ip).and_modify(|v| *v &= only).or_insert(only);
+    }
+    verdict
+        .into_iter()
+        .filter_map(|(ip, only)| only.then_some(ip))
+        .collect()
 }
 
 /// Every distinct management address the set advertises, keyed by the text the row carries.
@@ -412,6 +503,7 @@ fn classify_peers(
     claims: &[AddressMatch],
     listed: &BTreeMap<IpAddr, Uuid>,
     managed: &HashMap<IpAddr, NeighborManagedBy>,
+    blockers: &Blockers,
 ) -> Vec<NeighborPeer> {
     let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, &AddressMatch>> = BTreeMap::new();
     for c in claims {
@@ -433,6 +525,8 @@ fn classify_peers(
                 None => (NeighborPeerState::Ambiguous, None, None),
             };
             let unregistered = state == NeighborPeerState::Unregistered;
+            let managed_by = managed.get(ip).filter(|_| unregistered).cloned();
+            let stuck = unregistered && managed_by.is_none() && !listed.contains_key(ip);
             NeighborPeer {
                 address: text.clone(),
                 state,
@@ -440,7 +534,14 @@ fn classify_peers(
                 node_name,
                 discovery_listed: listed.contains_key(ip),
                 discovery_id: listed.get(ip).copied(),
-                managed_by: managed.get(ip).filter(|_| unregistered).cloned(),
+                managed_by,
+                setup_blocked: stuck.then(|| {
+                    setup_blocked(
+                        *ip,
+                        blockers.end_station_only.contains(ip),
+                        blockers.listed_elsewhere.contains(ip),
+                    )
+                }),
             }
         })
         .collect()
@@ -943,6 +1044,95 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The adjacency settings are written and read back as they were sent.
+    /// ADR-179 増分 9: a neighbour on the list only through a node outside the caller's folders
+    /// says so to that caller, and is simply listed for one who sees everything; one on no list
+    /// says it is not listed yet.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_neighbour_listed_only_outside_the_callers_folders_says_so(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let mine = crate::pgtest::group(&pool, "mine").await;
+        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let here = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let there = crate::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
+        sqlx::query("INSERT INTO l3_discovered (ip, via_node) VALUES ('198.51.100.20', $1)")
+            .bind(there)
+            .execute(&pool)
+            .await
+            .expect("listed row");
+        let heard = |chassis: &str, addr: &str| {
+            let mut n = yagra_common::Neighbor::new(
+                yagra_common::NeighborProto::Lldp,
+                "Gi0/1",
+                chassis,
+                "Gi0/2",
+            );
+            n.remote_mgmt_addr = Some(addr.to_owned());
+            n
+        };
+        crate::neighbors::NeighborRepo::new(pool.clone())
+            .record_observation(
+                here,
+                &NeighborSet::new(vec![
+                    heard("far-01", "198.51.100.20"),
+                    heard("far-02", "198.51.100.21"),
+                ]),
+            )
+            .await
+            .expect("record");
+        let st = live_state(pool.clone()).await;
+        // A scoped caller's view of a node comes from the alert engine's configuration, which a
+        // live core loads on its own; here it is set, as the nodes tests do.
+        let meta = [(here, mine), (there, theirs)]
+            .into_iter()
+            .map(|(node, group)| {
+                (
+                    yagra_common::NodeId::from(node),
+                    crate::alerts::NodeMeta {
+                        folder_group: Some(group),
+                        folder_chain: vec![group],
+                        ..crate::alerts::NodeMeta::default()
+                    },
+                )
+            })
+            .collect();
+        st.alerts
+            .set_config(crate::alerts::AlertConfig::new(Vec::new(), meta));
+        let path = format!("/api/v1/nodes/{here}/neighbors");
+        let blocked = |body: &serde_json::Value, addr: &str| {
+            body["peers"]
+                .as_array()
+                .expect("peers")
+                .iter()
+                .find(|p| p["address"] == addr)
+                .map(|p| (p["discovery_listed"].clone(), p["setup_blocked"].clone()))
+                .expect("the peer")
+        };
+
+        let scoped = scoped_token(&st, &[mine]);
+        let (status, body) = send(&st, "GET", &path, &scoped, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            blocked(&body, "198.51.100.20"),
+            (
+                serde_json::json!(false),
+                serde_json::json!("found_outside_your_folders")
+            )
+        );
+        assert_eq!(
+            blocked(&body, "198.51.100.21").1,
+            serde_json::json!("not_listed_yet")
+        );
+
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(&st, "GET", &path, &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            blocked(&body, "198.51.100.20"),
+            (serde_json::json!(true), serde_json::Value::Null)
+        );
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn adjacency_settings_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
@@ -968,7 +1158,7 @@ mod tests {
 #[cfg(test)]
 mod peer_tests {
     use super::*;
-    use yagra_common::{Neighbor, NeighborProto};
+    use yagra_common::{Neighbor, NeighborCapability, NeighborProto};
 
     fn claim(address: &str, id: Uuid, name: &str, visible: bool) -> AddressMatch {
         AddressMatch {
@@ -1004,6 +1194,7 @@ mod peer_tests {
             &claims,
             &listed,
             &HashMap::new(),
+            &Blockers::default(),
         );
         let states: Vec<(&str, NeighborPeerState)> = peers
             .iter()
@@ -1083,6 +1274,7 @@ mod peer_tests {
             &claims,
             &BTreeMap::new(),
             &managed,
+            &Blockers::default(),
         );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
         assert_eq!(peers[0].managed_by, None);
@@ -1107,6 +1299,7 @@ mod peer_tests {
             &claims,
             &BTreeMap::new(),
             &HashMap::new(),
+            &Blockers::default(),
         );
         for p in &peers {
             assert_eq!(p.node_id, None, "{}", p.address);
@@ -1133,6 +1326,7 @@ mod peer_tests {
             &claims,
             &BTreeMap::new(),
             &HashMap::new(),
+            &Blockers::default(),
         );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
     }
@@ -1147,6 +1341,7 @@ mod peer_tests {
             &claims,
             &BTreeMap::new(),
             &HashMap::new(),
+            &Blockers::default(),
         );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
         assert_eq!(peers[0].address, "2001:0db8:0:0:0:0:0:6");
@@ -1171,6 +1366,95 @@ mod peer_tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mac, "00:00:0c:12:34:56");
         assert!(found[0].vendor.starts_with("Cisco"), "{}", found[0].vendor);
+    }
+
+    /// ADR-179 増分 9: an unregistered address nothing adds says why, in the list's own order; one
+    /// that is listed, managed or monitored says nothing.
+    #[test]
+    fn an_address_nothing_adds_says_why_in_the_lists_own_order() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(
+            setup_blocked(ip("127.0.0.1"), true, true),
+            SetupBlocked::NotADeviceAddress
+        );
+        assert_eq!(
+            setup_blocked(ip("fe80::1"), false, false),
+            SetupBlocked::NotADeviceAddress
+        );
+        assert_eq!(
+            setup_blocked(ip("192.0.2.1"), true, true),
+            SetupBlocked::EndStation
+        );
+        assert_eq!(
+            setup_blocked(ip("192.0.2.1"), false, true),
+            SetupBlocked::FoundOutsideYourFolders
+        );
+        assert_eq!(
+            setup_blocked(ip("192.0.2.1"), false, false),
+            SetupBlocked::NotListedYet
+        );
+
+        let blockers = Blockers {
+            end_station_only: [ip("192.0.2.2")].into(),
+            listed_elsewhere: BTreeSet::new(),
+        };
+        let listed = BTreeMap::from([(ip("192.0.2.3"), Uuid::from_u128(3))]);
+        let managed = HashMap::from([(ip("192.0.2.4"), NeighborManagedBy::ControllerHidden)]);
+        let claims = vec![claim("192.0.2.5", Uuid::from_u128(5), "rtr-a", true)];
+        let peers = classify_peers(
+            &advertised(&[
+                "192.0.2.1",
+                "192.0.2.2",
+                "192.0.2.3",
+                "192.0.2.4",
+                "192.0.2.5",
+            ]),
+            &claims,
+            &listed,
+            &managed,
+            &blockers,
+        );
+        let got: Vec<(&str, Option<SetupBlocked>)> = peers
+            .iter()
+            .map(|p| (p.address.as_str(), p.setup_blocked))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("192.0.2.1", Some(SetupBlocked::NotListedYet)),
+                ("192.0.2.2", Some(SetupBlocked::EndStation)),
+                ("192.0.2.3", None),
+                ("192.0.2.4", None),
+                ("192.0.2.5", None),
+            ]
+        );
+    }
+
+    /// The list skips a row, not an address: one row that is not only an end station admits it.
+    #[test]
+    fn an_address_is_end_station_only_when_every_row_advertising_it_says_so() {
+        let mut phone = neighbor("sep-01", Some(NeighborIdKind::Text));
+        phone.remote_mgmt_addr = Some("192.0.2.10".to_owned());
+        phone.capabilities = vec![NeighborCapability::Phone, NeighborCapability::Host];
+        let mut switch_side = neighbor("sw-09", Some(NeighborIdKind::Text));
+        switch_side.remote_mgmt_addr = Some("192.0.2.11".to_owned());
+        switch_side.capabilities = vec![NeighborCapability::Phone];
+        let mut same_switch = neighbor("sw-09", Some(NeighborIdKind::Text));
+        same_switch.proto = NeighborProto::Cdp;
+        same_switch.remote_mgmt_addr = Some("192.0.2.11".to_owned());
+        same_switch.capabilities = vec![NeighborCapability::Switch];
+        let mut silent = neighbor("sw-10", Some(NeighborIdKind::Text));
+        silent.remote_mgmt_addr = Some("192.0.2.12".to_owned());
+        let got = end_station_only(&NeighborSet::new(vec![
+            phone,
+            switch_side,
+            same_switch,
+            silent,
+        ]));
+        assert_eq!(
+            got.into_iter().collect::<Vec<_>>(),
+            ["192.0.2.10".parse::<IpAddr>().unwrap()]
+        );
     }
 
     /// ADR-180 増分 3 決定 2: only a MAC chassis on a row with no usable address is matched by MAC.

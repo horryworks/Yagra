@@ -1038,6 +1038,13 @@
       "protoAria": "Filter by protocol"
     },
     "setup": {
+      "blocked": {
+        "not_listed_yet": "Not on the unregistered-device list yet. The list is refreshed every 5 minutes.",
+        "end_station": "It announces itself as an end station (a phone, for example), so it is not listed.",
+        "not_a_device_address": "This kind of address (loopback, for example) does not identify a device.",
+        "found_outside_your_folders": "Found by a node outside your folders.",
+        "controller_hidden": "An access point managed by a controller outside your folders."
+      },
       "open": "Set up monitoring",
       "title": "Monitoring setup",
       "credsHint": "Detect tries these in this order. The list starts from the one Discovery ▸ Scan a range last used; a change here lasts while this page is open. <lnk>Manage credentials →</lnk>",
