@@ -331,17 +331,10 @@ impl YagraMcp {
         // node the alert engine has not observed yet. Reading `node_states()` directly — which is
         // what this did — skips that, so a just-added node (or every node, in the window after a
         // core restart) reported `unknown` here while the dashboard showed it `ok`.
-        let ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
-        let states = crate::api::nodes::display_states(&self.state, &ids).await;
         // The kind comes from the same resolver the REST list uses (ADR-042 read parity), so a
-        // model and the WebUI cannot be told different things about what a node is. Skeleton mode
-        // has no side tables to read, so everything resolves to `device` — the same degradation
-        // the REST path takes on a failed read.
-        let uuids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
-        let mut kinds = match self.state.admin.as_ref() {
-            Some(admin) => crate::api::nodes::node_kinds_with_products(admin, &uuids).await,
-            None => crate::api::nodes::NodeKinds::default(),
-        };
+        // model and the WebUI cannot be told different things about what a node is.
+        let ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
+        let (states, mut kinds) = crate::api::nodes::node_enrichment(&self.state, &ids).await;
         // Built once for the whole page, like `kinds` above — a resolver per node would be one
         // whole-table read per row.
         let tags = match self.state.admin.as_ref() {

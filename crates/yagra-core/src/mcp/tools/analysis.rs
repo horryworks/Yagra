@@ -73,6 +73,12 @@ pub(super) struct ListAnalysesParams {
     kind: Option<String>,
     /// Max jobs to return (1–100, default 20). Applies to `runs` only.
     limit: Option<i64>,
+    /// Only runs of this analysis (e.g. `anomaly`). Applies to `runs` only.
+    tool: Option<String>,
+    /// Only runs in this state: queued | running | done | failed | cancelled. Applies to `runs` only.
+    state: Option<String>,
+    /// Only runs started at or after this instant (RFC 3339). Applies to `runs` only.
+    since: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -341,8 +347,8 @@ impl YagraMcp {
         description = "List Troubleshoot analyses. `kind` is runs (default: recent jobs, newest \
                        first, with their tool, scope, state and result summary) or schedules (the \
                        recurring analyses configured on this deployment, with their cadence, next \
-                       run and last status). `limit` applies to runs only, 1–100 (default 20). \
-                       Requires live mode."
+                       run and last status). `limit` (1–100, default 20), `tool`, `state` and \
+                       `since` apply to runs only. Requires live mode."
     )]
     async fn list_analyses(
         &self,
@@ -380,15 +386,23 @@ impl YagraMcp {
                 );
             }
         }
+        // The same filter `GET /api/v1/analysis/jobs` reads, validated before the live-mode check
+        // for the reason that handler gives: a malformed filter is an error on every deployment.
+        let filter = match crate::api::analysis::job_filter(
+            p.tool.as_deref(),
+            p.state.as_deref(),
+            p.since.as_deref(),
+        ) {
+            Ok(f) => f,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable(TOOL, "analysis requires live mode");
         };
         // A smaller page than the REST default (50): an AI client reads the runs list to orient,
         // not to render a table.
         let limit = p.limit.unwrap_or(20).clamp(1, 100);
-        // No filter: `list_analyses` answers "what has run recently", and a model narrows by
-        // reading the rows rather than by re-asking. The seam is shared so the cap cannot differ.
-        let jobs = match admin.analysis.list(limit, &Default::default()).await {
+        let jobs = match admin.analysis.list(limit, &filter).await {
             Ok(js) => js,
             Err(e) => return tool_error(TOOL, "list analyses", &e),
         };
@@ -469,6 +483,139 @@ mod tests {
     use super::*;
     use crate::mcp::tools::testkit::*;
 
+    /// ADR-184: a malformed filter is refused before anything else, on every deployment — the same
+    /// order `GET /api/v1/analysis/jobs` keeps.
+    #[tokio::test]
+    async fn a_filter_outside_its_vocabulary_is_refused_not_ignored() {
+        let m = mcp();
+        for p in [
+            ListAnalysesParams {
+                state: Some("succeeded".to_owned()),
+                ..Default::default()
+            },
+            ListAnalysesParams {
+                tool: Some("everything".to_owned()),
+                ..Default::default()
+            },
+            ListAnalysesParams {
+                since: Some("yesterday".to_owned()),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                m.list_analyses_in(p, &unrestricted()).await.is_err(),
+                "a filter the REST edge refuses must not widen into every run here"
+            );
+        }
+    }
+
+    /// ADR-184: `list_analyses` narrows on the same filter the runs list does, over real rows.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_surfaces_narrow_the_runs_list_the_same_way(pool: sqlx::PgPool) {
+        use crate::analysis::{AnalysisRepo, AnalysisTool, JobParams, ScopeKind};
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let repo = AnalysisRepo::new(pool.clone());
+        let job = |tool| JobParams {
+            tool,
+            scope_kind: ScopeKind::All,
+            scope_id: None,
+            scope_label: "Whole fleet".into(),
+            window_secs: 3_600,
+            baseline_secs: 86_400,
+            sensitivity: 3.0,
+            depth: "standard".into(),
+            family: "all".into(),
+            notify: false,
+        };
+        let running = repo
+            .insert(&job(AnalysisTool::Anomaly), None)
+            .await
+            .unwrap();
+        let done = repo
+            .insert(&job(AnalysisTool::Capacity), None)
+            .await
+            .unwrap();
+        repo.finish(done.id, 0, "nothing found").await.unwrap();
+
+        let ids = |v: &serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .expect("a list")
+                .iter()
+                .map(|j| j["id"].as_str().expect("an id").to_owned())
+                .collect()
+        };
+        let (_, rest) = send(&st, "GET", "/api/v1/analysis/jobs?state=done", &tok, None).await;
+        let tool = YagraMcp::new(st.clone())
+            .list_analyses_in(
+                ListAnalysesParams {
+                    state: Some("done".to_owned()),
+                    ..Default::default()
+                },
+                &unrestricted(),
+            )
+            .await
+            .expect("ok result");
+        assert_eq!(ids(&rest), [done.id.to_string()], "{rest}");
+        assert_eq!(
+            ids(&json_of(&tool)),
+            ids(&rest),
+            "the tool must answer what REST answers"
+        );
+
+        // Without a filter both runs come back, so the narrowing above was the filter's doing.
+        let all = YagraMcp::new(st.clone())
+            .list_analyses_in(ListAnalysesParams::default(), &unrestricted())
+            .await
+            .expect("ok result");
+        let mut every = ids(&json_of(&all));
+        every.sort();
+        let mut want = vec![running.id.to_string(), done.id.to_string()];
+        want.sort();
+        assert_eq!(every, want);
+    }
+
+    /// ADR-184: every dimension the runs filter has is a parameter of `list_analyses`.
+    ///
+    /// The tool shipped taking none of them while `JobFilter` had three, so an AI client asking for
+    /// failed runs was shown every run. Read from the struct, so a fourth dimension added to the
+    /// filter fails here until the tool can reach it too.
+    #[test]
+    fn every_job_filter_dimension_is_reachable_from_list_analyses() {
+        let fields = |src: &str, head: &str| -> Vec<String> {
+            let body = src
+                .split_once(head)
+                .unwrap_or_else(|| panic!("`{head}` is gone"))
+                .1;
+            let body = &body[..body.find("\n}").expect("the struct ends")];
+            body.lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("pub ") || (!l.starts_with("//") && l.contains(": ")))
+                .filter_map(|l| {
+                    let l = l.trim_start_matches("pub ");
+                    l.split_once(':').map(|(name, _)| name.trim().to_owned())
+                })
+                .filter(|name| !name.is_empty() && !name.contains(' '))
+                .collect()
+        };
+        let filter = fields(
+            &crate::module_source::code("src/analysis", "repo"),
+            &format!("pub struct {}<'a> {{", "JobFilter"),
+        );
+        assert!(filter.len() >= 3, "JobFilter read as {filter:?}");
+        let params = fields(
+            &crate::module_source::code("src/mcp/tools", "analysis"),
+            &format!("struct {} {{", "ListAnalysesParams"),
+        );
+        let missing: Vec<&String> = filter.iter().filter(|f| !params.contains(f)).collect();
+        assert!(
+            missing.is_empty(),
+            "list_analyses cannot narrow on {missing:?}, which the runs list can (params: {params:?})"
+        );
+    }
+
     // ── Pure helpers ────────────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -535,7 +682,7 @@ mod tests {
             .list_analyses_in(
                 ListAnalysesParams {
                     kind: Some("schedules".to_owned()),
-                    limit: None,
+                    ..Default::default()
                 },
                 &unrestricted(),
             )
@@ -547,7 +694,7 @@ mod tests {
             m.list_analyses_in(
                 ListAnalysesParams {
                     kind: Some("everything".to_owned()),
-                    limit: None,
+                    ..Default::default()
                 },
                 &unrestricted(),
             )

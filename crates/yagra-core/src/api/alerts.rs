@@ -222,21 +222,35 @@ async fn list_alerts(
     let acks = ack_map(&st).await;
     // Filter before decorating: an out-of-scope alert must not reach the ack join either, or the
     // response would be shorter but the work — and the ack lookups — would still name those nodes.
-    let alerts = st
-        .alerts
-        .active_alerts()
-        .into_iter()
-        .filter(|a| scope.allows_subject(&st, &a.subject))
-        .collect();
-    let mut views = decorate_alerts(alerts, &acks);
-    // A subject identified by id that is not a node (a Meraki organization) carries no name of its
-    // own, so the pure decorator above has none to give; the engine's snapshot does.
+    let mut views = decorate_alerts(visible_active_alerts(&st, &scope), &acks);
     for view in &mut views {
-        if view.subject_name.is_none() {
-            view.subject_name = st.alerts.subject_display_name(&view.alert.subject);
-        }
+        fill_subject_name(&st, &mut view.subject_name, &view.alert.subject);
     }
     Json(views)
+}
+
+/// The active alerts `scope` may see — the set both `GET /alerts` and `/mcp`'s `get_active_alerts`
+/// start from (ADR-184). Filtered first, so nothing downstream (an ack join, a limit) is spent on
+/// a row that is about to be dropped.
+pub(crate) fn visible_active_alerts(st: &ApiState, scope: &super::scope::NodeScope) -> Vec<Alert> {
+    st.alerts
+        .active_alerts()
+        .into_iter()
+        .filter(|a| scope.allows_subject(st, &a.subject))
+        .collect()
+}
+
+/// Give a row the engine's name for its subject when it has none of its own. A subject identified by
+/// id that is not a node (a Meraki organization) carries no name, so neither surface's decorator has
+/// one to give; the engine's snapshot does.
+pub(crate) fn fill_subject_name(
+    st: &ApiState,
+    name: &mut Option<String>,
+    subject: &yagra_alert::Subject,
+) {
+    if name.is_none() {
+        *name = st.alerts.subject_display_name(subject);
+    }
 }
 
 /// A page of alert history: `?limit=`, the keyset cursor, and the filters the History toolbar

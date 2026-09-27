@@ -277,23 +277,8 @@ impl YagraMcp {
         scope: &NodeScope,
         ids: impl Iterator<Item = Uuid>,
     ) -> HashMap<Uuid, String> {
-        let ids: Vec<Uuid> = {
-            let mut seen: Vec<Uuid> = ids.collect();
-            seen.sort_unstable();
-            seen.dedup();
-            seen
-        };
-        if ids.is_empty() {
-            return HashMap::new();
-        }
-        match self.state.admin.as_ref() {
-            Some(admin) => admin
-                .repo
-                .node_names(scope.group_filter(), &ids)
-                .await
-                .unwrap_or_default(),
-            None => HashMap::new(),
-        }
+        // The REST resolver, not a copy of it (ADR-184): the two were byte-identical.
+        crate::api::nodes::resolve_node_names(&self.state, scope, ids).await
     }
 
     /// [`analysis_report_body`] with the findings `scope` may not see removed.

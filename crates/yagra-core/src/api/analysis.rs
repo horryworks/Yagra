@@ -361,47 +361,11 @@ async fn list_analysis_jobs(
     Query(q): Query<JobsQuery>,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<Vec<AnalysisJob>>> {
-    // Rejected, never ignored: an unknown token dropped here widens the answer, and the operator
-    // who asked for failed runs would be shown every run believing the narrower thing.
-    let tool = match q.tool.as_deref() {
-        Some(t) => Some(
-            AnalysisTool::from_str(t)
-                .ok_or_else(|| {
-                    ApiError::bad_request(
-                        "invalid_tool",
-                        format!(
-                            "unknown analysis tool; must be one of: {}",
-                            AnalysisTool::token_list()
-                        ),
-                    )
-                })?
-                .as_str(),
-        ),
-        None => None,
-    };
-    let state = match q.state.as_deref() {
-        Some(s) => Some(AnalysisJobState::from_filter_token(s).ok_or_else(|| {
-            ApiError::bad_request(
-                "invalid_state",
-                format!(
-                    "unknown run state; must be one of: {}",
-                    AnalysisJobState::filter_token_list()
-                ),
-            )
-        })?),
-        None => None,
-    };
-    let since = match q.since.as_deref() {
-        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
-            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
-        })?),
-        None => None,
-    };
+    let filter = job_filter(q.tool.as_deref(), q.state.as_deref(), q.since.as_deref())?;
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let filter = crate::analysis::JobFilter { tool, state, since };
     let jobs = admin.analysis.list(limit, &filter).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -418,6 +382,53 @@ async fn list_analysis_jobs(
             .filter(|j| scope.allows_target(&st, row_target(j)))
             .collect(),
     ))
+}
+
+/// The runs filter, parsed from the three query tokens — the one reading both surfaces share
+/// (ADR-184). `/mcp`'s `list_analyses` used to take none of them and list every run.
+///
+/// Rejected, never ignored: an unknown token dropped here widens the answer, and the operator who
+/// asked for failed runs would be shown every run believing the narrower thing.
+pub(crate) fn job_filter(
+    tool: Option<&str>,
+    state: Option<&str>,
+    since: Option<&str>,
+) -> Result<crate::analysis::JobFilter<'static>, ApiError> {
+    let tool = match tool {
+        Some(t) => Some(
+            AnalysisTool::from_str(t)
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_tool",
+                        format!(
+                            "unknown analysis tool; must be one of: {}",
+                            AnalysisTool::token_list()
+                        ),
+                    )
+                })?
+                .as_str(),
+        ),
+        None => None,
+    };
+    let state = match state {
+        Some(s) => Some(AnalysisJobState::from_filter_token(s).ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_state",
+                format!(
+                    "unknown run state; must be one of: {}",
+                    AnalysisJobState::filter_token_list()
+                ),
+            )
+        })?),
+        None => None,
+    };
+    let since = match since {
+        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
+            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
+        })?),
+        None => None,
+    };
+    Ok(crate::analysis::JobFilter { tool, state, since })
 }
 
 /// One analysis job by id.

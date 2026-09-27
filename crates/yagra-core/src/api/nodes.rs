@@ -527,6 +527,24 @@ fn resolve_kinds(ids: &[Uuid], sets: &KindSets) -> HashMap<Uuid, NodeKind> {
         .collect()
 }
 
+/// What a node list adds to the stored rows: each node's display state and its resolved kind — the
+/// two reads `GET /nodes` and `/mcp`'s `list_nodes` must answer identically (ADR-042 read parity,
+/// ADR-184). Run concurrently; skeleton mode has no side tables, so every kind is `device`, the
+/// same degradation a failed read takes.
+pub(crate) async fn node_enrichment(
+    st: &ApiState,
+    ids: &[NodeId],
+) -> (HashMap<NodeId, NodeState>, NodeKinds) {
+    let uuids: Vec<Uuid> = ids.iter().map(|n| n.as_uuid()).collect();
+    let kinds = async {
+        match st.admin.as_ref() {
+            Some(admin) => node_kinds_with_products(admin, &uuids).await,
+            None => NodeKinds::default(),
+        }
+    };
+    tokio::join!(display_states(st, ids), kinds)
+}
+
 /// Enrich raw `Node` rows into UI [`NodeSummary`] rows: live display state, tree sort order, and
 /// the node's resolved kind. Shared by the paged fleet list and the per-group lazy tree load so both
 /// paths produce identical rows — and, since ADR-146, the pins read, for the same reason.
@@ -549,27 +567,19 @@ pub(super) async fn build_node_summaries(
         .copied()
         .filter(|id| !known_orders.contains_key(id))
         .collect();
-    // Skeleton mode has neither ordering nor side tables; a read failure degrades the kind and the
-    // ordering, never the list.
-    let inventory = async {
+    // Skeleton mode has no ordering; a read failure degrades the ordering, never the list.
+    let orders = async {
         match st.admin.as_ref() {
-            Some(admin) => tokio::join!(
-                async {
-                    if missing.is_empty() {
-                        known_orders
-                    } else {
-                        let mut orders = admin
-                            .repo
-                            .node_sort_orders(&missing)
-                            .await
-                            .unwrap_or_default();
-                        orders.extend(known_orders);
-                        orders
-                    }
-                },
-                node_kinds_with_products(admin, &ids),
-            ),
-            None => (known_orders, NodeKinds::default()),
+            Some(admin) if !missing.is_empty() => {
+                let mut orders = admin
+                    .repo
+                    .node_sort_orders(&missing)
+                    .await
+                    .unwrap_or_default();
+                orders.extend(known_orders);
+                orders
+            }
+            _ => known_orders,
         }
     };
     // Up to five independent reads — four PostgreSQL, one TSDB — on the hottest list in the
@@ -584,7 +594,7 @@ pub(super) async fn build_node_summaries(
     // spends four, not five. The wall clock barely moves — they were always parallel — but the
     // number of connections one request holds at its peak does, and that is what a pool of 20
     // against eight `ListSlot` seats is measured against.
-    let ((orders, mut kinds), states) = tokio::join!(inventory, display_states(st, &node_ids));
+    let (orders, (states, mut kinds)) = tokio::join!(orders, node_enrichment(st, &node_ids));
     nodes
         .into_iter()
         .map(|n| NodeSummary {

@@ -164,9 +164,7 @@ pub(super) async fn record_audit(
     status: u16,
 ) {
     if let Some(admin) = state.admin.as_ref() {
-        if let Err(e) = admin.audit.record(&identity.actor, action, status).await {
-            tracing::warn!(error = %e, action, "MCP audit record failed");
-        }
+        crate::api::util::audit_record(&admin.audit, &identity.actor, action, status).await;
     }
 }
 

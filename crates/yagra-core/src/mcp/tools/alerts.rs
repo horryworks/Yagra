@@ -136,10 +136,9 @@ impl YagraMcp {
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_active_alerts";
-        let mut alerts = self.state.alerts.active_alerts();
         // Filtered before the severity cut and the truncation, so a scoped caller's `limit` is
         // spent on rows they can see rather than on rows that are about to be dropped.
-        alerts.retain(|a| scope.allows_subject(&self.state, &a.subject));
+        let mut alerts = crate::api::alerts::visible_active_alerts(&self.state, scope);
         if let Some(node_id) = p.node_id {
             let nid = NodeId::from(node_id);
             alerts.retain(|a| a.subject.is_node(nid));
@@ -167,11 +166,12 @@ impl YagraMcp {
             .map(|a| {
                 let name = a.node().and_then(|n| names.get(&n.0).cloned());
                 let mut dto = AlertDto::from_alert(a, name);
-                // A Meraki organization is identified by id and carries no name of its own; the
-                // engine resolves it, exactly as the REST view does (read parity, ADR-042).
-                if dto.subject_name.is_none() {
-                    dto.subject_name = self.state.alerts.subject_display_name(&a.subject);
-                }
+                // Read parity (ADR-042): the name the REST view gives the same subject.
+                crate::api::alerts::fill_subject_name(
+                    &self.state,
+                    &mut dto.subject_name,
+                    &a.subject,
+                );
                 dto
             })
             .collect();
