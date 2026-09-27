@@ -17,8 +17,8 @@ import type { AnalysisSchedule, AnalysisToolKey, Cadence } from '../types/api';
 import { SELECTABLE_CADENCES, WEEKDAY_OPTIONS } from '../lib/cadence';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
+import { ANALYSIS_WINDOWS, analysisWindowLabelKey } from './analysisDefaults';
 import {
-  WINDOW_CHOICES,
   blankSchedule,
   formFromSchedule,
   scheduleBody,
@@ -36,14 +36,6 @@ interface Props {
   onClose: () => void;
   onSaved: () => void;
 }
-
-/** Window label keys, matching the launch drawer's so the two read the same. */
-const WINDOW_KEYS: Record<number, string> = {
-  86_400: 'launch.windows.h24',
-  604_800: 'launch.windows.d7',
-  2_592_000: 'launch.windows.d30',
-  7_776_000: 'launch.windows.d90',
-};
 
 export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props) {
   const { t } = useTranslation('troubleshoot');
@@ -75,7 +67,7 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
     }
     setSaving(true);
     setError(null);
-    const windowLabel = t(WINDOW_KEYS[form.windowSecs] ?? 'launch.windows.d7');
+    const windowLabel = t(analysisWindowLabelKey(form.windowSecs));
     const body = scheduleBody(form, windowLabel);
     try {
       if (schedule) await api.updateAnalysisSchedule(schedule.id, body);
@@ -133,9 +125,9 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
             value={String(form.windowSecs)}
             onChange={(e) => set('windowSecs', Number(e.target.value))}
           >
-            {WINDOW_CHOICES.map((w) => (
-              <option key={w} value={w}>
-                {t(WINDOW_KEYS[w])}
+            {ANALYSIS_WINDOWS.map((w) => (
+              <option key={w.secs} value={w.secs}>
+                {t(w.labelKey)}
               </option>
             ))}
           </Select>

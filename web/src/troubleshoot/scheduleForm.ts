@@ -14,12 +14,10 @@ import type {
 import { TOOLS } from './data';
 import { sigmaFor } from './report/format';
 import type { ScopeValue } from '../components/ScopePicker/scope';
-
-/** Baseline lookback, matching the launch drawer's fixed value. */
-export const BASELINE_SECS = 14 * 86_400;
-
-/** The analysis windows the form offers, in seconds. */
-export const WINDOW_CHOICES = [86_400, 604_800, 2_592_000, 7_776_000] as const;
+// The window a new schedule starts on and the fixed baseline are the launch drawer's, read from
+// the module that owns them rather than restated here; the modal lists the choices from the same
+// place (ADR-184 increment 6).
+import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 
 /** The form's state. Mirrors the launch drawer's fields plus the cadence. */
 export interface ScheduleForm {
@@ -50,7 +48,7 @@ export function blankSchedule(scope: ScopeValue): ScheduleForm {
   return {
     tool: 'anomaly',
     scope,
-    windowSecs: 604_800,
+    windowSecs: DEFAULT_WINDOW_SECS,
     sensitivity: 3,
     notify: false,
     frequency: 'daily',
@@ -72,7 +70,7 @@ export function formFromSchedule(s: AnalysisSchedule, scope: ScopeValue): Schedu
     // picker on a value it cannot render.
     tool: (TOOLS.some((t) => t.id === s.tool) ? s.tool : 'anomaly') as AnalysisToolKey,
     scope,
-    windowSecs: num('window_secs', 604_800),
+    windowSecs: num('window_secs', DEFAULT_WINDOW_SECS),
     sensitivity: sliderFor(num('sensitivity', 3)),
     notify: params.notify === true,
     // A cadence this build does not know must not silently become "daily" in an edit form — that

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { inputFromJob, relTime } from './format';
+import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 import type { AnalysisJob } from '../types/api';
 
 function job(over: Partial<AnalysisJob>): AnalysisJob {
@@ -58,13 +59,22 @@ describe('inputFromJob', () => {
 
   it('falls back to defaults when params are missing or the wrong type', () => {
     const inp = inputFromJob(job({ params: { window_secs: 'oops', sensitivity: null } }));
-    expect(inp.window_secs).toBe(24 * 3600);
-    expect(inp.baseline_secs).toBe(14 * 86_400);
+    expect(inp.window_secs).toBe(DEFAULT_WINDOW_SECS);
+    expect(inp.baseline_secs).toBe(BASELINE_SECS);
     expect(inp.sensitivity).toBe(3.0);
     expect(inp.depth).toBe('standard');
     expect(inp.family).toBe('all');
     // A non-boolean `notify` (here: absent) defaults to true.
     expect(inp.notify).toBe(true);
+  });
+
+  it('re-runs a job that recorded no window over the seven-day default, like every launcher', () => {
+    // The drift ADR-184 increment 6 closed: this fallback said 24 hours while the drawer, the
+    // schedule form and the quick run all said 7 days, so "Re-run" on an old row silently ran a
+    // shorter analysis than the one it copied. Pinned as a number, not as the constant, so the
+    // test is about the behaviour an operator sees and not about which name the code reads.
+    const inp = inputFromJob(job({ params: {} }));
+    expect(inp.window_secs).toBe(7 * 24 * 3600);
   });
 });
 

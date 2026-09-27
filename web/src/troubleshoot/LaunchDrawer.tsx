@@ -18,8 +18,7 @@ import { sigmaFor } from './report/format';
 import { useTroubleshootStore } from './store';
 import { useCan } from '../store';
 import type { AnalysisJobInput } from '../types/api';
-
-const BASELINE_SECS = 14 * 86_400;
+import { ANALYSIS_WINDOWS, BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 
 export function LaunchDrawer() {
   const { t } = useTranslation('troubleshoot');
@@ -33,13 +32,9 @@ export function LaunchDrawer() {
   const showToast = useTroubleshootStore((s) => s.showToast);
   const watchJob = useTroubleshootStore((s) => s.watchJob);
 
+  // `Segmented` speaks strings, so the shared list is rendered as one option per window.
   const WINDOWS = useMemo(
-    () => [
-      { value: '86400', label: t('launch.windows.h24') },
-      { value: '604800', label: t('launch.windows.d7') },
-      { value: '2592000', label: t('launch.windows.d30') },
-      { value: '7776000', label: t('launch.windows.d90') },
-    ],
+    () => ANALYSIS_WINDOWS.map((w) => ({ value: String(w.secs), label: t(w.labelKey) })),
     [t],
   );
   const DEPTHS = useMemo(
@@ -71,7 +66,7 @@ export function LaunchDrawer() {
   // Mirror the selected tool so its content survives the slide-out after openToolId clears.
   const [tool, setTool] = useState<Tool | null>(null);
   const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
-  const [windowVal, setWindowVal] = useState('604800');
+  const [windowVal, setWindowVal] = useState(String(DEFAULT_WINDOW_SECS));
   const [depth, setDepth] = useState('standard');
   const [sensitivity, setSensitivity] = useState(3);
   const [notify, setNotify] = useState('notify');
@@ -87,7 +82,7 @@ export function LaunchDrawer() {
       if (picked) {
         setTool(picked);
         setScope(allScope(t));
-        setWindowVal('604800');
+        setWindowVal(String(DEFAULT_WINDOW_SECS));
         setDepth('standard');
         setSensitivity(3);
         setNotify('notify');

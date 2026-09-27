@@ -4,6 +4,7 @@
 
 import i18n from '../i18n';
 import type { AnalysisJob, AnalysisJobInput } from '../types/api';
+import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 
 /** Compact "just now" / "Xm ago" / "Xh ago" / "Xd ago" from an epoch-millis timestamp, empty for a
  *  missing one. Reuses the shared `format:relative.*` keys (resolved at call time via the global
@@ -38,7 +39,9 @@ function str(params: Record<string, unknown>, key: string, fallback: string): st
   return typeof v === 'string' ? v : fallback;
 }
 
-/** Rebuild the launch request from a finished/failed job so it can be re-run with the same config. */
+/** Rebuild the launch request from a finished/failed job so it can be re-run with the same config.
+ *  A row that recorded no window (or one of the wrong type) re-runs over the same default window the
+ *  launchers use — it used to fall back to 24 hours while every launcher defaulted to 7 days. */
 export function inputFromJob(job: AnalysisJob): AnalysisJobInput {
   const params = paramFields(job.params);
   return {
@@ -46,8 +49,8 @@ export function inputFromJob(job: AnalysisJob): AnalysisJobInput {
     scope_kind: job.scope_kind,
     scope_id: job.scope_id,
     scope_label: job.scope_label,
-    window_secs: num(params, 'window_secs', 24 * 3600),
-    baseline_secs: num(params, 'baseline_secs', 14 * 86_400),
+    window_secs: num(params, 'window_secs', DEFAULT_WINDOW_SECS),
+    baseline_secs: num(params, 'baseline_secs', BASELINE_SECS),
     sensitivity: num(params, 'sensitivity', 3.0),
     depth: str(params, 'depth', 'standard'),
     family: str(params, 'family', 'all'),

@@ -88,6 +88,7 @@ import { MAINTENANCE_STATUSES } from './pages/maintenanceStatus';
 import { AUDIT_RANGES } from './pages/auditQuery';
 import { HISTORY_RANGES } from './pages/historyQuery';
 import { SCHEDULE_FORM_PROBLEMS } from './troubleshoot/scheduleForm';
+import { ANALYSIS_WINDOWS } from './troubleshoot/analysisDefaults';
 import {
   CORRELATION_DIRECTIONS,
   FLAP_BUCKETS,
@@ -552,6 +553,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'findings.range.',
       FINDING_RANGES,
+    );
+  });
+
+  it('every analysis window has a label (troubleshoot:launch.windows.*)', () => {
+    // The launch drawer, the schedule editor and the quick run all render `t(w.labelKey)` from
+    // the one list in `analysisDefaults.ts` (ADR-184 increment 6), so a window added there
+    // without its strings would put a raw key on a button in BOTH locales, which parity passes.
+    expectKeys(
+      'analysis window',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      '',
+      ANALYSIS_WINDOWS.map((w) => w.labelKey),
     );
   });
 

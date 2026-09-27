@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
-  BASELINE_SECS,
   blankSchedule,
   formFromSchedule,
   scheduleBody,
@@ -12,6 +11,7 @@ import {
   type ScheduleForm,
 } from './scheduleForm';
 import { sigmaFor } from './report/format';
+import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 import { TOOLS } from './data';
 import type { AnalysisSchedule } from '../types/api';
 import type { ScopeValue } from '../components/ScopePicker/scope';
@@ -49,6 +49,10 @@ describe('blankSchedule', () => {
     // schedule that pages every morning is how the feature gets switched off.
     expect(blankSchedule(ALL).notify).toBe(false);
   });
+
+  it('starts on the same window as the launch drawer', () => {
+    expect(blankSchedule(ALL).windowSecs).toBe(DEFAULT_WINDOW_SECS);
+  });
 });
 
 describe('sliderFor', () => {
@@ -85,6 +89,11 @@ describe('formFromSchedule', () => {
 
   it('falls back to a renderable tool when the row names one this build lacks', () => {
     expect(formFromSchedule(stored({ tool: 'teleport' }), ALL).tool).toBe('anomaly');
+  });
+
+  it('opens a row that recorded no window on the shared default', () => {
+    const f = formFromSchedule(stored({ params: { sensitivity: 2.5 } }), ALL);
+    expect(f.windowSecs).toBe(DEFAULT_WINDOW_SECS);
   });
 });
 
