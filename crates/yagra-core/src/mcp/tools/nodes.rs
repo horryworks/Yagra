@@ -416,7 +416,8 @@ impl YagraMcp {
                        ever runs, so an empty `interfaces` is the design and there are no \
                        neighbours to ask get_neighbors for; do not report either as a fault. A \
                        Meraki switch is the exception: its ports and its LLDP/CDP neighbours are \
-                       read from the Meraki Dashboard whatever this says. True \
+                       read from the Meraki Dashboard whatever this says, and so are a Meraki \
+                       MX's and MR's neighbours. True \
                        with nothing arriving is the case worth investigating, and \
                        list_node_metrics is what tells the two apart. `notes` is free text an \
                        operator wrote about this node — standing context such as \"this link \

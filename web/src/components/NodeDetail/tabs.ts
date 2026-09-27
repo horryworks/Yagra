@@ -122,8 +122,8 @@ const INTERFACE_KINDS: readonly NodeKind[] = ['device', 'wireless_ap', 'meraki']
 
 /** Every kind whose `node_neighbors` row something writes: an ordinary device (its own CDP/LLDP
  *  walk) and a Meraki node — whose switch-port collect reads each port's LLDP/CDP from the
- *  Dashboard (ADR-181). Necessary, not sufficient: only a Meraki **switch** is read, and
- *  [`neighborsFed`] is what keeps the tab off an MR or an MX. */
+ *  Dashboard (ADR-181). Necessary, not sufficient: only a Meraki switch, MX or MR is read, and
+ *  [`neighborsFed`] is what keeps the tab off the other Meraki products. */
 const NEIGHBOR_KINDS: readonly NodeKind[] = ['device', 'meraki'];
 
 /**
@@ -243,8 +243,8 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   },
   // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
   // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
-  // `needsSnmp` is answered by [`neighborsFed`] for this tab, not [`interfacesFed`]: a Meraki
-  // access point has radios but no neighbour source (ADR-181 決定 9).
+  // `needsSnmp` is answered by [`neighborsFed`] for this tab, not [`interfacesFed`]: the two
+  // sets of Meraki products differ — an MX has neighbours and no ports (ADR-181 決定 9).
   neighbors: {
     labelKey: 'tabs.neighbors',
     kinds: NEIGHBOR_KINDS,
@@ -343,15 +343,15 @@ export function interfacesFed(node: NodeDetailSubject): boolean {
 
 /** Whether something reads this node's CDP/LLDP neighbours — what the Neighbors tab is fed by
  *  (ADR-181 決定 9). A device: its own SNMP walk, when it has one. A Meraki node: a switch, from its
- *  organization's switch-port collect, and an MX, read one appliance at a time by the inventory sync
- *  (ADR-181 増分 3). An access point's are not read. Nothing else. Exhaustive, so the next kind has
- *  to answer it. */
+ *  organization's switch-port collect, and an MX or an MR, read one device at a time by the
+ *  inventory sync (ADR-181 増分 3, 増分 5). Nothing else. Exhaustive, so the next kind has to answer
+ *  it. */
 export function neighborsFed(node: NodeDetailSubject): boolean {
   switch (node.kind) {
     case 'device':
       return node.snmpConfigured;
     case 'meraki':
-      return ['switch', 'appliance'].includes(node.merakiProductType?.trim().toLowerCase() ?? '');
+      return ['switch', 'appliance', 'wireless'].includes(node.merakiProductType?.trim().toLowerCase() ?? '');
     case 'wireless_ap':
     case 'url':
     case 'dns':

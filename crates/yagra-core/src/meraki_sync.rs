@@ -99,11 +99,11 @@ const LAN_READ_BUDGET: Duration = Duration::from_secs(60);
 /// second. One that needs longer stops there — the MX wait (決定 31) and the next sync reads on from
 /// the networks it did not reach.
 const FULL_READ_CEILING: Duration = Duration::from_secs(30 * 60);
-/// How long one sync may spend reading MX neighbours (ADR-181 増分 3 決定 4). The share a sync reads
-/// ([`mx_neighbor_reads_per_sync`]) is 59 for about 690 MX synced every 300 s against an hourly
-/// neighbour interval — about 24 s at the 0.34–0.41 s a read measured — so this is headroom, and
-/// what is left over is read by the next sync.
-const MX_NEIGHBOR_BUDGET: Duration = Duration::from_secs(60);
+/// How long one sync may spend reading MX and MR neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 3).
+/// The share a sync reads ([`neighbor_reads_per_sync`]) is 201 for about 690 MX and 1,710 MR synced
+/// every 300 s against an hourly neighbour interval — about 75 s at the 0.34–0.41 s a read measured
+/// — so this is headroom, and what is left over is read by the next sync.
+const NEIGHBOR_READ_BUDGET: Duration = Duration::from_secs(90);
 /// How many networks the LAN stage reads between two progress writes and two `record_network_lans`.
 const LAN_READ_CHUNK: usize = 25;
 /// The shortest interval the loop honours, whatever a row says. Mirrors the column's CHECK.
@@ -257,8 +257,8 @@ pub trait MerakiDirectory: Send + Sync {
         rps: f64,
     ) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError>;
 
-    /// Read each MX in `serials` for its LAN-side LLDP/CDP neighbours, one device at a time at
-    /// `rps`, until `budget` is spent (ADR-181 増分 3): the devices reached, in order, each with its
+    /// Read each MX or MR in `serials` for its LLDP/CDP neighbours, one device at a time at
+    /// `rps`, until `budget` is spent (ADR-181 増分 3, 増分 5): the devices reached, in order, each with its
     /// neighbours or its own failure. `Err` only when nothing could be sent. No default body, for
     /// the reason [`ha_roles`](Self::ha_roles) has none.
     async fn device_neighbors(
@@ -429,16 +429,17 @@ pub struct MerakiSync {
     /// sync of that organization became one: progress on the page every five minutes, "Sync now"
     /// hidden while it ran, and a read at the full rate for an organization with no node.
     tried: std::sync::Mutex<HashMap<Uuid, HashSet<String>>>,
-    /// Where an MX's neighbours are recorded — the table an SNMP walk's go to (ADR-181 増分 3).
+    /// Where an MX's or MR's neighbours are recorded — the table an SNMP walk's go to (ADR-181
+    /// 増分 3, 増分 5).
     neighbors: Arc<NeighborRepo>,
     /// The deployment's neighbour interval, `None` while neighbour discovery is off. Set by
     /// [`run_sync_loop`] every tick from the same settings an SNMP node's walk follows; `None`
-    /// until then, so a sync that runs before the loop's first tick reads no MX.
+    /// until then, so a sync that runs before the loop's first tick reads no device.
     neighbor_every: std::sync::Mutex<Option<Duration>>,
-    /// When this process last asked each MX node for its neighbours — asked, not answered, so a
-    /// device whose read fails every time waits an interval like the rest rather than taking a
+    /// When this process last asked each MX or MR node for its neighbours — asked, not answered, so
+    /// a device whose read fails every time waits an interval like the rest rather than taking a
     /// place in every sync. A restarted core has none and reads its share of the oldest first.
-    mx_neighbors_at: std::sync::Mutex<HashMap<Uuid, Instant>>,
+    neighbors_asked_at: std::sync::Mutex<HashMap<Uuid, Instant>>,
 }
 
 impl MerakiSync {
@@ -462,11 +463,11 @@ impl MerakiSync {
             tried: std::sync::Mutex::default(),
             neighbors,
             neighbor_every: std::sync::Mutex::default(),
-            mx_neighbors_at: std::sync::Mutex::default(),
+            neighbors_asked_at: std::sync::Mutex::default(),
         }
     }
 
-    /// How often an MX's neighbours are read, or `None` for never (ADR-181 増分 3). The loop sets
+    /// How often an MX's or MR's neighbours are read, or `None` for never (ADR-181 増分 3). The loop sets
     /// it from the deployment's neighbour settings.
     pub fn set_neighbor_interval(&self, every: Option<Duration>) {
         *self
@@ -715,9 +716,9 @@ impl MerakiSync {
             Some(now) if now.enabled => self.import(&now, lans.complete).await?,
             _ => (0, 0),
         };
-        // Last, and never a reason to fail the sync: what it reads is each MX's own, and one not
-        // read keeps what it said last time.
-        self.read_mx_neighbors(org, &api_key, job).await;
+        // Last, and never a reason to fail the sync: what it reads is each MX's and MR's own, and
+        // one not read keeps what it said last time.
+        self.read_device_neighbors(org, &api_key, job).await;
 
         Ok(MerakiSyncReport {
             devices: count(seen.len()),
@@ -731,11 +732,12 @@ impl MerakiSync {
         })
     }
 
-    /// Read the LAN-side LLDP/CDP neighbours of the imported MX whose turn it is (ADR-181 増分 3
-    /// 決定 4/5), and record each answer as that node's neighbours. Only a device that answered is
-    /// written: its answer is whole on its own, so one that failed or was not reached keeps what it
-    /// said last time — as a switch not in a cut-short listing does (ADR-181 決定 3).
-    async fn read_mx_neighbors(&self, org: &MerakiOrg, api_key: &str, job: Uuid) {
+    /// Read the LLDP/CDP neighbours of the imported MX and MR whose turn it is (ADR-181 増分 3
+    /// 決定 4/5, 増分 5 決定 1/2) — one queue for both, oldest first — and record each answer as
+    /// that node's neighbours. Only a device that answered is written: its answer is whole on its
+    /// own, so one that failed or was not reached keeps what it said last time — as a switch not
+    /// in a cut-short listing does (ADR-181 決定 3).
+    async fn read_device_neighbors(&self, org: &MerakiOrg, api_key: &str, job: Uuid) {
         let Some(every) = *self
             .neighbor_every
             .lock()
@@ -743,40 +745,42 @@ impl MerakiSync {
         else {
             return;
         };
-        let mx = match self.inventory.appliance_nodes(org.id).await {
-            Ok(mx) => mx,
+        let devices = match self.inventory.neighbor_read_nodes(org.id).await {
+            Ok(devices) => devices,
             Err(e) => {
-                tracing::warn!(org = %org.org_id, error = %e, "meraki sync: listing the MX nodes failed");
+                tracing::warn!(org = %org.org_id, error = %e, "meraki sync: listing the MX and MR nodes failed");
                 return;
             }
         };
+        let queue: Vec<(String, Uuid)> =
+            devices.iter().map(|d| (d.serial.clone(), d.node)).collect();
         let now = Instant::now();
         let due = {
             let last = self
-                .mx_neighbors_at
+                .neighbors_asked_at
                 .lock()
-                .expect("meraki mx neighbours poisoned");
-            mx_neighbors_due(
-                &mx,
+                .expect("meraki device neighbours poisoned");
+            neighbors_due(
+                &queue,
                 &last,
                 now,
                 every,
-                mx_neighbor_reads_per_sync(mx.len(), org.inventory_secs, every),
+                neighbor_reads_per_sync(queue.len(), org.inventory_secs, every),
             )
         };
         if due.is_empty() {
             return;
         }
         self.inflight
-            .extend(job, MX_NEIGHBOR_BUDGET + LEASE_MARGIN, now);
+            .extend(job, NEIGHBOR_READ_BUDGET + LEASE_MARGIN, now);
         let serials: Vec<String> = due.iter().map(|(serial, _)| serial.clone()).collect();
         let reached = match tokio::time::timeout(
-            MX_NEIGHBOR_BUDGET + REQUEST_TIMEOUT,
+            NEIGHBOR_READ_BUDGET + REQUEST_TIMEOUT,
             self.directory.device_neighbors(
                 org,
                 api_key,
                 &serials,
-                MX_NEIGHBOR_BUDGET,
+                NEIGHBOR_READ_BUDGET,
                 org.lane_rps(),
             ),
         )
@@ -784,11 +788,11 @@ impl MerakiSync {
         {
             Ok(Ok(reached)) => reached,
             Ok(Err(why)) => {
-                tracing::warn!(org = %org.org_id, reason = why.token(), "meraki sync: the MX neighbour reads could not start");
+                tracing::warn!(org = %org.org_id, reason = why.token(), "meraki sync: the MX/MR neighbour reads could not start");
                 return;
             }
             Err(_) => {
-                tracing::warn!(org = %org.org_id, "meraki sync: the MX neighbour reads ran out of time");
+                tracing::warn!(org = %org.org_id, "meraki sync: the MX/MR neighbour reads ran out of time");
                 return;
             }
         };
@@ -796,13 +800,18 @@ impl MerakiSync {
             .iter()
             .map(|(serial, node)| (serial.as_str(), *node))
             .collect();
+        let product_of: HashMap<&str, &'static str> = devices
+            .iter()
+            .map(|d| (d.serial.as_str(), neighbor_product_label(&d.product_type)))
+            .collect();
         for (serial, answer) in reached {
             let Some(&node) = node_of.get(serial.as_str()) else {
                 continue;
             };
-            self.mx_neighbors_at
+            let product = product_of.get(serial.as_str()).copied().unwrap_or("other");
+            self.neighbors_asked_at
                 .lock()
-                .expect("meraki mx neighbours poisoned")
+                .expect("meraki device neighbours poisoned")
                 .insert(node, Instant::now());
             let outcome = match answer {
                 Ok(rows) => {
@@ -810,18 +819,22 @@ impl MerakiSync {
                     match self.neighbors.record_observation(node, &set).await {
                         Ok(()) => "ok",
                         Err(e) => {
-                            tracing::warn!(org = %org.org_id, error = %e, "meraki sync: recording an MX's neighbours failed");
+                            tracing::warn!(org = %org.org_id, product, error = %e, "meraki sync: recording a device's neighbours failed");
                             "not_recorded"
                         }
                     }
                 }
                 Err(why) => {
-                    tracing::debug!(org = %org.org_id, reason = why.token(), "meraki sync: an MX's neighbour read failed");
+                    tracing::debug!(org = %org.org_id, product, reason = why.token(), "meraki sync: a device's neighbour read failed");
                     "failed"
                 }
             };
-            metrics::counter!("yagra_meraki_mx_neighbor_reads_total", "outcome" => outcome)
-                .increment(1);
+            metrics::counter!(
+                "yagra_meraki_device_neighbor_reads_total",
+                "outcome" => outcome,
+                "product" => product
+            )
+            .increment(1);
         }
     }
 
@@ -1451,14 +1464,14 @@ impl RunningSyncs {
     }
 }
 
-/// How many MX one sync reads for neighbours (ADR-181 増分 3 決定 4): each MX's share if every one
-/// is read once per neighbour interval, rounded up, plus one — the shape of
-/// [`lan_rereads_per_sync`], for the same reason. Rounding up guarantees a whole round per interval
-/// at any sync cadence, and the one extra lets a round catch up on reads that failed. About 690 MX
-/// synced every 300 s against an hourly interval read 59 a sync.
+/// How many MX and MR one sync reads for neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 2): each
+/// device's share if every one is read once per neighbour interval, rounded up, plus one — the
+/// shape of [`lan_rereads_per_sync`], for the same reason. Rounding up guarantees a whole round per
+/// interval at any sync cadence, and the one extra lets a round catch up on reads that failed. About
+/// 690 MX and 1,710 MR synced every 300 s against an hourly interval read 201 a sync.
 #[must_use]
-pub fn mx_neighbor_reads_per_sync(mx: usize, sync_every_secs: u32, every: Duration) -> usize {
-    let share = (mx as u64)
+pub fn neighbor_reads_per_sync(devices: usize, sync_every_secs: u32, every: Duration) -> usize {
+    let share = (devices as u64)
         .saturating_mul(u64::from(sync_every_secs.max(1)))
         .div_ceil(every.as_secs().max(1));
     usize::try_from(share)
@@ -1466,18 +1479,18 @@ pub fn mx_neighbor_reads_per_sync(mx: usize, sync_every_secs: u32, every: Durati
         .saturating_add(1)
 }
 
-/// The MX nodes whose neighbours this sync reads: those never asked in this process, then those
-/// asked longest ago, of the ones not asked within `every` — at most `cap`. `mx` is
+/// The MX and MR nodes whose neighbours this sync reads: those never asked in this process, then
+/// those asked longest ago, of the ones not asked within `every` — at most `cap`. `devices` is
 /// `(serial, node)`. Pure.
 #[must_use]
-pub fn mx_neighbors_due(
-    mx: &[(String, Uuid)],
+pub fn neighbors_due(
+    devices: &[(String, Uuid)],
     last: &HashMap<Uuid, Instant>,
     now: Instant,
     every: Duration,
     cap: usize,
 ) -> Vec<(String, Uuid)> {
-    let mut due: Vec<(Option<Instant>, &(String, Uuid))> = mx
+    let mut due: Vec<(Option<Instant>, &(String, Uuid))> = devices
         .iter()
         .map(|d| (last.get(&d.1).copied(), d))
         .filter(|(at, _)| at.is_none_or(|t| now.saturating_duration_since(t) >= every))
@@ -1487,19 +1500,31 @@ pub fn mx_neighbors_due(
     due.into_iter().take(cap).map(|(_, d)| d.clone()).collect()
 }
 
+/// The `product` label a neighbour read is counted under: the two product types that are read, and
+/// `other` for anything else (never reached — the query names only these two).
+fn neighbor_product_label(product_type: &str) -> &'static str {
+    match product_type {
+        "appliance" => "appliance",
+        "wireless" => "wireless",
+        _ => "other",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// ADR-181 増分 3 決定 4: a whole round per interval, plus one to catch up.
     #[test]
-    fn a_sync_reads_its_share_of_the_mx_plus_one() {
+    fn a_sync_reads_its_share_of_the_devices_plus_one() {
         let hour = Duration::from_secs(3600);
-        assert_eq!(mx_neighbor_reads_per_sync(690, 300, hour), 59);
-        assert_eq!(mx_neighbor_reads_per_sync(0, 300, hour), 1);
-        assert_eq!(mx_neighbor_reads_per_sync(10, 300, hour), 2);
+        assert_eq!(neighbor_reads_per_sync(690, 300, hour), 59);
+        // ADR-181 増分 5: the MR join the same queue.
+        assert_eq!(neighbor_reads_per_sync(690 + 1710, 300, hour), 201);
+        assert_eq!(neighbor_reads_per_sync(0, 300, hour), 1);
+        assert_eq!(neighbor_reads_per_sync(10, 300, hour), 2);
         // A sync slower than the interval reads everything.
-        assert_eq!(mx_neighbor_reads_per_sync(10, 7200, hour), 21);
+        assert_eq!(neighbor_reads_per_sync(10, 7200, hour), 21);
     }
 
     #[test]
@@ -1513,11 +1538,11 @@ mod tests {
             (node(2), now - Duration::from_secs(9000)),
             (node(3), now - Duration::from_secs(60)),
         ]);
-        let got = mx_neighbors_due(&mx, &last, now, every, 3);
+        let got = neighbors_due(&mx, &last, now, every, 3);
         let serials: Vec<&str> = got.iter().map(|(s, _)| s.as_str()).collect();
         // 4 and 5 were never asked; 2 was asked longest ago; 3 is within the interval.
         assert_eq!(serials, ["Q2MX-0004", "Q2MX-0005", "Q2MX-0002"]);
-        assert!(mx_neighbors_due(&mx, &last, now, every, 0).is_empty());
+        assert!(neighbors_due(&mx, &last, now, every, 0).is_empty());
     }
     use crate::meraki::MerakiLane;
     use crate::pgtest;
@@ -1889,7 +1914,8 @@ mod tests {
 
     /// ADR-181 増分 3: a sync reads an imported MX's neighbours when the neighbour interval is on
     /// and its turn has come, records them as that node's, and does not ask again within the
-    /// interval. With neighbour discovery off it asks nothing.
+    /// interval. With neighbour discovery off it asks nothing. 増分 5: an MR is read the same way,
+    /// in the same queue; a switch is not (its neighbours come from the organization's listing).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_records_an_imported_mxs_neighbours_once_an_interval(pool: sqlx::PgPool) {
@@ -1929,17 +1955,45 @@ mod tests {
                 node
             }
         };
+        // An MR and an MS beside it, both nodes. Two devices a sync at 300 s against an hour reads
+        // two (the share, one, plus one) — so a switch in the queue would take the MR's place.
+        let bind = |serial: &'static str, name: &'static str, product: &'static str, n: u8| {
+            let pool = pool.clone();
+            let org = r.org;
+            async move {
+                let node = pgtest::node(&pool, name, n, None).await;
+                sqlx::query(
+                    "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type)                      VALUES ($1, $2, $3, 'N_1', $4)",
+                )
+                .bind(node)
+                .bind(org)
+                .bind(serial)
+                .bind(product)
+                .execute(&pool)
+                .await
+                .expect("bind");
+                node
+            }
+        };
+        let ap = bind("Q2-W", "ap-01", "wireless", 2).await;
+        bind("Q2-S", "sw-01", "switch", 3).await;
         let heard = yagra_common::Neighbor::new(
             yagra_common::NeighborProto::Lldp,
             "port3",
             "00:00:0c:00:00:20",
             "Gi0/1",
         );
-        r.directory
-            .neighbors_for
-            .lock()
-            .expect("answers")
-            .insert("Q2-A".into(), Ok(vec![heard]));
+        let ap_heard = yagra_common::Neighbor::new(
+            yagra_common::NeighborProto::Lldp,
+            "wired0",
+            "00:00:0c:00:00:21",
+            "Port 7",
+        );
+        {
+            let mut answers = r.directory.neighbors_for.lock().expect("answers");
+            answers.insert("Q2-A".into(), Ok(vec![heard]));
+            answers.insert("Q2-W".into(), Ok(vec![ap_heard]));
+        }
         r.sync
             .set_neighbor_interval(Some(Duration::from_secs(3600)));
 
@@ -1949,7 +2003,7 @@ mod tests {
             .expect("second sync");
         assert_eq!(
             *r.directory.neighbors_asked.lock().expect("asked"),
-            ["Q2-A"]
+            ["Q2-A", "Q2-W"]
         );
         let recorded = NeighborRepo::new(pool.clone())
             .current(node)
@@ -1958,6 +2012,12 @@ mod tests {
             .expect("recorded");
         assert_eq!(recorded.set.neighbors.len(), 1);
         assert_eq!(recorded.set.neighbors[0].local_port, "port3");
+        let ap_recorded = NeighborRepo::new(pool.clone())
+            .current(ap)
+            .await
+            .expect("read")
+            .expect("the MR's neighbours are recorded");
+        assert_eq!(ap_recorded.set.neighbors[0].local_port, "wired0");
 
         r.sync
             .sync_org_scheduled(&r.org().await)
@@ -1965,7 +2025,7 @@ mod tests {
             .expect("third sync");
         assert_eq!(
             r.directory.neighbors_asked.lock().expect("asked").len(),
-            1,
+            2,
             "asked again within the interval"
         );
     }

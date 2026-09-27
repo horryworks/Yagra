@@ -2442,13 +2442,13 @@ fn one_at_a_time<T>(answer: &Result<T, MerakiFetchError>) -> Step {
 /// One device's LLDP/CDP neighbours, or why this read could not say.
 pub type MerakiDeviceNeighbors = Result<Vec<yagra_common::Neighbor>, MerakiFetchError>;
 
-/// Read each MX's LAN-side LLDP/CDP neighbours, one device at a time (ADR-181 増分 3):
-/// `GET /devices/{serial}/lldpCdp`. Read-only.
+/// Read each MX's LAN-side and each MR's LLDP/CDP neighbours, one device at a time (ADR-181
+/// 増分 3, 増分 5): `GET /devices/{serial}/lldpCdp`. Read-only.
 ///
 /// Per device because nothing wider answers it: the organization-wide listing the switches are read
 /// from covers switches only, and `topology/linkLayer` does not keep a link's ports straight when
 /// the far end is not a Meraki device, and keeps a link for up to 25 days after it goes. Measured on
-/// ten MX of a real organization: 0.34–0.41 s each.
+/// ten MX of a real organization: 0.34–0.41 s each; on ten MR, 0.35–0.37 s.
 ///
 /// Returns the devices it **reached**, in the order given, and stops as [`fetch_network_lans`] does:
 /// at `budget`, and at the first failure that would be the same for every device. A device's own

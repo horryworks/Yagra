@@ -306,7 +306,7 @@ pub(crate) fn parse_history_cursor(
 /// The node's current CDP/LLDP neighbours.
 ///
 /// `404` means nothing has recorded this node's neighbours yet — the node may be neither an SNMP
-/// device nor a Meraki switch or MX (whose neighbours are read from the Meraki Dashboard), may not speak
+/// device nor a Meraki switch, MX or MR (whose neighbours are read from the Meraki Dashboard), may not speak
 /// either protocol, or may simply not have been read since collection was enabled. It is distinct from a recorded **empty** set, which is a real answer meaning the device
 /// reports no neighbours.
 #[utoipa::path(
@@ -730,10 +730,10 @@ pub(crate) async fn neighbor_history(
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct NeighborConfig {
     /// Whether CDP/LLDP neighbours are collected at all — the SNMP walks and the Meraki Dashboard
-    /// reads (a switch's and an MX's) alike.
+    /// reads (a switch's, an MX's and an MR's) alike.
     pub enabled: bool,
-    /// How often each SNMP node's neighbour tables are walked, and each Meraki switch's and MX's
-    /// neighbours are read, in seconds.
+    /// How often each SNMP node's neighbour tables are walked, and each Meraki switch's, MX's and
+    /// MR's neighbours are read, in seconds.
     pub interval_secs: u32,
     /// Whether interface-address walks are issued at all. Omitted on update leaves it unchanged.
     #[serde(default)]

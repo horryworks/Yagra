@@ -122,12 +122,13 @@ describe('node-detail tab visibility', () => {
       for (const other of ['appliance', 'camera', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
       }
-      // ADR-181: a switch's and (増分 3) an MX's neighbours are read from the Dashboard — an AP's
-      // are not.
+      // ADR-181: a switch's, (増分 3) an MX's and (増分 5) an MR's neighbours are read from the
+      // Dashboard — no other product's are.
       expect(visibleNodeDetailTabs(node('switch'))).toContain('neighbors');
       expect(visibleNodeDetailTabs(node(' Switch '))).toContain('neighbors');
       expect(visibleNodeDetailTabs(node('appliance'))).toContain('neighbors');
-      for (const other of ['wireless', 'camera', null]) {
+      expect(visibleNodeDetailTabs(node('wireless'))).toContain('neighbors');
+      for (const other of ['camera', 'sensor', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('neighbors');
       }
       // Flow has no Meraki source at all.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A Meraki switch's LLDP/CDP neighbours, from `switch/ports/topology/discovery/byDevice`
 //! (ADR-181) — the organization-wide listing that tells, per switch port, what the port hears —
-//! and an MX's, from `devices/{serial}/lldpCdp`, one appliance at a time (ADR-181 増分 3).
+//! and an MX's or an MR's, from `devices/{serial}/lldpCdp`, one device at a time (ADR-181 増分 3,
+//! 増分 5).
 //!
 //! The two answer the same facts in two shapes: the listing as `{name, value}` pairs labelled
 //! the way the Dashboard displays them, the per-device read as camelCase fields. Both are read into
@@ -146,7 +147,8 @@ const CDP_FIELDS: &[(&str, &str)] = &[
     ("capabilities", cdp::CAPABILITIES),
 ];
 
-/// `devices/{serial}/lldpCdp` for an MX → its LAN-side neighbours (ADR-181 増分 3).
+/// `devices/{serial}/lldpCdp` for an MX → its LAN-side neighbours (ADR-181 増分 3), and for an MR →
+/// the peer on its wired port (増分 5; every recorded MR names that port `wired0`).
 ///
 /// The body is `{"sourceMac": …, "ports": {"port3": {"lldp": {…}, "cdp": {…}, …}, "wan1": …}}`
 /// (recorded 2026-09-26 on ten MX). A `wan` port's peer is dropped (決定 3): it is the upstream
@@ -228,10 +230,12 @@ impl<'a> Fields<'a> {
 /// The port a neighbour is heard on.
 #[derive(Clone, Copy)]
 struct Local<'a> {
-    /// The Dashboard's name for it: a switch port's id (`7`), an MX port's key (`port3`).
+    /// The Dashboard's name for it: a switch port's id (`7`), an MX port's key (`port3`), an MR's
+    /// (`wired0`).
     port: &'a str,
     /// The ifIndex the Interfaces tab keys the port by — a switch's (ADR-181 決定 8, ADR-167
-    /// 決定 4). An MX has no Interfaces rows, so none (増分 3 決定 6).
+    /// 決定 4). An MX has no Interfaces rows, so none (増分 3 決定 6); an MR's are its radios, so
+    /// none either (増分 5 決定 4).
     ifindex: Option<u32>,
 }
 
@@ -784,6 +788,67 @@ mod tests {
             .expect("port5's CDP row");
         assert_eq!(meraki.remote_chassis, "0c:8d:db:00:00:30");
         assert_eq!(meraki.remote_sys_desc, None);
+    }
+
+    /// 増分 5: an MR's answer is an MX's shape with one port, `wired0` (recorded on ten MR, every
+    /// one named so). It keeps that name — "Port N" is for numbered ports only — has no ifIndex (an
+    /// MR's Interfaces rows are its radios), and its two rows of one Meraki switch fill each other.
+    #[test]
+    fn an_mr_answer_yields_its_wired_port_through_the_same_builders() {
+        let body = serde_json::json!({
+            "sourceMac": "0c:8d:db:00:00:50",
+            "ports": {
+                "wired0": {
+                    "cdp": {
+                        "sourcePort": "wired0",
+                        "platform": "MS120-24",
+                        "deviceId": "0c8ddb000060",
+                        "address": "192.0.2.60",
+                        "portId": "Port 7",
+                        "nativeVlan": 1,
+                        "version": "1",
+                        "capabilities": "Switch",
+                        "managementAddress": "192.0.2.60"
+                    },
+                    "lldp": {
+                        "sourcePort": "wired0",
+                        "systemName": "sw-01",
+                        "systemDescription": "Meraki MS120-24 Cloud Managed Switch",
+                        "chassisId": "0c:8d:db:00:00:60",
+                        "managementVlan": 1,
+                        "portVlan": 1,
+                        "managementAddress": "192.0.2.60",
+                        "portId": "7",
+                        "portDescription": "Port 7",
+                        "systemCapabilities": "S-VLAN Component of a VLAN Bridge"
+                    },
+                    "deviceMac": "0c:8d:db:00:00:60",
+                    "device": {"url": "https://example.com/"}
+                }
+            }
+        });
+        let rows = parse_device_lldp_cdp(&body);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.iter().all(|n| n.local_port == "wired0"));
+        assert!(rows.iter().all(|n| n.local_ifindex.is_none()));
+        assert!(rows
+            .iter()
+            .all(|n| n.remote_mgmt_addr.as_deref() == Some("192.0.2.60")));
+
+        let lldp = rows
+            .iter()
+            .find(|n| n.proto == NeighborProto::Lldp)
+            .expect("the LLDP row");
+        assert_eq!(lldp.remote_sys_name.as_deref(), Some("sw-01"));
+        // The Dashboard's LLDP value is unreadable (決定 10); the CDP row's lends it a role.
+        assert_eq!(lldp.capabilities, [NeighborCapability::Switch]);
+
+        let cdp = rows
+            .iter()
+            .find(|n| n.proto == NeighborProto::Cdp)
+            .expect("the CDP row");
+        assert_eq!(cdp.remote_chassis, "0c:8d:db:00:00:60");
+        assert_eq!(cdp.remote_sys_name.as_deref(), Some("sw-01"));
     }
 
     #[test]

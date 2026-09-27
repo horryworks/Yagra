@@ -667,6 +667,15 @@ pub struct HaPartner {
     pub node_id: Option<Uuid>,
 }
 
+/// An imported MX or MR whose neighbours the sync reads ([`MerakiInventoryRepo::neighbor_read_nodes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeighborReadNode {
+    pub serial: String,
+    pub node: Uuid,
+    /// `appliance` or `wireless`, lowercased.
+    pub product_type: String,
+}
+
 /// A listed Meraki device found by its MAC ([`MerakiInventoryRepo::devices_with_mac`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceWithMac {
@@ -781,19 +790,26 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
-    /// The organization's MX that are nodes here, `(serial, node)` — the appliances whose
-    /// neighbours the sync reads (ADR-181 増分 3). One not imported has nowhere to record them.
-    pub async fn appliance_nodes(&self, org: Uuid) -> anyhow::Result<Vec<(String, Uuid)>> {
+    /// The organization's MX and MR that are nodes here — the devices whose neighbours the sync
+    /// reads one at a time (ADR-181 増分 3, 増分 5). A switch is not among them: its neighbours come
+    /// from the organization-wide listing. One not imported has nowhere to record them.
+    pub async fn neighbor_read_nodes(&self, org: Uuid) -> anyhow::Result<Vec<NeighborReadNode>> {
         let rows = sqlx::query(
-            "SELECT serial, node_id FROM meraki_devices \
-             WHERE org_id = $1 AND lower(product_type) = 'appliance' \
+            "SELECT serial, node_id, lower(product_type) AS product_type FROM meraki_devices \
+             WHERE org_id = $1 AND lower(product_type) IN ('appliance', 'wireless') \
              ORDER BY serial",
         )
         .bind(org)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
-            .map(|r| Ok((r.try_get("serial")?, r.try_get("node_id")?)))
+            .map(|r| {
+                Ok(NeighborReadNode {
+                    serial: r.try_get("serial")?,
+                    node: r.try_get("node_id")?,
+                    product_type: r.try_get("product_type")?,
+                })
+            })
             .collect()
     }
 

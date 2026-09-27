@@ -110,7 +110,9 @@ impl YagraMcp {
                        `capabilities` say what that product is (switch, wlan_ap, router) for a \
                        row whose own capabilities are empty. On a Meraki device a CDP row with no \
                        name carries the name its LLDP row gave the same chassis, and an LLDP row \
-                       the capabilities its CDP row did; local ports read `Port N`. \
+                       the capabilities its CDP row did; local ports read `Port N` (an MR's one \
+                       wired port reads `wired0`). A Meraki switch's, MX's and MR's neighbours \
+                       are all read from the Meraki Dashboard. \
                        `current.mac_vendors` names the IEEE-registered maker of each id the device \
                        labelled a MAC address (on a Meraki switch, which reports no label, each id \
                        shaped like one — six octets, or twelve bare hex digits for a CDP device \
