@@ -18,6 +18,7 @@ import {
   peerOf,
   peerSecondary,
   platformCell,
+  shouldLoadSetupCatalog,
   portVendor,
   merakiOrgPath,
   setupMode,
@@ -427,5 +428,23 @@ describe('the name a neighbour is added under', () => {
 
   it('links a Meraki organization to its page', () => {
     expect(merakiOrgPath('o-1')).toBe('/settings/integrations/meraki/o-1');
+  });
+});
+
+describe('shouldLoadSetupCatalog', () => {
+  const base = { canConfig: true, rowOpen: false, setupPressed: false, alreadyAsked: false };
+
+  it('loads when a row is opened', () => {
+    expect(shouldLoadSetupCatalog({ ...base, rowOpen: true })).toBe(true);
+  });
+
+  it('loads when the button on a phone card is pressed with no row open', () => {
+    expect(shouldLoadSetupCatalog({ ...base, setupPressed: true })).toBe(true);
+  });
+
+  it('does not load before anything is opened, twice, or without the permission', () => {
+    expect(shouldLoadSetupCatalog(base)).toBe(false);
+    expect(shouldLoadSetupCatalog({ ...base, rowOpen: true, alreadyAsked: true })).toBe(false);
+    expect(shouldLoadSetupCatalog({ ...base, setupPressed: true, canConfig: false })).toBe(false);
   });
 });

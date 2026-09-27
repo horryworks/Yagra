@@ -391,3 +391,19 @@ export function setupName(n: Neighbor): string | null {
 export function merakiOrgPath(orgId: string): string {
   return `/settings/integrations/meraki/${encodeURIComponent(orgId)}`;
 }
+
+/**
+ * Whether to read the profile and credential lists the setup panel picks from (ADR-179 増分 7
+ * 決定 3). They are read once, the first time a row is opened or a "Set up monitoring" button is
+ * pressed. The button has to count on its own: on a phone the card opens its panel inside the card
+ * and no table row is ever opened, so keying this on the open row alone left the panel with no
+ * credentials to try.
+ */
+export function shouldLoadSetupCatalog(s: {
+  canConfig: boolean;
+  rowOpen: boolean;
+  setupPressed: boolean;
+  alreadyAsked: boolean;
+}): boolean {
+  return s.canConfig && !s.alreadyAsked && (s.rowOpen || s.setupPressed);
+}

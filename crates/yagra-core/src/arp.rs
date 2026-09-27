@@ -89,6 +89,10 @@ const MAX_DEVICE_TEXT: usize = 255;
     serde::Deserialize,
     utoipa::ToSchema,
 )]
+// No `#[serde(other)] Unknown` on purpose: the only stored copy is `l3_discovered.evidence`, which
+// `evidence_from_document` reads one entry at a time, so an older core drops a newer source's entry
+// alone rather than failing the row. A catch-all variant would reach the OpenAPI document, the
+// WebUI's source list and both locales for no reader that needs it (ADR-179 増分 7 決定 2).
 #[serde(rename_all = "snake_case")]
 pub enum EndpointSource {
     /// A monitored router's ARP or IPv6 neighbour cache.
@@ -525,13 +529,16 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
                     ))
             });
             g.evidence.dedup();
-            g.evidence.truncate(MAX_EVIDENCE_PER_ENDPOINT);
-            // The lowest observer across every source, and the port it saw the endpoint on.
+            // The lowest observer across every source, and the port it saw the endpoint on. Chosen
+            // before the cap: evidence is ordered by source first, so eight ARP lines from higher
+            // node ids would otherwise cut the lowest observer's BGP line and move `via_node` —
+            // which decides who may see the row — to another node (ADR-179 増分 7 決定 1).
             let via = g
                 .evidence
                 .iter()
                 .filter_map(|e| e.via_node.map(|n| (n, e.via_ifindex)))
                 .min_by_key(|(n, _)| *n);
+            g.evidence.truncate(MAX_EVIDENCE_PER_ENDPOINT);
             g.macs.sort();
             g.names.sort_by_key(|n| (n.0, n.1.is_none(), n.1));
             EndpointObservation {
@@ -962,6 +969,42 @@ impl DiscoveredRepo {
     }
 }
 
+/// Read a row's stored evidence document (ADR-179 増分 7 決定 2).
+///
+/// Entries are read one at a time and an entry this core cannot read is dropped on its own: only
+/// the sweep writes the column, so such an entry came from a newer core naming a source this one
+/// does not know, and the entries beside it are still true. Reading the array whole used to lose
+/// all of them to one unknown entry and then claim the row was seen in ARP.
+///
+/// Only a row with no evidence at all — NULL or an empty array, i.e. written before ADR-179 or by
+/// an older core's sweep, which only ever read ARP — gets the ARP line. A row whose entries were
+/// all unreadable gets none: we do not know how it was found, and ARP would be a guess.
+fn evidence_from_document(
+    document: Option<serde_json::Value>,
+    via_node: Option<Uuid>,
+    via_ifindex: Option<u32>,
+) -> Vec<EndpointEvidence> {
+    let entries = match document {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(entries)) => entries,
+        // Not an array: unreachable short of a manual edit, and nothing in it can be trusted.
+        Some(_) => return Vec::new(),
+    };
+    if entries.is_empty() {
+        return vec![EndpointEvidence {
+            source: EndpointSource::Arp,
+            via_node,
+            via_ifindex,
+            port: None,
+            detail: None,
+        }];
+    }
+    entries
+        .into_iter()
+        .filter_map(|e| serde_json::from_value(e).ok())
+        .collect()
+}
+
 /// One `l3_discovered` row, as both readers project it.
 fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DiscoveredEndpoint> {
     let ip: String = row.try_get("ip")?;
@@ -969,23 +1012,12 @@ fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DiscoveredEn
     let via_ifindex = row
         .try_get::<Option<i32>, _>("via_ifindex")?
         .and_then(|v| u32::try_from(v).ok());
-    // A document that will not parse reads as no evidence rather than failing the page: only the
-    // sweep writes the column, so such a row came from a newer core naming a source this one does
-    // not know — and the fallback below still says truthfully how rows were first found.
-    let mut evidence: Vec<EndpointEvidence> = row
-        .try_get::<Json<Vec<EndpointEvidence>>, _>("evidence")
-        .map(|j| j.0)
-        .unwrap_or_default();
-    if evidence.is_empty() {
-        // Written before ADR-179, or by an older core's sweep, which only ever read ARP.
-        evidence.push(EndpointEvidence {
-            source: EndpointSource::Arp,
-            via_node,
-            via_ifindex,
-            port: None,
-            detail: None,
-        });
-    }
+    let document = row
+        .try_get::<Option<Json<serde_json::Value>>, _>("evidence")
+        .ok()
+        .flatten()
+        .map(|j| j.0);
+    let evidence = evidence_from_document(document, via_node, via_ifindex);
     Ok(DiscoveredEndpoint {
         id: row.try_get("id")?,
         // A row whose address will not parse should not fail the page; `0.0.0.0` is visibly wrong
@@ -1587,6 +1619,71 @@ mod tests {
         );
         assert_eq!(found[0].evidence.len(), MAX_EVIDENCE_PER_ENDPOINT);
         assert_eq!(found[0].evidence[0].via_node, Some(node(1).as_uuid()));
+    }
+
+    #[test]
+    fn the_lowest_observer_is_chosen_before_the_cap_cuts_its_line() {
+        // Eight ARP lines from higher ids sort ahead of the BGP line, so the cap cuts it; the row's
+        // `via_node` must still be the lowest observer, which decides who may see the row.
+        let arp: Vec<(NodeId, ArpSummary)> = (10..=17u128)
+            .map(|n| (node(n), summary(&[(1, "192.0.2.71")])))
+            .collect();
+        let rts = [routing(node(2), &[(RoutingProto::Bgp, "192.0.2.71")])];
+        let found = candidates(
+            &Signals {
+                arp: &arp,
+                routing: &rts,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        );
+        assert_eq!(found[0].evidence.len(), MAX_EVIDENCE_PER_ENDPOINT);
+        assert!(
+            found[0]
+                .evidence
+                .iter()
+                .all(|e| e.source == EndpointSource::Arp),
+            "the premise: the BGP line is the one the cap cut"
+        );
+        assert_eq!(found[0].via_node, Some(node(2)));
+    }
+
+    #[test]
+    fn one_unreadable_entry_drops_alone_and_is_never_turned_into_arp() {
+        let seen = Some(node(1).as_uuid());
+        let doc = serde_json::json!([
+            { "source": "lldp", "via_node": seen, "port": "Gi1/0/1" },
+            { "source": "some_future_source", "via_node": seen },
+            { "source": "syslog", "detail": "sw-01" },
+        ]);
+        let got = evidence_from_document(Some(doc), seen, Some(3));
+        let sources: Vec<EndpointSource> = got.iter().map(|e| e.source).collect();
+        assert_eq!(sources, vec![EndpointSource::Lldp, EndpointSource::Syslog]);
+
+        // Every entry unreadable: we do not know how it was found, so no ARP guess.
+        let doc = serde_json::json!([{ "source": "some_future_source", "via_node": seen }]);
+        assert!(evidence_from_document(Some(doc), seen, Some(3)).is_empty());
+    }
+
+    #[test]
+    fn only_a_row_with_no_evidence_is_read_as_arp() {
+        let seen = Some(node(1).as_uuid());
+        let arp = vec![EndpointEvidence {
+            source: EndpointSource::Arp,
+            via_node: seen,
+            via_ifindex: Some(3),
+            port: None,
+            detail: None,
+        }];
+        assert_eq!(evidence_from_document(None, seen, Some(3)), arp);
+        assert_eq!(
+            evidence_from_document(Some(serde_json::Value::Null), seen, Some(3)),
+            arp
+        );
+        assert_eq!(
+            evidence_from_document(Some(serde_json::json!([])), seen, Some(3)),
+            arp
+        );
     }
 
     #[test]

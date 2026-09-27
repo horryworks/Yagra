@@ -694,6 +694,12 @@ impl EventRepo {
     /// builds it that way — because one `INSERT … ON CONFLICT` cannot touch the same row twice. A
     /// hostname is kept when a later message carries none: a device that names itself in some
     /// messages and not others still has a name.
+    ///
+    /// A known sender's row is rewritten only when it has not been touched for a minute or it now
+    /// names a different host (ADR-179 増分 7 決定 4). Rewriting `last_seen` on every batch cost a
+    /// PostgreSQL write per batch from a chatty sender, for a column that only ages rows out by the
+    /// day. The minute is a round number, not a measurement. The sweep's watermark moves at most a
+    /// minute late, which ADR-179 決定 6 already accepts. Returns the rows actually written.
     pub async fn record_unattributed_senders(
         &self,
         senders: &[crate::arp::SenderObservation],
@@ -710,7 +716,10 @@ impl EventRepo {
              FROM UNNEST($1::TEXT[], $2::TEXT[], $3::TEXT[]) AS u(ip, kind, host) \
              ON CONFLICT (ip, kind) DO UPDATE SET \
                  hostname = COALESCE(EXCLUDED.hostname, event_senders.hostname), \
-                 last_seen = now()",
+                 last_seen = now() \
+             WHERE event_senders.last_seen < now() - interval '1 minute' \
+                OR (EXCLUDED.hostname IS NOT NULL \
+                    AND EXCLUDED.hostname IS DISTINCT FROM event_senders.hostname)",
         )
         .bind(&ips)
         .bind(&kinds)
@@ -1298,9 +1307,62 @@ mod tests {
             .unwrap(),
             3
         );
-        repo.record_unattributed_senders(&[sender("192.0.2.5", SenderKind::Syslog, None)])
+        let last_seen = |pool: sqlx::PgPool| async move {
+            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                "SELECT last_seen FROM event_senders \
+                 WHERE host(ip) = '192.0.2.5' AND kind = 'syslog'",
+            )
+            .fetch_one(&pool)
             .await
-            .unwrap();
+            .unwrap()
+        };
+        let before = last_seen(pool.clone()).await;
+        // Heard again at once, with no new name: nothing is written (ADR-179 増分 7 決定 4).
+        assert_eq!(
+            repo.record_unattributed_senders(&[sender("192.0.2.5", SenderKind::Syslog, None)])
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            repo.record_unattributed_senders(&[sender(
+                "192.0.2.5",
+                SenderKind::Syslog,
+                Some("fw-01")
+            )])
+            .await
+            .unwrap(),
+            0,
+            "the same name is not a change"
+        );
+        assert_eq!(last_seen(pool.clone()).await, before);
+        // A new name is written at once.
+        assert_eq!(
+            repo.record_unattributed_senders(&[sender(
+                "192.0.2.5",
+                SenderKind::Syslog,
+                Some("fw-02")
+            )])
+            .await
+            .unwrap(),
+            1
+        );
+        // Silent for over a minute, then heard again: last_seen moves.
+        sqlx::query(
+            "UPDATE event_senders SET hostname = 'fw-01', last_seen = now() - interval '2 minutes' \
+             WHERE kind = 'syslog' AND host(ip) = '192.0.2.5'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let aged = last_seen(pool.clone()).await;
+        assert_eq!(
+            repo.record_unattributed_senders(&[sender("192.0.2.5", SenderKind::Syslog, None)])
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(last_seen(pool.clone()).await > aged);
         assert!(repo.senders_watermark().await.unwrap().is_some());
 
         let mut got = repo.unattributed_senders(100).await.unwrap();

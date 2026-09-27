@@ -50,6 +50,7 @@ import {
   merakiOrgPath,
   setupMode,
   setupName,
+  shouldLoadSetupCatalog,
   emptyReason,
   neighborAddressState,
   neighborDetails,
@@ -141,17 +142,27 @@ export function NeighborsTab({ node }: Props) {
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [probeCredIds, setProbeCredIds] = useState<string[]>([]);
   const [catalogAsked, setCatalogAsked] = useState(false);
+  // A "Set up monitoring" button was pressed — on a phone that opens the card, not a row.
+  const [setupPressed, setSetupPressed] = useState(false);
   // Rows added from here, by neighbour key → the name they were added under.
   const [added, setAdded] = useState<Record<string, string | null>>({});
   const [apBusy, setApBusy] = useState<string | null>(null);
   const [apError, setApError] = useState<string | null>(null);
   const setup = useEndpointSetup({ profiles, creds, probeCredIds });
 
-  // Profiles and credentials are read the first time a row is opened, not with the tab: most visits
-  // add nothing. A credential list this caller may not read degrades to "nothing to try", as on
-  // Discovery.
+  // Profiles and credentials are read the first time a row is opened or a setup button pressed, not
+  // with the tab: most visits add nothing. A credential list this caller may not read degrades to
+  // "nothing to try", as on Discovery.
   useEffect(() => {
-    if (!canConfig || openKey == null || catalogAsked) return;
+    if (
+      !shouldLoadSetupCatalog({
+        canConfig,
+        rowOpen: openKey != null,
+        setupPressed,
+        alreadyAsked: catalogAsked,
+      })
+    )
+      return;
     setCatalogAsked(true);
     api.listProfiles().then(setProfiles).catch(() => undefined);
     api
@@ -163,7 +174,7 @@ export function NeighborsTab({ node }: Props) {
         setProbeCredIds(initialCredentialIds(usePrefsStore.getState().discoveryScan, list));
       })
       .catch(() => undefined);
-  }, [canConfig, openKey, catalogAsked]);
+  }, [canConfig, openKey, setupPressed, catalogAsked]);
   const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
 
   const markAdded = (key: string, name: string | null) => {
@@ -291,7 +302,14 @@ export function NeighborsTab({ node }: Props) {
       header: t('neighbors.colMonitoring'),
       width: '150px',
       render: (n) =>
-        canSetUp(n) ? <SetupButton onOpen={() => setOpenKey(neighborKey(n))} /> : null,
+        canSetUp(n) ? (
+          <SetupButton
+            onOpen={() => {
+              setSetupPressed(true);
+              setOpenKey(neighborKey(n));
+            }}
+          />
+        ) : null,
     },
   ];
   for (const c of columns) c.filter = specs[c.key];
@@ -367,6 +385,7 @@ export function NeighborsTab({ node }: Props) {
                   lookups={lookups}
                   setup={setupPanel(n)}
                   canSetUp={canSetUp(n)}
+                  onSetUp={() => setSetupPressed(true)}
                 />
               )}
             />
@@ -513,11 +532,14 @@ function NeighborCard({
   lookups,
   setup,
   canSetUp,
+  onSetUp,
 }: {
   neighbor: Neighbor;
   lookups: NeighborLookups;
   setup?: ReactNode;
   canSetUp: boolean;
+  /** Tells the tab to read what the setup panel picks from; the card opens itself. */
+  onSetUp: () => void;
 }) {
   const { t } = useTranslation('nodes');
   const [open, setOpen] = useState(false);
@@ -529,7 +551,14 @@ function NeighborCard({
         {n.local_port} → {n.remote_port || '—'}
       </span>
       {n.remote_mgmt_addr && <span className="mono nd-nb-line">{n.remote_mgmt_addr}</span>}
-      {canSetUp && <SetupButton onOpen={() => setOpen(true)} />}
+      {canSetUp && (
+        <SetupButton
+          onOpen={() => {
+            onSetUp();
+            setOpen(true);
+          }}
+        />
+      )}
       {primary && <span className="nd-nb-card-platform">{primary}</span>}
       <span className="nd-nb-card-chips">
         <Capabilities neighbor={n} />
