@@ -228,26 +228,7 @@ pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
 /// discarded rather than queued. See `api/nodes.rs::validate_pool_update`, which enforces this on
 /// the assignment side; a pool created here that could not be assigned would be a trap.
 pub(super) fn validate_pool_name(name: &str) -> Result<String, ApiError> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "pool name must not be empty",
-        ));
-    }
-    if trimmed.len() > 63 {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "pool name must be 63 characters or fewer",
-        ));
-    }
-    if yagra_bus::subjects::sanitize_token(trimmed) != trimmed {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "pool name may contain only letters, digits, '_' or '-'",
-        ));
-    }
-    Ok(trimmed.to_owned())
+    super::util::pool_token(name).map(str::to_owned)
 }
 
 /// Trim a supplied description to `None` when it carries nothing.

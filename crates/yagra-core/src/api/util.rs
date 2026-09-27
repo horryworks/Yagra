@@ -413,9 +413,165 @@ pub(crate) fn now_unix_s() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
+/// Longest pool name: one NATS subject token, kept short and human-manageable.
+pub(crate) const POOL_NAME_MAX: usize = 63;
+
+/// **The one rule for a poller pool's name** (ADR-184), wherever an operator types one.
+///
+/// A pool name becomes the `yagra.jobs.<pool>` / assignment subject verbatim, and a forwarding
+/// destination matches it against the pool a poller stamped on each event. So it must already be a
+/// legal single NATS token (`[A-Za-z0-9_-]`): a name that would sanitize to a *different* string
+/// (a dot, a space, a slash) is refused rather than rewritten, because `tokyo.1` publishes where
+/// nothing subscribes and filters on a pool no event carries.
+///
+/// Trims, then refuses an empty name, one that is not a token, and one over [`POOL_NAME_MAX`]
+/// characters. The token check comes first: what survives it is ASCII, so the length counted is
+/// the same in bytes and in characters — three copies of this rule used to disagree on exactly
+/// that (63 characters, 63 bytes, and 64 characters with no token check at all).
+///
+/// Empty is refused here; a caller for which empty means "no pool" checks for it first.
+pub(crate) fn pool_token(raw: &str) -> Result<&str, ApiError> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_pool",
+            "pool name must not be empty",
+        ));
+    }
+    if yagra_bus::subjects::sanitize_token(name) != name {
+        return Err(ApiError::bad_request(
+            "invalid_pool",
+            "pool name may contain only letters, digits, '_' or '-'",
+        ));
+    }
+    if name.len() > POOL_NAME_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_pool",
+            format!("pool name must be at most {POOL_NAME_MAX} characters"),
+        ));
+    }
+    Ok(name)
+}
+
+/// A display name an operator types: trimmed, not empty, at most `max_chars` **characters**.
+///
+/// Characters rather than bytes, because the limit exists to keep the name renderable and a
+/// Japanese name is three bytes a character — two of the four copies this replaced counted bytes,
+/// so a 41-character Japanese source name was refused as "over 120". `code` is the caller's, since
+/// the WebUI branches on it.
+pub(crate) fn bounded_name<'a>(
+    raw: &'a str,
+    max_chars: usize,
+    code: &'static str,
+) -> Result<&'a str, ApiError> {
+    let name = raw.trim();
+    if name.is_empty() || name.chars().count() > max_chars {
+        return Err(ApiError::bad_request(
+            code,
+            format!("name must be 1–{max_chars} characters"),
+        ));
+    }
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refusal(r: Result<&str, ApiError>) -> String {
+        let e = r.expect_err("must be refused");
+        assert_eq!(e.status(), axum::http::StatusCode::BAD_REQUEST);
+        e.code().to_owned()
+    }
+
+    #[test]
+    fn a_pool_name_is_one_subject_token_of_at_most_63_characters() {
+        assert_eq!(pool_token("  site-a_1 ").unwrap(), "site-a_1");
+        assert_eq!(pool_token(&"p".repeat(POOL_NAME_MAX)).unwrap().len(), 63);
+        for bad in ["", "   ", "tokyo.1", "site a", "a/b", "東京"] {
+            assert_eq!(refusal(pool_token(bad)), "invalid_pool", "{bad:?}");
+        }
+        assert_eq!(
+            refusal(pool_token(&"p".repeat(POOL_NAME_MAX + 1))),
+            "invalid_pool"
+        );
+    }
+
+    #[test]
+    fn a_name_is_bounded_in_characters_not_bytes() {
+        // 41 characters, 123 bytes: refused by the byte-counting copies this replaced.
+        let japanese = "名".repeat(41);
+        assert_eq!(
+            bounded_name(&japanese, 120, "invalid_name").unwrap(),
+            japanese
+        );
+        assert_eq!(
+            bounded_name("  sw-01 ", 120, "invalid_name").unwrap(),
+            "sw-01"
+        );
+        assert_eq!(
+            refusal(bounded_name("  ", 120, "invalid_rule")),
+            "invalid_rule"
+        );
+        assert_eq!(
+            refusal(bounded_name(&"x".repeat(121), 120, "invalid_source")),
+            "invalid_source"
+        );
+    }
+
+    /// ADR-184: a pool name and a display name are measured in one place each.
+    ///
+    /// Three pool checks and four name checks had been written by hand and disagreed about bytes,
+    /// characters and whether a pool had to be a subject token at all. The needles are the two
+    /// spellings those copies used, built at run time so this file's text is not a match.
+    #[test]
+    fn no_domain_measures_a_pool_or_name_by_hand() {
+        let files =
+            crate::module_source::files_no_comments(&crate::module_source::roots("src", "api"));
+        assert!(
+            files.len() >= 40,
+            "only {} api files were read",
+            files.len()
+        );
+        let sanitize = format!("{}::sanitize_token(", "subjects");
+        let offenders: Vec<String> = files
+            .iter()
+            .filter(|(name, _)| name != "util.rs")
+            .flat_map(|(name, code)| {
+                let mut found = Vec::new();
+                // A pool compared against its sanitized self. `pollers.rs` does it for a poller
+                // *id*, which is not a pool; that one line is the only allowed use.
+                let uses = code.matches(&sanitize).count();
+                let allowed = usize::from(name == "pollers.rs");
+                if uses > allowed {
+                    found.push(format!("{name}: {sanitize}"));
+                }
+                // A name bounded by a length written as a literal.
+                for line in code.lines().filter(|l| l.contains("name")) {
+                    for spelling in [".len() > 1", ".chars().count() > 1"] {
+                        if line.contains(spelling) {
+                            found.push(format!("{name}: {}", line.trim()));
+                        }
+                    }
+                }
+                found
+            })
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} measure a pool or a name by hand; use `util::pool_token` / \
+             `util::bounded_name`"
+        );
+        // The floor: the callers were found using the helpers, so the search ran over real text.
+        let callers = files
+            .iter()
+            .filter(|(_, code)| {
+                code.contains(&format!("{}(", "pool_token"))
+                    || code.contains(&format!("{}(", "bounded_name"))
+            })
+            .count();
+        assert!(callers >= 6, "only {callers} api files use the helpers");
+    }
 
     #[test]
     fn an_unrestricted_ranking_is_never_reported_as_partial() {

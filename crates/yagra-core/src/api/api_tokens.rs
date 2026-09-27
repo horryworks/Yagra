@@ -109,13 +109,7 @@ fn validate_create<'a>(
     body: &'a CreateApiTokenBody,
     now: DateTime<Utc>,
 ) -> Result<NewToken<'a>, ApiError> {
-    let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > MAX_TOKEN_NAME_CHARS {
-        return Err(ApiError::bad_request(
-            "invalid_name",
-            "token name must be 1–128 characters",
-        ));
-    }
+    let name = super::util::bounded_name(&body.name, MAX_TOKEN_NAME_CHARS, "invalid_name")?;
     // Absent scope means the whole fleet, matching what the UI offers by default.
     let scope = body.scope.clone().unwrap_or(yagra_common::Scope::All);
     // A group scope is accepted here now. It used to be a `400 unsupported_scope`, because nothing

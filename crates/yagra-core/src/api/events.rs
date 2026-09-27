@@ -247,14 +247,7 @@ async fn list_event_sources(
 
 /// A source's name, bounded so it stays renderable in the sources table.
 fn checked_source_name(name: &str) -> Result<&str, ApiError> {
-    let name = name.trim();
-    if name.is_empty() || name.len() > 120 {
-        return Err(ApiError::bad_request(
-            "invalid_source",
-            "name must be 1..=120 characters",
-        ));
-    }
-    Ok(name)
+    super::util::bounded_name(name, 120, "invalid_source")
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -475,10 +468,7 @@ const fn default_event_rule_enabled() -> bool {
 /// nothing for the rest of its life, with no error anywhere.
 fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams<'_>, ApiError> {
     let bad = |msg: String| ApiError::bad_request("invalid_rule", msg);
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 120 {
-        return Err(bad("name must be 1..=120 characters".to_owned()));
-    }
+    let name = super::util::bounded_name(&body.name, 120, "invalid_rule")?;
     // Token vocabularies come from the enums' own `from_token`/`from_stored` (one source, no
     // re-typed lists). `Unknown` is the reader's shrug for a token this build doesn't recognise —
     // an operator cannot author a rule with it, so garbage and the literal "unknown" both reject.

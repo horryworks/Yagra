@@ -2732,9 +2732,6 @@ async fn place_node(
 
 // ── Poll pools (ADR-009/020) ─────────────────────────────────────────────────
 
-/// Longest accepted pool name (a single NATS subject token — keep it short and human-manageable).
-const MAX_POOL_LEN: usize = 63;
-
 /// Validate an operator-supplied pool name for an **update**, returning the DB update instruction:
 /// outer `None` = the field was absent, leave the node's pool unchanged; inner `None` = clear it to
 /// NULL (the node falls back to the `default` pool); inner `Some` = set it.
@@ -2754,19 +2751,7 @@ pub(crate) fn validate_pool_update(
     if trimmed.is_empty() {
         return Ok(Some(None)); // explicit clear → NULL (default pool)
     }
-    if trimmed.chars().count() > MAX_POOL_LEN {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            format!("pool name must be at most {MAX_POOL_LEN} characters"),
-        ));
-    }
-    if yagra_bus::subjects::sanitize_token(trimmed) != trimmed {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "pool name may contain only letters, digits, '_' or '-'",
-        ));
-    }
-    Ok(Some(Some(trimmed.to_owned())))
+    Ok(Some(Some(super::util::pool_token(trimmed)?.to_owned())))
 }
 
 /// [`validate_pool_update`] for a **create** path, where there is no prior value to leave alone:
@@ -3287,8 +3272,9 @@ mod tests {
         assert!(validate_pool_update(Some("east dc".to_owned())).is_err());
         assert!(validate_pool_update(Some("a/b".to_owned())).is_err());
         // Rejected: over the length bound; the bound itself is accepted.
-        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN + 1))).is_err());
-        assert!(validate_pool_update(Some("p".repeat(MAX_POOL_LEN))).is_ok());
+        let max = super::super::util::POOL_NAME_MAX;
+        assert!(validate_pool_update(Some("p".repeat(max + 1))).is_err());
+        assert!(validate_pool_update(Some("p".repeat(max))).is_ok());
     }
 
     #[test]

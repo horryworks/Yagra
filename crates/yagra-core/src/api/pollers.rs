@@ -931,12 +931,7 @@ async fn issue_poller_token(
         .filter(|p| !p.is_empty())
         .or(recorded.as_deref())
         .unwrap_or(yagra_bus::DEFAULT_POOL);
-    if yagra_bus::subjects::sanitize_token(pool) != pool {
-        return Err(ApiError::bad_request(
-            "invalid_pool",
-            "a pool name may contain only letters, digits, dash and underscore",
-        ));
-    }
+    let pool = super::util::pool_token(pool)?;
 
     let token = random_token();
     admin

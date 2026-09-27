@@ -122,10 +122,7 @@ fn validate_forward_body(
 ) -> Result<crate::forward_store::ForwardDestinationInput, ApiError> {
     let bad = ApiError::bad_request;
 
-    let name = body.name.trim().to_owned();
-    if name.is_empty() || name.chars().count() > 120 {
-        return Err(bad("invalid_name", "name must be 1–120 characters"));
-    }
+    let name = super::util::bounded_name(&body.name, 120, "invalid_name")?.to_owned();
     // Two target shapes: `host:port` for the socket kinds, `project.dataset.table` for BigQuery.
     // Validated per kind here so a typo is a 400 with a useful message, rather than a destination
     // that only reports "404" from Google after an admin enables it.
@@ -173,13 +170,17 @@ fn validate_forward_body(
             "rate limit must be greater than zero, or omitted for no limit",
         ));
     }
-    let pool = body
+    // Empty means every pool. A named one is matched against the pool a poller stamps on each
+    // event, so it is held to the rule every pool name is — `tokyo.1` would match nothing, ever.
+    let pool = match body
         .pool
-        .map(|p| p.trim().to_owned())
-        .filter(|p| !p.is_empty());
-    if pool.as_ref().is_some_and(|p| p.chars().count() > 64) {
-        return Err(bad("invalid_pool", "pool must be at most 64 characters"));
-    }
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(p) => Some(super::util::pool_token(p)?.to_owned()),
+        None => None,
+    };
 
     // Compile the filter now so a broken expression is a 400, never a destination that silently
     // drops everything (or, worse, forwards everything) once the dispatcher picks it up.
@@ -762,5 +763,56 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "forward_destinations").await, 1);
+    }
+
+    /// ADR-184: a pool name is held to the rule every pool name is — and a destination stored
+    /// before that rule still lists, so the operator can see it and fix it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_pool_that_is_not_a_subject_token_is_refused_and_an_old_one_still_lists(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let body = |name: &str, pool: &str| {
+            serde_json::json!({
+                "name": name,
+                "source_kind": "syslog",
+                "dest_kind": "syslog_udp",
+                "target": "192.0.2.9:514",
+                "pool": pool,
+            })
+        };
+        let (status, refused) = send(
+            &st,
+            "POST",
+            "/api/v1/forwarding/destinations",
+            &tok,
+            Some(body("dotted", "tokyo.1")),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["error"]["code"], "invalid_pool", "{refused}");
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/forwarding/destinations",
+            &tok,
+            Some(body("plain", "site-a")),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+
+        // What an older core accepted, written straight into the row.
+        sqlx::query("UPDATE forward_destinations SET pool = 'tokyo.1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, listed) =
+            send(&st, "GET", "/api/v1/forwarding/destinations", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{listed}");
+        assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+        assert_eq!(listed[0]["pool"], "tokyo.1", "{listed}");
     }
 }
