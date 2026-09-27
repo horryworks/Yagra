@@ -2064,32 +2064,91 @@ mod tests {
         assert!(!found.contains_key("0c:8d:db:00:00:02"));
     }
 
-    /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a scan. Sequential scans are switched off for the statement so a tiny test table cannot hide a
-    /// query shape the index cannot serve (ADR-180 増分 2, migration 0139).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn the_address_lookup_can_use_the_listed_lan_ip_index(pool: sqlx::PgPool) {
+    /// The planner's choice for `sql` over an inventory of 500 listed devices, statistics taken,
+    /// with sequential scans switched off so a small test table cannot hide a query shape the index
+    /// cannot serve. Rows, not an empty table: 0139's and 0140's indexes are both partial on
+    /// `missing_since IS NULL`, and over no rows the planner costs them the same and may walk the
+    /// one that matches nothing in the predicate (measured: it took the MAC index for a `lan_ip`
+    /// lookup).
+    async fn plan_over_a_filled_inventory(
+        pool: &sqlx::PgPool,
+        sql: &str,
+        bind: &str,
+    ) -> Vec<String> {
+        let cred = crate::pgtest::credential(pool, "meraki-key", "meraki_api").await;
+        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+            .create("123456", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        sqlx::query(
+            "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id, lan_ip, mac)              SELECT $1, 'Q2AA-' || g, 'dev-' || g, 'switch', 'N_1',                     '10.0.' || (g / 256) || '.' || (g % 256),                     '0c:8d:db:00:' || lpad(to_hex(g / 256), 2, '0') || ':' || lpad(to_hex(g % 256), 2, '0')              FROM generate_series(1, 500) g",
+        )
+        .bind(org)
+        .execute(pool)
+        .await
+        .expect("fill");
+        sqlx::query("ANALYZE meraki_inventory")
+            .execute(pool)
+            .await
+            .expect("analyze");
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SET LOCAL enable_seqscan = off")
             .execute(&mut *tx)
             .await
             .unwrap();
-        let rows = sqlx::query(
-            "EXPLAIN SELECT i.serial FROM meraki_inventory i WHERE i.lan_ip = ANY($1) AND i.missing_since IS NULL",
-        )
-        .bind(vec!["192.0.2.1".to_owned()])
-        .fetch_all(&mut *tx)
-        .await
-        .unwrap();
-        let plan: Vec<String> = rows
-            .iter()
+        let rows = sqlx::query(sql)
+            .bind(vec![bind.to_owned()])
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        rows.iter()
             .map(|r| sqlx::Row::get::<String, _>(r, 0))
-            .collect();
+            .collect()
+    }
+
+    /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a
+    /// scan (ADR-180 増分 2, migration 0139).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_address_lookup_can_use_the_listed_lan_ip_index(pool: sqlx::PgPool) {
+        let plan = plan_over_a_filled_inventory(
+            &pool,
+            "EXPLAIN SELECT i.serial FROM meraki_inventory i WHERE i.lan_ip = ANY($1) AND i.missing_since IS NULL",
+            "10.0.1.7",
+        )
+        .await;
         assert!(
             plan.iter()
                 .any(|l| l.contains("meraki_inventory_lan_ip_listed")),
-            "plan does not use the index:\n{}",
-            plan.join("\n")
+            "plan does not use the index:
+{}",
+            plan.join(
+                "
+"
+            )
+        );
+    }
+
+    /// …and which listed device carries a neighbour's chassis MAC, the same way (ADR-180 増分 3,
+    /// migration 0140).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_mac_lookup_can_use_the_listed_mac_index(pool: sqlx::PgPool) {
+        let plan = plan_over_a_filled_inventory(
+            &pool,
+            "EXPLAIN SELECT i.serial FROM meraki_inventory i WHERE i.mac = ANY($1) AND i.missing_since IS NULL",
+            "0c:8d:db:00:01:07",
+        )
+        .await;
+        assert!(
+            plan.iter()
+                .any(|l| l.contains("meraki_inventory_mac_listed")),
+            "plan does not use the index:
+{}",
+            plan.join(
+                "
+"
+            )
         );
     }
 }
