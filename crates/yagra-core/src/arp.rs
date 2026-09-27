@@ -90,8 +90,9 @@ const MAX_DEVICE_TEXT: usize = 255;
     utoipa::ToSchema,
 )]
 // No `#[serde(other)] Unknown` on purpose: the only stored copy is `l3_discovered.evidence`, which
-// `evidence_from_document` reads one entry at a time, so an older core drops a newer source's entry
-// alone rather than failing the row. A catch-all variant would reach the OpenAPI document, the
+// `evidence_from_document` reads one entry at a time, so a core that has that reader (ADR-179 増分 7
+// on) drops a later source's entry alone rather than failing the row. Cores before it read the
+// array whole, so a new source is still unsafe to add while one of those can be running. A catch-all variant would reach the OpenAPI document, the
 // WebUI's source list and both locales for no reader that needs it (ADR-179 増分 7 決定 2).
 #[serde(rename_all = "snake_case")]
 pub enum EndpointSource {
@@ -255,8 +256,9 @@ pub struct DiscoveredEndpoint {
     pub via_ifindex: Option<u32>,
     /// The best name any source gave it.
     pub name: Option<String>,
-    /// Where it was seen. Never empty on a row read back: a row written before evidence existed
-    /// reads as the one ARP observation it was.
+    /// Where it was seen. A row written before evidence existed reads as the one ARP observation it
+    /// was. Empty only when every stored entry names a source this core does not know, or when a
+    /// scoped caller can see none of the observers.
     pub evidence: Vec<EndpointEvidence>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
@@ -369,7 +371,8 @@ struct Gathered {
 /// The row's `via_node` is the lowest observing node id across all its evidence, so the attribution
 /// does not flip between sweeps as the map's redundancy shifts — a row whose `via_node` changed every
 /// five minutes would look like the endpoint was moving. Evidence is ordered by source, then
-/// observer, and capped at [`MAX_EVIDENCE_PER_ENDPOINT`].
+/// observer, and capped at [`MAX_EVIDENCE_PER_ENDPOINT`] — chosen before the cap, and the chosen
+/// observer's first line survives it.
 ///
 /// What each signal contributes, and what it does not:
 /// * **LLDP/CDP** — only a neighbour that advertised a management address (the table is keyed by
@@ -538,7 +541,17 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
                 .iter()
                 .filter_map(|e| e.via_node.map(|n| (n, e.via_ifindex)))
                 .min_by_key(|(n, _)| *n);
-            g.evidence.truncate(MAX_EVIDENCE_PER_ENDPOINT);
+            // …and that observer keeps a line after the cap, so the row's own `via_node` is always
+            // in its evidence: the port the listing shows comes from that line, and a caller who
+            // sees only that node would otherwise get the row with every line filtered away. Its
+            // first line sorts after everything kept, so putting it last keeps the order.
+            let via_line = via
+                .and_then(|(n, _)| g.evidence.iter().position(|e| e.via_node == Some(n)))
+                .filter(|&i| i >= MAX_EVIDENCE_PER_ENDPOINT)
+                .map(|i| g.evidence.remove(i));
+            g.evidence
+                .truncate(MAX_EVIDENCE_PER_ENDPOINT - usize::from(via_line.is_some()));
+            g.evidence.extend(via_line);
             g.macs.sort();
             g.names.sort_by_key(|n| (n.0, n.1.is_none(), n.1));
             EndpointObservation {
@@ -1622,9 +1635,9 @@ mod tests {
     }
 
     #[test]
-    fn the_lowest_observer_is_chosen_before_the_cap_cuts_its_line() {
-        // Eight ARP lines from higher ids sort ahead of the BGP line, so the cap cuts it; the row's
-        // `via_node` must still be the lowest observer, which decides who may see the row.
+    fn the_lowest_observer_is_chosen_before_the_cap_and_keeps_its_line() {
+        // Eight ARP lines from higher ids sort ahead of the BGP line, so the cap would cut it; the
+        // row's `via_node` must still be the lowest observer, which decides who may see the row.
         let arp: Vec<(NodeId, ArpSummary)> = (10..=17u128)
             .map(|n| (node(n), summary(&[(1, "192.0.2.71")])))
             .collect();
@@ -1637,15 +1650,20 @@ mod tests {
             },
             &BTreeSet::new(),
         );
-        assert_eq!(found[0].evidence.len(), MAX_EVIDENCE_PER_ENDPOINT);
-        assert!(
-            found[0]
-                .evidence
-                .iter()
-                .all(|e| e.source == EndpointSource::Arp),
-            "the premise: the BGP line is the one the cap cut"
-        );
         assert_eq!(found[0].via_node, Some(node(2)));
+        let ev = &found[0].evidence;
+        assert_eq!(ev.len(), MAX_EVIDENCE_PER_ENDPOINT);
+        assert_eq!(
+            ev.last().map(|e| (e.source, e.via_node)),
+            Some((EndpointSource::Bgp, Some(node(2).as_uuid()))),
+            "the row's own observer keeps its line, last, in place of the eighth ARP line"
+        );
+        assert_eq!(
+            ev.iter()
+                .filter(|e| e.source == EndpointSource::Arp)
+                .count(),
+            MAX_EVIDENCE_PER_ENDPOINT - 1
+        );
     }
 
     #[test]

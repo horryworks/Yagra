@@ -698,8 +698,8 @@ impl EventRepo {
     /// A known sender's row is rewritten only when it has not been touched for a minute or it now
     /// names a different host (ADR-179 増分 7 決定 4). Rewriting `last_seen` on every batch cost a
     /// PostgreSQL write per batch from a chatty sender, for a column that only ages rows out by the
-    /// day. The minute is a round number, not a measurement. The sweep's watermark moves at most a
-    /// minute late, which ADR-179 決定 6 already accepts. Returns the rows actually written.
+    /// day. The minute is a round number, not a measurement, and the sweep's watermark can move up
+    /// to a minute late for it. Returns the rows actually written.
     pub async fn record_unattributed_senders(
         &self,
         senders: &[crate::arp::SenderObservation],
