@@ -35,6 +35,16 @@ use yagra_common::{
     NeighborIdKind, NeighborProto,
 };
 
+/// The format every set built from these rows carries (ADR-182) — MS from the organization-wide
+/// listing and MX/MR from the per-device read alike, because both are read by this module. Raise it
+/// whenever a field here starts to read differently for the same cabling: core then records the
+/// next read as a change of spelling, not of adjacency. The fingerprint test at the bottom of this
+/// file fails until you do.
+///
+/// `1`: ADR-181 増分 4 — local ports read "Port 7", a CDP peer's bare-hex id is a MAC, a lone
+/// CDP version `1` is dropped, and a port's LLDP and CDP rows lend each other name and roles.
+pub const MERAKI_NEIGHBOR_FORMAT: u32 = 1;
+
 /// The largest page `switch/ports/topology/discovery/byDevice` accepts: "The perPage parameter must
 /// be between 3 and 20" (measured 2026-09-26 with 50, 100 and 1000). 854 switches took 43 pages and
 /// 25 s.
@@ -689,10 +699,48 @@ mod tests {
         assert!(!got.contains_key("Q2SW-0003"));
     }
 
+    /// ADR-182: how this module spells a row is pinned against [`MERAKI_NEIGHBOR_FORMAT`]. When a
+    /// change here makes the same cabling read differently, this fails — raise the format, then
+    /// paste the new keys below. Core marks the first read after the upgrade as a change of
+    /// spelling only because the number moved; forget it and every Meraki device's history gains
+    /// a row nobody can explain. ⚠️ It sees only what these two fixtures exercise.
+    #[test]
+    fn the_spelling_is_pinned_to_the_format() {
+        let switch = NeighborSet::new(parsed()["Q2SW-0001"].clone(), MERAKI_NEIGHBOR_FORMAT);
+        let appliance = NeighborSet::new(parse_device_lldp_cdp(&mx_body()), MERAKI_NEIGHBOR_FORMAT);
+        assert_eq!(
+            (MERAKI_NEIGHBOR_FORMAT, switch.content_key(), appliance.content_key()),
+            (
+                1,
+                concat!(
+                    "v1\nn=lldp\nlp=Port 7\nrc=0c:8d:db:00:00:02\nrp=0\nli=7\npd=eth0\nsn=ap-01\n",
+                    "sd=Meraki MR36 Cloud Managed AP\nma=192.0.2.21\npl=-\ncp=router,switch,igmp\n",
+                    "n=cdp\nlp=Port 7\nrc=0c:8d:db:00:00:02\nrp=Port 0\nli=7\npd=-\nsn=ap-01\nsd=-\n",
+                    "ma=192.0.2.21\npl=Meraki MR36 Cloud Managed AP\ncp=router,switch,igmp\n",
+                    "n=lldp\nlp=Port 8\nrc=core-sw\nrp=Gi1/0/8\nli=8\npd=-\nsn=-\nsd=-\nma=-\npl=-\n",
+                    "cp=\nt=0\n",
+                )
+                .to_owned(),
+                concat!(
+                    "v1\nn=lldp\nlp=Port 3\nrc=00:00:0c:00:00:20\nrp=Gi0/1\nli=-\n",
+                    "pd=GigabitEthernet0/1\nsn=sw-02\nsd=Cisco IOS Software\nma=192.0.2.31\npl=-\n",
+                    "cp=router,bridge\nn=cdp\nlp=Port 3\nrc=sw-02.example.com\n",
+                    "rp=GigabitEthernet0/1\nli=-\npd=-\nsn=-\n",
+                    "sd=Cisco IOS Software, C2960CX Software, Version 15.2(7)E\nma=192.0.2.31\n",
+                    "pl=cisco WS-C2960CX-8PC-L\ncp=switch\nn=cdp\nlp=Port 5\n",
+                    "rc=0c:8d:db:00:00:30\nrp=Port 1\nli=-\npd=-\nsn=-\nsd=-\nma=-\npl=-\ncp=\nt=0\n",
+                )
+                .to_owned(),
+            ),
+            "a Meraki neighbour row reads differently: raise MERAKI_NEIGHBOR_FORMAT and re-pin \
+             these keys (ADR-182)"
+        );
+    }
+
     #[test]
     fn the_rows_survive_canonicalisation_whole() {
         let got = parsed();
-        let set = NeighborSet::new(got["Q2SW-0001"].clone());
+        let set = NeighborSet::new(got["Q2SW-0001"].clone(), 0);
         assert_eq!(set.neighbors.len(), 3);
         assert!(!set.truncated);
     }

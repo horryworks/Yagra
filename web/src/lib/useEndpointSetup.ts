@@ -24,6 +24,7 @@ import {
 } from '../pages/discoveredEndpoints';
 import { mergePreview, type RowDestination } from '../pages/importFiling';
 import { groupOptions } from './nodeTree';
+import { previewBatches } from './previewBatch';
 import { MAX_POLL_FAILURES, POLL_INTERVAL_MS } from '../pages/discoveryScans';
 
 /** The row a setup acts on: an unregistered endpoint's id, its address, and the name a neighbour or
@@ -96,21 +97,41 @@ export function useEndpointSetup({
 
   // Which folder's range holds each address, as the server answered (`importFiling.ts`), and
   // whether any folder has a range at all. Asked once per address; a failed ask says nothing.
+  // Every cell asks on mount, so the asks of one render are gathered and sent together
+  // (`previewBatches`) — one POST for a page, where it was one per row, each an audit row. Only
+  // while the destination files by range: otherwise the answer is never read, and turning it on
+  // re-runs every cell's ask through the new callback.
   const [destinations, setDestinations] = useState<Map<string, RowDestination>>(new Map());
   const [anyPrefixes, setAnyPrefixes] = useState<boolean | undefined>(undefined);
   const asked = useRef(new Set<string>());
-  const ensureDestination = useCallback((ip: string) => {
-    if (!ip || asked.current.has(ip)) return;
-    asked.current.add(ip);
-    api
-      .previewDiscoveryImport([ip])
-      .then((preview) => {
-        if (!alive.current) return;
-        setDestinations((cur) => mergePreview(cur, preview));
-        setAnyPrefixes(preview.any_prefixes);
-      })
-      .catch(() => undefined);
-  }, []);
+  const pending = useRef<string[]>([]);
+  const flushQueued = useRef(false);
+  const fileByPrefix = destination.fileByPrefix;
+  const ensureDestination = useCallback(
+    (ip: string) => {
+      if (!fileByPrefix || !ip || asked.current.has(ip)) return;
+      pending.current.push(ip);
+      if (flushQueued.current) return;
+      flushQueued.current = true;
+      queueMicrotask(() => {
+        flushQueued.current = false;
+        const batches = previewBatches(pending.current, asked.current);
+        pending.current = [];
+        for (const batch of batches) {
+          for (const a of batch) asked.current.add(a);
+          api
+            .previewDiscoveryImport(batch)
+            .then((preview) => {
+              if (!alive.current) return;
+              setDestinations((cur) => mergePreview(cur, preview));
+              setAnyPrefixes(preview.any_prefixes);
+            })
+            .catch(() => undefined);
+        }
+      });
+    },
+    [fileByPrefix],
+  );
   const paths = useMemo(
     () => new Map(groupOptions(groups).map((o) => [o.id, o.path])),
     [groups],

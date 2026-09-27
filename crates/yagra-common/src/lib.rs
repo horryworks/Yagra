@@ -101,6 +101,7 @@ pub use neighbor::{
     render_network_address, render_port_id, render_port_id_kind, render_text, Neighbor,
     NeighborCapability, NeighborColumn, NeighborIdKind, NeighborProto, NeighborSet,
     MAX_NEIGHBORS_PER_NODE, MAX_NEIGHBOR_WALK_ROWS, METRIC_SNMP_NEIGHBOR_COUNT,
+    SNMP_NEIGHBOR_FORMAT,
 };
 pub use node::Node;
 pub use node_kind::{NodeKind, NodeRows};

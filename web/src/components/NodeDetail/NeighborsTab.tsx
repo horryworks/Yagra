@@ -831,19 +831,35 @@ function History({ changes, loaded }: { changes: NeighborChange[]; loaded: boole
             // where showing every link as new is the honest reading of what we loaded.
             const previous = changes[i + 1]?.neighbors ?? null;
             const rows = diffNeighbors(previous, c.neighbors);
+            const diff = (
+              <ul className="nd-nb-diff">
+                {rows.map((r) => (
+                  <DiffLine key={`${r.kind}-${neighborKey(r.neighbor)}`} row={r} />
+                ))}
+                {rows.length === 0 && (
+                  <li className="nd-muted">{t('neighbors.diff.unchangedDetail')}</li>
+                )}
+              </ul>
+            );
             return (
               <li key={c.id} className="nd-nb-entry">
                 <div className="nd-nb-when" title={c.at}>
                   {relativeTime(c.at)}
                 </div>
-                <ul className="nd-nb-diff">
-                  {rows.map((r) => (
-                    <DiffLine key={`${r.kind}-${neighborKey(r.neighbor)}`} row={r} />
-                  ))}
-                  {rows.length === 0 && (
-                    <li className="nd-muted">{t('neighbors.diff.unchangedDetail')}</li>
-                  )}
-                </ul>
+                {c.format_changed ? (
+                  // ADR-182: the collector respelled its rows, so every port reads as unplugged
+                  // and plugged back in. Say so first, and keep that list folded — a real change
+                  // read at the same moment is still in it for whoever opens it.
+                  <div className="nd-nb-respelled">
+                    <p className="nd-nb-respelled-note">{t('neighbors.respelled.note')}</p>
+                    <details>
+                      <summary>{t('neighbors.respelled.show', { lines: rows.length })}</summary>
+                      {diff}
+                    </details>
+                  </div>
+                ) : (
+                  diff
+                )}
               </li>
             );
           })}

@@ -141,7 +141,7 @@ pub async fn execute_meraki(
         // A switch's neighbours (ADR-181), canonicalized and capped exactly as a walked set is.
         // No `snmp_neighbor_count` beside them: that reading means "the last SNMP walk" (決定 6).
         let neighbors = obs.neighbors.map(|rows| {
-            let set = NeighborSet::new(rows);
+            let set = NeighborSet::new(rows, yagra_transport::MERAKI_NEIGHBOR_FORMAT);
             if set.truncated {
                 metrics::counter!("yagra_neighbor_rows_truncated_total").increment(1);
                 tracing::warn!(

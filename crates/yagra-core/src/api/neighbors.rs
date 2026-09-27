@@ -26,7 +26,7 @@ use crate::repo::AddressMatch;
 use axum::extract::{Path, Query};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{NeighborCapability, NeighborIdKind, NeighborSet};
@@ -243,6 +243,10 @@ pub(crate) struct NeighborChange {
     neighbors: NeighborSet,
     /// The content key this replaced; `null` marks the first observation ever recorded for the node.
     prev_neighbor_key: Option<String>,
+    /// `true` when the collector changed how it writes these rows (after an upgrade, ADR-182) —
+    /// a port read `7` and now reads `Port 7`, say. The row is a change of spelling, not of
+    /// cabling; a real change read at the same moment is still in it.
+    format_changed: bool,
 }
 
 /// Keyset cursor for the next page (ADR-019 — never OFFSET).
@@ -410,9 +414,11 @@ pub(crate) async fn current_neighbors(
         .collect();
     // Rows on the list the caller cannot see (ADR-179 増分 9): asked only for a scoped caller, and
     // only about addresses nothing else explains — an unrestricted caller already sees every row.
+    // An address a node claims (visible or not) is never Unregistered, so no blocker is read for it.
+    let claimed: HashSet<IpAddr> = claims.iter().map(|c| c.address).collect();
     let unexplained: Vec<IpAddr> = addresses
         .iter()
-        .filter(|ip| !listed.contains_key(ip) && !managed.contains_key(ip))
+        .filter(|ip| !listed.contains_key(ip) && !managed.contains_key(ip) && !claimed.contains(ip))
         .copied()
         .collect();
     let listed_elsewhere: BTreeSet<IpAddr> = if scope.is_all() || unexplained.is_empty() {
@@ -712,6 +718,7 @@ pub(crate) async fn neighbor_history(
                 at: r.at.to_rfc3339(),
                 neighbors: r.set,
                 prev_neighbor_key: r.prev_neighbor_key,
+                format_changed: r.format_changed,
             })
             .collect(),
         next,
@@ -1057,9 +1064,7 @@ mod tests {
         assert!(!neighbors::interval_in_bounds(cfg.min_interval_secs - 1));
         assert!(!neighbors::interval_in_bounds(cfg.max_interval_secs + 1));
     }
-    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
-    /// The adjacency settings are written and read back as they were sent.
     /// ADR-179 増分 9: a neighbour on the list only through a node outside the caller's folders
     /// says so to that caller, and is simply listed for one who sees everything; one on no list
     /// says it is not listed yet.
@@ -1089,10 +1094,13 @@ mod tests {
         crate::neighbors::NeighborRepo::new(pool.clone())
             .record_observation(
                 here,
-                &NeighborSet::new(vec![
-                    heard("far-01", "198.51.100.20"),
-                    heard("far-02", "198.51.100.21"),
-                ]),
+                &NeighborSet::new(
+                    vec![
+                        heard("far-01", "198.51.100.20"),
+                        heard("far-02", "198.51.100.21"),
+                    ],
+                    0,
+                ),
             )
             .await
             .expect("record");
@@ -1149,6 +1157,9 @@ mod tests {
         );
     }
 
+    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
+
+    /// The adjacency settings are written and read back as they were sent.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn adjacency_settings_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
@@ -1371,13 +1382,16 @@ mod peer_tests {
 
     #[test]
     fn only_ids_the_device_labelled_as_macs_are_looked_up() {
-        let set = NeighborSet::new(vec![
-            neighbor("00:00:0c:12:34:56", Some(NeighborIdKind::Mac)),
-            // Looks like a MAC, but was text on the wire.
-            neighbor("00:50:56:ab:cd:ef", Some(NeighborIdKind::Text)),
-            // Collected before the kind was recorded.
-            neighbor("00:50:56:ab:cd:00", None),
-        ]);
+        let set = NeighborSet::new(
+            vec![
+                neighbor("00:00:0c:12:34:56", Some(NeighborIdKind::Mac)),
+                // Looks like a MAC, but was text on the wire.
+                neighbor("00:50:56:ab:cd:ef", Some(NeighborIdKind::Text)),
+                // Collected before the kind was recorded.
+                neighbor("00:50:56:ab:cd:00", None),
+            ],
+            0,
+        );
         let found = mac_vendors(&set);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].mac, "00:00:0c:12:34:56");
@@ -1461,12 +1475,10 @@ mod peer_tests {
         same_switch.capabilities = vec![NeighborCapability::Switch];
         let mut silent = neighbor("sw-10", Some(NeighborIdKind::Text));
         silent.remote_mgmt_addr = Some("192.0.2.12".to_owned());
-        let got = end_station_only(&NeighborSet::new(vec![
-            phone,
-            switch_side,
-            same_switch,
-            silent,
-        ]));
+        let got = end_station_only(&NeighborSet::new(
+            vec![phone, switch_side, same_switch, silent],
+            0,
+        ));
         assert_eq!(
             got.into_iter().collect::<Vec<_>>(),
             ["192.0.2.10".parse::<IpAddr>().unwrap()]
@@ -1482,7 +1494,7 @@ mod peer_tests {
         let mut addressed = neighbor("0c:8d:db:00:00:03", Some(NeighborIdKind::Mac));
         addressed.remote_mgmt_addr = Some("192.0.2.7".to_owned());
         let named = neighbor("sw-01", Some(NeighborIdKind::Text));
-        let got = unaddressed_mac_chassis(&NeighborSet::new(vec![bare, junk, addressed, named]));
+        let got = unaddressed_mac_chassis(&NeighborSet::new(vec![bare, junk, addressed, named], 0));
         assert_eq!(
             got.into_iter().collect::<Vec<_>>(),
             ["0c:8d:db:00:00:01", "0c:8d:db:00:00:02"]
@@ -1568,7 +1580,7 @@ mod peer_tests {
         n.remote_mgmt_addr = Some("not-an-address".to_owned());
         let mut m = neighbor("sw-02", Some(NeighborIdKind::Text));
         m.remote_mgmt_addr = Some("192.0.2.5".to_owned());
-        let got = advertised_addresses(&NeighborSet::new(vec![n, m]));
+        let got = advertised_addresses(&NeighborSet::new(vec![n, m], 0));
         assert_eq!(got.keys().collect::<Vec<_>>(), vec!["192.0.2.5"]);
     }
 }

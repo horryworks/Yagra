@@ -493,11 +493,20 @@ describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)',
     expect(setupMode(listed, lookups)).toEqual({ kind: 'meraki', orgId: 'o-1', orgName: 'Acme' });
   });
 
-  it('never matches a MAC the row did not label as one, or a row that sent an address', () => {
+  it('never matches a MAC the row did not label as one, or a row whose address the server judged', () => {
     expect(neighborAddressState(row({ remote_chassis_kind: 'text' }), lookups)).toBe('none');
     expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.1' }), lookups)).toBe('address');
-    expect(peerMatchedBy(row({ remote_mgmt_addr: '192.0.2.77' }), lookups)).toBeNull();
     expect(neighborAddressState(row({ remote_chassis: '0c:8d:db:00:00:03' }), lookups)).toBe('none');
+  });
+
+  // The server reads an address that does not parse as none, and matches the row on its chassis
+  // instead (`unaddressed_mac_chassis`). The client must not throw that verdict away because the
+  // field is not empty.
+  it('matches on the MAC when the advertised address is not one the server could read', () => {
+    const junk = row({ remote_mgmt_addr: 'not-an-address' });
+    expect(peerMatchedBy(junk, lookups)).toBe('mac');
+    expect(peerOf(junk, lookups)?.node_id).toBe('n-9');
+    expect(neighborAddressState(junk, lookups)).toBe('node');
   });
 
   it('shows what the listing says the device is only where the row advertised nothing (ADR-181 増分 4)', () => {

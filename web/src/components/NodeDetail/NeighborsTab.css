@@ -250,6 +250,29 @@
   min-width: 0;
 }
 
+.nd-nb-respelled {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-sm);
+  min-width: 0;
+}
+
+.nd-nb-respelled-note {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.nd-nb-respelled summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
+.nd-nb-respelled details[open] summary {
+  margin-bottom: var(--space-1);
+}
+
 .nd-nb-diffline {
   display: flex;
   align-items: baseline;

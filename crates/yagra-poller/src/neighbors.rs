@@ -89,7 +89,7 @@ pub fn assemble(columns: &[SnmpNeighborColumn], rows: &[SnmpInstanceRow]) -> Nei
             neighbors.push(n);
         }
     }
-    NeighborSet::new(neighbors)
+    NeighborSet::new(neighbors, yagra_common::SNMP_NEIGHBOR_FORMAT)
 }
 
 /// `ifIndex` → the local interface's name, from `cdpInterfaceName` (indexed by `ifIndex` alone).
@@ -570,6 +570,34 @@ mod tests {
         let protos: Vec<_> = set.neighbors.iter().map(|n| n.proto).collect();
         assert!(protos.contains(&NeighborProto::Lldp));
         assert!(protos.contains(&NeighborProto::Cdp));
+    }
+
+    /// ADR-182: how a walk spells a row is pinned against `SNMP_NEIGHBOR_FORMAT`. When a change here
+    /// makes the same cabling read differently, this fails — raise the format in `yagra-common`,
+    /// then paste the new key below. Core marks the first walk after the upgrade as a change of
+    /// spelling only because the number moved; forget it and every walked node's history gains a
+    /// row nobody can explain. ⚠️ It sees only what this fixture exercises.
+    #[test]
+    fn the_spelling_is_pinned_to_the_format() {
+        let mut rows = lldp_rows(1000, 1);
+        rows.extend(lldp_mgmt_rows(1000, 1, &["192.0.2.10"]));
+        rows.extend(cdp_rows());
+        let set = assemble(&columns(), &rows);
+        assert_eq!(
+            (yagra_common::SNMP_NEIGHBOR_FORMAT, set.content_key()),
+            (
+                0,
+                concat!(
+                    "v1\nn=lldp\nlp=Gi0/3\nrc=00:1b:54:ff:00:9a\nrp=Gi1/0/24\nli=-\npd=-\n",
+                    "sn=core-sw-01\nsd=Cisco IOS 15.2\nma=192.0.2.10\npl=-\ncp=router,bridge\n",
+                    "n=cdp\nlp=GigabitEthernet0/7\nrc=edge-rtr-02\nrp=FastEthernet0/1\nli=7\npd=-\n",
+                    "sn=-\nsd=-\nma=192.168.1.9\npl=cisco WS-C2960\ncp=router,switch\nt=0\n",
+                )
+                .to_owned()
+            ),
+            "a walked neighbour row reads differently: raise SNMP_NEIGHBOR_FORMAT and re-pin this \
+             key (ADR-182)"
+        );
     }
 
     /// A `cdpInterfaceName` row is indexed by ifIndex alone — the same shape as the LLDP naming

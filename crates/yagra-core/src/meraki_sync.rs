@@ -815,7 +815,10 @@ impl MerakiSync {
                 .insert(node, Instant::now());
             let outcome = match answer {
                 Ok(rows) => {
-                    let set = yagra_common::NeighborSet::new(rows);
+                    let set = yagra_common::NeighborSet::new(
+                        rows,
+                        yagra_transport::MERAKI_NEIGHBOR_FORMAT,
+                    );
                     match self.neighbors.record_observation(node, &set).await {
                         Ok(()) => "ok",
                         Err(e) => {
@@ -1963,7 +1966,8 @@ mod tests {
             async move {
                 let node = pgtest::node(&pool, name, n, None).await;
                 sqlx::query(
-                    "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type)                      VALUES ($1, $2, $3, 'N_1', $4)",
+                    "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+                     VALUES ($1, $2, $3, 'N_1', $4)",
                 )
                 .bind(node)
                 .bind(org)

@@ -747,7 +747,7 @@ impl MerakiInventoryRepo {
     /// the Dashboard answers) can say whether the device on that port is monitored. `macs` are in
     /// the form [`SeenDevice::mac`] is stored in. A device the last listing no longer contained is
     /// left out, as in [`Self::devices_at`]. Not narrowed by scope: the caller decides from
-    /// [`DeviceWithMac::node_group`] what it may show.
+    /// [`MacNode::group_id`] what it may show.
     pub async fn devices_with_mac(
         &self,
         macs: &[String],
@@ -793,11 +793,19 @@ impl MerakiInventoryRepo {
     /// The organization's MX and MR that are nodes here — the devices whose neighbours the sync
     /// reads one at a time (ADR-181 増分 3, 増分 5). A switch is not among them: its neighbours come
     /// from the organization-wide listing. One not imported has nowhere to record them.
+    ///
+    /// A device the organization's last complete listing no longer contained (`missing_since`) is
+    /// left out: asking about it spends a Dashboard request and a slot of the read's budget on a
+    /// 404. Its node keeps the neighbours last read until it is listed again.
     pub async fn neighbor_read_nodes(&self, org: Uuid) -> anyhow::Result<Vec<NeighborReadNode>> {
         let rows = sqlx::query(
-            "SELECT serial, node_id, lower(product_type) AS product_type FROM meraki_devices \
-             WHERE org_id = $1 AND lower(product_type) IN ('appliance', 'wireless') \
-             ORDER BY serial",
+            "SELECT d.serial, d.node_id, lower(d.product_type) AS product_type \
+             FROM meraki_devices d \
+             WHERE d.org_id = $1 AND lower(d.product_type) IN ('appliance', 'wireless') \
+               AND NOT EXISTS (SELECT 1 FROM meraki_inventory i \
+                               WHERE i.org_id = d.org_id AND i.serial = d.serial \
+                                 AND i.missing_since IS NOT NULL) \
+             ORDER BY d.serial",
         )
         .bind(org)
         .fetch_all(&self.pool)
@@ -2103,7 +2111,11 @@ mod tests {
             .await
             .expect("org");
         sqlx::query(
-            "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id, lan_ip, mac)              SELECT $1, 'Q2AA-' || g, 'dev-' || g, 'switch', 'N_1',                     '10.0.' || (g / 256) || '.' || (g % 256),                     '0c:8d:db:00:' || lpad(to_hex(g / 256), 2, '0') || ':' || lpad(to_hex(g % 256), 2, '0')              FROM generate_series(1, 500) g",
+            "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id, lan_ip, mac) \
+             SELECT $1, 'Q2AA-' || g, 'dev-' || g, 'switch', 'N_1', \
+                    '10.0.' || (g / 256) || '.' || (g % 256), \
+                    '0c:8d:db:00:' || lpad(to_hex(g / 256), 2, '0') || ':' || lpad(to_hex(g % 256), 2, '0') \
+             FROM generate_series(1, 500) g",
         )
         .bind(org)
         .execute(pool)
@@ -2142,12 +2154,8 @@ mod tests {
         assert!(
             plan.iter()
                 .any(|l| l.contains("meraki_inventory_lan_ip_listed")),
-            "plan does not use the index:
-{}",
-            plan.join(
-                "
-"
-            )
+            "plan does not use the index:\n{}",
+            plan.join("\n")
         );
     }
 
@@ -2165,12 +2173,73 @@ mod tests {
         assert!(
             plan.iter()
                 .any(|l| l.contains("meraki_inventory_mac_listed")),
-            "plan does not use the index:
-{}",
-            plan.join(
-                "
-"
+            "plan does not use the index:\n{}",
+            plan.join("\n")
+        );
+    }
+
+    /// The MX and MR whose neighbours a sync reads leave out a device the organization's last
+    /// complete listing no longer contained: asking about it would spend a Dashboard request on a
+    /// 404. A switch is never among them.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_missing_from_the_listing_is_not_read_for_neighbours(pool: sqlx::PgPool) {
+        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+            .create("123456", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        for (i, (serial, product)) in [
+            ("Q2-A", "appliance"),
+            ("Q2-W", "wireless"),
+            ("Q2-S", "switch"),
+            ("Q2-G", "wireless"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let node = crate::pgtest::node(&pool, serial, u8::try_from(i + 1).unwrap(), None).await;
+            sqlx::query(
+                "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id) \
+                 VALUES ($1, $2, $2, $3, 'N_1')",
             )
+            .bind(org)
+            .bind(serial)
+            .bind(product)
+            .execute(&pool)
+            .await
+            .expect("list");
+            sqlx::query(
+                "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+                 VALUES ($1, $2, $3, 'N_1', $4)",
+            )
+            .bind(node)
+            .bind(org)
+            .bind(serial)
+            .bind(product)
+            .execute(&pool)
+            .await
+            .expect("bind");
+        }
+        let repo = MerakiInventoryRepo::new(pool.clone());
+        let serials = |nodes: Vec<NeighborReadNode>| -> Vec<String> {
+            nodes.into_iter().map(|n| n.serial).collect()
+        };
+        assert_eq!(
+            serials(repo.neighbor_read_nodes(org).await.expect("read")),
+            ["Q2-A", "Q2-G", "Q2-W"],
+        );
+
+        let gone = SyncPlan {
+            writes: vec![],
+            newly_missing: vec!["Q2-G".into()],
+            follows: vec![],
+        };
+        repo.apply(org, &gone).await.expect("apply");
+        assert_eq!(
+            serials(repo.neighbor_read_nodes(org).await.expect("read")),
+            ["Q2-A", "Q2-W"],
+            "a device the listing no longer contains is still read"
         );
     }
 }

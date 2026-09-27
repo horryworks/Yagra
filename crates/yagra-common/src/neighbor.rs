@@ -380,15 +380,32 @@ pub struct NeighborSet {
     /// silently swallowed — a truncated view that looks complete is worse than no view.
     #[serde(default)]
     pub truncated: bool,
+    /// How the producer spelled these rows (ADR-182): a number the producer raises whenever it
+    /// changes how it writes a field — a port name, an id's notation — without the cabling having
+    /// changed. Core compares it with the stored set's, and a set whose key moved **and** whose
+    /// format moved is recorded as a change of spelling, not a change of adjacency. Absent (an
+    /// older poller, a set stored before this existed) reads as `0`.
+    ///
+    /// Not part of [`Self::content_key`]: a format raised for one producer must not re-key the
+    /// sets whose rows did not change.
+    #[serde(default)]
+    pub format: u32,
 }
 
+/// The format [`NeighborSet::format`] carries for a set assembled from an SNMP LLDP/CDP walk
+/// (ADR-182). Raise it when the walk's parsing changes how a field reads; the fingerprint test in
+/// `yagra-poller/src/neighbors.rs` fails until you do.
+pub const SNMP_NEIGHBOR_FORMAT: u32 = 0;
+
 impl NeighborSet {
-    /// Build a set from observed records, canonicalizing immediately.
+    /// Build a set from observed records, canonicalizing immediately. `format` is the producer's
+    /// [`NeighborSet::format`] — every producer names its own, so none can forget to.
     #[must_use]
-    pub fn new(neighbors: Vec<Neighbor>) -> Self {
+    pub fn new(neighbors: Vec<Neighbor>, format: u32) -> Self {
         let mut set = Self {
             neighbors,
             truncated: false,
+            format,
         };
         set.canonicalize();
         set
@@ -440,8 +457,9 @@ impl NeighborSet {
     /// change on that port.
     ///
     /// ⚠️ This encoding is effectively a wire format. Changing it re-keys every stored set and emits
-    /// exactly one spurious change row per node on the first poll after the upgrade. It is
-    /// versioned (`v1` first line); bump the version and say so in RELEASE_NOTES if it changes. It
+    /// one change row per node on the first poll after the upgrade. It is versioned (`v1` first
+    /// line): bump the version when it changes, and core records that row as a change of spelling
+    /// rather than of adjacency, exactly as for a raised [`Self::format`] (ADR-182). It
     /// is built by hand rather than through `serde_json` precisely so serde's output cannot drift
     /// underneath it.
     ///
@@ -870,7 +888,7 @@ mod tests {
         a.capabilities = vec![NeighborCapability::Bridge, NeighborCapability::Router];
         let mut b = lldp("Gi0/2", "aa:bb:cc:dd:ee:02", "Gi1/0/25");
         b.remote_sys_name = Some("core-sw-02".into());
-        NeighborSet::new(vec![a, b])
+        NeighborSet::new(vec![a, b], 0)
     }
 
     fn key_of(mut set: NeighborSet) -> String {
@@ -886,6 +904,31 @@ mod tests {
     /// The guarantee is structural (neither is a field of [`Neighbor`]); this pins the observable
     /// consequence: two walks of an unchanged network, whose rows the agent returned in a different
     /// order, produce the same key.
+    /// ADR-182, N-1: a set from a poller that predates `format` reads as format 0, and one from a
+    /// newer poller with a field this build does not know still reads.
+    #[test]
+    fn a_set_tolerates_missing_and_unknown_fields() {
+        let old: NeighborSet =
+            serde_json::from_str(r#"{"neighbors": [], "truncated": false}"#).expect("old set");
+        assert_eq!(old.format, 0);
+        let newer: NeighborSet =
+            serde_json::from_str(r#"{"neighbors": [], "format": 3, "later": true}"#)
+                .expect("newer set");
+        assert_eq!(newer.format, 3);
+        let back: NeighborSet =
+            serde_json::from_str(&serde_json::to_string(&newer).expect("encode")).expect("decode");
+        assert_eq!(back, newer, "the format does not survive a round trip");
+    }
+
+    /// The format is not content: a raised format with unchanged rows keeps the key, so core
+    /// appends nothing for a producer whose rows did not actually change (ADR-182).
+    #[test]
+    fn content_key_ignores_the_format() {
+        let mut raised = sample();
+        raised.format = 7;
+        assert_eq!(key_of(sample()), key_of(raised));
+    }
+
     #[test]
     fn content_key_ignores_row_order() {
         let forward = sample();
@@ -1000,21 +1043,27 @@ mod tests {
 
     #[test]
     fn canonicalize_drops_rows_with_no_identity() {
-        let set = NeighborSet::new(vec![
-            lldp("", "aa:bb:cc:dd:ee:01", "Gi1/0/24"), // no local port
-            lldp("Gi0/2", "", ""),                     // no remote id at all
-            lldp("Gi0/3", "aa:bb:cc:dd:ee:03", ""),    // chassis only — usable
-        ]);
+        let set = NeighborSet::new(
+            vec![
+                lldp("", "aa:bb:cc:dd:ee:01", "Gi1/0/24"), // no local port
+                lldp("Gi0/2", "", ""),                     // no remote id at all
+                lldp("Gi0/3", "aa:bb:cc:dd:ee:03", ""),    // chassis only — usable
+            ],
+            0,
+        );
         assert_eq!(set.len(), 1);
         assert_eq!(set.neighbors[0].local_port, "Gi0/3");
     }
 
     #[test]
     fn canonicalize_collapses_repeated_rows() {
-        let set = NeighborSet::new(vec![
-            lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
-            lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
-        ]);
+        let set = NeighborSet::new(
+            vec![
+                lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
+                lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
+            ],
+            0,
+        );
         assert_eq!(set.len(), 1);
     }
 
@@ -1023,10 +1072,13 @@ mod tests {
     /// hostname name the same box.
     #[test]
     fn the_same_link_seen_by_both_protocols_is_kept_twice() {
-        let set = NeighborSet::new(vec![
-            lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
-            Neighbor::new(NeighborProto::Cdp, "Gi0/1", "core-sw-01", "Gi1/0/24"),
-        ]);
+        let set = NeighborSet::new(
+            vec![
+                lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "Gi1/0/24"),
+                Neighbor::new(NeighborProto::Cdp, "Gi0/1", "core-sw-01", "Gi1/0/24"),
+            ],
+            0,
+        );
         assert_eq!(set.len(), 2);
     }
 
@@ -1042,20 +1094,20 @@ mod tests {
             })
             .rev() // reversed input must still retain the same set
             .collect();
-        let set = NeighborSet::new(many.clone());
+        let set = NeighborSet::new(many.clone(), 0);
         assert_eq!(set.len(), MAX_NEIGHBORS_PER_NODE);
         assert!(set.truncated, "overflow must be reported, never silent");
 
         let mut forward = many;
         forward.reverse();
-        assert_eq!(NeighborSet::new(forward).neighbors, set.neighbors);
+        assert_eq!(NeighborSet::new(forward, 0).neighbors, set.neighbors);
     }
 
     #[test]
     fn canonicalize_clamps_long_device_text() {
         let mut n = lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "e1");
         n.remote_sys_desc = Some("x".repeat(4000));
-        let set = NeighborSet::new(vec![n]);
+        let set = NeighborSet::new(vec![n], 0);
         assert_eq!(
             set.neighbors[0].remote_sys_desc.as_deref().map(str::len),
             Some(MAX_FIELD_CHARS)
@@ -1066,7 +1118,7 @@ mod tests {
     fn clamping_never_splits_a_multibyte_character() {
         let mut n = lldp("Gi0/1", "aa:bb:cc:dd:ee:01", "e1");
         n.remote_sys_desc = Some("あ".repeat(400));
-        let set = NeighborSet::new(vec![n]);
+        let set = NeighborSet::new(vec![n], 0);
         let desc = set.neighbors[0].remote_sys_desc.clone().unwrap();
         assert_eq!(desc.chars().count(), MAX_FIELD_CHARS);
         assert!(desc.chars().all(|c| c == 'あ'));

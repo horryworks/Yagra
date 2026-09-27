@@ -236,11 +236,19 @@ export function neighborLookups(
   };
 }
 
-/** The Meraki device a row with no management address is, found by its chassis MAC (ADR-180
- *  増分 3), or `null`. A row that advertised an address is never matched this way — its address
- *  decides. */
+/** Whether the server judged this row by its management address: it advertised one and `peers`
+ *  carries a verdict on it. An address the server could not read (text that is not an address) has
+ *  no verdict there, and the server matched that row on its chassis instead — so this asks the
+ *  server's answer rather than repeating its parser. */
+function judgedByAddress(n: Neighbor, lookups: NeighborLookups): boolean {
+  return !!n.remote_mgmt_addr && lookups.peers.has(n.remote_mgmt_addr);
+}
+
+/** The Meraki device a row with no usable management address is, found by its chassis MAC
+ *  (ADR-180 増分 3), or `null`. A row the server judged by its address is never matched this
+ *  way — its address decides. */
 export function chassisPeerOf(n: Neighbor, lookups: NeighborLookups): NeighborChassisPeer | null {
-  if (n.remote_mgmt_addr || n.remote_chassis_kind !== 'mac') return null;
+  if (judgedByAddress(n, lookups) || n.remote_chassis_kind !== 'mac') return null;
   return lookups.chassis.get(n.remote_chassis) ?? null;
 }
 
@@ -260,15 +268,14 @@ export function neighborCapabilities(
 /** How a row was matched to what it is: by its management address, by its chassis MAC (a Meraki
  *  device with no address), or not at all. The badge's explanation says which. */
 export function peerMatchedBy(n: Neighbor, lookups: NeighborLookups): 'address' | 'mac' | null {
-  if (n.remote_mgmt_addr) return lookups.peers.has(n.remote_mgmt_addr) ? 'address' : null;
+  if (judgedByAddress(n, lookups)) return 'address';
   return chassisPeerOf(n, lookups) ? 'mac' : null;
 }
 
 /** The server's verdict on this row — on its management address, or for a row with none, on the
  *  Meraki device listed under its chassis MAC. `null` when neither says anything. */
 export function peerOf(n: Neighbor, lookups: NeighborLookups): NeighborPeer | null {
-  const addr = n.remote_mgmt_addr;
-  if (addr) return lookups.peers.get(addr) ?? null;
+  if (judgedByAddress(n, lookups)) return lookups.peers.get(n.remote_mgmt_addr ?? '') ?? null;
   const c = chassisPeerOf(n, lookups);
   if (!c) return null;
   // The same shape as an address verdict, so the badge, the link and the setup button read one

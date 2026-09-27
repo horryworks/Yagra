@@ -38,6 +38,7 @@ pub use meraki::{
     MerakiFetchError, MerakiInventory, MerakiInventoryDevice, MerakiLanAddress, MerakiNetworkInfo,
     MerakiNetworkLan, MerakiOrgInfo, MerakiWireOrigin, MERAKI_MIN_RPS,
 };
+pub use meraki_neighbors::MERAKI_NEIGHBOR_FORMAT;
 /// Why a multi-column walk stopped early, how long one may run, and how each of its columns ended.
 ///
 /// The rest of `walk_budget` stays private: the budget, the per-column outcome and the counter are

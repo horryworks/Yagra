@@ -1318,7 +1318,7 @@ mod tests {
     }
 
     fn neighbors(node_id: NodeId, list: Vec<yagra_common::Neighbor>) -> (NodeId, NeighborSet) {
-        (node_id, NeighborSet::new(list))
+        (node_id, NeighborSet::new(list, 0))
     }
 
     fn routing(node_id: NodeId, list: &[(RoutingProto, &str)]) -> (NodeId, RoutingSnapshot) {

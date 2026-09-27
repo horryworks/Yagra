@@ -691,7 +691,7 @@ mod tests {
         let out = derive_links(DeriveInput {
             nodes: &[],
             l3: &[],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
         });
@@ -712,7 +712,7 @@ mod tests {
         let out = derive_links(DeriveInput {
             nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
             l3: &[],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
         });
@@ -742,7 +742,7 @@ mod tests {
                 (n[2], ip("10.0.0.9")),
             ],
             l3: &[],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
         });
@@ -762,7 +762,7 @@ mod tests {
                 (n[0], snap(&[("10.0.0.1", 24)])),
                 (n[1], snap(&[("10.0.0.2", 24)])),
             ],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
         });
@@ -860,7 +860,7 @@ mod tests {
         let out = derive_links(DeriveInput {
             nodes: &[(n[0], ip("10.0.0.1"))],
             l3: &[],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
         });
@@ -1162,7 +1162,7 @@ mod tests {
         let out = derive_links(DeriveInput {
             nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
             l3: &[],
-            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
             overrides: &[],
         });

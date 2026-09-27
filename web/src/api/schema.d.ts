@@ -9688,6 +9688,12 @@ export interface components {
         NeighborChange: {
             /** @description When the change was recorded (RFC 3339). */
             at: string;
+            /**
+             * @description `true` when the collector changed how it writes these rows (after an upgrade, ADR-182) —
+             *     a port read `7` and now reads `Port 7`, say. The row is a change of spelling, not of
+             *     cabling; a real change read at the same moment is still in it.
+             */
+            format_changed: boolean;
             /** Format: int64 */
             id: number;
             /** @description The adjacency as of this change. */
@@ -9895,6 +9901,18 @@ export interface components {
          *     per-adjacency table would need an explicit "this is complete" flag to get the same guarantee.
          */
         NeighborSet: {
+            /**
+             * Format: int32
+             * @description How the producer spelled these rows (ADR-182): a number the producer raises whenever it
+             *     changes how it writes a field — a port name, an id's notation — without the cabling having
+             *     changed. Core compares it with the stored set's, and a set whose key moved **and** whose
+             *     format moved is recorded as a change of spelling, not a change of adjacency. Absent (an
+             *     older poller, a set stored before this existed) reads as `0`.
+             *
+             *     Not part of [`Self::content_key`]: a format raised for one producer must not re-key the
+             *     sets whose rows did not change.
+             */
+            format?: number;
             /** @description The adjacencies, canonically ordered. */
             neighbors?: components["schemas"]["Neighbor"][];
             /**

@@ -33534,12 +33534,17 @@
         "required": [
           "id",
           "at",
-          "neighbors"
+          "neighbors",
+          "format_changed"
         ],
         "properties": {
           "at": {
             "type": "string",
             "description": "When the change was recorded (RFC 3339)."
+          },
+          "format_changed": {
+            "type": "boolean",
+            "description": "`true` when the collector changed how it writes these rows (after an upgrade, ADR-182) —\na port read `7` and now reads `Port 7`, say. The row is a change of spelling, not of\ncabling; a real change read at the same moment is still in it."
           },
           "id": {
             "type": "integer",
@@ -33928,6 +33933,12 @@
         "type": "object",
         "description": "Every neighbour a node reports on one observation, as a set.\n\nThe unit of storage is the whole set per node, not one row per adjacency, because a partial walk\nmust never read as \"every neighbour disappeared\". The poller reports the set it could observe,\ncore replaces it atomically, and a failed walk sends no set at all — so nothing is written. A\nper-adjacency table would need an explicit \"this is complete\" flag to get the same guarantee.",
         "properties": {
+          "format": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How the producer spelled these rows (ADR-182): a number the producer raises whenever it\nchanges how it writes a field — a port name, an id's notation — without the cabling having\nchanged. Core compares it with the stored set's, and a set whose key moved **and** whose\nformat moved is recorded as a change of spelling, not a change of adjacency. Absent (an\nolder poller, a set stored before this existed) reads as `0`.\n\nNot part of [`Self::content_key`]: a format raised for one producer must not re-key the\nsets whose rows did not change.",
+            "minimum": 0
+          },
           "neighbors": {
             "type": "array",
             "items": {

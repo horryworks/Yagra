@@ -141,6 +141,9 @@ pub struct NeighborChange {
     pub set: NeighborSet,
     /// The key this replaced; `None` marks the first-ever observation for the node.
     pub prev_neighbor_key: Option<String>,
+    /// The producer changed how it spells these rows (ADR-182) — the row records a change of
+    /// spelling, not of cabling, though a real change read at the same moment is in it too.
+    pub format_changed: bool,
 }
 
 /// PostgreSQL-backed store for node adjacency: current set and change history.
@@ -169,11 +172,22 @@ impl NeighborRepo {
     /// Only ever called with a set the poller actually observed. A *failed* walk sends no set at
     /// all, so this is never reached with an empty stand-in — which is what stops one timed-out
     /// walk from erasing a node's adjacency.
+    ///
+    /// **A change of spelling is not a change of adjacency** (ADR-182). When the key moved and so
+    /// did the producer's [`NeighborSet::format`] — or the key's own encoding version, its first
+    /// line — the appended row is marked `format_changed` and `first_seen` is kept: the cabling
+    /// did not change, the way it is written did. The row is still appended, so a real change read
+    /// in the same observation is not lost. ⚠️ The previous format is read in its own CTE, from the
+    /// statement's snapshot rather than the locked row; two cores writing one node at the same
+    /// instant with two different formats could mark that one row wrongly, and nothing else.
     pub async fn record_observation(&self, node_id: Uuid, set: &NeighborSet) -> anyhow::Result<()> {
         let key = set.content_key();
         let count = i32::try_from(set.len()).unwrap_or(i32::MAX);
         sqlx::query(
-            "WITH up AS ( \
+            "WITH old AS ( \
+                SELECT neighbor_key, COALESCE((neighbors->>'format')::bigint, 0) AS format \
+                FROM node_neighbors WHERE node_id = $1 \
+             ), up AS ( \
                 INSERT INTO node_neighbors \
                     (node_id, neighbor_key, prev_neighbor_key, neighbors, neighbor_count, \
                      truncated, first_seen, last_seen) \
@@ -185,13 +199,21 @@ impl NeighborRepo {
                     neighbor_count = EXCLUDED.neighbor_count, \
                     truncated = EXCLUDED.truncated, \
                     first_seen = CASE WHEN node_neighbors.neighbor_key = EXCLUDED.neighbor_key \
+                                        OR COALESCE((node_neighbors.neighbors->>'format')::bigint, 0) <> $6 \
+                                        OR split_part(node_neighbors.neighbor_key, chr(10), 1) \
+                                           <> split_part(EXCLUDED.neighbor_key, chr(10), 1) \
                                       THEN node_neighbors.first_seen ELSE now() END, \
                     last_seen = now() \
                 RETURNING prev_neighbor_key, neighbor_key \
              ) \
              INSERT INTO node_neighbor_changes \
-                (node_id, at, neighbor_key, prev_neighbor_key, neighbors, neighbor_count) \
-             SELECT $1, now(), up.neighbor_key, up.prev_neighbor_key, $3, $4 \
+                (node_id, at, neighbor_key, prev_neighbor_key, neighbors, neighbor_count, \
+                 format_changed) \
+             SELECT $1, now(), up.neighbor_key, up.prev_neighbor_key, $3, $4, \
+                    COALESCE((SELECT o.format <> $6 \
+                                     OR split_part(o.neighbor_key, chr(10), 1) \
+                                        <> split_part(up.neighbor_key, chr(10), 1) \
+                              FROM old o), FALSE) \
              FROM up WHERE up.prev_neighbor_key IS DISTINCT FROM up.neighbor_key",
         )
         .bind(node_id)
@@ -199,6 +221,7 @@ impl NeighborRepo {
         .bind(Json(set))
         .bind(count)
         .bind(set.truncated)
+        .bind(i64::from(set.format))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -298,7 +321,7 @@ impl NeighborRepo {
         let rows = match before {
             Some((at, id)) => {
                 sqlx::query(
-                    "SELECT id, at, neighbors, prev_neighbor_key \
+                    "SELECT id, at, neighbors, prev_neighbor_key, format_changed \
                      FROM node_neighbor_changes \
                      WHERE node_id = $1 AND (at, id) < ($2, $3) \
                      ORDER BY at DESC, id DESC LIMIT $4",
@@ -312,7 +335,7 @@ impl NeighborRepo {
             }
             None => {
                 sqlx::query(
-                    "SELECT id, at, neighbors, prev_neighbor_key \
+                    "SELECT id, at, neighbors, prev_neighbor_key, format_changed \
                      FROM node_neighbor_changes \
                      WHERE node_id = $1 \
                      ORDER BY at DESC, id DESC LIMIT $2",
@@ -332,6 +355,7 @@ impl NeighborRepo {
                     at: row.try_get("at")?,
                     set: set.0,
                     prev_neighbor_key: row.try_get("prev_neighbor_key")?,
+                    format_changed: row.try_get("format_changed")?,
                 })
             })
             .collect()
@@ -513,7 +537,7 @@ mod tests {
     ) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
         let repo = NeighborRepo::new(pool.clone());
-        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")], 0);
         repo.record_observation(node, &set).await.expect("record");
 
         let current = repo
@@ -555,7 +579,7 @@ mod tests {
     async fn an_unchanged_observation_appends_no_history_and_keeps_first_seen(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
         let repo = NeighborRepo::new(pool.clone());
-        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
+        let set = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")], 0);
 
         repo.record_observation(node, &set).await.expect("record");
         let first = repo.current(node).await.expect("current").expect("a set");
@@ -585,8 +609,8 @@ mod tests {
     async fn a_changed_set_appends_a_row_naming_the_key_it_replaced(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
         let repo = NeighborRepo::new(pool.clone());
-        let before = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
-        let after = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:02")]);
+        let before = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")], 0);
+        let after = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:02")], 0);
 
         repo.record_observation(node, &before).await.expect("first");
         let held = repo.current(node).await.expect("current").expect("a set");
@@ -606,6 +630,81 @@ mod tests {
         assert!(
             now.first_seen > held.first_seen,
             "first_seen did not restart when the set actually changed"
+        );
+        assert!(
+            !changes[0].format_changed && !changes[1].format_changed,
+            "a change at one format was marked as a change of spelling"
+        );
+    }
+
+    /// ADR-182: the producer respells its rows and raises its format. The row is still appended —
+    /// a real change read at the same moment must not vanish — but it says it is a change of
+    /// spelling, and `first_seen` keeps counting from the cabling's own first sight.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_respelled_set_is_marked_and_keeps_first_seen(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        let before = NeighborSet::new(vec![full_neighbor("7", "aa:bb:cc:00:00:01")], 0);
+        let after = NeighborSet::new(vec![full_neighbor("Port 7", "aa:bb:cc:00:00:01")], 1);
+
+        repo.record_observation(node, &before).await.expect("first");
+        let held = repo.current(node).await.expect("current").expect("a set");
+        repo.record_observation(node, &after).await.expect("second");
+
+        let changes = repo.list_changes(node, None, 10).await.expect("changes");
+        assert_eq!(
+            changes.len(),
+            2,
+            "the respelled set appended no history row"
+        );
+        assert!(
+            changes[0].format_changed,
+            "the row a raised format appended is not marked"
+        );
+        assert!(!changes[1].format_changed, "the genesis row is marked");
+        let now = repo.current(node).await.expect("current").expect("a set");
+        assert_eq!(now.set.format, 1, "the stored set lost its format");
+        assert_eq!(
+            now.first_seen, held.first_seen,
+            "first_seen restarted although only the spelling moved"
+        );
+
+        // Same format, same key: nothing more. Same format, new key: an ordinary change again.
+        repo.record_observation(node, &after).await.expect("third");
+        let moved = NeighborSet::new(vec![full_neighbor("Port 8", "aa:bb:cc:00:00:01")], 1);
+        repo.record_observation(node, &moved).await.expect("fourth");
+        let changes = repo.list_changes(node, None, 10).await.expect("changes");
+        assert_eq!(
+            changes.len(),
+            3,
+            "an unchanged read appended, or a change did not"
+        );
+        assert!(
+            !changes[0].format_changed,
+            "a change at an unchanged format was marked as a respelling"
+        );
+    }
+
+    /// A format raised for a producer whose rows did not change leaves no row at all: the key did
+    /// not move, and there is nothing to explain.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_raised_format_with_the_same_rows_appends_nothing(pool: sqlx::PgPool) {
+        let node = pgtest::node(&pool, "sw", 1, None).await;
+        let repo = NeighborRepo::new(pool.clone());
+        let rows = vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")];
+        repo.record_observation(node, &NeighborSet::new(rows.clone(), 0))
+            .await
+            .expect("first");
+        repo.record_observation(node, &NeighborSet::new(rows, 1))
+            .await
+            .expect("second");
+        let changes = repo.list_changes(node, None, 10).await.expect("changes");
+        assert_eq!(
+            changes.len(),
+            1,
+            "a format change with identical rows appended a row"
         );
     }
 
@@ -627,8 +726,8 @@ mod tests {
 
         let a = pgtest::node(&pool, "a", 1, None).await;
         let b = pgtest::node(&pool, "b", 2, None).await;
-        let set_a = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]);
-        let set_b = NeighborSet::new(vec![full_neighbor("Gi0/2", "aa:bb:cc:00:00:02")]);
+        let set_a = NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")], 0);
+        let set_b = NeighborSet::new(vec![full_neighbor("Gi0/2", "aa:bb:cc:00:00:02")], 0);
         repo.record_observation(a, &set_a).await.expect("record a");
         repo.record_observation(b, &set_b).await.expect("record b");
 
@@ -675,7 +774,7 @@ mod tests {
         ] {
             repo.record_observation(
                 node,
-                &NeighborSet::new(vec![full_neighbor("Gi0/1", chassis)]),
+                &NeighborSet::new(vec![full_neighbor("Gi0/1", chassis)], 0),
             )
             .await
             .expect("record");
@@ -717,7 +816,7 @@ mod tests {
         let repo = NeighborRepo::new(pool.clone());
         repo.record_observation(
             node,
-            &NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")]),
+            &NeighborSet::new(vec![full_neighbor("Gi0/1", "aa:bb:cc:00:00:01")], 0),
         )
         .await
         .expect("record");
