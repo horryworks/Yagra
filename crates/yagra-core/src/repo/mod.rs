@@ -259,6 +259,20 @@ pub struct AddressMatch {
 /// there is no code path that can drop the predicate — see [`NodeRepo::SCOPE_PREDICATE`].
 pub type GroupFilter<'a> = Option<&'a [Uuid]>;
 
+/// The group-scope predicate on a column holding a folder id, bound at `$param`: true for every
+/// row when the bound array is `NULL` (unrestricted), otherwise only for rows in one of the groups.
+/// `Some(&[])` binds an empty array and matches nothing — see [`GroupFilter`].
+///
+/// One spelling for every file that restricts a direct column (ADR-184). The copies had not
+/// drifted, but a copy that dropped the `IS NULL` half would return nothing to every unrestricted
+/// caller, and one that dropped the `ANY` half would return everything to every scoped one — and
+/// `repo/guards.rs`-style text checks are the only thing that would see either.
+///
+/// ⚠️ Parenthesize the condition it is `AND`ed with — see [`NodeRepo::SCOPE_PREDICATE`].
+pub(crate) fn scope_predicate(param: u8, column: &str) -> String {
+    format!("(${param}::uuid[] IS NULL OR {column} = ANY(${param}))")
+}
+
 impl NodeRepo {
     /// Connect (with retry, so Postgres may start after core) and return the repo.
     ///

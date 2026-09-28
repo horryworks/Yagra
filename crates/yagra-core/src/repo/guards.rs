@@ -380,3 +380,66 @@ fn every_inserted_column_is_updated_and_compared() {
         "a fifteenth placeholder has no bind behind it"
     );
 }
+
+/// Files that spell a group-scope predicate on a column by hand, and why each may.
+const SCOPE_PREDICATE_COPIES: &[(&str, &str)] = &[
+    (
+        "repo/mod.rs",
+        "`NodeRepo::SCOPE_PREDICATE`, the `$1` form the node listing interpolates as a const",
+    ),
+    (
+        "arp.rs",
+        "the module refuses `format!` so every statement stays a literal, and a test holds it to that",
+    ),
+    (
+        "wireless.rs",
+        "its predicates sit inside `EXISTS` and `CASE`, where the NULL guard is written one level up",
+    ),
+    (
+        "events/sql.rs",
+        "`e.node_id = ANY($9)` is a set of node ids resolved by the caller, not a folder scope",
+    ),
+];
+
+/// ADR-184: a statement restricts a folder-id column to a scope through
+/// `repo::scope_predicate`, or its file says why not. The shape is the one whose two halves each
+/// fail silently: drop `IS NULL` and every unrestricted caller sees nothing, drop `ANY` and every
+/// scoped caller sees everything.
+#[test]
+fn every_group_scope_predicate_is_the_helper_or_declared() {
+    let files = crate::module_source::crate_code();
+    assert!(files.len() >= 150, "only {} files were read", files.len());
+    let hand = regex::Regex::new(&format!(
+        r"(?i)\(\$\d+::uuid\[\] {} OR [\w.]+ = ANY\(\$\d+\)\)",
+        "IS NULL"
+    ))
+    .unwrap();
+    let mut offenders = Vec::new();
+    let mut declared_seen = 0;
+    for (name, code) in &files {
+        let found = hand.find_iter(code).count();
+        if found == 0 {
+            continue;
+        }
+        if SCOPE_PREDICATE_COPIES.iter().any(|(f, _)| f == name) {
+            declared_seen += 1;
+        } else {
+            offenders.push(format!("{name}: {found}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} spell a group-scope predicate by hand — use `repo::scope_predicate`, or add \
+         the file to SCOPE_PREDICATE_COPIES with the reason"
+    );
+    assert_eq!(
+        declared_seen,
+        SCOPE_PREDICATE_COPIES.len(),
+        "a declared file no longer holds a hand-written predicate; take it off the list"
+    );
+    let calls: usize = files
+        .iter()
+        .map(|(_, c)| c.matches(&format!("{}(", "scope_predicate")).count())
+        .sum();
+    assert!(calls >= 13, "only {calls} statements ask scope_predicate");
+}

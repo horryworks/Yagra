@@ -9,6 +9,7 @@
 //! folder under it and every node filed in any of them, in one transaction. Re-parenting a group
 //! guards against cycles via [`would_create_cycle`].
 
+use crate::repo::scope_predicate;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -1037,7 +1038,7 @@ impl GroupRepo {
         // The longest match is a `rank()`, for the reason `match_address_prefixes` gives: the
         // correlated `MAX(masklen)` it replaced re-scanned every range once per candidate row
         // (ADR-131 増分 2 決定 12). Ties share rank 1, so an ambiguity still comes back twice.
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             "WITH hits AS ( \
                SELECT n.id AS node_id, p.group_id, p.prefix, \
                       rank() OVER (PARTITION BY n.id \
@@ -1045,13 +1046,15 @@ impl GroupRepo {
                FROM nodes n \
                JOIN node_group_prefixes p ON n.address <<= p.prefix \
                WHERE n.id = ANY($1) \
-                 AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
-                 AND ($2::uuid[] IS NULL OR p.group_id = ANY($2))) \
+                 AND {} \
+                 AND {}) \
              SELECT node_id, group_id, prefix::TEXT AS prefix \
              FROM hits \
              WHERE depth_rank = 1 \
              ORDER BY node_id, group_id",
-        )
+            scope_predicate(2, "n.group_id"),
+            scope_predicate(2, "p.group_id"),
+        ))
         .bind(nodes)
         .bind(&scope_bind)
         .fetch_all(&self.pool)
@@ -1113,7 +1116,7 @@ impl GroupRepo {
         scope: Option<&[Uuid]>,
     ) -> anyhow::Result<Vec<Uuid>> {
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
-        let ids = sqlx::query_scalar(
+        let ids = sqlx::query_scalar(&format!(
             "WITH RECURSIVE sub(id) AS ( \
                SELECT id FROM node_groups WHERE id = $1 \
                UNION \
@@ -1121,9 +1124,10 @@ impl GroupRepo {
              ) \
              SELECT n.id FROM nodes n \
              WHERE ($1::uuid IS NULL OR n.group_id IN (SELECT id FROM sub)) \
-               AND ($2::uuid[] IS NULL OR n.group_id = ANY($2)) \
+               AND {} \
              ORDER BY n.name, n.id",
-        )
+            scope_predicate(2, "n.group_id"),
+        ))
         .bind(root)
         .bind(&scope_bind)
         .fetch_all(&self.pool)
@@ -1193,20 +1197,21 @@ impl GroupRepo {
         }
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
-        let rows = sqlx::query(
-            "WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)), \
+        let rows = sqlx::query(&format!(
+"WITH addrs AS (SELECT DISTINCT a.txt::inet AS addr FROM unnest($1::text[]) AS a(txt)), \
                   hits AS ( \
                     SELECT addrs.addr, p.group_id, p.prefix, \
                            rank() OVER (PARTITION BY addrs.addr \
                                         ORDER BY masklen(p.prefix) DESC) AS depth_rank \
                     FROM addrs \
                     JOIN node_group_prefixes p ON addrs.addr <<= p.prefix \
-                    WHERE ($2::uuid[] IS NULL OR p.group_id = ANY($2))) \
+                    WHERE {}) \
              SELECT host(addr) AS address, group_id, prefix::TEXT AS prefix \
              FROM hits \
              WHERE depth_rank = 1 \
              ORDER BY addr, group_id",
-        )
+scope_predicate(2, "p.group_id"),
+))
         .bind(&text)
         .bind(&scope_bind)
         .fetch_all(&self.pool)
@@ -1236,10 +1241,11 @@ impl GroupRepo {
     /// unmatched and give the operator no way to learn that the answer was never possible.
     pub async fn any_prefixes(&self, scope: Option<&[Uuid]>) -> anyhow::Result<bool> {
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
-        let found: bool = sqlx::query_scalar(
+        let found: bool = sqlx::query_scalar(&format!(
             "SELECT EXISTS(SELECT 1 FROM node_group_prefixes \
-             WHERE ($1::uuid[] IS NULL OR group_id = ANY($1)))",
-        )
+             WHERE {})",
+            scope_predicate(1, "group_id"),
+        ))
         .bind(&scope_bind)
         .fetch_one(&self.pool)
         .await?;

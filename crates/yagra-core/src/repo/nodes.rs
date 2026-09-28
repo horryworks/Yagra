@@ -7,6 +7,7 @@
 //! their whole life and read a **per-node column**, so they belong beside the other node
 //! reads — see [`super`] for the rule and why it is the SQL that decides.
 
+use super::scope_predicate;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
@@ -214,8 +215,9 @@ impl NodeRepo {
         }
         let rows = sqlx::query(&format!(
             "SELECT {} FROM nodes \
-             WHERE id = ANY($1) AND ($2::uuid[] IS NULL OR group_id = ANY($2))",
-            Self::NODE_COLUMNS
+             WHERE id = ANY($1) AND {}",
+            Self::NODE_COLUMNS,
+            scope_predicate(2, "group_id"),
         ))
         .bind(ids)
         .bind(Self::scope_bind(scope))
@@ -635,14 +637,15 @@ impl NodeRepo {
         if ids.is_empty() {
             return Ok((0, 0));
         }
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "UPDATE nodes SET tags = ( \
-                   SELECT COALESCE(array_agg(DISTINCT t ORDER BY t), '{}') \
+                   SELECT COALESCE(array_agg(DISTINCT t ORDER BY t), '{{}}') \
                      FROM unnest(tags || $2::text[]) AS t \
                     WHERE t <> ALL ($3::text[])), \
                  updated_at = now() \
-             WHERE id = ANY($1) AND ($4::uuid[] IS NULL OR group_id = ANY($4))",
-        )
+             WHERE id = ANY($1) AND {}",
+            scope_predicate(4, "group_id"),
+        ))
         .bind(&ids)
         .bind(add)
         .bind(remove)
@@ -751,7 +754,8 @@ impl NodeRepo {
              sort_order = {base} + t.ord::double precision \
              FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord) \
              WHERE nodes.id = t.id \
-               AND ($3::uuid[] IS NULL OR nodes.group_id = ANY($3))"
+               AND {}",
+            scope_predicate(3, "nodes.group_id")
         ))
         .bind(&ids)
         .bind(group)
@@ -809,12 +813,13 @@ impl NodeRepo {
             .filter(|(sid, _)| !seen.contains(sid))
             .collect();
         let orders = crate::groups::placement_orders(&siblings, before, after, ids.len());
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "UPDATE nodes SET group_id = $3, sort_order = t.ord, updated_at = now() \
              FROM unnest($1::uuid[], $2::float8[]) AS t(id, ord) \
              WHERE nodes.id = t.id \
-               AND ($4::uuid[] IS NULL OR nodes.group_id = ANY($4))",
-        )
+               AND {}",
+            scope_predicate(4, "nodes.group_id"),
+        ))
         .bind(&ids)
         .bind(&orders)
         .bind(group)
@@ -864,10 +869,11 @@ impl NodeRepo {
         if ids.is_empty() {
             return Ok((0, 0));
         }
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "UPDATE nodes SET pool = $2, updated_at = now() \
-             WHERE id = ANY($1) AND ($3::uuid[] IS NULL OR group_id = ANY($3))",
-        )
+             WHERE id = ANY($1) AND {}",
+            scope_predicate(3, "group_id"),
+        ))
         .bind(&ids)
         .bind(pool)
         .bind(Self::scope_bind(scope))
@@ -1616,10 +1622,11 @@ impl NodeRepo {
         if ids.is_empty() {
             return Ok((0, 0));
         }
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "DELETE FROM nodes WHERE id = ANY($1) \
-               AND ($2::uuid[] IS NULL OR group_id = ANY($2))",
-        )
+               AND {}",
+            scope_predicate(2, "group_id"),
+        ))
         .bind(&ids)
         .bind(Self::scope_bind(scope))
         .execute(&self.pool)

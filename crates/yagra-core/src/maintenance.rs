@@ -15,6 +15,7 @@
 //! time; the alert still fires for the UI/history. This is the I/O adapter — the
 //! suppression itself lives in [`crate::alerts`].
 
+use crate::repo::scope_predicate;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -256,13 +257,14 @@ impl MaintenanceRepo {
             return Ok((0, 0));
         }
         let window_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
-        let res = sqlx::query(
-            "INSERT INTO maintenance_windows (id, name, scope_level, scope_id, starts_at, ends_at) \
+        let res = sqlx::query(&format!(
+"INSERT INTO maintenance_windows (id, name, scope_level, scope_id, starts_at, ends_at) \
              SELECT t.window_id, $3, 'node', n.id::text, $4, $5 \
                FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, window_id) \
                JOIN nodes n ON n.id = t.node_id \
-              WHERE ($6::uuid[] IS NULL OR n.group_id = ANY($6))",
-        )
+              WHERE {}",
+scope_predicate(6, "n.group_id"),
+))
         .bind(&ids)
         .bind(&window_ids)
         .bind(name)
@@ -487,13 +489,14 @@ impl MaintenanceRepo {
             return Ok((0, 0));
         }
         let mute_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "INSERT INTO mutes (id, scope_kind, node_id, group_id, check_name, until_at, reason) \
              SELECT t.mute_id, 'node', n.id, NULL, $3, $4, $5 \
                FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, mute_id) \
                JOIN nodes n ON n.id = t.node_id \
-              WHERE ($6::uuid[] IS NULL OR n.group_id = ANY($6))",
-        )
+              WHERE {}",
+            scope_predicate(6, "n.group_id"),
+        ))
         .bind(&ids)
         .bind(&mute_ids)
         .bind(check_name)
