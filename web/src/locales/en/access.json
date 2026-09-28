@@ -252,12 +252,6 @@
       "client": "Refused (3xx–4xx)",
       "server": "Server error (5xx)"
     },
-    "range": {
-      "all": "All time",
-      "24h": "Last 24h",
-      "7d": "Last 7 days",
-      "30d": "Last 30 days"
-    },
     "cols": {
       "time": "Time",
       "user": "User",

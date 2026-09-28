@@ -10,10 +10,11 @@
 // the ref-counted single-subscription pattern in useNodeStates.ts.
 
 import { useSyncExternalStore } from 'react';
+import { POLL_INTERVAL_MS } from './sharedPoll';
 
 /** The one live-refresh cadence for node-detail readings. Single source of truth (was declared
  *  independently in NodeDetail / OverviewTab / InterfacesTab). */
-export const REFRESH_TICK_MS = 15_000;
+export const REFRESH_TICK_MS = POLL_INTERVAL_MS;
 
 let tick = 0;
 let timer: ReturnType<typeof setInterval> | undefined;

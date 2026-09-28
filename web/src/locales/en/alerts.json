@@ -60,12 +60,6 @@
       "allAcked": "Acknowledged or not",
       "acked": "Acknowledged",
       "unacked": "Not acknowledged"
-    },
-    "range": {
-      "all": "All time",
-      "24h": "Last 24h",
-      "7d": "Last 7 days",
-      "30d": "Last 30 days"
     }
   },
   "events": {
@@ -78,13 +72,6 @@
     "filters": {
       "allKinds": "All kinds",
       "allEvents": "All events"
-    },
-    "range": {
-      "24h": "Last 24h",
-      "7d": "Last 7 days",
-      "30d": "Last 30 days",
-      "all": "All time",
-      "custom": "Custom…"
     },
     "emptyWindow": "No events in the last 24 hours. The window is what keeps searching fast — widen it under When.",
     "emptyPrefixMiss": "No word starts with that here. This deployment matches from the start of a word, so a term that sits inside a longer one finds nothing — switch the message filter to Regex.",

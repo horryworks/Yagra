@@ -127,7 +127,7 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       // The window becomes `since` in the query, and the missing `readTime` — not a nulled
       // `seconds` — is what stops a client predicate re-applying it against a different clock
       // (Inc.10; `filterPredicate.ts` returns at the accessor, before it reads a length).
-      presets: rangePresets(HISTORY_RANGES, t, 'history.range.'),
+      presets: rangePresets(HISTORY_RANGES, t),
       // `all` rather than a bounded window. `alert_history_cursor_idx` orders the table by exactly
       // the columns the cursor pages on, so an unfiltered first page is an index seek of 100 rows
       // however large the log is — and History showing everything on open is what it has always

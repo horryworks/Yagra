@@ -85,8 +85,6 @@ import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
 import { IMPORT_BLOCKS } from './pages/tlsSettingsForm';
 import { MAINTENANCE_STATUSES } from './pages/maintenanceStatus';
-import { AUDIT_RANGES } from './pages/auditQuery';
-import { HISTORY_RANGES } from './pages/historyQuery';
 import { SCHEDULE_FORM_PROBLEMS } from './troubleshoot/scheduleForm';
 import { ANALYSIS_WINDOWS } from './troubleshoot/analysisDefaults';
 import {
@@ -133,7 +131,6 @@ import { SCAN_STATE_SPECS } from './pages/discoveryScans';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES, TOOL_GROUPS } from './troubleshoot/data';
-import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
 import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings';
@@ -310,12 +307,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('credential kind', { en: enAccess, ja: jaAccess }, 'cred.kind.', CREDENTIAL_KINDS);
   });
 
-  it('every alert-history range and phase has a label (alerts:history.*)', () => {
+  it('every alert-history phase has a label (alerts:history.phase.*)', () => {
     // Built at runtime from the `as const` arrays, so a range or phase added without strings ships
     // as a raw key in *both* locales — which parity passes and nobody notices until an operator is
-    // staring at `history.range.90d` in a filter.
+    // staring at `history.phase.x` in a filter. (The ranges are `common:filter.range.*` since
+    // ADR-184 — `filterPresets.test.ts` holds every window to a label.)
     const locales = { en: enAlerts, ja: jaAlerts };
-    expectKeys('history range', locales, 'history.range.', HISTORY_RANGES);
     // The phase filter's two options and the row badge read the same keys, so one miss shows twice.
     expectKeys('history phase', locales, 'history.phase.', ['fired', 'cleared'] as const);
   });
@@ -327,9 +324,6 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enAccess, ja: jaAccess };
     expectKeys('audit action', locales, 'audit.action.', AUDIT_ACTIONS);
     expectKeys('audit status class', locales, 'audit.statusClass.', AUDIT_STATUS_CLASSES);
-    // The ranges are the screen's own, not a backend enum — but the key is built the same way, so
-    // the same hole exists.
-    expectKeys('audit range', locales, 'audit.range.', AUDIT_RANGES);
   });
 
   it('every HTTP auth scheme has a label (access:cred.http.schemeName.*)', () => {
@@ -544,15 +538,6 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'findings.severity.',
       FINDING_SEVERITIES,
-    );
-  });
-
-  it('every findings time range has a label (troubleshoot:findings.range.*)', () => {
-    expectKeys(
-      'findings range',
-      { en: enTroubleshoot, ja: jaTroubleshoot },
-      'findings.range.',
-      FINDING_RANGES,
     );
   });
 

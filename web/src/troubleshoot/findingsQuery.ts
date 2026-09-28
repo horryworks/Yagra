@@ -287,7 +287,7 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
     },
     range: {
       kind: 'range',
-      presets: rangePresets(FINDING_RANGES, t, 'findings.range.'),
+      presets: rangePresets(FINDING_RANGES, t),
       // A week, not `all`. An unbounded default would get slower as the table fills, and the first
       // screen an operator opens is the wrong place to discover that.
       //

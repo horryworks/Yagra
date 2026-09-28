@@ -8,9 +8,13 @@ import {
   clientRangePresets,
   discoveredOptions,
   enumOptions,
+  rangeLabel,
   rangePresets,
   rangeSeconds,
 } from './filterPresets';
+import { readSources } from '../testSupport/sources';
+import enCommon from '../locales/en/common.json';
+import jaCommon from '../locales/ja/common.json';
 import { AUDIT_RANGES } from '../pages/auditQuery';
 import { HISTORY_RANGES } from '../pages/historyQuery';
 import { EVENT_RANGES } from '../components/EventLog/eventRange';
@@ -108,10 +112,10 @@ describe('rangeSeconds is the only place a window length is written down (ADR-05
 });
 
 describe('rangePresets', () => {
-  it('keeps the caller order and builds each label under the given prefix', () => {
-    expect(rangePresets(['7d', '24h'] as const, t, 'audit.range.')).toEqual([
-      { value: '7d', label: '«audit.range.7d»', seconds: 604_800 },
-      { value: '24h', label: '«audit.range.24h»', seconds: 86_400 },
+  it('keeps the caller order and labels every window from the one shared group', () => {
+    expect(rangePresets(['7d', '24h'] as const, t)).toEqual([
+      { value: '7d', label: '«common:filter.range.7d»', seconds: 604_800 },
+      { value: '24h', label: '«common:filter.range.24h»', seconds: 86_400 },
     ]);
   });
 
@@ -119,7 +123,7 @@ describe('rangePresets', () => {
     // The presets on a server-side list used to be nulled out "because the server applies the
     // window". That guard was inert — `filterPredicate` returns at the missing `readTime` before
     // it reads a length — and nulling them is what forced each screen to keep its own table.
-    expect(rangePresets(AUDIT_RANGES, t, 'audit.range.').map((p) => p.seconds)).toEqual([
+    expect(rangePresets(AUDIT_RANGES, t).map((p) => p.seconds)).toEqual([
       86_400,
       604_800,
       2_592_000,
@@ -183,5 +187,51 @@ describe('discoveredOptions', () => {
 
   it('is empty for no rows', () => {
     expect(discoveredOptions([], read)).toEqual([]);
+  });
+});
+
+/**
+ * ADR-184: a window has one label, `common:filter.range.<token>`, on every screen. Events, History,
+ * Audit and All findings each had a label group of their own, and between them and the shared one
+ * there were five spellings of "the last 24 hours" across the two languages.
+ */
+describe('a time window has one label', () => {
+  it('rangeLabel reads the shared group', () => {
+    expect(rangeLabel('custom', t)).toBe('«common:filter.range.custom»');
+  });
+
+  it('every window token has a label in both languages', () => {
+    for (const [lng, ns] of [['en', enCommon], ['ja', jaCommon]] as const) {
+      const group = ns.filter.range as Record<string, string>;
+      const missing = RANGE_TOKENS.filter((tok) => !group[tok]?.trim());
+      expect({ lng, missing }).toEqual({ lng, missing: [] });
+    }
+  });
+
+  it('no other locale group holds window labels', () => {
+    // A group keyed by the window tokens anywhere but `common:filter.range` is a sixth spelling.
+    const locales = readSources(undefined, { exts: ['.json'] }).filter(([p]) => p.startsWith('locales/'));
+    expect(locales.length).toBeGreaterThanOrEqual(40);
+    const offenders: string[] = [];
+    const visit = (o: unknown, at: string, file: string) => {
+      if (typeof o !== 'object' || o === null) return;
+      const keys = Object.keys(o);
+      if (at !== 'filter.range' && keys.includes('24h') && keys.includes('7d')) {
+        offenders.push(`${file}: ${at}`);
+      }
+      for (const k of keys) visit((o as Record<string, unknown>)[k], at ? `${at}.${k}` : k, file);
+    };
+    for (const [file, src] of locales) visit(JSON.parse(src), '', file);
+    expect(offenders).toEqual([]);
+  });
+
+  it('no screen builds a window label key itself', () => {
+    // ⚠️ Assembled at runtime, or it would match this file.
+    const needle = `range.${'$'}{`;
+    const files = readSources();
+    expect(files.length).toBeGreaterThan(300);
+    const offenders = files.filter(([f, src]) => f !== 'lib/filterPresets.ts' && src.includes(needle)).map(([f]) => f);
+    expect(offenders, 'use rangeLabel / rangePresets from lib/filterPresets').toEqual([]);
+    expect(files.find(([f]) => f === 'lib/filterPresets.ts')?.[1].includes(needle)).toBe(true);
   });
 });

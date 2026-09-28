@@ -166,7 +166,7 @@ export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<Audi
       // `seconds: null` "because this list is server-side". That null was inert — the predicate
       // returns at the missing `readTime` above it — and its only effect was to force a private
       // seconds table into this file for `queryFor` to read.
-      presets: rangePresets(AUDIT_RANGES, t, 'audit.range.'),
+      presets: rangePresets(AUDIT_RANGES, t),
       // `all` rather than a bounded window, deliberately, and it is the one place this screen
       // differs from All findings. `audit_log_at_idx` orders the table by the same column the
       // cursor pages on, so an unfiltered first page is an index scan of 100 rows however large the

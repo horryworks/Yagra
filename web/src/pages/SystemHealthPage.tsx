@@ -16,7 +16,7 @@
 // worst, so the page read as a pool-level gauge (ADR-118). The grouping and series rules are in
 // `hostSections.ts` where they can be tested; what is left here is layout and fetching.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -35,10 +35,9 @@ import { mirrorAxisLabels } from '../dashboard/widgets/interfaceTraffic';
 import { diskHeadline } from './diskHeadline';
 import { groupHosts, hostCharts } from './hostSections';
 import type { HostSection } from './hostSections';
-import type { DependencyHealth, HostInfo, HostMetricRange } from '../types/api';
+import type { DependencyHealth } from '../types/api';
 import './SystemHealthPage.css';
 
-const REFRESH_MS = 15_000;
 /** A bounded gauge's Y range — CPU/mem/disk read 0–100%, so the baseline is 0. Module-level so
  *  MetricChart isn't rebuilt each refresh. */
 const PCT_RANGE: [number, number] = [0, 100];
@@ -166,37 +165,27 @@ function HostMetricCard({
 function HostSectionView({ section, range }: { section: HostSection; range: Range }) {
   const { t } = useTranslation('system');
   const [open, setOpen] = useState(true);
-  const [hostRange, setHostRange] = useState<HostMetricRange | null>(null);
-  const [win, setWin] = useState<[number, number] | null>(null);
 
   const host = section.host;
   // The id, not the object: `groupHosts` rebuilds `section.host` on every 15s inventory refresh, so
   // depending on the object itself would tear down and restart the interval each time.
   const instance = host.instance;
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const load = () => {
+  // A folded section asks for nothing: its fetch answers `null` without a request, and unfolding
+  // it is a dependency change, so the read happens at once.
+  const polled = usePolled(
+    async () => {
+      if (!open) return null;
       const { from, to } = resolveRange(range);
       // A failure resolves to null so an unreachable poller draws empty cards rather than
       // propagating its error to the page.
-      api
-        .getHostMetricRange(instance, { from, to })
-        .catch(() => null)
-        .then((r) => {
-          if (cancelled) return;
-          setHostRange(r);
-          setWin([from, to]);
-        });
-    };
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [open, instance, range]);
+      const r = await api.getHostMetricRange(instance, { from, to }).catch(() => null);
+      return { r, win: [from, to] as [number, number] };
+    },
+    [open, instance, range],
+  );
+  const hostRange = polled.data?.r ?? null;
+  const win = polled.data?.win ?? null;
 
   const charts = useMemo(
     () =>
@@ -346,28 +335,14 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
  *  over a shared range picker. */
 function HostResourcesCard() {
   const { t } = useTranslation('system');
-  const [hosts, setHosts] = useState<HostInfo[]>([]);
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
 
   // Instance list (core + pollers reporting telemetry), refreshed on the standard cadence. This is
   // the only unconditional poll here; the per-section trend fetches hang off it.
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
-      api
-        .getSystemHosts()
-        .then((r) => !cancelled && setHosts(r.hosts))
-        .catch(() => undefined);
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  const sections = useMemo(() => groupHosts(hosts), [hosts]);
+  // A failed read keeps the last list (`usePolled` leaves `data` alone on an error).
+  const hosts = usePolled(() => api.getSystemHosts(), []).data?.hosts;
+  const sections = useMemo(() => groupHosts(hosts ?? []), [hosts]);
 
   return (
     <div className="host-resources">

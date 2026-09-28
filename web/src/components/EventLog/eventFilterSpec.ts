@@ -28,6 +28,7 @@ import {
   type FilterableColumn,
 } from '../../lib/columnFilter';
 import { decodeCondition, type TextCondition } from '../../lib/filterCondition';
+import { rangeLabel } from '../../lib/filterPresets';
 import { localInputToIso } from '../NodeDetail/RangeControl';
 import { boundsFor, DEFAULT_EVENT_RANGE, EVENT_RANGES, type EventRange } from './eventRange';
 
@@ -89,7 +90,7 @@ export function eventFilters(
       kind: 'range',
       presets: EVENT_RANGES.map((r) => ({
         value: r,
-        label: t(`alerts:events.range.${r}`),
+        label: rangeLabel(r, t),
         // Only the client-side predicate reads `seconds`, and Events has no client-side predicate.
         // The real windows come from `boundsFor`, which stays the one place they are computed.
         seconds: null,

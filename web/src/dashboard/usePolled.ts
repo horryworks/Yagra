@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import i18n from '../i18n';
 import { ApiError, errMsg } from '../services/api';
+import { POLL_INTERVAL_MS } from '../lib/sharedPoll';
 
 export interface Polled<T> {
   data: T | null;
@@ -18,8 +19,6 @@ export interface Polled<T> {
   errorStatus: number | null;
 }
 
-const REFRESH_MS = 15_000;
-
 /** Poll `fetcher` on mount and every `intervalMs`, re-arming whenever `deps` change.
  *
  *  CONTRACT — avoid a stale closure: every value the `fetcher` closes over (query args, props,
@@ -30,7 +29,7 @@ const REFRESH_MS = 15_000;
 export function usePolled<T>(
   fetcher: () => Promise<T>,
   deps: readonly unknown[] = [],
-  intervalMs: number = REFRESH_MS,
+  intervalMs: number = POLL_INTERVAL_MS,
 ): Polled<T> {
   const [state, setState] = useState<Polled<T>>({
     data: null,

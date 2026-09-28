@@ -62,19 +62,25 @@ export function rangeSeconds(token: RangeToken): number | null {
   return SECONDS[token];
 }
 
+/** The one label a window has, on every screen: `common:filter.range.<token>` (ADR-184).
+ *
+ *  Each server-side list used to pass its own key prefix, and five label groups had grown for six
+ *  tokens — "Last 24h" on Events and History, "Last 24 hours" on All findings, "24 時間" and
+ *  "過去 24 時間" and "過去 7 日" and "過去 7 日間" in Japanese. The prefix is no longer an argument,
+ *  so a screen cannot start a sixth. */
+export function rangeLabel(token: RangeToken, t: TFunction): string {
+  return t(`common:filter.range.${token}`);
+}
+
 /** Localized presets for a screen's chosen subset of the windows.
  *
  *  `Record<RangeToken, …>` above is what makes a new window a compile error rather than a preset
  *  that renders its own key (extensibility.md §1), and `satisfies` on each screen's array is what
  *  keeps the subset relation checked in the other direction. */
-export function rangePresets<T extends RangeToken>(
-  values: readonly T[],
-  t: TFunction,
-  prefix: string,
-): RangePreset[] {
+export function rangePresets<T extends RangeToken>(values: readonly T[], t: TFunction): RangePreset[] {
   return values.map((value) => ({
     value,
-    label: t(`${prefix}${value}`),
+    label: rangeLabel(value, t),
     seconds: SECONDS[value],
   }));
 }
@@ -90,7 +96,7 @@ export type ClientRange = (typeof CLIENT_RANGES)[number];
 
 /** The presets a client-side list offers, localized. */
 export function clientRangePresets(t: TFunction): RangePreset[] {
-  return rangePresets(CLIENT_RANGES, t, 'common:filter.range.');
+  return rangePresets(CLIENT_RANGES, t);
 }
 
 /** Options for a column whose values are an `as const` enum with `t()` labels under one prefix.
