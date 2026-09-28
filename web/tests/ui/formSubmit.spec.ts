@@ -57,6 +57,17 @@ test('an accepted save closes the dialog', async ({ page, mock }) => {
   await expect(dialog).toBeHidden();
 });
 
+// 🚨 Red until the fix that came with it: the dialog's first field autofocuses, and the modal read
+// that field as the trigger to hand focus back to.
+test('Escape closes a dialog and gives focus back to the button that opened it', async ({
+  page,
+}) => {
+  const { open, dialog } = await openAddUser(page);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(open).toBeFocused();
+});
+
 /** Three nodes in the inventory tree's working set. */
 async function checkThree(page: Page) {
   await page.goto('/nodes');

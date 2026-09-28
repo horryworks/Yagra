@@ -4,7 +4,7 @@
 // every dialog in the app matches — this is the Modals UI-consistency group. Closes on
 // overlay click and Escape.
 
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FOCUSABLE_SELECTOR, trapTarget } from '../../lib/focusTrap';
@@ -64,11 +64,17 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // The trigger, read while this first renders. 🚨 Not in the effect below: a child's `autoFocus`
+  // moves focus during the commit, before any effect runs, so the effect read the dialog's own
+  // first field as "what had focus before" and handed focus back to an element that was about to
+  // be unmounted. Every dialog whose first field autofocuses — most of them — dropped focus to
+  // `<body>` on close (ADR-184 increment 34, `formSubmit.spec.ts`).
+  const [trigger] = useState(() => document.activeElement as HTMLElement | null);
+
   // Move focus into the dialog on open (so keyboard / screen-reader users start inside it) and
   // restore it to the trigger on close. A child `autoFocus` is respected — we only take focus
   // when nothing inside the dialog already has it.
   useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null;
     const dialog = dialogRef.current;
     if (dialog && !dialog.contains(document.activeElement)) {
       dialog.focus();
@@ -76,9 +82,9 @@ export function Modal({ title, onClose, footer, size = 'default', children }: Pr
     // Only restore focus if the trigger is still in the DOM; if it was removed while the modal
     // was open, calling focus() is a no-op that drops focus to <body>.
     return () => {
-      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+      if (trigger?.isConnected) trigger.focus();
     };
-  }, []);
+  }, [trigger]);
 
   return (
     // 🚨 **A backdrop click closes; a drag that merely ENDS on the backdrop does not.** The browser
