@@ -24,8 +24,9 @@ interface Subject {
   toolbar: boolean;
   /** The refusal, when the screen keeps a sentence of its own rather than the shared one. */
   refused?: RegExp;
-  /** False for the two review screens, whose only writes act on a selection: there is no "Add"
-   *  to lose, so the check that it is gone would pass vacuously. */
+  /** False for the two review screens, whose only writes act on a selection, and for the alert
+   *  log, which has none: there is no "Add" to lose, so the check that it is gone would pass
+   *  vacuously. */
   adds?: boolean;
 }
 
@@ -55,6 +56,9 @@ const SUBJECTS: Subject[] = [
   { path: '/events/forwarding', read: '/api/v1/forwarding/destinations', toolbar: true },
   { path: '/nodes/mib', read: '/api/v1/mib-catalog', toolbar: true },
   { path: '/alerts/rules', read: '/api/v1/thresholds', toolbar: true },
+  // A log, not a configuration list: nothing to add. It swallowed every failure until ADR-184
+  // increment 27, so a refusal read as an empty history.
+  { path: '/alerts/history', read: '/api/v1/alerts/history', toolbar: true, adds: false },
 ];
 
 /** The sentence both refusal texts end with (`common.loadBlock.*`). */

@@ -20,7 +20,7 @@
 // match on the other two. That imprecision is stated rather than hidden, the same call
 // `auditQuery.ts` makes about its own two-column `q`.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
@@ -43,8 +43,8 @@ import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { TrashIcon } from '../components/ui/icons';
 import { mibEntryReady } from './mibEntryForm';
 import './MibRepositoryPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 /** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
 function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -177,7 +177,6 @@ function DeleteMibEntryModal({
 export function MibRepositoryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   // The search term is `?q=` (ADR-153) — the API's own parameter name — so a reload keeps it. Read
   // and written raw, not trimmed: the filter cell echoes this value back into the box it came from,
   // and a trimmed echo would eat a trailing space while the operator is still typing. `load` trims.
@@ -192,29 +191,17 @@ export function MibRepositoryPage() {
     },
     [params, setParams],
   );
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MibCatalogEntry | null>(null);
   const [sheet, setSheet] = useState(false);
 
-  const load = useCallback((q: string) => {
-    api
-      .listMibCatalog(q.trim() || undefined)
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  // The term settles, then one load runs for it. (No stale-response guard here, deliberately: the
-  // catalog is a single admin-scoped list and the last write wins either way.)
+  // The term settles, then one load runs for it; an answer to an earlier term that arrives late
+  // is dropped (useLoad).
   const settledQuery = useDebouncedValue(query);
-  useEffect(() => {
-    load(settledQuery);
-  }, [load, settledQuery]);
+  const catalog = useLoad(() => api.listMibCatalog(settledQuery.trim() || undefined), [settledQuery], {
+    initial: [] as MibCatalogEntry[],
+  });
+  const { data: rows, loading, reload: load } = catalog;
 
   const columns = useMemo<Column<MibCatalogEntry>[]>(
     () => [
@@ -300,51 +287,47 @@ export function MibRepositoryPage() {
         note={t('mib.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice block={block} unavailable={t('mib.unavailable')} />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={() => setQuery('')} />
-            <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('mib.addEntry')}
-              </Button>
-            )}
-          </TableToolbar>
-
-          <DataTable
-            tableId="nodes.mib"
-            rows={rows}
-            columns={columns}
-            rowKey={(e) => e.id}
+      <LoadGate load={catalog} unavailable={t('mib.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={onFiltersChange}
-            loading={loading}
-            empty={t('mib.empty.noMatch')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={onFiltersChange}
-              counts={{}}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={() => setQuery('')} />
+          <TableSpacer />
+          <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('mib.addEntry')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+
+        <DataTable
+          tableId="nodes.mib"
+          rows={rows}
+          columns={columns}
+          rowKey={(e) => e.id}
+          filters={filters}
+          onFiltersChange={onFiltersChange}
+          loading={loading}
+          empty={t('mib.empty.noMatch')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={onFiltersChange}
+            counts={{}}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && (
-        <AddMibEntryModal onClose={() => setAdding(false)} onSaved={() => load(query)} />
+        <AddMibEntryModal onClose={() => setAdding(false)} onSaved={load} />
       )}
       {deleting && (
         <DeleteMibEntryModal
@@ -352,7 +335,7 @@ export function MibRepositoryPage() {
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);
-            load(query);
+            load();
           }}
         />
       )}

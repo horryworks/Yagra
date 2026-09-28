@@ -196,22 +196,12 @@ describe('a screen reads through useLoad', () => {
       'chained reads, where "not found" is an answer the screen draws rather than a failure',
   };
 
-  /** Screens still to move. Only ever shorter; deleted when empty (increment 27). */
-  const NOT_YET_MIGRATED: string[] = [
-    'pages/ApiTokensPage.tsx',
-    'pages/ForwardingPage.tsx',
-    'pages/MibRepositoryPage.tsx',
-    'pages/ThresholdsPage.tsx',
-  ];
-  /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 4;
-
   const callers = readSources()
     .filter(([, src]) => codeOnly(src).includes(NEEDLE))
     .map(([p]) => p);
 
   it('no other file classifies a load failure itself', () => {
-    const allowed = new Set([...Object.keys(PERMANENT), ...NOT_YET_MIGRATED]);
+    const allowed = new Set(Object.keys(PERMANENT));
     const offenders = callers.filter((p) => !allowed.has(p));
     expect(
       offenders,
@@ -221,20 +211,13 @@ describe('a screen reads through useLoad', () => {
   });
 
   it('every listed file still does, so the lists cannot go stale', () => {
-    const stale = [...Object.keys(PERMANENT), ...NOT_YET_MIGRATED].filter(
-      (p) => !callers.includes(p),
-    );
+    const stale = Object.keys(PERMANENT).filter((p) => !callers.includes(p));
     expect(stale, 'listed, but no longer classifies by hand — take it off the list').toEqual([]);
   });
 
-  it('the migration list only shrinks', () => {
-    expect(NOT_YET_MIGRATED.length).toBeLessThanOrEqual(CEILING);
-    expect(new Set(NOT_YET_MIGRATED).size).toBe(NOT_YET_MIGRATED.length);
-  });
-
   it('finds the callers it is supposed to be reading', () => {
-    // The two lists together are exactly what the walk must see; this is the floor that tells a
-    // walk that found nothing from a tree with nothing to find.
+    // The permanent list is exactly what the walk must see; this is the floor that tells a walk
+    // that found nothing from a tree with nothing to find.
     expect(callers.length).toBeGreaterThanOrEqual(Object.keys(PERMANENT).length);
   });
 });

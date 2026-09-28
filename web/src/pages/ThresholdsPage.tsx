@@ -14,11 +14,11 @@
 // server caps the response. When the cap bites, the toolbar says so: a silently short ruleset reads
 // as "these are all the rules", which is exactly the wrong belief to hold about alerting config.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useCan } from '../store';
-import type { StoredThreshold } from '../types/api';
+import type { StoredThreshold, ThresholdPage } from '../types/api';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from '../lib/metricMeaning';
 import { boundText } from '../lib/portRuleForm';
@@ -43,8 +43,8 @@ import { queryFor, thresholdFilters } from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 /** Confirm + delete a threshold rule (destructive-consent modal). */
 function DeleteThresholdModal({
@@ -101,32 +101,10 @@ const MAX_SCOPE_LINES = 8;
 export function ThresholdsPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<StoredThreshold[]>([]);
-  /** Whole-ruleset size and whether `rows` is only a prefix of it — both come from the server. */
-  const [page, setPage] = useState<{ total: number; truncated: boolean }>({
-    total: 0,
-    truncated: false,
-  });
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<StoredThreshold | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
-  /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
-   *
-   *  It cannot be read off `rows`: that list is the operator's current filter, capped by the
-   *  server, so an absent rule and a narrowed view look identical. And the tri-state matters —
-   *  rendering the warning while the answer is still `undefined` would flash "nothing is watching
-   *  your fleet" on every page load. */
-  const [hasLiveness, setHasLiveness] = useState<boolean | null>(null);
-  /** How many port-scoped rules exist, whether or not this view is showing them.
-   *
-   *  🚨 Asked as its own request, not counted from `rows`. The rows are the operator's filter —
-   *  which by default excludes exactly these — and capped at 500 besides, so counting them would
-   *  answer "none" about a fleet with thousands. A default that hides rows without saying how many
-   *  is a screen that quietly reports a shorter ruleset than the deployment has. */
-  const [portRuleTotal, setPortRuleTotal] = useState(0);
   const { scopeName } = useEntityNames();
   // The whole target list, for the cell's `title`. Two names are drawn; this is what makes the
   // other two readable rather than merely counted.
@@ -353,29 +331,42 @@ export function ThresholdsPage() {
   // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
   // narrowing would only ever examine the 500 rules already on screen — which is the whole
   // reason this screen filters server-side (see `thresholdQuery.ts`).
+  const ruleset = useLoad(() => api.listThresholds(queryFor(filterCols, filters)), [filterCols, filters], {
+    initial: { items: [], total: 0, truncated: false } as ThresholdPage,
+  });
+  const { data: page, loading, reload: rulesetReload } = ruleset;
+  const rows = page.items;
+  /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
+   *
+   *  It cannot be read off `rows`: that list is the operator's current filter, capped by the
+   *  server, so an absent rule and a narrowed view look identical. And the tri-state matters —
+   *  rendering the warning while the answer is still `undefined` would flash "nothing is watching
+   *  your fleet" on every page load.
+   *
+   *  Asked separately and unfiltered, because the question is about the whole ruleset — and
+   *  re-asked with the list, after an add or a delete, the two moments the answer changes. */
+  const { data: hasLiveness, reload: livenessReload } = useLoad(
+    () => api.listThresholds({ q: LIVENESS_METRIC }).then((p) => p.total > 0),
+    [filterCols, filters],
+    { initial: null as boolean | null },
+  );
+  /** How many port-scoped rules exist, whether or not this view is showing them.
+   *
+   *  🚨 Asked as its own request, not counted from `rows`. The rows are the operator's filter —
+   *  which by default excludes exactly these — and capped at 500 besides, so counting them would
+   *  answer "none" about a fleet with thousands. A default that hides rows without saying how many
+   *  is a screen that quietly reports a shorter ruleset than the deployment has. Re-asked with the
+   *  list, so it stays true after an add or a delete and after the level filter opens up. */
+  const { data: portRuleTotal, reload: portsReload } = useLoad(
+    () => api.listThresholds({ scope_level: 'interface', limit: 1 }).then((p) => p.total),
+    [filterCols, filters],
+    { initial: 0 },
+  );
   const load = useCallback(() => {
-    api
-      .listThresholds(queryFor(filterCols, filters))
-      .then((p) => {
-        setRows(p.items);
-        setPage({ total: p.total, truncated: p.truncated });
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-    // Asked separately and unfiltered, because the question is about the whole ruleset. Rides
-    // `load` so it is re-asked after an add or a delete — the two moments the answer changes.
-    api
-      .listThresholds({ q: LIVENESS_METRIC })
-      .then((p) => setHasLiveness(p.total > 0))
-      .catch(() => setHasLiveness(null));
-    // Likewise unfiltered and likewise riding `load`: the count has to stay true after an add or
-    // a delete, and after the operator opens the level filter up.
-    api
-      .listThresholds({ scope_level: 'interface', limit: 1 })
-      .then((p) => setPortRuleTotal(p.total))
-      .catch(() => setPortRuleTotal(0));
-  }, [filterCols, filters]);
+    rulesetReload();
+    livenessReload();
+    portsReload();
+  }, [rulesetReload, livenessReload, portsReload]);
 
   /** Whether this view is currently leaving port rules out. */
   const portRulesHidden = useMemo(() => {
@@ -383,10 +374,6 @@ export function ThresholdsPage() {
     // An empty selection means every level, so nothing is being left out.
     return selected.length > 0 && !selected.includes('interface');
   }, [filters.scope_level]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   return (
     <div>
@@ -426,85 +413,77 @@ export function ThresholdsPage() {
         </p>
       )}
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('thresholds.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-            <ClearFilters
-              columns={filterCols}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(filterCols))}
-            />
-            <TableSpacer />
-            {/* Says how many of how many when the server capped the response — never a bare count
-                that would read as the whole ruleset. */}
-            {page.truncated && (
-              <span className="muted thresholds-truncated">
-                {t('thresholds.truncated', { shown: rows.length, total: page.total })}
-              </span>
-            )}
-            <ResultCount
-              shown={rows.length}
-              total={filtered ? page.total : undefined}
-              noun={t('common:noun.rule', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                {t('thresholds.add')}
-              </Button>
-            )}
-          </TableToolbar>
-
-          {error && <p className="form-error">{error}</p>}
-
-          <DataTable
-            tableId="alerts.thresholds"
-            rows={rows}
-            columns={columns}
-            // The Scope cell stacks one line per target, so a row is as tall as its rule is broad
-            // (ADR-078 増分 5). This is the only table that asks for it — see the prop's warning.
-            autoRowHeight
+      <LoadGate load={ruleset} permission="manage_config" unavailable={t('thresholds.unavailable')}>
+        <TableToolbar>
+          <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+          <ClearFilters
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            rowKey={(r) => r.id}
-            loading={loading}
-            // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a
-            // filtered query that legitimately returns zero is indistinguishable from a
-            // ruleset that has no rules at all — and on this table those read very differently.
-            empty={
-              filtered ? (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">{t('thresholds.emptyFiltered')}</p>
-                </div>
-              ) : (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">{t('thresholds.empty')}</p>
-                  <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
-                </div>
-              )
-            }
+            onClear={() => setFilters(defaultFilters(filterCols))}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              labels={{
-                q: t('thresholds.cols.metric'),
-                scope_level: t('thresholds.cols.scope'),
-                direction: t('thresholds.cols.direction'),
-              }}
-              onClose={() => setSheet(false)}
-            />
+          <TableSpacer />
+          {/* Says how many of how many when the server capped the response — never a bare count
+              that would read as the whole ruleset. */}
+          {page.truncated && (
+            <span className="muted thresholds-truncated">
+              {t('thresholds.truncated', { shown: rows.length, total: page.total })}
+            </span>
           )}
-        </>
-      )}
+          <ResultCount
+            shown={rows.length}
+            total={filtered ? page.total : undefined}
+            noun={t('common:noun.rule', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              {t('thresholds.add')}
+            </Button>
+          )}
+        </TableToolbar>
+
+        {error && <p className="form-error">{error}</p>}
+
+        <DataTable
+          tableId="alerts.thresholds"
+          rows={rows}
+          columns={columns}
+          // The Scope cell stacks one line per target, so a row is as tall as its rule is broad
+          // (ADR-078 増分 5). This is the only table that asks for it — see the prop's warning.
+          autoRowHeight
+          filters={filters}
+          onFiltersChange={setFilters}
+          rowKey={(r) => r.id}
+          loading={loading}
+          // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a
+          // filtered query that legitimately returns zero is indistinguishable from a
+          // ruleset that has no rules at all — and on this table those read very differently.
+          empty={
+            filtered ? (
+              <div className="yt-empty">
+                <p className="yt-empty-title">{t('thresholds.emptyFiltered')}</p>
+              </div>
+            ) : (
+              <div className="yt-empty">
+                <p className="yt-empty-title">{t('thresholds.empty')}</p>
+                <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
+              </div>
+            )
+          }
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            labels={{
+              q: t('thresholds.cols.metric'),
+              scope_level: t('thresholds.cols.scope'),
+              direction: t('thresholds.cols.direction'),
+            }}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && <ThresholdModal mode="add" onClose={() => setAdding(false)} onSaved={load} />}
       {editing && (

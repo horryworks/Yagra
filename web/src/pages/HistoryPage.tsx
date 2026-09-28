@@ -17,6 +17,8 @@ import {
 import { api } from '../services/api';
 import { type AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { LoadGate } from '../components/ui/LoadGate';
+import { useLoad } from '../lib/useLoad';
 import { Badge } from '../components/ui/Badge';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -39,11 +41,7 @@ import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuer
 
 export function HistoryPage() {
   const { t } = useTranslation('alerts');
-  const [rows, setRows] = useState<AlertHistoryRow[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [loading, setLoading] = useState(true);
-  /** Keyset cursor for the next (older) page; `null` once the log is exhausted. */
-  const [cursor, setCursor] = useState<{ before: string; before_id: string } | null>(null);
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
@@ -181,24 +179,26 @@ export function HistoryPage() {
 
   // Refetch from the top whenever the filter changes — a cursor is only meaningful within one
   // filter, so carrying it across a change would page into the previous query's results.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api
-      .listAlertHistory(queryFor(filterCols, filters, scopeIds, null, nowMs))
-      .then((page) => {
-        if (cancelled) return;
-        setRows(page);
-        setCursor(nextCursor(page));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [filterCols, filters, scopeIds, nowMs]);
+  //
+  // Through useLoad since ADR-184: this read used to swallow every failure, so a 403 and a 500 both
+  // looked like an empty log. A refusal now says so instead of the table.
+  const firstPage = useLoad(
+    () => api.listAlertHistory(queryFor(filterCols, filters, scopeIds, null, nowMs)),
+    [filterCols, filters, scopeIds, nowMs],
+    { initial: [] as AlertHistoryRow[] },
+  );
+  const { loading } = firstPage;
+  /** The pages scrolled to below the first, and the cursor past them — kept against the first page
+   *  they were loaded under, so a new first page (another filter) starts from the top again. */
+  const [older, setOlder] = useState<{
+    under: AlertHistoryRow[];
+    rows: AlertHistoryRow[];
+    cursor: { before: string; before_id: string } | null;
+  } | null>(null);
+  const current = older?.under === firstPage.data ? older : null;
+  const rows = current?.rows ?? firstPage.data;
+  /** Keyset cursor for the next (older) page; `null` once the log is exhausted. */
+  const cursor = current ? current.cursor : nextCursor(firstPage.data);
 
   // Keyset "load older": fetch the next page strictly older than the last loaded row. The log is
   // append-only and can grow without bound, so we page on scroll instead of one capped fetch.
@@ -210,17 +210,21 @@ export function HistoryPage() {
   const loadMore = useCallback(() => {
     if (loadingMore.current || cursor === null) return;
     loadingMore.current = true;
+    const under = firstPage.data;
     api
       .listAlertHistory(queryFor(filterCols, filters, scopeIds, cursor, nowMs))
       .then((page) => {
-        setRows((cur) => appendPage(cur, page));
-        setCursor(nextCursor(page));
+        setOlder((prev) => ({
+          under,
+          rows: appendPage(prev?.under === under ? prev.rows : under, page),
+          cursor: nextCursor(page),
+        }));
       })
       .catch(() => undefined)
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [cursor, filterCols, filters, scopeIds, nowMs]);
+  }, [cursor, filterCols, filters, scopeIds, nowMs, firstPage.data]);
 
 
   return (
@@ -234,59 +238,61 @@ export function HistoryPage() {
           There is no search box: the only free-text column is `metric`, unindexed on a table that
           reaches millions of rows, so an ILIKE there would turn the keyset seek into a seq scan.
           "Which node" is what ScopePicker answers instead. */}
-      <TableToolbar>
-        <ScopePicker value={scope} onChange={onScope} className="table-filter" />
-        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-        {/* The scope is counted and cleared with the columns: it is not a column filter, but it
-            narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
-            ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}
-        <ClearFilters
-          columns={filterCols}
+      <LoadGate load={firstPage} unavailable={t('history.unavailable')}>
+        <TableToolbar>
+          <ScopePicker value={scope} onChange={onScope} className="table-filter" />
+          <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+          {/* The scope is counted and cleared with the columns: it is not a column filter, but it
+              narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
+              ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}
+          <ClearFilters
+            columns={filterCols}
+            filters={filters}
+            extraActive={!!scopeIds.nodeId || !!scopeIds.groupId}
+            onClear={() => {
+              setScope(allScope(t));
+              setFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
+            }}
+          />
+          <TableSpacer />
+          <ResultCount
+            shown={rows.length}
+            noun={cursor === null ? t('history.transitions') : t('history.transitionsLoaded')}
+          />
+        </TableToolbar>
+        <DataTable
+          tableId="alerts.history"
+          rows={rows}
+          columns={columns}
           filters={filters}
-          extraActive={!!scopeIds.nodeId || !!scopeIds.groupId}
-          onClear={() => {
-            setScope(allScope(t));
-            setFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
-          }}
+          onFiltersChange={setFilters}
+          // The row's own id. The composite key this replaces was not unique — two transitions of the
+          // same subject and check, in the same millisecond, collided — and a duplicate React key is
+          // a silent misrender rather than an error.
+          rowKey={(r) => r.id}
+          onReachEnd={cursor === null ? undefined : loadMore}
+          // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered query
+          // that legitimately returns zero is indistinguishable from an empty log.
+          empty={filtered ? t('history.emptyFiltered') : t('history.empty')}
+          loading={loading}
+          // No facet counts: every count here would be a second aggregate query over a table that
+          // reaches millions of rows, per popover open. ADR-023 puts UI load third.
         />
-        <TableSpacer />
-        <ResultCount
-          shown={rows.length}
-          noun={cursor === null ? t('history.transitions') : t('history.transitionsLoaded')}
-        />
-      </TableToolbar>
-      <DataTable
-        tableId="alerts.history"
-        rows={rows}
-        columns={columns}
-        filters={filters}
-        onFiltersChange={setFilters}
-        // The row's own id. The composite key this replaces was not unique — two transitions of the
-        // same subject and check, in the same millisecond, collided — and a duplicate React key is
-        // a silent misrender rather than an error.
-        rowKey={(r) => r.id}
-        onReachEnd={cursor === null ? undefined : loadMore}
-        // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered query
-        // that legitimately returns zero is indistinguishable from an empty log.
-        empty={filtered ? t('history.emptyFiltered') : t('history.empty')}
-        loading={loading}
-        // No facet counts: every count here would be a second aggregate query over a table that
-        // reaches millions of rows, per popover open. ADR-023 puts UI load third.
-      />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          labels={{
-            severity: t('history.cols.severity'),
-            state: t('history.cols.state'),
-            phase: t('history.cols.event'),
-            range: t('history.cols.when'),
-          }}
-          onClose={() => setSheet(false)}
-        />
-      )}
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            labels={{
+              severity: t('history.cols.severity'),
+              state: t('history.cols.state'),
+              phase: t('history.cols.event'),
+              range: t('history.cols.when'),
+            }}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
     </div>
   );
 }

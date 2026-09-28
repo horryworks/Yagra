@@ -13,8 +13,8 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore, useCan } from '../store';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import {
   ROLES,
   TOKEN_SURFACES,
@@ -470,15 +470,23 @@ export function ApiTokensPage() {
   const { t } = useTranslation('settings-tokens');
   const authed = useAuthStore((s) => s.authed);
   const canUsers = useCan('manage_users');
-  const [rows, setRows] = useState<ApiTokenSummary[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [created, setCreated] = useState<CreatedApiToken | null>(null);
   const [revoking, setRevoking] = useState<ApiTokenSummary | null>(null);
-  const [users, setUsers] = useState<UserSummary[]>([]);
   const [sheet, setSheet] = useState(false);
+  const tokens = useLoad(() => api.listApiTokens(), [], {
+    initial: [] as ApiTokenSummary[],
+    enabled: authed,
+    errorFallback: t('err.load'),
+  });
+  const { data: rows, loading, error, reload: tokensReload } = tokens;
+  // Owner candidates for the create dialog. Same ManageUsers gate as this page, so a caller who
+  // can see the tokens can see the accounts; a failure just leaves the picker with the caller
+  // themselves, which is the pre-service-account behaviour and still correct.
+  const { data: users, reload: ownersReload } = useLoad(() => api.listUsers(), [], {
+    initial: [] as UserSummary[],
+    enabled: authed,
+  });
   // The table sorts in the browser, and legitimately: every token is here. `DataTable` renders the
   // header affordance and reports the click — it never reorders `rows` itself, so a keyset-paged
   // screen cannot accidentally sort a prefix and present it as the order (`lib/tableSort.ts`).
@@ -495,32 +503,9 @@ export function ApiTokensPage() {
   const now = clock.current.at;
 
   const load = useCallback(() => {
-    setError(null);
-    api
-      .listApiTokens()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => {
-        const b = classifyLoadError(e);
-        if (b) setBlock(b);
-        else setError(errMsg(e, t('err.load')));
-      })
-      .finally(() => setLoading(false));
-    // Owner candidates for the create dialog. Same ManageUsers gate as this page, so a caller who
-    // can see the tokens can see the accounts; a failure just leaves the picker with the caller
-    // themselves, which is the pre-service-account behaviour and still correct.
-    api
-      .listUsers()
-      .then(setUsers)
-      .catch(() => setUsers([]));
-  }, [t]);
-
-  useEffect(() => {
-    if (authed) load();
-    else setLoading(false);
-  }, [authed, load]);
+    tokensReload();
+    ownersReload();
+  }, [tokensReload, ownersReload]);
 
   const columns = useMemo(
     () => tokenColumns(t, now, canUsers ? (r) => setRevoking(r) : null),
@@ -547,10 +532,8 @@ export function ApiTokensPage() {
         <Card>
           <p className="muted">{t('signInPrompt')}</p>
         </Card>
-      ) : block ? (
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_users" />
       ) : (
-        <>
+        <LoadGate load={tokens} unavailable={t('unavailable')} permission="manage_users">
           <TableToolbar>
             <FilterButton
               columns={filterCols}
@@ -600,7 +583,7 @@ export function ApiTokensPage() {
               onClose={() => setSheet(false)}
             />
           )}
-        </>
+        </LoadGate>
       )}
 
       {adding && (

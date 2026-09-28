@@ -8,7 +8,7 @@
 // per-row OverflowMenu actions with modals. The form mirrors core's validation rules through the
 // pure helpers in `forwardingOptions.ts`, so an impossible combination is never offered.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
@@ -50,8 +50,8 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadGate } from '../components/ui/LoadGate';
+import { useLoad } from '../lib/useLoad';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
   draftFrom,
@@ -566,59 +566,26 @@ export function ForwardingPage() {
   // Forwarding sends log bodies — which routinely carry credentials — off the box, so it stayed
   // with the administrator when monitoring configuration moved down to the operator (ADR-057).
   const canSystem = useCan('manage_system');
-  const [rows, setRows] = useState<ForwardDestination[]>([]);
-  const [status, setStatus] = useState<ForwardStatus | null>(null);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ForwardDestination | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<ForwardDestination | null>(null);
   const [testResult, setTestResult] = useState<{ name: string; text: string } | null>(null);
   const [sheet, setSheet] = useState(false);
 
-  const load = useCallback(() => {
-    setError(null);
-    api
-      .listForwardDestinations()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => {
-        const b = classifyLoadError(e);
-        if (b) setBlock(b);
-        else setError(errMsg(e, t('err.load')));
-      })
-      .finally(() => setLoading(false));
-  }, [t]);
+  const destinations = useLoad(() => api.listForwardDestinations(), [], {
+    initial: [] as ForwardDestination[],
+    enabled: authed,
+    errorFallback: t('err.load'),
+  });
+  const { data: rows, loading, error, reload: load } = destinations;
 
-  useEffect(() => {
-    if (authed) load();
-    else setLoading(false);
-  }, [authed, load]);
-
-  // Counters are live, so poll them separately from the (edit-driven) destination list.
-  useEffect(() => {
-    if (!authed || block) return undefined;
-    let alive = true;
-    const tick = () => {
-      api
-        .forwardingStatus()
-        .then((s) => {
-          if (alive) setStatus(s);
-        })
-        .catch(() => {
-          /* transient: the table simply shows no counters this cycle */
-        });
-    };
-    tick();
-    const id = window.setInterval(tick, STATUS_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, [authed, block]);
+  // Counters are live, so poll them separately from the (edit-driven) destination list — in a
+  // visible tab only. A failed tick keeps the last counters on screen.
+  const { data: status } = useLoad(() => api.forwardingStatus(), [], {
+    initial: null as ForwardStatus | null,
+    enabled: authed && !destinations.block,
+    intervalMs: STATUS_POLL_MS,
+  });
 
   const statusById = useMemo(
     () => new Map((status?.destinations ?? []).map((s) => [s.id, s])),
@@ -677,10 +644,8 @@ export function ForwardingPage() {
         <Card>
           <p className="muted">{t('signInPrompt')}</p>
         </Card>
-      ) : block ? (
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_system" />
       ) : (
-        <>
+        <LoadGate load={destinations} unavailable={t('unavailable')} permission="manage_system">
           {wantsVerbatim && staleP.length > 0 && (
             <Card>
               <p className="fwd-warn">{t('warn.noRawCapture', { pollers: staleP.join(', ') })}</p>
@@ -742,7 +707,7 @@ export function ForwardingPage() {
               onClose={() => setSheet(false)}
             />
           )}
-        </>
+        </LoadGate>
       )}
 
       {(adding || editing) && (
