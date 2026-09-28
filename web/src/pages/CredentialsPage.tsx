@@ -13,7 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CredentialSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -70,6 +70,9 @@ import {
   totalUsage,
   usageLabel,
 } from './credentialList';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** The creatable kinds and their type come from `lib/credentialKinds.ts`, which is also what the
  *  node-binding, URL-monitor and discovery pickers filter on — one list, so a kind added here
@@ -271,8 +274,13 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
   const [httpAuth, setHttpAuth] = useState<HttpAuthState>(emptyHttpAuth);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('cred.err.add'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const isV3 = kind === 'snmp_v3';
   const isHttpAuth = kind === 'http_auth';
@@ -282,26 +290,19 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createCredential({
-        name: name.trim(),
-        kind,
-        secret: isV3
-          ? buildV3Secret(v3)
-          : isHttpAuth
-            ? buildHttpAuthSecret(httpAuth)
-            : secret,
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('cred.err.add')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createCredential({
+          name: name.trim(),
+          kind,
+          secret: isV3
+            ? buildV3Secret(v3)
+            : isHttpAuth
+              ? buildHttpAuthSecret(httpAuth)
+              : secret,
+        })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -309,14 +310,13 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
       title={t('cred.add.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('cred.add.title')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('cred.add.title')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -360,7 +360,7 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
           <span className="modal-hint">{t('cred.add.secretHint')}</span>
         </div>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -386,8 +386,13 @@ function EditCredentialModal({
   );
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('cred.err.update'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const fixedKind = replacement.mode === 'fixed' ? replacement.kind : null;
   const isV3 = fixedKind === null && kind === 'snmp_v3';
@@ -396,23 +401,16 @@ function EditCredentialModal({
   const ready = name.trim() !== '' && secretReady;
 
   const save = () => {
-    setError(null);
-    setBusy(true);
     const body = !replace
       ? { name: name.trim() }
       : fixedKind
         ? { name: name.trim(), kind: fixedKind, secret: integrationSecret(fixedKind, secret) }
         : { name: name.trim(), kind, secret: isV3 ? buildV3Secret(v3) : secret };
-    api
-      .updateCredential(cred.id, body)
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('cred.err.update')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .updateCredential(cred.id, body)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -420,14 +418,13 @@ function EditCredentialModal({
       title={t('cred.edit.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={!ready || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -481,7 +478,7 @@ function EditCredentialModal({
           )}
         </>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

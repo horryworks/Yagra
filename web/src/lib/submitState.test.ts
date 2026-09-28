@@ -87,14 +87,10 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
   /** Dialogs still to move. Only ever shorter; deleted when empty (increment 40). */
   const NOT_YET_MIGRATED = [
     'components/GroupModal/GroupModal.tsx',
-    'components/InterfaceRules/InterfaceRulesModal.tsx',
     'components/MoveNodeModal/MoveNodeModal.tsx',
     'components/NodeDetail/EditNodeModal.tsx',
     'components/NodeTree/BulkTagModal.tsx',
-    'components/SetParentModal/SetParentModal.tsx',
     'components/SetPoolModal/SetPoolModal.tsx',
-    'components/ThresholdModal/ThresholdModal.tsx',
-    'components/shell/ChangeMyPasswordModal.tsx',
     'components/suppression/AddMaintenanceWindowModal.tsx',
     'components/suppression/AddMuteModal.tsx',
     'pages/ApiTokensPage.tsx',
@@ -103,22 +99,19 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
     'pages/ChannelTemplateModal.tsx',
     'pages/ClassificationRulesPage.tsx',
     'pages/CollectionTemplatesPage.tsx',
-    'pages/CredentialsPage.tsx',
     'pages/EventRulesPage.tsx',
-    'pages/EventSourcesPage.tsx',
     'pages/ForwardingPage.tsx',
     'pages/MibRepositoryPage.tsx',
     'pages/PollersPage.tsx',
     'pages/ProfilesPage.tsx',
     'pages/RoutingPage.tsx',
-    'pages/UsersPage.tsx',
     'pages/integrations/MerakiIntegrationPage.tsx',
     'pages/integrations/NetboxIntegrationPage.tsx',
     'reports/ReportBuilder.tsx',
     'reports/ScheduleModal.tsx',
     'troubleshoot/ScheduleModal.tsx',
   ];
-  const CEILING = 31;
+  const CEILING = 24;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const handWritten = sources.filter(([, code]) => NEEDLE.test(code)).map(([p]) => p);

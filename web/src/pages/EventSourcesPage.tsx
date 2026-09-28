@@ -21,6 +21,9 @@ import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons'
 import './EventSourcesPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
@@ -197,34 +200,28 @@ function AddSourceModal({
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('eventSources.err.add'), onDone });
   const valid = name.trim() !== '';
   const submit = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createEventSource({ name: name.trim() })
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('eventSources.err.add')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createEventSource({ name: name.trim() })
+        .then((created) => done(created)),
+    );
   };
   return (
     <Modal
       title={t('eventSources.addModal.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {t('eventSources.addModal.create')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('eventSources.addModal.create')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -237,7 +234,7 @@ function AddSourceModal({
         />
         <span className="modal-hint">{t('eventSources.addModal.hint')}</span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -253,41 +250,35 @@ function EditSourceModal({
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(source.name);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('eventSources.err.save'), onDone });
   const valid = name.trim() !== '';
   const submit = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .updateEventSource(source.id, { name: name.trim(), enabled: source.enabled, node_id: source.node_id })
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('eventSources.err.save')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .updateEventSource(source.id, { name: name.trim(), enabled: source.enabled, node_id: source.node_id })
+        .then(() => done()),
+    );
   };
   return (
     <Modal
       title={t('eventSources.editModal.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">{t('eventSources.editModal.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

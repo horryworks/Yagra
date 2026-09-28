@@ -15,9 +15,11 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
-import { Button } from '../ui/Button';
+import { api } from '../../services/api';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { TextInput } from '../ui/Field';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
 import { MIN_PW, validateOwnPasswordChange } from '../../lib/password';
 
@@ -32,8 +34,7 @@ export function ChangeMyPasswordModal({ onClose, onChanged }: Props) {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('password.err.failed'), onDone: onChanged });
 
   const problem = validateOwnPasswordChange({ current, next, confirm });
   // Which problems are worth saying out loud while the operator is still typing. A mismatch against
@@ -43,16 +44,8 @@ export function ChangeMyPasswordModal({ onClose, onChanged }: Props) {
     problem === 'unchanged' || (problem === 'mismatch' && confirm.length > 0) ? problem : null;
 
   const submit = () => {
-    if (problem !== null || busy) return;
-    setBusy(true);
-    setError(null);
-    api
-      .changeMyPassword(current, next)
-      .then(onChanged)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('password.err.failed')));
-        setBusy(false);
-      });
+    if (problem !== null) return;
+    form.submit(() => api.changeMyPassword(current, next).then(() => done()));
   };
 
   return (
@@ -60,14 +53,13 @@ export function ChangeMyPasswordModal({ onClose, onChanged }: Props) {
       title={t('password.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={problem !== null || busy}>
-            {t('password.submit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('password.submit')}
+          canSubmit={problem === null}
+        />
       }
     >
       <p className="pref-note muted">{t('password.note')}</p>
@@ -101,7 +93,7 @@ export function ChangeMyPasswordModal({ onClose, onChanged }: Props) {
       </div>
       {inlineProblem === 'mismatch' && <p className="form-error">{t('password.err.mismatch')}</p>}
       {inlineProblem === 'unchanged' && <p className="form-error">{t('password.err.unchanged')}</p>}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

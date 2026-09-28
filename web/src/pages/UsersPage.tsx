@@ -50,6 +50,9 @@ import { useLoad } from '../lib/useLoad';
 import { MIN_PW } from '../lib/password';
 import { LoadGate } from '../components/ui/LoadGate';
 import './UsersPage.css';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 // The role *filter* moved to `pages/userFilters.ts` (ADR-053 Inc.6). It used to be a segmented
 // radio group built from a `['all', ...ROLES.reverse()]` list here — one-of-four by construction, so
@@ -317,30 +320,25 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
   // `oidc` is excluded: those accounts appear by signing in through the IdP, and the API refuses to
   // create one by hand. Offering it would be a choice that always fails.
   const [kind, setKind] = useState<CreatableUserKind>('local');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('users.err.create'), onDone });
   // A service account has no password to validate — it cannot sign in at all.
   const valid =
     username.trim().length > 0 && (kind === 'service' || password.length >= MIN_PW);
 
   const submit = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createUser({
-        username: username.trim(),
-        role,
-        kind,
-        // Omitted for a service account: the API rejects a password there rather than discarding
-        // it, so that an admin cannot come away believing they set one.
-        password: kind === 'service' ? undefined : password,
-      })
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('users.err.create')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createUser({
+          username: username.trim(),
+          role,
+          kind,
+          // Omitted for a service account: the API rejects a password there rather than discarding
+          // it, so that an admin cannot come away believing they set one.
+          password: kind === 'service' ? undefined : password,
+        })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -348,14 +346,13 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       title={t('users.actions.addUser')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {t('users.actions.addUser')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('users.actions.addUser')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -406,7 +403,7 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
           ))}
         </Select>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -424,23 +421,18 @@ function ChangePasswordModal({
   const { t } = useTranslation('access');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('users.err.changePw'), onDone });
   const tooShort = password.length < MIN_PW;
   const mismatch = confirm.length > 0 && password !== confirm;
   const valid = !tooShort && password === confirm;
 
   const submit = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .setUserPassword(user.id, password)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('users.err.changePw')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .setUserPassword(user.id, password)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -448,14 +440,13 @@ function ChangePasswordModal({
       title={t('users.changePw.title', { name: user.username })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -478,7 +469,7 @@ function ChangePasswordModal({
         />
       </div>
       {mismatch && <p className="form-error">{t('users.changePw.mismatch')}</p>}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -500,8 +491,9 @@ function ChangeScopeModal({
   const { t } = useTranslation('access');
   const [groups, setGroups] = useState<NodeGroup[] | null>(null);
   const [selected, setSelected] = useState<string[]>(() => scopeGroupIds(user.scope));
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('users.err.changeScope'), onDone });
+  // The folder list failing to load is said on the same line a failed save is.
+  const { refuse } = form;
 
   useEffect(() => {
     api
@@ -509,9 +501,9 @@ function ChangeScopeModal({
       .then(setGroups)
       .catch((e: unknown) => {
         setGroups([]);
-        setError(errMsg(e, t('users.err.loadGroups')));
+        refuse(errMsg(e, t('users.err.loadGroups')));
       });
-  }, [t]);
+  }, [t, refuse]);
 
   const next = scopeFromSelection(selected);
   // Saving revokes every session the account holds, so an unchanged selection must not be savable:
@@ -520,15 +512,11 @@ function ChangeScopeModal({
 
   const submit = () => {
     if (!changed) return;
-    setBusy(true);
-    setError(null);
-    api
-      .setUserScope(user.id, next)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('users.err.changeScope')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .setUserScope(user.id, next)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -536,14 +524,13 @@ function ChangeScopeModal({
       title={t('users.scopeModal.title', { name: user.username })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!changed || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={changed}
+        />
       }
     >
       <p className="modal-hint users-scope-intro">{t('users.scopeModal.intro')}</p>
@@ -578,7 +565,7 @@ function ChangeScopeModal({
           {t('users.scopeModal.revokes')}
         </span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

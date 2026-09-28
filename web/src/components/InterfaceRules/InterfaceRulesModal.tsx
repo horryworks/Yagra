@@ -35,8 +35,11 @@ import {
 } from '../../lib/portRuleForm';
 import type { MatchingThreshold, StoredThreshold } from '../../types/api';
 import { boundSentence, isOwnRule } from './interfaceRuleText';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { Select, TextInput } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
 import { EditIcon, TrashIcon } from '../ui/icons';
@@ -271,8 +274,7 @@ function PortRuleFormView({
   const [form, setForm] = useState<PortRuleForm>(
     () => (rule && portRuleFrom(rule)) || newPortRuleForm(),
   );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const save = useSubmit({ errorFallback: t('interfaces.rules.saveFailed'), onDone: onSaved });
   const set = <K extends keyof PortRuleForm>(key: K, value: PortRuleForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -283,14 +285,9 @@ function PortRuleFormView({
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
-    const call = rule
-      ? api.updateThreshold(rule.id, body)
-      : api.createThreshold(body).then(() => undefined);
-    call.then(onSaved).catch((e: unknown) => {
-      setError(errMsg(e, t('interfaces.rules.saveFailed')));
-      setBusy(false);
+    save.submit(() => {
+      const call = rule ? api.updateThreshold(rule.id, body) : api.createThreshold(body);
+      return call.then(() => done());
     });
   };
 
@@ -303,14 +300,13 @@ function PortRuleFormView({
       })}
       onClose={onCancel}
       footer={
-        <>
-          <Button variant="outline" onClick={onCancel} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {rule ? t('common:actions.save') : t('interfaces.rules.add')}
-          </Button>
-        </>
+        <FormFooter
+          form={save}
+          onClose={onCancel}
+          onSubmit={submit}
+          submitLabel={rule ? t('common:actions.save') : t('interfaces.rules.add')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -434,7 +430,7 @@ function PortRuleFormView({
           value: storedBound(body) ?? '—',
         })}
       </p>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={save} />
     </Modal>
   );
 }

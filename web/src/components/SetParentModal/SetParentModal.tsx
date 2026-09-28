@@ -7,11 +7,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import type { TopologyNode } from '../../types/api';
 import { invalidParentIds } from '../../lib/dependencies';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { NodePicker } from '../NodePicker/NodePicker';
 
 export function SetParentModal({
@@ -38,8 +40,7 @@ export function SetParentModal({
     currentParentId ? { id: currentParentId, name: '' } : null,
   );
   const [loadFailed, setLoadFailed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('err.setDependency'), onDone: onSaved });
 
   // Load the dependency graph once: to resolve the current upstream's name for the trigger and to
   // exclude cycle-forming choices (self + descendants) from the picker.
@@ -70,31 +71,20 @@ export function SetParentModal({
     [topo, nodeId],
   );
 
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setNodeParent(nodeId, parent?.id ?? null)
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.setDependency')));
-        setBusy(false);
-      });
-  };
+  const save = () =>
+    form.submit(() => api.setNodeParent(nodeId, parent?.id ?? null).then(() => done()));
 
   return (
     <Modal
       title={t('setParent.title', { name: nodeName })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+        />
       }
     >
       <div className="form-stack">
@@ -110,7 +100,7 @@ export function SetParentModal({
         </label>
         <p className="form-hint">{t('setParent.hint', { name: nodeName })}</p>
         {loadFailed && <p className="form-error">{t('setParent.loadFailed')}</p>}
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

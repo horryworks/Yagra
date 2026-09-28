@@ -12,7 +12,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { LIVENESS_METRIC } from '../../lib/format';
 import { splitInterfaceScopeId } from '../../lib/interfaceScope';
 import {
@@ -33,7 +35,7 @@ import {
 } from '../../types/api';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
 import { NodePicker } from '../NodePicker/NodePicker';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
 import { Select, TextInput } from '../ui/Field';
 import { MultiSelectList } from '../ui/MultiSelectList';
@@ -216,8 +218,13 @@ export function ThresholdModal({
   // now opens its own port-shaped dialog (ADR-076 増分 5), and a prop with no caller is a prop
   // nothing keeps true.
   const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const save = useSubmit({
+    errorFallback: t('thresholds.err.save'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
   const set = <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -251,22 +258,12 @@ export function ThresholdModal({
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
     const body = thresholdBody(form);
-    const call =
-      mode === 'edit' && rule
-        ? api.updateThreshold(rule.id, body)
-        : api.createThreshold(body).then(() => undefined);
-    call
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('thresholds.err.save')));
-        setBusy(false);
-      });
+    save.submit(() => {
+      const call =
+        mode === 'edit' && rule ? api.updateThreshold(rule.id, body) : api.createThreshold(body);
+      return call.then(() => done());
+    });
   };
 
   return (
@@ -274,14 +271,13 @@ export function ThresholdModal({
       title={mode === 'edit' ? t('thresholds.editModal.title') : t('thresholds.addModal.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {mode === 'edit' ? t('common:actions.save') : t('thresholds.addModal.add')}
-          </Button>
-        </>
+        <FormFooter
+          form={save}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={mode === 'edit' ? t('common:actions.save') : t('thresholds.addModal.add')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -392,7 +388,7 @@ export function ThresholdModal({
           {noBounds ? t('thresholds.livenessMetric') : t('thresholds.addModal.boundsHint')}
         </span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={save} />
     </Modal>
   );
 }
