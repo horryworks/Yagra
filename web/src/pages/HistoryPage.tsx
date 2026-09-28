@@ -22,10 +22,9 @@ import { useLoad } from '../lib/useLoad';
 import { Badge } from '../components/ui/Badge';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
+import { isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
@@ -41,7 +40,6 @@ import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuer
 
 export function HistoryPage() {
   const { t } = useTranslation('alerts');
-  const [sheet, setSheet] = useState(false);
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
@@ -226,7 +224,6 @@ export function HistoryPage() {
       });
   }, [cursor, filterCols, filters, scopeIds, nowMs, firstPage.data]);
 
-
   return (
     <div className="page-fill">
       <PageHeader
@@ -239,27 +236,32 @@ export function HistoryPage() {
           reaches millions of rows, so an ILIKE there would turn the keyset seek into a seq scan.
           "Which node" is what ScopePicker answers instead. */}
       <LoadGate load={firstPage} unavailable={t('history.unavailable')}>
-        <TableToolbar>
-          <ScopePicker value={scope} onChange={onScope} className="table-filter" />
-          <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-          {/* The scope is counted and cleared with the columns: it is not a column filter, but it
-              narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
-              ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}
-          <ClearFilters
-            columns={filterCols}
-            filters={filters}
-            extraActive={!!scopeIds.nodeId || !!scopeIds.groupId}
-            onClear={() => {
-              setScope(allScope(t));
-              setFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
-            }}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={rows.length}
-            noun={cursor === null ? t('history.transitions') : t('history.transitionsLoaded')}
-          />
-        </TableToolbar>
+        {/* The scope is counted and cleared with the columns: it is not a column filter, but it
+            narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
+            ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}
+        <ListToolbar
+          list={serverToolbarFilters(
+            filterCols,
+            { filters, setFilters },
+            {
+              active: !!scopeIds.nodeId || !!scopeIds.groupId,
+              clear: writeScope({ nodeId: '', groupId: '' }),
+              onClear: () => setScope(allScope(t)),
+            },
+          )}
+          labels={{
+            severity: t('history.cols.severity'),
+            state: t('history.cols.state'),
+            phase: t('history.cols.event'),
+            range: t('history.cols.when'),
+          }}
+          count={{
+            shown: rows.length,
+            noun: () =>
+              cursor === null ? t('history.transitions') : t('history.transitionsLoaded'),
+          }}
+          leading={<ScopePicker value={scope} onChange={onScope} className="table-filter" />}
+        />
         <DataTable
           tableId="alerts.history"
           rows={rows}
@@ -278,20 +280,6 @@ export function HistoryPage() {
           // No facet counts: every count here would be a second aggregate query over a table that
           // reaches millions of rows, per popover open. ADR-023 puts UI load third.
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            labels={{
-              severity: t('history.cols.severity'),
-              state: t('history.cols.state'),
-              phase: t('history.cols.event'),
-              range: t('history.cols.when'),
-            }}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
     </div>
   );

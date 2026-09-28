@@ -17,8 +17,8 @@ import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable } from '../components/ui/DataTable';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { eventColumns, eventCard } from '../components/EventLog/eventColumns';
 import {
@@ -35,8 +35,7 @@ import {
 } from '../components/EventLog/useEventFilters';
 import { eventListeners, type ListenerBinding } from '../components/EventLog/listeners';
 import { useFilterParams } from '../lib/useFilterParams';
-import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
-import { ClearFilters } from '../components/ui/ClearFilters';
+import { isAnyFiltered } from '../lib/columnFilter';
 import { readIdParam, writeIdParam } from '../lib/filterParams';
 
 /**
@@ -73,7 +72,6 @@ export function EventsPage() {
   const nodeId = readIdParam(searchParams, 'node_id');
   const { nodeName } = useEntityNames();
   const semantics = useSearchSemantics();
-  const [sheet, setSheet] = useState(false);
   const bindings = useEventListeners();
 
   const filterCols = useMemo(() => eventFilterColumns(t, { semantics }), [t, semantics]);
@@ -142,41 +140,36 @@ export function EventsPage() {
           Source column's filter: it resolves a name to an id against the inventory, which is a
           different question from "does this row's source contain these characters", and nesting its
           own popover inside a filter popover would clip it (ui-conventions). */}
-      <TableToolbar>
-        <NodePicker
-          value={nodeId ?? null}
-          valueLabel={nodeId ? nodeName(nodeId) : undefined}
-          onChange={setNode}
-          placeholder={t('nav:nodes.all')}
-        />
-        <FilterButton
-          columns={filterCols}
-          filters={filters}
-          onOpen={() => {
-            // The sheet shows every column at once, so its counts are fetched together rather than
-            // per popover — there is no "opened this one" signal on mobile.
-            for (const c of filterCols) facets.load(c.key);
-            setSheet(true);
-          }}
-        />
-        {/* The node picker is counted and cleared with the columns: it is not a column filter, but
-            it narrows this list, and "clear all filters" that leaves a node selected is a lie.
-            ⚠️ Both go into ONE `setSearchParams` — see `setFilters`'s `also` parameter for what
-            happened when they were two. */}
-        <ClearFilters
-          columns={filterCols}
-          filters={filters}
-          extraActive={nodeId != null}
-          onClear={() =>
-            setFilters(defaultFilters(filterCols), (p) => writeIdParam(p, 'node_id', null))
-          }
-        />
-        <TableSpacer />
-        <ResultCount
-          shown={rows.length}
-          noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
-        />
-      </TableToolbar>
+      {/* The node picker is counted and cleared with the columns: it is not a column filter, but
+          it narrows this list, and "clear all filters" that leaves a node selected is a lie.
+          ⚠️ Both go into ONE `setSearchParams` — `serverToolbarFilters` folds the picker's reset
+          into the columns' write (`setFilters`' `also` says what happened when they were two). */}
+      <ListToolbar
+        list={serverToolbarFilters(
+          filterCols,
+          { filters, setFilters },
+          { active: nodeId != null, clear: (p) => writeIdParam(p, 'node_id', null) },
+          facets.counts,
+        )}
+        labels={eventColumnLabels(t)}
+        // The sheet shows every column at once, so its counts are fetched together rather than
+        // per popover — there is no "opened this one" signal on mobile.
+        onSheetOpen={() => {
+          for (const c of filterCols) facets.load(c.key);
+        }}
+        count={{
+          shown: rows.length,
+          noun: () => (exhausted ? t('events.events') : t('events.eventsLoaded')),
+        }}
+        leading={
+          <NodePicker
+            value={nodeId ?? null}
+            valueLabel={nodeId ? nodeName(nodeId) : undefined}
+            onChange={setNode}
+            placeholder={t('nav:nodes.all')}
+          />
+        }
+      />
       {/* Said out loud, because the rows below are the answer to a slightly broader question than
           the one the operator typed. Silently widening would be the worse half of this trade. */}
       {widened && <p className="ev-widened">{t('events.widened')}</p>}
@@ -195,16 +188,6 @@ export function EventsPage() {
         empty={empty}
         loading={loading}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={facets.counts}
-          labels={eventColumnLabels(t)}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </div>
   );
 }

@@ -34,11 +34,10 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { FilterBar } from '../components/ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters } from '../lib/columnFilter';
+
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -65,7 +64,6 @@ export function UsersPage() {
   const filterLabels = useMemo(() => userFilterLabels(t), [t]);
   // In the URL (ADR-153), so a narrowed list survives a reload.
   const { filters, setFilters } = useFilterParams(filterCols);
-  const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Open dialogs: add form, and the user targeted by a password change / delete.
   const [adding, setAdding] = useState(false);
@@ -128,29 +126,21 @@ export function UsersPage() {
         // that would let you in, which is what ADR-056 Increment 2 will give every screen.
         forbidden={t('users.forbidden')}
       >
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters
-            columns={filterCols}
-            filters={filters}
-            onClear={() => setFilters(defaultFilters(filterCols))}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={list.length}
-            total={rows.length}
-            noun={t('common:noun.user', { count: rows.length })}
-          />
+        <ListToolbar
+          list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, facets)}
+          labels={filterLabels}
+          count={{
+            shown: list.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.user', { count: n }),
+          }}
+        >
           {canUsers && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('users.actions.addUser')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         {/* The identity list is a card per account with no header row, so the controls carry
             their own names rather than sitting under columns that do not exist (ADR-053 Inc.6
@@ -163,16 +153,6 @@ export function UsersPage() {
           onChange={setFilters}
           counts={facets}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            labels={filterLabels}
-            filters={filters}
-            onChange={setFilters}
-            counts={facets}
-            onClose={() => setSheet(false)}
-          />
-        )}
 
         {error && <p className="form-error users-error">{error}</p>}
 

@@ -8,14 +8,12 @@
 // Progress and terminal states arrive over SSE (store.upsertJob); no client-side faking.
 
 import { useNavigate } from 'react-router-dom';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { Button } from '../components/ui/Button';
-import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -155,8 +153,6 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   // In the URL (ADR-153). This used to be component state because the list was also embedded in
   // the catalog; it no longer is (`TroubleshootCatalogPage.tsx`), so the Runs page is its one host.
   const { filters, setFilters } = useFilterParams(columns);
-  const [sheet, setSheet] = useState(false);
-  const narrowed = filterable && isAnyFiltered(columns, filters);
   const shown = useMemo(
     () => (filterable ? jobs.filter(buildPredicate(columns, filters, Date.now())) : jobs),
     [filterable, jobs, columns, filters],
@@ -186,24 +182,15 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
     <>
       {filterable && (
         <>
-          <TableToolbar>
-            <FilterButton
-              columns={columns}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={columns}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(columns))}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={narrowed ? jobs.length : undefined}
-              noun={t('runs.noun', { count: shown.length })}
-            />
-          </TableToolbar>
+          <ListToolbar
+            list={serverToolbarFilters(columns, { filters, setFilters }, undefined, counts)}
+            labels={labels}
+            count={{
+              shown: shown.length,
+              total: jobs.length,
+              noun: (n) => t('runs.noun', { count: n }),
+            }}
+          />
           {/* A run row is a CSS grid with no header row above it, so the controls carry their own
               names instead of sitting under columns that do not exist (ADR-053 Inc.6 decision E). */}
           <FilterBar
@@ -213,16 +200,6 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
             onChange={setFilters}
             counts={counts}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={columns}
-              labels={labels}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
       {shown.length === 0 ? (

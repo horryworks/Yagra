@@ -25,10 +25,9 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
+import { isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
@@ -91,7 +90,6 @@ export function AuditPage() {
 
   // The search box settles before it is sent; the selects commit immediately (picking an option is
   // already a deliberate act, and waiting on it would feel broken).
-  const [sheet, setSheet] = useState(false);
 
   // Columns close over the translator, so rebuild them on a language switch.
   //
@@ -196,19 +194,16 @@ export function AuditPage() {
         />
       ) : (
         <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={rowFilters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={filterCols}
-              filters={rowFilters}
-              onClear={() => setRowFilters(defaultFilters(filterCols))}
-            />
-            <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('audit.entry', { count: rows.length })} />
+          <ListToolbar
+            list={serverToolbarFilters(filterCols, { filters: rowFilters, setFilters: setRowFilters })}
+            labels={{
+              q: t('audit.cols.user'),
+              action: t('audit.cols.action'),
+              status: t('audit.cols.status'),
+              range: t('audit.cols.time'),
+            }}
+            count={{ shown: rows.length, noun: (n) => t('audit.entry', { count: n }) }}
+          >
             <Button
               variant="outline"
               onClick={exportCsv}
@@ -217,7 +212,7 @@ export function AuditPage() {
             >
               <DownloadIcon width={15} height={15} /> {t('audit.export')}
             </Button>
-          </TableToolbar>
+          </ListToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
@@ -235,20 +230,6 @@ export function AuditPage() {
             loading={loading}
             empty={filtered ? t('audit.empty.filtered') : t('audit.empty.none')}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={rowFilters}
-              onChange={setRowFilters}
-              labels={{
-                q: t('audit.cols.user'),
-                action: t('audit.cols.action'),
-                status: t('audit.cols.status'),
-                range: t('audit.cols.time'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
     </div>

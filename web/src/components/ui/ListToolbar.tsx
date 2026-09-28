@@ -27,10 +27,13 @@ interface ControlsProps<T> {
   list: ToolbarFilters<T>;
   /** What the sheet calls each filterable column — `columnLabels(columns)` for most screens. */
   labels: Record<string, string>;
+  /** Runs as the phone's sheet opens: a server-counted list fetches every column's counts here,
+   *  since the sheet shows them all at once (Events). */
+  onSheetOpen?: () => void;
 }
 
 /** The filter button, "clear all filters", and the phone's filter sheet. */
-export function FilterControls<T>({ list, labels }: ControlsProps<T>) {
+export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T>) {
   const [sheet, setSheet] = useState(false);
   return (
     <>
@@ -38,7 +41,10 @@ export function FilterControls<T>({ list, labels }: ControlsProps<T>) {
         columns={list.filterCols}
         filters={list.filters}
         baseline={list.baseline}
-        onOpen={() => setSheet(true)}
+        onOpen={() => {
+          onSheetOpen?.();
+          setSheet(true);
+        }}
       />
       <ClearFilters
         columns={list.filterCols}
@@ -75,12 +81,21 @@ interface Props<T> extends ControlsProps<T> {
   children?: ReactNode;
 }
 
-export function ListToolbar<T>({ list, labels, count, leading, tools, note, children }: Props<T>) {
+export function ListToolbar<T>({
+  list,
+  labels,
+  onSheetOpen,
+  count,
+  leading,
+  tools,
+  note,
+  children,
+}: Props<T>) {
   const n = count && resultCount({ ...count, anyFiltered: list.anyFiltered });
   return (
     <TableToolbar>
       {leading}
-      <FilterControls list={list} labels={labels} />
+      <FilterControls list={list} labels={labels} onSheetOpen={onSheetOpen} />
       {tools}
       <TableSpacer />
       {note}

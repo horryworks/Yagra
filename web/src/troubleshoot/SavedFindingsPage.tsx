@@ -33,10 +33,9 @@ import type { SavedFinding } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
+import { isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName } from '../components/ui/EntityName';
@@ -147,7 +146,6 @@ export function SavedFindingsPage() {
   const authed = useAuthStore((s) => s.authed);
   const { nodeName, groupName } = useEntityNames();
 
-  const [sheet, setSheet] = useState(false);
   const [rows, setRows] = useState<SavedFinding[]>([]);
   const [cursor, setCursor] = useState<FindingCursor | null>(null);
   const [exhausted, setExhausted] = useState(false);
@@ -176,6 +174,15 @@ export function SavedFindingsPage() {
   // written through `setFilters`' `also` so a change to both is ONE write. The picker's value is
   // derived for display — seeded from the URL on arrival, then owned by the picker's own label.
   const [params] = useSearchParams();
+  // What the phone's filter sheet calls each column.
+  const sheetLabels = useMemo(
+    () => ({
+      severity: t('findings.cols.severity'),
+      tool: t('findings.cols.tool'),
+      range: t('findings.cols.at'),
+    }),
+    [t],
+  );
   const scopeIds = useMemo(() => readScope(params), [params]);
   const [scope, setScope] = useState<ScopeValue>(() =>
     scopeFromIds(scopeIds, { node: nodeName, group: groupName }, t),
@@ -254,31 +261,25 @@ export function SavedFindingsPage() {
         </Card>
       ) : (
         <>
-          <TableToolbar>
-            {/* The scope's ids are the URL's; the picker writes them and shows a label for them. */}
-            <ScopePicker value={scope} onChange={onScope} className="ts-sf-scope" />
-            <FilterButton
-              columns={filterCols}
-              filters={rowFilters}
-              onOpen={() => setSheet(true)}
-            />
-            {/* The scope narrows this list too, so it is counted and cleared with the columns —
-                a "clear all" that leaves a node selected is a lie. */}
-            <ClearFilters
-              columns={filterCols}
-              filters={rowFilters}
-              extraActive={scopeIsSet(scopeIds)}
-              onClear={() => {
-                setScope(allScope(t));
-                setRowFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
-              }}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={rows.length}
-              noun={t('findings.finding', { count: rows.length })}
-            />
-          </TableToolbar>
+          {/* The scope narrows this list too, so it is counted and cleared with the columns — a
+              "clear all" that leaves a node selected is a lie. */}
+          <ListToolbar
+            list={serverToolbarFilters(
+              filterCols,
+              { filters: rowFilters, setFilters: setRowFilters },
+              {
+                active: scopeIsSet(scopeIds),
+                clear: writeScope({ nodeId: '', groupId: '' }),
+                onClear: () => setScope(allScope(t)),
+              },
+            )}
+            labels={sheetLabels}
+            count={{ shown: rows.length, noun: (n) => t('findings.finding', { count: n }) }}
+            leading={
+              // The scope's ids are the URL's; the picker writes them and shows a label for them.
+              <ScopePicker value={scope} onChange={onScope} className="ts-sf-scope" />
+            }
+          />
 
           {error && <p className="form-error">{error}</p>}
 
@@ -301,19 +302,6 @@ export function SavedFindingsPage() {
                 : t('findings.empty.none')
             }
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={rowFilters}
-              onChange={setRowFilters}
-              labels={{
-                severity: t('findings.cols.severity'),
-                tool: t('findings.cols.tool'),
-                range: t('findings.cols.at'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
     </div>

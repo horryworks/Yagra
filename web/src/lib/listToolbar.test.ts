@@ -116,21 +116,13 @@ describe('a list draws its filter controls through ListToolbar', () => {
     'components/NodeDetail/EventsTab.tsx',
     'components/NodeDetail/FlowTab.tsx',
     'components/NodeDetail/InterfacesTab.tsx',
-    'pages/ActiveAlertsPage.tsx',
-    'pages/AuditPage.tsx',
     'pages/DiscoveryPage.tsx',
-    'pages/EventsPage.tsx',
-    'pages/HistoryPage.tsx',
-    'pages/ThresholdsPage.tsx',
-    'pages/UsersPage.tsx',
-    'troubleshoot/AnalysisRuns.tsx',
-    'troubleshoot/SavedFindingsPage.tsx',
     'troubleshoot/report/bodies/AuthProbeBody.tsx',
     'troubleshoot/report/bodies/FlowScanBody.tsx',
     'troubleshoot/report/bodies/RuleGapBody.tsx',
   ];
   /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 16;
+  const CEILING = 8;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const drawing = (needle: string) =>

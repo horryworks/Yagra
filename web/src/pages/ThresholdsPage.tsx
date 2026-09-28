@@ -34,11 +34,10 @@ import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
 import { IconButton } from '../components/ui/IconButton';
 import { EditIcon } from '../components/ui/icons';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { decodeSet, defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { decodeSet, isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { queryFor, thresholdFilters } from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
@@ -116,8 +115,6 @@ export function ThresholdsPage() {
       row.scope_ids.map((id) => scopeName(row.scope_level, id)).join(', '),
     [scopeName],
   );
-
-  const [sheet, setSheet] = useState(false);
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given, `load` depends on
@@ -414,32 +411,36 @@ export function ThresholdsPage() {
       )}
 
       <LoadGate load={ruleset} permission="manage_config" unavailable={t('thresholds.unavailable')}>
-        <TableToolbar>
-          <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-          <ClearFilters
-            columns={filterCols}
-            filters={filters}
-            onClear={() => setFilters(defaultFilters(filterCols))}
-          />
-          <TableSpacer />
-          {/* Says how many of how many when the server capped the response — never a bare count
-              that would read as the whole ruleset. */}
-          {page.truncated && (
-            <span className="muted thresholds-truncated">
-              {t('thresholds.truncated', { shown: rows.length, total: page.total })}
-            </span>
-          )}
-          <ResultCount
-            shown={rows.length}
-            total={filtered ? page.total : undefined}
-            noun={t('common:noun.rule', { count: rows.length })}
-          />
+        <ListToolbar
+          list={serverToolbarFilters(filterCols, { filters, setFilters })}
+          labels={{
+            q: t('thresholds.cols.metric'),
+            scope_level: t('thresholds.cols.scope'),
+            direction: t('thresholds.cols.direction'),
+          }}
+          count={{
+            shown: rows.length,
+            total: page.total,
+            noun: (n) => t('common:noun.rule', { count: n }),
+          }}
+          note={
+            <>
+              {/* Says how many of how many when the server capped the response — never a bare count
+                  that would read as the whole ruleset. */}
+              {page.truncated && (
+                <span className="muted thresholds-truncated">
+                  {t('thresholds.truncated', { shown: rows.length, total: page.total })}
+                </span>
+              )}
+            </>
+          }
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               {t('thresholds.add')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         {error && <p className="form-error">{error}</p>}
 
@@ -470,19 +471,6 @@ export function ThresholdsPage() {
             )
           }
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            labels={{
-              q: t('thresholds.cols.metric'),
-              scope_level: t('thresholds.cols.scope'),
-              direction: t('thresholds.cols.direction'),
-            }}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
 
       {adding && <ThresholdModal mode="add" onClose={() => setAdding(false)} onSaved={load} />}

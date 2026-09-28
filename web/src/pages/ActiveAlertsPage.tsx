@@ -22,11 +22,10 @@ import { muteTargetFromAlert, type AlertMuteSeed } from '../lib/suppression';
 import { SEVERITIES } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
-import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { FilterBar } from '../components/ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
+import { type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { RcaModal } from '../components/Rca/RcaModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -65,7 +64,6 @@ export function ActiveAlertsPage() {
     [t],
   );
   const labels = useMemo(() => activeAlertLabels(t), [t]);
-  const [sheet, setSheet] = useState(false);
 
   const filters = useMemo(
     () => readFilters(codecColumns, params),
@@ -90,7 +88,6 @@ export function ActiveAlertsPage() {
       alertPredicate(activeAlertColumns(t, nameOf, SEVERITIES, SEVERITY_ORDER), filters),
     [filters, t],
   );
-  const narrowed = isAnyFiltered(codecColumns, filters);
 
   // `rca_enabled` is the server's own answer to "would this button work" — an installation with no
   // provider would 503, so the affordance simply isn't offered there.
@@ -141,20 +138,15 @@ export function ActiveAlertsPage() {
           );
           return (
             <>
-              <TableToolbar>
-                <FilterButton columns={cols} filters={filters} onOpen={() => setSheet(true)} />
-                <ClearFilters
-                  columns={cols}
-                  filters={filters}
-                  onClear={() => setFilters(defaultFilters(cols))}
-                />
-                <TableSpacer />
-                <ResultCount
-                  shown={shown}
-                  total={narrowed ? total : undefined}
-                  noun={t('common:noun.alert', { count: shown })}
-                />
-              </TableToolbar>
+              <ListToolbar
+                list={serverToolbarFilters(cols, { filters, setFilters }, undefined, counts)}
+                labels={labels}
+                count={{
+                  shown: shown,
+                  total: total,
+                  noun: (n) => t('common:noun.alert', { count: n }),
+                }}
+              />
               {/* No header row on this list, so the controls sit in a bar with their names beside
                   them rather than under columns that do not exist (ADR-053 Inc.6 decision E). */}
               <FilterBar
@@ -164,16 +156,6 @@ export function ActiveAlertsPage() {
                 onChange={setFilters}
                 counts={counts}
               />
-              {sheet && (
-                <MobileFilterSheet
-                  columns={cols}
-                  labels={labels}
-                  filters={filters}
-                  onChange={setFilters}
-                  counts={counts}
-                  onClose={() => setSheet(false)}
-                />
-              )}
             </>
           );
         }}
