@@ -41,6 +41,35 @@ pub(super) fn first_offset(node: NodeId) -> Duration {
     Duration::from_secs(u64::from_le_bytes(low) % IDENTITY_PERIOD.as_secs())
 }
 
+/// How much of a node's identity one job reads (ADR-138 Increment 6).
+///
+/// Core asks for `sysDescr` on every poll while a node's maker is unknown, and until this existed
+/// the poller answered that ask with the whole probe — the OS-version OIDs, a Huawei's patch table
+/// and the ENTITY-MIB serial walk — on every poll. What core needs to classify is two scalars;
+/// the rest changes a few times a year and belongs to the hourly cadence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdentityRead {
+    /// Read nothing.
+    Skip,
+    /// `sysDescr` and `sysObjectID` in one GET — what core classifies a device from.
+    Classify,
+    /// The whole probe: version, patch, model and serial as well.
+    Full,
+}
+
+impl IdentityRead {
+    /// What a job asks for on its own, with no cadence consulted: the full probe when core set the
+    /// flag. Only a caller that has no [`IdentityCadence`] — a test — reads this way.
+    #[cfg(test)]
+    pub(crate) fn asked_by(job: &PollJob) -> Self {
+        if job.probe_identity {
+            Self::Full
+        } else {
+            Self::Skip
+        }
+    }
+}
+
 struct Entry {
     /// When the next probe is due.
     due: Instant,
@@ -127,6 +156,37 @@ impl IdentityCadence {
         on_demand: bool,
     ) -> bool {
         self.claim_first_now(node, now) || on_demand
+    }
+
+    /// How much of this node's identity the job going past now reads (ADR-138 Increment 6).
+    ///
+    /// `core_asked` is the job's `probe_identity` as core sent it: the node's maker is still unknown.
+    /// Such a node reads the two classifying scalars on every poll and the full probe only when the
+    /// cadence is due — **and on first sight** ([`Self::claim_first_now`]), so a device added a
+    /// minute ago still shows its version and serial after its first poll, as it did before. A node
+    /// core did not ask about reads in full on the offset cadence, as it always has.
+    ///
+    /// 🚨 Report [`Self::succeeded`] only after a [`IdentityRead::Full`] read. Doing it after a
+    /// `Classify` read — which answers `sysDescr` every poll — would push the full read a period
+    /// away on every poll, and the version would never be read at all.
+    pub(super) fn read_for(
+        &mut self,
+        node: NodeId,
+        now: Instant,
+        first_offset: Duration,
+        core_asked: bool,
+        on_demand: bool,
+    ) -> IdentityRead {
+        let full = if core_asked {
+            self.claim_first_now_or_asked(node, now, on_demand)
+        } else {
+            self.claim_or_asked(node, now, first_offset, on_demand)
+        };
+        match (full, core_asked) {
+            (true, _) => IdentityRead::Full,
+            (false, true) => IdentityRead::Classify,
+            (false, false) => IdentityRead::Skip,
+        }
     }
 
     /// A probe for this node got an answer: the next one is a full period away.
@@ -352,6 +412,90 @@ mod tests {
         assert!(
             c.claim_first_now_or_asked(node(1), soon, true),
             "a poll now walks the names anyway"
+        );
+    }
+
+    /// ADR-138 Increment 6. An unknown-maker node reads the full probe on first sight and then once
+    /// a period, and only the two classifying scalars on every poll between — the case that used to
+    /// read the version, patch table and serial walk on every poll.
+    #[test]
+    fn a_node_core_asks_about_reads_in_full_once_a_period_and_classifies_between() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        let offset = Duration::from_secs(1_800);
+        assert_eq!(
+            c.read_for(node(1), t0, offset, true, false),
+            IdentityRead::Full,
+            "a device added a minute ago gets its version on its first poll"
+        );
+        c.succeeded(node(1), t0);
+        for minutes in [1, 5, 30, 59] {
+            assert_eq!(
+                c.read_for(
+                    node(1),
+                    t0 + Duration::from_secs(minutes * 60),
+                    offset,
+                    true,
+                    false
+                ),
+                IdentityRead::Classify,
+                "{minutes} min after a full read, core's ask reads sysDescr only"
+            );
+        }
+        assert_eq!(
+            c.read_for(node(1), t0 + IDENTITY_PERIOD, offset, true, false),
+            IdentityRead::Full,
+            "a period later the full read is due again"
+        );
+    }
+
+    /// 🚨 The trap the increment was written around: `Classify` reads never report success, so the
+    /// full read stays due. Were they reported, every poll would push it a period away and the
+    /// version would never be read. This asserts the schedule, which is what that mistake breaks.
+    #[test]
+    fn classify_reads_do_not_push_the_full_read_away() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        // The first full read got no answer: the short retry, not the period.
+        assert_eq!(
+            c.read_for(node(1), t0, Duration::ZERO, true, false),
+            IdentityRead::Full
+        );
+        let between = t0 + Duration::from_secs(60);
+        assert_eq!(
+            c.read_for(node(1), between, Duration::ZERO, true, false),
+            IdentityRead::Classify
+        );
+        assert_eq!(
+            c.read_for(node(1), t0 + IDENTITY_RETRY, Duration::ZERO, true, false),
+            IdentityRead::Full,
+            "the retry arrives however many classify reads came between"
+        );
+    }
+
+    #[test]
+    fn a_node_core_does_not_ask_about_keeps_the_offset_cadence() {
+        let mut c = IdentityCadence::default();
+        let t0 = Instant::now();
+        let offset = Duration::from_secs(600);
+        assert_eq!(
+            c.read_for(node(1), t0, offset, false, false),
+            IdentityRead::Skip,
+            "first sight only schedules"
+        );
+        assert_eq!(
+            c.read_for(node(1), t0 + offset, offset, false, false),
+            IdentityRead::Full
+        );
+        assert_eq!(
+            c.read_for(node(2), t0, offset, false, true),
+            IdentityRead::Full,
+            "a poll now reads in full"
+        );
+        assert_eq!(
+            c.read_for(node(3), t0, offset, true, true),
+            IdentityRead::Full,
+            "a poll now reads in full whether or not core asked"
         );
     }
 

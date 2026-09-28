@@ -162,10 +162,10 @@ fn the_dispatch_delegates_and_touches_no_device() {
         .find(|(name, _)| name == "mod.rs")
         .map(|(_, code)| code)
         .expect("worker/mod.rs");
-    let head = "pub async fn execute(";
+    let head = "pub(crate) async fn execute_reading(";
     let start = code
         .find(head)
-        .expect("`execute` is still the dispatch in worker/mod.rs");
+        .expect("`execute_reading` is still the dispatch in worker/mod.rs (`execute` wraps it)");
     let body = &code[start..];
     let end = body
         .find("\n}")

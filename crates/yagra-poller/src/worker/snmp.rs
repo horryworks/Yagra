@@ -103,6 +103,15 @@ impl IdentityProbe {
     }
 }
 
+/// What one scalar GET reads: the check's scalars and columns, and how much of the node's identity
+/// rides along (ADR-138 Increment 6). The v2c and v3 arms differ only in the credential, which is
+/// [`SnmpWalker`]; this is the half they share.
+pub(super) struct ScalarRead<'a> {
+    pub(super) oids: &'a [String],
+    pub(super) columns: &'a [SnmpColumn],
+    pub(super) identity: IdentityRead,
+}
+
 /// The credential half of an SNMP check that differs between v2c and v3 (community vs USM params).
 /// Capturing it here lets everything above it — the scalar GET, the column walk, the interface
 /// metadata fold, the identity probe — be written once instead of twice: v2c and v3 differ only in
@@ -129,6 +138,44 @@ impl SnmpWalker {
         }
     }
 
+    /// `sysDescr` and `sysObjectID`, in one GET: what core classifies a device's maker and model
+    /// from, and what the full probe reads first to decide which OIDs hold the version.
+    async fn read_classifying(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        timeout: Duration,
+    ) -> HashMap<String, String> {
+        self.read_strings(
+            transport,
+            target,
+            &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
+            timeout,
+        )
+        .await
+    }
+
+    /// The light form of the identity probe (ADR-138 Increment 6): only what [`Self::read_classifying`]
+    /// reads, for a node whose maker core does not know yet. No version, no patch table, no serial
+    /// walk — those wait for the node's hourly full probe.
+    async fn fetch_classifiers(
+        &self,
+        transport: &dyn Transport,
+        target: IpAddr,
+        timeout: Duration,
+    ) -> (Option<String>, Option<String>) {
+        let first = self.read_classifying(transport, target, timeout).await;
+        let sys_descr = first
+            .get(os_version::OID_SYS_DESCR)
+            .filter(|v| !v.is_empty())
+            .cloned();
+        let sys_object_id = first
+            .get(os_version::OID_SYS_OBJECT_ID)
+            .map(String::as_str)
+            .and_then(yagra_discovery::normalize_sys_object_id);
+        (sys_descr, sys_object_id)
+    }
+
     /// The identity probe: `sysDescr` (so core can fill the node's maker/model) and the OS version
     /// (ADR-138).
     ///
@@ -150,14 +197,7 @@ impl SnmpWalker {
         target: IpAddr,
         timeout: Duration,
     ) -> IdentityProbe {
-        let first = self
-            .read_strings(
-                transport,
-                target,
-                &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
-                timeout,
-            )
-            .await;
+        let first = self.read_classifying(transport, target, timeout).await;
         let sys_descr = first
             .get(os_version::OID_SYS_DESCR)
             .filter(|v| !v.is_empty())
@@ -608,11 +648,15 @@ pub(super) async fn execute_scalar_get(
     job: &PollJob,
     transport: &dyn Transport,
     at_unix_ms: i64,
-    oids: &[String],
-    columns: &[SnmpColumn],
+    read: ScalarRead<'_>,
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
+    let ScalarRead {
+        oids,
+        columns,
+        identity,
+    } = read;
     let col_by_oid: HashMap<&str, &SnmpColumn> =
         columns.iter().map(|c| (c.oid.as_str(), c)).collect();
     let mut all_oids = oids.to_vec();
@@ -650,15 +694,30 @@ pub(super) async fn execute_scalar_get(
             // it is — `sysDescr`, its OS version, its serial — and that is the device an operator
             // most needs identified, to correct its profile. A silent agent never reaches here, so
             // this adds no wait to an outage.
-            if job.probe_identity {
-                let probe = walker.fetch_identity(transport, job.target, timeout).await;
-                metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome()).increment(1);
-                r.sys_descr = probe.sys_descr;
-                r.os_version = probe.os_version;
-                r.os_version_without_patch = probe.os_version_without_patch;
-                r.sys_object_id = probe.sys_object_id;
-                r.serial_number = probe.serial_number;
-                r.hardware_model = probe.hardware_model;
+            //
+            // How much is read is the caller's (ADR-138 Increment 6): a node whose maker core does
+            // not know yet reads only the two classifying scalars between its hourly full probes,
+            // and the fields it does not read go out `None`, which core never writes.
+            match identity {
+                IdentityRead::Skip => {}
+                IdentityRead::Classify => {
+                    let (sys_descr, sys_object_id) = walker
+                        .fetch_classifiers(transport, job.target, timeout)
+                        .await;
+                    r.sys_descr = sys_descr;
+                    r.sys_object_id = sys_object_id;
+                }
+                IdentityRead::Full => {
+                    let probe = walker.fetch_identity(transport, job.target, timeout).await;
+                    metrics::counter!(IDENTITY_PROBES_METRIC, "result" => probe.outcome())
+                        .increment(1);
+                    r.sys_descr = probe.sys_descr;
+                    r.os_version = probe.os_version;
+                    r.os_version_without_patch = probe.os_version_without_patch;
+                    r.sys_object_id = probe.sys_object_id;
+                    r.serial_number = probe.serial_number;
+                    r.hardware_model = probe.hardware_model;
+                }
             }
             r
         }
@@ -1297,6 +1356,41 @@ mod tests {
             Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
         );
         assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// ADR-138 Increment 6. The classify read is what an unknown-maker node gets on every poll
+    /// between its full probes: `sysDescr` and `sysObjectID`, and no walk. The same device read in
+    /// full gets its serial, so the missing serial is the walk not being made, not the fixture.
+    #[tokio::test]
+    async fn a_classify_read_asks_for_the_two_scalars_and_walks_nothing() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = catalyst_stack();
+        let r = execute_reading(&job, &t, 1_000, IdentityRead::Classify).await;
+        assert!(
+            r.sys_descr.is_some(),
+            "core still gets what it classifies from"
+        );
+        assert_eq!(r.serial_number, None);
+        assert_eq!(r.os_version, None);
+        assert_eq!(r.hardware_model, None);
+        assert!(!walked_for_a_serial(&t), "{:?}", t.asked());
+        // The check's own GET, then one request for the pair (v2c reads them as their columns).
+        assert_eq!(
+            t.asked().len(),
+            2,
+            "a classify read asks for nothing past the two scalars: {:?}",
+            t.asked()
+        );
+
+        let full = catalyst_stack();
+        let r = execute_reading(&job, &full, 1_000, IdentityRead::Full).await;
+        assert!(
+            r.serial_number.is_some(),
+            "the full read of the same device"
+        );
+        assert!(walked_for_a_serial(&full));
+        assert!(full.asked().len() > 2, "{:?}", full.asked());
     }
 
     /// 🚨 ADR-147 decision 4. The rows are all in hand here on purpose: a read that decided from the

@@ -185,20 +185,25 @@ pub async fn run_stream<S>(
         // The hourly identity re-probe (ADR-138). Decided here because every job — a working-set
         // one, a legacy per-job one, an operator's "poll now" — passes this point, and before the
         // spawn because the task takes the job by value. Core's own `probe_identity` (a node whose
-        // maker is still unknown) is kept as it came: this can add a probe, never remove one. An
-        // operator's "poll now" (`on_demand`, ADR-149) reads whatever the cadence says.
-        if identity::carries_identity_probe(&job.check) {
-            let due = cadence
+        // maker is still unknown) still reads something on every poll, but only the two scalars
+        // core classifies from; the version, patch and serial wait for the cadence like any other
+        // node's (ADR-138 Increment 6). An operator's "poll now" (`on_demand`, ADR-149) reads in
+        // full whatever the cadence says.
+        let identity_read = if identity::carries_identity_probe(&job.check) {
+            cadence
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .claim_or_asked(
+                .read_for(
                     job.node_id,
                     Instant::now(),
                     identity::first_offset(job.node_id),
+                    job.probe_identity,
                     job.on_demand,
-                );
-            job.probe_identity |= due;
-        }
+                )
+        } else {
+            identity::IdentityRead::Skip
+        };
+        job.probe_identity = identity_read != identity::IdentityRead::Skip;
         let task_cadence = cadence.clone();
         // The hourly row-name walk (ADR-143), claimed out here for the identity probe's reason: every
         // job passes this point, and the task takes the job by value. "Poll now" walks it regardless.
@@ -294,7 +299,8 @@ pub async fn run_stream<S>(
                 metrics::gauge!("yagra_poll_inflight").set(running as f64);
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                 let probed_at = Instant::now();
-                let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
+                let mut result =
+                    execute_reading(&job, transport.as_ref(), now_unix_ms(), identity_read).await;
                 // After the table job and inside its permit, so the device is asked on a conversation
                 // that already exists. Only a device that answered: a silent one would spend the walk's
                 // whole budget saying nothing, and keeps the short retry `claim_first_now` set. It
@@ -310,8 +316,10 @@ pub async fn run_stream<S>(
                 }
                 record_phase(kind, "execute", probed_at);
                 // Answered ⇒ not due again for a period. Unanswered (or shed above, which returned
-                // before reaching this) keeps the short retry `claim` already set.
-                if job.probe_identity && result.sys_descr.is_some() {
+                // before reaching this) keeps the short retry `claim` already set. 🚨 Only a full
+                // read: a classify read answers `sysDescr` on every poll, and reporting it would
+                // push the full read a period away every poll — the version would never be read.
+                if identity_read == identity::IdentityRead::Full && result.sys_descr.is_some() {
                     task_cadence
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)

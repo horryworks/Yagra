@@ -29,7 +29,7 @@
 //! [`row_names`] reads what a vendor table's rows are called, hourly, after a table job and inside
 //! its permit (ADR-143) — `stream` decides when and `row_names` walks.
 //!
-//! 🚨 **Every arm of [`execute`] delegates; none of them touches the transport itself.** That is
+//! 🚨 **Every arm of [`execute_reading`] delegates; none of them touches the transport itself.** That is
 //! what makes the table above true rather than aspirational, and `guards.rs` fails the build if an
 //! arm reaches for the device inline. It is not style: the HTTP arm had grown to 101 lines and the
 //! DNS arm to 53 — together 47% of the dispatch — while owning 19 of this module's tests and having
@@ -60,11 +60,12 @@ mod wlan;
 // Re-exported so a sibling's `use super::*` sees them: a private `use` here is visible to every
 // descendant, which is what keeps each conversation file free of its own import block.
 use adjacency::{execute_arp, execute_l3, execute_neighbors, execute_routing};
+use identity::IdentityRead;
 use interfaces::{execute_snmp_table, execute_snmp_v3_table};
 use meraki::execute_meraki;
 use physical::{execute_mau, execute_optical};
 use probes::{execute_dns, execute_http, execute_icmp};
-use snmp::{execute_scalar_get, SnmpWalker};
+use snmp::{execute_scalar_get, ScalarRead, SnmpWalker};
 pub(crate) use stream::{run_stream, POLL_PHASE_BUCKETS, POLL_PHASE_METRIC};
 use wlan::{execute_wlan, WlanPlan};
 
@@ -96,9 +97,22 @@ use yagra_transport::{
     TableWalk, Transport, TransportError, Truncation, WalkLimits,
 };
 
-/// Execute one job and build its result. Pure given the transport and timestamp, so it
-/// is unit-testable without a clock or a bus.
+/// Execute one job and build its result, reading as much identity as the job asks for on its own
+/// ([`IdentityRead::asked_by`]). Pure given the transport and timestamp, so it is unit-testable
+/// without a clock or a bus. Test-only: the poll loop decides the identity read itself.
+#[cfg(test)]
 pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) -> PollResult {
+    execute_reading(job, transport, at_unix_ms, IdentityRead::asked_by(job)).await
+}
+
+/// [`execute`], with how much identity to read decided by the caller — `stream` asks the cadence
+/// (ADR-138 Increment 6). Only the scalar SNMP arms read it.
+pub(crate) async fn execute_reading(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    identity: IdentityRead,
+) -> PollResult {
     match &job.check {
         CheckSpec::Icmp(icmp) => execute_icmp(job, transport, at_unix_ms, icmp).await,
         CheckSpec::Snmp(snmp) => {
@@ -108,8 +122,11 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 job,
                 transport,
                 at_unix_ms,
-                &snmp.oids,
-                &snmp.columns,
+                ScalarRead {
+                    oids: &snmp.oids,
+                    columns: &snmp.columns,
+                    identity,
+                },
                 timeout,
                 &walker,
             )
@@ -122,8 +139,11 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 job,
                 transport,
                 at_unix_ms,
-                &v3.oids,
-                &v3.columns,
+                ScalarRead {
+                    oids: &v3.oids,
+                    columns: &v3.columns,
+                    identity,
+                },
                 timeout,
                 &walker,
             )

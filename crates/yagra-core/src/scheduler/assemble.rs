@@ -366,7 +366,9 @@ fn push_snmp_jobs<S: SnmpJobSource>(
     let (scalar, table) = src.scalar_and_table(items, SNMP_TIMEOUT_MS);
     if let Some(spec) = scalar {
         // Identity probing rides the scalar job only: it is the one that already does a GET, so
-        // asking for sysDescr.0 alongside costs no extra round trip.
+        // asking for sysDescr.0 alongside costs no extra round trip. The poller answers this ask
+        // with sysDescr and sysObjectID only; the version, patch and serial it reads on first
+        // sight and then hourly, as for every node (ADR-138 Increment 6).
         let (mut j, kind) = job(spec, interval_secs);
         j.probe_identity = node.vendor.is_none();
         jobs.push((j, kind));
