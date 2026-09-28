@@ -1477,10 +1477,7 @@ const SETTINGS_ENABLED_KEY: &str = "enabled";
 pub(crate) fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
     std::sync::Arc::new(UpgradeRepo::new(
         pool,
-        std::env::var("YAGRA_UPGRADE_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from),
+        yagra_common::env::path("YAGRA_UPGRADE_DIR"),
         std::env::var("YAGRA_UPGRADE_BUNDLE_MAX_BYTES")
             .ok()
             .and_then(|s| s.trim().parse().ok())

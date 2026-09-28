@@ -160,15 +160,7 @@ pub fn build_router(state: ApiState, cancel: CancellationToken) -> axum::Router 
 /// comma-separated, e.g. `yagra.example.com,192.0.2.10:8080`). Empty/unset ⇒ the allowlist is
 /// disabled and any Host is accepted (Bearer auth remains the gate — see `build_router`).
 fn mcp_allowed_hosts() -> Vec<String> {
-    std::env::var("YAGRA_MCP_ALLOWED_HOSTS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(|h| h.trim().to_owned())
-                .filter(|h| !h.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    yagra_common::env::list("YAGRA_MCP_ALLOWED_HOSTS")
 }
 
 /// Authenticate every `/mcp` request before the MCP protocol handler runs. A denial short-circuits

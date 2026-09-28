@@ -76,7 +76,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tracing::Instrument as _;
 use yagra_bus::{
     CheckOutcome, CheckSpec, DiscoveredInterface, DnsCheck, HttpCheck, IcmpCheck, PollJob,
@@ -326,11 +326,7 @@ fn result(
     }
 }
 
-fn now_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use yagra_common::clock::now_unix_ms;
 
 /// Stamp the producing poller's provenance onto a result (ADR-009). `None` leaves it unset (the
 /// single-process skeleton / an unidentified poller); core reads that as "unknown / central".

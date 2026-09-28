@@ -484,12 +484,7 @@ impl WebTlsRepo {
 /// is why Settings ▸ TLS can regenerate with names they supply.
 #[must_use]
 pub fn configured_names() -> Vec<String> {
-    let configured: Vec<String> = std::env::var("YAGRA_TLS_SELF_SIGNED_SANS")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let configured = yagra_common::env::list("YAGRA_TLS_SELF_SIGNED_SANS");
     if !configured.is_empty() {
         return configured;
     }
@@ -565,10 +560,7 @@ pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<WebTlsRepo> {
     std::sync::Arc::new(WebTlsRepo::new(
         pool,
         kek,
-        std::env::var("YAGRA_TLS_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from),
+        yagra_common::env::path("YAGRA_TLS_DIR"),
     ))
 }
 

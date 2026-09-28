@@ -40,7 +40,6 @@
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use uuid::Uuid;
 use yagra_bus::{encode_raw, Bus, EventKind, EventMsg};
@@ -56,11 +55,7 @@ const SYSLOG_BUF_BYTES: usize = 8 * 1024;
 /// Trap datagrams beyond this are rejected outright.
 const TRAP_BUF_BYTES: usize = 64 * 1024;
 
-pub(crate) fn now_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+pub(crate) use yagra_common::clock::now_unix_ms;
 
 /// Run `f` — one datagram's worth of parsing — and turn a panic inside it into a counted drop.
 ///
@@ -394,8 +389,8 @@ impl EdgeTuning {
     pub(crate) fn from_env() -> Self {
         Self {
             workers: env_listener_workers(),
-            rcvbuf: crate::env_usize("YAGRA_LISTENER_RCVBUF_BYTES", 4 * 1024 * 1024),
-            pool: crate::env_nonempty("YAGRA_POLLER_POOL"),
+            rcvbuf: yagra_common::env::positive("YAGRA_LISTENER_RCVBUF_BYTES", 4 * 1024 * 1024),
+            pool: yagra_common::env::nonempty("YAGRA_POLLER_POOL"),
         }
     }
 }
@@ -408,7 +403,7 @@ fn env_listener_workers() -> usize {
         .map(|n| n.get())
         .unwrap_or(1)
         .clamp(1, 4);
-    crate::env_usize("YAGRA_LISTENER_WORKERS", default).max(1)
+    yagra_common::env::positive("YAGRA_LISTENER_WORKERS", default).max(1)
 }
 
 /// Bind and spawn the syslog / SNMP-trap listeners for every address configured via env, returning a
@@ -422,8 +417,8 @@ pub(crate) async fn start(
     shutdown: &CancellationToken,
     tuning: &EdgeTuning,
 ) -> Vec<String> {
-    let syslog_bind = crate::env_nonempty("YAGRA_SYSLOG_BIND");
-    let trap_bind = crate::env_nonempty("YAGRA_TRAP_BIND");
+    let syslog_bind = yagra_common::env::nonempty("YAGRA_SYSLOG_BIND");
+    let trap_bind = yagra_common::env::nonempty("YAGRA_TRAP_BIND");
     if syslog_bind.is_none() && trap_bind.is_none() {
         return Vec::new();
     }
@@ -434,11 +429,9 @@ pub(crate) async fn start(
     // defaults dropped 75-97% of a realistic multi-device / chassis-storm flow for no protective
     // benefit. A chassis router's syslog burst now fits per-source; the global cap stays well under
     // the measured drain limit. Both remain env-tunable per deployment.
-    let per_source = crate::env_f64("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
-    let global = crate::env_f64("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let per_source = yagra_common::env::positive("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
+    let global = yagra_common::env::positive("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
+    let now_ms = yagra_common::clock::now_unix_ms();
     // One shared limiter behind a `std::sync::Mutex` (S22): its critical section is a few
     // arithmetic ops and is never held across an await, so all readers share the exact global
     // budget without async-lock overhead. Sharing (not sharding) keeps the global rate correct.
@@ -476,7 +469,9 @@ pub(crate) async fn start(
 
     if let Some(bind) = trap_bind {
         // Optional community filter — value must never be logged.
-        let community = crate::env_nonempty("YAGRA_TRAP_COMMUNITY");
+        let community = std::env::var("YAGRA_TRAP_COMMUNITY")
+            .ok()
+            .filter(|v| !v.is_empty());
         match bind_reuseport(&bind, tuning.workers, tuning.rcvbuf).await {
             Ok(socks) => {
                 let n = socks.len();

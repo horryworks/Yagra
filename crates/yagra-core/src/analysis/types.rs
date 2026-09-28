@@ -535,11 +535,7 @@ pub(super) fn name_lookup(names: &HashMap<Uuid, String>, id: &Uuid) -> String {
     names.get(id).cloned().unwrap_or_else(|| id.to_string())
 }
 
-pub(super) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+pub(super) use yagra_common::clock::now_unix_ms as now_ms;
 
 pub(super) fn now_s() -> i64 {
     now_ms() / 1000

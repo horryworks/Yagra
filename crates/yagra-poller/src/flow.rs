@@ -380,8 +380,8 @@ pub(crate) async fn start(
 ) -> Vec<String> {
     // Flow collector (Phase 3, ADR-031) — NetFlow v5/v9 / IPFIX on `YAGRA_FLOW_BIND` (:2055-style),
     // sFlow v5 on `YAGRA_SFLOW_BIND` (:6343). Both off if unset; both feed the same aggregator.
-    let flow_bind = crate::env_nonempty("YAGRA_FLOW_BIND");
-    let sflow_bind = crate::env_nonempty("YAGRA_SFLOW_BIND");
+    let flow_bind = yagra_common::env::nonempty("YAGRA_FLOW_BIND");
+    let sflow_bind = yagra_common::env::nonempty("YAGRA_SFLOW_BIND");
     if flow_bind.is_none() && sflow_bind.is_none() {
         return Vec::new();
     }
@@ -393,18 +393,17 @@ pub(crate) async fn start(
     // cardinality control; this is just the storm front door. NetFlow and sFlow share one
     // limiter, one aggregator `state`, and one flush ticker — a device exporting both merges
     // per-exporter, and there is one bucket cadence per poller.
-    let flow_per_source = crate::env_f64("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
-    let flow_global = crate::env_f64("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
-    let flow_now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let flow_per_source = yagra_common::env::positive("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
+    let flow_global = yagra_common::env::positive("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
+    let flow_now_ms = yagra_common::clock::now_unix_ms();
     let flow_limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
         flow_per_source,
         flow_global,
         flow_now_ms,
     )));
-    let top_n = crate::env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
-    let bucket_secs = u32::try_from(crate::env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
+    let top_n = yagra_common::env::positive("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
+    let bucket_secs =
+        u32::try_from(yagra_common::env::positive("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
     let state = Arc::new(std::sync::Mutex::new(FlowState::new(top_n)));
     // Verbatim relay for forwarding (ADR-034 Increment 2). Unconditional: the aggregate above is
     // irreversible (bucketed, top-N, folded), so without the original datagrams a flow

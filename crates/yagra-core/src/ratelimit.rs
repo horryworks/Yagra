@@ -14,14 +14,9 @@ use std::time::{Duration, Instant};
 
 /// Read a positive-`usize` cap from an env var, falling back to `default` when unset, unparseable or
 /// zero. A zero is treated as "not configured" rather than "admit nothing": a typo in a deployment
-/// should degrade to the documented default, not silently disable a feature.
-pub(crate) fn env_cap(var: &str, default: usize) -> usize {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(default)
-}
+/// should degrade to the documented default, not silently disable a feature. That is exactly
+/// `yagra_common::env::positive`, named here for what the two callers use it for.
+pub(crate) use yagra_common::env::positive as env_cap;
 
 /// Charge one admission against a sliding window: prune entries older than `window`, then admit iff
 /// fewer than `max` remain (pushing `now` on admission).

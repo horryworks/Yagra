@@ -54,18 +54,24 @@ pub(crate) const FLOW_PERSIST_CHANNEL_CAP: usize = 16_384;
 /// logs and moves on — inserts will keep failing (dropped, loss-tolerant tier) until ClickHouse is
 /// reachable, at which point they succeed against the now-present tables.
 pub(crate) async fn ensure_flow_schema(store: &Arc<dyn FlowStore>) {
-    for attempt in 1..=5u32 {
-        match store.ensure_schema().await {
-            Ok(()) => return,
-            Err(e) => {
-                tracing::warn!(attempt, error = %e, "ClickHouse flow schema ensure failed; retrying");
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
-        }
+    let ensured = yagra_common::retry::until_ready(
+        yagra_common::retry::Budget {
+            retries: 4,
+            delay: Duration::from_secs(3),
+        },
+        |_| false,
+        |e, attempt| {
+            tracing::warn!(attempt, error = %e, "ClickHouse flow schema ensure failed; retrying");
+        },
+        || store.ensure_schema(),
+        tokio::time::sleep,
+    )
+    .await;
+    if ensured.is_err() {
+        tracing::error!(
+            "could not ensure ClickHouse flow schema after retries — flow inserts will fail until reachable"
+        );
     }
-    tracing::error!(
-        "could not ensure ClickHouse flow schema after retries — flow inserts will fail until reachable"
-    );
 }
 
 /// Bound ClickHouse's own system log tables (ADR-031 Increment 4). Best-effort by construction:

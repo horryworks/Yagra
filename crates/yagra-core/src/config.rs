@@ -264,7 +264,7 @@ pub fn local_poller_id() -> Option<String> {
 /// Normalize an optional string env var: unset, empty, or all-whitespace ⇒ `None`; otherwise the
 /// trimmed value. Keeps a blank `YAGRA_REDIS_URL=` from being treated as a real URL.
 fn parse_optional(raw: Option<String>) -> Option<String> {
-    raw.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    yagra_common::env::parse_nonempty(raw.as_deref())
 }
 
 /// Parse the flow-retention days (`YAGRA_FLOW_RETENTION_DAYS`), defaulting on unset/invalid and
@@ -350,16 +350,7 @@ fn parse_bool(raw: Option<String>) -> bool {
 /// `Some("")` — not `None` — and reading that as "the operator said no" would make an opt-out
 /// default unreachable through the very file that ships it.
 fn parse_bool_or(raw: Option<String>, default: bool) -> bool {
-    match raw
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("1" | "true" | "yes" | "on") => true,
-        Some("0" | "false" | "no" | "off") => false,
-        _ => default,
-    }
+    yagra_common::env::parse_bool_or(raw.as_deref(), default)
 }
 
 /// Whether a polling interval (seconds) is within the operator-configurable band `[MIN, MAX]`.

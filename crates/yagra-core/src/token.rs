@@ -115,13 +115,7 @@ pub fn token_hash(token: &str) -> String {
 }
 
 /// Current Unix time in seconds (saturating on the impossible pre-epoch case).
-#[must_use]
-pub fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+pub use yagra_common::clock::now_unix_s_u64 as unix_now;
 
 /// Load the 32-byte session signing key from a mounted file (`YAGRA_SESSION_KEY_FILE`), accepting
 /// either 64 hex chars or 32 raw bytes (surrounding whitespace trimmed). Like the KEK

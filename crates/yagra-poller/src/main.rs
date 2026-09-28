@@ -105,14 +105,15 @@ struct PollerIdentity {
 /// heartbeat / sync-request / assignment-subject use is consistent (`sanitize_token` is idempotent,
 /// so it still matches the subject core publishes to). Logs the id + pool only — never a secret.
 fn resolve_identity() -> PollerIdentity {
-    let raw_id = env_nonempty("YAGRA_POLLER_ID")
+    let raw_id = yagra_common::env::nonempty("YAGRA_POLLER_ID")
         .or_else(machine_hostname)
         .unwrap_or_else(|| {
             let uuid = Uuid::new_v4().simple().to_string();
             format!("poller-{}", &uuid[..8])
         });
     let id = subjects::sanitize_token(&raw_id);
-    let pool = env_nonempty("YAGRA_POLLER_POOL").unwrap_or_else(|| "default".to_owned());
+    let pool =
+        yagra_common::env::nonempty("YAGRA_POLLER_POOL").unwrap_or_else(|| "default".to_owned());
     PollerIdentity {
         id,
         pool,
@@ -196,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Remote pollers pin the server cert with a CA file (TLS mandatory across trust boundaries,
     // security.md / ADR-020); the single-node plaintext path leaves it unset.
-    let ca_file = env_nonempty("YAGRA_BUS_CA_FILE").map(PathBuf::from);
+    let ca_file = yagra_common::env::nonempty("YAGRA_BUS_CA_FILE").map(PathBuf::from);
     // Tolerate NATS coming up after the poller (compose has no health gate). The poller presents its
     // own id/pool so core's Auth Callout can scope its credentials (ADR-030); harmless on no-auth.
     let bus =
@@ -208,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
     // Rate control: bound total concurrent probes + per-device single-flight (#4). The default
     // lives beside the semaphore it sizes, with the measurement that chose it — never a literal
     // here, because four shipped files quote that number and a test pins them to the constant.
-    let max_concurrent = env_usize(
+    let max_concurrent = yagra_common::env::positive(
         "YAGRA_MAX_CONCURRENT_POLLS",
         limiter::DEFAULT_MAX_CONCURRENT_POLLS,
     );
@@ -395,26 +396,6 @@ async fn drain_inflight(inflight: &AtomicU64, budget: Duration) {
     }
 }
 
-fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(default)
-}
-
-fn env_nonempty(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.is_empty())
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| *v > 0.0)
-        .unwrap_or(default)
-}
-
 /// Connect to NATS, retrying with a fixed backoff so startup ordering doesn't matter. `ca_file`
 /// pins the server certificate for the remote-poller TLS path (`None` = plaintext single-node).
 /// `poller_id`/`pool` are presented to core's Auth Callout for per-poller credential scoping (ADR-030).
@@ -434,7 +415,7 @@ fn env_f64(key: &str, default: f64) -> f64 {
 /// off" — and nothing on this side had ever been told which mode it was in. The knob is the
 /// missing half of that sentence, and it defaults to the configuration that ships.
 fn bus_username<'a>(url: &'a str, poller_id: &'a str) -> &'a str {
-    if env_nonempty("YAGRA_BUS_AUTH_CALLOUT")
+    if yagra_common::env::nonempty("YAGRA_BUS_AUTH_CALLOUT")
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     {
         return poller_id;
@@ -463,18 +444,23 @@ async fn connect_bus(
 ) -> anyhow::Result<NatsBus> {
     const MAX_ATTEMPTS: u32 = 30;
     let username = bus_username(url, poller_id);
-    let mut attempt = 0;
-    loop {
-        match NatsBus::connect_opts_identified(url, ca_file, username, pool).await {
-            Ok(bus) => return Ok(bus),
-            Err(e) if attempt < MAX_ATTEMPTS => {
-                attempt += 1;
-                tracing::warn!(error = %e, attempt, "NATS not ready; retrying in 2s");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            Err(e) => anyhow::bail!("NATS connect failed after {MAX_ATTEMPTS} attempts: {e}"),
-        }
-    }
+    yagra_common::retry::until_ready(
+        yagra_common::retry::Budget {
+            retries: MAX_ATTEMPTS,
+            delay: Duration::from_secs(2),
+        },
+        |_| false,
+        |e, attempt| tracing::warn!(error = %e, attempt, "NATS not ready; retrying in 2s"),
+        || NatsBus::connect_opts_identified(url, ca_file, username, pool),
+        tokio::time::sleep,
+    )
+    .await
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "NATS connect failed after {MAX_ATTEMPTS} attempts: {}",
+            e.into_inner()
+        )
+    })
 }
 
 #[cfg(test)]

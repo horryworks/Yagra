@@ -87,14 +87,9 @@ pub fn default_names() -> Vec<String> {
 #[must_use]
 pub fn configured_names() -> Vec<String> {
     let mut names = default_names();
-    for extra in std::env::var("YAGRA_BUS_TLS_SANS")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        if !names.iter().any(|n| n == extra) {
-            names.push(extra.to_owned());
+    for extra in yagra_common::env::list("YAGRA_BUS_TLS_SANS") {
+        if !names.contains(&extra) {
+            names.push(extra);
         }
     }
     names
@@ -422,10 +417,7 @@ pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<BusTlsRepo> {
     std::sync::Arc::new(BusTlsRepo::new(
         pool,
         kek,
-        std::env::var("YAGRA_BUS_TLS_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from),
+        yagra_common::env::path("YAGRA_BUS_TLS_DIR"),
     ))
 }
 

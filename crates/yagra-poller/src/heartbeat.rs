@@ -257,17 +257,13 @@ async fn run_heartbeat_loop<B>(
 /// Impure only in its first three lines; everything decided lives in [`updater_caps_from`], where a
 /// test can reach it without a filesystem or a clock.
 fn updater_caps() -> Vec<String> {
-    let Some(dir) = crate::env_nonempty("YAGRA_UPGRADE_DIR") else {
+    let Some(dir) = yagra_common::env::nonempty("YAGRA_UPGRADE_DIR") else {
         return Vec::new();
     };
     let Ok(raw) = std::fs::read_to_string(Path::new(&dir).join("current.json")) else {
         return Vec::new();
     };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_secs()).ok());
-    now.map_or_else(Vec::new, |now| updater_caps_from(&raw, now))
+    updater_caps_from(&raw, yagra_common::clock::now_unix_s())
 }
 
 /// What a site updater's `current.json` claims, given its text and the clock.
@@ -336,7 +332,7 @@ fn updater_caps_from(raw: &str, now: i64) -> Vec<String> {
 /// read. All of them mean the same thing to core — nothing to report — and none of them is worth
 /// failing a heartbeat over.
 fn upgrade_report() -> Option<yagra_bus::UpgradeReport> {
-    let dir = crate::env_nonempty("YAGRA_UPGRADE_DIR")?;
+    let dir = yagra_common::env::nonempty("YAGRA_UPGRADE_DIR")?;
     let raw = std::fs::read_to_string(Path::new(&dir).join("status.json")).ok()?;
     serde_json::from_str(&raw).ok()
 }

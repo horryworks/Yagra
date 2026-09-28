@@ -623,13 +623,7 @@ fn count_lines(path: &Path) -> std::io::Result<u64> {
     Ok(count)
 }
 
-fn now_unix_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+use yagra_common::clock::now_unix_ms;
 
 #[cfg(test)]
 mod tests {

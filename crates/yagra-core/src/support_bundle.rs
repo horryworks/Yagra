@@ -159,6 +159,51 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     ("OTEL_TRACES_SAMPLER", EnvShape::Plain),
     ("OTEL_TRACES_SAMPLER_ARG", EnvShape::Plain),
     ("TZ", EnvShape::Plain),
+    // Everything else core reads (ADR-184). Each was read before being added: a number, a path, a
+    // listen address, a list of host names, a pool name, or an e-mail address to send from/to.
+    ("YAGRA_API_BIND", EnvShape::Plain),
+    ("YAGRA_LOCAL_POLLER_ID", EnvShape::Plain),
+    ("YAGRA_MERAKI_POOL", EnvShape::Plain),
+    ("YAGRA_MCP_ALLOWED_HOSTS", EnvShape::Plain),
+    ("YAGRA_PG_MAX_CONNECTIONS", EnvShape::Plain),
+    ("YAGRA_VM_WRITERS", EnvShape::Plain),
+    ("YAGRA_RESULT_QUEUE_CAP", EnvShape::Plain),
+    ("YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS", EnvShape::Plain),
+    ("YAGRA_ANALYSIS_MAX_CONCURRENT", EnvShape::Plain),
+    ("YAGRA_ANALYSIS_RATE_PER_MIN", EnvShape::Plain),
+    ("YAGRA_RCA_MAX_CONCURRENT", EnvShape::Plain),
+    ("YAGRA_RCA_RATE_PER_MIN", EnvShape::Plain),
+    ("YAGRA_RCA_MAX_TURNS", EnvShape::Plain),
+    ("YAGRA_RCA_CACHE_SECS", EnvShape::Plain),
+    ("YAGRA_RCA_TASK_BUDGET_SECS", EnvShape::Plain),
+    ("YAGRA_BUS_CA_FILE", EnvShape::Plain),
+    ("YAGRA_BUS_TLS_DIR", EnvShape::Plain),
+    ("YAGRA_BUS_TLS_SANS", EnvShape::Plain),
+    ("YAGRA_TLS_SELF_SIGNED_SANS", EnvShape::Plain),
+    ("YAGRA_UPGRADE_DIR", EnvShape::Plain),
+    ("YAGRA_UPGRADE_BUNDLE_MAX_BYTES", EnvShape::Plain),
+    ("YAGRA_SMTP_HOST", EnvShape::Plain),
+    ("YAGRA_SMTP_PORT", EnvShape::Plain),
+    ("YAGRA_SMTP_FROM", EnvShape::Plain),
+    ("YAGRA_SMTP_TO", EnvShape::Plain),
+];
+
+/// What core reads and the bundle deliberately does **not** carry, each with the reason. A new
+/// variable goes in one list or the other — `every_variable_core_reads_is_bundled_or_excluded_with_a_reason`
+/// fails on one in neither, so "is this safe to ship?" is asked when the variable is added rather
+/// than when a support engineer notices it missing (ADR-184). Test-only: nothing at run time needs
+/// the list of what is left out, only the check that everything was decided.
+#[cfg(test)]
+pub const ENV_NOT_BUNDLED: &[(&str, &str)] = &[
+    ("YAGRA_ADMIN_PASSWORD", "a password"),
+    ("YAGRA_NATS_POLLER_PASSWORD", "a password"),
+    ("YAGRA_SMTP_USER", "an SMTP credential"),
+    ("YAGRA_SMTP_PASS", "an SMTP credential"),
+    ("YAGRA_SNMP_COMMUNITY", "an SNMP community is a credential"),
+    (
+        "YAGRA_WEBHOOK_URL",
+        "chat webhooks carry their token in the path, which URL redaction does not strip",
+    ),
 ];
 
 /// One environment variable as the bundle carries it.
@@ -1079,6 +1124,61 @@ mod tests {
     /// The allow-list must not acquire a secret by name. `YAGRA_NATS_POLLER_PASSWORD` is the one
     /// that would be easiest to add "for completeness" — it sits beside the callout account in
     /// `config.rs` and looks like configuration.
+    /// ADR-184: every `YAGRA_*` variable core reads is either carried or excluded with a reason, and
+    /// every `YAGRA_*` name carried is one something actually reads.
+    #[test]
+    fn every_variable_core_reads_is_bundled_or_excluded_with_a_reason() {
+        use std::collections::BTreeSet;
+        let files = crate::module_source::crate_code();
+        assert!(files.len() >= 150, "only {} files were read", files.len());
+        // A read is a name handed to one of the readers, or a `*_ENV` constant that is.
+        let read = regex::Regex::new(
+            r#"(?:\bvar|var_os|nonempty|positive|path|list|bool_or|env_cap)\(\s*"(YAGRA_[A-Z0-9_]+)""#,
+        )
+        .unwrap();
+        let named = regex::Regex::new(r#"const [A-Z_]+_ENV: &str = "(YAGRA_[A-Z0-9_]+)""#).unwrap();
+        let mut reads = BTreeSet::new();
+        for (_, code) in &files {
+            for re in [&read, &named] {
+                for c in re.captures_iter(code) {
+                    reads.insert(c[1].to_owned());
+                }
+            }
+        }
+        assert!(reads.len() >= 40, "only {} variables found", reads.len());
+        let carried: BTreeSet<&str> = ENV_ALLOWLIST.iter().map(|(n, _)| *n).collect();
+        let excluded: BTreeSet<&str> = ENV_NOT_BUNDLED.iter().map(|(n, _)| *n).collect();
+        let neither: Vec<&String> = reads
+            .iter()
+            .filter(|n| !carried.contains(n.as_str()) && !excluded.contains(n.as_str()))
+            .collect();
+        assert!(
+            neither.is_empty(),
+            "{neither:?} are read by core but neither carried in a support bundle nor excluded \
+             with a reason — add each to ENV_ALLOWLIST or ENV_NOT_BUNDLED"
+        );
+        // The other direction. The telemetry crate reads the log and trace settings for every
+        // binary, so its names count as read.
+        let telemetry = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-telemetry/src/lib.rs"),
+        )
+        .expect("yagra-telemetry is readable");
+        let stale: Vec<&&str> = carried
+            .iter()
+            .chain(excluded.iter())
+            .filter(|n| n.starts_with("YAGRA_"))
+            .filter(|n| !reads.contains(**n) && !telemetry.contains(**n))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{stale:?} are listed but nothing reads them any more"
+        );
+        assert!(
+            carried.is_disjoint(&excluded),
+            "a name is both carried and excluded"
+        );
+    }
+
     #[test]
     fn the_env_allowlist_carries_no_secret_and_redacts_every_url() {
         for (name, shape) in ENV_ALLOWLIST {

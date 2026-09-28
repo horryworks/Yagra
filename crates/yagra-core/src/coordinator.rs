@@ -34,7 +34,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
@@ -243,12 +243,7 @@ pub struct Coordinator {
 }
 
 /// Current Unix time in milliseconds (UTC), saturating on the impossible pre-epoch case.
-fn now_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
-}
+use yagra_common::clock::now_unix_ms;
 
 impl Coordinator {
     /// Build a coordinator with a fresh process epoch. `pollers_repo == None` disables durable

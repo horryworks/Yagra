@@ -72,10 +72,7 @@ async fn run_host_collector(
             }),
             Err(e) => tracing::debug!(error = %e, "pg_database_size query failed"),
         }
-        let at_unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
+        let at_unix_ms = yagra_common::clock::now_unix_ms();
         store
             .write_host_sample("core", "core", None, &sample, at_unix_ms)
             .await;

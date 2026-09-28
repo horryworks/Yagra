@@ -17,6 +17,17 @@ const ONE_HOME: &[(&str, &str)] = &[
     ("fn tail_subids(", "yagra-common/src/oid.rs"),
     ("SNMP_TRAP_OID_0: &str =", "yagra-common/src/oid.rs"),
     ("SYS_UPTIME_0: &str =", "yagra-common/src/oid.rs"),
+    ("tokens -= 1.0", "yagra-common/src/ratelimit.rs"),
+    ("attempt += 1", "yagra-common/src/retry.rs"),
+];
+
+/// Reading the wall clock as "time since 1970" — the one place allowed, and the two readings that
+/// are not "now": a file's modification time, and a certificate's expiry, which is `None` rather
+/// than `0` before 1970 because it is compared against the certificate's own date.
+const EPOCH_READERS: &[&str] = &[
+    "yagra-common/src/clock.rs",
+    "yagra-core/src/relocation.rs",
+    "yagra-transport/src/http.rs",
 ];
 
 #[test]
@@ -61,5 +72,21 @@ fn every_shared_helper_is_defined_once_in_the_workspace() {
         homes_seen,
         ONE_HOME.len(),
         "a definition moved out of the file named for it; the needle list is stale"
+    );
+    let epoch = [
+        format!("duration_since({})", "UNIX_EPOCH"),
+        format!("duration_since(std::time::{})", "UNIX_EPOCH"),
+    ];
+    let clocks: Vec<&str> = files
+        .iter()
+        .filter(|(path, code)| {
+            !EPOCH_READERS.contains(&path.as_str())
+                && epoch.iter().any(|n| code.contains(n.as_str()))
+        })
+        .map(|(path, _)| path.as_str())
+        .collect();
+    assert!(
+        clocks.is_empty(),
+        "{clocks:?} compute \"now\" by hand — call `yagra_common::clock` (ADR-184)"
     );
 }

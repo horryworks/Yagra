@@ -17,7 +17,6 @@ use super::extract::{Admin, RequireManageConfig, RequireView};
 use super::ApiState;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -292,10 +291,7 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
                 .get_default_poll_interval()
                 .await
                 .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
-            let now_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-                .unwrap_or(0);
+            let now_ms = yagra_common::clock::now_unix_ms();
             let fresh = bus_sweep_is_fresh(
                 admin.scheduler_stats.snapshot().last_sweep_unix_ms,
                 default_secs,

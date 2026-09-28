@@ -84,10 +84,7 @@ impl VolatileStore {
     #[allow(dead_code)]
     #[must_use]
     pub fn from_env() -> Self {
-        let url = std::env::var("YAGRA_REDIS_URL")
-            .ok()
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty());
+        let url = yagra_common::env::nonempty("YAGRA_REDIS_URL");
         Self::from_optional_url(url.as_deref())
     }
 

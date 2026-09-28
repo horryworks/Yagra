@@ -28,7 +28,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Max accepted webhook ingest body (axum answers 413 beyond it).
@@ -181,9 +180,7 @@ async fn ingest_webhook(
 
     let (message, truncated) = extract_webhook_text(&body);
     let event_id = Uuid::new_v4();
-    let at_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let at_unix_ms = yagra_common::clock::now_unix_ms();
     let msg = yagra_bus::EventMsg {
         event_id,
         kind: yagra_bus::EventKind::Webhook,

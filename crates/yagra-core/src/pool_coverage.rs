@@ -461,12 +461,7 @@ pub fn count_notification(event: &'static str) {
 }
 
 /// Wall-clock milliseconds, for stamping a coverage alert.
-#[must_use]
-pub fn now_unix_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+pub use yagra_common::clock::now_unix_ms;
 
 /// Leader-only loop: alert when a poller pool has nodes but no live poller (ADR-009's blind spot).
 ///

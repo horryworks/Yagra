@@ -10,7 +10,6 @@
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use yagra_bus::PollResult;
 use yagra_common::{HostSample, SeriesKey};
@@ -2199,9 +2198,7 @@ impl MetricStore for VmStore {
     async fn node_series(&self, node: Uuid, within_secs: u64) -> Vec<NodeSeries> {
         // The series endpoint lists the label sets of every series matching a selector.
         // `node` is a UUID (bounded type), so it's safe to interpolate into the matcher.
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+        let now = yagra_common::clock::now_unix_s();
         let start = now - i64::try_from(within_secs.max(1)).unwrap_or(i64::MAX);
         let params = [
             ("match[]", format!("{{node=\"{node}\"}}")),

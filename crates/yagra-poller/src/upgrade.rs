@@ -36,7 +36,7 @@ pub(crate) async fn start(
     identity: &PollerIdentity,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
-    if let Some(dir) = crate::env_nonempty("YAGRA_UPGRADE_DIR") {
+    if let Some(dir) = yagra_common::env::nonempty("YAGRA_UPGRADE_DIR") {
         let sub = Box::pin(bus.subscribe_poller_upgrades(&identity.id).await?);
         spawn_cancellable(
             shutdown,

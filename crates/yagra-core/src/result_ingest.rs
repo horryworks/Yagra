@@ -896,9 +896,7 @@ async fn ingest_result(
 
     // End-to-end ingest lag (poll timestamp → matcher entry) — the primary scale health signal.
     if result.at_unix_ms > 0 {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let now_ms = yagra_common::clock::now_unix_ms();
         metrics::gauge!("yagra_result_ingest_lag_ms")
             .set((now_ms - result.at_unix_ms).max(0) as f64);
     }

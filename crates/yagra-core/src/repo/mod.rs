@@ -53,6 +53,7 @@ use std::time::Duration;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
+use yagra_common::retry::{until_ready, Budget, GaveUp};
 use yagra_common::{CredentialId, GroupId, Node, NodeId, ProfileId};
 
 mod address_owners;
@@ -271,43 +272,46 @@ impl NodeRepo {
         // the tens-of-thousands-of-nodes target (the scheduler alone builds specs with concurrency
         // 16). Default higher and let deployments tune it via env. Postgres' own `max_connections`
         // (default 100) remains the outer bound; keep the default comfortably under it.
-        let max_conns = std::env::var("YAGRA_PG_MAX_CONNECTIONS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or(20);
-        let mut attempt = 0;
-        loop {
-            let result = PgPoolOptions::new()
-                .max_connections(max_conns)
-                .acquire_timeout(Duration::from_secs(5))
-                .connect(url)
-                .await;
-            match result {
-                Ok(pool) => {
-                    tracing::info!(max_connections = max_conns, "connected to PostgreSQL");
-                    return Ok(Self { pool });
-                }
-                // 🚨 A malformed URL is NOT a readiness problem, and retrying one is worse than
-                // useless: it spends the whole 60-second budget and then reports "PostgreSQL not
-                // ready" — which sends the operator to look at a server that was healthy the whole
-                // time. Measured on a GCE deployment (2026-09-08): `POSTGRES_PASSWORD` held a `/`,
-                // so the URL's authority ended at it, `yagra:<prefix>` was read as host:port, and
-                // sqlx said "invalid port number" 30 times, 2 s apart, while `postgres` reported
-                // healthy throughout. The composition interpolates the password into a URL without
-                // percent-encoding it — a string template cannot — so a password alone reaches this.
-                Err(sqlx::Error::Configuration(e)) => anyhow::bail!(
-                    "the database URL is not a usable connection string: {e}. Waiting cannot \
+        let max_conns = yagra_common::env::positive("YAGRA_PG_MAX_CONNECTIONS", 20u32);
+        let connected = until_ready(
+            Budget {
+                retries: MAX_ATTEMPTS,
+                delay: Duration::from_secs(2),
+            },
+            // 🚨 A malformed URL is NOT a readiness problem, and retrying one is worse than
+            // useless: it spends the whole 60-second budget and then reports "PostgreSQL not
+            // ready" — which sends the operator to look at a server that was healthy the whole
+            // time. Measured on a GCE deployment (2026-09-08): `POSTGRES_PASSWORD` held a `/`,
+            // so the URL's authority ended at it, `yagra:<prefix>` was read as host:port, and
+            // sqlx said "invalid port number" 30 times, 2 s apart, while `postgres` reported
+            // healthy throughout. The composition interpolates the password into a URL without
+            // percent-encoding it — a string template cannot — so a password alone reaches this.
+            |e| matches!(e, sqlx::Error::Configuration(_)),
+            |e, attempt| {
+                tracing::warn!(error = %e, attempt, "PostgreSQL not ready; retrying in 2s");
+            },
+            || {
+                PgPoolOptions::new()
+                    .max_connections(max_conns)
+                    .acquire_timeout(Duration::from_secs(5))
+                    .connect(url)
+            },
+            tokio::time::sleep,
+        )
+        .await;
+        match connected {
+            Ok(pool) => {
+                tracing::info!(max_connections = max_conns, "connected to PostgreSQL");
+                Ok(Self { pool })
+            }
+            Err(GaveUp::Fatal(e)) => anyhow::bail!(
+                "the database URL is not a usable connection string: {e}. Waiting cannot \
                      repair a string — check YAGRA_DATABASE_URL. A password holding `/`, `@`, \
                      `:`, `?` or `#` ends the URL early unless it is percent-encoded; \
                      `openssl rand -hex 16` produces none of them"
-                ),
-                Err(e) if attempt < MAX_ATTEMPTS => {
-                    attempt += 1;
-                    tracing::warn!(error = %e, attempt, "PostgreSQL not ready; retrying in 2s");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-                Err(e) => anyhow::bail!("PostgreSQL connect failed after {MAX_ATTEMPTS}: {e}"),
+            ),
+            Err(GaveUp::Exhausted(e)) => {
+                anyhow::bail!("PostgreSQL connect failed after {MAX_ATTEMPTS}: {e}")
             }
         }
     }

@@ -89,7 +89,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
@@ -503,12 +503,7 @@ async fn sweep_chunk(
 }
 
 /// Current Unix time in milliseconds (clock for the per-device probe limiter).
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
-}
+use yagra_common::clock::now_unix_ms as now_ms;
 
 /// Probe one target: ICMP liveness + SNMP identity, trying each candidate in order
 /// (first that answers wins). Candidate probes run **sequentially per device** and are spaced

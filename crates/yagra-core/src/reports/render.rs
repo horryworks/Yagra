@@ -145,10 +145,10 @@ pub(super) fn human_bps(v: f64) -> String {
     format!("{val:.1} {}", units[i])
 }
 
-/// Sample step that keeps a window under [`MAX_POINTS`] samples (min 60s).
+/// Sample step that keeps a window under [`MAX_POINTS`] samples (min 60s) — the arithmetic is
+/// `yagra_common::clock::read_step`'s; the ceiling is this module's.
 pub(super) fn read_step(from_s: i64, to_s: i64) -> u64 {
-    let span = (to_s - from_s).max(1);
-    ((span / MAX_POINTS).max(60)) as u64
+    yagra_common::clock::read_step(from_s, to_s, MAX_POINTS)
 }
 
 /// The PromQL metric/selector + display label + unit for a top-metric section. CPU/memory expand to

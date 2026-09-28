@@ -11,7 +11,6 @@
 
 use super::ApiError;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 /// Edge cap on an **opaque operator-authored JSON document** — a dashboard layout, a report spec.
@@ -407,11 +406,7 @@ pub(crate) fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// Saturating rather than fallible: a clock before the epoch yields `0` and one past `i64::MAX`
 /// yields `i64::MAX`, because every caller uses this for a stamp on a row it is about to write and
 /// none of them has a sensible failure branch.
-pub(crate) fn now_unix_s() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-}
+pub(crate) use yagra_common::clock::now_unix_s;
 
 /// Longest pool name: one NATS subject token, kept short and human-manageable.
 pub(crate) const POOL_NAME_MAX: usize = 63;

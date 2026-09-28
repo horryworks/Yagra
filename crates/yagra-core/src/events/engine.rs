@@ -15,6 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, RwLock};
+use yagra_common::ratelimit::TokenBucket;
 
 use uuid::Uuid;
 use yagra_alert::Alert;
@@ -135,7 +136,7 @@ pub struct EventEngine {
     snapshot: RwLock<Snapshot>,
     runtime: Mutex<Runtime>,
     /// Ingest token buckets per (already-verified) webhook source: (tokens, last-refill ms).
-    ingest_rate: Mutex<HashMap<Uuid, (f64, i64)>>,
+    ingest_rate: Mutex<HashMap<Uuid, TokenBucket>>,
     /// Non-blocking handoff to the async batch persist writer (ADR-024). `None` in unit tests that
     /// exercise the pure planner only.
     persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
@@ -171,18 +172,13 @@ impl EventEngine {
     #[must_use]
     pub fn ingest_allowed(&self, source_id: Uuid) -> bool {
         let now_ms = now_unix_ms();
-        let burst = INGEST_RATE_PER_SOURCE * 2.0;
         let mut buckets = self.ingest_rate.lock().expect("ingest mutex poisoned");
-        let (tokens, last) = buckets.entry(source_id).or_insert((burst, now_ms));
-        let elapsed_ms = (now_ms - *last).max(0) as f64;
-        *tokens = (*tokens + INGEST_RATE_PER_SOURCE * elapsed_ms / 1000.0).min(burst);
-        *last = now_ms;
-        if *tokens >= 1.0 {
-            *tokens -= 1.0;
-            true
-        } else {
-            false
-        }
+        buckets
+            .entry(source_id)
+            .or_insert_with(|| {
+                TokenBucket::new(INGEST_RATE_PER_SOURCE, INGEST_RATE_PER_SOURCE * 2.0, now_ms)
+            })
+            .take(now_ms)
     }
 
     /// Reload the rules + address-map snapshot. Keeps the previous snapshot parts on a

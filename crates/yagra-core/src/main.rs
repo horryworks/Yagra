@@ -333,10 +333,7 @@ fn print_embedded_migrations() {
 async fn run_bus_cert() -> anyhow::Result<()> {
     let db = std::env::var("YAGRA_DATABASE_URL")
         .map_err(|_| anyhow::anyhow!("YAGRA_BUS_TLS needs YAGRA_DATABASE_URL"))?;
-    let dir = std::env::var("YAGRA_BUS_TLS_DIR")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(std::path::PathBuf::from)
+    let dir = yagra_common::env::path("YAGRA_BUS_TLS_DIR")
         .ok_or_else(|| anyhow::anyhow!("YAGRA_BUS_TLS_DIR is not set — nowhere to write to"))?;
 
     let kek = secrets::load_key_provider()?;
@@ -725,11 +722,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Scheduler + Meraki scheduler are leader-only (spawned in `leader_work`). Collects route to the
     // configured Meraki pool (env `YAGRA_MERAKI_POOL`, default `default`); resolve it here so the
     // value is available to `leader_work`.
-    let meraki_pool = std::env::var("YAGRA_MERAKI_POOL")
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_POOL.to_owned());
+    let meraki_pool =
+        yagra_common::env::nonempty("YAGRA_MERAKI_POOL").unwrap_or_else(|| DEFAULT_POOL.to_owned());
 
     // Thresholds + maintenance windows: snapshot into the alert engine now, then refresh
     // periodically so edits (and window start/end boundaries) take effect without a restart.
@@ -2677,23 +2671,24 @@ async fn serve(
 /// ignore it. Turning TLS on would have left core unable to reach its own bus.
 async fn connect_bus(url: &str) -> anyhow::Result<NatsBus> {
     const MAX_ATTEMPTS: u32 = 30;
-    let ca = std::env::var("YAGRA_BUS_CA_FILE")
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .map(std::path::PathBuf::from);
-    let mut attempt = 0;
-    loop {
-        match NatsBus::connect_opts(url, ca.as_deref()).await {
-            Ok(bus) => return Ok(bus),
-            Err(e) if attempt < MAX_ATTEMPTS => {
-                attempt += 1;
-                tracing::warn!(error = %e, attempt, "NATS not ready; retrying in 2s");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            Err(e) => anyhow::bail!("NATS connect failed after {MAX_ATTEMPTS} attempts: {e}"),
-        }
-    }
+    let ca = yagra_common::env::path("YAGRA_BUS_CA_FILE");
+    yagra_common::retry::until_ready(
+        yagra_common::retry::Budget {
+            retries: MAX_ATTEMPTS,
+            delay: Duration::from_secs(2),
+        },
+        |_| false,
+        |e, attempt| tracing::warn!(error = %e, attempt, "NATS not ready; retrying in 2s"),
+        || NatsBus::connect_opts(url, ca.as_deref()),
+        tokio::time::sleep,
+    )
+    .await
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "NATS connect failed after {MAX_ATTEMPTS} attempts: {}",
+            e.into_inner()
+        )
+    })
 }
 
 #[cfg(test)]

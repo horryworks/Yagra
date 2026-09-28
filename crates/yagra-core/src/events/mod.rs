@@ -79,7 +79,7 @@ pub(crate) use sql::{
 };
 
 use std::hash::Hash;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -133,11 +133,7 @@ pub const ACTION_CHANNEL_CAP: usize = 8192;
 /// Largest action batch the writer records to `alert_history` in one multi-row INSERT.
 const ACTION_BATCH_MAX: usize = 500;
 
-fn now_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use yagra_common::clock::now_unix_ms;
 
 // ─── Storage ────────────────────────────────────────────────────────────────────────
 

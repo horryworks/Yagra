@@ -15,7 +15,6 @@
 //! only issue/deny counts.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_nats::Client;
 use futures::StreamExt;
@@ -26,12 +25,7 @@ const AUTH_SUBJECT: &str = "$SYS.REQ.USER.AUTH";
 /// Queue group so multiple cores share the work (and one always answers during a failover).
 const AUTH_QUEUE: &str = "yagra-authz";
 
-fn unix_now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
+use yagra_common::clock::now_unix_s as unix_now_secs;
 
 /// Is this deployment's bus one the callout governs?
 ///
@@ -223,13 +217,6 @@ mod tests {
         // saturates at 0 and lets the signer reject on its own terms.
         let now = unix_now_secs();
         assert!(now > 1_600_000_000, "the wall clock should be past 2020");
-        assert_eq!(
-            SystemTime::UNIX_EPOCH
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            0
-        );
     }
 
     #[test]

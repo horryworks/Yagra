@@ -796,34 +796,22 @@ fn enqueue(dest: &LiveDest, payload: Vec<u8>) {
 
 // ── Senders ──────────────────────────────────────────────────────────────────────────────────
 
-/// Simple token bucket: `per_sec` tokens refilled continuously, burst capped at one second's worth.
-struct RateLimit {
-    per_sec: f64,
-    tokens: f64,
-    last: Instant,
-}
+/// A destination's send rate: `per_sec` tokens refilled continuously, burst capped at one second's
+/// worth, on the monotonic clock. The arithmetic is `yagra_common::ratelimit`'s (ADR-184).
+struct RateLimit(yagra_common::ratelimit::TokenBucket);
 
 impl RateLimit {
     fn new(per_sec: u32) -> Self {
         let per_sec = f64::from(per_sec);
-        Self {
+        Self(yagra_common::ratelimit::TokenBucket::new(
             per_sec,
-            tokens: per_sec,
-            last: Instant::now(),
-        }
+            per_sec,
+            yagra_common::clock::monotonic_ms(),
+        ))
     }
 
     fn allow(&mut self) -> bool {
-        let now = Instant::now();
-        self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * self.per_sec)
-            .min(self.per_sec);
-        self.last = now;
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
-        } else {
-            false
-        }
+        self.0.take(yagra_common::clock::monotonic_ms())
     }
 }
 
@@ -1351,11 +1339,7 @@ async fn resolve(target: &str) -> Result<SocketAddr, String> {
         .ok_or_else(|| format!("resolve {target}: no addresses"))
 }
 
-fn now_unix_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use yagra_common::clock::now_unix_ms;
 
 // ── One-shot delivery, for the "Test" button ────────────────────────────────────────────────
 

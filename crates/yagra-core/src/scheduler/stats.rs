@@ -49,10 +49,7 @@ impl SchedulerStats {
     /// Record a completed dispatch round (`jobs` published, stamped now).
     pub fn record_sweep(&self, jobs: u64) {
         use std::sync::atomic::Ordering;
-        let ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
+        let ms = yagra_common::clock::now_unix_ms();
         self.last_sweep_ms.store(ms, Ordering::Relaxed);
         self.jobs_last_round.store(jobs, Ordering::Relaxed);
     }

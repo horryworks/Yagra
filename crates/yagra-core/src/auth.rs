@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use yagra_common::clock::monotonic_ms;
+use yagra_common::ratelimit::TokenBucket;
 
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -441,19 +443,14 @@ struct Attempts {
     last: Instant,
 }
 
-#[derive(Debug)]
-struct GlobalBucket {
-    tokens: f64,
-    last_refill: Instant,
-}
-
 /// Brute-force guard for `POST /auth/login`. Two independent limits: a per-account exponential
 /// lockout (stops targeted password guessing against one account) and a global token bucket
 /// (stops username-spraying from exhausting CPU via Argon2id). Keyed by the *submitted* username
 /// so unknown names are tracked too — the throttle never reveals whether an account exists.
 pub struct LoginThrottle {
     keys: Mutex<HashMap<String, Attempts>>,
-    global: Mutex<GlobalBucket>,
+    /// On the monotonic clock, so an operator setting the wall clock cannot refill it.
+    global: Mutex<TokenBucket>,
 }
 
 impl LoginThrottle {
@@ -462,10 +459,11 @@ impl LoginThrottle {
     pub fn new() -> Self {
         Self {
             keys: Mutex::new(HashMap::new()),
-            global: Mutex::new(GlobalBucket {
-                tokens: LOGIN_GLOBAL_BURST,
-                last_refill: Instant::now(),
-            }),
+            global: Mutex::new(TokenBucket::new(
+                LOGIN_GLOBAL_REFILL_PER_SEC,
+                LOGIN_GLOBAL_BURST,
+                monotonic_ms(),
+            )),
         }
     }
 
@@ -498,16 +496,11 @@ impl LoginThrottle {
         }
         // Global token bucket (CPU-exhaustion cap).
         let mut g = self.global.lock().expect("login throttle global poisoned");
-        let elapsed = now.duration_since(g.last_refill).as_secs_f64();
-        g.tokens = (g.tokens + elapsed * LOGIN_GLOBAL_REFILL_PER_SEC).min(LOGIN_GLOBAL_BURST);
-        g.last_refill = now;
-        if g.tokens < 1.0 {
+        if !g.take(monotonic_ms()) {
             return Err(ThrottleReject {
-                // Time until one token refills.
-                retry_after_secs: (1.0 / LOGIN_GLOBAL_REFILL_PER_SEC).ceil() as u64,
+                retry_after_secs: g.retry_after_secs(),
             });
         }
-        g.tokens -= 1.0;
         Ok(())
     }
 

@@ -39,8 +39,6 @@
 //! `events/mod.rs` give: a child sees its parent's private items, so the constants, the clock and
 //! the two date formatters cost no `pub(super)` at all.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use chrono::{TimeZone, Utc};
 
 mod catalog;
@@ -71,11 +69,7 @@ const DEFAULT_RANGE_SECS: i64 = 7 * 86_400;
 /// Target sample count for a time-series section (bounds the step so a long window stays cheap).
 const MAX_POINTS: i64 = 240;
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
+use yagra_common::clock::now_unix_ms as now_ms;
 
 fn now_s() -> i64 {
     now_ms() / 1000

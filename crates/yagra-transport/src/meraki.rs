@@ -1176,11 +1176,7 @@ fn switch_usage_bucket(now_unix_secs: u64) -> (u64, u64) {
     (t1.saturating_sub(SWITCH_USAGE_BUCKET_SECS), t1)
 }
 
-fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
+use yagra_common::clock::now_unix_s_u64 as unix_now_secs;
 
 /// Whether a usage or configuration row belongs to a switch on the spine.
 fn on_spine(row: &Value, spine: &BTreeMap<String, BTreeMap<u32, MerakiPort>>) -> bool {
