@@ -626,6 +626,9 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+mod static_account;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
