@@ -26,6 +26,8 @@ import {
 import { stateLabel } from '../../lib/format';
 import { nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
+import { brandBadgeClass } from '../../lib/brandBadge';
+import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
@@ -98,6 +100,8 @@ export function GroupDetail({
     [nodes, group.id],
   );
   const trail = groupTrail(groups, group.id);
+  // Null for a folder a person made — and for an origin this build does not know (see the lib).
+  const origin = groupOriginOf(group);
   const memberRows = subgroups.length + directMembers.length;
   const trailer = membersTrailer(membersFetch, memberRows);
 
@@ -120,6 +124,18 @@ export function GroupDetail({
                 group.name
               )}
             </span>
+            {/* Who keeps this folder, in words. The tree says it with one letter and a tooltip
+                (`BRAND_MONOGRAMS`), which a touch screen cannot hover — so opening the folder is
+                where the word is always readable (ADR-055 R4), as a node's header does for its
+                kind. */}
+            {origin && (
+              <span
+                className={`nd-kind${brandBadgeClass(GROUP_ORIGIN_BADGE_BRANDS[origin])}`}
+                title={t(`tree.origin.${origin}`)}
+              >
+                {GROUP_ORIGIN_BADGES[origin]}
+              </span>
+            )}
           </div>
           {(canEdit || onPinError) && (
             <div className="nd-actions">

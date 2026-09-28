@@ -24,7 +24,7 @@ import { poolChoices, sharedOwnPool } from '../../lib/pool';
 import { targetNodeCount, type ActionTarget } from '../../lib/actionTarget';
 import { nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
-import { brandBadgeClass } from '../../lib/brandBadge';
+import { BRAND_MONOGRAMS, brandBadgeClass } from '../../lib/brandBadge';
 import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '../../lib/groupOrigin';
 import {
   asGroupType,
@@ -1115,6 +1115,7 @@ export function NodeTree({
     const target: Target = { kind: 'group', id: group.id, scope: group.parent_id ?? null };
     // Null for a folder a person made — and for an origin this build does not know (see the lib).
     const origin = groupOriginOf(group);
+    const originBrand = origin ? GROUP_ORIGIN_BADGE_BRANDS[origin] : null;
     return (
       <div
         id={rowDomId({ kind: 'group', id: group.id })}
@@ -1179,18 +1180,20 @@ export function NodeTree({
         )}
         {/* An integration made this folder and still keeps it (ADR-164 Inc.7): the organization's
             tree goes when the organization does, and a NetBox sync renames and re-parents its
-            folders over whatever was typed. The badge's own text is the fact — the `title` only
-            elaborates, so nothing here is hover-only (ADR-055 R4). `.ntree-badge` does not shrink,
-            so it is the name that gives way in the row, never the mark. `role="img"` as on the pin
-            mark below: an `aria-label` on a span with no role is not reliably read out. */}
+            folders over whatever was typed. Drawn as the brand's one letter (`BRAND_MONOGRAMS`,
+            2026-09-29) — the word is in the `title`, and, because a touch screen cannot hover, in
+            the folder's own detail header too (ADR-055 R4). An origin with no brand keeps its word.
+            `.ntree-badge` does not shrink, so it is the name that gives way in the row, never the
+            mark. `role="img"` as on the pin mark below: an `aria-label` on a span with no role is
+            not reliably read out. */}
         {origin && (
           <span
-            className={`ntree-badge${brandBadgeClass(GROUP_ORIGIN_BADGE_BRANDS[origin])}`}
+            className={`ntree-badge${brandBadgeClass(originBrand)}${originBrand ? ' is-mono' : ''}`}
             role="img"
             title={t(`tree.origin.${origin}`)}
             aria-label={t(`tree.origin.${origin}`)}
           >
-            {GROUP_ORIGIN_BADGES[origin]}
+            {originBrand ? BRAND_MONOGRAMS[originBrand] : GROUP_ORIGIN_BADGES[origin]}
           </span>
         )}
         {/* A mark, not a control: pinning is in the row's menu and the detail pane. */}
@@ -1297,6 +1300,11 @@ export function NodeTree({
     // at exactly one row, which is the property that proves the pane's selection is single.
     const isChecked = checkedNodes.has(node.id);
     const move = nodeMoveItems(checkedNodes, node.id, canEdit);
+    const badges = nodeBadges({
+      kind: node.kind,
+      merakiProductType: node.meraki_product_type,
+      merakiRepeater: node.meraki_repeater,
+    });
     return (
       <div
         id={rowDomId({ kind: 'node', id: node.id })}
@@ -1352,20 +1360,22 @@ export function NodeTree({
         )}
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
             a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
-            ordinary devices, so a badge on every one of 50k rows would say nothing. */}
-        {nodeBadges({
-          kind: node.kind,
-          merakiProductType: node.meraki_product_type,
-          merakiRepeater: node.meraki_repeater,
-        }).map(
-          (badge) => (
-            <NodeBadgeTag
-              key={badge.text}
-              badge={badge}
-              className="ntree-badge"
-              label={t(badge.labelKey)}
-            />
-          ),
+            ordinary devices, so a badge on every one of 50k rows would say nothing. A brand's
+            badge is its one letter here (`monogram`), and `.ntree-badges` lays the set out
+            right-to-left so that letter is always the rightmost — "M" then stands in one column
+            down a Meraki site whether or not the row also wears the Wi-Fi mark. */}
+        {badges.length > 0 && (
+          <span className="ntree-badges">
+            {badges.map((badge) => (
+              <NodeBadgeTag
+                key={badge.text}
+                badge={badge}
+                className="ntree-badge"
+                label={t(badge.labelKey)}
+                monogram
+              />
+            ))}
+          </span>
         )}
         {/* Before the markers — see `.ntree-actions` in the stylesheet. The ↗ acts on whatever the
             menu's move items act on: this row, or the working set it belongs to (`nodeMoveItems`,

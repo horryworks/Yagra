@@ -85,8 +85,8 @@
 }
 
 /* What kind of node this is (URL / DNS / Meraki monitor), beside its name. Only non-device kinds
-   carry one — see `lib/nodeKind.ts`. Same visual language as the inventory tree's `.ntree-badge`,
-   spelled out here rather than shared because a component owns its own CSS file. */
+   carry one — see `lib/nodeKind.ts`. The full pill, with the word: the inventory tree draws a
+   quieter chip (`.ntree-badge`, 2026-09-29), so this header is where the word is always readable. */
 .nd-kind {
   flex: 0 0 auto;
   padding: 0 7px;

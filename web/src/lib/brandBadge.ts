@@ -8,6 +8,11 @@
 // badge silently keeps the default accent.
 //
 // The colours themselves are tokens (`--brand-<name>` / `--brand-<name>-fg` in tokens.css).
+//
+// The inventory tree draws it smaller (user decision, 2026-09-29): one letter on a faint tint of
+// the brand's colour (`--brand-<name>-ink`), because a filled pill on every row of a Meraki site
+// out-shouted the status dots — and Meraki's filled green sat right beside the green of "up".
+// Everywhere else keeps the pill and the word.
 
 /** The third parties whose colours a badge may wear. */
 export const BADGE_BRANDS = ['meraki', 'netbox'] as const;
@@ -17,3 +22,10 @@ export type BadgeBrand = (typeof BADGE_BRANDS)[number];
 export function brandBadgeClass(brand: BadgeBrand | null): string {
   return brand ? ` is-${brand}` : '';
 }
+
+/** The one letter a brand badge shrinks to in the inventory tree. The name it stands for stays in
+ *  the badge's tooltip and accessible name, so the letter never has to be learned to be read. */
+export const BRAND_MONOGRAMS: Record<BadgeBrand, string> = {
+  meraki: 'M',
+  netbox: 'N',
+};

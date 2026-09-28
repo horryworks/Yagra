@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The node tree's badges are quieter.** A Meraki device, and a folder Meraki or NetBox keeps, used to wear a filled pill with the brand's name on every row, and Meraki's filled green sat right beside the green of an up node. In the tree they are now one letter — **M** or **N** — on a faint tint of the brand's colour, lined up at the right edge; hover it, or read it aloud with a screen reader, for the full name. An access point's Wi-Fi mark is a plain grey glyph, and the URL, DNS and Repeater badges are low grey chips. The node's own header keeps the full pill, and a folder's header now shows "NetBox" or "Meraki" beside its name too, so the name stays readable on a touch screen.
+
 ## v0.3.35 — A device whose maker Yagra does not know yet is read in full once an hour and asked only for sysDescr and sysObjectID in between, every list toolbar and every dialog work the same way, a metrics query VictoriaMetrics refuses is logged instead of read as no data, dashboards and lists stop refreshing in a background tab, MCP list_analyses narrows by tool, state and since
 
 ### New Features

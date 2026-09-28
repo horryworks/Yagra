@@ -45,22 +45,34 @@ test('a folder an integration keeps carries its badge, and a hand-made one carri
   await page.goto('/nodes');
   const row = (name: string) => page.locator('.ntree-grow').filter({ hasText: label(name) });
 
-  // The badge's own text is the fact; the title only says it in a sentence.
+  // In the tree the badge is the brand's one letter (2026-09-29); the name is its tooltip and its
+  // accessible name, and the folder's own header spells it out (checked below).
   const netbox = row('from-netbox').locator('.ntree-badge');
-  await expect(netbox).toHaveText('NetBox');
+  await expect(netbox).toHaveText('N');
   await expect(netbox).toHaveAttribute('title', 'Created by the NetBox integration');
-  // NetBox's blue on white (2026-09-23), Meraki's white on green: each wears its own colours.
+  await expect(netbox).toHaveAttribute('aria-label', 'Created by the NetBox integration');
+  // Each brand's ink, on a faint tint of itself rather than a filled pill: a filled pill is what
+  // the tree was too loud with.
   const colours = (badge: typeof netbox) =>
     badge.evaluate((el) => {
       const cs = getComputedStyle(el);
       return [cs.color, cs.backgroundColor];
     });
-  expect(await colours(netbox)).toEqual(['rgb(22, 133, 252)', 'rgb(255, 255, 255)']);
+  const [netboxInk, netboxGround] = await colours(netbox);
+  // The walk runs in the dark theme, so these are the dark inks (tokens.css).
+  expect(netboxInk).toBe('rgb(90, 166, 255)');
+  expect(netboxGround).not.toBe('rgb(255, 255, 255)');
 
   const meraki = row('from-meraki').locator('.ntree-badge');
-  await expect(meraki).toHaveText('Meraki');
+  await expect(meraki).toHaveText('M');
   await expect(meraki).toHaveAttribute('title', 'Created by the Cisco Meraki integration');
-  expect(await colours(meraki)).toEqual(['rgb(255, 255, 255)', 'rgb(103, 179, 70)']);
+  const [merakiInk, merakiGround] = await colours(meraki);
+  expect(merakiInk).toBe('rgb(124, 195, 90)');
+  expect(merakiGround).not.toBe('rgb(103, 179, 70)');
+
+  // A touch screen cannot hover the letter, so opening the folder is where the word is readable.
+  await row('from-netbox').click();
+  await expect(page.locator('.nd-namewrap .nd-kind')).toHaveText('NetBox');
 
   // The row is there, and unmarked. Counting the badge on a row that was never found would pass
   // just as well, so the row is counted first.

@@ -155,24 +155,24 @@ describe('node badges drawn as a glyph', () => {
   });
 
   // A glyph with no rule draws in the default accent on the default pill — the badge looks
-  // deliberate and is simply not what was asked for, which nothing else here can see.
-  it('has a rule in both badge stylesheets for every glyph, reading its two tokens', () => {
+  // deliberate and is simply not what was asked for, which nothing else here can see. The node
+  // header's pill wears the glyph's two tokens; the tree draws it bare and grey (2026-09-29).
+  it('has a rule in both badge stylesheets for every glyph, reading its tokens', () => {
     const src = join(__dirname, '..');
     const tokens = readFileSync(join(src, 'styles/tokens.css'), 'utf8');
-    const pills: [string, string][] = [
-      ['.nd-kind', 'components/NodeDetail/NodeDetail.css'],
-      ['.ntree-badge', 'components/NodeTree/NodeTree.css'],
+    const pills: [string, string, (icon: string) => string[]][] = [
+      ['.nd-kind', 'components/NodeDetail/NodeDetail.css', (i) => [`--badge-${i}-bg`, `--badge-${i}-fg`]],
+      ['.ntree-badge', 'components/NodeTree/NodeTree.css', () => ['--text-tertiary']],
     ];
     let checked = 0;
     for (const icon of BADGE_ICONS) {
       expect(tokens).toMatch(new RegExp(`--badge-${icon}-bg:\\s*#`));
       expect(tokens).toMatch(new RegExp(`--badge-${icon}-fg:\\s*#`));
-      for (const [pill, file] of pills) {
+      for (const [pill, file, reads] of pills) {
         const css = readFileSync(join(src, file), 'utf8');
         const rule = new RegExp(`\\${pill}\\.is-${icon}\\s*\\{([^}]*)\\}`).exec(css);
         expect(rule, `${pill}.is-${icon} in ${file}`).not.toBeNull();
-        expect(rule?.[1]).toContain(`var(--badge-${icon}-bg)`);
-        expect(rule?.[1]).toContain(`var(--badge-${icon}-fg)`);
+        for (const token of reads(icon)) expect(rule?.[1]).toContain(`var(${token})`);
         expect(css, `${pill} .badge-glyph in ${file}`).toContain(`${pill} .badge-glyph {`);
         checked++;
       }

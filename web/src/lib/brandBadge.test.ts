@@ -2,15 +2,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BADGE_BRANDS, brandBadgeClass } from './brandBadge';
+import { BADGE_BRANDS, BRAND_MONOGRAMS, brandBadgeClass } from './brandBadge';
 import { GROUP_ORIGIN_BADGE_BRANDS } from './groupOrigin';
 import { NODE_KIND_SPEC } from './nodeKind';
 
 const SRC = join(__dirname, '..');
-/** The two pill badges and the stylesheet each one lives in. */
-const PILLS: [string, string][] = [
-  ['.nd-kind', 'components/NodeDetail/NodeDetail.css'],
-  ['.ntree-badge', 'components/NodeTree/NodeTree.css'],
+/** The two badges, the stylesheet each one lives in, and the tokens its brand rule must read: the
+ *  node header's pill wears the logo pair, the tree's one-letter chip the per-theme ink
+ *  (2026-09-29). */
+const PILLS: [string, string, (brand: string) => string[]][] = [
+  ['.nd-kind', 'components/NodeDetail/NodeDetail.css', (b) => [`--brand-${b}`, `--brand-${b}-fg`]],
+  ['.ntree-badge', 'components/NodeTree/NodeTree.css', (b) => [`--brand-${b}-ink`]],
 ];
 
 describe('brand badges', () => {
@@ -37,21 +39,32 @@ describe('brand badges', () => {
 
   // A brand named by either registry with no rule in a stylesheet draws the default accent — the
   // badge looks deliberate and is simply wrong, which no other test here can see.
-  it('has a rule in both badge stylesheets for every brand, reading its two tokens', () => {
+  it('has a rule in both badge stylesheets for every brand, reading its tokens', () => {
     const tokens = readFileSync(join(SRC, 'styles/tokens.css'), 'utf8');
+    // The ink is text on the page's own ground, so it is set once per theme; a brand with no dark
+    // value would keep the light theme's dark ink on a dark row.
+    const dark = tokens.slice(tokens.indexOf("[data-theme='dark']"));
     let checked = 0;
     for (const brand of BADGE_BRANDS) {
       expect(tokens, `--brand-${brand}`).toMatch(new RegExp(`--brand-${brand}:\\s*#`));
       expect(tokens, `--brand-${brand}-fg`).toMatch(new RegExp(`--brand-${brand}-fg:\\s*#`));
-      for (const [pill, file] of PILLS) {
+      expect(tokens, `--brand-${brand}-ink`).toMatch(new RegExp(`--brand-${brand}-ink:\\s*#`));
+      expect(dark, `dark --brand-${brand}-ink`).toMatch(new RegExp(`--brand-${brand}-ink:\\s*#`));
+      for (const [pill, file, reads] of PILLS) {
         const css = readFileSync(join(SRC, file), 'utf8');
         const rule = new RegExp(`\\${pill}\\.is-${brand}\\s*\\{([^}]*)\\}`).exec(css);
         expect(rule, `${pill}.is-${brand} in ${file}`).not.toBeNull();
-        expect(rule?.[1]).toContain(`var(--brand-${brand})`);
-        expect(rule?.[1]).toContain(`var(--brand-${brand}-fg)`);
+        for (const token of reads(brand)) expect(rule?.[1]).toContain(`var(${token})`);
         checked++;
       }
     }
     expect(checked).toBe(BADGE_BRANDS.length * PILLS.length);
+  });
+
+  // The tree tells brands apart by this letter alone; two brands sharing one would be one badge.
+  it('gives every brand one letter of its own', () => {
+    const letters = BADGE_BRANDS.map((b) => BRAND_MONOGRAMS[b]);
+    for (const l of letters) expect(l).toMatch(/^[A-Z]$/);
+    expect(new Set(letters).size).toBe(letters.length);
   });
 });

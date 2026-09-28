@@ -659,46 +659,68 @@ button.ntree-supp-icon:hover {
   border-color: var(--accent-color);
 }
 
-/* Monitoring-source badge (e.g. Cisco Meraki) shown after a node name in the tree. */
+/* Badges after a name in the tree (user decision, 2026-09-29): quiet chips, never filled pills. A
+   filled pill on every row of a Meraki site out-shouted the status dots — the one thing a row must
+   say first — and Meraki's filled green sat right beside the green of "up". So: a low chip in the
+   secondary ink for a word (URL / DNS / Repeater), one letter on a faint tint for a brand, and a
+   bare grey glyph for the Wi-Fi mark. The node detail header keeps the full pills (`.nd-kind`). */
 .ntree-badge {
   flex: 0 0 auto;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 8px;
+  height: 17px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 4px;
   font-size: var(--font-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.02em;
-  line-height: 1.5;
-  color: var(--accent-color);
+  line-height: 1;
+  color: var(--text-secondary);
   background: var(--bg-tertiary);
-  border: var(--border-width) solid var(--border-color);
 }
 
-/* A badge that names a third party — a Meraki node, a folder Meraki keeps — wears that party's
-   colours (`lib/brandBadge.ts`). */
+/* A node's badges as one group, laid out right-to-left: the brand letter is first in the source
+   (and so first to a screen reader) but always rightmost on screen, so it lines up in one column
+   down a site whether or not the row also wears the Wi-Fi mark. */
+.ntree-badges {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A badge that names a third party — a Meraki node, a folder Meraki or NetBox keeps — is that
+   party's colour as ink on a faint tint of itself (`lib/brandBadge.ts`). */
 .ntree-badge.is-meraki {
-  color: var(--brand-meraki-fg);
-  background: var(--brand-meraki);
-  border-color: var(--brand-meraki);
+  color: var(--brand-meraki-ink);
+  background: color-mix(in srgb, var(--brand-meraki-ink) 14%, transparent);
 }
 
 .ntree-badge.is-netbox {
-  color: var(--brand-netbox-fg);
-  background: var(--brand-netbox);
+  color: var(--brand-netbox-ink);
+  background: color-mix(in srgb, var(--brand-netbox-ink) 14%, transparent);
 }
 
-/* A badge drawn as a glyph (`BADGE_ICONS` in lib/nodeKind.ts): an access point's Wi-Fi mark, black
-   on white. The glyph sits in the line box the text would, so the pill keeps its height. */
+/* A brand drawn as its one letter (`BRAND_MONOGRAMS`): a square, so every letter is the same width
+   and the column stays straight. */
+.ntree-badge.is-mono {
+  width: 17px;
+  padding: 0;
+  letter-spacing: 0;
+}
+
+/* A badge drawn as a glyph (`BADGE_ICONS` in lib/nodeKind.ts): an access point's Wi-Fi mark, bare
+   and grey — it says what the device is, which is less urgent than whether it is up. */
 .ntree-badge.is-wifi {
-  padding: 0 5px;
-  color: var(--badge-wifi-fg);
-  background: var(--badge-wifi-bg);
+  padding: 0 1px;
+  color: var(--text-tertiary);
+  background: none;
 }
 
 .ntree-badge .badge-glyph {
-  width: 1.3em;
-  height: 1.3em;
-  vertical-align: -0.25em;
+  width: 14px;
+  height: 14px;
 }
 
 /* ---- Branch lines (ADR-171) ----------------------------------------------------------------
