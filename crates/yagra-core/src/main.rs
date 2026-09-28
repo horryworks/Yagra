@@ -29,6 +29,7 @@ mod atomic_file;
 mod audit;
 mod auth;
 mod authcallout;
+mod batch_writer;
 mod bigquery;
 mod bus_callout;
 mod bus_cert;

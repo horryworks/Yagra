@@ -239,53 +239,24 @@ pub(crate) async fn consume_flows<S>(
 /// the batch and counts it (unlike the metrics path, which spills). Takes the shutdown token
 /// directly (not `spawn_cancellable`) so it can do a best-effort final flush on cancel.
 pub(crate) async fn run_flow_writer(
-    mut rx: tokio::sync::mpsc::Receiver<FlowRow>,
+    rx: tokio::sync::mpsc::Receiver<FlowRow>,
     store: Arc<dyn FlowStore>,
     shutdown: CancellationToken,
 ) {
-    let mut buf: Vec<FlowRow> = Vec::new();
-    let mut ticker = tokio::time::interval(Duration::from_secs(FLOW_INSERT_FLUSH_SECS));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => {
-                while let Ok(r) = rx.try_recv() {
-                    buf.push(r);
-                    if buf.len() >= FLOW_INSERT_MAX_ROWS {
-                        flush_flow(&store, &mut buf).await;
-                    }
-                }
-                flush_flow(&store, &mut buf).await;
-                break;
-            }
-            _ = ticker.tick() => {
-                flush_flow(&store, &mut buf).await;
-            }
-            first = rx.recv() => {
-                match first {
-                    None => {
-                        flush_flow(&store, &mut buf).await;
-                        break;
-                    }
-                    Some(r) => {
-                        buf.push(r);
-                        while buf.len() < FLOW_INSERT_MAX_ROWS {
-                            match rx.try_recv() {
-                                Ok(r) => buf.push(r),
-                                Err(_) => break,
-                            }
-                        }
-                        if buf.len() >= FLOW_INSERT_MAX_ROWS {
-                            flush_flow(&store, &mut buf).await;
-                        }
-                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "flow")
-                            .set(rx.len() as f64);
-                    }
-                }
-            }
-        }
-    }
+    crate::batch_writer::run(
+        rx,
+        FLOW_INSERT_MAX_ROWS,
+        crate::batch_writer::FlushPolicy::WhenFullOrEvery(Duration::from_secs(
+            FLOW_INSERT_FLUSH_SECS,
+        )),
+        "flow",
+        shutdown,
+        move |buf: &mut Vec<FlowRow>| -> futures::future::BoxFuture<'_, ()> {
+            let store = store.clone();
+            Box::pin(async move { flush_flow(&store, buf).await })
+        },
+    )
+    .await;
 }
 
 /// Insert one buffered batch of flow rows; on failure the batch is dropped and counted (flow is a

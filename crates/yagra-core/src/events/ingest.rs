@@ -138,47 +138,23 @@ pub(crate) fn unattributed_senders(buf: &[PersistRecord]) -> Vec<crate::arp::Sen
 /// blocking `recv`, then a non-blocking drain up to [`PERSIST_BATCH_MAX`]). On shutdown it drains
 /// and flushes what's queued (best-effort final flush) before returning.
 pub async fn run_persist_writer(
-    mut rx: tokio::sync::mpsc::Receiver<PersistRecord>,
+    rx: tokio::sync::mpsc::Receiver<PersistRecord>,
     repo: Arc<EventRepo>,
     logs: Option<Arc<dyn LogStore>>,
     shutdown: CancellationToken,
 ) {
-    let mut buf: Vec<PersistRecord> = Vec::with_capacity(PERSIST_BATCH_MAX);
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => {
-                while let Ok(rec) = rx.try_recv() {
-                    buf.push(rec);
-                    if buf.len() >= PERSIST_BATCH_MAX {
-                        flush_persist(&repo, &logs, &mut buf).await;
-                    }
-                }
-                flush_persist(&repo, &logs, &mut buf).await;
-                break;
-            }
-            first = rx.recv() => {
-                match first {
-                    None => {
-                        flush_persist(&repo, &logs, &mut buf).await;
-                        break;
-                    }
-                    Some(rec) => {
-                        buf.push(rec);
-                        while buf.len() < PERSIST_BATCH_MAX {
-                            match rx.try_recv() {
-                                Ok(rec) => buf.push(rec),
-                                Err(_) => break,
-                            }
-                        }
-                        flush_persist(&repo, &logs, &mut buf).await;
-                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "events")
-                            .set(rx.len() as f64);
-                    }
-                }
-            }
-        }
-    }
+    crate::batch_writer::run(
+        rx,
+        PERSIST_BATCH_MAX,
+        crate::batch_writer::FlushPolicy::EveryDrain,
+        "events",
+        shutdown,
+        move |buf: &mut Vec<PersistRecord>| -> futures::future::BoxFuture<'_, ()> {
+            let (repo, logs) = (repo.clone(), logs.clone());
+            Box::pin(async move { flush_persist(&repo, &logs, buf).await })
+        },
+    )
+    .await;
 }
 
 /// Map a drained action batch to the `alert_history` rows to insert: a fire records `resolved=false`,
@@ -232,47 +208,23 @@ async fn flush_actions(
 /// serialize a PG round-trip per action on the matcher. Delivers notifications in FIFO order so a
 /// fire always precedes its later resolve. On shutdown it drains and flushes what's queued.
 pub async fn run_event_action_writer(
-    mut rx: tokio::sync::mpsc::Receiver<QueuedAction>,
+    rx: tokio::sync::mpsc::Receiver<QueuedAction>,
     history: Arc<AlertHistoryStore>,
     notifier: Arc<Notifier>,
     shutdown: CancellationToken,
 ) {
-    let mut buf: Vec<QueuedAction> = Vec::with_capacity(ACTION_BATCH_MAX);
-    loop {
-        tokio::select! {
-            biased;
-            () = shutdown.cancelled() => {
-                while let Ok(a) = rx.try_recv() {
-                    buf.push(a);
-                    if buf.len() >= ACTION_BATCH_MAX {
-                        flush_actions(&history, &notifier, &mut buf).await;
-                    }
-                }
-                flush_actions(&history, &notifier, &mut buf).await;
-                break;
-            }
-            first = rx.recv() => {
-                match first {
-                    None => {
-                        flush_actions(&history, &notifier, &mut buf).await;
-                        break;
-                    }
-                    Some(a) => {
-                        buf.push(a);
-                        while buf.len() < ACTION_BATCH_MAX {
-                            match rx.try_recv() {
-                                Ok(a) => buf.push(a),
-                                Err(_) => break,
-                            }
-                        }
-                        flush_actions(&history, &notifier, &mut buf).await;
-                        metrics::gauge!("yagra_persist_queue_depth", "stream" => "event_actions")
-                            .set(rx.len() as f64);
-                    }
-                }
-            }
-        }
-    }
+    crate::batch_writer::run(
+        rx,
+        ACTION_BATCH_MAX,
+        crate::batch_writer::FlushPolicy::EveryDrain,
+        "event_actions",
+        shutdown,
+        move |buf: &mut Vec<QueuedAction>| -> futures::future::BoxFuture<'_, ()> {
+            let (history, notifier) = (history.clone(), notifier.clone());
+            Box::pin(async move { flush_actions(&history, &notifier, buf).await })
+        },
+    )
+    .await;
 }
 
 #[cfg(test)]
