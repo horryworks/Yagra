@@ -683,30 +683,14 @@ mod tests {
 
     fn result(at_ms: i64) -> PollResult {
         PollResult {
-            job_id: Uuid::nil(),
-            node_id: NodeId::from(Uuid::nil()),
-            at_unix_ms: at_ms,
-            outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 1.0)],
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
             poller_id: Some("edge-1".into()),
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(
+                Uuid::nil(),
+                NodeId::from(Uuid::nil()),
+                at_ms,
+                CheckOutcome::Reachable,
+            )
         }
     }
 

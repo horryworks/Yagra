@@ -162,34 +162,14 @@ fn make_result(
         })
         .collect();
     PollResult {
-        job_id: Uuid::new_v4(),
-        node_id: node,
-        at_unix_ms: now_ms(),
-        outcome,
         samples,
         interfaces,
         sys_descr: sys_descr.map(str::to_owned),
-        // None: a real poller sends a version only on the hourly identity probe (ADR-138), and
-        // `update_os_version_batch` writes only a changed one — so a firehose that sent the same
-        // version on every result would exercise a no-op, not the fleet's real write load.
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        // None for the same reason: identity rides the hourly probe (ADR-140).
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
-        observational: false,
-        judge_samples: false,
         poller_id: Some("firehose".to_owned()),
-        trace_context: Default::default(),
-        meraki_collect: None,
+        // No OS version and no sysObjectID: a real poller sends identity only on the hourly probe
+        // (ADR-138/140), and the writers store only a change — so a firehose that sent them on every
+        // result would exercise a no-op, not the fleet's real write load.
+        ..PollResult::new(Uuid::new_v4(), node, now_ms(), outcome)
     }
 }
 

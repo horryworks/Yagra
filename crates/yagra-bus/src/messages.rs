@@ -2406,6 +2406,47 @@ pub struct PollResult {
     pub meraki_collect: Option<MerakiCollectReport>,
 }
 
+impl PollResult {
+    /// A result carrying only what every result must: which job, which node, when, and how it
+    /// went. Everything else is what the wire gives a field its producer did not send.
+    ///
+    /// ⚠️ **Deliberately not `Default`.** A defaulted `outcome` would be a liveness verdict nobody
+    /// reached, and the engine feeds `outcome` to the node's state machine on every result
+    /// (`extensibility.md` §6). The four that decide what a result *means* are arguments; the rest
+    /// are optional evidence, and their default here is their `#[serde(default)]` — which is what a
+    /// test pins, so a field added with a different wire default fails the build instead of making
+    /// in-process results disagree with N-1 ones. Same shape as `NeighborSet::new` (ADR-182).
+    #[must_use]
+    pub fn new(job_id: Uuid, node_id: NodeId, at_unix_ms: i64, outcome: CheckOutcome) -> Self {
+        Self {
+            job_id,
+            node_id,
+            at_unix_ms,
+            outcome,
+            samples: Vec::new(),
+            interfaces: Vec::new(),
+            sys_descr: None,
+            os_version: None,
+            os_version_without_patch: None,
+            sys_object_id: None,
+            serial_number: None,
+            hardware_model: None,
+            dns_chain: None,
+            neighbors: None,
+            l3: None,
+            arp: None,
+            routing: None,
+            wlan: None,
+            row_names: Vec::new(),
+            observational: false,
+            judge_samples: false,
+            poller_id: None,
+            trace_context: TraceContext::default(),
+            meraki_collect: None,
+        }
+    }
+}
+
 /// How one Meraki collect ended (see [`PollResult::meraki_collect`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerakiCollectReport {
@@ -3913,30 +3954,14 @@ mod tests {
     #[test]
     fn poll_result_with_poller_id_round_trips() {
         let result = PollResult {
-            job_id: Uuid::nil(),
-            node_id: NodeId::from(Uuid::nil()),
-            at_unix_ms: 42,
-            outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 5.0)],
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
             poller_id: Some("edge-poller-1".into()),
-            trace_context: TraceContext::new(),
-            meraki_collect: None,
+            ..PollResult::new(
+                Uuid::nil(),
+                NodeId::from(Uuid::nil()),
+                42,
+                CheckOutcome::Reachable,
+            )
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: PollResult = serde_json::from_str(&json).unwrap();
@@ -5441,6 +5466,71 @@ mod tests {
                 hash: "abc".into(),
                 exp_unix: 42
             }
+        );
+    }
+
+    /// ADR-184: `PollResult::new` gives every optional field the value the wire gives a field its
+    /// producer did not send — so an in-process result and one read from an N-1 poller agree. A
+    /// field added with a different `#[serde(default)]` than `new()`'s fails here.
+    #[test]
+    fn a_new_poll_result_field_defaults_the_way_the_wire_does() {
+        let job = Uuid::from_u128(7);
+        let node = NodeId::from(Uuid::from_u128(9));
+        let built = PollResult::new(job, node, 42, CheckOutcome::Reachable);
+        let minimal = serde_json::json!({
+            "job_id": job,
+            "node_id": node,
+            "at_unix_ms": 42,
+            "outcome": CheckOutcome::Reachable,
+        });
+        let read: PollResult = serde_json::from_value(minimal).expect("four fields are enough");
+        assert_eq!(built, read);
+        // And the round trip: what `new()` sends is read back as itself.
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&built).unwrap()).unwrap();
+        assert_eq!(built, back);
+    }
+
+    /// ADR-184: nobody spells a result's optional fields out by hand any more. The two needles are
+    /// fields no caller has a reason to set to their default explicitly, so either one outside this
+    /// file is a full literal that will need a new field added to it by hand.
+    #[test]
+    fn no_poll_result_is_written_out_field_by_field() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let needles = [
+            format!("{}: None", "meraki_collect"),
+            format!("{}: None", "os_version_without_patch"),
+        ];
+        let mut read = 0;
+        let mut offenders = Vec::new();
+        let mut stack = vec![crates];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                let name = path.to_string_lossy().replace('\\', "/");
+                if path.is_dir() {
+                    if !name.ends_with("/target") && !name.contains("/vendor") {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                read += 1;
+                if name.ends_with("yagra-bus/src/messages.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                if needles.iter().any(|n| text.contains(n.as_str())) {
+                    offenders.push(name);
+                }
+            }
+        }
+        assert!(read >= 300, "only {read} files read");
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} build a PollResult field by field — use `PollResult {{ .., ..PollResult::new(..) }}`"
         );
     }
 }

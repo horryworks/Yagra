@@ -1491,10 +1491,6 @@ mod tests {
         let vm = VmWriters::from_senders(vec![metrics_tx]);
         let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
         let result = PollResult {
-            job_id: uuid::Uuid::nil(),
-            node_id: NodeId::from(uuid::Uuid::nil()),
-            at_unix_ms: 1_000, // deliberately ancient — must NOT drive any "now" alert logic
-            outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 3.0)],
             interfaces: vec![DiscoveredInterface {
                 ifindex: IfIndex(1),
@@ -1510,24 +1506,13 @@ mod tests {
                 tx_power_low_dbm: None,
                 tx_power_high_dbm: None,
             }],
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
             poller_id: Some("edge-1".into()),
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(
+                uuid::Uuid::nil(),
+                NodeId::from(uuid::Uuid::nil()),
+                1_000,
+                CheckOutcome::Reachable,
+            )
         };
         consume_results_backfill(
             futures::stream::iter(vec![result]),
@@ -1943,30 +1928,9 @@ mod tests {
 
     fn observational_result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
         PollResult {
-            job_id: uuid::Uuid::new_v4(),
-            node_id: node,
-            at_unix_ms: at,
-            outcome,
-            samples: Vec::new(),
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
             observational: true,
-            judge_samples: false,
-            poller_id: None,
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(uuid::Uuid::new_v4(), node, at, outcome)
         }
     }
 
@@ -2489,30 +2453,8 @@ mod tests {
 
     fn sample_result() -> Arc<PollResult> {
         Arc::new(PollResult {
-            job_id: Uuid::nil(),
-            node_id: NodeId::new(),
-            at_unix_ms: 1,
-            outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 9.0)],
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
-            poller_id: None,
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(Uuid::nil(), NodeId::new(), 1, CheckOutcome::Reachable)
         })
     }
 

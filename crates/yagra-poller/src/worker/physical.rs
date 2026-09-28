@@ -184,11 +184,6 @@ pub(super) async fn execute_optical(
     }
 
     PollResult {
-        job_id: job.job_id,
-        node_id: job.node_id,
-        at_unix_ms,
-        // Never a liveness statement — see the doc comment.
-        outcome: CheckOutcome::Reachable,
         samples,
         // ⚠️ These carry the thresholds and NOTHING else — no name, no alias, no speed, no link
         // mode. Core's interface upsert COALESCEs every column against its existing value, so the
@@ -211,27 +206,13 @@ pub(super) async fn execute_optical(
                 tx_power_high_dbm: w.tx_high,
             })
             .collect(),
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
         observational: true,
         // …but its readings are readings: a band on a light level or a chassis temperature is
         // judged like any other (ADR-158 A10). Core schedules this job at the node's own poll
         // interval (`scheduler/assemble.rs`), which is the condition the field's doc sets.
         judge_samples: true,
-        poller_id: None,
-        trace_context: Default::default(),
-        meraki_collect: None,
+        // Never a liveness statement — `Reachable` is a placeholder; see the doc comment.
+        ..PollResult::new(job.job_id, job.node_id, at_unix_ms, CheckOutcome::Reachable)
     }
 }
 
@@ -640,32 +621,11 @@ pub(super) async fn execute_mau(
 /// struct is exactly how one of them ends up claiming reachability the walk never established.
 fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterface>) -> PollResult {
     PollResult {
-        job_id: job.job_id,
-        node_id: job.node_id,
-        at_unix_ms,
-        outcome: CheckOutcome::Reachable,
-        samples: Vec::new(),
         interfaces,
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        poller_id: None,
-        // Never a liveness statement — see [`execute_mau`]'s doc comment.
-        row_names: Vec::new(),
         observational: true,
-        // Hourly, and it carries no samples anyway.
-        judge_samples: false,
-        trace_context: Default::default(),
-        meraki_collect: None,
+        // Never a liveness statement (`Reachable` is a placeholder) — see [`execute_mau`]'s doc
+        // comment. `judge_samples` stays false: hourly, and it carries no samples anyway.
+        ..PollResult::new(job.job_id, job.node_id, at_unix_ms, CheckOutcome::Reachable)
     }
 }
 

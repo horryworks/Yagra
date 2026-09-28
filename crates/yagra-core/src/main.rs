@@ -1704,30 +1704,13 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
     let sink = Arc::new(InMemorySink::default());
     // Demo seed so the walking-skeleton WebUI shows data before real polling is wired.
     sink.ingest(&PollResult {
-        job_id: Uuid::nil(),
-        node_id: yagra_common::NodeId::from(Uuid::nil()),
-        at_unix_ms: 0,
-        outcome: yagra_bus::CheckOutcome::Reachable,
         samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 8.0)],
-        interfaces: Vec::new(),
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
-        observational: false,
-        judge_samples: false,
-        poller_id: None,
-        trace_context: Default::default(),
-        meraki_collect: None,
+        ..PollResult::new(
+            Uuid::nil(),
+            yagra_common::NodeId::from(Uuid::nil()),
+            0,
+            yagra_bus::CheckOutcome::Reachable,
+        )
     });
     let state = ApiState {
         store: sink,

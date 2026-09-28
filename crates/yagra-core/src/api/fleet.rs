@@ -579,30 +579,8 @@ mod tests {
     fn store_with_rtt(node: NodeId) -> std::sync::Arc<dyn crate::store::MetricStore> {
         let sink = crate::sink::InMemorySink::default();
         sink.ingest(&yagra_bus::PollResult {
-            job_id: Uuid::nil(),
-            node_id: node,
-            at_unix_ms: 0,
-            outcome: yagra_bus::CheckOutcome::Reachable,
             samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 1.5)],
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
-            poller_id: None,
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..yagra_bus::PollResult::new(Uuid::nil(), node, 0, yagra_bus::CheckOutcome::Reachable)
         });
         std::sync::Arc::new(sink)
     }

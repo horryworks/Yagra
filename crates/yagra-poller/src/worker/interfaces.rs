@@ -245,31 +245,9 @@ async fn execute_table_walk(
     }
 
     PollResult {
-        job_id: job.job_id,
-        node_id: job.node_id,
-        at_unix_ms,
-        outcome,
         samples,
         interfaces,
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
-        observational: false,
-        judge_samples: false,
-        poller_id: None,
-        // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
-        trace_context: Default::default(),
-        meraki_collect: None,
+        ..PollResult::new(job.job_id, job.node_id, at_unix_ms, outcome)
     }
 }
 

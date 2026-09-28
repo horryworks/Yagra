@@ -3147,30 +3147,8 @@ mod tests {
         let node = NodeId::new();
         let store = InMemorySink::default();
         let result = PollResult {
-            job_id: Uuid::nil(),
-            node_id: node,
-            at_unix_ms: 0,
-            outcome: CheckOutcome::Reachable,
             samples: vec![Sample::gauge("icmp_rtt_ms", 7.0)],
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
-            row_names: Vec::new(),
-            observational: false,
-            judge_samples: false,
-            poller_id: None,
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(Uuid::nil(), node, 0, CheckOutcome::Reachable)
         };
         MetricStore::write(&store, &result).await;
         assert_eq!(
@@ -3188,30 +3166,8 @@ mod tests {
         let ids: Vec<NodeId> = (0..3).map(|_| NodeId::new()).collect();
         for n in &ids {
             let result = PollResult {
-                job_id: Uuid::nil(),
-                node_id: *n,
-                at_unix_ms: 0,
-                outcome: CheckOutcome::Reachable,
                 samples: vec![Sample::gauge("icmp_rtt_ms", 1.0)],
-                interfaces: Vec::new(),
-                sys_descr: None,
-                os_version: None,
-                os_version_without_patch: None,
-                serial_number: None,
-                hardware_model: None,
-                sys_object_id: None,
-                dns_chain: None,
-                neighbors: None,
-                l3: None,
-                arp: None,
-                routing: None,
-                wlan: None,
-                row_names: Vec::new(),
-                observational: false,
-                judge_samples: false,
-                poller_id: None,
-                trace_context: Default::default(),
-                meraki_collect: None,
+                ..PollResult::new(Uuid::nil(), *n, 0, CheckOutcome::Reachable)
             };
             MetricStore::write(&store, &result).await;
         }
@@ -3252,30 +3208,8 @@ mod tests {
         for kind in NodeKind::ALL {
             let node = NodeId::new();
             let result = PollResult {
-                job_id: Uuid::nil(),
-                node_id: node,
-                at_unix_ms: 0,
-                outcome: CheckOutcome::Reachable,
                 samples: vec![Sample::gauge(kind.liveness_metric(), 1.0)],
-                interfaces: Vec::new(),
-                sys_descr: None,
-                os_version: None,
-                os_version_without_patch: None,
-                serial_number: None,
-                hardware_model: None,
-                sys_object_id: None,
-                dns_chain: None,
-                neighbors: None,
-                l3: None,
-                arp: None,
-                routing: None,
-                wlan: None,
-                row_names: Vec::new(),
-                observational: false,
-                judge_samples: false,
-                poller_id: None,
-                trace_context: Default::default(),
-                meraki_collect: None,
+                ..PollResult::new(Uuid::nil(), node, 0, CheckOutcome::Reachable)
             };
             MetricStore::write(&store, &result).await;
             ids.push(node.as_uuid());

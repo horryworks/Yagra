@@ -286,32 +286,12 @@ fn ap_poll_result(
     interfaces: Vec<DiscoveredInterface>,
 ) -> PollResult {
     PollResult {
-        job_id: controller.job_id,
-        node_id: node,
-        at_unix_ms: controller.at_unix_ms,
-        outcome,
         samples,
         interfaces,
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
-        // A liveness result: this is the only statement anything makes about whether the AP is up.
-        observational: false,
-        judge_samples: false,
-        // Not a poller's result — the controller's is, and it is counted once, there.
-        poller_id: None,
         trace_context: controller.trace_context.clone(),
-        meraki_collect: None,
+        // A liveness result: this is the only statement anything makes about whether the AP is up.
+        // `poller_id` stays unset — not a poller's result; the controller's is, counted once, there.
+        ..PollResult::new(controller.job_id, node, controller.at_unix_ms, outcome)
     }
 }
 
@@ -427,30 +407,16 @@ mod tests {
 
     fn inventory_result(controller: u128, at_secs: i64, aps: Vec<WlanApObservation>) -> PollResult {
         PollResult {
-            job_id: Uuid::new_v4(),
-            node_id: NodeId::from(Uuid::from_u128(controller)),
-            at_unix_ms: at_secs * 1000,
-            outcome: CheckOutcome::Reachable,
-            samples: Vec::new(),
-            interfaces: Vec::new(),
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
-            neighbors: None,
-            l3: None,
-            arp: None,
-            routing: None,
             wlan: Some(WlanInventory::bounded(WlanFlavor::Huawei, aps, 1024)),
-            row_names: Vec::new(),
             observational: true,
             judge_samples: true,
             poller_id: Some("p1".into()),
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(
+                Uuid::new_v4(),
+                NodeId::from(Uuid::from_u128(controller)),
+                at_secs * 1000,
+                CheckOutcome::Reachable,
+            )
         }
     }
 

@@ -175,30 +175,13 @@ pub async fn execute_meraki(
             .chain(radios.iter().map(RadioReadings::interface))
             .collect();
         results.push(PollResult {
-            job_id: job.job_id,
-            node_id,
-            at_unix_ms,
-            outcome,
             samples,
             interfaces,
-            sys_descr: None,
-            os_version: None,
-            os_version_without_patch: None,
-            serial_number: None,
-            hardware_model: None,
-            sys_object_id: None,
-            dns_chain: None,
             neighbors,
-            l3: None,
-            arp: None,
-            routing: None,
-            wlan: None,
             row_names,
             observational,
             judge_samples,
-            poller_id: None,
-            trace_context: Default::default(),
-            meraki_collect: None,
+            ..PollResult::new(job.job_id, node_id, at_unix_ms, outcome)
         });
     }
     results
@@ -324,36 +307,15 @@ fn collect_report(
     at_unix_ms: i64,
 ) -> PollResult {
     PollResult {
-        job_id: job.job_id,
-        node_id: job.node_id,
-        at_unix_ms,
-        // A placeholder the engine never reads for an observational result.
-        outcome: CheckOutcome::Reachable,
-        samples: Vec::new(),
-        interfaces: Vec::new(),
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
         observational: true,
-        judge_samples: false,
-        poller_id: None,
-        trace_context: Default::default(),
         meraki_collect: Some(MerakiCollectReport {
             org: check.meraki_org_uuid,
             tier: check.tier,
             failure: failure.map(|why| why.token().to_owned()),
             listing: listing.map(|l| l.as_str().to_owned()),
         }),
+        // `Reachable` is a placeholder the engine never reads for an observational result.
+        ..PollResult::new(job.job_id, job.node_id, at_unix_ms, CheckOutcome::Reachable)
     }
 }
 

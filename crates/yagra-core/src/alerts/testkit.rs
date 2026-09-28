@@ -49,32 +49,7 @@ pub(crate) fn manager() -> AlertManager {
 }
 
 pub(crate) fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
-    PollResult {
-        job_id: Uuid::nil(),
-        node_id: node,
-        at_unix_ms: at,
-        outcome,
-        samples: Vec::new(),
-        interfaces: Vec::new(),
-        sys_descr: None,
-        os_version: None,
-        os_version_without_patch: None,
-        serial_number: None,
-        hardware_model: None,
-        sys_object_id: None,
-        dns_chain: None,
-        neighbors: None,
-        l3: None,
-        arp: None,
-        routing: None,
-        wlan: None,
-        row_names: Vec::new(),
-        observational: false,
-        judge_samples: false,
-        poller_id: None,
-        trace_context: Default::default(),
-        meraki_collect: None,
-    }
+    PollResult::new(Uuid::nil(), node, at, outcome)
 }
 
 pub(crate) fn folder_rule(group: Uuid, warning: f64) -> StoredThreshold {
