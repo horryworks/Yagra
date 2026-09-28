@@ -75,14 +75,16 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .collect();
+        // Read before the directory is removed — on Unix the mode check below needs the file.
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777
+        };
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(names, vec![std::ffi::OsString::from("server.pem")]);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o640, "the final mode is set, not left to the umask");
-        }
+        assert_eq!(mode, 0o640, "the final mode is set, not left to the umask");
     }
 
     #[test]
