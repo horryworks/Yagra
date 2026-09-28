@@ -70,7 +70,7 @@ describe('partialOutcome', () => {
 
 /**
  * ADR-184 increment 35: a dialog's Cancel + submit pair is drawn by `FormFooter`, and the save
- * that drives it is `useSubmit`. Thirty-three files wrote the pair by hand.
+ * that drives it is `useSubmit`. Thirty-three files wrote the pair by hand (increments 35-39).
  *
  * The needle is Cancel wired to close and disabled on the busy flag — the one line every hand copy
  * shares. Not `setBusy(true)`: ten page-level forms set that too, and they are a different
@@ -93,17 +93,11 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
       'runs a loop over prefixes and ends on a summary of what moved, not on closing',
   };
 
-  /** Dialogs still to move. Only ever shorter; deleted when empty (increment 40). */
-  const NOT_YET_MIGRATED: string[] = [];
-  const CEILING = 0;
-
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const handWritten = sources.filter(([, code]) => NEEDLE.test(code)).map(([p]) => p);
 
   it('no other dialog writes its footer by hand', () => {
-    const offenders = handWritten.filter(
-      (p) => p !== HOME && !PERMANENT[p] && !NOT_YET_MIGRATED.includes(p),
-    );
+    const offenders = handWritten.filter((p) => p !== HOME && !PERMANENT[p]);
     expect(
       offenders,
       `these files write a dialog's Cancel + submit by hand. Use useSubmit and FormFooter ` +
@@ -112,21 +106,15 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
     ).toEqual([]);
   });
 
-  it('every listed file still does, so the lists cannot go stale', () => {
-    const stale = [...Object.keys(PERMANENT), ...NOT_YET_MIGRATED].filter(
-      (p) => !handWritten.includes(p),
-    );
+  it('every listed exception still is one, so the list cannot go stale', () => {
+    const stale = Object.keys(PERMANENT).filter((p) => !handWritten.includes(p));
     expect(stale, 'listed, but no longer writes its footer by hand — take it off').toEqual([]);
   });
 
-  it('the migration list only shrinks', () => {
-    expect(NOT_YET_MIGRATED.length).toBeLessThanOrEqual(CEILING);
-    expect(new Set(NOT_YET_MIGRATED).size).toBe(NOT_YET_MIGRATED.length);
-  });
-
   it('finds the dialogs it is supposed to be reading', () => {
-    // Counts footers written by hand **or** saves through the shared hook, so the number holds
-    // while dialogs move and a walk that found nothing cannot pass.
+    // Counts footers written by hand **or** saves through the shared hook, so a walk that found
+    // nothing cannot pass — and a dialog that drops its save altogether shows up as a lower
+    // number.
     const HOOK = `${'useSubmit'}(`;
     const dialogs = sources.filter(
       ([p, code]) => p !== 'lib/useSubmit.ts' && (NEEDLE.test(code) || code.includes(HOOK)),
