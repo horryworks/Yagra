@@ -6,7 +6,8 @@
 // `authed` or from a role comparison. That guard is the increment's whole point: the 35 sites were
 // individually reasonable, and it is only the *rule* that stops the 36th.
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles } from '../testSupport/sources';
 import { join } from 'node:path';
 import { grants, permissionLabel } from './permissions';
 import { releasePermission, releasableRows, type SuppressionPanelRow } from './suppression';
@@ -98,14 +99,7 @@ describe('release actions follow what they release', () => {
 // ---------------------------------------------------------------------------------------------
 
 /** Every `.tsx` under `src/`. */
-function tsxFiles(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) tsxFiles(p, out);
-    else if (e.name.endsWith('.tsx')) out.push(p);
-  }
-  return out;
-}
+const tsxFiles = (dir: string) => sourceFiles(dir, { exts: ['.tsx'], includeTests: true });
 
 const SRC = join(__dirname, '..');
 

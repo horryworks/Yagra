@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Reading the WebUI's own source, for the tests that guard it (ADR-184).
 //
-// Seventeen guard tests each carried their own directory walk — the same `readdirSync` recursion,
+// Fourteen guard tests each carried their own directory walk — the same `readdirSync` recursion,
 // the same `.test.` exclusion, the same backslash fix for Windows paths — and they had drifted on
 // the details that decide what a guard can see (`.ts` only, `.tsx` only, tests in or out). This is
 // the one walk. What stays in each test is what makes the guard mean something: its needle, its
 // exemptions, and **its floor** — the assertion that it found the sources it expected, so a moved
 // directory fails the guard instead of emptying it.
+//
+// Still listing a directory themselves, on purpose — `sources.test.ts` holds this list:
+// `tsxJudgement.test.ts` (it resolves imports between the files it walks), `RangeControl.test.ts`
+// (one directory, not a tree), `nodeKind.test.ts` (Rust sources), and the one-directory listings
+// in `i18nPrefixes.test.ts` (the locale files) and `testIds.test.ts` (`tests/ui`).
 //
 // Imported only by `*.test.ts`. It uses `node:fs`, so a component importing it would not build.
 
@@ -29,6 +34,9 @@ export interface SourceOptions {
   includeTests?: boolean;
   /** Directories to skip, relative to `web/src` (`'api'`, `'services'`). */
   skipDirs?: readonly string[];
+  /** Keep `.d.ts` files. Default false: a declaration builds nothing. Several guards were written
+   *  with them in, and keep them in so this move changed no guard's file set. */
+  declarations?: boolean;
 }
 
 /** Every source file under `root` (default `web/src`), absolute paths, in directory order. */
@@ -41,6 +49,7 @@ export function sourceFiles(root: string = SRC, opts: SourceOptions = {}): strin
       if (statSync(p).isDirectory()) return skip.has(rel(p)) ? [] : walk(p);
       if (!exts.some((x) => e.endsWith(x))) return [];
       if (!opts.includeTests && /\.test\.tsx?$/.test(e)) return [];
+      if (!opts.declarations && e.endsWith('.d.ts')) return [];
       return [p];
     });
   return walk(root);

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceFiles as walkSources } from '../testSupport/sources';
 import { merakiOrgPath, nodeHref, nodesPageHref } from './entityHref';
 
 const NODE = '0b0e6a9e-1c1c-4d5e-8a3f-2f4f6a7b8c9d';
@@ -60,14 +61,9 @@ describe('no screen builds a node detail link by hand', () => {
   }
 
   function sources(dir: string): string[] {
-    return readdirSync(dir).flatMap((e) => {
-      const p = join(dir, e);
-      if (statSync(p).isDirectory()) {
-        return dir === SRC && EXEMPT_DIRS.includes(e) ? [] : sources(p);
-      }
-      if (!/\.tsx?$/.test(e) || /\.test\.tsx?$/.test(e)) return [];
-      return rel(p) === 'lib/entityHref.ts' ? [] : [p];
-    });
+    return walkSources(dir, { skipDirs: EXEMPT_DIRS, declarations: true }).filter(
+      (p) => rel(p) !== 'lib/entityHref.ts',
+    );
   }
 
   function isComment(line: string): boolean {

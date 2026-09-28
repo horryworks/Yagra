@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
+import { sourceFiles } from '../testSupport/sources';
 import { classifyLoadError, LOAD_BLOCKS } from './loadState';
 
 describe('classifyLoadError', () => {
@@ -59,13 +60,7 @@ describe('no screen classifies a load failure by hand', () => {
   const SRC = join(__dirname, '..');
   const NEEDLE = `'${'admin'}_${'unavailable'}'`;
 
-  function tsxFiles(dir: string): string[] {
-    return readdirSync(dir).flatMap((e) => {
-      const p = join(dir, e);
-      if (statSync(p).isDirectory()) return tsxFiles(p);
-      return p.endsWith('.tsx') ? [p] : [];
-    });
-  }
+  const tsxFiles = (dir: string) => sourceFiles(dir, { exts: ['.tsx'], includeTests: true });
 
   it('every screen that inspects the skeleton-mode code goes through classifyLoadError', () => {
     const offenders = tsxFiles(SRC)

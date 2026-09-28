@@ -747,7 +747,24 @@ export function formatSi(n: number): string {
 export const agoSec = (sec: number | null): string =>
   sec == null ? '—' : relativeTimeMs(sec * 1000);
 
-export const toRfc3339 = (local: string) => new Date(local).toISOString();
+/** 'YYYY-MM-DDTHH:MM' (local wall-clock, an `<input type="datetime-local">`) → unix seconds, or
+ *  null if empty/unparseable. `new Date(v)` with no zone suffix is interpreted as local time, so
+ *  this round-trips with `RangeControl`'s `unixToLocalInput`. */
+export function localInputToUnix(v: string): number | null {
+  if (!v) return null;
+  const ms = new Date(v).getTime();
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+/** The same input → RFC 3339 (UTC), or undefined when empty or unparseable — the one conversion
+ *  every form that sends a typed instant uses (ADR-184).
+ *
+ *  The suppression dialogs used to have `toRfc3339`, which threw on a value it could not parse and
+ *  left the dialog busy with nothing on screen; they now refuse to submit instead. */
+export function localInputToIso(local: string): string | undefined {
+  const secs = localInputToUnix(local);
+  return secs == null ? undefined : new Date(secs * 1000).toISOString();
+}
 
 export function timeValue(hour: number, minute: number): string {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;

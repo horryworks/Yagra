@@ -18,7 +18,7 @@ import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone } from '../../lib/format';
 import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
-import { toRfc3339 } from '../../lib/format';
+import { localInputToIso } from '../../lib/format';
 
 const TZ = localTimeZone();
 /** Scope choices when not locked to a right-click target. */
@@ -74,10 +74,12 @@ export function AddMaintenanceWindowModal({
 
   const groupItems = groupOptions(groups);
   // A batch supplies its targets as ids, so there is no single `scopeId` to require.
-  const ready = !!name.trim() && (!!batch || !!scopeId.trim()) && !!startsAt && !!endsAt;
+  const startsIso = localInputToIso(startsAt);
+  const endsIso = localInputToIso(endsAt);
+  const ready = !!name.trim() && (!!batch || !!scopeId.trim()) && !!startsIso && !!endsIso;
 
   const submit = () => {
-    if (!ready) return;
+    if (!ready || !startsIso || !endsIso) return;
     setBusy(true);
     setError(null);
     if (batch) {
@@ -87,8 +89,8 @@ export function AddMaintenanceWindowModal({
         .createMaintenanceWindows({
           node_ids: batch.nodes.map((n) => n.id),
           name: name.trim(),
-          starts_at: toRfc3339(startsAt),
-          ends_at: toRfc3339(endsAt),
+          starts_at: startsIso,
+          ends_at: endsIso,
         })
         .then((r) => {
           if (r.created < r.requested) {
@@ -111,8 +113,8 @@ export function AddMaintenanceWindowModal({
         name: name.trim(),
         scope_level: scope as MaintenanceScopeLevel,
         scope_id: scopeId.trim(),
-        starts_at: toRfc3339(startsAt),
-        ends_at: toRfc3339(endsAt),
+        starts_at: startsIso,
+        ends_at: endsIso,
       })
       .then(() => {
         onSaved();

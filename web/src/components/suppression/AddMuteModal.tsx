@@ -18,7 +18,7 @@ import { GroupPicker } from '../ui/GroupPicker';
 import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
 import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
-import { toRfc3339 } from '../../lib/format';
+import { localInputToIso } from '../../lib/format';
 
 const TZ = localTimeZone();
 interface Props {
@@ -69,10 +69,11 @@ export function AddMuteModal({
 
   const groupItems = groupOptions(groups);
   // A batch supplies its targets as ids, so there is no single `scopeId` to require.
-  const ready = (!!batch || !!scopeId) && !!until;
+  const untilIso = localInputToIso(until);
+  const ready = (!!batch || !!scopeId) && !!untilIso;
 
   const submit = () => {
-    if (!ready) return;
+    if (!ready || !untilIso) return;
     setBusy(true);
     setError(null);
     if (batch) {
@@ -80,7 +81,7 @@ export function AddMuteModal({
       api
         .createMutes({
           node_ids: batch.nodes.map((n) => n.id),
-          until: toRfc3339(until),
+          until: untilIso,
           metric_name: check.trim() || undefined,
           reason: reason.trim() || undefined,
         })
@@ -105,7 +106,7 @@ export function AddMuteModal({
         scope_kind: scopeKind,
         scope_id: scopeId,
         metric_name: scopeKind === 'node' ? check.trim() || undefined : undefined,
-        until: toRfc3339(until),
+        until: untilIso,
         reason: reason.trim() || undefined,
       })
       .then(() => {

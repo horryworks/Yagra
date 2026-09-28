@@ -19,19 +19,13 @@
 // `useEnumParam`, `useSortParams`) hold no `useState` of either type, so they need no carve-out.
 
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles } from './testSupport/sources';
 import { join, relative } from 'node:path';
 
 const SRC = join(__dirname);
 
-function sources(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) sources(p, out);
-    else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts')) out.push(p);
-  }
-  return out;
-}
+const sources = (dir: string) => sourceFiles(dir);
 
 const rel = (p: string) => relative(SRC, p).split('\\').join('/');
 

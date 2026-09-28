@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { sourceFiles as walkSources } from '../testSupport/sources';
+import { relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isImeComposing } from './ime';
@@ -47,13 +48,7 @@ const NOT_A_TEXT_FIELD: Readonly<Record<string, string>> = {
   'components/shell/searchBox.ts': 'maps a key NAME to an action; its caller (GlobalSearch) asks',
 };
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return sourceFiles(path);
-    return /\.tsx?$/.test(name) && !/\.test\.ts$/.test(name) && !name.endsWith('.d.ts') ? [path] : [];
-  });
-}
+const sourceFiles = (dir: string) => walkSources(dir);
 
 describe('Enter handlers', () => {
   const readers = sourceFiles(SRC)

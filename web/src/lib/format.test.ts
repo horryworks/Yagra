@@ -39,7 +39,7 @@ import {
   stateColorVar,
   stateLabel,
   timeValue,
-  toRfc3339,
+  localInputToIso,
   withUnit,
 } from './format';
 
@@ -577,13 +577,15 @@ describe('helpers lifted out of the .tsx screens', () => {
     expect(agoSec(Math.floor(Date.now() / 1000) - 120)).not.toBe('—');
   });
 
-  it('toRfc3339 turns a datetime-local value into UTC', () => {
-    // Both suppression dialogs had their own copy of this one-liner. The property that matters is
-    // that the browser's local zone is applied on the way in — the server stores UTC.
+  it('localInputToIso turns a datetime-local value into UTC, and refuses rather than throws', () => {
+    // Both suppression dialogs had their own copy of this (`toRfc3339`), which threw on a value it
+    // could not parse. The property that matters is that the browser's local zone is applied on
+    // the way in — the server stores UTC.
     const local = '2026-03-01T12:30';
-    const iso = toRfc3339(local);
+    const iso = localInputToIso(local) as string;
     expect(iso).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(new Date(iso).getTime()).toBe(new Date(local).getTime());
+    expect(localInputToIso('not a date')).toBeUndefined();
   });
 
   it('timeValue zero-pads a schedule’s time of day', () => {

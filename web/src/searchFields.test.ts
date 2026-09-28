@@ -22,21 +22,16 @@
 //     by stylesheet order and lose, and the text would run under the ✕. That reads as "a bit
 //     cramped", not as a bug, which is exactly the kind of defect a test has to hold.
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles } from './testSupport/sources';
 import { join, relative } from 'node:path';
 
 const SRC = join(__dirname);
 const COMPONENT = 'components/ui/SearchField.tsx';
 const STYLESHEET = join(SRC, 'components/ui/SearchField.css');
 
-function filesUnder(dir: string, ext: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) filesUnder(p, ext, out);
-    else if (e.name.endsWith(ext)) out.push(p);
-  }
-  return out;
-}
+const filesUnder = (dir: string, ext: string) =>
+  sourceFiles(dir, { exts: [ext], includeTests: true, declarations: true });
 
 const rel = (p: string) => relative(SRC, p).split('\\').join('/');
 

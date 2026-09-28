@@ -8,17 +8,13 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sourceFiles as walkSources } from './testSupport/sources';
 import { TEST_IDS } from './testIds';
 
 const SRC = join(process.cwd(), 'src');
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) sourceFiles(full, out);
-    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
+function sourceFiles(dir: string): string[] {
+  return walkSources(dir, { declarations: true });
 }
 
 describe('test ids', () => {

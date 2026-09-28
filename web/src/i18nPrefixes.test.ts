@@ -21,6 +21,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { sourceFiles as walkSources } from './testSupport/sources';
 
 const SRC = __dirname;
 const LOCALES = join(SRC, 'locales');
@@ -28,16 +29,8 @@ const LOCALES = join(SRC, 'locales');
 type Json = Record<string, unknown>;
 
 /** Every `.ts`/`.tsx` under `src/` that is production code: not a test, not the generated `api/`. */
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) {
-      if (e.name !== 'api') sourceFiles(p, out);
-    } else if (/\.tsx?$/.test(e.name) && !e.name.endsWith('.test.ts')) {
-      out.push(p);
-    }
-  }
-  return out;
+function sourceFiles(dir: string): string[] {
+  return walkSources(dir, { skipDirs: ['api'], declarations: true });
 }
 
 const rel = (p: string) => relative(SRC, p).split('\\').join('/');

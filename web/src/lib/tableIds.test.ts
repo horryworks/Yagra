@@ -14,20 +14,15 @@
 // tree forever. The floors count what was *inspected*, not what was walked
 // (`floor-must-count-what-was-checked`).
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles } from '../testSupport/sources';
 import { join, relative } from 'node:path';
 import { TABLE_IDS } from './tableIds';
 
 const SRC = join(__dirname, '..');
 
-function filesUnder(dir: string, ext: string, out: string[] = []): string[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) filesUnder(p, ext, out);
-    else if (e.name.endsWith(ext)) out.push(p);
-  }
-  return out;
-}
+const filesUnder = (dir: string, ext: string) =>
+  sourceFiles(dir, { exts: [ext], includeTests: true, declarations: true });
 
 const rel = (p: string) => relative(SRC, p).split('\\').join('/');
 

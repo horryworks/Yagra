@@ -9,10 +9,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { localInputToIso, localInputToUnix } from '../../lib/format';
 import {
   formatCompactRange,
-  localInputToIso,
-  localInputToUnix,
   pad2,
   rangeInputsValid,
   resolveRange,

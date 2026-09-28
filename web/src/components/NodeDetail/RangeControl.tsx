@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarIcon } from '../ui/icons';
+import { localInputToUnix } from '../../lib/format';
 import './RangeControl.css';
 
 export type Range =
@@ -65,22 +66,6 @@ export function formatCompactRange(from: number, to: number): string {
 export function unixToLocalInput(s: number): string {
   const d = new Date(s * 1000);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-/** 'YYYY-MM-DDTHH:MM' (local wall-clock) → unix seconds, or null if empty/unparseable. `new Date(v)`
- *  with no zone suffix is interpreted as local time, so this round-trips with unixToLocalInput. */
-export function localInputToUnix(v: string): number | null {
-  if (!v) return null;
-  const ms = new Date(v).getTime();
-  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
-}
-
-/** 'YYYY-MM-DDTHH:MM' (local wall-clock) → RFC 3339 (UTC), or undefined when empty or
- *  unparseable. The event log's filter bar had its own copy of this; it is the same conversion as
- *  [] with a different output shape, so it lives beside it rather than drifting. */
-export function localInputToIso(local: string): string | undefined {
-  const secs = localInputToUnix(local);
-  return secs == null ? undefined : new Date(secs * 1000).toISOString();
 }
 
 /** Whether the From/To draft inputs form a valid absolute window (both parse, from < to). */

@@ -4,7 +4,8 @@
 // Before this module a trap was `--series-2` on the dashboard and `--series-5` in Troubleshoot,
 // because the mapping was written out in three files. The first half pins the values; the second
 // refuses a fourth copy, which is how the first three appeared.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles as walkSources } from '../../testSupport/sources';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EVENT_ACTIONS, EVENT_KINDS } from '../../types/api';
@@ -84,14 +85,7 @@ describe('no other file re-declares the event or severity colour mapping', () =>
   const HOME = join(__dirname, 'eventTone.ts');
   const FINDING_TONE = join(SRC, 'troubleshoot', 'report', 'findingTone.ts');
 
-  function sourceFiles(dir: string): string[] {
-    return readdirSync(dir).flatMap((e) => {
-      const p = join(dir, e);
-      if (statSync(p).isDirectory()) return sourceFiles(p);
-      if (!/\.tsx?$/.test(p) || /\.test\.tsx?$/.test(p) || p.endsWith('.d.ts')) return [];
-      return [p];
-    });
-  }
+  const sourceFiles = (dir: string) => walkSources(dir);
 
   const alt = (xs: readonly string[]) => xs.join('|');
   // `trap: 'var(--series-5)'` — a kind keyed to a CSS colour.

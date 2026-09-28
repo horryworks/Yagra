@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { sourceFiles } from '../testSupport/sources';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { interfaceScopeId, isInterfaceScopeId, splitInterfaceScopeId } from './interfaceScope';
@@ -80,14 +81,7 @@ describe('the composite has exactly two builders', () => {
     'src/dashboard/widgets/interfaceTraffic.ts', // `linkId` — a React key and a fetch dependency
   ];
 
-  function tsFiles(dir: string, out: string[] = []): string[] {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) tsFiles(p, out);
-      else if (/\.tsx?$/.test(e.name)) out.push(p);
-    }
-    return out;
-  }
+  const tsFiles = (dir: string) => sourceFiles(dir, { includeTests: true, declarations: true });
 
   const SRC = join(__dirname, '..');
   const files = tsFiles(SRC);

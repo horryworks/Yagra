@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { sourceFiles as walkSources } from '../testSupport/sources';
+import { relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import i18n from '../i18n';
 import {
@@ -105,13 +106,7 @@ describe('no other Troubleshoot file spells an analysis window', () => {
   /** One number, or several joined by `*` — `24 * 3600` is a spelling of a day too. */
   const CHAIN = new RegExp(`${NUMBER}(?:\\s*\\*\\s*${NUMBER})*`, 'g');
 
-  function sourceFiles(dir: string): string[] {
-    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) return sourceFiles(p);
-      return /\.tsx?$/.test(e.name) && !e.name.endsWith('.test.ts') ? [p] : [];
-    });
-  }
+  const sourceFiles = (dir: string) => walkSources(dir, { declarations: true });
 
   const rel = (p: string) => relative(ROOT, p).split(sep).join('/');
 

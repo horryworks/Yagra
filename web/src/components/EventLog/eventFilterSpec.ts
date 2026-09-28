@@ -29,7 +29,7 @@ import {
 } from '../../lib/columnFilter';
 import { decodeCondition, type TextCondition } from '../../lib/filterCondition';
 import { rangeLabel } from '../../lib/filterPresets';
-import { localInputToIso } from '../NodeDetail/RangeControl';
+import { localInputToIso } from '../../lib/format';
 import { boundsFor, DEFAULT_EVENT_RANGE, EVENT_RANGES, type EventRange } from './eventRange';
 
 /** The column keys that carry a filter. They are also the URL keys — see `columnFilter.ts` for why

@@ -17,7 +17,8 @@
 // resolver. This test reads **keys**, never values, and a stub that tried to look realistic would
 // be a second, worse copy of each screen's own test data.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { sourceFiles as walkSources } from '../testSupport/sources';
 import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
@@ -509,13 +510,8 @@ const NOT_A_SCREEN: readonly string[] = [
 const SRC = join(process.cwd(), 'src');
 
 /** Every `.ts`/`.tsx` under `src/` that is not a test, as a POSIX path relative to `src/`. */
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) sourceFiles(full, out);
-    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
-  }
-  return out;
+function sourceFiles(dir: string): string[] {
+  return walkSources(dir, { declarations: true });
 }
 
 const posix = (full: string) => relative(SRC, full).split(sep).join('/');
