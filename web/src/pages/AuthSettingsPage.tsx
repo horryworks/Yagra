@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import {
   ROLES,
   type LdapConfigView,
@@ -880,29 +880,14 @@ function PublicDashboardCard() {
 export function AuthSettingsPage() {
   const { t } = useTranslation('settings-auth');
   const canUsers = useCan('manage_users');
-  const [rows, setRows] = useState<OidcProviderSummary[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<OidcProviderSummary | null>(null);
   const [deleting, setDeleting] = useState<OidcProviderSummary | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listOidcProviders()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => {
-        setBlock(classifyLoadError(e));
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const providers = useLoad(() => api.listOidcProviders(), [], {
+    initial: [] as OidcProviderSummary[],
+  });
+  const { data: rows, loading, reload: load } = providers;
 
   return (
     <div>
@@ -923,70 +908,66 @@ export function AuthSettingsPage() {
         </Card>
       )}
 
-      {block ? (
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_users" />
-      ) : (
-        <>
-          <div className="auth-toolbar">
-            {canUsers && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('add.title')}
-              </Button>
-            )}
-          </div>
-
-          {rows.length === 0 ? (
-            <Card>
-              <p className="muted">{loading ? t('common:loading') : t('empty')}</p>
-            </Card>
-          ) : (
-            <div className="auth-list">
-              {rows.map((p) => (
-                <Card key={p.id}>
-                  <div className="auth-provider">
-                    <div className="auth-provider-main">
-                      <div className="auth-provider-name">
-                        {p.name}
-                        <span className="auth-badge product">{t(`idp.${p.kind}`)}</span>
-                        <span className={p.enabled ? 'auth-badge on' : 'auth-badge off'}>
-                          {p.enabled ? t('badge.enabled') : t('badge.disabled')}
-                        </span>
-                      </div>
-                      <div className="auth-provider-meta mono">{p.issuer}</div>
-                      <div className="auth-provider-meta">
-                        {t('mappedGroups', { count: Object.keys(p.role_map).length })}
-                      </div>
-                    </div>
-                    {canUsers && (
-                      <OverflowMenu
-                        actions={[
-                          {
-                            label: t('common:actions.edit'),
-                            icon: <EditIcon />,
-                            onClick: () => setEditing(p),
-                          },
-                          {
-                            label: t('common:actions.delete'),
-                            icon: <TrashIcon />,
-                            danger: true,
-                            onClick: () => setDeleting(p),
-                          },
-                        ]}
-                      />
-                    )}
-                  </div>
-                </Card>
-              ))}
-            </div>
+      <LoadGate load={providers} unavailable={t('unavailable')} permission="manage_users">
+        <div className="auth-toolbar">
+          {canUsers && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('add.title')}
+            </Button>
           )}
+        </div>
 
-          {/* The directory lives on this page rather than one of its own (ADR-041). "Who may sign
-              in" is one subject with two sources, and a separate *Directory* nav item would be the
-              second settings screen for one concept that decision 2 exists to prevent. */}
-          <DirectoryCard canUsers={canUsers} />
-          <PublicDashboardCard />
-        </>
-      )}
+        {rows.length === 0 ? (
+          <Card>
+            <p className="muted">{loading ? t('common:loading') : t('empty')}</p>
+          </Card>
+        ) : (
+          <div className="auth-list">
+            {rows.map((p) => (
+              <Card key={p.id}>
+                <div className="auth-provider">
+                  <div className="auth-provider-main">
+                    <div className="auth-provider-name">
+                      {p.name}
+                      <span className="auth-badge product">{t(`idp.${p.kind}`)}</span>
+                      <span className={p.enabled ? 'auth-badge on' : 'auth-badge off'}>
+                        {p.enabled ? t('badge.enabled') : t('badge.disabled')}
+                      </span>
+                    </div>
+                    <div className="auth-provider-meta mono">{p.issuer}</div>
+                    <div className="auth-provider-meta">
+                      {t('mappedGroups', { count: Object.keys(p.role_map).length })}
+                    </div>
+                  </div>
+                  {canUsers && (
+                    <OverflowMenu
+                      actions={[
+                        {
+                          label: t('common:actions.edit'),
+                          icon: <EditIcon />,
+                          onClick: () => setEditing(p),
+                        },
+                        {
+                          label: t('common:actions.delete'),
+                          icon: <TrashIcon />,
+                          danger: true,
+                          onClick: () => setDeleting(p),
+                        },
+                      ]}
+                    />
+                  )}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* The directory lives on this page rather than one of its own (ADR-041). "Who may sign
+            in" is one subject with two sources, and a separate *Directory* nav item would be the
+            second settings screen for one concept that decision 2 exists to prevent. */}
+        <DirectoryCard canUsers={canUsers} />
+        <PublicDashboardCard />
+      </LoadGate>
 
       {adding && <ProviderModal provider={null} onClose={() => setAdding(false)} onSaved={load} />}
       {editing && (

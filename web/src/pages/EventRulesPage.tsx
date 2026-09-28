@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -26,8 +26,8 @@ import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import './EventRulesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import {
   EVENT_RULE_BOUNDS,
   eventRuleNumberProblem,
@@ -42,33 +42,21 @@ function SeverityBadge({ value }: { value: Severity }) {
 export function EventRulesPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<EventRule[]>([]);
-  const [sources, setSources] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventRule | null>(null);
   const [deleting, setDeleting] = useState<EventRule | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const rules = useLoad(() => api.listEventRules(), [], { initial: [] as EventRule[] });
+  const { data: sources, reload: sourcesReload } = useLoad(() => api.listEventSources(), [], {
+    initial: [] as EventSource[],
+  });
+  const { data: rows, loading, reload: rulesReload } = rules;
   const load = useCallback(() => {
-    api
-      .listEventRules()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-    api
-      .listEventSources()
-      .then(setSources)
-      .catch(() => setSources([]));
-  }, []);
-  useEffect(() => {
-    load();
-  }, [load]);
+    rulesReload();
+    sourcesReload();
+  }, [rulesReload, sourcesReload]);
 
   const toggleEnabled = (r: EventRule) => {
     setError(null);
@@ -180,57 +168,49 @@ export function EventRulesPage() {
   return (
     <div>
       <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('eventRules.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('common:noun.rule', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                {t('eventRules.add')}
-              </Button>
-            )}
-          </TableToolbar>
-          {error && <p className="form-error">{error}</p>}
-          <DataTable
-            tableId="alerts.eventRules"
-            rows={shown}
-            columns={columns}
-            rowKey={(r) => r.id}
+      <LoadGate load={rules} permission="manage_config" unavailable={t('eventRules.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('eventRules.emptyMatch') : t('eventRules.empty')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('common:noun.rule', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              {t('eventRules.add')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+        {error && <p className="form-error">{error}</p>}
+        <DataTable
+          tableId="alerts.eventRules"
+          rows={shown}
+          columns={columns}
+          rowKey={(r) => r.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('eventRules.emptyMatch') : t('eventRules.empty')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
       {adding && (
         <RuleModal
           mode="add"

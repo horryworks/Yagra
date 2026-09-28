@@ -11,7 +11,7 @@
 // validates and seals. Edit: name is always editable; the secret is never returned, so it's left
 // intact unless the operator opts to replace it (then kind + secret are re-entered and re-sealed).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -62,8 +62,8 @@ import {
   type CredentialKind,
 } from '../lib/credentialKinds';
 import './CredentialsPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import {
   integrationUsageLabel,
   isHeldByIntegration,
@@ -548,30 +548,15 @@ function DeleteCredentialModal({
 export function CredentialsPage() {
   const { t } = useTranslation('access');
   const canCredentials = useCan('manage_credentials');
-  const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [sheet, setSheet] = useState(false);
   // In the URL (ADR-153), so a reload keeps the order.
   const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listCredentials()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const creds = useLoad(() => api.listCredentials(), [], { initial: [] as CredentialSummary[] });
+  const { data: rows, loading, reload: load } = creds;
 
   const columns = useMemo<Column<CredentialSummary>[]>(() => {
     // Every kind present in the table, so a `meraki_api` or `http_auth` row — neither of which the
@@ -680,59 +665,51 @@ export function CredentialsPage() {
         note={t('cred.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_credentials"
-          block={block}
-          unavailable={t('cred.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('common:noun.credential', { count: rows.length })}
-            />
-            {canCredentials && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('cred.add.title')}
-              </Button>
-            )}
-          </TableToolbar>
-
-          <DataTable
-            tableId="settings.credentials"
-            rows={shown}
-            columns={columns}
-            rowKey={(c) => c.id}
-            sort={sort}
-            onSortChange={setSort}
+      <LoadGate load={creds} permission="manage_credentials" unavailable={t('cred.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('cred.empty.filtered') : t('cred.empty.none')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('common:noun.credential', { count: rows.length })}
+          />
+          {canCredentials && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('cred.add.title')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+
+        <DataTable
+          tableId="settings.credentials"
+          rows={shown}
+          columns={columns}
+          rowKey={(c) => c.id}
+          sort={sort}
+          onSortChange={setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('cred.empty.filtered') : t('cred.empty.none')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && <AddCredentialModal onClose={() => setAdding(false)} onSaved={load} />}
       {editing && (

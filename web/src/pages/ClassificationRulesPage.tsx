@@ -10,7 +10,7 @@
 // "ASA" keyword). Prefix-bearing rules outrank sysDescr-only ones; within that, lower priority
 // wins — so a vendor's NOS-specific rules can precede its prefix-only catch-all.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -31,38 +31,30 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { classificationRuleFilters } from './classificationFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import { ruleToInput } from './classificationRuleForm';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<ClassificationRule[]>([]);
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ClassificationRule | null>(null);
   const [deleting, setDeleting] = useState<ClassificationRule | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const rules = useLoad(() => api.listClassificationRules(), [], {
+    initial: [] as ClassificationRule[],
+  });
+  const { data: profiles, reload: profilesReload } = useLoad(() => api.listProfiles(), [], {
+    initial: [] as ProfileSummary[],
+  });
+  const { data: rows, loading, reload: rulesReload } = rules;
   const load = useCallback(() => {
-    api
-      .listClassificationRules()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-    api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+    rulesReload();
+    profilesReload();
+  }, [rulesReload, profilesReload]);
 
   const profileName = (id: string) => profiles.find((p) => p.id === id)?.name ?? id;
 
@@ -175,59 +167,51 @@ export function ClassificationRulesPage() {
         note={t('rules.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('rules.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('common:noun.rule', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('rules.addRule')}
-              </Button>
-            )}
-          </TableToolbar>
-
-          {error && <p className="form-error">{error}</p>}
-
-          <DataTable
-            tableId="nodes.classification"
-            rows={shown}
-            columns={columns}
-            rowKey={(r) => r.id}
+      <LoadGate load={rules} permission="manage_config" unavailable={t('rules.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('rules.empty.noMatch') : t('rules.empty.none')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('common:noun.rule', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('rules.addRule')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+
+        {error && <p className="form-error">{error}</p>}
+
+        <DataTable
+          tableId="nodes.classification"
+          rows={shown}
+          columns={columns}
+          rowKey={(r) => r.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('rules.empty.noMatch') : t('rules.empty.none')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && (
         <RuleModal

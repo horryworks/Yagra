@@ -6,7 +6,7 @@
 // against removing/demoting/disabling the last admin (409 last_admin); the UI surfaces those typed
 // errors and reverts. Passwords are write-only — the API never returns a hash.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -45,11 +45,11 @@ import { buildPredicate } from '../lib/filterPredicate';
 import { userColumns, userFilterLabels } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { useLoad } from '../lib/useLoad';
 // The floor is shared with the account badge's own change-password dialog — one literal, not
 // three (ADR-122 決定 8).
 import { MIN_PW } from '../lib/password';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { LoadGate } from '../components/ui/LoadGate';
 import './UsersPage.css';
 
 // The role *filter* moved to `pages/userFilters.ts` (ADR-053 Inc.6). It used to be a segmented
@@ -60,7 +60,6 @@ import './UsersPage.css';
 export function UsersPage() {
   const { t } = useTranslation('access');
   const canUsers = useCan('manage_users');
-  const [rows, setRows] = useState<UserSummary[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const filterCols = useMemo(() => userColumns(t), [t]);
   const filterLabels = useMemo(() => userFilterLabels(t), [t]);
@@ -68,29 +67,18 @@ export function UsersPage() {
   const { filters, setFilters } = useFilterParams(filterCols);
   const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   // Open dialogs: add form, and the user targeted by a password change / delete.
   const [adding, setAdding] = useState(false);
   const [pwUser, setPwUser] = useState<UserSummary | null>(null);
   const [delUser, setDelUser] = useState<UserSummary | null>(null);
   const [scopeUser, setScopeUser] = useState<UserSummary | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listUsers()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
+  const users = useLoad(() => api.listUsers(), [], { initial: [] as UserSummary[] });
+  const { data: rows, loading, reload: load } = users;
 
   useEffect(() => {
-    load();
     api.me().then((m) => setMe(m.username)).catch(() => setMe(null));
-  }, [load]);
+  }, []);
 
   const changeRole = (id: string, next: Role) => {
     setError(null);
@@ -133,172 +121,168 @@ export function UsersPage() {
         note={t('users.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          block={block}
-          unavailable={t('users.unavailable')}
-          // Kept rather than falling back to the shared sentence: this one already names the role
-          // that would let you in, which is what ADR-056 Increment 2 will give every screen.
-          forbidden={t('users.forbidden')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={filterCols}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(filterCols))}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={list.length}
-              total={rows.length}
-              noun={t('common:noun.user', { count: rows.length })}
-            />
-            {canUsers && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('users.actions.addUser')}
-              </Button>
-            )}
-          </TableToolbar>
+      <LoadGate
+        load={users}
+        unavailable={t('users.unavailable')}
+        // Kept rather than falling back to the shared sentence: this one already names the role
+        // that would let you in, which is what ADR-056 Increment 2 will give every screen.
+        forbidden={t('users.forbidden')}
+      >
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
+            filters={filters}
+            onOpen={() => setSheet(true)}
+          />
+          <ClearFilters
+            columns={filterCols}
+            filters={filters}
+            onClear={() => setFilters(defaultFilters(filterCols))}
+          />
+          <TableSpacer />
+          <ResultCount
+            shown={list.length}
+            total={rows.length}
+            noun={t('common:noun.user', { count: rows.length })}
+          />
+          {canUsers && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('users.actions.addUser')}
+            </Button>
+          )}
+        </TableToolbar>
 
-          {/* The identity list is a card per account with no header row, so the controls carry
-              their own names rather than sitting under columns that do not exist (ADR-053 Inc.6
-              decision E). Role went from a one-of-three segmented control to a set, which is what
-              makes "operators and admins" — the accounts that can change anything — sayable. */}
-          <FilterBar
+        {/* The identity list is a card per account with no header row, so the controls carry
+            their own names rather than sitting under columns that do not exist (ADR-053 Inc.6
+            decision E). Role went from a one-of-three segmented control to a set, which is what
+            makes "operators and admins" — the accounts that can change anything — sayable. */}
+        <FilterBar
+          columns={filterCols}
+          labels={filterLabels}
+          filters={filters}
+          onChange={setFilters}
+          counts={facets}
+        />
+        {sheet && (
+          <MobileFilterSheet
             columns={filterCols}
             labels={filterLabels}
             filters={filters}
             onChange={setFilters}
             counts={facets}
+            onClose={() => setSheet(false)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              labels={filterLabels}
-              filters={filters}
-              onChange={setFilters}
-              counts={facets}
-              onClose={() => setSheet(false)}
-            />
-          )}
+        )}
 
-          {error && <p className="form-error users-error">{error}</p>}
+        {error && <p className="form-error users-error">{error}</p>}
 
-          <div className="identity-list">
-            {list.length === 0 ? (
-              <div className="il-empty">
-                {loading
-                  ? t('common:loading')
-                  : rows.length === 0
-                    ? t('users.empty.none')
-                    : t('users.empty.filtered')}
-              </div>
-            ) : (
-              list.map((u) => {
-                const last = relativeTime(u.last_login_at ?? null);
-                return (
-                  <div className={u.enabled ? 'il-row' : 'il-row is-muted'} key={u.id}>
-                    <Monogram name={u.username} role={u.role} lg />
-                    <div className="il-id">
-                      <div className="il-line1">
-                        <span className="il-name">{u.username}</span>
-                        {me === u.username && <span className="you-pill">{t('users.you')}</span>}
-                        {/* One badge driven by the kind, not a branch per kind: LDAP was the third
-                            member and would have been the third `===` comparison. Both strings are
-                            runtime keys, so `i18nEnumKeys.test.ts` demands EN and JA for any kind
-                            added later — which EN/JA parity alone would not (a new kind is missing
-                            from both locales, so parity passes and the badge shows a raw key). */}
-                        {u.auth_source !== 'local' && (
-                          <span className="you-pill" title={t(`users.kindHint.${u.auth_source}`)}>
-                            {t(`users.kind.${u.auth_source}`)}
-                          </span>
-                        )}
-                        <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
-                          <span className="yt-status-dot" />
-                          {u.enabled ? t('users.status.active') : t('users.status.disabled')}
+        <div className="identity-list">
+          {list.length === 0 ? (
+            <div className="il-empty">
+              {loading
+                ? t('common:loading')
+                : rows.length === 0
+                  ? t('users.empty.none')
+                  : t('users.empty.filtered')}
+            </div>
+          ) : (
+            list.map((u) => {
+              const last = relativeTime(u.last_login_at ?? null);
+              return (
+                <div className={u.enabled ? 'il-row' : 'il-row is-muted'} key={u.id}>
+                  <Monogram name={u.username} role={u.role} lg />
+                  <div className="il-id">
+                    <div className="il-line1">
+                      <span className="il-name">{u.username}</span>
+                      {me === u.username && <span className="you-pill">{t('users.you')}</span>}
+                      {/* One badge driven by the kind, not a branch per kind: LDAP was the third
+                          member and would have been the third `===` comparison. Both strings are
+                          runtime keys, so `i18nEnumKeys.test.ts` demands EN and JA for any kind
+                          added later — which EN/JA parity alone would not (a new kind is missing
+                          from both locales, so parity passes and the badge shows a raw key). */}
+                      {u.auth_source !== 'local' && (
+                        <span className="you-pill" title={t(`users.kindHint.${u.auth_source}`)}>
+                          {t(`users.kind.${u.auth_source}`)}
                         </span>
-                      </div>
-                      <div className="il-line2">
-                        <span>{t('users.created', { date: dateOnly(u.created_at) })}</span>
-                        <span className="il-meta-sep">·</span>
-                        <span title={u.last_login_at ?? undefined}>
-                          {t('users.lastLogin', { time: last })}
-                        </span>
-                        <span className="il-meta-sep">·</span>
-                        <ScopeSummary scope={u.scope} />
-                      </div>
+                      )}
+                      <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
+                        <span className="yt-status-dot" />
+                        {u.enabled ? t('users.status.active') : t('users.status.disabled')}
+                      </span>
                     </div>
-                    <div className="il-right">
-                      {canUsers ? (
-                        <select
-                          className={`role-select role-${u.role}`}
-                          value={u.role}
-                          onChange={(e) => changeRole(u.id, e.target.value as Role)}
-                          aria-label={t('users.roleFor', { name: u.username })}
-                        >
-                          {ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {t(`role.${r}`)}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="muted">{t(`role.${u.role}`)}</span>
-                      )}
-                      {canUsers && (
-                        <div className="il-actions">
-                          <OverflowMenu
-                            actions={[
-                              // Offered only where it can succeed: the API refuses to scope an
-                              // admin (409 `admin_is_unscoped`) because admin permissions are
-                              // fleet-wide, so showing the action there is showing a button that
-                              // must fail.
-                              ...(canHoldScope(u.role)
-                                ? [
-                                    {
-                                      label: t('users.action.changeScope'),
-                                      icon: <BoxIcon />,
-                                      onClick: () => setScopeUser(u),
-                                    },
-                                  ]
-                                : []),
-                              {
-                                label: u.enabled
-                                  ? t('users.action.disable')
-                                  : t('users.action.enable'),
-                                icon: <PowerIcon />,
-                                onClick: () => toggleEnabled(u),
-                              },
-                              {
-                                label: t('users.action.changePassword'),
-                                icon: <KeyIcon />,
-                                onClick: () => setPwUser(u),
-                              },
-                              {
-                                label: t('users.action.delete'),
-                                icon: <TrashIcon />,
-                                danger: true,
-                                onClick: () => setDelUser(u),
-                              },
-                            ]}
-                          />
-                        </div>
-                      )}
+                    <div className="il-line2">
+                      <span>{t('users.created', { date: dateOnly(u.created_at) })}</span>
+                      <span className="il-meta-sep">·</span>
+                      <span title={u.last_login_at ?? undefined}>
+                        {t('users.lastLogin', { time: last })}
+                      </span>
+                      <span className="il-meta-sep">·</span>
+                      <ScopeSummary scope={u.scope} />
                     </div>
                   </div>
-                );
-              })
-            )}
-          </div>
-        </>
-      )}
+                  <div className="il-right">
+                    {canUsers ? (
+                      <select
+                        className={`role-select role-${u.role}`}
+                        value={u.role}
+                        onChange={(e) => changeRole(u.id, e.target.value as Role)}
+                        aria-label={t('users.roleFor', { name: u.username })}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {t(`role.${r}`)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="muted">{t(`role.${u.role}`)}</span>
+                    )}
+                    {canUsers && (
+                      <div className="il-actions">
+                        <OverflowMenu
+                          actions={[
+                            // Offered only where it can succeed: the API refuses to scope an
+                            // admin (409 `admin_is_unscoped`) because admin permissions are
+                            // fleet-wide, so showing the action there is showing a button that
+                            // must fail.
+                            ...(canHoldScope(u.role)
+                              ? [
+                                  {
+                                    label: t('users.action.changeScope'),
+                                    icon: <BoxIcon />,
+                                    onClick: () => setScopeUser(u),
+                                  },
+                                ]
+                              : []),
+                            {
+                              label: u.enabled
+                                ? t('users.action.disable')
+                                : t('users.action.enable'),
+                              icon: <PowerIcon />,
+                              onClick: () => toggleEnabled(u),
+                            },
+                            {
+                              label: t('users.action.changePassword'),
+                              icon: <KeyIcon />,
+                              onClick: () => setPwUser(u),
+                            },
+                            {
+                              label: t('users.action.delete'),
+                              icon: <TrashIcon />,
+                              danger: true,
+                              onClick: () => setDelUser(u),
+                            },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </LoadGate>
 
       {adding && (
         <AddUserModal

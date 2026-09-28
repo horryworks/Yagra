@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCopy } from '../lib/useCopy';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
@@ -20,16 +20,13 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { eventSourceFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
 import './EventSourcesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventSource | null>(null);
   const [deleting, setDeleting] = useState<EventSource | null>(null);
@@ -37,19 +34,8 @@ export function EventSourcesPage() {
   const [issued, setIssued] = useState<{ id: string; token: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listEventSources()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const sources = useLoad(() => api.listEventSources(), [], { initial: [] as EventSource[] });
+  const { data: rows, loading, reload: load } = sources;
 
 
   const toggleEnabled = (r: EventSource) => {
@@ -139,57 +125,52 @@ export function EventSourcesPage() {
   return (
     <div>
       <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('eventSources.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('noun.source', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                {t('eventSources.add')}
-              </Button>
-            )}
-          </TableToolbar>
-          {error && <p className="form-error">{error}</p>}
-          <DataTable
-            tableId="events.sources"
-            rows={shown}
-            columns={columns}
-            rowKey={(r) => r.id}
+      <LoadGate
+        load={sources}
+        permission="manage_config"
+        unavailable={t('eventSources.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('eventSources.emptyMatch') : t('eventSources.empty')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('noun.source', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              {t('eventSources.add')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+        {error && <p className="form-error">{error}</p>}
+        <DataTable
+          tableId="events.sources"
+          rows={shown}
+          columns={columns}
+          rowKey={(r) => r.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('eventSources.emptyMatch') : t('eventSources.empty')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
       {adding && (
         <AddSourceModal
           onClose={() => setAdding(false)}

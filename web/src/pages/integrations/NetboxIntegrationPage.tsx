@@ -15,7 +15,7 @@
 // The judgement that can be got wrong — what a server's three sync columns mean together — is in
 // `netboxStatus.ts` where a test can reach it (`testing.md`).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
@@ -26,9 +26,9 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
-import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
+import { useLoad } from '../../lib/useLoad';
 import { formatTimestamp } from '../../lib/format';
-import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
+import { LoadGate } from '../../components/ui/LoadGate';
 import { anySyncInProgress, syncProgress, syncSummary } from './netboxStatus';
 import { useSyncWatch } from './useSyncWatch';
 import { addressChangeNeedsToken } from './netboxBaseUrl';
@@ -444,25 +444,12 @@ export function NetboxIntegrationPage() {
   // The permission the handlers' `RequireManageConfig` checks — never `authed`, never a role
   // (ADR-056). A control the caller may not use is not drawn.
   const canConfig = useCan('manage_config');
-  const [servers, setServers] = useState<NetboxServer[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<NetboxServer | null>(null);
   const [deleting, setDeleting] = useState<NetboxServer | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listNetboxServers()
-      .then((list) => {
-        setServers(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const list = useLoad(() => api.listNetboxServers(), [], { initial: [] as NetboxServer[] });
+  const { data: servers, reload: load } = list;
 
   // A "Sync now" runs in the leader's loop (ADR-172 決定 1), so the rows change by themselves
   // while one is asked for or running. The list is a handful of rows, so the poll and the reload
@@ -470,42 +457,41 @@ export function NetboxIntegrationPage() {
   useSyncWatch(anySyncInProgress(servers), load, load);
 
   const content = useMemo(() => {
-    if (block) {
-      return <LoadBlockNotice block={block} unavailable={t('integrations.unavailable')} />;
-    }
     return (
-      <Card
-        title={t('netbox.servers.title')}
-        actions={
-          canConfig ? (
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              {t('netbox.servers.add')}
-            </Button>
-          ) : undefined
-        }
-      >
-        {servers.length === 0 ? (
-          // ADR-055 R6: say what this screen is for where someone comes looking for it, rather
-          // than showing an empty box.
-          <p className="muted">{t('netbox.servers.empty')}</p>
-        ) : (
-          <div className="netbox-list">
-            {servers.map((s) => (
-              <ServerRow
-                key={s.id}
-                server={s}
-                canConfig={canConfig}
-                onEdit={() => setEditing(s)}
-                onDelete={() => setDeleting(s)}
-                onSynced={load}
-              />
-            ))}
-          </div>
-        )}
-        <p className="muted netbox-ownership">{t('netbox.servers.ownership')}</p>
-      </Card>
+      <LoadGate load={list} unavailable={t('integrations.unavailable')}>
+        <Card
+          title={t('netbox.servers.title')}
+          actions={
+            canConfig ? (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                {t('netbox.servers.add')}
+              </Button>
+            ) : undefined
+          }
+        >
+          {servers.length === 0 ? (
+            // ADR-055 R6: say what this screen is for where someone comes looking for it, rather
+            // than showing an empty box.
+            <p className="muted">{t('netbox.servers.empty')}</p>
+          ) : (
+            <div className="netbox-list">
+              {servers.map((s) => (
+                <ServerRow
+                  key={s.id}
+                  server={s}
+                  canConfig={canConfig}
+                  onEdit={() => setEditing(s)}
+                  onDelete={() => setDeleting(s)}
+                  onSynced={load}
+                />
+              ))}
+            </div>
+          )}
+          <p className="muted netbox-ownership">{t('netbox.servers.ownership')}</p>
+        </Card>
+      </LoadGate>
     );
-  }, [block, servers, canConfig, load, t]);
+  }, [list, servers, canConfig, load, t]);
 
   return (
     <div>

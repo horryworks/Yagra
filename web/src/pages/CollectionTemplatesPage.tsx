@@ -8,7 +8,7 @@
 // Data-table standard v2: a toolbar (count + "+ Add metric set") over the shared `.ytable`; add via
 // modal, delete via confirm modal. Each row expands to its metric editor.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -30,35 +30,22 @@ import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfi
 import { TrashIcon } from '../components/ui/icons';
 import { CollectionEditor } from '../components/CollectionEditor/CollectionEditor';
 import './CollectionTemplatesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 
 export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<CollectionTemplate[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<CollectionTemplate | null>(null);
   const [openItems, setOpenItems] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .listCollectionTemplates()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const sets = useLoad(() => api.listCollectionTemplates(), [], {
+    initial: [] as CollectionTemplate[],
+  });
+  const { data: rows, loading, reload: load } = sets;
 
   const filterCols = useMemo(() => setColumns(t), [t]);
   // In the URL (ADR-153), so a narrowed list survives a reload.
@@ -137,81 +124,73 @@ export function CollectionTemplatesPage() {
         note={t('sets.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('sets.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={filterCols}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(filterCols))}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={filtered.length}
-              total={rows.length}
-              noun={t('sets.noun', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('sets.addSet')}
-              </Button>
-            )}
-          </TableToolbar>
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              labels={setFilterLabels(t)}
-              filters={filters}
-              onChange={setFilters}
-              onClose={() => setSheet(false)}
-            />
+      <LoadGate load={sets} permission="manage_config" unavailable={t('sets.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
+            filters={filters}
+            onOpen={() => setSheet(true)}
+          />
+          <ClearFilters
+            columns={filterCols}
+            filters={filters}
+            onClear={() => setFilters(defaultFilters(filterCols))}
+          />
+          <TableSpacer />
+          <ResultCount
+            shown={filtered.length}
+            total={rows.length}
+            noun={t('sets.noun', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('sets.addSet')}
+            </Button>
           )}
+        </TableToolbar>
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            labels={setFilterLabels(t)}
+            filters={filters}
+            onChange={setFilters}
+            onClose={() => setSheet(false)}
+          />
+        )}
 
-          {/* Virtualized since ADR-053 Inc.6 — the last of the twelve hand-rolled `ytable` screens
-              to move, held back only because its rows expand. `expandedKey` is what drops the
-              measured height of a row that has just closed. */}
-          <div className="templates-table">
-            <DataTable
-              tableId="nodes.collectionTemplates"
-              rows={filtered}
-              columns={columns}
-              rowKey={(r) => r.id}
-              loading={loading}
-              expanded={(r) =>
-                openItems === r.id ? (
-                  <div className="crud-collection">
-                    <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
-                  </div>
-                ) : null
-              }
-              expandedKey={openItems}
-              filters={filters}
-              onFiltersChange={setFilters}
-              empty={
-                <>
-                  <p className="yt-empty-title">
-                    {rows.length === 0 ? t('sets.empty.none') : t('sets.empty.noMatch')}
-                  </p>
-                  <p className="yt-empty-sub">
-                    {rows.length === 0 ? t('sets.empty.noneSub') : t('shared.trySearch')}
-                  </p>
-                </>
-              }
-            />
-          </div>
-        </>
-      )}
+        {/* Virtualized since ADR-053 Inc.6 — the last of the twelve hand-rolled `ytable` screens
+            to move, held back only because its rows expand. `expandedKey` is what drops the
+            measured height of a row that has just closed. */}
+        <div className="templates-table">
+          <DataTable
+            tableId="nodes.collectionTemplates"
+            rows={filtered}
+            columns={columns}
+            rowKey={(r) => r.id}
+            loading={loading}
+            expanded={(r) =>
+              openItems === r.id ? (
+                <div className="crud-collection">
+                  <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
+                </div>
+              ) : null
+            }
+            expandedKey={openItems}
+            filters={filters}
+            onFiltersChange={setFilters}
+            empty={
+              <>
+                <p className="yt-empty-title">
+                  {rows.length === 0 ? t('sets.empty.none') : t('sets.empty.noMatch')}
+                </p>
+                <p className="yt-empty-sub">
+                  {rows.length === 0 ? t('sets.empty.noneSub') : t('shared.trySearch')}
+                </p>
+              </>
+            }
+          />
+        </div>
+      </LoadGate>
 
       {adding && (
         <AddTemplateModal

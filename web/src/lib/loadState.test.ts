@@ -199,13 +199,7 @@ describe('a screen reads through useLoad', () => {
   /** Screens still to move. Only ever shorter; deleted when empty (increment 27). */
   const NOT_YET_MIGRATED: string[] = [
     'pages/ApiTokensPage.tsx',
-    'pages/AuthSettingsPage.tsx',
-    'pages/ClassificationRulesPage.tsx',
-    'pages/CollectionTemplatesPage.tsx',
-    'pages/CredentialsPage.tsx',
     'pages/DuplicateNodesPage.tsx',
-    'pages/EventRulesPage.tsx',
-    'pages/EventSourcesPage.tsx',
     'pages/ForwardingPage.tsx',
     'pages/MaintenancePage.tsx',
     'pages/MibRepositoryPage.tsx',
@@ -215,12 +209,10 @@ describe('a screen reads through useLoad', () => {
     'pages/ReclassifyPage.tsx',
     'pages/RoutingPage.tsx',
     'pages/ThresholdsPage.tsx',
-    'pages/UsersPage.tsx',
     'pages/integrations/MerakiIntegrationPage.tsx',
-    'pages/integrations/NetboxIntegrationPage.tsx',
   ];
   /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 20;
+  const CEILING = 12;
 
   const callers = readSources()
     .filter(([, src]) => codeOnly(src).includes(NEEDLE))
