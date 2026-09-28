@@ -27,8 +27,11 @@ export interface MockConfig {
    *
    *  A bare status sends the code `mock_forced_failure`. Give `{ status, code }` when the screen
    *  branches on the code: `classifyLoadError` reads `admin_unavailable` off a 503, so a bare 503
-   *  can never reach a screen's "unavailable" notice (ADR-184 increment 23). */
-  failures?: Record<string, number | { status: number; code: string }>;
+   *  can never reach a screen's "unavailable" notice (ADR-184 increment 23).
+   *
+   *  Give `method` to fail only that verb: a dialog's save is a POST to the same path the list
+   *  behind it GETs, and failing both would test a screen that never drew (ADR-184 increment 34). */
+  failures?: Record<string, number | { status: number; code: string; method?: string }>;
 }
 
 export interface MockState {
@@ -106,7 +109,10 @@ export async function installMockApi(page: Page, config: MockConfig = {}): Promi
     }
 
     const failure = failures[pathname];
-    if (failure !== undefined) {
+    const failsThisVerb =
+      failure !== undefined &&
+      (typeof failure === 'number' || failure.method === undefined || failure.method === method);
+    if (failure !== undefined && failsThisVerb) {
       state.served.push(label);
       const { status, code } =
         typeof failure === 'number' ? { status: failure, code: 'mock_forced_failure' } : failure;
