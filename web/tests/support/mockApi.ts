@@ -23,8 +23,12 @@ export interface MockConfig {
    *  pathname first. Wins over the generated default. */
   overrides?: Record<string, Override>;
   /** Keyed by pathname. Answers with this status and the standard error envelope instead —
-   *  the lever the "prove it can fail" check pulls. */
-  failures?: Record<string, number>;
+   *  the lever the "prove it can fail" check pulls.
+   *
+   *  A bare status sends the code `mock_forced_failure`. Give `{ status, code }` when the screen
+   *  branches on the code: `classifyLoadError` reads `admin_unavailable` off a 503, so a bare 503
+   *  can never reach a screen's "unavailable" notice (ADR-184 increment 23). */
+  failures?: Record<string, number | { status: number; code: string }>;
 }
 
 export interface MockState {
@@ -104,10 +108,12 @@ export async function installMockApi(page: Page, config: MockConfig = {}): Promi
     const failure = failures[pathname];
     if (failure !== undefined) {
       state.served.push(label);
+      const { status, code } =
+        typeof failure === 'number' ? { status: failure, code: 'mock_forced_failure' } : failure;
       await route.fulfill({
-        status: failure,
+        status,
         contentType: 'application/json',
-        body: envelope('mock_forced_failure', `forced ${failure} for ${pathname}`),
+        body: envelope(code, `forced ${status} for ${pathname}`),
       });
       return;
     }
