@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
+import { columnLabels } from '../../lib/listToolbar';
 import { nextSort, type SortState } from '../../lib/tableSort';
 import { ColumnFilterRow } from './ColumnFilterRow';
 import { filterableColumns, type ColumnFilterSpec, type FilterState } from '../../lib/columnFilter';
@@ -242,10 +243,8 @@ export function DataTable<T>({
   );
   // The accessible name has to be a string, and `header` is a ReactNode. Every filterable column's
   // header is a `t()` string today; the key is a readable last resort rather than an empty label.
-  const filterLabels = useMemo(
-    () => Object.fromEntries(columns.map((c) => [c.key, typeof c.header === 'string' ? c.header : c.key])),
-    [columns],
-  );
+  // `columnLabels` is the one copy of that rule — the phone's filter sheet names columns with it too.
+  const filterLabels = useMemo(() => columnLabels(columns), [columns]);
 
   const items = virtualizer.getVirtualItems();
   // Fire the page-load callback once the last virtual row is within view of the end.
