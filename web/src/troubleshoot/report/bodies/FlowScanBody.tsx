@@ -18,19 +18,18 @@
 // now, which is the shape this table wanted: five of them are numbers, and "sources that touched
 // more than 500 destinations" was unsayable from a toolbar. Sort stays in the action row (決定 L).
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useFilterParams } from '../../../lib/useFilterParams';
 import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../components/ui/Badge';
 import { Card } from '../../../components/ui/Card';
-import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { DataTable, type Column } from '../../../components/ui/DataTable';
 import { EntityName } from '../../../components/ui/EntityName';
 import { Select } from '../../../components/ui/Field';
-import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
-import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
-import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
+import { ListToolbar } from '../../../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../../../lib/listToolbar';
+import { isAnyFiltered } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { formatSi } from '../../../lib/format';
@@ -61,7 +60,6 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
   // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
   // tool is its own path, so this body's keys are the only filter keys on its route.
   const { filters, setFilters } = useFilterParams(filterCols);
-  const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useEnumParam('sort', ['dst', 'ports', 'flows', 'score'] as const, 'dst');
   const narrowed = isAnyFiltered(filterCols, filters);
 
@@ -170,30 +168,37 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         </Card>
       )}
       {/* The action row. Everything that narrows the table now lives under its own header. */}
-      <TableToolbar>
-        <FilterButton
-          columns={filterCols}
-          filters={filters}
-          onOpen={() => setSheet(true)}
-        />
-        <ClearFilters
-          columns={filterCols}
-          filters={filters}
-          onClear={() => setFilters(defaultFilters(filterCols))}
-        />
-        <Select
-          aria-label={t('report.common.sort.label')}
-          value={sort}
-          onChange={(e) => setSort(e.target.value as 'dst' | 'ports' | 'flows' | 'score')}
-        >
-          <option value="dst">{t('report.flow_scan.sort.byDst')}</option>
-          <option value="ports">{t('report.flow_scan.sort.byPorts')}</option>
-          <option value="flows">{t('report.flow_scan.sort.byFlows')}</option>
-          <option value="score">{t('report.common.sort.byScore')}</option>
-        </Select>
-        <TableSpacer />
-        <ResultCount shown={rows.length} total={findings.length} noun={t('report.flow_scan.noun')} />
-      </TableToolbar>
+      <ListToolbar
+        list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, counts)}
+        labels={{
+          src: t('report.flow_scan.cols.source'),
+          node: t('report.flow_scan.cols.node'),
+          dst: t('report.flow_scan.cols.dst'),
+          ports: t('report.flow_scan.cols.ports'),
+          flows: t('report.flow_scan.cols.flows'),
+          pattern: t('report.flow_scan.cols.pattern'),
+          score: t('report.common.score'),
+        }}
+        count={{
+          shown: rows.length,
+          total: findings.length,
+          noun: () => t('report.flow_scan.noun'),
+        }}
+        tools={
+          <>
+            <Select
+              aria-label={t('report.common.sort.label')}
+              value={sort}
+              onChange={(e) => setSort(e.target.value as 'dst' | 'ports' | 'flows' | 'score')}
+            >
+              <option value="dst">{t('report.flow_scan.sort.byDst')}</option>
+              <option value="ports">{t('report.flow_scan.sort.byPorts')}</option>
+              <option value="flows">{t('report.flow_scan.sort.byFlows')}</option>
+              <option value="score">{t('report.common.sort.byScore')}</option>
+            </Select>
+          </>
+        }
+      />
       <DataTable
         tableId="troubleshoot.flowScan"
         rows={rows}
@@ -219,24 +224,6 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         )}
         cardEstimatePx={108}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={{
-            src: t('report.flow_scan.cols.source'),
-            node: t('report.flow_scan.cols.node'),
-            dst: t('report.flow_scan.cols.dst'),
-            ports: t('report.flow_scan.cols.ports'),
-            flows: t('report.flow_scan.cols.flows'),
-            pattern: t('report.flow_scan.cols.pattern'),
-            score: t('report.common.score'),
-          }}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </>
   );
 }

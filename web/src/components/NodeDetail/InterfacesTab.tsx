@@ -63,9 +63,9 @@ import { ifStateCounts, interfaceColumns } from './tabFilters';
 import { utilHeat } from '../../lib/utilHeat';
 import { duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
-import { ClearFilters } from '../ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered } from '../../lib/columnFilter';
+import { FilterControls } from '../ui/ListToolbar';
+import { serverToolbarFilters } from '../../lib/listToolbar';
+import { isAnyFiltered } from '../../lib/columnFilter';
 import { useFilterParams } from '../../lib/useFilterParams';
 import { nodeTabFilterPrefix } from './tabs';
 import { facetCounts } from '../../lib/filterCounts';
@@ -128,7 +128,6 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // switch. ADR-134 had declined this, and its reason (`ifindex` names a different port on the next
   // device) is about the SELECTED row below, which stays local.
   const { filters, setFilters } = useFilterParams(columns, nodeTabFilterPrefix('interfaces'));
-  const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   // Escape closes the dock (ADR-073). It was the one dismissal this tab lacked — re-clicking the
   // row and the dock's own ✕ were already there, and `keepSelectedInView` exists specifically to
@@ -401,23 +400,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           )}
           <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
-        <FilterButton columns={columns} filters={filters} onOpen={() => setSheet(true)} />
-        <ClearFilters
-          columns={columns}
-          filters={filters}
-          onClear={() => setFilters(defaultFilters(columns))}
+        <FilterControls
+          list={serverToolbarFilters(columns, { filters, setFilters }, undefined, counts)}
+          labels={labels}
         />
       </div>
-      {sheet && (
-        <MobileFilterSheet
-          columns={columns}
-          labels={labels}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          onClose={() => setSheet(false)}
-        />
-      )}
       {error && <p className="form-error nd-tabpad">{error}</p>}
 
       {/* 🚨 The template goes in as a CUSTOM PROPERTY, never as an inline

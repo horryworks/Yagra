@@ -26,9 +26,8 @@ import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
-import { ClearFilters } from '../ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters } from '../../lib/columnFilter';
+import { FilterControls } from '../ui/ListToolbar';
+import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useFilterParams } from '../../lib/useFilterParams';
 import { nodeTabFilterPrefix } from './tabs';
 import { facetCounts } from '../../lib/filterCounts';
@@ -182,7 +181,6 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const columns = useMemo(() => metricColumns(t), [t]);
   // In the URL under `collection.` (ADR-153): survives a reload and the walk to the next node.
   const { filters, setFilters } = useFilterParams(columns, nodeTabFilterPrefix('collection'));
-  const [sheet, setSheet] = useState(false);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
   const range = useRangeStore((s) => s.range);
@@ -311,28 +309,12 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         <section>
           <div className="nd-section-head">
             <div className="nd-section-t">{t('collection.allMetrics')}</div>
-            <FilterButton
-              columns={columns}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={columns}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(columns))}
+            <FilterControls
+              list={serverToolbarFilters(columns, { filters, setFilters }, undefined, metricCounts)}
+              labels={metricLabels}
             />
             <RangeControl value={range} onChange={setRange} />
           </div>
-          {sheet && (
-            <MobileFilterSheet
-              columns={columns}
-              labels={metricLabels}
-              filters={filters}
-              onChange={setFilters}
-              counts={metricCounts}
-              onClose={() => setSheet(false)}
-            />
-          )}
           <p className="nd-muted nd-coll-editnote">{t('collection.allMetricsNote')}</p>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">

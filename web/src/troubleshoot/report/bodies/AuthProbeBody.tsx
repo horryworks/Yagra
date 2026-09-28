@@ -15,17 +15,16 @@
 // generic filter. Being a card list with no header row, this gets a `FilterBar` rather than a filter
 // row (決定 E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useFilterParams } from '../../../lib/useFilterParams';
 import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
-import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { FilterBar } from '../../../components/ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
-import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
-import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
+import { ListToolbar } from '../../../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../../../lib/listToolbar';
+import { isAnyFiltered } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
 import { EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
@@ -74,7 +73,6 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
   // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
   // tool is its own path, so this body's keys are the only filter keys on its route.
   const { filters, setFilters } = useFilterParams(filterCols);
-  const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useEnumParam('sort', ['count', 'source', 'node'] as const, 'count');
   const narrowed = isAnyFiltered(filterCols, filters);
 
@@ -113,24 +111,15 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
       )}
       {/* ⚠️ The action row is gated on `findings`, never on `list`: filtering to zero would
           otherwise take the controls that undo the filter away with the rows. */}
-      <TableToolbar>
-        <FilterButton
-          columns={filterCols}
-          filters={filters}
-          onOpen={() => setSheet(true)}
-        />
-        <ClearFilters
-          columns={filterCols}
-          filters={filters}
-          onClear={() => setFilters(defaultFilters(filterCols))}
-        />
-        <TableSpacer />
-        <ResultCount
-          shown={list.length}
-          total={findings.length}
-          noun={t('report.auth_probe.noun')}
-        />
-      </TableToolbar>
+      <ListToolbar
+        list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, counts)}
+        labels={labels}
+        count={{
+          shown: list.length,
+          total: findings.length,
+          noun: () => t('report.auth_probe.noun'),
+        }}
+      />
       {/* A run of `FindingRow`s has no header row to hang a filter row under, so the controls carry
           their own names (決定 E). */}
       <FilterBar
@@ -159,16 +148,6 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
           <EmptyList total={narrowed ? findings.length : 0} />
         )}
       </div>
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          labels={labels}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </>
   );
 }

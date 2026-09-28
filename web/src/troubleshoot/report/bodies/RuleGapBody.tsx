@@ -16,21 +16,20 @@
 // vocabulary, and the two columns that had no control at all (Events, Scope) gained one. Sort stays
 // in the action row — this ADR moves filtering, not ordering (決定 L).
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useEnumParam } from '../../../lib/useEnumParam';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { Badge } from '../../../components/ui/Badge';
-import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { DataTable, type Column } from '../../../components/ui/DataTable';
 import { EntityName } from '../../../components/ui/EntityName';
-import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
-import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
+import { ListToolbar } from '../../../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../../../lib/listToolbar';
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { Select } from '../../../components/ui/Field';
-import { defaultFilters, isAnyFiltered } from '../../../lib/columnFilter';
+import { isAnyFiltered } from '../../../lib/columnFilter';
 import { useFilterParams } from '../../../lib/useFilterParams';
 import { facetCounts } from '../../../lib/filterCounts';
 import { applyFilters } from '../../../lib/filterPredicate';
@@ -52,7 +51,6 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
   // In the URL (ADR-153). Several report bodies share the `/troubleshoot/report/…` shell, but each
   // tool is its own path, so this body's keys are the only filter keys on its route.
   const { filters, setFilters } = useFilterParams(filterCols);
-  const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useEnumParam('sort', ['count', 'signature'] as const, 'count');
   const narrowed = isAnyFiltered(filterCols, filters);
 
@@ -162,28 +160,32 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
       {/* The action row: what acts on the list, never what narrows it. Sort stays because ADR-053
           moves filtering, not ordering — and a fourth track in `.dt-filters` would slide the filter
           cells out from under their headers (決定 L). */}
-      <TableToolbar>
-        <FilterButton
-          columns={filterCols}
-          filters={filters}
-          onOpen={() => setSheet(true)}
-        />
-        <ClearFilters
-          columns={filterCols}
-          filters={filters}
-          onClear={() => setFilters(defaultFilters(filterCols))}
-        />
-        <Select
-          aria-label={t('report.common.sort.label')}
-          value={sort}
-          onChange={(e) => setSort(e.target.value as 'count' | 'signature')}
-        >
-          <option value="count">{t('report.rule_gap.sort.byEvents')}</option>
-          <option value="signature">{t('report.rule_gap.sort.bySignature')}</option>
-        </Select>
-        <TableSpacer />
-        <ResultCount shown={rows.length} total={findings.length} noun={t('report.rule_gap.noun')} />
-      </TableToolbar>
+      <ListToolbar
+        list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, counts)}
+        labels={{
+          src: t('report.rule_gap.cols.source'),
+          sig: t('report.rule_gap.cols.signature'),
+          count: t('report.rule_gap.cols.events'),
+          scope: t('report.rule_gap.cols.scope'),
+        }}
+        count={{
+          shown: rows.length,
+          total: findings.length,
+          noun: () => t('report.rule_gap.noun'),
+        }}
+        tools={
+          <>
+            <Select
+              aria-label={t('report.common.sort.label')}
+              value={sort}
+              onChange={(e) => setSort(e.target.value as 'count' | 'signature')}
+            >
+              <option value="count">{t('report.rule_gap.sort.byEvents')}</option>
+              <option value="signature">{t('report.rule_gap.sort.bySignature')}</option>
+            </Select>
+          </>
+        }
+      />
       <DataTable
         tableId="troubleshoot.ruleGap"
         rows={rows}
@@ -209,21 +211,6 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
         )}
         cardEstimatePx={104}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={{
-            src: t('report.rule_gap.cols.source'),
-            sig: t('report.rule_gap.cols.signature'),
-            count: t('report.rule_gap.cols.events'),
-            scope: t('report.rule_gap.cols.scope'),
-          }}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </>
   );
 }

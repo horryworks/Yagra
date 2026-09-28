@@ -10,15 +10,15 @@
 // a bare `kind` too), which is what the prefix answers; the route ledger in
 // `filterSpecRegistry.test.ts` checks the keys stay disjoint.
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useFilterParams } from '../../lib/useFilterParams';
 import { nodeTabFilterPrefix } from './tabs';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
+import { ListToolbar } from '../../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useEntityNames } from '../ui/entityNames';
 import { eventColumns, eventCard } from '../EventLog/eventColumns';
 import {
@@ -33,14 +33,12 @@ import {
   useSearchSemantics,
   useWidenedEventLog,
 } from '../EventLog/useEventFilters';
-import { defaultFilters, isAnyFiltered } from '../../lib/columnFilter';
-import { ClearFilters } from '../ui/ClearFilters';
+import { isAnyFiltered } from '../../lib/columnFilter';
 
 export function EventsTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('alerts');
   const { nodeName } = useEntityNames();
   const semantics = useSearchSemantics();
-  const [sheet, setSheet] = useState(false);
 
   const filterCols = useMemo(
     () => eventFilterColumns(t, { showSource: false, semantics }),
@@ -86,26 +84,17 @@ export function EventsTab({ node }: { node: NodeDetail }) {
           {t('eventLog.openInEvents')} →
         </Link>
       </div>
-      <TableToolbar>
-        <FilterButton
-          columns={filterCols}
-          filters={filters}
-          onOpen={() => {
-            for (const c of filterCols) facets.load(c.key);
-            setSheet(true);
-          }}
-        />
-        <ClearFilters
-          columns={filterCols}
-          filters={filters}
-          onClear={() => setFilters(defaultFilters(filterCols))}
-        />
-        <TableSpacer />
-        <ResultCount
-          shown={rows.length}
-          noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
-        />
-      </TableToolbar>
+      <ListToolbar
+        list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, facets.counts)}
+        labels={eventColumnLabels(t)}
+        onSheetOpen={() => {
+          for (const c of filterCols) facets.load(c.key);
+        }}
+        count={{
+          shown: rows.length,
+          noun: () => (exhausted ? t('events.events') : t('events.eventsLoaded')),
+        }}
+      />
       {widened && <p className="ev-widened">{t('events.widened')}</p>}
       <DataTable
         tableId="node.events"
@@ -122,16 +111,6 @@ export function EventsTab({ node }: { node: NodeDetail }) {
         empty={empty}
         loading={loading}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={facets.counts}
-          labels={eventColumnLabels(t)}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </div>
   );
 }

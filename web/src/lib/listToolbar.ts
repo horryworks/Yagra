@@ -60,17 +60,24 @@ export function labelGaps<T>(
  * The result count's numbers.
  *
  * - **"N of M" only while something is narrowing the list** (T2). Unfiltered, the two are the same
- *   number and "12 of 12 users" says it twice; four screens said it anyway.
+ *   number and "12 of 12 users" says it twice; four screens said it anyway. `showTotal: 'always'`
+ *   is for a table whose own default already narrows (Discovery's endpoints), where the two numbers
+ *   differ before anyone touches a filter.
  * - **The noun agrees with the number beside it** (T1): "1 of 5 windows", not "1 of 5 window".
  *   Most screens pluralized by `shown`, which is the number *before* "of", so English read wrong
  *   whenever exactly one row matched.
  */
-export function resultCount(i: { shown: number; total?: number; anyFiltered: boolean }): {
+export function resultCount(i: {
+  shown: number;
+  total?: number;
+  anyFiltered: boolean;
+  showTotal?: 'whenFiltered' | 'always';
+}): {
   shown: number;
   total: number | undefined;
   nounCount: number;
 } {
-  const total = i.anyFiltered ? i.total : undefined;
+  const total = i.anyFiltered || i.showTotal === 'always' ? i.total : undefined;
   return { shown: i.shown, total, nounCount: total ?? i.shown };
 }
 

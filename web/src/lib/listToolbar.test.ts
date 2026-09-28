@@ -32,6 +32,10 @@ describe('resultCount', () => {
   it('shows "N of M" only while something narrows the list (T2)', () => {
     expect(resultCount({ shown: 12, total: 12, anyFiltered: false }).total).toBeUndefined();
     expect(resultCount({ shown: 3, total: 12, anyFiltered: true }).total).toBe(12);
+    // A table whose default already narrows pairs the two numbers from the start.
+    expect(
+      resultCount({ shown: 3, total: 12, anyFiltered: false, showTotal: 'always' }).total,
+    ).toBe(12);
   });
 
   it('agrees the noun with the number beside it (T1)', () => {
@@ -112,17 +116,9 @@ describe('a list draws its filter controls through ListToolbar', () => {
 
   /** Toolbars still to move. Only ever shorter; deleted when empty (increment 33). */
   const NOT_YET_MIGRATED: string[] = [
-    'components/NodeDetail/CollectionTab.tsx',
-    'components/NodeDetail/EventsTab.tsx',
-    'components/NodeDetail/FlowTab.tsx',
-    'components/NodeDetail/InterfacesTab.tsx',
-    'pages/DiscoveryPage.tsx',
-    'troubleshoot/report/bodies/AuthProbeBody.tsx',
-    'troubleshoot/report/bodies/FlowScanBody.tsx',
-    'troubleshoot/report/bodies/RuleGapBody.tsx',
   ];
   /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 8;
+  const CEILING = 0;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const drawing = (needle: string) =>

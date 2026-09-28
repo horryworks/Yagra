@@ -93,11 +93,9 @@ import {
   CANDIDATE_FILTER_PREFIX,
   ENDPOINT_FILTER_PREFIX,
 } from './discoveryFilters';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -256,7 +254,6 @@ export function DiscoveryPage() {
   // In the URL under `candidates.` (ADR-153): the page also owns `?scan=` and the seen-endpoints
   // table below owns `endpoints.`, so each table carries its own prefix.
   const { filters, setFilters } = useFilterParams(candCols, CANDIDATE_FILTER_PREFIX);
-  const [candSheet, setCandSheet] = useState(false);
   /** The `?scan=` present when the page was opened. Held in a ref because the URL is rewritten from
    *  `scanId` below, so reading the live value during the reattach would race with our own write. */
   const arrivedWith = useRef(searchParams.get('scan'));
@@ -1143,34 +1140,15 @@ export function DiscoveryPage() {
 
       {candidates.length > 0 && (
         <Card title={t('discovery.resultsTitle')} className="disco-results-card">
-          <TableToolbar>
-            <FilterButton
-              columns={candCols}
-              filters={filters}
-              onOpen={() => setCandSheet(true)}
-            />
-            <ClearFilters
-              columns={candCols}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(candCols))}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={shownCandidates.length}
-              total={isAnyFiltered(candCols, filters) ? candidates.length : undefined}
-              noun={t('discovery.filter.candidateNoun')}
-            />
-          </TableToolbar>
-          {candSheet && (
-            <MobileFilterSheet
-              columns={candCols}
-              labels={candLabels}
-              filters={filters}
-              onChange={setFilters}
-              counts={candCounts}
-              onClose={() => setCandSheet(false)}
-            />
-          )}
+          <ListToolbar
+            list={serverToolbarFilters(candCols, { filters, setFilters }, undefined, candCounts)}
+            labels={candLabels}
+            count={{
+              shown: shownCandidates.length,
+              total: candidates.length,
+              noun: () => t('discovery.filter.candidateNoun'),
+            }}
+          />
           <div className="disco-table">
             <div className="disco-head">
               <div className="disco-h" />
@@ -1402,7 +1380,6 @@ function SeenOnNetworkCard({
   // `endpoints.monitored=`. The row count always shows the total beside it, because the default
   // hides rows.
   const { filters: epFilters, setFilters: setEpFilters } = useFilterParams(epCols, ENDPOINT_FILTER_PREFIX);
-  const [epSheet, setEpSheet] = useState(false);
   // The observer's port as it named it, or its ifIndex when no neighbour table named one.
   const viaPort = (e: DiscoveredEndpoint): string | null =>
     portName(e) ?? (e.via_ifindex != null ? t('discovery.seen.port', { n: e.via_ifindex }) : null);
@@ -1461,24 +1438,25 @@ function SeenOnNetworkCard({
         })}
       </p>
       {all.length > 0 && (
-        <TableToolbar>
-          <FilterButton columns={epCols} filters={epFilters} onOpen={() => setEpSheet(true)} />
-          <ClearFilters
-            columns={epCols}
-            filters={epFilters}
-            // Back to *this table's* default, not to the empty state: "unmonitored only" is the
-            // view an operator expects to land on here. `defaultFilters` is that view, because the
-            // narrowing is the column's `defaultSelection`.
-            onClear={() => setEpFilters(defaultFilters(epCols))}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={endpoints.length}
+        // "Clear all" goes back to *this table's* default, not to the empty state: "unmonitored
+        // only" is the view an operator expects to land on here. `defaultFilters` is that view,
+        // because the narrowing is the column's `defaultSelection`.
+        <ListToolbar
+          list={serverToolbarFilters(
+            epCols,
+            { filters: epFilters, setFilters: setEpFilters },
+            undefined,
+            epCounts,
+          )}
+          labels={epLabels}
+          count={{
+            shown: endpoints.length,
+            total: all.length,
+            noun: () => t('discovery.seen.filter.endpointNoun'),
             // Always paired with the total, because the default already narrows.
-            total={all.length}
-            noun={t('discovery.seen.filter.endpointNoun')}
-          />
-        </TableToolbar>
+            showTotal: 'always',
+          }}
+        />
       )}
       {/* While more pages remain, say how much of the list is on screen and that the filters only
           search that much (ADR-179 増分 6 決定 2). */}
@@ -1489,16 +1467,6 @@ function SeenOnNetworkCard({
             total: page.summary.unmonitored_total,
           })}
         </p>
-      )}
-      {epSheet && (
-        <MobileFilterSheet
-          columns={epCols}
-          labels={epLabels}
-          filters={epFilters}
-          onChange={setEpFilters}
-          counts={epCounts}
-          onClose={() => setEpSheet(false)}
-        />
       )}
       {/* ⚠️ Gated on `all`, the UNFILTERED list, not on `endpoints`. Gating on the filtered one made
           the header and the filter row vanish the moment a filter matched nothing — taking the

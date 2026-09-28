@@ -70,7 +70,12 @@ export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T
 interface Props<T> extends ControlsProps<T> {
   /** The result count. `total` is the unfiltered size; it is shown only while filtered (T2), and
    *  `noun` is given the number it stands beside (T1). Omit on a list with nothing to count. */
-  count?: { shown: number; total?: number; noun: (n: number) => string };
+  count?: {
+    shown: number;
+    total?: number;
+    noun: (n: number) => string;
+    showTotal?: 'whenFiltered' | 'always';
+  };
   /** Before the filter controls: a scope picker, a section title. */
   leading?: ReactNode;
   /** After the filter controls, before the spacer: a sort control, a view switch. */

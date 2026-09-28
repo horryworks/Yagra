@@ -14,10 +14,9 @@ import { useRangeStore } from '../../store';
 import { formatBytes, formatAsn } from '../../lib/format';
 import { protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
-import { ClearFilters } from '../ui/ClearFilters';
 import { FilterBar } from '../ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
-import { defaultFilters } from '../../lib/columnFilter';
+import { FilterControls } from '../ui/ListToolbar';
+import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useFilterParams } from '../../lib/useFilterParams';
 import { nodeTabFilterPrefix } from './tabs';
 import {
@@ -73,7 +72,6 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const labels = useMemo(() => flowFilterLabels(t), [t]);
   // In the URL under `flow.` (ADR-153): survives a reload and the walk to the next node.
   const { filters, setFilters } = useFilterParams(filterCols, nodeTabFilterPrefix('flow'));
-  const [sheet, setSheet] = useState(false);
   const [asDir, setAsDir] = useState<'src' | 'dst'>('dst');
   const [loading, setLoading] = useState(true);
   const [disabled, setDisabled] = useState(false);
@@ -255,15 +253,9 @@ export function FlowTab({ node }: { node: NodeDetail }) {
             `space-between` and needs a left-hand child that always exists, or the range control
             walks to the left edge whenever nothing is filtered. */}
         <div className="nd-flow-toolbar-actions">
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters
-            columns={filterCols}
-            filters={filters}
-            onClear={() => setFilters(defaultFilters(filterCols))}
+          <FilterControls
+            list={serverToolbarFilters(filterCols, { filters, setFilters })}
+            labels={labels}
           />
         </div>
         <RangeControl value={range} onChange={setRange} />
@@ -274,15 +266,6 @@ export function FlowTab({ node }: { node: NodeDetail }) {
         filters={filters}
         onChange={setFilters}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          labels={labels}
-          filters={filters}
-          onChange={setFilters}
-          onClose={() => setSheet(false)}
-        />
-      )}
       {error && <p className="nd-flow-error">{error}</p>}
 
       {isEmpty ? (
