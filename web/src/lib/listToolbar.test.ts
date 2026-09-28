@@ -114,12 +114,6 @@ describe('a list draws its filter controls through ListToolbar', () => {
     },
   };
 
-  /** Toolbars still to move. Only ever shorter; deleted when empty (increment 33). */
-  const NOT_YET_MIGRATED: string[] = [
-  ];
-  /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 0;
-
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const drawing = (needle: string) =>
     sources.filter(([, code]) => code.includes(needle)).map(([p]) => p);
@@ -127,7 +121,7 @@ describe('a list draws its filter controls through ListToolbar', () => {
   it('no other file draws the filter button, the reset or the sheet', () => {
     const offenders = NEEDLES.flatMap((needle) =>
       drawing(needle)
-        .filter((p) => p !== HOME && !NOT_YET_MIGRATED.includes(p))
+        .filter((p) => p !== HOME)
         .filter((p) => PERMANENT[p]?.needle !== needle)
         .map((p) => `${p} (${needle})`),
     );
@@ -139,25 +133,16 @@ describe('a list draws its filter controls through ListToolbar', () => {
     ).toEqual([]);
   });
 
-  it('every listed file still does, so the lists cannot go stale', () => {
-    const drawsAny = (p: string) => NEEDLES.some((n) => drawing(n).includes(p));
-    const stale = [
-      ...NOT_YET_MIGRATED.filter((p) => !drawsAny(p)),
-      ...Object.entries(PERMANENT)
-        .filter(([p, { needle }]) => !drawing(needle).includes(p))
-        .map(([p]) => p),
-    ];
+  it('every listed exception still is one, so the list cannot go stale', () => {
+    const stale = Object.entries(PERMANENT)
+      .filter(([p, { needle }]) => !drawing(needle).includes(p))
+      .map(([p]) => p);
     expect(stale, 'listed, but no longer draws them by hand — take it off the list').toEqual([]);
   });
 
-  it('the migration list only shrinks', () => {
-    expect(NOT_YET_MIGRATED.length).toBeLessThanOrEqual(CEILING);
-    expect(new Set(NOT_YET_MIGRATED).size).toBe(NOT_YET_MIGRATED.length);
-  });
-
   it('finds the lists it is supposed to be reading', () => {
-    // Counts toolbars drawn by hand **or** through the shared one, so the number holds while
-    // screens move and a walk that found nothing cannot pass.
+    // Counts toolbars drawn by hand **or** through the shared one, so a walk that found nothing
+    // cannot pass — and a screen that drops its toolbar altogether shows up as a lower number.
     const IMPORT = `${'ListToolbar'}'`;
     const lists = sources.filter(
       ([p, code]) =>

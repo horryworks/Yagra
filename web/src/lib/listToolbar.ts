@@ -27,8 +27,6 @@ export interface ToolbarFilters<T> {
   anyFiltered: boolean;
   /** A control outside the filter row is also narrowing the list (a node picker). */
   extraActive?: boolean;
-  /** The state that counts as "nothing set", for a table whose own default narrows. */
-  baseline?: FilterState;
 }
 
 /**

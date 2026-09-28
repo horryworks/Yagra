@@ -40,7 +40,6 @@ export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T
       <FilterButton
         columns={list.filterCols}
         filters={list.filters}
-        baseline={list.baseline}
         onOpen={() => {
           onSheetOpen?.();
           setSheet(true);
@@ -51,7 +50,6 @@ export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T
         filters={list.filters}
         onClear={list.clear}
         extraActive={list.extraActive}
-        baseline={list.baseline}
       />
       {sheet && (
         <MobileFilterSheet
