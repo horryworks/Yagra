@@ -13,7 +13,7 @@
 // **This file is `.ts`, not `.tsx`, and that is load-bearing.** Vitest runs with
 // `environment: 'node'` and `include: ['src/**/*.test.ts']`, so a decision written inside a
 // component is a decision no test can reach (`testing.md`).
-import { ApiError } from '../services/api';
+import { ApiError, errMsg } from '../services/api';
 
 /** The reasons a list can be empty that are **not** "there is nothing to list". */
 export const LOAD_BLOCKS = ['unavailable', 'forbidden'] as const;
@@ -44,4 +44,57 @@ export function classifyLoadError(e: unknown): LoadBlock | null {
   if (e.code === 'admin_unavailable') return 'unavailable';
   if (e.status === 403 || e.code === 'forbidden') return 'forbidden';
   return null;
+}
+
+/** What a list screen knows about its read (ADR-184). `useLoad` holds one of these. */
+export interface LoadState<T> {
+  /** The last answer — kept through a later failure, so a re-read that fails leaves the list the
+   *  operator was reading rather than blanking it. */
+  data: T;
+  /** Why the screen draws a notice instead of its list, or `null`. Decided again at every settle. */
+  block: LoadBlock | null;
+  /** A failure that is not a block, as text — only when the caller asked for one
+   *  (`errorFallback`). Most lists deliberately show nothing for a 500; changing that is a
+   *  separate decision, not this one's. */
+  error: string | null;
+  /** True until the first read settles, and never again: a re-read keeps the rows on screen. */
+  loading: boolean;
+}
+
+/** The reducer's state: the screen's view plus the sequence number of the answer it shows. */
+export interface LoadMachine<T> extends LoadState<T> {
+  applied: number;
+}
+
+export type LoadEvent<T> =
+  | { type: 'loaded'; seq: number; data: T }
+  | { type: 'failed'; seq: number; error: unknown; fallback?: string }
+  /** The read is switched off (`enabled: false`). Settles `loading` without a request. */
+  | { type: 'skipped'; seq: number };
+
+export function initialLoadState<T>(initial: T): LoadMachine<T> {
+  return { data: initial, block: null, error: null, loading: true, applied: 0 };
+}
+
+/**
+ * One read's answer, applied to the screen.
+ *
+ * **The request asked last wins** (`seq`): an answer older than the one on screen is dropped.
+ * Screens used to apply whatever arrived, so a slow answer to the previous filter could land after
+ * the answer to the current one and put the wrong rows back — a few had a `cancelled` flag against
+ * that, most did not.
+ */
+export function loadReducer<T>(s: LoadMachine<T>, e: LoadEvent<T>): LoadMachine<T> {
+  if (e.seq <= s.applied) return s;
+  switch (e.type) {
+    case 'loaded':
+      return { data: e.data, block: null, error: null, loading: false, applied: e.seq };
+    case 'failed': {
+      const block = classifyLoadError(e.error);
+      const error = block === null && e.fallback !== undefined ? errMsg(e.error, e.fallback) : null;
+      return { ...s, block, error, loading: false, applied: e.seq };
+    }
+    case 'skipped':
+      return { ...s, loading: false, applied: e.seq };
+  }
 }

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Generic polled-fetch hook for dashboard widgets that read a snapshot endpoint (maintenance
 // windows, audit, discovery, alert history, Top-N). Fetches on mount and re-fetches every
-// `intervalMs` (default 15s, matching the dashboard cadence), cancelling in-flight updates on
-// unmount/dep-change so a slow response can't write into a torn-down widget.
+// `intervalMs` (default 15s, matching the dashboard cadence) while the tab is visible — reading at
+// once on return — cancelling in-flight updates on unmount/dep-change so a slow response can't
+// write into a torn-down widget. The timer is `pollWhileVisible`, shared with `useLoad` (ADR-184).
 
 import { useEffect, useState } from 'react';
 import i18n from '../i18n';
 import { ApiError, errMsg } from '../services/api';
-import { POLL_INTERVAL_MS } from '../lib/sharedPoll';
+import { POLL_INTERVAL_MS, pollWhileVisible } from '../lib/sharedPoll';
 
 export interface Polled<T> {
   data: T | null;
@@ -57,10 +58,10 @@ export function usePolled<T>(
         });
     };
     run();
-    const id = setInterval(run, intervalMs);
+    const stop = pollWhileVisible(run, intervalMs);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);

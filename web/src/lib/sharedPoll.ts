@@ -29,6 +29,43 @@ function isHidden(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden';
 }
 
+/** Run `run` every `intervalMs` while the tab is visible; returns the stop function.
+ *
+ *  The one timer every polled read in the WebUI goes through — this module's shared polls,
+ *  `usePolled` and `useLoad`'s `intervalMs` (ADR-184). It does **not** run `run` at start: each
+ *  caller reads at once in its own way (on subscribe, on mount, on a dependency change), and a
+ *  second immediate read here would be a duplicate request. What it does own is the hidden tab:
+ *  the interval stops while hidden, and on return `run` fires at once — what is on screen is stale —
+ *  and the interval resumes. */
+export function pollWhileVisible(run: () => void, intervalMs: number): () => void {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const start = () => {
+    if (timer === undefined && !isHidden()) timer = setInterval(run, intervalMs);
+  };
+  const stop = () => {
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  };
+  const onVisibility = () => {
+    if (isHidden()) {
+      stop();
+    } else {
+      run();
+      start();
+    }
+  };
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+  start();
+  return () => {
+    stop();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibility);
+    }
+  };
+}
+
 /** Build a hook that shares one poll of `fetch` among every component that calls it.
  *
  *  - The first subscriber reads at once and starts the timer; the last one to leave stops it.
@@ -41,7 +78,7 @@ export function createSharedPoll<T>(
 ): () => SharedPolled<T> {
   let state: SharedPolled<T> = { data: null, loading: true, error: false };
   const listeners = new Set<() => void>();
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let stopPolling: (() => void) | undefined;
   let inFlight = false;
 
   const publish = (next: SharedPolled<T>) => {
@@ -62,40 +99,17 @@ export function createSharedPoll<T>(
     }
   };
 
-  const start = () => {
-    if (timer !== undefined || listeners.size === 0 || isHidden()) return;
-    timer = setInterval(() => void load(), intervalMs);
-  };
-  const stop = () => {
-    if (timer !== undefined) {
-      clearInterval(timer);
-      timer = undefined;
-    }
-  };
-  const onVisibility = () => {
-    if (isHidden()) {
-      stop();
-    } else if (listeners.size > 0) {
-      // Back on the tab: what is on screen is stale. Read at once, then resume.
-      void load();
-      start();
-    }
-  };
-
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     if (listeners.size === 1) {
-      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
       if (!isHidden()) void load();
-      start();
+      stopPolling = pollWhileVisible(() => void load(), intervalMs);
     }
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) {
-        stop();
-        if (typeof document !== 'undefined') {
-          document.removeEventListener('visibilitychange', onVisibility);
-        }
+        stopPolling?.();
+        stopPolling = undefined;
       }
     };
   };
