@@ -33,8 +33,8 @@ import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../../components/ui/Field';
 import { OPTIONAL_MERAKI_TIERS, tierList, tiersToSave } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
-import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
-import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
+import { useLoad } from '../../lib/useLoad';
+import { LoadGate } from '../../components/ui/LoadGate';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS } from './merakiRegions';
 import {
   CADENCE_TARGET_RPS_MAX,
@@ -628,11 +628,6 @@ export function MerakiIntegrationPage() {
   // Reading the credential list takes its own permission. Without it the page is whole: the rows
   // leave out which key they use, and the add dialog offers only the box to type one into.
   const canCredentials = useCan('manage_credentials');
-  const [orgs, setOrgs] = useState<MerakiOrg[]>([]);
-  const [creds, setCreds] = useState<CredentialSummary[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [pollingOn, setPollingOn] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
   const [scoping, setScoping] = useState<MerakiOrg | null>(null);
@@ -642,65 +637,52 @@ export function MerakiIntegrationPage() {
   // (`.catch(() => undefined)`): a refused pause looked exactly like one that worked (ADR-164).
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
-      .then(([list, polling]) => {
-        setOrgs(list);
-        setPollingOn(polling.enabled);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const list = useLoad(
+    () =>
+      Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()]).then(([orgs, polling]) => ({
+        orgs,
+        polling: polling.enabled,
+      })),
+    [],
+    { initial: { orgs: [] as MerakiOrg[], polling: true } },
+  );
+  const { data, loading, reload: load } = list;
+  const orgs = data.orgs;
+  // The kill switch answers at once rather than after its round trip. The guess is tied to the
+  // answer it was made over, so the next read — this page's own poll, or anyone's reload — replaces
+  // it with what the server says.
+  const [pollingGuess, setPollingGuess] = useState<{ over: typeof data; on: boolean } | null>(null);
+  const pollingOn = pollingGuess?.over === data ? pollingGuess.on : data.polling;
 
   // A read asked for by "Sync now", or an organization's first, runs for minutes: keep the rows
-  // moving while one does (ADR-164 決定 32). The list is small, so one read serves both halves.
+  // moving while one does (ADR-164 決定 32). The list is small, so one read serves both halves —
+  // and the poll is `load` itself: a failed re-read keeps the rows where they were (useLoad), so a
+  // dropped poll only leaves the progress where it was, as on the organization page. Only a
+  // refusal (403/503) replaces the rows with the notice, and that is the truth of the page.
   const reading = orgs.some((o) => orgFullRead(o, pollingOn).kind !== 'none');
-  // Not `load`: that one blocks the whole page on a failure, and the next poll is five seconds
-  // away — one dropped read would replace every row with the load-failure notice. Here a failure
-  // only leaves the progress where it was, as on the organization page.
-  const pollOrgs = useCallback(() => {
-    Promise.all([api.listMerakiOrgs(), api.getMerakiPolling()])
-      .then(([list, polling]) => {
-        setOrgs(list);
-        setPollingOn(polling.enabled);
-      })
-      .catch(() => undefined);
-  }, []);
-  useSyncWatch(reading, pollOrgs, load);
+  useSyncWatch(reading, load, load);
 
   // Apart from `load` on purpose. Joined to its `Promise.all`, a credentials read that failed
   // would block the whole page over an annotation — so a failure here only means "no names".
-  const loadCreds = useCallback(() => {
-    if (!canCredentials) return;
-    api
-      .listCredentials()
-      .then(setCreds)
-      .catch(() => setCreds(null));
-  }, [canCredentials]);
-
-  useEffect(() => {
-    loadCreds();
-  }, [loadCreds]);
+  const { data: creds, reload: loadCreds } = useLoad(() => api.listCredentials(), [], {
+    initial: null as CredentialSummary[] | null,
+    enabled: canCredentials,
+  });
 
   // After an add: a typed key was sealed as a new credential, so the names are stale as well.
   const reload = useCallback(() => {
     load();
-    loadCreds();
-  }, [load, loadCreds]);
+    if (canCredentials) loadCreds();
+  }, [load, loadCreds, canCredentials]);
 
   const savedKeys = useMemo(() => (creds ? savedMerakiKeys(creds) : []), [creds]);
 
   const togglePolling = () => {
     const next = !pollingOn;
-    setPollingOn(next);
+    setPollingGuess({ over: data, on: next });
     setActionError(null);
     api.setMerakiPolling(next).catch((e: unknown) => {
-      setPollingOn(!next);
+      setPollingGuess({ over: data, on: !next });
       setActionError(errMsg(e, t('meraki.err.polling')));
     });
   };
@@ -714,11 +696,8 @@ export function MerakiIntegrationPage() {
   };
 
   const content = useMemo(() => {
-    if (block) {
-      return <LoadBlockNotice block={block} unavailable={t('integrations.unavailable')} />;
-    }
     return (
-      <>
+      <LoadGate load={list} unavailable={t('integrations.unavailable')}>
         {actionError && <p className="form-error meraki-page-note">{actionError}</p>}
         <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
           <label className="meraki-switch">
@@ -764,10 +743,10 @@ export function MerakiIntegrationPage() {
             </div>
           )}
         </Card>
-      </>
+      </LoadGate>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, creds, loading, block, pollingOn, canConfig, actionError, t]);
+  }, [orgs, creds, loading, list, pollingOn, canConfig, actionError, t]);
 
   return (
     <div>

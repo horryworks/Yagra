@@ -9,7 +9,7 @@
 // shared `.ytable`. Add via modal; enable/disable is an inline icon toggle; delete confirms in a
 // modal. Channel kind and rule severity are neutral/status chips (categorical vs status).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -43,8 +43,8 @@ import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import './RoutingPage.css';
 
 /** Inline status (dot + label) shared by channels and rules. */
@@ -63,42 +63,22 @@ export function RoutingPage() {
   // A notification channel holds a PagerDuty / JSM token, and a routing rule decides where every
   // alert goes; ADR-057 keeps both with the administrator.
   const canSystem = useCan('manage_system');
-  const [channels, setChannels] = useState<NotificationChannel[]>([]);
-  const [rules, setRules] = useState<RoutingRule[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    Promise.all([api.listNotificationChannels(), api.listRoutingRules()])
-      .then(([ch, ru]) => {
-        setChannels(ch);
-        setRules(ru);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  if (block) {
-    return (
-      <div>
-        <PageHeader
-          title={t('nav:alerts.routing')}
-          trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
-        />
-        <LoadBlockNotice
-          permission="manage_system"
-          block={block}
-          unavailable={t('routing.unavailable')}
-        />
-      </div>
-    );
-  }
+  // One read for both tables: a rule names its channel, so the two are only ever shown together.
+  const routing = useLoad(
+    () =>
+      Promise.all([api.listNotificationChannels(), api.listRoutingRules()]).then(
+        ([channels, rules]) => ({ channels, rules }),
+      ),
+    [],
+    { initial: { channels: [] as NotificationChannel[], rules: [] as RoutingRule[] } },
+  );
+  const {
+    data: { channels, rules },
+    loading,
+    reload: load,
+  } = routing;
 
   return (
     <div>
@@ -107,22 +87,24 @@ export function RoutingPage() {
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
         note={t('routing.note')}
       />
-      {error && <p className="form-error routing-error">{error}</p>}
-      <ChannelsSection
-        channels={channels}
-        canSystem={canSystem}
-        loading={loading}
-        onChange={load}
-        onError={setError}
-      />
-      <RulesSection
-        rules={rules}
-        channels={channels}
-        canSystem={canSystem}
-        loading={loading}
-        onChange={load}
-        onError={setError}
-      />
+      <LoadGate load={routing} permission="manage_system" unavailable={t('routing.unavailable')}>
+        {error && <p className="form-error routing-error">{error}</p>}
+        <ChannelsSection
+          channels={channels}
+          canSystem={canSystem}
+          loading={loading}
+          onChange={load}
+          onError={setError}
+        />
+        <RulesSection
+          rules={rules}
+          channels={channels}
+          canSystem={canSystem}
+          loading={loading}
+          onChange={load}
+          onError={setError}
+        />
+      </LoadGate>
     </div>
   );
 }

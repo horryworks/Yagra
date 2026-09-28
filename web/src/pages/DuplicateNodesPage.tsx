@@ -7,7 +7,7 @@
 // The delete is the inventory tree's own bulk delete (`DeleteNodesModal`). Which rows a delete may
 // send, and what an empty table means, are in `duplicateNodes.ts` where a test can reach them.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { addressText } from '../lib/nodeAddress';
 import { Link } from 'react-router-dom';
@@ -22,8 +22,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
 import {
   confidenceCounts,
@@ -44,27 +44,17 @@ export function DuplicateNodesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const { groupName } = useEntityNames();
-  const [view, setView] = useState<DuplicateNodesView | null>(null);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .getDuplicateNodes()
-      .then((v) => {
-        setView(v);
-        setBlock(null);
-        setSelected((prev) => pruneSelection(prev, v));
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
+  const duplicates = useLoad(() => api.getDuplicateNodes(), [], {
+    initial: null as DuplicateNodesView | null,
+  });
+  const { data: view, loading, reload: load } = duplicates;
+  // A node that left the list leaves the selection with it, whenever an answer lands.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (view) setSelected((prev) => pruneSelection(prev, view));
+  }, [view]);
 
   const rows = useMemo(() => flattenRows(view), [view]);
   const refusal = deleteBlock(view, selected);
@@ -204,89 +194,84 @@ export function DuplicateNodesPage() {
         note={t('duplicates.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('duplicates.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            {canConfig && rows.length > 0 && (
-              <Button variant="outline" onClick={() => setSelected(selectAllButKeepers(view))}>
-                {t('duplicates.selectKeepers')}
-              </Button>
-            )}
-            {canConfig && selected.size > 0 && (
-              <Button variant="outline" onClick={() => setSelected(new Set())}>
-                {t('duplicates.clearSelection')}
-              </Button>
-            )}
-            <TableSpacer />
-            {view && (
-              <span className="dup-counts">
-                {t('duplicates.counts', {
-                  total: view.total,
-                  confident: counts.confident,
-                  possible: counts.possible,
-                  scanned: view.scanned,
-                })}
-              </span>
-            )}
-            {canConfig && (
-              <Button
-                variant="danger"
-                onClick={() => setDeleting(true)}
-                disabled={selected.size === 0 || refusal !== null}
-              >
-                {t('duplicates.delete', { count: selected.size })}
-              </Button>
-            )}
-          </TableToolbar>
-
-          {refusal && (
-            <p className="form-error">
-              {refusal.key === 'duplicates.block.keepOne'
-                ? t(refusal.key, { groups: refusal.groups.map((n) => `#${n}`).join(', ') })
-                : t(refusal.key, { max: refusal.max })}
-            </p>
+      <LoadGate
+        load={duplicates}
+        permission="manage_config"
+        unavailable={t('duplicates.unavailable')}>
+        <TableToolbar>
+          {canConfig && rows.length > 0 && (
+            <Button variant="outline" onClick={() => setSelected(selectAllButKeepers(view))}>
+              {t('duplicates.selectKeepers')}
+            </Button>
           )}
-          {view && view.total > view.groups.length && (
-            <p className="muted">
-              {t('duplicates.truncated', { shown: view.groups.length, total: view.total })}
-            </p>
+          {canConfig && selected.size > 0 && (
+            <Button variant="outline" onClick={() => setSelected(new Set())}>
+              {t('duplicates.clearSelection')}
+            </Button>
           )}
-          {ignored.shown.length > 0 && (
-            <p className="muted dup-ignored">
-              {t('duplicates.ignored', {
-                count: view?.ignored_total ?? 0,
-                values:
-                  ignored.shown
-                    .map((i) =>
-                      t('duplicates.ignoredValue', {
-                        kind: t(`duplicates.kind.${i.kind}`),
-                        value: i.value,
-                        nodes: i.nodes,
-                      }),
-                    )
-                    .join(', ') + (ignored.more > 0 ? ', …' : ''),
+          <TableSpacer />
+          {view && (
+            <span className="dup-counts">
+              {t('duplicates.counts', {
+                total: view.total,
+                confident: counts.confident,
+                possible: counts.possible,
+                scanned: view.scanned,
               })}
-            </p>
+            </span>
           )}
+          {canConfig && (
+            <Button
+              variant="danger"
+              onClick={() => setDeleting(true)}
+              disabled={selected.size === 0 || refusal !== null}
+            >
+              {t('duplicates.delete', { count: selected.size })}
+            </Button>
+          )}
+        </TableToolbar>
 
-          <DataTable
-            tableId="nodes.duplicates"
-            rows={rows}
-            columns={columns}
-            rowKey={(r) => r.member.node_id}
-            rowClass={(r) => `dup-shade-${r.shade}`}
-            loading={loading}
-            empty={t(empty.key, { count: empty.count })}
-          />
-          <p className="muted dup-hint">{t('duplicates.hint')}</p>
-        </>
-      )}
+        {refusal && (
+          <p className="form-error">
+            {refusal.key === 'duplicates.block.keepOne'
+              ? t(refusal.key, { groups: refusal.groups.map((n) => `#${n}`).join(', ') })
+              : t(refusal.key, { max: refusal.max })}
+          </p>
+        )}
+        {view && view.total > view.groups.length && (
+          <p className="muted">
+            {t('duplicates.truncated', { shown: view.groups.length, total: view.total })}
+          </p>
+        )}
+        {ignored.shown.length > 0 && (
+          <p className="muted dup-ignored">
+            {t('duplicates.ignored', {
+              count: view?.ignored_total ?? 0,
+              values:
+                ignored.shown
+                  .map((i) =>
+                    t('duplicates.ignoredValue', {
+                      kind: t(`duplicates.kind.${i.kind}`),
+                      value: i.value,
+                      nodes: i.nodes,
+                    }),
+                  )
+                  .join(', ') + (ignored.more > 0 ? ', …' : ''),
+            })}
+          </p>
+        )}
+
+        <DataTable
+          tableId="nodes.duplicates"
+          rows={rows}
+          columns={columns}
+          rowKey={(r) => r.member.node_id}
+          rowClass={(r) => `dup-shade-${r.shade}`}
+          loading={loading}
+          empty={t(empty.key, { count: empty.count })}
+        />
+        <p className="muted dup-hint">{t('duplicates.hint')}</p>
+      </LoadGate>
 
       {deleting && (
         <DeleteNodesModal

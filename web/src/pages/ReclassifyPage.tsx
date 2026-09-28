@@ -7,7 +7,7 @@
 // thresholds and its maintenance windows all at once, so the rules only ever propose. What an apply
 // sends, and which selections survive a reload, are in `reclassify.ts` where a test can reach them.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
@@ -18,8 +18,8 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import { applyItems, emptyState, pruneSelection, ruleSignature } from './reclassify';
 import { nodeHref } from '../lib/entityHref';
 import './ReclassifyPage.css';
@@ -27,30 +27,20 @@ import './ReclassifyPage.css';
 export function ReclassifyPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [view, setView] = useState<ReclassifyView | null>(null);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .getReclassify()
-      .then((v) => {
-        setView(v);
-        setBlock(null);
-        setSelected((prev) => pruneSelection(prev, v.proposals));
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
+  const proposals = useLoad(() => api.getReclassify(), [], {
+    initial: null as ReclassifyView | null,
+  });
+  const { data: view, loading, reload: load } = proposals;
+  // A node that left the list leaves the selection with it, whenever an answer lands.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (view) setSelected((prev) => pruneSelection(prev, view.proposals));
+  }, [view]);
 
   const rows = useMemo(() => view?.proposals ?? [], [view]);
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.node_id));
@@ -191,74 +181,69 @@ export function ReclassifyPage() {
         note={t('reclassify.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('reclassify.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            {canConfig && rows.length > 0 && (
-              <label className="reclassify-select-all">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={(e) =>
-                    setSelected(e.target.checked ? new Set(rows.map((r) => r.node_id)) : new Set())
-                  }
-                />
-                <span>{t('reclassify.selectAll')}</span>
-              </label>
-            )}
-            <TableSpacer />
-            {view && (
-              <span className="reclassify-counts">
-                {t('reclassify.counts', {
-                  differ: view.total,
-                  locked: view.locked,
-                  unidentified: view.unidentified,
-                })}
-              </span>
-            )}
-            {canConfig && (
-              <>
-                <Button variant="outline" onClick={lock} disabled={selected.size === 0 || busy}>
-                  {t('reclassify.lock')}
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={() => setConfirming(true)}
-                  disabled={selected.size === 0 || busy}
-                >
-                  {t('reclassify.apply')}
-                </Button>
-              </>
-            )}
-          </TableToolbar>
-
-          {view && view.total > rows.length && (
-            <p className="muted">
-              {t('reclassify.truncated', { shown: rows.length, total: view.total })}
-            </p>
+      <LoadGate
+        load={proposals}
+        permission="manage_config"
+        unavailable={t('reclassify.unavailable')}>
+        <TableToolbar>
+          {canConfig && rows.length > 0 && (
+            <label className="reclassify-select-all">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={(e) =>
+                  setSelected(e.target.checked ? new Set(rows.map((r) => r.node_id)) : new Set())
+                }
+              />
+              <span>{t('reclassify.selectAll')}</span>
+            </label>
           )}
-          {message && <p className="reclassify-message">{message}</p>}
-          {error && !confirming && <p className="form-error">{error}</p>}
+          <TableSpacer />
+          {view && (
+            <span className="reclassify-counts">
+              {t('reclassify.counts', {
+                differ: view.total,
+                locked: view.locked,
+                unidentified: view.unidentified,
+              })}
+            </span>
+          )}
+          {canConfig && (
+            <>
+              <Button variant="outline" onClick={lock} disabled={selected.size === 0 || busy}>
+                {t('reclassify.lock')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => setConfirming(true)}
+                disabled={selected.size === 0 || busy}
+              >
+                {t('reclassify.apply')}
+              </Button>
+            </>
+          )}
+        </TableToolbar>
 
-          <DataTable
-            tableId="nodes.reclassify"
-            rows={rows}
-            columns={columns}
-            rowKey={(r) => r.node_id}
-            loading={loading}
-            empty={t(emptyState(view).key, { count: emptyState(view).count })}
-          />
-          <p className="muted reclassify-hint">
-            {t('reclassify.lockedHint')} {t('reclassify.unidentifiedHint')}
+        {view && view.total > rows.length && (
+          <p className="muted">
+            {t('reclassify.truncated', { shown: rows.length, total: view.total })}
           </p>
-        </>
-      )}
+        )}
+        {message && <p className="reclassify-message">{message}</p>}
+        {error && !confirming && <p className="form-error">{error}</p>}
+
+        <DataTable
+          tableId="nodes.reclassify"
+          rows={rows}
+          columns={columns}
+          rowKey={(r) => r.node_id}
+          loading={loading}
+          empty={t(emptyState(view).key, { count: emptyState(view).count })}
+        />
+        <p className="muted reclassify-hint">
+          {t('reclassify.lockedHint')} {t('reclassify.unidentifiedHint')}
+        </p>
+      </LoadGate>
 
       {confirming && (
         <Modal

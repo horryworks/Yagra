@@ -72,8 +72,8 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { decodeSet, toggleSetValue } from '../lib/columnFilter';
 import { BusPanel } from './BusPanel';
 import './PollersPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 import { nodesPageHref } from '../lib/entityHref';
 
 const REFRESH_MS = 10_000;
@@ -1252,11 +1252,26 @@ export function PollersPage() {
   const { t } = useTranslation('system');
   // The poller fleet is deployment topology rather than monitoring configuration (ADR-057).
   const canSystem = useCan('manage_system');
-  const [pollers, setPollers] = useState<PollerInfo[]>([]);
-  const [pools, setPools] = useState<PoolSummary[]>([]);
-  const [gaps, setGaps] = useState<MonitoringGap[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
+  // The fleet and its gaps refresh on one cadence, in a visible tab only (ADR-184).
+  const fleet = useLoad(() => api.listPollers(), [], {
+    initial: { pollers: [] as PollerInfo[], pools: [] as PoolSummary[] },
+    intervalMs: REFRESH_MS,
+  });
+  const {
+    data: { pollers, pools },
+    loading,
+    reload: fleetReload,
+  } = fleet;
+  // Monitoring gaps are best-effort context (store-and-forward, Phase 3) — a read error just keeps
+  // what the section showed; it must never block the fleet table.
+  const { data: gaps, reload: gapsReload } = useLoad(() => api.listMonitoringGaps(), [], {
+    initial: [] as MonitoringGap[],
+    intervalMs: REFRESH_MS,
+  });
+  const load = useCallback(() => {
+    fleetReload();
+    gapsReload();
+  }, [fleetReload, gapsReload]);
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
   const [anchoring, setAnchoring] = useState<PollerInfo | null>(null);
@@ -1269,7 +1284,21 @@ export function PollersPage() {
   const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
-  const [drill, setDrill] = useState<PollerNodesResponse | null>(null);
+  // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
+  // without the operator reopening it. A read error just leaves the last page on screen.
+  const drilled = useLoad(
+    () => api.listPollerNodes(drillId ?? '').then((page) => ({ id: drillId, page })),
+    [drillId],
+    {
+      initial: null as { id: string | null; page: PollerNodesResponse } | null,
+      enabled: !!drillId,
+      intervalMs: REFRESH_MS,
+    },
+  );
+  // Only the page for the poller that is open. Going from poller A straight to poller B used to
+  // leave A's node list on screen — under A's name, since the panel titles itself from the data —
+  // until B answered, on the one screen that exists to say which nodes a poller carries.
+  const drill = drilled.data?.id === drillId ? drilled.data.page : null;
   /** Core's own version, so a poller's can be read as "same" or "behind" rather than as a number
    *  the operator has to compare by eye. Fetched once — it cannot change without this page
    *  reloading, since core restarting is what changes it. */
@@ -1609,8 +1638,7 @@ export function PollersPage() {
         .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))))
         .finally(() => setMoveBusy(false));
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is defined below and stable
-    [confirmMove, t],
+    [confirmMove, load, t],
   );
 
   // A drop is the same move as the link, so it resolves the poller and hands off immediately.
@@ -1630,32 +1658,6 @@ export function PollersPage() {
   // and the row's other controls sit right beside it.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  // Refresh without flashing the initial loading state on every poll (loading only gates the very
-  // first paint, like the sibling list pages).
-  const load = useCallback(() => {
-    api
-      .listPollers()
-      .then((res) => {
-        setPollers(res.pollers);
-        setPools(res.pools);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-    // Monitoring gaps are best-effort context (store-and-forward, Phase 3) — a read error just leaves
-    // the section hidden; it must never block the fleet table.
-    api
-      .listMonitoringGaps()
-      .then(setGaps)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [load]);
-
   // Best-effort context, like the gaps below: if this read fails the version column simply shows
   // the number with no verdict, which is what it did before.
   useEffect(() => {
@@ -1665,29 +1667,6 @@ export function PollersPage() {
       .catch(() => {});
   }, []);
 
-  // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
-  // without the operator reopening it. A read error just leaves the last page on screen.
-  useEffect(() => {
-    // Cleared on every change, not only on close. Going from poller A straight to poller B left
-    // A's node list on screen — under A's name, since the panel titles itself from the data —
-    // until B answered, on the one screen that exists to say which nodes a poller carries.
-    setDrill(null);
-    if (!drillId) return;
-    let cancelled = false;
-    const fetch = () => {
-      api
-        .listPollerNodes(drillId)
-        .then((d) => !cancelled && setDrill(d))
-        .catch(() => undefined);
-    };
-    fetch();
-    const id = setInterval(fetch, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [drillId]);
-
   return (
     <div>
       <PageHeader
@@ -1696,175 +1675,171 @@ export function PollersPage() {
         note={t('pollers.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice block={block} unavailable={t('pollers.unavailable')} />
-      ) : (
-        <>
-          {/* The bus itself, above the pools it carries (ADR-065). Renders nothing for a caller
-              who may not manage the deployment, and nothing on a deployment with no bus
-              certificate store — so a viewer's page is unchanged. */}
-          <BusPanel />
+      <LoadGate load={fleet} unavailable={t('pollers.unavailable')}>
+        {/* The bus itself, above the pools it carries (ADR-065). Renders nothing for a caller
+            who may not manage the deployment, and nothing on a deployment with no bus
+            certificate store — so a viewer's page is unchanged. */}
+        <BusPanel />
 
-          {/* Named, because four unlabelled boxes say nothing about what they are (ADR-055 R1).
-              Paired with the toolbar's poller count below so the screen reads as two lists. */}
-          <p className="section-label">
-            <strong>{t('pollers.pool.stripTitle')}</strong>{' '}
-            {t('pollers.pool.count', { count: pools.length })}{' '}
-            <span className="section-label-sub">{t('pollers.pool.stripNote')}</span>
-          </p>
-          {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
-              The likely one is the server declining a poller it considers offline — the row was
-              drawn from a snapshot a few seconds old. */}
-          {moveError && !confirmMove && <p className="form-error pool-move-error">{moveError}</p>}
-          <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-          <div className="pool-strip">
-            {pools.map((p) => {
-              // ADR-107 増分 4. Both entries come from ONE helper, so this page cannot spell the
-              // question differently from the pill on the card beside it — which is exactly what
-              // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
-              const takeover = poolTakeoverActions(p);
-              return (
-              <PoolCard
-                key={p.pool}
-                pool={p}
-                droppable={canSystem}
-                selected={selectedPools.includes(p.pool)}
-                onSelect={() => togglePool(p.pool)}
-                actions={
-                  canSystem
-                    ? [
-                        { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
-                        { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
-                        // ADR-107 増分 4. Offered only in the state each one answers: cover a pool
-                        // that has members and nothing to poll them, restore one already covered.
-                        // Showing both always would put "stop covering" on 20 pools nobody is
-                        // covering, which reads as a feature that does nothing.
-                        ...(takeover.cover
-                          ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
-                          : []),
-                        ...(takeover.restore
-                          ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
-                          : []),
-                        { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
-                      ]
-                    : []
-                }
-              />
-              );
-            })}
-            {canSystem && (
-              <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
-                {t('pollers.pool.createButton')}
-              </button>
-            )}
-          </div>
-
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
+        {/* Named, because four unlabelled boxes say nothing about what they are (ADR-055 R1).
+            Paired with the toolbar's poller count below so the screen reads as two lists. */}
+        <p className="section-label">
+          <strong>{t('pollers.pool.stripTitle')}</strong>{' '}
+          {t('pollers.pool.count', { count: pools.length })}{' '}
+          <span className="section-label-sub">{t('pollers.pool.stripNote')}</span>
+        </p>
+        {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
+            The likely one is the server declining a poller it considers offline — the row was
+            drawn from a snapshot a few seconds old. */}
+        {moveError && !confirmMove && <p className="form-error pool-move-error">{moveError}</p>}
+        <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+        <div className="pool-strip">
+          {pools.map((p) => {
+            // ADR-107 増分 4. Both entries come from ONE helper, so this page cannot spell the
+            // question differently from the pill on the card beside it — which is exactly what
+            // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
+            const takeover = poolTakeoverActions(p);
+            return (
+            <PoolCard
+              key={p.pool}
+              pool={p}
+              droppable={canSystem}
+              selected={selectedPools.includes(p.pool)}
+              onSelect={() => togglePool(p.pool)}
+              actions={
+                canSystem
+                  ? [
+                      { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
+                      { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
+                      // ADR-107 増分 4. Offered only in the state each one answers: cover a pool
+                      // that has members and nothing to poll them, restore one already covered.
+                      // Showing both always would put "stop covering" on 20 pools nobody is
+                      // covering, which reads as a feature that does nothing.
+                      ...(takeover.cover
+                        ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
+                        : []),
+                      ...(takeover.restore
+                        ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
+                        : []),
+                      { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
+                    ]
+                  : []
+              }
             />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? pollers.length : undefined}
-              noun={t('common:noun.poller', { count: shown.length })}
-            />
-            {canSystem && (
-              <Button variant="primary" onClick={() => setRegistering(true)}>
-                {t('pollers.registerButton')}
-              </Button>
-            )}
-          </TableToolbar>
+            );
+          })}
+          {canSystem && (
+            <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
+              {t('pollers.pool.createButton')}
+            </button>
+          )}
+        </div>
 
-          <DataTable
-            tableId="settings.pollers"
-            rows={shown}
-            columns={columns}
-            rowKey={(p) => p.id}
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
+            onOpen={() => setSheet(true)}
           />
-          </DndContext>
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? pollers.length : undefined}
+            noun={t('common:noun.poller', { count: shown.length })}
+          />
+          {canSystem && (
+            <Button variant="primary" onClick={() => setRegistering(true)}>
+              {t('pollers.registerButton')}
+            </Button>
           )}
+        </TableToolbar>
 
-          {creatingPool && (
-            <CreatePoolModal onClose={() => setCreatingPool(false)} onDone={load} />
-          )}
-          {poolAction?.kind === 'edit' && (
-            <EditPoolModal pool={poolAction.pool} onClose={() => setPoolAction(null)} onDone={load} />
-          )}
-          {poolAction?.kind === 'rename' && (
-            <RenamePoolModal
-              pool={poolAction.pool}
-              pollers={pollers}
-              onClose={() => setPoolAction(null)}
-              onDone={load}
-            />
-          )}
-          {poolAction?.kind === 'cover' && (
-            <CoverPoolModal
-              pool={poolAction.pool}
-              pools={pools}
-              onClose={() => setPoolAction(null)}
-              onDone={load}
-            />
-          )}
-          {poolAction?.kind === 'restore' && (
-            <RestorePoolModal
-              pool={poolAction.pool}
-              onClose={() => setPoolAction(null)}
-              onDone={load}
-            />
-          )}
-          {poolAction?.kind === 'delete' && (
-            <DeletePoolModal
-              pool={poolAction.pool}
-              pollers={pollers}
-              onClose={() => setPoolAction(null)}
-              onDone={load}
-            />
-          )}
-          {movingPoller && (
-            <MovePollerModal
-              poller={movingPoller}
-              pools={pools}
-              onPick={(to) => beginMove(movingPoller, to)}
-              onClose={() => setMovingPoller(null)}
-            />
-          )}
-          {confirmMove && (
-            <ConfirmMoveModal
-              poller={confirmMove.poller}
-              to={confirmMove.to}
-              from={confirmMove.from}
-              nodes={confirmMove.nodes}
-              busy={moveBusy}
-              error={moveError}
-              onConfirm={applyConfirmedMove}
-              onClose={() => setConfirmMove(null)}
-            />
-          )}
+        <DataTable
+          tableId="settings.pollers"
+          rows={shown}
+          columns={columns}
+          rowKey={(p) => p.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
+        />
+        </DndContext>
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
 
-          {drill && <PollerNodesSection data={drill} onClose={() => setDrillId(null)} />}
+        {creatingPool && (
+          <CreatePoolModal onClose={() => setCreatingPool(false)} onDone={load} />
+        )}
+        {poolAction?.kind === 'edit' && (
+          <EditPoolModal pool={poolAction.pool} onClose={() => setPoolAction(null)} onDone={load} />
+        )}
+        {poolAction?.kind === 'rename' && (
+          <RenamePoolModal
+            pool={poolAction.pool}
+            pollers={pollers}
+            onClose={() => setPoolAction(null)}
+            onDone={load}
+          />
+        )}
+        {poolAction?.kind === 'cover' && (
+          <CoverPoolModal
+            pool={poolAction.pool}
+            pools={pools}
+            onClose={() => setPoolAction(null)}
+            onDone={load}
+          />
+        )}
+        {poolAction?.kind === 'restore' && (
+          <RestorePoolModal
+            pool={poolAction.pool}
+            onClose={() => setPoolAction(null)}
+            onDone={load}
+          />
+        )}
+        {poolAction?.kind === 'delete' && (
+          <DeletePoolModal
+            pool={poolAction.pool}
+            pollers={pollers}
+            onClose={() => setPoolAction(null)}
+            onDone={load}
+          />
+        )}
+        {movingPoller && (
+          <MovePollerModal
+            poller={movingPoller}
+            pools={pools}
+            onPick={(to) => beginMove(movingPoller, to)}
+            onClose={() => setMovingPoller(null)}
+          />
+        )}
+        {confirmMove && (
+          <ConfirmMoveModal
+            poller={confirmMove.poller}
+            to={confirmMove.to}
+            from={confirmMove.from}
+            nodes={confirmMove.nodes}
+            busy={moveBusy}
+            error={moveError}
+            onConfirm={applyConfirmedMove}
+            onClose={() => setConfirmMove(null)}
+          />
+        )}
 
-          <MonitoringGapsSection gaps={gaps} />
-        </>
-      )}
+        {drill && <PollerNodesSection data={drill} onClose={() => setDrillId(null)} />}
+
+        <MonitoringGapsSection gaps={gaps} />
+      </LoadGate>
 
       {registering && <RegisterPollerModal onClose={() => setRegistering(false)} />}
       {tokenFor && (

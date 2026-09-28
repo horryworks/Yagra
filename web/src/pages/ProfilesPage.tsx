@@ -43,58 +43,46 @@ import {
 } from './monitoringConfigFilters';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { useLoad } from '../lib/useLoad';
 import { collectedMetrics, profileRuleGap } from '../lib/profileRuleGap';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { LoadGate } from '../components/ui/LoadGate';
 
 const COLS = '1.8fr 1fr 120px 130px 96px';
 
 export function ProfilesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [rows, setRows] = useState<ProfileSummary[]>([]);
-  const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ProfileSummary | null>(null);
   const [deleting, setDeleting] = useState<ProfileSummary | null>(null);
   // Which profile's template attachments are expanded (one at a time).
   const [openTemplates, setOpenTemplates] = useState<string | null>(null);
+  const profiles = useLoad(() => api.listProfiles(), [], { initial: [] as ProfileSummary[] });
+  const { data: rows, loading, reload: profilesReload } = profiles;
+  const { data: templates, reload: templatesReload } = useLoad(
+    () => api.listCollectionTemplates(),
+    [],
+    { initial: [] as CollectionTemplate[] },
+  );
   // The rules that can give a profile a baseline (ADR-106) — fetched once here rather than per
   // expander, so opening one profile after another does not re-ask. `null` is "never arrived",
   // which the gap panel reports as unchecked rather than as an absence of rules.
-  const [rules, setRules] = useState<StoredThreshold[] | null>(null);
-  const [rulesTruncated, setRulesTruncated] = useState(false);
-
+  //
+  // Only the two levels that can be a baseline, which is also what keeps this under the server's
+  // 500-rule cap on any realistic ruleset. `truncated` is carried rather than compared here — the
+  // page must not turn a prefix into "no rule names this metric".
+  const { data: baseline, reload: baselineReload } = useLoad(
+    () => api.listThresholds({ scope_level: 'global,profile' }),
+    [],
+    { initial: null as { items: StoredThreshold[]; truncated: boolean } | null },
+  );
+  const rules = baseline?.items ?? null;
+  const rulesTruncated = baseline?.truncated ?? false;
   const load = useCallback(() => {
-    api
-      .listProfiles()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-    api.listCollectionTemplates().then(setTemplates).catch(() => setTemplates([]));
-    // Only the two levels that can be a baseline, which is also what keeps this under the
-    // server's 500-rule cap on any realistic ruleset. `truncated` is carried rather than
-    // compared here — the page must not turn a prefix into "no rule names this metric".
-    api
-      .listThresholds({ scope_level: 'global,profile' })
-      .then((page) => {
-        setRules(page.items);
-        setRulesTruncated(page.truncated);
-      })
-      .catch(() => {
-        setRules(null);
-        setRulesTruncated(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+    profilesReload();
+    templatesReload();
+    baselineReload();
+  }, [profilesReload, templatesReload, baselineReload]);
 
   // Three of the four controls sit under their own column headers (ADR-053 Inc.6 decision F). The
   // fourth — category — has no column: it *is* the group heading, so it goes in a `FilterBar`
@@ -165,180 +153,172 @@ export function ProfilesPage() {
         note={t('profiles.note')}
       />
 
-      {block ? (
-        <LoadBlockNotice
-          permission="manage_config"
-          block={block}
-          unavailable={t('profiles.unavailable')}
-        />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={allFilterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={allFilterCols}
-              filters={filters}
-              onClear={() => setFilters(defaultFilters(allFilterCols))}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={filtered.length}
-              total={rows.length}
-              noun={t('common:noun.profile', { count: rows.length })}
-            />
-            {canConfig && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('profiles.addProfile')}
-              </Button>
-            )}
-          </TableToolbar>
-          {sheet && (
-            <MobileFilterSheet
-              columns={allFilterCols}
-              labels={filterLabels}
-              filters={filters}
-              onChange={setFilters}
-              counts={filterCounts}
-              onClose={() => setSheet(false)}
-            />
+      <LoadGate load={profiles} permission="manage_config" unavailable={t('profiles.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={allFilterCols}
+            filters={filters}
+            onOpen={() => setSheet(true)}
+          />
+          <ClearFilters
+            columns={allFilterCols}
+            filters={filters}
+            onClear={() => setFilters(defaultFilters(allFilterCols))}
+          />
+          <TableSpacer />
+          <ResultCount
+            shown={filtered.length}
+            total={rows.length}
+            noun={t('common:noun.profile', { count: rows.length })}
+          />
+          {canConfig && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('profiles.addProfile')}
+            </Button>
           )}
-          {/* Category has no column of its own — it is the group heading below. */}
-          <FilterBar
-            columns={catCols}
+        </TableToolbar>
+        {sheet && (
+          <MobileFilterSheet
+            columns={allFilterCols}
             labels={filterLabels}
             filters={filters}
             onChange={setFilters}
             counts={filterCounts}
+            onClose={() => setSheet(false)}
+          />
+        )}
+        {/* Category has no column of its own — it is the group heading below. */}
+        <FilterBar
+          columns={catCols}
+          labels={filterLabels}
+          filters={filters}
+          onChange={setFilters}
+          counts={filterCounts}
+        />
+
+        <div className="ytable profiles-table">
+          <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
+            <div className="ytable-h">{t('profiles.cols.name')}</div>
+            <div className="ytable-h">{t('profiles.cols.vendor')}</div>
+            <div className="ytable-h">{t('profiles.cols.pollInterval')}</div>
+            <div className="ytable-h">{t('profiles.cols.metricSets')}</div>
+            <div className="ytable-h right">{t('shared.colActions')}</div>
+          </div>
+          {/* ⚠️ The SAME `COLS` const as the header and every row — three grids, one binding, the
+              discipline `DataTable` enforces for its own. This screen keeps its hand-rolled table
+              because the rows are grouped by category and `DataTable` has no group heading; the
+              trade is stated in `monitoringConfigFilters.ts`.
+              The mobile gate used to be a `display: none` on `.ytable-filters` in
+              `styles/table.css`. It moved here so that all seven filter surfaces read the one
+              decision in `MobileFilterSheet.tsx` — the CSS copy was correct and still cost
+              nothing to keep, but it meant "is the row visible" had two answers in two
+              languages, and the four rows that had *neither* were invisible against that.
+              ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws.
+              A category filter is narrowing the list through the `FilterBar` above, which shows
+              itself for exactly that reason — forcing *this* row open too would reveal a control
+              that is not the one responsible. */}
+          <ColumnFilterRow
+            columns={colFilters}
+            slots={['name', 'vendor', 'interval', null, null]}
+            filters={filters}
+            onChange={setFilters}
+            counts={filterCounts}
+            labels={filterLabels}
+            className="ytable-filters"
+            style={{ gridTemplateColumns: COLS }}
           />
 
-          <div className="ytable profiles-table">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('profiles.cols.name')}</div>
-              <div className="ytable-h">{t('profiles.cols.vendor')}</div>
-              <div className="ytable-h">{t('profiles.cols.pollInterval')}</div>
-              <div className="ytable-h">{t('profiles.cols.metricSets')}</div>
-              <div className="ytable-h right">{t('shared.colActions')}</div>
-            </div>
-            {/* ⚠️ The SAME `COLS` const as the header and every row — three grids, one binding, the
-                discipline `DataTable` enforces for its own. This screen keeps its hand-rolled table
-                because the rows are grouped by category and `DataTable` has no group heading; the
-                trade is stated in `monitoringConfigFilters.ts`.
-                The mobile gate used to be a `display: none` on `.ytable-filters` in
-                `styles/table.css`. It moved here so that all seven filter surfaces read the one
-                decision in `MobileFilterSheet.tsx` — the CSS copy was correct and still cost
-                nothing to keep, but it meant "is the row visible" had two answers in two
-                languages, and the four rows that had *neither* were invisible against that.
-                ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws.
-                A category filter is narrowing the list through the `FilterBar` above, which shows
-                itself for exactly that reason — forcing *this* row open too would reveal a control
-                that is not the one responsible. */}
-            <ColumnFilterRow
-              columns={colFilters}
-              slots={['name', 'vendor', 'interval', null, null]}
-              filters={filters}
-              onChange={setFilters}
-              counts={filterCounts}
-              labels={filterLabels}
-              className="ytable-filters"
-              style={{ gridTemplateColumns: COLS }}
-            />
-
-            {filtered.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : rows.length === 0
-                      ? t('profiles.empty.none')
-                      : t('profiles.empty.noMatch')}
+          {filtered.length === 0 ? (
+            <div className="yt-empty">
+              <p className="yt-empty-title">
+                {loading
+                  ? t('common:loading')
+                  : rows.length === 0
+                    ? t('profiles.empty.none')
+                    : t('profiles.empty.noMatch')}
+              </p>
+              {!loading && (
+                <p className="yt-empty-sub">
+                  {rows.length === 0 ? t('profiles.empty.noneSub') : t('shared.trySearch')}
                 </p>
-                {!loading && (
-                  <p className="yt-empty-sub">
-                    {rows.length === 0 ? t('profiles.empty.noneSub') : t('shared.trySearch')}
-                  </p>
-                )}
-              </div>
-            ) : (
-              groups.map((g) => (
-                <Fragment key={g.token}>
-                  <div className="profiles-group-head">
-                    <span className="profiles-group-label">{g.label}</span>
-                    <span className="profiles-group-count">{g.items.length}</span>
-                  </div>
-                  {g.items.map((p) => {
-                    const open = openTemplates === p.id;
-                    return (
-                      <Fragment key={p.id}>
-                        <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
-                          <div className="ytable-cell">
-                            <span className="yt-name-txt">{p.name}</span>
-                          </div>
-                          <div className="ytable-cell">
-                            {p.vendor ? p.vendor : <span className="muted">—</span>}
-                          </div>
-                          <div className="ytable-cell">
-                            {p.poll_interval_secs ? (
-                              `${p.poll_interval_secs}s`
-                            ) : (
-                              <span className="muted">{t('profiles.defaultInterval')}</span>
-                            )}
-                          </div>
-                          <div className="ytable-cell">
-                            <Button
-                              variant="ghost"
-                              onClick={() =>
-                                setOpenTemplates((cur) => (cur === p.id ? null : p.id))
-                              }
-                            >
-                              {open ? t('profiles.hideSets') : t('profiles.cols.metricSets')}
-                            </Button>
-                          </div>
-                          <div className="ytable-cell right">
-                            {canConfig && (
-                              <span className="ytable-actions">
-                                <OverflowMenu
-                                  actions={[
-                                    {
-                                      label: t('profiles.editProfile'),
-                                      icon: <EditIcon />,
-                                      onClick: () => setEditing(p),
-                                    },
-                                    {
-                                      label: t('profiles.deleteProfile'),
-                                      icon: <TrashIcon />,
-                                      danger: true,
-                                      onClick: () => setDeleting(p),
-                                    },
-                                  ]}
-                                />
-                              </span>
-                            )}
-                          </div>
+              )}
+            </div>
+          ) : (
+            groups.map((g) => (
+              <Fragment key={g.token}>
+                <div className="profiles-group-head">
+                  <span className="profiles-group-label">{g.label}</span>
+                  <span className="profiles-group-count">{g.items.length}</span>
+                </div>
+                {g.items.map((p) => {
+                  const open = openTemplates === p.id;
+                  return (
+                    <Fragment key={p.id}>
+                      <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
+                        <div className="ytable-cell">
+                          <span className="yt-name-txt">{p.name}</span>
                         </div>
-                        {open && (
-                          <div className="crud-collection">
-                            <ProfileTemplates
-                              profileId={p.id}
-                              templates={templates}
-                              canEdit={canConfig}
-                              rules={rules}
-                              rulesTruncated={rulesTruncated}
-                            />
-                          </div>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </Fragment>
-              ))
-            )}
-          </div>
-        </>
-      )}
+                        <div className="ytable-cell">
+                          {p.vendor ? p.vendor : <span className="muted">—</span>}
+                        </div>
+                        <div className="ytable-cell">
+                          {p.poll_interval_secs ? (
+                            `${p.poll_interval_secs}s`
+                          ) : (
+                            <span className="muted">{t('profiles.defaultInterval')}</span>
+                          )}
+                        </div>
+                        <div className="ytable-cell">
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              setOpenTemplates((cur) => (cur === p.id ? null : p.id))
+                            }
+                          >
+                            {open ? t('profiles.hideSets') : t('profiles.cols.metricSets')}
+                          </Button>
+                        </div>
+                        <div className="ytable-cell right">
+                          {canConfig && (
+                            <span className="ytable-actions">
+                              <OverflowMenu
+                                actions={[
+                                  {
+                                    label: t('profiles.editProfile'),
+                                    icon: <EditIcon />,
+                                    onClick: () => setEditing(p),
+                                  },
+                                  {
+                                    label: t('profiles.deleteProfile'),
+                                    icon: <TrashIcon />,
+                                    danger: true,
+                                    onClick: () => setDeleting(p),
+                                  },
+                                ]}
+                              />
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {open && (
+                        <div className="crud-collection">
+                          <ProfileTemplates
+                            profileId={p.id}
+                            templates={templates}
+                            canEdit={canConfig}
+                            rules={rules}
+                            rulesTruncated={rulesTruncated}
+                          />
+                        </div>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            ))
+          )}
+        </div>
+      </LoadGate>
 
       {adding && (
         <ProfileModal

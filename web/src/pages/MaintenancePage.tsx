@@ -8,8 +8,7 @@
 // the narrowing controls in the filter row under the header (ADR-053 Inc.5).
 // Add and delete both go through modals; enable/disable is an immediate row action.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useOnConfigChange } from '../lib/configChanges';
+import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
@@ -33,8 +32,8 @@ import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
 import { windowFilters } from './suppressionFilters';
 import './MaintenancePage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
 function DeleteWindowModal({
@@ -103,38 +102,26 @@ function ClearEndedModal({
 export function MaintenancePage() {
   const { t } = useTranslation('suppression');
   const canMaintenance = useCan('manage_maintenance');
-  const [rows, setRows] = useState<MaintenanceWindow[]>([]);
-  const [groups, setGroups] = useState<NodeGroup[]>([]);
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
   const [clearing, setClearing] = useState(false);
   const [sheet, setSheet] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .listMaintenanceWindows()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const loadAll = useCallback(() => {
-    load();
-    api.listNodeGroups().then(setGroups).catch(() => undefined);
-    api.listProfiles().then(setProfiles).catch(() => undefined);
-  }, [load]);
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
-  // Someone else opened, edited or closed a window (ADR-019 増分 2).
-  useOnConfigChange(loadAll);
+  // All three re-read when someone else opens, edits or closes a window (ADR-019 増分 2).
+  const windows = useLoad(() => api.listMaintenanceWindows(), [], {
+    initial: [] as MaintenanceWindow[],
+    onConfigChange: true,
+  });
+  const { data: rows, loading, reload: load } = windows;
+  const { data: groups } = useLoad(() => api.listNodeGroups(), [], {
+    initial: [] as NodeGroup[],
+    onConfigChange: true,
+  });
+  const { data: profiles } = useLoad(() => api.listProfiles(), [], {
+    initial: [] as ProfileSummary[],
+    onConfigChange: true,
+  });
 
   const setEnabled = (id: string, enabled: boolean) =>
     api
@@ -270,66 +257,62 @@ export function MaintenancePage() {
         }
       />
 
-      {block ? (
-        <LoadBlockNotice block={block} unavailable={t('maintenance.unavailable')} />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('common:noun.window', { count: shown.length })}
-            />
-            {canMaintenance && (
-              <>
-                {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
-                    zero it still tells the operator the capability exists. */}
-                <Button
-                  variant="danger"
-                  onClick={() => setClearing(true)}
-                  disabled={endedCount === 0}
-                >
-                  {t('maintenance.clearEnded.action', { count: endedCount })}
-                </Button>
-                <Button variant="primary" onClick={() => setAdding(true)}>
-                  {t('maintenance.add')}
-                </Button>
-              </>
-            )}
-          </TableToolbar>
-
-          {error && <p className="form-error">{error}</p>}
-
-          <DataTable
-            tableId="alerts.maintenance"
-            rows={shown}
-            columns={columns}
-            rowKey={(w) => w.id}
+      <LoadGate load={windows} unavailable={t('maintenance.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('maintenance.empty.filtered') : t('maintenance.empty.title')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, t(`maintenance.cols.${c.key}`)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('common:noun.window', { count: shown.length })}
+          />
+          {canMaintenance && (
+            <>
+              {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
+                  zero it still tells the operator the capability exists. */}
+              <Button
+                variant="danger"
+                onClick={() => setClearing(true)}
+                disabled={endedCount === 0}
+              >
+                {t('maintenance.clearEnded.action', { count: endedCount })}
+              </Button>
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                {t('maintenance.add')}
+              </Button>
+            </>
           )}
-        </>
-      )}
+        </TableToolbar>
+
+        {error && <p className="form-error">{error}</p>}
+
+        <DataTable
+          tableId="alerts.maintenance"
+          rows={shown}
+          columns={columns}
+          rowKey={(w) => w.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('maintenance.empty.filtered') : t('maintenance.empty.title')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, t(`maintenance.cols.${c.key}`)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && (
         <AddMaintenanceWindowModal

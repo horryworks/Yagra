@@ -13,8 +13,7 @@
 // fleet-scaled, so that is insurance rather than a fix — the reason to do it here is that the
 // filter row and the hand-rolled grid could not coexist (three grids share one template).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useOnConfigChange } from '../lib/configChanges';
+import { useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
@@ -37,8 +36,8 @@ import { useEntityNames } from '../components/ui/entityNames';
 import { formatScheduleTime } from '../lib/format';
 import { muteFilters } from './suppressionFilters';
 import './MutesPage.css';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { useLoad } from '../lib/useLoad';
+import { LoadGate } from '../components/ui/LoadGate';
 
 /** Confirm + lift a mute. Destructive-consent chrome comes from the shared modal; only the
  *  sentence and the confirm label are this dialog's own (the action is "lift", not "delete"). */
@@ -85,34 +84,17 @@ function LiftMuteModal({
 export function MutesPage() {
   const { t } = useTranslation('suppression');
   const canAck = useCan('ack_alerts');
-  const [rows, setRows] = useState<Mute[]>([]);
-  const [groups, setGroups] = useState<NodeGroup[]>([]);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [lifting, setLifting] = useState<Mute | null>(null);
   const [sheet, setSheet] = useState(false);
 
-  const load = useCallback(() => {
-    api
-      .listMutes()
-      .then((list) => {
-        setRows(list);
-        setBlock(null);
-      })
-      .catch((e: unknown) => setBlock(classifyLoadError(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const loadAll = useCallback(() => {
-    load();
-    api.listNodeGroups().then(setGroups).catch(() => undefined);
-  }, [load]);
-  useEffect(() => {
-    loadAll();
-  }, [loadAll]);
-  // Someone else added or lifted a mute (ADR-019 増分 2).
-  useOnConfigChange(loadAll);
+  // Both re-read when someone else adds or lifts a mute, or moves a folder (ADR-019 増分 2).
+  const mutes = useLoad(() => api.listMutes(), [], { initial: [] as Mute[], onConfigChange: true });
+  const { data: rows, loading, reload: load } = mutes;
+  const { data: groups } = useLoad(() => api.listNodeGroups(), [], {
+    initial: [] as NodeGroup[],
+    onConfigChange: true,
+  });
 
   // Resolve a mute's node target by name across the whole fleet (not just the first list page —
   // the old nodes.find() capped at 100 and showed a raw UUID for the 101st+ node, S12).
@@ -224,53 +206,49 @@ export function MutesPage() {
         }
       />
 
-      {block ? (
-        <LoadBlockNotice block={block} unavailable={t('mutes.unavailable')} />
-      ) : (
-        <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('mutes.resultNoun')}
-            />
-            {canAck && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                {t('mutes.add')}
-              </Button>
-            )}
-          </TableToolbar>
-
-          <DataTable
-            tableId="alerts.mutes"
-            rows={shown}
-            columns={columns}
-            rowKey={(m) => m.id}
+      <LoadGate load={mutes} unavailable={t('mutes.unavailable')}>
+        <TableToolbar>
+          <FilterButton
+            columns={filterCols}
             filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            loading={loading}
-            empty={anyFiltered ? t('mutes.empty.filtered') : t('mutes.empty.title')}
+            onOpen={() => setSheet(true)}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, t(`mutes.cols.${c.key}`)]))}
-              onClose={() => setSheet(false)}
-            />
+          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={anyFiltered ? rows.length : undefined}
+            noun={t('mutes.resultNoun')}
+          />
+          {canAck && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              {t('mutes.add')}
+            </Button>
           )}
-        </>
-      )}
+        </TableToolbar>
+
+        <DataTable
+          tableId="alerts.mutes"
+          rows={shown}
+          columns={columns}
+          rowKey={(m) => m.id}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          loading={loading}
+          empty={anyFiltered ? t('mutes.empty.filtered') : t('mutes.empty.title')}
+        />
+        {sheet && (
+          <MobileFilterSheet
+            columns={filterCols}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
+            labels={Object.fromEntries(columns.map((c) => [c.key, t(`mutes.cols.${c.key}`)]))}
+            onClose={() => setSheet(false)}
+          />
+        )}
+      </LoadGate>
 
       {adding && (
         <AddMuteModal
