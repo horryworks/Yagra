@@ -55,6 +55,23 @@ use std::time::{Duration, Instant};
 /// answer**, never columns it does not implement.
 pub(crate) const MAX_CONSECUTIVE_COLUMN_FAILURES: usize = 2;
 
+/// Standard SNMP agent port, for both walkers.
+pub(crate) const SNMP_PORT: u16 = 161;
+
+/// GETBULK max-repetitions per request, for both walkers — bounds one response PDU's size so a large
+/// table is paged, not pulled in one oversized PDU. Declared here once (ADR-184): the v3 walker's
+/// copy said "mirrors the v2c walker's cap", which is a promise nothing kept.
+pub(crate) const WALK_MAX_REPETITIONS: u32 = 20;
+
+/// The most GETBULK requests one column may take — a broken or looping agent cannot spin a walk
+/// forever. **The two walkers differ, and neither declaration said why** — ADR-184 found them in
+/// two files and could not recover a reason, so they sit side by side here where the difference is
+/// seen. Treat either change as a decision; `both_walkers_page_with_the_same_repetition_count` pins
+/// both numbers.
+pub(crate) const V2C_MAX_REQUESTS_PER_COLUMN: usize = 4096;
+/// See [`V2C_MAX_REQUESTS_PER_COLUMN`].
+pub(crate) const V3_MAX_REQUESTS_PER_COLUMN: usize = 1000;
+
 /// How many per-round-trip timeouts one whole multi-column call may spend, when its caller did not
 /// name a deadline of its own ([`WalkLimits::per_round_trip`]).
 ///
@@ -1106,5 +1123,41 @@ mod tests {
         quiet.record(ColumnOutcome::Failed);
         quiet.record(ColumnOutcome::Failed);
         assert_eq!(trailing_stop(&quiet, &cut), Some(Truncation::Silent));
+    }
+
+    /// ADR-184: both walkers page with the one repetition count and dial the one port, and each
+    /// takes its request ceiling from this file — so the two numbers that *do* differ are seen
+    /// together, and pinned.
+    #[test]
+    fn both_walkers_page_with_the_same_repetition_count() {
+        let files = crate::module_source::files_no_comments(&[
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snmp.rs"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/snmp_v3.rs"),
+        ]);
+        assert_eq!(files.len(), 2, "both walkers were read");
+        let own = [
+            format!("const {}: u16", "SNMP_PORT"),
+            format!("const {}: u32", "WALK_MAX_REPETITIONS"),
+        ];
+        for (name, code) in &files {
+            for needle in &own {
+                assert!(
+                    !code.contains(needle.as_str()),
+                    "{name} declares `{needle}` again"
+                );
+            }
+        }
+        assert!(
+            files[0].1.contains("V2C_MAX_REQUESTS_PER_COLUMN")
+                || files[1].1.contains("V2C_MAX_REQUESTS_PER_COLUMN")
+        );
+        assert!(
+            files[0].1.contains("V3_MAX_REQUESTS_PER_COLUMN")
+                || files[1].1.contains("V3_MAX_REQUESTS_PER_COLUMN")
+        );
+        // The declared difference. Change either number deliberately, and change this with it.
+        assert_eq!(V2C_MAX_REQUESTS_PER_COLUMN, 4096);
+        assert_eq!(V3_MAX_REQUESTS_PER_COLUMN, 1000);
+        assert_eq!(WALK_MAX_REPETITIONS, 20);
     }
 }

@@ -13,6 +13,7 @@
 use crate::walk_budget::{
     conclude, is_silence, not_asked, note_retry, note_truncation, ColumnEnd, ColumnOutcome,
     ColumnReport, ColumnStop, RetryAllowance, TableWalk, Truncation, WalkBudget, WalkLimits,
+    SNMP_PORT, V2C_MAX_REQUESTS_PER_COLUMN, WALK_MAX_REPETITIONS,
 };
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
@@ -22,9 +23,6 @@ use csnmp::message::BindingValue;
 use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient, SnmpClientError};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
-
-/// Standard SNMP agent port.
-const SNMP_PORT: u16 = 161;
 
 /// Did the agent say **anything**, or nothing at all?
 ///
@@ -52,10 +50,6 @@ fn outcome_of(err: &SnmpClientError) -> ColumnOutcome {
         _ => ColumnOutcome::Answered,
     }
 }
-
-/// GETBULK max-repetitions per request. Bounded so a huge table is paged, not pulled in
-/// one oversized PDU; [`walk_column_v2c`] repeats until the column is exhausted.
-const WALK_MAX_REPETITIONS: u32 = 20;
 
 /// Fetch `oids` from `target` via SNMP v2c. Per-OID failures are logged and skipped so a
 /// single bad OID doesn't fail the whole poll — bounded by a [`WalkBudget`], so a device that
@@ -435,7 +429,7 @@ async fn walk_column_v2c<P: BulkPager>(
     retries: &mut RetryAllowance,
     mut keep: impl FnMut(&ObjectIdentifier, &ObjectValue) + Send,
 ) -> ColumnStop {
-    const MAX_REQUESTS: usize = 4096;
+    const MAX_REQUESTS: usize = V2C_MAX_REQUESTS_PER_COLUMN;
     let base = column.base;
     let mut cursor = base;
     let mut taken = 0usize;

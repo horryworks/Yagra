@@ -10,7 +10,8 @@
 
 use crate::walk_budget::{
     conclude, is_silence, not_asked, note_truncation, ColumnOutcome, ColumnReport, ColumnStop,
-    TableWalk, Truncation, WalkBudget, WalkLimits,
+    TableWalk, Truncation, WalkBudget, WalkLimits, SNMP_PORT, V3_MAX_REQUESTS_PER_COLUMN,
+    WALK_MAX_REPETITIONS,
 };
 use crate::{
     SnmpInstanceRow, SnmpSample, SnmpStringSample, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -21,16 +22,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use yagra_common::oid::tail_subids;
 
-/// Standard SNMP agent port.
-const SNMP_PORT: u16 = 161;
-
-/// GETBULK max-repetitions per request — bounds one response PDU's size so a large table is paged,
-/// not pulled in one oversized PDU. Mirrors the v2c walker's cap.
-const WALK_MAX_REPETITIONS: u32 = 20;
-
 /// Safety cap on GETBULK requests per column: a broken or looping agent can't spin the walk
 /// forever (`WALK_MAX_REPETITIONS` × this bounds the rows collected per column).
-const MAX_WALK_REQUESTS: usize = 1000;
+const MAX_WALK_REQUESTS: usize = V3_MAX_REQUESTS_PER_COLUMN;
 
 /// Row budget for the walkers that predate ADR-043 Increment 3's explicit cap.
 ///
