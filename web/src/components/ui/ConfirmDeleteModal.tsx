@@ -8,10 +8,11 @@
 import { useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { isImeComposing } from '../../lib/ime';
-import { errMsg } from '../../services/api';
-import { Button } from './Button';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { confirmPhraseMatches } from './confirmPhrase';
 import { TextInput } from './Field';
+import { FormError, FormFooter } from './FormFooter';
 import { Modal } from './Modal';
 
 interface Props {
@@ -45,21 +46,13 @@ export function ConfirmDeleteModal({
   confirmPhrase,
 }: Props) {
   const { t } = useTranslation('common');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback, onDone });
   const [typed, setTyped] = useState('');
   const confirmed = confirmPhrase === undefined || confirmPhraseMatches(typed, confirmPhrase);
 
   const submit = () => {
     if (!confirmed) return;
-    setBusy(true);
-    setError(null);
-    onConfirm()
-      .then(() => onDone())
-      .catch((e: unknown) => {
-        setError(errMsg(e, errorFallback));
-        setBusy(false);
-      });
+    form.submit(() => onConfirm().then(() => done()));
   };
 
   return (
@@ -67,14 +60,14 @@ export function ConfirmDeleteModal({
       title={title}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy || !confirmed}>
-            {confirmLabel ?? t('actions.delete')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={confirmLabel ?? t('actions.delete')}
+          canSubmit={confirmed}
+          variant="danger"
+        />
       }
     >
       <p className="modal-confirm-text">{children}</p>
@@ -95,14 +88,14 @@ export function ConfirmDeleteModal({
               // A folder name is often Japanese: Enter that commits an IME candidate must not delete.
               if (e.key === 'Enter' && !isImeComposing(e)) submit();
             }}
-            disabled={busy}
+            disabled={form.busy}
             autoFocus
             autoComplete="off"
             spellCheck={false}
           />
         </label>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
