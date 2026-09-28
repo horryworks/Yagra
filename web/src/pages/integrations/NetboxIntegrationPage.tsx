@@ -41,6 +41,9 @@ import {
   siteIdOptions,
   siteIdOutcome,
 } from './siteIdField';
+import { done, step } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
+import { FormError, FormFooter } from '../../components/ui/FormFooter';
 import './NetboxIntegrationPage.css';
 
 /** The form behind both add and edit. One component because the two differ in exactly two things —
@@ -70,8 +73,9 @@ function ServerModal({
   const initialSelection = selectionFor(existing?.site_id_field ?? null, null);
   const [siteIdSelected, setSiteIdSelected] = useState(initialSelection.selected);
   const [customKeyInput, setCustomKeyInput] = useState(initialSelection.customKeyInput);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Two actions on one form: testing the connection writes nothing and shows its answer here;
+  // saving closes the dialog.
+  const form = useSubmit({ errorFallback: t('netbox.err.save'), onDone: onSaved });
 
   // A saved server's token is sealed and never returned, so the edit form cannot press "test
   // connection" to learn its fields — this route asks on its behalf. For an unsaved server there
@@ -105,57 +109,52 @@ function ServerModal({
     !existing || addressChangeNeedsToken(existing.base_url, baseUrl);
 
   const test = () => {
-    setBusy(true);
-    setError(null);
     setProbe(null);
-    api
-      .testNetboxConnection({
-        base_url: baseUrl.trim(),
-        token: token.trim(),
-        ca_cert_pem: caPem.trim() === '' ? null : caPem,
-      })
-      .then((r) => {
-        setProbe(r);
-        // The add form's only chance: the token exists on the server side for this one call.
-        if (r.site_id_fields) setFields(r.site_id_fields);
-      })
-      .catch((e: unknown) => setError(errMsg(e, t('netbox.err.test'))))
-      .finally(() => setBusy(false));
+    form.submit(
+      () =>
+        api
+          .testNetboxConnection({
+            base_url: baseUrl.trim(),
+            token: token.trim(),
+            ca_cert_pem: caPem.trim() === '' ? null : caPem,
+          })
+          .then((r) => {
+            setProbe(r);
+            // The add form's only chance: the token exists on the server side for this one call.
+            if (r.site_id_fields) setFields(r.site_id_fields);
+            return step();
+          }),
+      t('netbox.err.test'),
+    );
   };
 
   const save = () => {
-    setBusy(true);
-    setError(null);
     const secs = Number(intervalSecs);
     const ca = caPem.trim() === '' ? null : caPem;
     const siteIdField = siteIdFieldToSend(siteIdSelected, customKeyInput);
-    const done = existing
-      ? api.updateNetboxServer(existing.id, {
-          name: name.trim(),
-          base_url: baseUrl.trim(),
-          // Omitted rather than sent empty, so the sealed token survives an unrelated edit.
-          ...(token.trim() === '' ? {} : { token: token.trim() }),
-          ca_cert_pem: ca,
-          enabled: existing.enabled,
-          sync_interval_secs: secs,
-          site_id_field: siteIdField,
-        })
-      : api
-          .createNetboxServer({
+    const request = () =>
+      existing
+        ? api.updateNetboxServer(existing.id, {
             name: name.trim(),
             base_url: baseUrl.trim(),
-            token: token.trim(),
+            // Omitted rather than sent empty, so the sealed token survives an unrelated edit.
+            ...(token.trim() === '' ? {} : { token: token.trim() }),
             ca_cert_pem: ca,
+            enabled: existing.enabled,
             sync_interval_secs: secs,
             site_id_field: siteIdField,
           })
-          .then(() => undefined);
-    done
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('netbox.err.save')));
-        setBusy(false);
-      });
+        : api
+            .createNetboxServer({
+              name: name.trim(),
+              base_url: baseUrl.trim(),
+              token: token.trim(),
+              ca_cert_pem: ca,
+              sync_interval_secs: secs,
+              site_id_field: siteIdField,
+            })
+            .then(() => undefined);
+    form.submit(() => request().then(() => done()));
   };
 
   /** What the probe found, in the operator's terms.
@@ -183,21 +182,20 @@ function ServerModal({
       title={existing ? t('netbox.form.editTitle') : t('netbox.form.addTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button onClick={test} disabled={busy || !canTest}>
-            {t('netbox.form.test')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={busy || name.trim() === '' || baseUrl.trim() === '' || (tokenNeeded && token.trim() === '')}
-          >
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={
+            name.trim() !== '' && baseUrl.trim() !== '' && !(tokenNeeded && token.trim() === '')
+          }
+          extra={
+            <Button onClick={test} disabled={form.busy || !canTest}>
+              {t('netbox.form.test')}
+            </Button>
+          }
+        />
       }
     >
       <label className="netbox-field">
@@ -309,7 +307,7 @@ function ServerModal({
         />
       </label>
       {probeLine()}
-      {error && <p className="netbox-probe bad">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

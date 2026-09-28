@@ -11,6 +11,7 @@ import { errMsg } from '../services/api';
 import {
   initialSubmitState,
   submitReducer,
+  WordedFailure,
   type SubmitOutcome,
   type SubmitState,
 } from './submitState';
@@ -28,8 +29,10 @@ export interface SubmitOptions<T> {
 }
 
 export interface Submit<T> extends SubmitState {
-  /** Send. Ignored while a request is in flight (F2), so a double click sends once. */
-  submit: (run: () => Promise<SubmitOutcome<T>>) => void;
+  /** Send. Ignored while a request is in flight (F2), so a double click sends once.
+   *  `errorFallback` overrides the hook's for this call — a dialog with two actions (issue and
+   *  revoke) that fail in different words. */
+  submit: (run: () => Promise<SubmitOutcome<T>>, errorFallback?: string) => void;
   /** Show a message without sending — a field the dialog itself found wrong. */
   refuse: (message: string) => void;
 }
@@ -43,7 +46,7 @@ export function useSubmit<T = void>(opts: SubmitOptions<T>): Submit<T> {
     latest.current = opts;
   });
 
-  const submit = useCallback((run: () => Promise<SubmitOutcome<T>>) => {
+  const submit = useCallback((run: () => Promise<SubmitOutcome<T>>, fallback?: string) => {
     if (inFlight.current) return;
     inFlight.current = true;
     dispatch({ type: 'start' });
@@ -62,12 +65,16 @@ export function useSubmit<T = void>(opts: SubmitOptions<T>): Submit<T> {
           return;
         }
         inFlight.current = false;
-        if (outcome.refresh) latest.current.onSaved?.();
+        if (outcome.kind === 'keepOpen' && outcome.refresh) latest.current.onSaved?.();
       },
       (e: unknown) => {
         inFlight.current = false;
         const { describeError, errorFallback } = latest.current;
-        dispatch({ type: 'fail', message: describeError?.(e) ?? errMsg(e, errorFallback) });
+        const message =
+          e instanceof WordedFailure
+            ? e.message
+            : (describeError?.(e) ?? errMsg(e, fallback ?? errorFallback));
+        dispatch({ type: 'fail', message });
       },
     );
   }, []);

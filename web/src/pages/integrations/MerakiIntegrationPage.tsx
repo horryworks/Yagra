@@ -60,6 +60,9 @@ import { merakiOrgPath } from '../../lib/entityHref';
 import { MerakiSyncButton, MerakiSyncStatus } from './MerakiSyncStatus';
 import { useSyncWatch } from './useSyncWatch';
 import { useMerakiSync } from './useMerakiSync';
+import { done, step } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
+import { FormError, FormFooter } from '../../components/ui/FormFooter';
 
 /** Add one or more organizations under a shared read-only API key (discover → multi-select).
  *
@@ -88,8 +91,15 @@ function AddOrgModal({
   const [baseUrl, setBaseUrl] = useState<string>(DEFAULT_MERAKI_BASE_URL);
   const [orgs, setOrgs] = useState<MerakiOrgOption[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Two steps on one form: finding the organizations writes nothing and moves the dialog on;
+  // adding them closes it.
+  const form = useSubmit({
+    errorFallback: t('meraki.err.addOrgs'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   // The one key field both requests carry. Spread into each body rather than read from the two
   // pieces of state, so a key typed before switching to a saved one cannot ride along.
@@ -111,16 +121,15 @@ function AddOrgModal({
 
   const discover = () => {
     if (!key) return;
-    setBusy(true);
-    setError(null);
-    api
-      .merakiDiscover({ ...key, base_url: baseUrl })
-      .then((list) => {
-        setOrgs(list);
-        setSelected(new Set(selectableOrgIds(list)));
-      })
-      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.discover'))))
-      .finally(() => setBusy(false));
+    form.submit(
+      () =>
+        api.merakiDiscover({ ...key, base_url: baseUrl }).then((list) => {
+          setOrgs(list);
+          setSelected(new Set(selectableOrgIds(list)));
+          return step();
+        }),
+      t('meraki.err.discover'),
+    );
   };
 
   const toggle = (id: string) =>
@@ -133,18 +142,11 @@ function AddOrgModal({
 
   const create = () => {
     if (!key) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createMerakiOrgs({ ...key, base_url: baseUrl, org_ids: [...selected] })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('meraki.err.addOrgs')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createMerakiOrgs({ ...key, base_url: baseUrl, org_ids: [...selected] })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -152,20 +154,23 @@ function AddOrgModal({
       title={t('meraki.addOrg.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          {orgs === null ? (
-            <Button variant="primary" onClick={discover} disabled={key === null || busy}>
-              {t('meraki.addOrg.find')}
-            </Button>
-          ) : (
-            <Button variant="primary" onClick={create} disabled={selected.size === 0 || busy}>
-              {t('meraki.addOrg.add', { count: selected.size })}
-            </Button>
-          )}
-        </>
+        orgs === null ? (
+          <FormFooter
+            form={form}
+            onClose={onClose}
+            onSubmit={discover}
+            submitLabel={t('meraki.addOrg.find')}
+            canSubmit={key !== null}
+          />
+        ) : (
+          <FormFooter
+            form={form}
+            onClose={onClose}
+            onSubmit={create}
+            submitLabel={t('meraki.addOrg.add', { count: selected.size })}
+            canSubmit={selected.size > 0}
+          />
+        )
       }
     >
       {orgs === null ? (
@@ -269,7 +274,7 @@ function AddOrgModal({
           </div>
         </>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -287,8 +292,13 @@ function NetworksModal({
   const { t } = useTranslation('system');
   const [networks, setNetworks] = useState<MerakiNetwork[] | null>(null);
   const [monitored, setMonitored] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('meraki.err.saveScope'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   useEffect(() => {
     api
@@ -297,7 +307,7 @@ function NetworksModal({
         setNetworks(nets);
         setMonitored(new Set(nets.filter((n) => n.monitored).map((n) => n.network_id)));
       })
-      .catch((e: unknown) => setError(errMsg(e, t('meraki.err.loadNetworks'))));
+      .catch((e: unknown) => form.refuse(errMsg(e, t('meraki.err.loadNetworks'))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org.id]);
 
@@ -313,20 +323,13 @@ function NetworksModal({
     if (!networks) return;
     const on = networks.filter((n) => monitored.has(n.network_id)).map((n) => n.network_id);
     const off = networks.filter((n) => !monitored.has(n.network_id)).map((n) => n.network_id);
-    setBusy(true);
-    setError(null);
-    Promise.all([
-      on.length ? api.setMerakiNetworksMonitored(org.id, on, true) : Promise.resolve(),
-      off.length ? api.setMerakiNetworksMonitored(org.id, off, false) : Promise.resolve(),
-    ])
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('meraki.err.saveScope')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      Promise.all([
+        on.length ? api.setMerakiNetworksMonitored(org.id, on, true) : Promise.resolve(),
+        off.length ? api.setMerakiNetworksMonitored(org.id, off, false) : Promise.resolve(),
+      ])
+        .then(() => done()),
+    );
   };
 
   return (
@@ -334,14 +337,13 @@ function NetworksModal({
       title={t('meraki.networks.title', { name: org.name })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy || !networks}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={!!networks}
+        />
       }
     >
       <p className="modal-hint">{t('meraki.networks.hint')}</p>
@@ -364,7 +366,7 @@ function NetworksModal({
           ))}
         </div>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -400,8 +402,13 @@ function CadenceModal({
   };
   const rps = parseTargetRps(targetRps);
   const valid = Object.values(parsed).every((v) => v !== null) && rps !== null;
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('meraki.err.saveCadence'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const toggleTier = (tier: string) =>
     setTiers((s) => {
@@ -413,27 +420,20 @@ function CadenceModal({
 
   const save = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .setMerakiOrgCadence(org.id, {
-        availability_secs: parsed.availability!,
-        uplink_secs: parsed.uplink!,
-        traffic_secs: parsed.traffic!,
-        inventory_secs: parsed.inventory!,
-        switch_ports_secs: parsed.switch_ports!,
-        wireless_secs: parsed.wireless!,
-        enabled_tiers: tiersToSave(tiers),
-        target_rps: rps!,
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('meraki.err.saveCadence')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .setMerakiOrgCadence(org.id, {
+          availability_secs: parsed.availability!,
+          uplink_secs: parsed.uplink!,
+          traffic_secs: parsed.traffic!,
+          inventory_secs: parsed.inventory!,
+          switch_ports_secs: parsed.switch_ports!,
+          wireless_secs: parsed.wireless!,
+          enabled_tiers: tiersToSave(tiers),
+          target_rps: rps!,
+        })
+        .then(() => done()),
+    );
   };
 
   const numField = (
@@ -481,14 +481,13 @@ function CadenceModal({
       title={t('meraki.cadence.title', { name: org.name })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy || !valid}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -529,7 +528,7 @@ function CadenceModal({
         rps !== null,
         `0–${CADENCE_TARGET_RPS_MAX}`,
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

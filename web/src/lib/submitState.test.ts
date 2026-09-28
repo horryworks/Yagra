@@ -5,6 +5,7 @@ import {
   done,
   initialSubmitState,
   partialOutcome,
+  step,
   submitReducer,
   type SubmitEvent,
   type SubmitState,
@@ -34,6 +35,14 @@ describe('submitReducer', () => {
     // A retry that then fails outright does not un-land the first write.
     const retried = run([{ type: 'start' }, { type: 'fail', message: 'down' }], partial);
     expect(retried.settled).toBe(true);
+  });
+
+  it('a step that wrote nothing frees the dialog and leaves Cancel as it was', () => {
+    expect(run([{ type: 'start' }, { type: 'outcome', outcome: step() }])).toEqual({
+      busy: false,
+      error: null,
+      settled: false,
+    });
   });
 
   it('a refusal the dialog makes itself sends nothing and says why', () => {
@@ -86,21 +95,15 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
 
   /** Dialogs still to move. Only ever shorter; deleted when empty (increment 40). */
   const NOT_YET_MIGRATED = [
-    'components/GroupModal/GroupModal.tsx',
     'components/MoveNodeModal/MoveNodeModal.tsx',
-    'components/NodeDetail/EditNodeModal.tsx',
     'components/NodeTree/BulkTagModal.tsx',
     'components/SetPoolModal/SetPoolModal.tsx',
     'components/suppression/AddMaintenanceWindowModal.tsx',
     'components/suppression/AddMuteModal.tsx',
-    'pages/AuthSettingsPage.tsx',
     'pages/ChannelTemplateModal.tsx',
-    'pages/PollersPage.tsx',
     'pages/RoutingPage.tsx',
-    'pages/integrations/MerakiIntegrationPage.tsx',
-    'pages/integrations/NetboxIntegrationPage.tsx',
   ];
-  const CEILING = 13;
+  const CEILING = 7;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const handWritten = sources.filter(([, code]) => NEEDLE.test(code)).map(([p]) => p);

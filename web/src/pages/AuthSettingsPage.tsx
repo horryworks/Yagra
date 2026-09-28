@@ -49,6 +49,9 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './AuthSettingsPage.css';
 import { asRole } from './roleMapForm';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 
 /** One editable IdP-group → role mapping row. */
@@ -112,8 +115,13 @@ function ProviderModal({
   );
   const [defaultRole, setDefaultRole] = useState<Role | ''>(asRole(provider?.default_role) ?? '');
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const saving = useSubmit({
+    errorFallback: t('err.save'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const secretReady = !replaceSecret ? true : clientSecret !== '';
   const sentIssuer = effectiveIssuer(kind, issuerParam, issuer);
@@ -141,38 +149,30 @@ function ProviderModal({
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
-    const role_map: Record<string, Role> = {};
-    for (const r of rows) {
-      const g = r.group.trim();
-      if (g) role_map[g] = r.role;
-    }
-    const body: OidcProviderInput = {
-      name: name.trim(),
-      kind,
-      issuer: sentIssuer,
-      client_id: clientId.trim(),
-      ...(replaceSecret ? { client_secret: clientSecret } : {}),
-      redirect_uri: redirectUri.trim(),
-      scopes: scopes.trim(),
-      groups_claim: groupsClaim.trim() || 'groups',
-      role_map: roleMapToSend(kind, role_map),
-      default_role: defaultRole === '' ? null : defaultRole,
-      enabled,
-    };
-    const call = editing
-      ? api.updateOidcProvider(provider.id, body)
-      : api.createOidcProvider(body).then(() => undefined);
-    call
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.save')));
-        setBusy(false);
-      });
+    saving.submit(() => {
+      const role_map: Record<string, Role> = {};
+      for (const r of rows) {
+        const g = r.group.trim();
+        if (g) role_map[g] = r.role;
+      }
+      const body: OidcProviderInput = {
+        name: name.trim(),
+        kind,
+        issuer: sentIssuer,
+        client_id: clientId.trim(),
+        ...(replaceSecret ? { client_secret: clientSecret } : {}),
+        redirect_uri: redirectUri.trim(),
+        scopes: scopes.trim(),
+        groups_claim: groupsClaim.trim() || 'groups',
+        role_map: roleMapToSend(kind, role_map),
+        default_role: defaultRole === '' ? null : defaultRole,
+        enabled,
+      };
+      const call = editing
+        ? api.updateOidcProvider(provider.id, body)
+        : api.createOidcProvider(body);
+      return call.then(() => done());
+    });
   };
 
   return (
@@ -180,14 +180,13 @@ function ProviderModal({
       title={editing ? t('edit.title') : t('add.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={saving}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -392,7 +391,7 @@ function ProviderModal({
         <span>{t('field.enabled')}</span>
       </label>
 
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={saving} />
     </Modal>
   );
 }

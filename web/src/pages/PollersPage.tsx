@@ -74,6 +74,9 @@ import './PollersPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import { nodesPageHref } from '../lib/entityHref';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 const REFRESH_MS = 10_000;
 
@@ -171,21 +174,21 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const { t } = useTranslation('system');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({
+    errorFallback: t('pollers.pool.createFailed'),
+    onDone: () => {
+      onDone();
+      onClose();
+    },
+  });
   const valid = isValidNewPoolName(name);
 
   const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .createPool({ name: name.trim(), description: description.trim() || null })
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.pool.createFailed'))))
-      .finally(() => setBusy(false));
+    form.submit(() =>
+      api
+        .createPool({ name: name.trim(), description: description.trim() || null })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -193,14 +196,13 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
       title={t('pollers.pool.createTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={busy || !valid}>
-            {t('pollers.pool.createConfirm')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('pollers.pool.createConfirm')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="form-stack">
@@ -222,7 +224,7 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
             subject nobody subscribes to and discarded, a poller with no nodes simply idles. Said
             here because this is where somebody is looking (ADR-055 R6). */}
         <p className="form-hint">{t('pollers.pool.createNote')}</p>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -240,20 +242,20 @@ function EditPoolModal({
 }) {
   const { t } = useTranslation('system');
   const [description, setDescription] = useState(pool.description ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({
+    errorFallback: t('pollers.pool.editFailed'),
+    onDone: () => {
+      onDone();
+      onClose();
+    },
+  });
 
   const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .updatePool(pool.pool, { description: description.trim() || null })
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.pool.editFailed'))))
-      .finally(() => setBusy(false));
+    form.submit(() =>
+      api
+        .updatePool(pool.pool, { description: description.trim() || null })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -261,14 +263,12 @@ function EditPoolModal({
       title={t('pollers.pool.editTitle', { pool: pool.pool })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+        />
       }
     >
       <div className="form-stack">
@@ -281,7 +281,7 @@ function EditPoolModal({
           />
         </label>
         <FieldHint>{t('pollers.pool.descHint')}</FieldHint>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -308,24 +308,24 @@ function CoverPoolModal({
 }) {
   const { t } = useTranslation('system');
   const [to, setTo] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({
+    errorFallback: t('pollers.pool.coverFailed'),
+    onDone: () => {
+      onDone();
+      onClose();
+    },
+  });
 
   // Only pools that can actually poll, and never the one being covered for. Offering a pool with no
   // live poller would move the nodes from one silence to another.
   const targets = pools.filter((p) => p.pool !== pool.pool && p.live_pollers > 0);
 
   const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .takeOverPool(pool.pool, to)
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.pool.coverFailed'))))
-      .finally(() => setBusy(false));
+    form.submit(() =>
+      api
+        .takeOverPool(pool.pool, to)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -333,14 +333,13 @@ function CoverPoolModal({
       title={t('pollers.pool.coverTitle', { pool: pool.pool })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={busy || !to}>
-            {t('pollers.pool.coverConfirm')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('pollers.pool.coverConfirm')}
+          canSubmit={!!to}
+        />
       }
     >
       <div className="form-stack">
@@ -359,7 +358,7 @@ function CoverPoolModal({
         </label>
         {targets.length === 0 && <FieldHint>{t('pollers.pool.coverNoTarget')}</FieldHint>}
         <FieldHint>{t('pollers.pool.coverReversible')}</FieldHint>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -376,20 +375,20 @@ function RestorePoolModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('system');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({
+    errorFallback: t('pollers.pool.restoreFailed'),
+    onDone: () => {
+      onDone();
+      onClose();
+    },
+  });
 
   const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .restorePool(pool.pool)
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.pool.restoreFailed'))))
-      .finally(() => setBusy(false));
+    form.submit(() =>
+      api
+        .restorePool(pool.pool)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -397,20 +396,18 @@ function RestorePoolModal({
       title={t('pollers.pool.restoreTitle', { pool: pool.pool })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={busy}>
-            {t('pollers.pool.restoreConfirm')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('pollers.pool.restoreConfirm')}
+        />
       }
     >
       <div className="form-stack">
         <p>{t('pollers.pool.restoreBody', { pool: pool.pool, to: pool.covered_by ?? '' })}</p>
         <FieldHint>{t('pollers.pool.restoreHint')}</FieldHint>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -439,21 +436,21 @@ function RenamePoolModal({
   const passengers = renamePassengers(pool.pool, pollers);
   const stuck = pollers.filter((p) => p.pool === pool.pool && !pollerCanMove(p)).map((p) => p.id);
   const [name, setName] = useState(pool.pool);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({
+    errorFallback: t('pollers.pool.renameFailed'),
+    onDone: () => {
+      onDone();
+      onClose();
+    },
+  });
   const valid = isValidNewPoolName(name) && name.trim() !== pool.pool;
 
   const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .updatePool(pool.pool, { name: name.trim() })
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.pool.renameFailed'))))
-      .finally(() => setBusy(false));
+    form.submit(() =>
+      api
+        .updatePool(pool.pool, { name: name.trim() })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -466,14 +463,13 @@ function RenamePoolModal({
             {t('common:actions.close')}
           </Button>
         ) : (
-          <>
-            <Button variant="outline" onClick={onClose} disabled={busy}>
-              {t('common:actions.cancel')}
-            </Button>
-            <Button variant="primary" onClick={submit} disabled={busy || !valid}>
-              {t('pollers.pool.renameConfirm')}
-            </Button>
-          </>
+          <FormFooter
+            form={form}
+            onClose={onClose}
+            onSubmit={submit}
+            submitLabel={t('pollers.pool.renameConfirm')}
+            canSubmit={valid}
+          />
         )
       }
     >
@@ -502,7 +498,7 @@ function RenamePoolModal({
             <FieldHint>
               {t('pollers.pool.renameHint', { nodes: pool.nodes, pollers: passengers.length })}
             </FieldHint>
-            {error && <p className="form-error">{error}</p>}
+            <FormError form={form} />
           </>
         )}
       </div>
@@ -670,38 +666,37 @@ function ConfirmMoveModal({
   to,
   from,
   nodes,
-  busy,
-  error,
   onConfirm,
+  onDone,
   onClose,
 }: {
   poller: PollerInfo;
   to: string;
   from: string;
   nodes: number;
-  busy: boolean;
-  error: string | null;
-  onConfirm: (takeNodes: boolean) => void;
+  /** Makes the move. A rejection keeps the dialog open and shows the message. */
+  onConfirm: (takeNodes: boolean) => Promise<unknown>;
+  /** The move was made: close and re-read. */
+  onDone: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation('system');
   // Defaults to bringing them along, which is the answer that keeps monitoring running. The other
   // one is available and spelled out; it is not the one a distracted operator lands on.
   const [take, setTake] = useState(true);
+  const form = useSubmit({ errorFallback: t('pollers.move.failed'), onDone });
 
   return (
     <Modal
       title={t('pollers.move.confirmTitle', { id: poller.id, pool: to })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={() => onConfirm(take)} disabled={busy}>
-            {t('pollers.move.confirm')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={() => form.submit(() => onConfirm(take).then(() => done()))}
+          submitLabel={t('pollers.move.confirm')}
+        />
       }
     >
       <div className="form-stack">
@@ -730,7 +725,7 @@ function ConfirmMoveModal({
             </span>
           </span>
         </label>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -785,8 +780,7 @@ function SetAnchorModal({
 }) {
   const { t } = useTranslation('system');
   const [node, setNode] = useState<{ id: string; name: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('pollers.err.anchor'), onDone });
 
   // Resolve the current anchor's name for the picker's trigger. `getNodeNames` is the fleet-wide
   // resolver (a bounded `listNodes()` would miss an anchor outside the first page).
@@ -806,15 +800,11 @@ function SetAnchorModal({
   }, [poller.anchor_node_id]);
 
   const save = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setPollerAnchor(poller.id, node?.id ?? null)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('pollers.err.anchor')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .setPollerAnchor(poller.id, node?.id ?? null)
+        .then(() => done()),
+    );
   };
 
   return (
@@ -822,14 +812,12 @@ function SetAnchorModal({
       title={t('pollers.anchor.title', { id: poller.id })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+        />
       }
     >
       <div className="form-stack">
@@ -848,7 +836,7 @@ function SetAnchorModal({
             {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
           </p>
         )}
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -873,59 +861,57 @@ function PollerTokenModal({
   // On by default (ADR-051 Inc.4 decision 15). The site can turn it off later in its own `.env`,
   // which is the file no upgrade replaces — so this is a starting point rather than a commitment.
   const [selfUpgrade, setSelfUpgrade] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [issued, setIssued] = useState(false);
+  // Two actions on one form. Issuing downloads the archive and keeps the dialog, which then says
+  // it did; revoking closes it.
+  const form = useSubmit({
+    errorFallback: t('pollers.token.issueFailed'),
+    onDone: () => {
+      onChanged();
+      onClose();
+    },
+    onSaved: onChanged,
+  });
 
-  const issue = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .issuePollerToken(poller.id, {
-        pool: poller.pool || undefined,
-        host: host.trim() || undefined,
-        self_upgrade: selfUpgrade,
-      })
-      .then(({ blob, filename }) => {
-        saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
-        setDone(true);
-        onChanged();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.token.issueFailed'))))
-      .finally(() => setBusy(false));
-  };
+  const issue = () =>
+    form.submit(() =>
+      api
+        .issuePollerToken(poller.id, {
+          pool: poller.pool || undefined,
+          host: host.trim() || undefined,
+          self_upgrade: selfUpgrade,
+        })
+        .then(({ blob, filename }) => {
+          saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
+          setIssued(true);
+          return { kind: 'keepOpen' as const, message: null, refresh: true };
+        }),
+    );
 
-  const revoke = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .revokePollerToken(poller.id)
-      .then(() => {
-        onChanged();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.token.revokeFailed'))))
-      .finally(() => setBusy(false));
-  };
+  const revoke = () =>
+    form.submit(
+      () => api.revokePollerToken(poller.id).then(() => done()),
+      t('pollers.token.revokeFailed'),
+    );
 
   return (
     <Modal
       title={t('pollers.token.title', { id: poller.id })}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {done ? t('pollers.register.done') : t('common:actions.cancel')}
-          </Button>
-          {poller.has_token && (
-            <Button variant="danger" onClick={revoke} disabled={busy}>
-              {t('pollers.token.revoke')}
-            </Button>
-          )}
-          <Button variant="primary" onClick={issue} disabled={busy}>
-            {poller.has_token ? t('pollers.token.reissue') : t('pollers.token.issue')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={issue}
+          submitLabel={poller.has_token ? t('pollers.token.reissue') : t('pollers.token.issue')}
+          extra={
+            poller.has_token && (
+              <Button variant="danger" onClick={revoke} disabled={form.busy}>
+                {t('pollers.token.revoke')}
+              </Button>
+            )
+          }
+        />
       }
     >
       <div className="form-stack">
@@ -949,7 +935,7 @@ function PollerTokenModal({
           <input
             type="checkbox"
             checked={selfUpgrade}
-            disabled={busy}
+            disabled={form.busy}
             onChange={(e) => setSelfUpgrade(e.target.checked)}
           />
           <span>{t('pollers.token.selfUpgrade.label')}</span>
@@ -957,8 +943,8 @@ function PollerTokenModal({
         <FieldHint>{t('pollers.token.selfUpgrade.hint')}</FieldHint>
         {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
         {poller.has_token && <p className="form-hint">{t('pollers.token.reissueWarning')}</p>}
-        {done && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
-        {error && <p className="form-error">{error}</p>}
+        {issued && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -1585,7 +1571,7 @@ export function PollersPage() {
     from: string;
     nodes: number;
   } | null>(null);
-  const [moveBusy, setMoveBusy] = useState(false);
+  // The error of a move that needed no confirmation. One that did reports in its own dialog.
   const [moveError, setMoveError] = useState<string | null>(null);
 
   // 🚨 **The one place a move happens**, whichever entry point started it. The check below decides
@@ -1606,35 +1592,24 @@ export function PollersPage() {
         setConfirmMove({ poller, to, from: risk.pool, nodes: risk.nodes });
         return;
       }
-      setMoveBusy(true);
       api
         .setPollerPool(poller.id, { pool: to })
         .then(() => load())
-        .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))))
-        .finally(() => setMoveBusy(false));
+        .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))));
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is defined below and stable
     [pollers, pools, t],
   );
 
   const applyConfirmedMove = useCallback(
-    (takeNodes: boolean) => {
-      if (!confirmMove) return;
-      setMoveBusy(true);
-      setMoveError(null);
-      api
-        .setPollerPool(confirmMove.poller.id, {
-          pool: confirmMove.to,
-          on_source_empty: takeNodes ? 'move_nodes' : 'leave',
-        })
-        .then(() => {
-          setConfirmMove(null);
-          load();
-        })
-        .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))))
-        .finally(() => setMoveBusy(false));
-    },
-    [confirmMove, load, t],
+    (takeNodes: boolean) =>
+      confirmMove
+        ? api.setPollerPool(confirmMove.poller.id, {
+            pool: confirmMove.to,
+            on_source_empty: takeNodes ? 'move_nodes' : 'leave',
+          })
+        : Promise.resolve(),
+    [confirmMove],
   );
 
   // A drop is the same move as the link, so it resolves the poller and hands off immediately.
@@ -1811,9 +1786,11 @@ export function PollersPage() {
             to={confirmMove.to}
             from={confirmMove.from}
             nodes={confirmMove.nodes}
-            busy={moveBusy}
-            error={moveError}
             onConfirm={applyConfirmedMove}
+            onDone={() => {
+              setConfirmMove(null);
+              load();
+            }}
             onClose={() => setConfirmMove(null)}
           />
         )}

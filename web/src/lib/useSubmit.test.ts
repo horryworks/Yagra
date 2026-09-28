@@ -5,7 +5,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../services/api';
-import { done } from './submitState';
+import { done, WordedFailure } from './submitState';
 import { useSubmit } from './useSubmit';
 
 function deferred<T>() {
@@ -61,6 +61,14 @@ describe('useSubmit', () => {
     await waitFor(() => expect(result.current.error).toBe('keep one admin'));
     act(() => result.current.submit(() => Promise.reject(new ApiError('internal', 'boom', 500))));
     await waitFor(() => expect(result.current.error).toBe('boom'));
+  });
+
+  it('shows a failure the dialog already worded, as it is', async () => {
+    const { result } = renderHook(() =>
+      useSubmit({ errorFallback: 'x', describeError: () => 'not me', onDone: vi.fn() }),
+    );
+    act(() => result.current.submit(() => Promise.reject(new WordedFailure('stage two failed'))));
+    await waitFor(() => expect(result.current.error).toBe('stage two failed'));
   });
 
   it('a partial batch refreshes the list only when asked, and keeps the dialog', async () => {

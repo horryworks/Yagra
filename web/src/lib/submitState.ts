@@ -11,10 +11,14 @@
 export type SubmitOutcome<T = void> =
   /** Everything asked for happened. The dialog is about to close. */
   | { kind: 'done'; value: T }
-  /** Something happened, but not all of it (a batch the server applied to some of its rows). The
-   *  dialog stays open with `message`; `refresh` asks the caller to re-read the list behind it
-   *  first, when what is on screen is no longer true. */
-  | { kind: 'keepOpen'; message: string; refresh: boolean };
+  /** Something happened and the dialog stays: a batch the server applied to some of its rows
+   *  (`message` says which), or an action whose result is shown in the dialog itself (a
+   *  download, `message` null). `refresh` asks the caller to re-read the list behind it first,
+   *  when what is on screen is no longer true. */
+  | { kind: 'keepOpen'; message: string | null; refresh: boolean }
+  /** A step that wrote nothing — a lookup whose answer the dialog shows next (the organizations
+   *  a Meraki key can see). Busy ends; Cancel stays "Cancel". */
+  | { kind: 'step' };
 
 export interface SubmitState {
   /** A request is in flight — or it succeeded and the dialog is closing. */
@@ -52,8 +56,20 @@ export function submitReducer(s: SubmitState, e: SubmitEvent): SubmitState {
         // then fails outright.
         case 'keepOpen':
           return { busy: false, error: e.outcome.message, settled: true };
+        case 'step':
+          return { ...s, busy: false, error: null };
       }
   }
+}
+
+/** A failure the dialog has already put into words: thrown from a save whose answer was a
+ *  refusal but not an exception of the API's (a two-stage save that reports which stage failed).
+ *  `useSubmit` shows its message as it is. */
+export class WordedFailure extends Error {}
+
+/** See the `step` outcome. */
+export function step(): SubmitOutcome<never> {
+  return { kind: 'step' };
 }
 
 export function done(): SubmitOutcome<void>;

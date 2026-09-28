@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
 import { asGroupType, groupOptions, subtreeGroupIds } from '../../lib/nodeTree';
@@ -23,8 +23,11 @@ import {
   prefixesChanged,
   syncOwnedRows,
 } from './prefixFields';
+import { done } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { TextInput, Select, RequiredMark } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
 import './GroupModal.css';
@@ -71,8 +74,7 @@ export function GroupModal({
   const [tagDraft, setTagDraft] = useState(() => tagDraftFrom(state.group));
   /** Ranges a NetBox sync maintains — shown, never editable. */
   const syncRows = syncOwnedRows(state.group);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('err.saveGroup'), onDone: onSaved });
   const poolInvalid = !isValidPoolName(pool);
   // What this folder would inherit if its own pool is cleared. Preview only — the authority on what
   // actually polls a node is the server (`getNodeAssignment`), never this walk.
@@ -106,7 +108,7 @@ export function GroupModal({
     // leave the group saved with the pin rejected.
     const pin = geoBodyFrom(geo);
     if ('error' in pin) {
-      setError(t(`err.${pin.error}`));
+      form.refuse(t(`err.${pin.error}`));
       return;
     }
     // Same rule for the ranges: validated before any request, so a bad row costs no round trip and
@@ -114,11 +116,9 @@ export function GroupModal({
     // and the caps only — the CIDR itself is the server's to judge (see `prefixFields.ts`).
     const ranges = prefixBodyFrom(prefixRows, state.group);
     if ('error' in ranges) {
-      setError(t(`err.${ranges.error}`, { prefix: ranges.prefix ?? '' }));
+      form.refuse(t(`err.${ranges.error}`, { prefix: ranges.prefix ?? '' }));
       return;
     }
-    setBusy(true);
-    setError(null);
     // `pool` is always sent: '' clears it back to inherited (a JSON-absent field would mean
     // "unchanged" server-side and silently drop the edit).
     const body = {
@@ -127,35 +127,33 @@ export function GroupModal({
       parent_id: parent || null,
       pool: pool.trim(),
     };
-    const saved: Promise<string> = editing
-      ? api.updateNodeGroup(state.group!.id, body).then(() => state.group!.id)
-      : api.createNodeGroup(body).then((r) => r.id);
-    saved
-      // The pin is a sub-resource with its own endpoint (like placement and pool), so saving one
-      // is a second request. Skip it when the pin is untouched — on a create with no coordinates
-      // entered that is the common case.
-      .then(async (id) => {
-        if (geoChanged(geo, state.group)) await api.setNodeGroupGeo(id, pin.body);
-        // Skipped when untouched, for the reason the pin is: on a create with no ranges typed
-        // that is the common case, and an unchanged dialog should issue nothing.
-        if (prefixesChanged(prefixRows, state.group)) {
-          await api.setNodeGroupPrefixes(id, ranges.body);
-        }
-        // Same again for the labels. ⚠️ The changed-check is order-insensitive (`tagFields.ts`):
-        // the chip input appends, so a label removed and re-added would otherwise read as a change
-        // and put an audit row in for a write that alters nothing.
-        if (tagsChanged(tagDraft, state.group)) {
-          await api.setNodeGroupTags(id, tagDraft.tags, tagDraft.tagsExcluded);
-        }
-        // Handed on rather than swallowed: `onSaved` takes the id (ADR-159), and this block's own
-        // return value is what reaches it.
-        return id;
-      })
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.saveGroup')));
-        setBusy(false);
-      });
+    form.submit(() => {
+      const saved: Promise<string> = editing
+        ? api.updateNodeGroup(state.group!.id, body).then(() => state.group!.id)
+        : api.createNodeGroup(body).then((r) => r.id);
+      return saved
+        // The pin is a sub-resource with its own endpoint (like placement and pool), so saving one
+        // is a second request. Skip it when the pin is untouched — on a create with no coordinates
+        // entered that is the common case.
+        .then(async (id) => {
+          if (geoChanged(geo, state.group)) await api.setNodeGroupGeo(id, pin.body);
+          // Skipped when untouched, for the reason the pin is: on a create with no ranges typed
+          // that is the common case, and an unchanged dialog should issue nothing.
+          if (prefixesChanged(prefixRows, state.group)) {
+            await api.setNodeGroupPrefixes(id, ranges.body);
+          }
+          // Same again for the labels. ⚠️ The changed-check is order-insensitive (`tagFields.ts`):
+          // the chip input appends, so a label removed and re-added would otherwise read as a change
+          // and put an audit row in for a write that alters nothing.
+          if (tagsChanged(tagDraft, state.group)) {
+            await api.setNodeGroupTags(id, tagDraft.tags, tagDraft.tagsExcluded);
+          }
+          // Handed on rather than swallowed: `onSaved` takes the id (ADR-159), and this block's own
+          // return value is what reaches it.
+          return id;
+        })
+        .then((id) => done(id));
+    });
   };
 
   return (
@@ -163,18 +161,13 @@ export function GroupModal({
       title={editing ? t('group.edit') : t('group.add')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={!name.trim() || busy || poolInvalid || tagsInvalid}
-          >
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={!!name.trim() && !poolInvalid && !tagsInvalid}
+        />
       }
     >
       <div className="form-stack">
@@ -354,7 +347,7 @@ export function GroupModal({
               scope — naming a folder they cannot see would be worse than saying nothing. */}
           {pinnedAt ? t('group.geoInherited', { name: pinnedAt.name }) : t('group.geoHint')}
         </span>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

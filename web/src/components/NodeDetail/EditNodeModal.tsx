@@ -45,6 +45,9 @@ import {
 import { ChipInput } from '../ui/ChipInput';
 import { LABELS_MAX, labelsAreValid } from '../ui/labelRules';
 import { Badge } from '../ui/Badge';
+import { FormError, FormFooter } from '../ui/FormFooter';
+import { done, WordedFailure } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 
 export function EditNodeModal({
   node,
@@ -66,8 +69,7 @@ export function EditNodeModal({
   // What this node would inherit if its own pool were cleared — the field placeholder, so blanking
   // it is a visible choice rather than a mystery.
   const [inheritedPool, setInheritedPool] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('err.saveNode'), onDone });
   const poolInvalid = !isValidPoolName(d.pool);
   const nameInvalid = !isValidNodeName(d.name);
   const notesTooLong = !isValidNotes(d.notes);
@@ -106,25 +108,26 @@ export function EditNodeModal({
   const save = () => {
     const built = nodeEditRequest(node.kind, d);
     if ('error' in built) {
-      setError(t(`checkEdit.err.${built.error}`));
+      form.refuse(t(`checkEdit.err.${built.error}`));
       return;
     }
-    setBusy(true);
-    setError(null);
-    void sendNodeEdit(node.id, built.req).then((out) => {
-      // No `setBusy(false)` on success: it unmounts the dialog, and re-enabling the button first
-      // would open a window where a second Save is live against an already-saved node.
-      if (out.ok) return onDone();
-      const key = nodeEditErrorKey(built.req, out.stage);
-      // The partial-save sentence keeps its own wording and takes the server's reason as a clause;
-      // every other failure is wholly described by the server's message when there is one.
-      setError(
-        key === PARTIAL_SAVE_KEY
-          ? t(key, { reason: errMsg(out.error, t('err.saveNode')) })
-          : errMsg(out.error, t(key)),
-      );
-      setBusy(false);
-    });
+    form.submit(() =>
+      sendNodeEdit(node.id, built.req).then((out) => {
+        if (out.ok) return done();
+        const key = nodeEditErrorKey(built.req, out.stage);
+        // The partial-save sentence keeps its own wording and takes the server's reason as a
+        // clause — and part of the edit landed, so the dialog offers "Close". Every other failure
+        // is wholly described by the server's message when there is one.
+        if (key === PARTIAL_SAVE_KEY) {
+          return {
+            kind: 'keepOpen' as const,
+            message: t(key, { reason: errMsg(out.error, t('err.saveNode')) }),
+            refresh: false,
+          };
+        }
+        throw new WordedFailure(errMsg(out.error, t(key)));
+      }),
+    );
   };
 
   // Keyed by field rather than chained on the kind, so a new field is one entry the compiler
@@ -304,18 +307,13 @@ export function EditNodeModal({
       title={t(spec.titleKey)}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={busy || poolInvalid || nameInvalid || notesTooLong || tagsInvalid}
-          >
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={!(poolInvalid || nameInvalid || notesTooLong || tagsInvalid)}
+        />
       }
     >
       {fields.map((f, i) => {
@@ -332,7 +330,7 @@ export function EditNodeModal({
           </Fragment>
         );
       })}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
