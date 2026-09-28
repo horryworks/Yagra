@@ -307,7 +307,10 @@ impl YagraMcp {
                 Ok(f) => f,
                 Err(e) => return tool_api_error(TOOL, &e),
             };
-        let limit = p.limit.unwrap_or(100).clamp(1, 500);
+        let limit = p
+            .limit
+            .unwrap_or(100)
+            .clamp(1, crate::events::EVENT_PAGE_MAX);
         // Same store routing too, including resolving a node-name term to ids so the name never
         // enters the log store (ADR-011).
         let rows =

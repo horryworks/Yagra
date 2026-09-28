@@ -519,7 +519,7 @@ fn build_search_logsql(filter: &EventFilter, names: NameIds<'_>, limit: i64) -> 
     format!(
         "{} | sort by (_time) desc | limit {}",
         build_filter_part(filter, names),
-        limit.clamp(1, 500)
+        limit.clamp(1, crate::events::EVENT_PAGE_MAX)
     )
 }
 
@@ -546,7 +546,7 @@ fn build_stats_grouped_logsql(
     format!(
         "{}{extra} | stats by ({by}) count() as n | sort by (n) desc | limit {}",
         build_filter_part(filter, names),
-        limit.clamp(1, 500)
+        limit.clamp(1, crate::events::EVENT_PAGE_MAX)
     )
 }
 
@@ -557,7 +557,7 @@ fn build_stats_series_logsql(
     bucket_secs: i64,
     split_kind: bool,
 ) -> String {
-    let b = bucket_secs.clamp(1, 86_400);
+    let b = bucket_secs.clamp(1, crate::events::EVENT_BUCKET_SECS_MAX);
     let by = if split_kind {
         format!("_time:{b}s, kind")
     } else {
@@ -577,7 +577,7 @@ fn build_stats_series_logsql(
 
 /// `<filter> node_id:* | stats by (_time:Ns, node_id) count() as n`.
 fn build_agg_counts_by_bucket_logsql(filter: &EventFilter, bucket_secs: i64) -> String {
-    let b = bucket_secs.clamp(1, 86_400);
+    let b = bucket_secs.clamp(1, crate::events::EVENT_BUCKET_SECS_MAX);
     format!(
         "{} node_id:* | stats by (_time:{b}s, node_id) count() as n | sort by (_time) asc",
         build_filter_part(filter, NameIds::default())
@@ -611,7 +611,7 @@ fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, tier: 
         "{} matched:=\"false\" {field}:*{excluded} | stats by (kind, {field}) count() as n \
          | sort by (n) desc | limit {}",
         build_filter_part(filter, NameIds::default()),
-        limit.clamp(1, 500)
+        limit.clamp(1, crate::events::EVENT_PAGE_MAX)
     )
 }
 
@@ -637,7 +637,7 @@ fn build_agg_auth_sources_logsql(filter: &EventFilter, limit: i64) -> String {
         "{} ({}) | stats by (source_ip, node_id) count() as n | sort by (n) desc | limit {}",
         build_filter_part(filter, NameIds::default()),
         ors.join(" OR "),
-        limit.clamp(1, 500)
+        limit.clamp(1, crate::events::EVENT_PAGE_MAX)
     )
 }
 
@@ -958,7 +958,7 @@ impl LogStore for VlStore {
         // Re-sort across the tiers: each was ordered and capped on its own, so the merge is only
         // the top-N of the union once it is sorted again.
         out.sort_by_key(|s| std::cmp::Reverse(s.count));
-        out.truncate(limit.clamp(1, 500) as usize);
+        out.truncate(limit.clamp(1, crate::events::EVENT_PAGE_MAX) as usize);
         Ok(out)
     }
 
@@ -1205,7 +1205,7 @@ impl LogStore for InMemoryLogStore {
             .map(record_to_event_row)
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.at_unix_ms));
-        rows.truncate(limit.clamp(1, 500) as usize);
+        rows.truncate(limit.clamp(1, crate::events::EVENT_PAGE_MAX) as usize);
         Ok(rows)
     }
 
@@ -1252,7 +1252,7 @@ impl LogStore for InMemoryLogStore {
             })
             .collect();
         out.sort_by_key(|b| std::cmp::Reverse(b.count));
-        out.truncate(limit.clamp(1, 500) as usize);
+        out.truncate(limit.clamp(1, crate::events::EVENT_PAGE_MAX) as usize);
         Ok(out)
     }
 
@@ -1263,7 +1263,7 @@ impl LogStore for InMemoryLogStore {
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>> {
-        let b = bucket_secs.clamp(1, 86_400);
+        let b = bucket_secs.clamp(1, crate::events::EVENT_BUCKET_SECS_MAX);
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let rows = guard
             .iter()
@@ -1369,7 +1369,7 @@ impl LogStore for InMemoryLogStore {
             })
             .collect();
         out.sort_by_key(|s| std::cmp::Reverse(s.count));
-        out.truncate(limit.clamp(1, 500) as usize);
+        out.truncate(limit.clamp(1, crate::events::EVENT_PAGE_MAX) as usize);
         Ok(out)
     }
 
@@ -1405,7 +1405,7 @@ impl LogStore for InMemoryLogStore {
             })
             .collect();
         out.sort_by_key(|s| std::cmp::Reverse(s.count));
-        out.truncate(limit.clamp(1, 500) as usize);
+        out.truncate(limit.clamp(1, crate::events::EVENT_PAGE_MAX) as usize);
         Ok(out)
     }
 }

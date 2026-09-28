@@ -39,6 +39,9 @@ pub use crate::retention::DEFAULT_FLOW_DAYS as DEFAULT_FLOW_RETENTION_DAYS;
 /// (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`) is the whole surface.
 pub const DEFAULT_SYSTEM_LOG_RETENTION_DAYS: u32 = 7;
 
+/// The most rows one flow query returns — the store's own clamp and the API edge's (ADR-184).
+pub const FLOW_QUERY_LIMIT_MAX: u32 = 1000;
+
 /// One flow row to insert (a poller's per-bucket top-N record, with `node_id` resolved by core).
 #[derive(Debug, Clone)]
 pub struct FlowRow {
@@ -429,7 +432,7 @@ fn join_nums<T: std::fmt::Display>(vals: &[T]) -> String {
 /// column so the AS drill-down actually narrows the conversations (and thus the Sankey).
 fn conversations_sql(q: &FlowQuery) -> String {
     let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-    let limit = q.limit.clamp(1, 1000);
+    let limit = q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX);
     let filters = flow_filters_sql(q);
     let scope = node_scope_sql(q.node_id);
     // `any(src_as)`/`any(dst_as)` keep one row per (src,dst): grouping by AS too would split a
@@ -782,7 +785,7 @@ impl FlowStore for ChStore {
 
     async fn top_talkers(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowTalker>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-        let limit = q.limit.clamp(1, 1000);
+        let limit = q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX);
         let filters = flow_filters_sql(q);
         let scope = node_scope_sql(q.node_id);
         let sql = format!(
@@ -826,7 +829,7 @@ impl FlowStore for ChStore {
 
     async fn top_ports(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowPortAgg>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-        let limit = q.limit.clamp(1, 1000);
+        let limit = q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX);
         let filters = flow_filters_sql(q);
         let scope = node_scope_sql(q.node_id);
         let sql = format!(
@@ -874,7 +877,7 @@ impl FlowStore for ChStore {
 
     async fn top_as(&self, q: &FlowQuery, dir: AsDir) -> anyhow::Result<Vec<FlowAsAgg>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-        let limit = q.limit.clamp(1, 1000);
+        let limit = q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX);
         let col = dir.column(); // fixed identifier ("src_as" | "dst_as")
         let filters = flow_filters_sql(q);
         let scope = node_scope_sql(q.node_id);
@@ -928,7 +931,7 @@ impl FlowStore for ChStore {
 
     async fn fanout_by_src(&self, q: &FlowQuery) -> anyhow::Result<Vec<FlowFanout>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
-        let limit = q.limit.clamp(1, 1000);
+        let limit = q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX);
         let filters = flow_filters_sql(q);
         let scope = node_scope_sql(q.node_id);
         // `uniqExact` is a distinct-count no existing aggregate exposes; ordered by destination
@@ -1044,7 +1047,7 @@ impl FlowStore for InMemoryFlowStore {
             })
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
-        out.truncate(q.limit.clamp(1, 1000) as usize);
+        out.truncate(q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX) as usize);
         Ok(out)
     }
 
@@ -1080,7 +1083,7 @@ impl FlowStore for InMemoryFlowStore {
             )
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
-        out.truncate(q.limit.clamp(1, 1000) as usize);
+        out.truncate(q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX) as usize);
         Ok(out)
     }
 
@@ -1103,7 +1106,7 @@ impl FlowStore for InMemoryFlowStore {
             })
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
-        out.truncate(q.limit.clamp(1, 1000) as usize);
+        out.truncate(q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX) as usize);
         Ok(out)
     }
 
@@ -1153,7 +1156,7 @@ impl FlowStore for InMemoryFlowStore {
             })
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.bytes));
-        out.truncate(q.limit.clamp(1, 1000) as usize);
+        out.truncate(q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX) as usize);
         Ok(out)
     }
 
@@ -1209,7 +1212,7 @@ impl FlowStore for InMemoryFlowStore {
             })
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse(r.distinct_dst));
-        out.truncate(q.limit.clamp(1, 1000) as usize);
+        out.truncate(q.limit.clamp(1, FLOW_QUERY_LIMIT_MAX) as usize);
         Ok(out)
     }
 }
@@ -1217,6 +1220,30 @@ impl FlowStore for InMemoryFlowStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-184: the store and the API edge cap a flow query with the one constant.
+    #[test]
+    fn every_flow_limit_clamps_to_the_named_cap() {
+        let files = crate::module_source::crate_code();
+        let literal = regex::Regex::new(r"clamp\(1, 1_?000\)").unwrap();
+        let cap = format!("{}_QUERY_LIMIT_MAX", "FLOW");
+        let mut uses = 0;
+        for name in ["flowstore.rs", "api/flow.rs"] {
+            let code = &files
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("{name} is gone"))
+                .1;
+            let found: Vec<&str> = literal.find_iter(code).map(|m| m.as_str()).collect();
+            assert!(
+                found.is_empty(),
+                "{name} clamps with a number of its own: {found:?}"
+            );
+            uses += code.matches(cap.as_str()).count();
+        }
+        // Six in the store and one at the API edge; the in-memory fake is test-only and not counted.
+        assert!(uses >= 7, "only {uses} flow limits name the cap");
+    }
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn row(node: Uuid, src: &str, dst: &str, port: u16, proto: u8, bytes: u64, ts: i64) -> FlowRow {

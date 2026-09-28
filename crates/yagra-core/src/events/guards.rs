@@ -213,3 +213,58 @@ fn every_statement_names_a_table_its_file_declares() {
          a module full of misplaced queries as clean"
     );
 }
+
+/// Counts `needle` in each named file of the crate's production code.
+fn uses_in(files: &[(String, String)], name: &str, needle: &str) -> usize {
+    files
+        .iter()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("{name} is gone"))
+        .1
+        .matches(needle)
+        .count()
+}
+
+/// ADR-184: both event backends — and the MCP tool in front of them — cap a page and a bucket with
+/// the same two constants, never a number of their own. A cap that differed would make one query
+/// return a different number of rows depending on which store holds the events.
+#[test]
+fn both_event_backends_clamp_to_the_same_constants() {
+    let files = crate::module_source::crate_code();
+    let literal = regex::Regex::new(r"clamp\(1, [0-9_]+\)").unwrap();
+    for name in ["events/repo.rs", "logstore.rs", "mcp/tools/events.rs"] {
+        let code = &files
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name} is gone"))
+            .1;
+        let found: Vec<&str> = literal.find_iter(code).map(|m| m.as_str()).collect();
+        assert!(
+            found.is_empty(),
+            "{name} clamps with a number of its own: {found:?}"
+        );
+    }
+    let page = format!("{}_PAGE_MAX", "EVENT");
+    let bucket = format!("{}_BUCKET_SECS_MAX", "EVENT");
+    // Floors: every site this was written for still names the constant.
+    assert!(uses_in(&files, "events/repo.rs", &page) >= 4);
+    assert!(uses_in(&files, "events/repo.rs", &bucket) >= 1);
+    assert!(uses_in(&files, "logstore.rs", &page) >= 5);
+    assert!(uses_in(&files, "logstore.rs", &bucket) >= 2);
+    // The log store's in-memory fake is test-only, so `crate_code` never shows it — and it is the
+    // third implementation a test compares the other two against. Read it raw.
+    let raw = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/logstore.rs"),
+    )
+    .expect("logstore.rs is readable");
+    let fake: Vec<&str> = literal.find_iter(&raw).map(|m| m.as_str()).collect();
+    assert!(
+        fake.is_empty(),
+        "logstore.rs's fake clamps with its own number: {fake:?}"
+    );
+    assert!(
+        raw.matches(page.as_str()).count() >= 9,
+        "the fake stopped naming the page cap"
+    );
+    assert!(uses_in(&files, "mcp/tools/events.rs", &page) >= 1);
+}

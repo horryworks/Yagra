@@ -110,6 +110,14 @@ const DEDUP_CAP: usize = 4096;
 /// constant, with a test.
 pub(crate) const EVENT_METRIC_PREFIX: &str = "event:";
 
+/// The most rows one event query returns, on **both** stores (ADR-184). Written once because the
+/// PostgreSQL and VictoriaLogs paths answer the same request, and a page cap that differed between
+/// them would make the same query return a different number of rows depending on where events live.
+pub const EVENT_PAGE_MAX: i64 = 500;
+
+/// The widest histogram bucket an event aggregation accepts, in seconds (one day), on both stores.
+pub const EVENT_BUCKET_SECS_MAX: i64 = 86_400;
+
 /// TTL sweeper cadence.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 // Retention windows are no longer declared here: they are operator-configurable and live in

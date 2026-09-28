@@ -178,7 +178,9 @@ pub(crate) fn flow_window(
     (
         from.saturating_mul(1000),
         to.saturating_mul(1000),
-        limit.unwrap_or(default_limit).clamp(1, 1000),
+        limit
+            .unwrap_or(default_limit)
+            .clamp(1, crate::flowstore::FLOW_QUERY_LIMIT_MAX),
     )
 }
 

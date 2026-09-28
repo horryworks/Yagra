@@ -381,7 +381,7 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
         let rows = bind_event_filter(sqlx::query(&list_events_sql()), filter)
-            .bind(limit.clamp(1, 500))
+            .bind(limit.clamp(1, crate::events::EVENT_PAGE_MAX))
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -518,7 +518,7 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventSignatureCount>> {
         let rows = bind_event_filter(sqlx::query(&agg_unmatched_signatures_sql()), filter)
-            .bind(limit.clamp(1, 500))
+            .bind(limit.clamp(1, crate::events::EVENT_PAGE_MAX))
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -541,7 +541,7 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventAuthSource>> {
         let rows = bind_event_filter(sqlx::query(&agg_auth_sources_sql()), filter)
-            .bind(limit.clamp(1, 500))
+            .bind(limit.clamp(1, crate::events::EVENT_PAGE_MAX))
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -571,7 +571,7 @@ impl EventRepo {
     ) -> anyhow::Result<Vec<EventStatBucket>> {
         let sql = stats_grouped_sql(group);
         let rows = bind_event_filter(sqlx::query(&sql), filter)
-            .bind(limit.clamp(1, 500))
+            .bind(limit.clamp(1, crate::events::EVENT_PAGE_MAX))
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter()
@@ -629,7 +629,7 @@ impl EventRepo {
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>> {
-        let b = bucket_secs.clamp(1, 86_400);
+        let b = bucket_secs.clamp(1, crate::events::EVENT_BUCKET_SECS_MAX);
         let sql = stats_series_sql(split_kind);
         let rows = bind_event_filter(sqlx::query(&sql), filter)
             .bind(b)
