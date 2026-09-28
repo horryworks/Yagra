@@ -31,8 +31,9 @@ function isHidden(): boolean {
 
 /** Run `run` every `intervalMs` while the tab is visible; returns the stop function.
  *
- *  The one timer every polled read in the WebUI goes through — this module's shared polls,
- *  `usePolled` and `useLoad`'s `intervalMs` (ADR-184). It does **not** run `run` at start: each
+ *  The timer this module's shared polls, `usePolled` and `useLoad`'s `intervalMs` go through
+ *  (ADR-184). Not every timer in the WebUI: a few screens still run their own `setInterval`
+ *  (the node list, Upgrade, Relocation, the sync watch, `refreshTick`). It does **not** run `run` at start: each
  *  caller reads at once in its own way (on subscribe, on mount, on a dependency change), and a
  *  second immediate read here would be a duplicate request. What it does own is the hidden tab:
  *  the interval stops while hidden, and on return `run` fires at once — what is on screen is stale —

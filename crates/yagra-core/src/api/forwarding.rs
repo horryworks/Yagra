@@ -78,7 +78,8 @@ pub(super) struct ForwardDestinationBody {
     dest_kind: yagra_forward::DestKind,
     /// `host:port` of the collector.
     target: String,
-    /// Restrict to one poller pool; omitted/null = every pool.
+    /// Restrict to one poller pool; omitted/null = every pool. A pool name is letters, digits, `_`
+    /// and `-` only, at most 63 characters; anything else is refused with `invalid_pool`.
     #[serde(default)]
     pool: Option<String>,
     /// Relay the original bytes (default) rather than re-rendering from the parsed fields.
@@ -407,7 +408,7 @@ async fn list_forward_destinations(
     request_body = ForwardDestinationBody,
     responses(
         (status = 201, description = "Destination created", body = CreatedId),
-        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, rate limit, or the destination cap)", body = super::error::ErrorBody),
+        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, rate limit, or the destination cap)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 409, description = "A destination with that name already exists", body = super::error::ErrorBody),
@@ -455,7 +456,7 @@ async fn create_forward_destination(
     request_body = ForwardDestinationBody,
     responses(
         (status = 204, description = "Destination updated; an omitted secret keeps the stored one"),
-        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, or rate limit)", body = super::error::ErrorBody),
+        (status = 400, description = "Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, or rate limit)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such destination", body = super::error::ErrorBody),

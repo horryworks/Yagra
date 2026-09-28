@@ -838,7 +838,7 @@ const INTERNAL_NAMES: &[&str] = &["nats", "localhost", "127.0.0.1", "::1"];
     request_body = PollerTokenRequest,
     responses(
         (status = 200, description = "A gzipped tar archive holding the site's .env, the bus certificate, the composition and a README", content_type = "application/gzip"),
-        (status = 400, description = "The poller id is not usable as a bus identity, or no address was given and none could be derived", body = super::error::ErrorBody),
+        (status = 400, description = "The poller id is not usable as a bus identity, the pool name is not a valid subject token or is longer than 63 characters, or no address was given and none could be derived", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode, or this deployment has no bus certificate yet", body = super::error::ErrorBody),
@@ -1119,7 +1119,7 @@ struct MovePoolRequest {
     request_body = MovePoolRequest,
     responses(
         (status = 204, description = "The poller was moved"),
-        (status = 400, description = "The pool name is not a valid subject token", body = super::error::ErrorBody),
+        (status = 400, description = "The pool name is not a valid subject token (letters, digits, `_` and `-` only), or is longer than 63 characters", body = super::error::ErrorBody),
         (status = 404, description = "No such poller", body = super::error::ErrorBody),
         (status = 409, description = "The poller cannot follow a pool change, or the move would leave its current pool unmonitored and the caller did not say what to do", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),

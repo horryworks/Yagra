@@ -386,7 +386,7 @@ export function EditNodeModalById({
       }
     >
       {error ? (
-        <p className="form-error">{error}</p>
+        <FormError form={{ error }} />
       ) : (
         <p className="nd-muted">{t('common:loading')}</p>
       )}

@@ -291,7 +291,25 @@ pub(crate) fn allow(limiter: &Mutex<SourceLimiter>, source: IpAddr) -> bool {
     limiter
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .allow(source, now_unix_ms())
+        .allow(source, limiter_clock_ms())
+}
+
+/// A shared limiter for one intake (syslog + traps, or flow), started on the clock [`allow`]
+/// reads. Build every limiter here: a limiter started on the wall clock and read on the monotonic
+/// one would see every call as being in its past and never refill.
+pub(crate) fn shared_limiter(per_source: f64, global: f64) -> Arc<Mutex<SourceLimiter>> {
+    Arc::new(Mutex::new(SourceLimiter::new(
+        per_source,
+        global,
+        limiter_clock_ms(),
+    )))
+}
+
+/// The clock the edge limiters run on. Monotonic, not the wall clock: a bucket refuses to refill
+/// for a time earlier than its last one, so a wall clock stepped back by NTP or a resumed VM would
+/// stop refilling every bucket — syslog, traps and flow alike — for as long as the step.
+fn limiter_clock_ms() -> i64 {
+    yagra_common::clock::monotonic_ms()
 }
 
 /// Publish one event; failures are counted + logged (never fatal).
@@ -431,13 +449,10 @@ pub(crate) async fn start(
     // the measured drain limit. Both remain env-tunable per deployment.
     let per_source = yagra_common::env::positive("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
     let global = yagra_common::env::positive("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
-    let now_ms = yagra_common::clock::now_unix_ms();
     // One shared limiter behind a `std::sync::Mutex` (S22): its critical section is a few
     // arithmetic ops and is never held across an await, so all readers share the exact global
     // budget without async-lock overhead. Sharing (not sharding) keeps the global rate correct.
-    let limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
-        per_source, global, now_ms,
-    )));
+    let limiter = shared_limiter(per_source, global);
 
     let mut labels = Vec::new();
 
@@ -510,7 +525,23 @@ mod tests {
     use yagra_bus::InMemoryBus;
 
     fn limiter() -> Arc<Mutex<SourceLimiter>> {
-        Arc::new(Mutex::new(SourceLimiter::new(50.0, 500.0, 0)))
+        shared_limiter(50.0, 500.0)
+    }
+
+    /// A limiter started on one clock and read on another sees every call as being in its past:
+    /// it passes its burst and then never refills. This refills only if both read the same clock.
+    /// The global bucket is the one that runs dry here, because it is the one the constructor
+    /// starts — a per-source bucket is started by `allow` itself, on `allow`'s clock.
+    #[test]
+    fn a_shared_limiter_refills_on_the_clock_it_was_started_on() {
+        let limiter = shared_limiter(1000.0, 10.0);
+        let source = IpAddr::from([192, 0, 2, 1]);
+        for i in 0..20 {
+            assert!(allow(&limiter, source), "burst event {i}");
+        }
+        assert!(!allow(&limiter, source), "the burst is spent");
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(allow(&limiter, source), "250 ms at 10/s refills two tokens");
     }
 
     /// End-to-end over a real UDP socket: datagram in → EventMsg on the bus.

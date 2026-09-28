@@ -80,8 +80,16 @@ describe('partialOutcome', () => {
  * comment quoting a footer cannot match.
  */
 describe('a dialog saves through useSubmit and draws its footer through FormFooter', () => {
+  // The second shape is the same pair spelled another way: Cancel closing through a setter and
+  // disabled on a flag with another name (`submitting`). Three dialogs slipped past the first
+  // shape alone (v0.3.35's /verify).
   const NEEDLE = new RegExp(
-    ['onClick=\\{(onClose|onCancel)\\}', 'disabled=\\{(busy|saving)\\b'].join('\\s+'),
+    [
+      ['onClick=\\{(onClose|onCancel)\\}', 'disabled=\\{(busy|saving)\\b'].join('\\s+'),
+      ['onClick=\\{[^{}]*\\}', 'disabled=\\{\\w+\\}\\s*>', "\\{t\\('[\\w:.]*[cC]ancel'\\)\\}"].join(
+        '\\s*',
+      ),
+    ].join('|'),
   );
   const HOME = 'components/ui/FormFooter.tsx';
 

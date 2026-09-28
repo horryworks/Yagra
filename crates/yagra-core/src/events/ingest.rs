@@ -83,9 +83,14 @@ async fn flush_persist(
         }
     }
     if let Some(store) = logs {
-        store.ingest_batch(buf).await;
-        metrics::counter!("yagra_events_persisted_total", "store" => "victorialogs")
-            .increment(buf.len() as u64);
+        let n = buf.len() as u64;
+        if store.ingest_batch(buf).await {
+            metrics::counter!("yagra_events_persisted_total", "store" => "victorialogs")
+                .increment(n);
+        } else {
+            metrics::counter!("yagra_events_persist_dropped_total", "reason" => "log_store_write")
+                .increment(n);
+        }
     }
     // Here and not in either store's branch: which store holds the rows depends on configuration,
     // and "who sent something no node claimed" must not (ADR-179 決定 3).

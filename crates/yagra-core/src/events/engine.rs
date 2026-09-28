@@ -171,7 +171,9 @@ impl EventEngine {
     /// operator-created sources). Called by the ingest endpoint before any DB write.
     #[must_use]
     pub fn ingest_allowed(&self, source_id: Uuid) -> bool {
-        let now_ms = now_unix_ms();
+        // Monotonic, not the wall clock: a bucket refuses to refill for a time earlier than its
+        // last one, so a wall clock stepped back would answer 429 to every source for the step.
+        let now_ms = yagra_common::clock::monotonic_ms();
         let mut buckets = self.ingest_rate.lock().expect("ingest mutex poisoned");
         buckets
             .entry(source_id)

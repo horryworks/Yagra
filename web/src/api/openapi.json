@@ -6504,7 +6504,7 @@
             }
           },
           "400": {
-            "description": "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, rate limit, or the destination cap)",
+            "description": "Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, rate limit, or the destination cap)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6589,7 +6589,7 @@
             "description": "Destination updated; an omitted secret keeps the stored one"
           },
           "400": {
-            "description": "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, or rate limit)",
+            "description": "Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, or rate limit)",
             "content": {
               "application/json": {
                 "schema": {
@@ -16536,7 +16536,7 @@
             "description": "The poller was moved"
           },
           "400": {
-            "description": "The pool name is not a valid subject token",
+            "description": "The pool name is not a valid subject token (letters, digits, `_` and `-` only), or is longer than 63 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -16635,7 +16635,7 @@
             }
           },
           "400": {
-            "description": "The poller id is not usable as a bus identity, or no address was given and none could be derived",
+            "description": "The poller id is not usable as a bus identity, the pool name is not a valid subject token or is longer than 63 characters, or no address was given and none could be derived",
             "content": {
               "application/json": {
                 "schema": {
@@ -29890,7 +29890,7 @@
               "string",
               "null"
             ],
-            "description": "Restrict to one poller pool; omitted/null = every pool."
+            "description": "Restrict to one poller pool; omitted/null = every pool. A pool name is letters, digits, `_`\nand `-` only, at most 63 characters; anything else is refused with `invalid_pool`."
           },
           "rate_limit_per_sec": {
             "type": [

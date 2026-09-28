@@ -2230,8 +2230,9 @@ pub struct PollResult {
     pub sys_descr: Option<String>,
     /// The OS / software version the device reports, resolved poller-side from `sysDescr`, a
     /// vendor MIB or ENTITY-MIB by `yagra_discovery::os_version` (ADR-138). Rides the same identity
-    /// probe as `sys_descr`, so it is present on exactly the results that probed identity and found
-    /// a version; `None` means "not probed or not found", never "the device has no version", and
+    /// probe as `sys_descr`, so it is present on exactly the results that read identity **in full**
+    /// and found a version — a light read (`identity_partial`) carries `sys_descr` and never this;
+    /// `None` means "not probed or not found", never "the device has no version", and
     /// core leaves the stored value alone on `None`. Descriptive device text — never a TSDB label.
     ///
     /// Defaulted so an N-1 poller stays compatible, and skipped when absent so every other result's

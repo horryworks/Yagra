@@ -60,14 +60,16 @@ pub(crate) fn builder(timeout: Duration, redirects: Redirects) -> reqwest::Clien
 /// Building can only fail when the TLS backend cannot start, which is not something a retry or a
 /// different option changes. The fallback is therefore a second attempt that **keeps the redirect
 /// policy and drops everything else**: losing a timeout is survivable, following a redirect the
-/// caller forbade is not. This is the only place in the crate a build failure falls back.
+/// caller forbade is not. If that attempt fails too, this panics rather than hand back
+/// `reqwest::Client::default()`, which follows redirects. This is the only place in the crate a
+/// build failure falls back.
 pub(crate) fn client(timeout: Duration, redirects: Redirects) -> reqwest::Client {
     builder(timeout, redirects).build().unwrap_or_else(|error| {
         tracing::error!(%error, "could not build an outbound HTTP client; retrying without a timeout");
         reqwest::Client::builder()
             .redirect(redirects.policy())
             .build()
-            .unwrap_or_default()
+            .expect("the TLS backend cannot start, so no outbound HTTP client can be built")
     })
 }
 

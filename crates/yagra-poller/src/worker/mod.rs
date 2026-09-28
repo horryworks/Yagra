@@ -6,8 +6,9 @@
 //! in-flight job — that statelessness is what lets pollers scale out and fail over (ADR-003/009).
 //! Counters are reported raw; rates are derived later (ADR-012).
 //!
-//! This file holds two things and nothing else: [`execute`], which decides **which** conversation a
-//! job wants, and the vocabulary every conversation shares ([`result`] and the stamping helpers).
+//! This file holds two things and nothing else: [`execute_reading`], which decides **which**
+//! conversation a job wants, and the vocabulary every conversation shares ([`result`] and the
+//! stamping helpers).
 //! The conversations themselves are one file each:
 //!
 //! | file | how it talks to the device |
@@ -23,7 +24,9 @@
 //!
 //! Two more files are not conversations. [`identity`] decides **when** a node's `sysDescr` and OS
 //! version are read again — hourly, on the poller, so a classified device's upgrade still shows
-//! (ADR-138). It holds a timer per node and touches nothing; `stream` asks it and `snmp` probes.
+//! (ADR-138) — and **how much** of it each poll reads: nothing, only `sysDescr` + `sysObjectID`
+//! for a node whose maker core does not know yet, or all of it (Increment 6). It holds a timer per
+//! node and touches nothing; `stream` asks it and `snmp` probes.
 //! [`table_plan`] decides **how long** a table job may run and how long a job waits for its device,
 //! from the poll interval (ADR-110 Increment 10) — arithmetic only; `interfaces` and `stream` ask it.
 //! [`row_names`] reads what a vendor table's rows are called, hourly, after a table job and inside
@@ -105,7 +108,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
     execute_reading(job, transport, at_unix_ms, IdentityRead::asked_by(job)).await
 }
 
-/// [`execute`], with how much identity to read decided by the caller — `stream` asks the cadence
+/// One job, with how much identity to read decided by the caller — `stream` asks the cadence
 /// (ADR-138 Increment 6). Only the scalar SNMP arms read it.
 pub(crate) async fn execute_reading(
     job: &PollJob,

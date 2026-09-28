@@ -115,7 +115,9 @@ pub trait LogStore: Send + Sync {
         None
     }
     /// Persist a batch of received events (best-effort — a store hiccup must not stop alerting).
-    async fn ingest_batch(&self, records: &[PersistRecord]);
+    /// Returns whether the store accepted the batch, so the caller counts a refused one as dropped
+    /// rather than as persisted.
+    async fn ingest_batch(&self, records: &[PersistRecord]) -> bool;
     /// Search the event log, newest first. See [`NameIds`] for the resolved node-name sets.
     async fn search(
         &self,
@@ -811,9 +813,9 @@ impl LogStore for VlStore {
         crate::retention::parse_retention_flag(&body)
     }
 
-    async fn ingest_batch(&self, records: &[PersistRecord]) {
+    async fn ingest_batch(&self, records: &[PersistRecord]) -> bool {
         if records.is_empty() {
-            return;
+            return true;
         }
         let mut body = String::new();
         for r in records {
@@ -837,9 +839,13 @@ impl LogStore for VlStore {
         {
             Ok(resp) if !resp.status().is_success() => {
                 tracing::warn!(status = %resp.status(), "VictoriaLogs ingest non-2xx");
+                false
             }
-            Err(e) => tracing::warn!(error = %e, "VictoriaLogs ingest request failed"),
-            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaLogs ingest request failed");
+                false
+            }
+            Ok(_) => true,
         }
     }
 
@@ -1185,11 +1191,12 @@ impl InMemoryLogStore {
 #[cfg(test)]
 #[async_trait]
 impl LogStore for InMemoryLogStore {
-    async fn ingest_batch(&self, records: &[PersistRecord]) {
+    async fn ingest_batch(&self, records: &[PersistRecord]) -> bool {
         self.records
             .lock()
             .expect("log fake mutex poisoned")
             .extend(records.iter().cloned());
+        true
     }
 
     async fn search(
@@ -2654,15 +2661,34 @@ mod tests {
         let store = VlStore::new(silent_server().await)
             .with_write_timeout(std::time::Duration::from_millis(300));
         let started = std::time::Instant::now();
-        store
-            .ingest_batch(&[record(Uuid::nil(), "link down", 0, EventAction::None)])
-            .await;
+        assert!(
+            !store
+                .ingest_batch(&[record(Uuid::nil(), "link down", 0, EventAction::None)])
+                .await,
+            "a write that timed out is reported as not accepted, so it is counted as dropped"
+        );
         assert!(!store.healthy().await);
         assert_eq!(store.retention_flag().await, None);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "three requests at 300 ms each took {:?}",
             started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_says_whether_the_store_accepted_it() {
+        // The caller counts persisted and dropped from this answer; before, every batch was
+        // counted as persisted whatever the store said.
+        let (addr, _) =
+            crate::httpfake::serve(vec![(500, String::new()), (204, String::new())]).await;
+        let store = VlStore::new(format!("http://{addr}"));
+        let batch = [record(Uuid::nil(), "link down", 0, EventAction::None)];
+        assert!(!store.ingest_batch(&batch).await, "a 500 is not accepted");
+        assert!(store.ingest_batch(&batch).await, "a 2xx is");
+        assert!(
+            store.ingest_batch(&[]).await,
+            "an empty batch has nothing to lose"
         );
     }
 

@@ -20,7 +20,7 @@
 //! limiter, and timestamp helper are reused verbatim from [`crate::listeners`].
 
 use crate::listeners::{
-    allow, contained, now_unix_ms, register_datagram_panics_at_zero, EdgeTuning,
+    allow, contained, now_unix_ms, register_datagram_panics_at_zero, shared_limiter, EdgeTuning,
 };
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -395,12 +395,7 @@ pub(crate) async fn start(
     // per-exporter, and there is one bucket cadence per poller.
     let flow_per_source = yagra_common::env::positive("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
     let flow_global = yagra_common::env::positive("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
-    let flow_now_ms = yagra_common::clock::now_unix_ms();
-    let flow_limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
-        flow_per_source,
-        flow_global,
-        flow_now_ms,
-    )));
+    let flow_limiter = shared_limiter(flow_per_source, flow_global);
     let top_n = yagra_common::env::positive("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
     let bucket_secs =
         u32::try_from(yagra_common::env::positive("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);

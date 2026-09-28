@@ -849,16 +849,13 @@ function PublicDashboardCard() {
           title={confirm ? t('publicDashboard.confirmOnTitle') : t('publicDashboard.confirmOffTitle')}
           onClose={() => setConfirm(null)}
           footer={
-            <>
-              <Button onClick={() => setConfirm(null)}>{t('common:actions.cancel')}</Button>
-              <Button
-                variant={confirm ? 'primary' : 'danger'}
-                onClick={() => apply(confirm)}
-                disabled={busy}
-              >
-                {confirm ? t('publicDashboard.turnOn') : t('publicDashboard.turnOff')}
-              </Button>
-            </>
+            <FormFooter
+              form={{ busy, settled: false }}
+              onClose={() => setConfirm(null)}
+              onSubmit={() => apply(confirm)}
+              submitLabel={confirm ? t('publicDashboard.turnOn') : t('publicDashboard.turnOff')}
+              variant={confirm ? 'primary' : 'danger'}
+            />
           }
         >
           <p className="modal-confirm-text">

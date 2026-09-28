@@ -187,7 +187,7 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
           )}
         </>
       )}
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={{ error }} />
     </Modal>
   );
 }

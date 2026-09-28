@@ -118,8 +118,7 @@ const VM_WRITERS_MAX: usize = 4;
 /// number an operator typed is worse than refusing it.
 fn vm_writer_count() -> usize {
     writer_count_from(
-        std::env::var("YAGRA_VM_WRITERS")
-            .ok()
+        yagra_common::env::nonempty("YAGRA_VM_WRITERS")
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n > 0),
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
@@ -150,8 +149,7 @@ fn writer_count_from(requested: Option<usize>, cores: usize) -> usize {
 /// among the writers) and reading them apart is how they would come to disagree.
 fn result_queue_cap() -> usize {
     queue_cap_from(
-        std::env::var("YAGRA_RESULT_QUEUE_CAP")
-            .ok()
+        yagra_common::env::nonempty("YAGRA_RESULT_QUEUE_CAP")
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n > 0),
     )

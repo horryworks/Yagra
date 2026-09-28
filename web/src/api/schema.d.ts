@@ -7797,7 +7797,10 @@ export interface components {
             filter?: components["schemas"]["FilterExpr"];
             /** @description Human label (unique, 1–120 chars). */
             name: string;
-            /** @description Restrict to one poller pool; omitted/null = every pool. */
+            /**
+             * @description Restrict to one poller pool; omitted/null = every pool. A pool name is letters, digits, `_`
+             *     and `-` only, at most 63 characters; anything else is refused with `invalid_pool`.
+             */
             pool?: string | null;
             /**
              * Format: int32
@@ -18514,7 +18517,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, rate limit, or the destination cap) */
+            /** @description Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, rate limit, or the destination cap) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -18584,7 +18587,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, or rate limit) */
+            /** @description Edge validation rejected the destination (target, kind pairing, pool name, filter, certificate, credential, or rate limit) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -26444,7 +26447,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The pool name is not a valid subject token */
+            /** @description The pool name is not a valid subject token (letters, digits, `_` and `-` only), or is longer than 63 characters */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -26525,7 +26528,7 @@ export interface operations {
                     "application/gzip": unknown;
                 };
             };
-            /** @description The poller id is not usable as a bus identity, or no address was given and none could be derived */
+            /** @description The poller id is not usable as a bus identity, the pool name is not a valid subject token or is longer than 63 characters, or no address was given and none could be derived */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -22,6 +22,7 @@ import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { FormFooter } from '../components/ui/FormFooter';
 import { Badge } from '../components/ui/Badge';
 import { ProgressBar } from '../components/ui/ProgressBar';
 import { api, errMsg } from '../services/api';
@@ -909,21 +910,19 @@ export function UpgradePage() {
           onClose={() => setPicking(null)}
           size="wide"
           footer={
-            <>
-              <span className="upgrade-count muted">
-                {t('pick.count', { count: selected.length, total: movable.length })}
-              </span>
-              <Button onClick={() => setPicking(null)} disabled={submitting}>
-                {t('apply.cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => void submit()}
-                disabled={submitting || selected.length === 0}
-              >
-                {t('pick.confirm', { count: selected.length })}
-              </Button>
-            </>
+            <FormFooter
+              form={{ busy: submitting, settled: false }}
+              onClose={() => setPicking(null)}
+              onSubmit={() => void submit()}
+              submitLabel={t('pick.confirm', { count: selected.length })}
+              canSubmit={selected.length > 0}
+              variant="danger"
+              extra={
+                <span className="upgrade-count muted">
+                  {t('pick.count', { count: selected.length, total: movable.length })}
+                </span>
+              }
+            />
           }
         >
           <p className="upgrade-note">{t('pick.intro', { tag: picked })}</p>

@@ -16,6 +16,7 @@ import type { ReclassifyProposal, ReclassifyView } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useLoad } from '../lib/useLoad';
@@ -250,19 +251,17 @@ export function ReclassifyPage() {
           title={t('reclassify.confirm.title', { count: selected.size })}
           onClose={() => setConfirming(false)}
           footer={
-            <>
-              <Button variant="outline" onClick={() => setConfirming(false)} disabled={busy}>
-                {t('common:actions.cancel')}
-              </Button>
-              <Button variant="primary" onClick={apply} disabled={busy}>
-                {t('reclassify.confirm.submit')}
-              </Button>
-            </>
+            <FormFooter
+              form={{ busy, settled: false }}
+              onClose={() => setConfirming(false)}
+              onSubmit={apply}
+              submitLabel={t('reclassify.confirm.submit')}
+            />
           }
         >
           <p>{t('reclassify.confirm.body')}</p>
           <p>{t('reclassify.confirm.stops')}</p>
-          {error && <p className="form-error">{error}</p>}
+          <FormError form={{ error }} />
         </Modal>
       )}
     </div>
