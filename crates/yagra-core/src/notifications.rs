@@ -33,25 +33,12 @@ pub enum ChannelKind {
     Jsm,
 }
 
-impl ChannelKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            ChannelKind::Webhook => "webhook",
-            ChannelKind::Email => "email",
-            ChannelKind::PagerDuty => "pagerduty",
-            ChannelKind::Jsm => "jsm",
-        }
-    }
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "webhook" => Some(ChannelKind::Webhook),
-            "email" => Some(ChannelKind::Email),
-            "pagerduty" => Some(ChannelKind::PagerDuty),
-            "jsm" => Some(ChannelKind::Jsm),
-            _ => None,
-        }
-    }
-}
+crate::stored_enum::token_enum!(ChannelKind, [
+    Webhook => "webhook",
+    Email => "email",
+    PagerDuty => "pagerduty",
+    Jsm => "jsm",
+]);
 
 /// The (secret) connection config for a channel — sealed at rest, never returned by the API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -137,15 +124,6 @@ pub struct RoutingRule {
     pub channel_ids: Vec<Uuid>,
 }
 
-/// Render a severity to its snake_case DB token.
-fn severity_str(s: Severity) -> &'static str {
-    match s {
-        Severity::Info => "info",
-        Severity::Warning => "warning",
-        Severity::Critical => "critical",
-    }
-}
-
 /// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
 fn parse_severity(s: Option<String>) -> Option<Severity> {
     s.as_deref().and_then(Severity::from_token)
@@ -187,7 +165,7 @@ impl NotificationRepo {
                 Ok(ChannelSummary {
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
-                    kind: ChannelKind::parse(&kind).unwrap_or(ChannelKind::Webhook),
+                    kind: ChannelKind::from_token(&kind).unwrap_or(ChannelKind::Webhook),
                     enabled: row.try_get("enabled")?,
                     subject_template: row.try_get("subject_template")?,
                     body_template: row.try_get("body_template")?,
@@ -337,7 +315,7 @@ impl NotificationRepo {
         )
         .bind(id)
         .bind(name)
-        .bind(severity.map(severity_str))
+        .bind(severity.map(|s| s.as_str()))
         .bind(channel_ids)
         .execute(&self.pool)
         .await?;
@@ -424,10 +402,10 @@ mod tests {
         assert_eq!(back.kind(), ChannelKind::Jsm);
 
         assert_eq!(
-            ChannelKind::parse("pagerduty"),
+            ChannelKind::from_token("pagerduty"),
             Some(ChannelKind::PagerDuty)
         );
-        assert_eq!(ChannelKind::parse("jsm"), Some(ChannelKind::Jsm));
+        assert_eq!(ChannelKind::from_token("jsm"), Some(ChannelKind::Jsm));
         assert_eq!(ChannelKind::PagerDuty.as_str(), "pagerduty");
         assert_eq!(ChannelKind::Jsm.as_str(), "jsm");
     }
@@ -440,7 +418,7 @@ mod tests {
         );
         assert_eq!(parse_severity(Some("bogus".to_owned())), None);
         assert_eq!(parse_severity(None), None);
-        assert_eq!(severity_str(Severity::Warning), "warning");
+        assert_eq!(Severity::Warning.as_str(), "warning");
     }
 
     // ── Database tests (ADR-114) ───────────────────────────────────────────────────────

@@ -45,45 +45,26 @@ pub(super) enum HealthSection {
     Upgrade,
 }
 
+crate::stored_enum::token_enum!(HealthSection, [
+    Pollers => "pollers",
+    PollerHealth => "poller_health",
+    Pools => "pools",
+    PollerNodes => "poller_nodes",
+    NodeAssignment => "node_assignment",
+    MonitoringGaps => "monitoring_gaps",
+    Dependencies => "dependencies",
+    Hosts => "hosts",
+    HostTrends => "host_trends",
+    Forwarding => "forwarding",
+    Credentials => "credentials",
+    Version => "version",
+    Deployment => "deployment",
+    Upgrade => "upgrade",
+]);
+
 impl HealthSection {
     /// Every accepted `section` value, in the order the description lists them.
-    pub(super) const NAMES: &'static [&'static str] = &[
-        "pollers",
-        "poller_health",
-        "pools",
-        "poller_nodes",
-        "node_assignment",
-        "monitoring_gaps",
-        "dependencies",
-        "hosts",
-        "host_trends",
-        "forwarding",
-        "credentials",
-        "version",
-        "deployment",
-        "upgrade",
-    ];
-
-    pub(super) fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "pollers" => Self::Pollers,
-            "poller_health" => Self::PollerHealth,
-            "pools" => Self::Pools,
-            "poller_nodes" => Self::PollerNodes,
-            "node_assignment" => Self::NodeAssignment,
-            "monitoring_gaps" => Self::MonitoringGaps,
-            "dependencies" => Self::Dependencies,
-            "hosts" => Self::Hosts,
-            "host_trends" => Self::HostTrends,
-            "forwarding" => Self::Forwarding,
-            "credentials" => Self::Credentials,
-            "version" => Self::Version,
-            "deployment" => Self::Deployment,
-            "upgrade" => Self::Upgrade,
-            _ => return None,
-        })
-    }
-
+    pub(super) const NAMES: &'static [&'static str] = Self::TOKENS;
     /// The `folded::FOLDED_READS` key for this section — the string the permission is filed under.
     pub(super) fn arg(self) -> &'static str {
         match self {
@@ -105,7 +86,7 @@ impl HealthSection {
     }
 }
 
-/// The refusal for a `section` [`HealthSection::parse`] does not serve — see
+/// The refusal for a `section` [`HealthSection::from_token`] does not serve — see
 /// [`bad_fleet_summary_kind`] for why this is one function and not two.
 ///
 /// It hands back [`HealthSection::NAMES`] rather than saying only "unknown": a model that is told
@@ -196,6 +177,43 @@ pub(super) enum ConfigKind {
     Ldap,
 }
 
+crate::stored_enum::token_enum!(ConfigKind, [
+    Thresholds => "thresholds",
+    EventRules => "event_rules",
+    EventSources => "event_sources",
+    NotificationChannels => "notification_channels",
+    RoutingRules => "routing_rules",
+    Profiles => "profiles",
+    ProfileTemplates => "profile_templates",
+    CollectionTemplates => "collection_templates",
+    TemplateItems => "template_items",
+    NodeCollection => "node_collection",
+    ClassificationRules => "classification_rules",
+    Reclassify => "reclassify",
+    DuplicateNodes => "duplicate_nodes",
+    MibCatalog => "mib_catalog",
+    MetricMeanings => "metric_meanings",
+    UrlCheck => "url_check",
+    DnsCheck => "dns_check",
+    DiscoveryCandidates => "discovery_candidates",
+    DiscoveryScan => "discovery_scan",
+    DiscoveryScans => "discovery_scans",
+    MerakiOrgs => "meraki_orgs",
+    MerakiNetworks => "meraki_networks",
+    MerakiDevices => "meraki_devices",
+    MerakiPolling => "meraki_polling",
+    NetboxServers => "netbox_servers",
+    ForwardDestinations => "forward_destinations",
+    ReportDefinitions => "report_definitions",
+    ReportSchedules => "report_schedules",
+    Retention => "retention",
+    AdjacencySettings => "adjacency_settings",
+    Llm => "llm",
+    Roles => "roles",
+    Oidc => "oidc",
+    Ldap => "ldap",
+]);
+
 impl ConfigKind {
     /// Every accepted `kind` value, in the order the description lists them.
     ///
@@ -205,86 +223,7 @@ impl ConfigKind {
     /// `get_neighbors` is a live per-node read and this is a deployment-wide policy;
     /// `report_schedules` rather than `schedules` because `list_analyses(kind="schedules")` has it.
     /// One word meaning two things across two tools is how a model comes to guess.
-    pub(super) const NAMES: &'static [&'static str] = &[
-        "thresholds",
-        "event_rules",
-        "event_sources",
-        "notification_channels",
-        "routing_rules",
-        "profiles",
-        "profile_templates",
-        "collection_templates",
-        "template_items",
-        "node_collection",
-        "classification_rules",
-        "reclassify",
-        "duplicate_nodes",
-        "mib_catalog",
-        "metric_meanings",
-        "url_check",
-        "dns_check",
-        "discovery_candidates",
-        "discovery_scan",
-        "discovery_scans",
-        "meraki_orgs",
-        "meraki_networks",
-        "meraki_devices",
-        "meraki_polling",
-        "netbox_servers",
-        "forward_destinations",
-        "report_definitions",
-        "report_schedules",
-        "retention",
-        "adjacency_settings",
-        "llm",
-        "roles",
-        "oidc",
-        "ldap",
-    ];
-
-    /// Exact match, with no default. A `kind` is the whole question here — unlike `get_topology`,
-    /// where one graph is the obvious default — so a caller who omits it or mistypes it is told,
-    /// never quietly served something else.
-    pub(super) fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "thresholds" => Self::Thresholds,
-            "event_rules" => Self::EventRules,
-            "event_sources" => Self::EventSources,
-            "notification_channels" => Self::NotificationChannels,
-            "routing_rules" => Self::RoutingRules,
-            "profiles" => Self::Profiles,
-            "profile_templates" => Self::ProfileTemplates,
-            "collection_templates" => Self::CollectionTemplates,
-            "template_items" => Self::TemplateItems,
-            "node_collection" => Self::NodeCollection,
-            "classification_rules" => Self::ClassificationRules,
-            "reclassify" => Self::Reclassify,
-            "duplicate_nodes" => Self::DuplicateNodes,
-            "mib_catalog" => Self::MibCatalog,
-            "metric_meanings" => Self::MetricMeanings,
-            "url_check" => Self::UrlCheck,
-            "dns_check" => Self::DnsCheck,
-            "discovery_candidates" => Self::DiscoveryCandidates,
-            "discovery_scan" => Self::DiscoveryScan,
-            "discovery_scans" => Self::DiscoveryScans,
-            "meraki_orgs" => Self::MerakiOrgs,
-            "meraki_networks" => Self::MerakiNetworks,
-            "meraki_devices" => Self::MerakiDevices,
-            "meraki_polling" => Self::MerakiPolling,
-            "netbox_servers" => Self::NetboxServers,
-            "forward_destinations" => Self::ForwardDestinations,
-            "report_definitions" => Self::ReportDefinitions,
-            "report_schedules" => Self::ReportSchedules,
-            "retention" => Self::Retention,
-            "adjacency_settings" => Self::AdjacencySettings,
-            "llm" => Self::Llm,
-            "roles" => Self::Roles,
-            "oidc" => Self::Oidc,
-            "ldap" => Self::Ldap,
-            _ => return None,
-        })
-    }
-
+    pub(super) const NAMES: &'static [&'static str] = Self::TOKENS;
     /// Which id this kind cannot answer without, if any.
     ///
     /// Exhaustive, so a new kind has to state whether it takes one, and **the only place that fact
@@ -367,7 +306,7 @@ impl ConfigKind {
     }
 }
 
-/// The refusal for a `kind` [`ConfigKind::parse`] does not serve — see [`bad_fleet_summary_kind`]
+/// The refusal for a `kind` [`ConfigKind::from_token`] does not serve — see [`bad_fleet_summary_kind`]
 /// for why this is one function and not two, and [`bad_health_section`] for why it lists the
 /// vocabulary.
 pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
@@ -557,7 +496,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_system_health";
-        let Some(section) = HealthSection::parse(&p.section) else {
+        let Some(section) = HealthSection::from_token(&p.section) else {
             return bad_health_section(&p.section);
         };
         // Resolve → authorize → scope → availability. The permission check sits above every store
@@ -885,7 +824,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_config";
-        let Some(kind) = ConfigKind::parse(&p.kind) else {
+        let Some(kind) = ConfigKind::from_token(&p.kind) else {
             return bad_config_kind(&p.kind);
         };
         // Resolve → authorize → scope → availability, as `get_system_health` does and for the same
@@ -1360,7 +1299,7 @@ mod tests {
     #[test]
     fn every_advertised_health_section_parses() {
         for name in HealthSection::NAMES {
-            let parsed = HealthSection::parse(name)
+            let parsed = HealthSection::from_token(name)
                 .unwrap_or_else(|| panic!("section {name} is advertised but not parsed"));
             assert_eq!(
                 parsed.arg(),
@@ -1427,11 +1366,11 @@ mod tests {
     #[test]
     fn an_unknown_health_section_is_rejected() {
         assert!(
-            HealthSection::parse("Pollers").is_none(),
+            HealthSection::from_token("Pollers").is_none(),
             "parsing is exact"
         );
-        assert!(HealthSection::parse("poller-nodes").is_none());
-        assert!(HealthSection::parse("").is_none());
+        assert!(HealthSection::from_token("poller-nodes").is_none());
+        assert!(HealthSection::from_token("").is_none());
     }
 
     /// The two sections that need an id say so instead of answering about something else.
@@ -1504,7 +1443,7 @@ mod tests {
     #[test]
     fn every_advertised_config_kind_parses() {
         for name in ConfigKind::NAMES {
-            let parsed = ConfigKind::parse(name)
+            let parsed = ConfigKind::from_token(name)
                 .unwrap_or_else(|| panic!("kind {name} is advertised but not parsed"));
             assert_eq!(
                 parsed.arg(),
@@ -1546,11 +1485,14 @@ mod tests {
     /// kind is the obvious question here.
     #[test]
     fn an_unknown_config_kind_is_rejected() {
-        assert!(ConfigKind::parse("url-check").is_none(), "parsing is exact");
-        assert!(ConfigKind::parse("Thresholds").is_none());
-        assert!(ConfigKind::parse("forwarding").is_none());
-        assert!(ConfigKind::parse("schedules").is_none());
-        assert!(ConfigKind::parse("").is_none());
+        assert!(
+            ConfigKind::from_token("url-check").is_none(),
+            "parsing is exact"
+        );
+        assert!(ConfigKind::from_token("Thresholds").is_none());
+        assert!(ConfigKind::from_token("forwarding").is_none());
+        assert!(ConfigKind::from_token("schedules").is_none());
+        assert!(ConfigKind::from_token("").is_none());
     }
 
     /// The kinds that need an id say so rather than answering about something else.

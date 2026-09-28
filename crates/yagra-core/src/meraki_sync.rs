@@ -145,50 +145,21 @@ pub enum MerakiSyncFailure {
     NoAnswer,
 }
 
-impl MerakiSyncFailure {
-    /// Every reason, for the tests that pin the token, the serde tag and the locale keys together.
-    pub const ALL: [Self; 11] = [
-        Self::Credential,
-        Self::Config,
-        Self::Auth,
-        Self::RateLimited,
-        Self::Upstream,
-        Self::Unreachable,
-        Self::Malformed,
-        Self::Truncated,
-        Self::Timeout,
-        Self::Internal,
-        Self::NoAnswer,
-    ];
-
-    /// The stored token (matches the serde tag — pinned by a test).
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Credential => "credential",
-            Self::Config => "config",
-            Self::Auth => "auth",
-            Self::RateLimited => "rate_limited",
-            Self::Upstream => "upstream",
-            Self::Unreachable => "unreachable",
-            Self::Malformed => "malformed",
-            Self::Truncated => "truncated",
-            Self::Timeout => "timeout",
-            Self::Internal => "internal",
-            Self::NoAnswer => "no_answer",
-        }
-    }
-
-    /// Read a stored token. A token this build does not know — written by a newer core — reads as
-    /// [`Self::Internal`] rather than as "no failure": the row still says the sync failed.
-    #[must_use]
-    pub fn from_token(token: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|f| f.as_str() == token)
-            .unwrap_or(Self::Internal)
-    }
-}
+// A token this build does not know — written by a newer core — reads as `Internal` rather than as
+// "no failure": the row still says the sync failed.
+crate::stored_enum::token_enum!(MerakiSyncFailure, Internal, "meraki_organizations.last_sync_error", [
+    Credential => "credential",
+    Config => "config",
+    Auth => "auth",
+    RateLimited => "rate_limited",
+    Upstream => "upstream",
+    Unreachable => "unreachable",
+    Malformed => "malformed",
+    Truncated => "truncated",
+    Timeout => "timeout",
+    Internal => "internal",
+    NoAnswer => "no_answer",
+]);
 
 impl From<MerakiFetchError> for MerakiSyncFailure {
     fn from(e: MerakiFetchError) -> Self {
@@ -1592,14 +1563,14 @@ mod tests {
 
     #[test]
     fn every_failure_round_trips_through_its_token_and_through_serde() {
-        for f in MerakiSyncFailure::ALL {
+        for &f in MerakiSyncFailure::ALL {
             let json = serde_json::to_string(&f).expect("serialize");
             assert_eq!(json, format!("\"{}\"", f.as_str()), "{f:?}");
-            assert_eq!(MerakiSyncFailure::from_token(f.as_str()), f);
+            assert_eq!(MerakiSyncFailure::from_stored(f.as_str()), f);
         }
         // A token from a newer core still reads as a failure, never as none.
         assert_eq!(
-            MerakiSyncFailure::from_token("quota_exhausted"),
+            MerakiSyncFailure::from_stored("quota_exhausted"),
             MerakiSyncFailure::Internal
         );
     }
@@ -1618,7 +1589,7 @@ mod tests {
                 mapped.as_str(),
                 "{e:?} travels as a token core reads back as something else"
             );
-            assert_eq!(MerakiSyncFailure::from_token(e.token()), mapped, "{e:?}");
+            assert_eq!(MerakiSyncFailure::from_stored(e.token()), mapped, "{e:?}");
         }
     }
 

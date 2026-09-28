@@ -126,7 +126,7 @@ fn the_config_description_names_every_kind_it_accepts() {
 fn the_config_description_names_every_permission_it_can_demand() {
     let args: Vec<&str> = ConfigKind::NAMES
         .iter()
-        .map(|n| ConfigKind::parse(n).expect("every NAME parses").arg())
+        .map(|n| ConfigKind::from_token(n).expect("every NAME parses").arg())
         .collect();
     a_description_names_exactly_the_permissions_it_demands(
         "get_config",
@@ -596,7 +596,11 @@ fn a_description_names_exactly_the_permissions_it_demands(
 fn the_health_description_names_every_permission_it_can_demand() {
     let args: Vec<&str> = HealthSection::NAMES
         .iter()
-        .map(|n| HealthSection::parse(n).expect("every NAME parses").arg())
+        .map(|n| {
+            HealthSection::from_token(n)
+                .expect("every NAME parses")
+                .arg()
+        })
         .collect();
     a_description_names_exactly_the_permissions_it_demands(
         "get_system_health",

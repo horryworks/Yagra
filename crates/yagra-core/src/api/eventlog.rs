@@ -66,7 +66,9 @@ fn kind_list() -> String {
 /// The rule outcomes a filter may name, read off the enum for the same reason as [`kind_list`].
 fn action_list() -> String {
     crate::events::EventAction::ALL
-        .map(crate::events::EventAction::as_str)
+        .iter()
+        .map(|a| a.as_str())
+        .collect::<Vec<_>>()
         .join(", ")
 }
 

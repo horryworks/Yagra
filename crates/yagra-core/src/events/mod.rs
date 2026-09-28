@@ -224,48 +224,20 @@ pub enum EventMatchKind {
     Unknown,
 }
 
+// Least → most consequential. Two parsers that want opposite failure modes: a row this build cannot
+// read is honestly `none` (`from_stored`, which is also what the log-store path returns when the
+// field is absent), but a *filter* that degrades a typo to `none` answers a different question
+// than the one asked and looks like a correct answer — so request input uses `from_token`.
+crate::stored_enum::token_enum!(EventAction, None, "events.action", [
+    None => "none",
+    Info => "info",
+    Suppressed => "suppressed",
+    Cleared => "cleared",
+    Refreshed => "refreshed",
+    Fired => "fired",
+]);
+
 impl EventAction {
-    /// Every action, least → most consequential.
-    pub const ALL: [EventAction; 6] = [
-        Self::None,
-        Self::Info,
-        Self::Suppressed,
-        Self::Cleared,
-        Self::Refreshed,
-        Self::Fired,
-    ];
-
-    /// Stable token — the `events.action` column value and the JSON tag.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Info => "info",
-            Self::Suppressed => "suppressed",
-            Self::Cleared => "cleared",
-            Self::Refreshed => "refreshed",
-            Self::Fired => "fired",
-        }
-    }
-
-    /// Parse a stored token, degrading to `None` — which is what an unreadable outcome honestly is
-    /// from this build's point of view, and is already what the log-store path returns when the
-    /// field is absent.
-    #[must_use]
-    pub fn from_stored(s: &str) -> Self {
-        Self::from_token(s).unwrap_or(Self::None)
-    }
-
-    /// Parse a token strictly, for **request** input.
-    ///
-    /// Separate from [`from_stored`](Self::from_stored) because the two want opposite failure
-    /// modes: a row this build cannot read is honestly `none`, but a *filter* that degrades a typo
-    /// to `none` answers a different question than the one asked and looks like a correct answer.
-    #[must_use]
-    pub fn from_token(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|v| v.as_str() == s)
-    }
-
     /// Whether this outcome ties the row to an alert, which is what makes it survive in PostgreSQL
     /// (the log store keeps the whole firehose; PostgreSQL keeps the alert-linked rows — ADR-024).
     #[must_use]
@@ -288,26 +260,11 @@ fn event_kind_from_stored(s: &str) -> EventKind {
     })
 }
 
-impl EventMatchKind {
-    pub const ALL: [EventMatchKind; 3] = [Self::Substring, Self::Regex, Self::Unknown];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Substring => "substring",
-            Self::Regex => "regex",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    #[must_use]
-    pub fn from_stored(s: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|v| v.as_str() == s)
-            .unwrap_or(Self::Unknown)
-    }
-}
+crate::stored_enum::token_enum!(EventMatchKind, Unknown, "event_rules.match_kind", [
+    Substring => "substring",
+    Regex => "regex",
+    Unknown => "unknown",
+]);
 
 /// One received event, as served by `GET /api/v1/events`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -677,7 +634,7 @@ mod tests {
     /// A strict token parse for request input, distinct from the lenient stored-row one.
     #[test]
     fn an_action_token_parses_strictly_for_requests_and_leniently_for_rows() {
-        for a in EventAction::ALL {
+        for &a in EventAction::ALL {
             assert_eq!(EventAction::from_token(a.as_str()), Some(a));
         }
         // A typo in a *filter* must be refused; the same string read out of a row is honestly
@@ -719,7 +676,7 @@ mod tests {
     fn every_action_round_trips_through_its_token() {
         // `as_str` writes the `events.action` column and serde's `rename_all` writes the JSON tag;
         // nothing makes the two agree, and the log-store path reads back what it wrote.
-        for a in EventAction::ALL {
+        for &a in EventAction::ALL {
             assert_eq!(EventAction::from_stored(a.as_str()), a);
             assert_eq!(
                 serde_json::to_string(&a).unwrap(),

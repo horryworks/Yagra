@@ -63,29 +63,15 @@ pub enum ProviderKind {
     Claude,
 }
 
+// Strict: an unknown provider is a config error at the API edge, never a silent fallback to a
+// different vendor. The token is also a metric label, so the set must stay closed.
+crate::stored_enum::token_enum!(ProviderKind, [
+    Vertex => "vertex",
+    Gemini => "gemini",
+    Claude => "claude",
+]);
+
 impl ProviderKind {
-    /// Stable wire/DB spelling. Used as a metric label, so the set must stay closed.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Vertex => "vertex",
-            Self::Gemini => "gemini",
-            Self::Claude => "claude",
-        }
-    }
-
-    /// Parse the stored spelling. `None` for anything else — an unknown provider is a config error
-    /// at the API edge, never a silent fallback to a different vendor.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "vertex" => Some(Self::Vertex),
-            "gemini" => Some(Self::Gemini),
-            "claude" => Some(Self::Claude),
-            _ => None,
-        }
-    }
-
     /// Whether choosing this provider sends incident context outside the operator's own cloud.
     /// Drives the warning the Settings page shows: the operator should be picking their egress
     /// boundary deliberately, not discovering it later.
@@ -200,12 +186,12 @@ mod tests {
             ProviderKind::Gemini,
             ProviderKind::Claude,
         ] {
-            assert_eq!(ProviderKind::parse(kind.as_str()), Some(kind));
+            assert_eq!(ProviderKind::from_token(kind.as_str()), Some(kind));
         }
         // An unknown value is a config error, never a silent switch to another vendor.
-        assert_eq!(ProviderKind::parse("openai"), None);
-        assert_eq!(ProviderKind::parse(""), None);
-        assert_eq!(ProviderKind::parse("Vertex"), None);
+        assert_eq!(ProviderKind::from_token("openai"), None);
+        assert_eq!(ProviderKind::from_token(""), None);
+        assert_eq!(ProviderKind::from_token("Vertex"), None);
     }
 
     #[test]

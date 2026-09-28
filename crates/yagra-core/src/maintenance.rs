@@ -67,37 +67,18 @@ pub enum WindowScope {
 /// window without carrying its id through the updater and back.
 pub const UPGRADE_SCOPE_ID: &str = "upgrade";
 
-impl WindowScope {
-    /// Parse the stored `scope_level` token.
-    ///
-    /// The fallback is over a `&str` from the database, not over this enum, so it is not the
-    /// wildcard `coding-conventions.md` bans — it is the lenient read that keeps one unrecognised
-    /// row from failing a whole page. It does mean an **older core reads a `system` window as a
-    /// profile window whose id matches no profile**, i.e. suppresses nothing. That is the safe
-    /// direction: during a rolling upgrade the old binary alerts too much rather than too little.
-    fn parse(s: &str) -> Self {
-        match s {
-            "node" => WindowScope::Node,
-            "group" => WindowScope::Group,
-            "group_id" => WindowScope::FolderGroup,
-            "system" => WindowScope::System,
-            _ => WindowScope::Profile,
-        }
-    }
-
-    /// The stored token, which must match the serde tag — the column and the JSON field are
-    /// produced by two different mechanisms (testing.md).
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WindowScope::Node => "node",
-            WindowScope::Profile => "profile",
-            WindowScope::Group => "group",
-            WindowScope::FolderGroup => "group_id",
-            WindowScope::System => "system",
-        }
-    }
-}
+// The stored `scope_level` token. The fallback is over a `&str` from the database, not over this
+// enum, so it is not the wildcard `coding-conventions.md` bans — it is the lenient read that keeps
+// one unrecognised row from failing a whole page. It does mean an **older core reads a `system`
+// window as a profile window whose id matches no profile**, i.e. suppresses nothing. That is the
+// safe direction: during a rolling upgrade the old binary alerts too much rather than too little.
+crate::stored_enum::token_enum!(WindowScope, Profile, "maintenance_windows.scope_level", [
+    Node => "node",
+    Profile => "profile",
+    Group => "group",
+    FolderGroup => "group_id",
+    System => "system",
+]);
 
 /// Whether a mute targets a single node or a whole folder group (recursive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -107,14 +88,10 @@ pub enum MuteScope {
     Group,
 }
 
-impl MuteScope {
-    fn parse(s: &str) -> Self {
-        match s {
-            "group" => MuteScope::Group,
-            _ => MuteScope::Node,
-        }
-    }
-}
+crate::stored_enum::token_enum!(MuteScope, Node, "mutes.scope_kind", [
+    Node => "node",
+    Group => "group",
+]);
 
 /// Which kind of suppression a node has been released from.
 ///
@@ -128,30 +105,13 @@ pub enum ExemptionKind {
     Mute,
 }
 
-impl ExemptionKind {
-    /// The stored token, which must match the serde tag — the column and the JSON field are
-    /// produced by two different mechanisms (`testing.md`), and a disagreement means rows the
-    /// writer produces are rows the reader cannot parse.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ExemptionKind::Maintenance => "maintenance",
-            ExemptionKind::Mute => "mute",
-        }
-    }
-
-    /// Parse the stored token. Like [`WindowScope::parse`] this is lenient over a `&str` from the
-    /// database rather than a wildcard over this enum: one unrecognised row must not fail a whole
-    /// page. It falls back to `Maintenance` — the narrower of the two, since a mute-only exemption
-    /// read as a maintenance one releases a node from planned suppression it was already visible
-    /// in, rather than silently un-muting notifications nobody asked to hear.
-    fn parse(s: &str) -> Self {
-        match s {
-            "mute" => ExemptionKind::Mute,
-            _ => ExemptionKind::Maintenance,
-        }
-    }
-}
+// Falls back to `Maintenance` — the narrower of the two, since a mute-only exemption read as a
+// maintenance one releases a node from planned suppression it was already visible in, rather than
+// silently un-muting notifications nobody asked to hear.
+crate::stored_enum::token_enum!(ExemptionKind, Maintenance, "exemptions.kind", [
+    Maintenance => "maintenance",
+    Mute => "mute",
+]);
 
 /// A node released from an inherited suppression, until the suppression it was carved out of ends.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -222,7 +182,7 @@ impl MaintenanceRepo {
                 Ok(StoredWindow {
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
-                    level: WindowScope::parse(&row.try_get::<String, _>("scope_level")?),
+                    level: WindowScope::from_stored(&row.try_get::<String, _>("scope_level")?),
                     scope_id: row.try_get("scope_id")?,
                     starts_at: starts.to_rfc3339(),
                     ends_at: ends.to_rfc3339(),
@@ -402,7 +362,7 @@ impl MaintenanceRepo {
         rows.into_iter()
             .map(|row| {
                 Ok((
-                    WindowScope::parse(&row.try_get::<String, _>("scope_level")?),
+                    WindowScope::from_stored(&row.try_get::<String, _>("scope_level")?),
                     row.try_get("scope_id")?,
                     row.try_get("ends_at")?,
                 ))
@@ -459,7 +419,7 @@ impl MaintenanceRepo {
                 let until: DateTime<Utc> = row.try_get("until_at")?;
                 Ok(StoredMute {
                     id: row.try_get("id")?,
-                    scope_kind: MuteScope::parse(&row.try_get::<String, _>("scope_kind")?),
+                    scope_kind: MuteScope::from_stored(&row.try_get::<String, _>("scope_kind")?),
                     node_id: row.try_get("node_id")?,
                     group_id: row.try_get("group_id")?,
                     check_name: row.try_get("check_name")?,
@@ -577,7 +537,7 @@ impl MaintenanceRepo {
                 let until: DateTime<Utc> = row.try_get("until_at")?;
                 Ok(StoredExemption {
                     id: row.try_get("id")?,
-                    kind: ExemptionKind::parse(&row.try_get::<String, _>("kind")?),
+                    kind: ExemptionKind::from_stored(&row.try_get::<String, _>("kind")?),
                     node_id: row.try_get("node_id")?,
                     until_at: until.to_rfc3339(),
                 })
@@ -1070,7 +1030,7 @@ mod tests {
             ("group", WindowScope::Group),
             ("group_id", WindowScope::FolderGroup),
         ] {
-            assert_eq!(WindowScope::parse(s), scope);
+            assert_eq!(WindowScope::from_stored(s), scope);
             // Serialize emits the same wire string the API edge accepts.
             assert_eq!(
                 serde_json::to_value(scope).unwrap(),
@@ -1078,14 +1038,14 @@ mod tests {
             );
         }
         // Unknown levels fall back to Profile (the broadest), never panic.
-        assert_eq!(WindowScope::parse("bogus"), WindowScope::Profile);
+        assert_eq!(WindowScope::from_stored("bogus"), WindowScope::Profile);
     }
 
     #[test]
     fn mute_scope_round_trips() {
-        assert_eq!(MuteScope::parse("group"), MuteScope::Group);
-        assert_eq!(MuteScope::parse("node"), MuteScope::Node);
-        assert_eq!(MuteScope::parse("bogus"), MuteScope::Node);
+        assert_eq!(MuteScope::from_stored("group"), MuteScope::Group);
+        assert_eq!(MuteScope::from_stored("node"), MuteScope::Node);
+        assert_eq!(MuteScope::from_stored("bogus"), MuteScope::Node);
         assert_eq!(
             serde_json::to_value(MuteScope::Group).unwrap(),
             serde_json::Value::String("group".to_owned())
@@ -1104,7 +1064,7 @@ mod tests {
             ("maintenance", ExemptionKind::Maintenance),
             ("mute", ExemptionKind::Mute),
         ] {
-            assert_eq!(ExemptionKind::parse(s), kind);
+            assert_eq!(ExemptionKind::from_stored(s), kind);
             assert_eq!(kind.as_str(), s);
             // The column token and the JSON tag come from two different mechanisms; a
             // disagreement means rows this writes are rows it cannot read back.
@@ -1113,7 +1073,10 @@ mod tests {
                 serde_json::Value::String(s.to_owned())
             );
         }
-        assert_eq!(ExemptionKind::parse("bogus"), ExemptionKind::Maintenance);
+        assert_eq!(
+            ExemptionKind::from_stored("bogus"),
+            ExemptionKind::Maintenance
+        );
     }
 
     #[test]

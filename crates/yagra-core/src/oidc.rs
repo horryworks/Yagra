@@ -195,34 +195,16 @@ pub enum OidcProviderKind {
     Generic,
 }
 
-impl OidcProviderKind {
-    /// Every variant. Load-bearing: [`Self::from_token`] is derived from it, so a product added
-    /// here without a token is a test failure rather than a row that silently reads as generic.
-    pub const ALL: [Self; 4] = [Self::Entra, Self::Okta, Self::Google, Self::Generic];
-
-    /// The token stored in `oidc_providers.kind`.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Entra => "entra",
-            Self::Okta => "okta",
-            Self::Google => "google",
-            Self::Generic => "generic",
-        }
-    }
-
-    /// Read a stored token. **Deliberately total**: a value this binary has never heard of — a row
-    /// written by a newer core — reads as [`Self::Generic`] rather than failing the row and taking
-    /// the whole provider list down with it. Same call as `LinkSource` (ADR-043), and the reason
-    /// migration 0077 carries no `CHECK`.
-    #[must_use]
-    pub fn from_token(s: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|k| k.as_str() == s)
-            .unwrap_or(Self::Generic)
-    }
-}
+// **Deliberately total** on the way in: a value this binary has never heard of — a row written by
+// a newer core — reads as `Generic` rather than failing the row and taking the whole provider list
+// down with it. Same call as `LinkSource` (ADR-043), and the reason migration 0077 carries no
+// `CHECK`.
+crate::stored_enum::token_enum!(OidcProviderKind, Generic, "oidc_providers.kind", [
+    Entra => "entra",
+    Okta => "okta",
+    Google => "google",
+    Generic => "generic",
+]);
 
 /// A fully-resolved provider (client_secret decrypted, role_map/scopes parsed) — used at login.
 /// The plaintext `client_secret` lives only in memory and is never logged or returned.
@@ -555,7 +537,7 @@ impl OidcRepo {
         Ok(OidcProviderSummary {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
-            kind: OidcProviderKind::from_token(&kind),
+            kind: OidcProviderKind::from_stored(&kind),
             issuer: row.try_get("issuer")?,
             client_id: row.try_get("client_id")?,
             redirect_uri: row.try_get("redirect_uri")?,
@@ -777,8 +759,8 @@ mod tests {
     // rows the writer produces are rows the reader misreads — silently, as `generic`.
     #[test]
     fn every_provider_kind_round_trips_through_its_token_and_through_serde() {
-        for k in OidcProviderKind::ALL {
-            assert_eq!(OidcProviderKind::from_token(k.as_str()), k, "{k:?}");
+        for &k in OidcProviderKind::ALL {
+            assert_eq!(OidcProviderKind::from_stored(k.as_str()), k, "{k:?}");
             assert_eq!(
                 serde_json::to_value(k).unwrap(),
                 serde_json::Value::String(k.as_str().to_owned()),
@@ -793,10 +775,10 @@ mod tests {
     #[test]
     fn an_unknown_provider_kind_reads_as_generic() {
         assert_eq!(
-            OidcProviderKind::from_token("keycloak"),
+            OidcProviderKind::from_stored("keycloak"),
             OidcProviderKind::Generic
         );
-        assert_eq!(OidcProviderKind::from_token(""), OidcProviderKind::Generic);
+        assert_eq!(OidcProviderKind::from_stored(""), OidcProviderKind::Generic);
         // And an input that omits the field entirely — an N-1 client — says the same thing.
         let input: OidcProviderInput = serde_json::from_str(
             r#"{"name":"idp","issuer":"https://idp.example.com","client_id":"c",

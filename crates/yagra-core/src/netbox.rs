@@ -255,43 +255,15 @@ pub enum ObjectKind {
     Site,
 }
 
+// `ALL` is production since Inc.4: `NetboxPrefix::scope` turns NetBox's `scope_type` string into a
+// kind by searching it. `from_token`'s `None` is the `LinkSource` rule — an older core meeting an
+// unknown token must skip that row rather than fail the query it appeared in.
+crate::stored_enum::token_enum!(ObjectKind, [
+    Region => "region",
+    Site => "site",
+]);
+
 impl ObjectKind {
-    /// Every kind, so a mapping over the set is written once rather than as two literals.
-    ///
-    /// **Production since Inc.4**: [`NetboxPrefix::scope`] turns NetBox's `scope_type` string into
-    /// a kind by searching this, so adding a third `ObjectKind` cannot leave the prefix reader
-    /// silently unable to recognise it — the compiler demands an arm in
-    /// [`Self::netbox_scope_type`] and this array carries it to the reader.
-    ///
-    /// ⚠️ [`Self::from_str`] is still test-only, because **nothing reads `object_kind` back out of
-    /// `netbox_groups` yet** — Inc.1 writes it as half of that table's primary key (region 6 and
-    /// site 6 are different objects) and never selects on it. It is kept rather than deleted
-    /// because the token is already in a shipped table: what it must round-trip to is a fact about
-    /// stored data, and the first reader arrives with Inc.2's folder list.
-    pub const ALL: [ObjectKind; 2] = [ObjectKind::Region, ObjectKind::Site];
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            ObjectKind::Region => "region",
-            ObjectKind::Site => "site",
-        }
-    }
-
-    /// The stored token back to a kind, or `None` for one this build does not know.
-    ///
-    /// The `None` is the `LinkSource` rule: an older core meeting an unknown token must skip that
-    /// row rather than fail the query it appeared in.
-    #[cfg(test)]
-    #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "region" => Some(ObjectKind::Region),
-            "site" => Some(ObjectKind::Site),
-            _ => None,
-        }
-    }
-
     /// The folder type a NetBox object of this kind becomes. `GroupType` already had both, which
     /// is why this integration needs no new vocabulary anywhere (ADR-100 decision 4's ⭐).
     #[must_use]
@@ -690,7 +662,8 @@ impl NetboxPrefix {
             // Derived from `ObjectKind::ALL` rather than matched on literals, so a third kind
             // reaches this reader by way of the exhaustive match in `netbox_scope_type`.
             return ObjectKind::ALL
-                .into_iter()
+                .iter()
+                .copied()
                 .find(|k| k.netbox_scope_type() == t)
                 .map(|k| (k, id));
         }
@@ -1998,8 +1971,8 @@ mod tests {
 
     #[test]
     fn object_kind_round_trips_and_maps_onto_the_folder_types_that_already_existed() {
-        for k in ObjectKind::ALL {
-            assert_eq!(ObjectKind::from_str(k.as_str()), Some(k));
+        for &k in ObjectKind::ALL {
+            assert_eq!(ObjectKind::from_token(k.as_str()), Some(k));
             // `group_id` must agree with the free functions, or a caller reaching for either
             // spelling would write a different row.
             assert_eq!(k.group_id(Uuid::from_u128(3), 9), {
@@ -2009,7 +1982,7 @@ mod tests {
                 }
             });
         }
-        assert_eq!(ObjectKind::from_str("location"), None);
+        assert_eq!(ObjectKind::from_token("location"), None);
         assert_eq!(ObjectKind::Region.group_type(), GroupType::Region);
         assert_eq!(ObjectKind::Site.group_type(), GroupType::Site);
     }
@@ -3412,7 +3385,8 @@ mod tests {
     #[test]
     fn every_object_kind_has_a_distinct_netbox_scope_type() {
         let tokens: Vec<&str> = ObjectKind::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(ObjectKind::netbox_scope_type)
             .collect();
         assert_eq!(tokens.len(), ObjectKind::ALL.len());

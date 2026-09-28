@@ -136,7 +136,7 @@ pub(crate) fn job_params(req: AnalysisRequest) -> Result<JobParams, ApiError> {
             ),
         )
     })?;
-    let scope_kind = ScopeKind::from_str(&req.scope_kind).ok_or_else(|| {
+    let scope_kind = ScopeKind::from_token(&req.scope_kind).ok_or_else(|| {
         ApiError::bad_request(
             "invalid_scope",
             format!(
@@ -272,7 +272,7 @@ fn job_target(kind: Option<ScopeKind>, id: Option<Uuid>) -> ScopeTarget {
 
 /// [`job_target`] for a stored row, whose `scope_kind` is still in its persisted text form.
 pub(crate) fn row_target(job: &AnalysisJob) -> ScopeTarget {
-    job_target(ScopeKind::from_str(&job.scope_kind), job.scope_id)
+    job_target(ScopeKind::from_token(&job.scope_kind), job.scope_id)
 }
 
 /// Refuse a run the caller may not see, as `404` rather than `403`.
@@ -893,7 +893,7 @@ pub(crate) fn scheduled_params(
 /// The schedule's own target, as a [`ScopeTarget`] — exhaustive over [`ScopeKind`], and the same
 /// reading `job_target` gives a run row.
 fn schedule_target(s: &crate::analysis::AnalysisSchedule) -> ScopeTarget {
-    job_target(ScopeKind::from_str(&s.scope_kind), s.scope_id)
+    job_target(ScopeKind::from_token(&s.scope_kind), s.scope_id)
 }
 
 /// Every analysis schedule, soonest first. Empty in skeleton mode.

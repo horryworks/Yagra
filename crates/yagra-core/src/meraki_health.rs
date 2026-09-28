@@ -209,7 +209,7 @@ impl MerakiCollectHealth {
             Some(token) => self.record_failed_in(
                 report.org,
                 report.tier,
-                MerakiSyncFailure::from_token(token),
+                MerakiSyncFailure::from_stored(token),
                 report
                     .listing
                     .as_deref()

@@ -475,7 +475,7 @@ fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) ->
         // Only a failed sync has a reason. A row written by a newer core may carry a token this
         // build does not know; `from_token` reads that as `internal`, never as "no failure".
         last_sync_error: (o.last_sync_ok == Some(false)).then(|| {
-            MerakiSyncFailure::from_token(o.last_sync_error.as_deref().unwrap_or_default())
+            MerakiSyncFailure::from_stored(o.last_sync_error.as_deref().unwrap_or_default())
         }),
         devices,
         import_devices: o.import_devices,

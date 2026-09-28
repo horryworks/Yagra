@@ -93,25 +93,12 @@ pub enum LdapSecurity {
     StartTls,
 }
 
+crate::stored_enum::token_enum!(LdapSecurity, [
+    Ldaps => "ldaps",
+    StartTls => "starttls",
+]);
+
 impl LdapSecurity {
-    /// Every mode, in display order.
-    pub const ALL: [LdapSecurity; 2] = [LdapSecurity::Ldaps, LdapSecurity::StartTls];
-
-    /// Stable token — the `ldap_config.security` value and the serde representation.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            LdapSecurity::Ldaps => "ldaps",
-            LdapSecurity::StartTls => "starttls",
-        }
-    }
-
-    /// Parse a stored token; `None` on anything else.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|m| m.as_str() == s)
-    }
-
     /// Whether the connection starts plain and is upgraded.
     #[must_use]
     const fn starttls(self) -> bool {
@@ -588,7 +575,7 @@ impl LdapRepo {
         Ok(Some(LdapConfigView {
             host: row.try_get("host")?,
             port: u16::try_from(port).unwrap_or(636),
-            security: LdapSecurity::parse(&security).unwrap_or(LdapSecurity::Ldaps),
+            security: LdapSecurity::from_token(&security).unwrap_or(LdapSecurity::Ldaps),
             ca_cert: row.try_get("ca_cert")?,
             bind_dn: row.try_get("bind_dn")?,
             has_bind_password: row.try_get("has_bind_password")?,
@@ -650,7 +637,7 @@ impl LdapRepo {
         Ok(Some(LdapConfig {
             host: row.try_get("host")?,
             port: u16::try_from(port).unwrap_or(636),
-            security: LdapSecurity::parse(&security).unwrap_or(LdapSecurity::Ldaps),
+            security: LdapSecurity::from_token(&security).unwrap_or(LdapSecurity::Ldaps),
             ca_cert: row.try_get("ca_cert")?,
             bind_dn: row.try_get("bind_dn")?,
             bind_password,
@@ -1545,14 +1532,14 @@ mod tests {
 
     #[test]
     fn every_security_mode_round_trips_through_its_token_and_through_serde() {
-        for m in LdapSecurity::ALL {
-            assert_eq!(LdapSecurity::parse(m.as_str()), Some(m));
+        for &m in LdapSecurity::ALL {
+            assert_eq!(LdapSecurity::from_token(m.as_str()), Some(m));
             assert_eq!(
                 serde_json::to_value(m).expect("serializes"),
                 serde_json::Value::String(m.as_str().to_owned())
             );
         }
-        assert_eq!(LdapSecurity::parse("plain"), None);
+        assert_eq!(LdapSecurity::from_token("plain"), None);
     }
 
     #[test]

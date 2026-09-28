@@ -206,26 +206,12 @@ pub enum SenderKind {
     Trap,
 }
 
+crate::stored_enum::token_enum!(SenderKind, [
+    Syslog => "syslog",
+    Trap => "trap",
+]);
+
 impl SenderKind {
-    /// The stable token stored in `event_senders.kind`.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            SenderKind::Syslog => "syslog",
-            SenderKind::Trap => "trap",
-        }
-    }
-
-    /// Parse a stored token back.
-    #[must_use]
-    pub fn from_token(s: &str) -> Option<Self> {
-        match s {
-            "syslog" => Some(SenderKind::Syslog),
-            "trap" => Some(SenderKind::Trap),
-            _ => None,
-        }
-    }
-
     /// The evidence source a sender of this kind becomes.
     #[must_use]
     pub const fn source(self) -> EndpointSource {

@@ -114,7 +114,7 @@ use stats::*;
 /// tick. Duplicating six lines into the seam would be a second place the frame's shape is decided.
 pub(super) fn broadcast_job(tx: &broadcast::Sender<JobFrame>, job: &AnalysisJob) {
     if let Ok(json) = serde_json::to_string(job) {
-        let kind = ScopeKind::from_str(&job.scope_kind);
+        let kind = ScopeKind::from_token(&job.scope_kind);
         let _ = tx.send((kind, job.scope_id, std::sync::Arc::from(json)));
     }
 }

@@ -193,7 +193,7 @@ impl RcaRepo {
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
         let tokens: i32 = row.try_get("max_output_tokens")?;
         Ok(Some(LlmConfigView {
-            leaves_operator_boundary: ProviderKind::parse(&provider)
+            leaves_operator_boundary: ProviderKind::from_token(&provider)
                 // An unrecognised stored value is treated as leaving the boundary: the honest
                 // default for "we are not sure where this goes" is to warn.
                 .is_none_or(ProviderKind::leaves_operator_boundary),
@@ -237,7 +237,7 @@ impl RcaRepo {
             return Ok(None);
         }
         let provider: String = row.try_get("provider")?;
-        let kind = ProviderKind::parse(&provider)
+        let kind = ProviderKind::from_token(&provider)
             .ok_or_else(|| anyhow::anyhow!("stored provider '{provider}' is not recognised"))?;
 
         // The five sealed columns move together (enforced by a CHECK); a NULL ciphertext means
@@ -454,7 +454,7 @@ fn row_to_report(row: &sqlx::postgres::PgRow) -> anyhow::Result<RcaReport> {
 /// # Errors
 /// Operator-facing text describing the first problem found.
 pub fn validate(input: &LlmConfigInput) -> Result<ProviderKind, String> {
-    let kind = ProviderKind::parse(input.provider.trim())
+    let kind = ProviderKind::from_token(input.provider.trim())
         .ok_or_else(|| format!("unknown provider '{}'", input.provider.trim()))?;
     let model = input.model.trim();
     if model.is_empty() {

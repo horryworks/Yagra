@@ -207,14 +207,14 @@ impl YagraMcp {
             "get_audit" => self.audit_in(p!(AuditParams)).await,
             "get_system_health" => {
                 let p = p!(SystemHealthParams);
-                match HealthSection::parse(&p.section) {
+                match HealthSection::from_token(&p.section) {
                     Some(section) => self.system_health_in(section, p, scope).await,
                     None => bad_health_section(&p.section),
                 }
             }
             "get_config" => {
                 let p = p!(ConfigParams);
-                match ConfigKind::parse(&p.kind) {
+                match ConfigKind::from_token(&p.kind) {
                     Some(kind) => self.config_in(kind, p, scope).await,
                     None => bad_config_kind(&p.kind),
                 }
@@ -496,11 +496,11 @@ mod tests {
             ("get_report_runs", "detail".to_owned()),
         ];
         for name in HealthSection::NAMES {
-            let s = HealthSection::parse(name).expect("NAMES parses");
+            let s = HealthSection::from_token(name).expect("NAMES parses");
             args.push(("get_system_health", s.arg().to_owned()));
         }
         for name in ConfigKind::NAMES {
-            let k = ConfigKind::parse(name).expect("NAMES parses");
+            let k = ConfigKind::from_token(name).expect("NAMES parses");
             args.push(("get_config", k.arg().to_owned()));
         }
         // The floor counts what was checked, not what was listed: a `NAMES` that stopped parsing

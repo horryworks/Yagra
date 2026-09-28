@@ -30,53 +30,18 @@ pub enum TopologyMode {
     Derived,
 }
 
+// Two parsers because the two failures want opposite answers. A bad value *submitted* must be
+// rejected so the operator learns (`from_token`; the migration deliberately carries no `CHECK`, so
+// this is the column's only validation). A bad value *stored* — a row written by a newer core, or
+// hand-edited — resolves to `Manual`, the mode that changes nothing, because the alternative is
+// that an unreadable setting decides how the fleet alerts.
+crate::stored_enum::token_enum!(TopologyMode, Manual, "app_settings.topology_mode", [
+    Manual => "manual",
+    Shadow => "shadow",
+    Derived => "derived",
+]);
+
 impl TopologyMode {
-    /// Every mode, for the coverage test below.
-    //
-    // `#[cfg(test)]` because that test is genuinely its only consumer: production parses one token
-    // at a time and never enumerates. Stating that is better than an `#[allow(dead_code)]` that
-    // reads as "someone will use this later" — and a new variant still has to be added here, or the
-    // round-trip test stops covering it.
-    #[cfg(test)]
-    pub const ALL: [TopologyMode; 3] = [
-        TopologyMode::Manual,
-        TopologyMode::Shadow,
-        TopologyMode::Derived,
-    ];
-
-    /// The stable token stored in `app_settings.topology_mode`.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            TopologyMode::Manual => "manual",
-            TopologyMode::Shadow => "shadow",
-            TopologyMode::Derived => "derived",
-        }
-    }
-
-    /// Parse a submitted token. `None` for anything else — the API edge rejects it, which is the
-    /// only validation this column has (the migration deliberately carries no `CHECK`).
-    #[must_use]
-    pub fn from_token(s: &str) -> Option<Self> {
-        match s {
-            "manual" => Some(TopologyMode::Manual),
-            "shadow" => Some(TopologyMode::Shadow),
-            "derived" => Some(TopologyMode::Derived),
-            _ => None,
-        }
-    }
-
-    /// Parse a token read back from the database, falling back to [`TopologyMode::Manual`].
-    ///
-    /// Separate from [`Self::from_token`] because the two failures want opposite answers. A bad
-    /// value *submitted* must be rejected so the operator learns. A bad value *stored* — a row
-    /// written by a newer core, or hand-edited — must resolve to the mode that changes nothing,
-    /// because the alternative is that an unreadable setting decides how the fleet alerts.
-    #[must_use]
-    pub fn from_stored(s: &str) -> Self {
-        Self::from_token(s).unwrap_or(TopologyMode::Manual)
-    }
-
     /// Whether the alert engine takes its dependency graph from the derivation.
     #[must_use]
     pub const fn uses_derived(self) -> bool {
@@ -94,7 +59,7 @@ mod tests {
 
     #[test]
     fn every_mode_round_trips_through_its_token_and_through_serde() {
-        for m in TopologyMode::ALL {
+        for &m in TopologyMode::ALL {
             assert_eq!(TopologyMode::from_token(m.as_str()), Some(m));
             assert_eq!(
                 serde_json::to_string(&m).unwrap(),

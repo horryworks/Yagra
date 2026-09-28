@@ -87,6 +87,19 @@ pub enum AuditAction {
 // by axum's `Query` rejection (plain text, naming the valid variants) rather than by the ADR-019
 // error envelope. `?limit=abc` already behaved that way. The closed union in `schema.d.ts` is worth
 // more than the envelope on a request the WebUI's own `<select>` cannot produce.
+// The wire token is the spelling `#[serde(rename_all = "lowercase")]` produces, and `from_token` is
+// **exact**, not case-insensitive: every `from_token` in this workspace is (`Severity`,
+// `NodeState`, `Direction`), and one that quietly accepted `POST` would make the vocabulary a
+// slightly different set on this endpoint than on every other one.
+crate::stored_enum::token_enum!(AuditAction, [
+    Post => "post",
+    Put => "put",
+    Patch => "patch",
+    Delete => "delete",
+    Login => "login",
+    Mcp => "mcp",
+]);
+
 impl AuditAction {
     /// The literal prefix of the `action` column this variant selects.
     ///
@@ -113,39 +126,6 @@ impl AuditAction {
             Self::Mcp => "mcp.",
         }
     }
-
-    /// Every action, in the order the WebUI lists them.
-    pub const ALL: [AuditAction; 6] = [
-        Self::Post,
-        Self::Put,
-        Self::Patch,
-        Self::Delete,
-        Self::Login,
-        Self::Mcp,
-    ];
-
-    /// The wire token — the same spelling `#[serde(rename_all = "lowercase")]` produces, which is
-    /// what makes this parse and a serde parse accept the same vocabulary.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Post => "post",
-            Self::Put => "put",
-            Self::Patch => "patch",
-            Self::Delete => "delete",
-            Self::Login => "login",
-            Self::Mcp => "mcp",
-        }
-    }
-
-    /// Parse one token from a comma-separated set parameter — an **exact** lowercase token, or
-    /// `None`. Not case-insensitive: every `from_token` in this workspace is exact (`Severity`,
-    /// `NodeState`, `Direction`), and one that quietly accepted `POST` would make the vocabulary
-    /// a slightly different set on this endpoint than on every other one.
-    #[must_use]
-    pub fn from_token(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|a| a.as_str() == s)
-    }
 }
 
 /// How an audit entry's HTTP status turned out.
@@ -162,6 +142,12 @@ pub enum AuditStatusClass {
     Server,
 }
 
+crate::stored_enum::token_enum!(AuditStatusClass, [
+    Ok => "ok",
+    Client => "client",
+    Server => "server",
+]);
+
 impl AuditStatusClass {
     /// The inclusive `[min, max]` status bounds this class selects, `None` meaning unbounded.
     ///
@@ -177,25 +163,6 @@ impl AuditStatusClass {
             Self::Client => (Some(300), Some(499)),
             Self::Server => (Some(500), None),
         }
-    }
-
-    /// Every class, in the order the WebUI lists them.
-    pub const ALL: [AuditStatusClass; 3] = [Self::Ok, Self::Client, Self::Server];
-
-    /// The wire token — the same spelling `#[serde(rename_all = "lowercase")]` produces.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Client => "client",
-            Self::Server => "server",
-        }
-    }
-
-    /// See [`AuditAction::from_token`].
-    #[must_use]
-    pub fn from_token(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|c| c.as_str() == s)
     }
 }
 
@@ -544,7 +511,8 @@ mod tests {
         };
         for status in 100..=599 {
             let matched: Vec<_> = AuditStatusClass::ALL
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|c| holds(*c, status))
                 .collect();
             assert_eq!(
@@ -583,7 +551,8 @@ mod tests {
         ];
         for (action, want) in cases {
             let got: Vec<_> = AuditAction::ALL
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|a| action.starts_with(a.sql_prefix()))
                 .collect();
             match want {
@@ -616,7 +585,7 @@ mod tests {
         // The token and the serde tag are produced by two different mechanisms — `as_str()` and
         // `#[serde(rename_all)]` — and nothing makes them agree, so a disagreement means a value the
         // WebUI sends is a value this parser rejects.
-        for a in AuditAction::ALL {
+        for &a in AuditAction::ALL {
             assert_eq!(AuditAction::from_token(a.as_str()), Some(a));
             let json = format!("\"{}\"", a.as_str());
             assert_eq!(
@@ -624,7 +593,7 @@ mod tests {
                 a
             );
         }
-        for c in AuditStatusClass::ALL {
+        for &c in AuditStatusClass::ALL {
             assert_eq!(AuditStatusClass::from_token(c.as_str()), Some(c));
             let json = format!("\"{}\"", c.as_str());
             assert_eq!(

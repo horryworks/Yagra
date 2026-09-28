@@ -175,26 +175,11 @@ pub enum ScopeKind {
     Node,
 }
 
-impl ScopeKind {
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            ScopeKind::All => "all",
-            ScopeKind::Group => "group",
-            ScopeKind::Node => "node",
-        }
-    }
-
-    #[must_use]
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "all" => Some(ScopeKind::All),
-            "group" => Some(ScopeKind::Group),
-            "node" => Some(ScopeKind::Node),
-            _ => None,
-        }
-    }
-}
+crate::stored_enum::token_enum!(ScopeKind, [
+    All => "all",
+    Group => "group",
+    Node => "node",
+]);
 
 /// The validated request to launch an analysis (parsed at the API edge from the create body).
 #[derive(Debug, Clone)]

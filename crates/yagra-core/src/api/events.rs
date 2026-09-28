@@ -466,14 +466,15 @@ const fn default_event_rule_enabled() -> bool {
 fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams<'_>, ApiError> {
     let bad = |msg: String| ApiError::bad_request("invalid_rule", msg);
     let name = super::util::bounded_name(&body.name, 120, "invalid_rule")?;
-    // Token vocabularies come from the enums' own `from_token`/`from_stored` (one source, no
-    // re-typed lists). `Unknown` is the reader's shrug for a token this build doesn't recognise —
-    // an operator cannot author a rule with it, so garbage and the literal "unknown" both reject.
-    match crate::events::EventMatchKind::from_stored(&body.match_kind) {
-        crate::events::EventMatchKind::Unknown => {
+    // Token vocabularies come from the enum's own `from_token` (one source, no re-typed lists).
+    // `Unknown` is the reader's shrug for a token this build doesn't recognise — an operator
+    // cannot author a rule with it, so garbage and the literal "unknown" both reject. The strict
+    // parser, not `from_stored`: a typo in a request is a 400, not a "newer core wrote this" warning.
+    match crate::events::EventMatchKind::from_token(&body.match_kind) {
+        None | Some(crate::events::EventMatchKind::Unknown) => {
             return Err(bad("match_kind must be substring or regex".to_owned()));
         }
-        crate::events::EventMatchKind::Substring | crate::events::EventMatchKind::Regex => {}
+        Some(crate::events::EventMatchKind::Substring | crate::events::EventMatchKind::Regex) => {}
     }
     crate::events::compile_matcher(&body.match_kind, &body.pattern)
         .map_err(|e| bad(format!("pattern: {e}")))?;
