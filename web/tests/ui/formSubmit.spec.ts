@@ -3,7 +3,8 @@
 //
 // Written before the dialogs moved onto the shared submit (ADR-184 increment 34), against the code
 // as it was, so the move is checked against what shipped rather than against what it became. The
-// one assertion the move is meant to change is marked, and changes in the increment that changes it.
+// one assertion the move was meant to change — SetPool and BulkTag saying "Cancel" after a partial
+// batch — changed in increment 39, the increment that changed it.
 //
 // Why a browser: the footer, the error line and the focus are all in `.tsx` files, which Vitest
 // does not load (`web-vitest-node`), and "the dialog stayed open" is a statement about the DOM.
@@ -93,7 +94,7 @@ test.describe('a batch the server only partly applied', () => {
     },
   });
 
-  test('pool: stays open and names both numbers', async ({ page }) => {
+  test('pool: stays open, names both numbers, and offers Close', async ({ page }) => {
     await checkThree(page);
     await page.getByRole('button', { name: 'More…' }).click();
     await page.getByRole('menuitem', { name: 'Poller pool…' }).click();
@@ -103,14 +104,14 @@ test.describe('a batch the server only partly applied', () => {
 
     await expect(dialog.locator('.form-error')).toContainText('1 of 3');
     await expect(dialog).toBeVisible();
-    // ⚠️ Today's wording. Increment 39 turns this into "Close": a write happened, and "Cancel"
-    // reads as undoing it.
+    // "Close", not "Cancel": part of the batch has landed, and "Cancel" reads as undoing it. This
+    // said "Cancel" until ADR-184 increment 39 (F3).
     await expect(
-      dialog.locator('.modal-footer').getByRole('button', { name: 'Cancel', exact: true }),
+      dialog.locator('.modal-footer').getByRole('button', { name: 'Close', exact: true }),
     ).toBeEnabled();
   });
 
-  test('tags: stays open and names both numbers', async ({ page }) => {
+  test('tags: stays open, names both numbers, and offers Close', async ({ page }) => {
     await checkThree(page);
     await page.getByRole('button', { name: 'Tag…' }).click();
     const dialog = page.getByRole('dialog');
@@ -121,9 +122,9 @@ test.describe('a batch the server only partly applied', () => {
 
     await expect(dialog.locator('.form-error')).toContainText('1 of 3');
     await expect(dialog).toBeVisible();
-    // ⚠️ Today's wording — see the pool test.
+    // "Close" — see the pool test.
     await expect(
-      dialog.locator('.modal-footer').getByRole('button', { name: 'Cancel', exact: true }),
+      dialog.locator('.modal-footer').getByRole('button', { name: 'Close', exact: true }),
     ).toBeEnabled();
   });
 

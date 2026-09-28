@@ -1900,6 +1900,11 @@ describe('no screen picks an error message by hand', () => {
     const files = readSources();
     expect(files.length).toBeGreaterThan(300);
     expect(COPY.test(files.find(([p]) => p === 'services/api.ts')?.[1] ?? '')).toBe(true);
-    expect(files.filter(([, src]) => src.includes('errMsg(')).length).toBeGreaterThan(50);
+    // A dialog's save calls errMsg inside `useSubmit` (ADR-184 increments 35-39), so a file that
+    // moved onto the hook still counts: the number is how many surfaces report a failure, which
+    // the move did not change.
+    expect(
+      files.filter(([, src]) => src.includes('errMsg(') || src.includes('useSubmit(')).length,
+    ).toBeGreaterThan(50);
   });
 });

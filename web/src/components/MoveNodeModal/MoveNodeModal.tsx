@@ -15,11 +15,13 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
+import { partialOutcome } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { GroupPicker } from '../ui/GroupPicker';
 
 /** What this dialog reads of a node — and nothing more, so a caller that holds the node in another
@@ -46,33 +48,33 @@ export function MoveNodeModal({
     ? (targets[0]?.group_id ?? '')
     : '';
   const [target, setTarget] = useState<string>(shared);
-  const [error, setError] = useState<string | null>(null);
-  const [partial, setPartial] = useState<{ requested: number; moved: number } | null>(null);
-  const [busy, setBusy] = useState(false);
+  // A partial move refreshes the tree (what is on screen is true) and keeps the dialog; a full one
+  // refreshes and closes.
+  const form = useSubmit({
+    errorFallback: t('err.moveNode'),
+    onDone: () => {
+      onMoved();
+      onClose();
+    },
+    onSaved: onMoved,
+  });
 
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    setPartial(null);
-    api
-      .moveNodes(
-        targets.map((n) => n.id),
-        target || null,
-      )
-      .then((r) => {
-        onMoved();
-        if (r.moved < r.requested) {
-          setPartial(r);
-          setBusy(false);
-        } else {
-          onClose();
-        }
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.moveNode')));
-        setBusy(false);
-      });
-  };
+  const save = () =>
+    form.submit(() =>
+      api
+        .moveNodes(
+          targets.map((n) => n.id),
+          target || null,
+        )
+        .then((r) =>
+          partialOutcome(
+            r.moved,
+            r.requested,
+            ({ applied, requested }) => t('moveNode.partial', { moved: applied, requested }),
+            true,
+          ),
+        ),
+    );
 
   const one = targets.length === 1 ? targets[0] : null;
 
@@ -83,14 +85,13 @@ export function MoveNodeModal({
       }
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {partial ? t('common:actions.close') : t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy || targets.length === 0}>
-            {t('moveNode.move')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('moveNode.move')}
+          canSubmit={targets.length > 0}
+        />
       }
     >
       <div className="form-stack">
@@ -109,15 +110,10 @@ export function MoveNodeModal({
             value={target}
             onChange={setTarget}
             emptyOption={t('moveNode.ungroupedOption')}
-            disabled={busy}
+            disabled={form.busy}
           />
         </label>
-        {partial && (
-          <p className="form-error">
-            {t('moveNode.partial', { moved: partial.moved, requested: partial.requested })}
-          </p>
-        )}
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

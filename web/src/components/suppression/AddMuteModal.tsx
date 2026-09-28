@@ -7,10 +7,12 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import type { NodeGroup } from '../../types/api';
+import { done, partialOutcome } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
@@ -63,9 +65,13 @@ export function AddMuteModal({
   const livenessCheck = check === LIVENESS_METRIC;
   const [until, setUntil] = useState('');
   const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [partial, setPartial] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('muteForm.err.add'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const groupItems = groupOptions(groups);
   // A batch supplies its targets as ids, so there is no single `scopeId` to require.
@@ -74,49 +80,35 @@ export function AddMuteModal({
 
   const submit = () => {
     if (!ready || !untilIso) return;
-    setBusy(true);
-    setError(null);
-    if (batch) {
-      // 🚨 A shortfall keeps the dialog open: closing would read as "all of them are quiet".
-      api
-        .createMutes({
-          node_ids: batch.nodes.map((n) => n.id),
+    form.submit(() => {
+      if (batch) {
+        // 🚨 A shortfall keeps the dialog open: closing would read as "all of them are quiet".
+        return api
+          .createMutes({
+            node_ids: batch.nodes.map((n) => n.id),
+            until: untilIso,
+            metric_name: check.trim() || undefined,
+            reason: reason.trim() || undefined,
+          })
+          .then((r) =>
+            partialOutcome(
+              r.created,
+              r.requested,
+              ({ applied, requested }) => t('muteForm.partial', { created: applied, requested }),
+              false,
+            ),
+          );
+      }
+      return api
+        .createMute({
+          scope_kind: scopeKind,
+          scope_id: scopeId,
+          metric_name: scopeKind === 'node' ? check.trim() || undefined : undefined,
           until: untilIso,
-          metric_name: check.trim() || undefined,
           reason: reason.trim() || undefined,
         })
-        .then((r) => {
-          if (r.created < r.requested) {
-            setPartial(true);
-            setError(t('muteForm.partial', { created: r.created, requested: r.requested }));
-            setBusy(false);
-            return;
-          }
-          onSaved();
-          onClose();
-        })
-        .catch((e: unknown) => {
-          setError(errMsg(e, t('muteForm.err.add')));
-          setBusy(false);
-        });
-      return;
-    }
-    api
-      .createMute({
-        scope_kind: scopeKind,
-        scope_id: scopeId,
-        metric_name: scopeKind === 'node' ? check.trim() || undefined : undefined,
-        until: untilIso,
-        reason: reason.trim() || undefined,
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('muteForm.err.add')));
-        setBusy(false);
-      });
+        .then(() => done());
+    });
   };
 
   return (
@@ -124,14 +116,13 @@ export function AddMuteModal({
       title={t('muteForm.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {partial ? t('common:actions.close') : t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('muteForm.submit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('muteForm.submit')}
+          canSubmit={ready}
+        />
       }
     >
       {batch ? (
@@ -229,7 +220,7 @@ export function AddMuteModal({
           onChange={(e) => setReason(e.target.value)}
         />
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

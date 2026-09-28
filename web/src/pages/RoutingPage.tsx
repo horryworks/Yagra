@@ -45,6 +45,9 @@ import { hasTemplate } from './channelTemplate';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import './RoutingPage.css';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
@@ -254,7 +257,6 @@ function ChannelsSection({
             setAdding(false);
             onChange();
           }}
-          onError={onError}
         />
       )}
       {templating && (
@@ -265,7 +267,6 @@ function ChannelsSection({
             setTemplating(null);
             onChange();
           }}
-          onError={onError}
         />
       )}
       {deleting && (
@@ -294,11 +295,9 @@ function ChannelsSection({
 function AddChannelModal({
   onClose,
   onDone,
-  onError,
 }: {
   onClose: () => void;
   onDone: () => void;
-  onError: (m: string) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
@@ -313,7 +312,8 @@ function AddChannelModal({
   // JSM: integration base URL + GenieKey.
   const [jsmUrl, setJsmUrl] = useState('https://api.atlassian.com/jsm/ops/integration/v2');
   const [jsmKey, setJsmKey] = useState('');
-  const [busy, setBusy] = useState(false);
+  // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
+  const form = useSubmit({ errorFallback: t('routing.err.addChannel'), onDone });
 
   const canAdd =
     name.trim() !== '' &&
@@ -345,14 +345,11 @@ function AddChannelModal({
 
   const submit = () => {
     if (!canAdd) return;
-    setBusy(true);
-    api
-      .createNotificationChannel({ name: name.trim(), config: buildConfig() })
-      .then(onDone)
-      .catch((e: unknown) => {
-        onError(errMsg(e, t('routing.err.addChannel')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createNotificationChannel({ name: name.trim(), config: buildConfig() })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -360,14 +357,13 @@ function AddChannelModal({
       title={t('routing.channelModal.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!canAdd || busy}>
-            {t('routing.channelModal.add')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('routing.channelModal.add')}
+          canSubmit={canAdd}
+        />
       }
     >
       <div className="modal-field">
@@ -459,6 +455,7 @@ function AddChannelModal({
           </div>
         </>
       )}
+      <FormError form={form} />
     </Modal>
   );
 }
@@ -607,7 +604,6 @@ function RulesSection({
             setAdding(false);
             onChange();
           }}
-          onError={onError}
         />
       )}
       {deleting && (
@@ -637,18 +633,17 @@ function AddRuleModal({
   channels,
   onClose,
   onDone,
-  onError,
 }: {
   channels: NotificationChannel[];
   onClose: () => void;
   onDone: () => void;
-  onError: (m: string) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState('');
   const [severity, setSeverity] = useState<'' | Severity>('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
+  const form = useSubmit({ errorFallback: t('routing.err.addRule'), onDone });
 
   const toggle = (id: string) =>
     setSelected((cur) => {
@@ -662,18 +657,15 @@ function AddRuleModal({
 
   const submit = () => {
     if (!canAdd) return;
-    setBusy(true);
-    api
-      .createRoutingRule({
-        name: name.trim(),
-        severity: severity === '' ? null : severity,
-        channel_ids: [...selected],
-      })
-      .then(onDone)
-      .catch((e: unknown) => {
-        onError(errMsg(e, t('routing.err.addRule')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createRoutingRule({
+          name: name.trim(),
+          severity: severity === '' ? null : severity,
+          channel_ids: [...selected],
+        })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -681,14 +673,13 @@ function AddRuleModal({
       title={t('routing.ruleModal.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!canAdd || busy}>
-            {t('routing.ruleModal.add')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('routing.ruleModal.add')}
+          canSubmit={canAdd}
+        />
       }
     >
       <div className="modal-field">
@@ -715,6 +706,7 @@ function AddRuleModal({
           ))}
         </div>
       </div>
+      <FormError form={form} />
     </Modal>
   );
 }

@@ -94,16 +94,8 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
   };
 
   /** Dialogs still to move. Only ever shorter; deleted when empty (increment 40). */
-  const NOT_YET_MIGRATED = [
-    'components/MoveNodeModal/MoveNodeModal.tsx',
-    'components/NodeTree/BulkTagModal.tsx',
-    'components/SetPoolModal/SetPoolModal.tsx',
-    'components/suppression/AddMaintenanceWindowModal.tsx',
-    'components/suppression/AddMuteModal.tsx',
-    'pages/ChannelTemplateModal.tsx',
-    'pages/RoutingPage.tsx',
-  ];
-  const CEILING = 7;
+  const NOT_YET_MIGRATED: string[] = [];
+  const CEILING = 0;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const handWritten = sources.filter(([, code]) => NEEDLE.test(code)).map(([p]) => p);

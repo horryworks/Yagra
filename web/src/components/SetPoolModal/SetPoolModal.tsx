@@ -10,12 +10,14 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import type { ActionTarget } from '../../lib/actionTarget';
 import { targetNodeIds, targetNodeNames } from '../../lib/actionTarget';
 import { isValidPoolName } from '../../lib/pool';
+import { done, partialOutcome } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { TextInput } from '../ui/Field';
 
 export function SetPoolModal({
@@ -37,42 +39,28 @@ export function SetPoolModal({
 }) {
   const { t } = useTranslation('nodes');
   const [pool, setPool] = useState(currentPool ?? '');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('err.setPool'), onDone: onSaved });
   const invalid = !isValidPoolName(pool);
   const names = targetNodeNames(target);
 
   const save = () => {
-    setBusy(true);
-    setError(null);
     // Always sent: '' clears the assignment back to inherited.
     const value = pool.trim();
-    if (target.kind === 'nodes') {
-      // 🚨 The batch reports two numbers and the dialog stays open on a shortfall. Closing would
-      // read as "all of them moved", which is the claim `applied` exists to stop anyone making.
-      api
-        .setNodesPool(targetNodeIds(target), value)
-        .then((r) => {
-          if (r.applied < r.requested) {
-            setError(t('setPool.partial', { applied: r.applied, requested: r.requested }));
-            setBusy(false);
-            return;
-          }
-          onSaved();
-        })
-        .catch((e: unknown) => {
-          setError(errMsg(e, t('err.setPool')));
-          setBusy(false);
-        });
-      return;
-    }
-    const call =
-      target.kind === 'node'
-        ? api.setNodePool(target.id, value)
-        : api.setNodeGroupPool(target.id, value);
-    call.then(onSaved).catch((e: unknown) => {
-      setError(errMsg(e, t('err.setPool')));
-      setBusy(false);
+    form.submit(() => {
+      if (target.kind === 'nodes') {
+        // 🚨 The batch reports two numbers and the dialog stays open on a shortfall. Closing would
+        // read as "all of them moved", which is the claim `applied` exists to stop anyone making.
+        return api
+          .setNodesPool(targetNodeIds(target), value)
+          .then((r) =>
+            partialOutcome(r.applied, r.requested, (n) => t('setPool.partial', n), false),
+          );
+      }
+      const call =
+        target.kind === 'node'
+          ? api.setNodePool(target.id, value)
+          : api.setNodeGroupPool(target.id, value);
+      return call.then(() => done());
     });
   };
 
@@ -85,14 +73,13 @@ export function SetPoolModal({
       }
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy || invalid}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('common:actions.save')}
+          canSubmit={!invalid}
+        />
       }
     >
       <div className="form-stack">
@@ -124,7 +111,7 @@ export function SetPoolModal({
                   : t('field.poolHint')}
           </span>
         </label>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

@@ -8,10 +8,12 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import type { MaintenanceScopeLevel, NodeGroup, ProfileSummary } from '../../types/api';
+import { done, partialOutcome } from '../../lib/submitState';
+import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { FormError, FormFooter } from '../ui/FormFooter';
 import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
@@ -66,11 +68,15 @@ export function AddMaintenanceWindowModal({
   const [nodeLabel, setNodeLabel] = useState(
     initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
   );
-  const [partial, setPartial] = useState(false);
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('maintenanceForm.err.add'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const groupItems = groupOptions(groups);
   // A batch supplies its targets as ids, so there is no single `scopeId` to require.
@@ -80,50 +86,38 @@ export function AddMaintenanceWindowModal({
 
   const submit = () => {
     if (!ready || !startsIso || !endsIso) return;
-    setBusy(true);
-    setError(null);
-    if (batch) {
-      // 🚨 A shortfall keeps the dialog open. Closing on `created < requested` would read as "every
-      // node is covered tonight", which is the belief a maintenance window exists to make true.
-      api
-        .createMaintenanceWindows({
-          node_ids: batch.nodes.map((n) => n.id),
+    form.submit(() => {
+      if (batch) {
+        // 🚨 A shortfall keeps the dialog open. Closing on `created < requested` would read as
+        // "every node is covered tonight", which is the belief a maintenance window exists to
+        // make true.
+        return api
+          .createMaintenanceWindows({
+            node_ids: batch.nodes.map((n) => n.id),
+            name: name.trim(),
+            starts_at: startsIso,
+            ends_at: endsIso,
+          })
+          .then((r) =>
+            partialOutcome(
+              r.created,
+              r.requested,
+              ({ applied, requested }) =>
+                t('maintenanceForm.partial', { created: applied, requested }),
+              false,
+            ),
+          );
+      }
+      return api
+        .createMaintenanceWindow({
           name: name.trim(),
+          scope_level: scope as MaintenanceScopeLevel,
+          scope_id: scopeId.trim(),
           starts_at: startsIso,
           ends_at: endsIso,
         })
-        .then((r) => {
-          if (r.created < r.requested) {
-            setPartial(true);
-            setError(t('maintenanceForm.partial', { created: r.created, requested: r.requested }));
-            setBusy(false);
-            return;
-          }
-          onSaved();
-          onClose();
-        })
-        .catch((e: unknown) => {
-          setError(errMsg(e, t('maintenanceForm.err.add')));
-          setBusy(false);
-        });
-      return;
-    }
-    api
-      .createMaintenanceWindow({
-        name: name.trim(),
-        scope_level: scope as MaintenanceScopeLevel,
-        scope_id: scopeId.trim(),
-        starts_at: startsIso,
-        ends_at: endsIso,
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('maintenanceForm.err.add')));
-        setBusy(false);
-      });
+        .then(() => done());
+    });
   };
 
   return (
@@ -131,14 +125,13 @@ export function AddMaintenanceWindowModal({
       title={t('maintenanceForm.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {partial ? t('common:actions.close') : t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('maintenanceForm.submit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('maintenanceForm.submit')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -242,7 +235,7 @@ export function AddMaintenanceWindowModal({
         <TextInput type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
         <span className="modal-hint">{t('maintenanceForm.tzHint', { tz: TZ })}</span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

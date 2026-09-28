@@ -12,12 +12,15 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import type { NotificationChannel, TemplateVariable } from '../types/api';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
+import { done, step } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
 import {
   draftFor,
   isBuiltin,
@@ -34,19 +37,19 @@ export function ChannelTemplateModal({
   channel,
   onClose,
   onDone,
-  onError,
 }: {
   channel: NotificationChannel;
   onClose: () => void;
   onDone: () => void;
-  onError: (m: string) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [draft, setDraft] = useState<TemplateDraft>(() => draftFor(channel));
   const [variables, setVariables] = useState<TemplateVariable[]>([]);
   const [preview, setPreview] = useState<PreviewView | null>(null);
   const [previewFor, setPreviewFor] = useState<TemplateDraft | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Two actions on one form: a preview writes nothing and shows its answer below; saving closes.
+  // A failure of either is said in the dialog — it used to go to the page, behind the overlay.
+  const form = useSubmit({ errorFallback: t('routing.err.template'), onDone });
 
   useEffect(() => {
     api
@@ -62,25 +65,23 @@ export function ChannelTemplateModal({
 
   const runPreview = () => {
     const shownFor = draft;
-    setBusy(true);
-    api
-      .previewNotificationTemplate({ kind: channel.kind, ...saveBody(draft) })
-      .then((r) => {
-        setPreview(previewView(r));
-        setPreviewFor(shownFor);
-      })
-      .catch((e: unknown) => onError(errMsg(e, t('routing.err.preview'))))
-      .finally(() => setBusy(false));
+    form.submit(
+      () =>
+        api
+          .previewNotificationTemplate({ kind: channel.kind, ...saveBody(draft) })
+          .then((r) => {
+            setPreview(previewView(r));
+            setPreviewFor(shownFor);
+            return step();
+          }),
+      t('routing.err.preview'),
+    );
   };
 
-  const save = () => {
-    setBusy(true);
-    api
-      .setNotificationTemplate(channel.id, saveBody(draft))
-      .then(onDone)
-      .catch((e: unknown) => onError(errMsg(e, t('routing.err.template'))))
-      .finally(() => setBusy(false));
-  };
+  const save = () =>
+    form.submit(() =>
+      api.setNotificationTemplate(channel.id, saveBody(draft)).then(() => done()),
+    );
 
   return (
     <Modal
@@ -88,21 +89,18 @@ export function ChannelTemplateModal({
       onClose={onClose}
       size="wide"
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="outline" onClick={runPreview} disabled={busy}>
-            {t('routing.template.preview')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={save}
-            disabled={busy || !isDirty(channel, draft)}
-          >
-            {t('routing.template.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('routing.template.save')}
+          canSubmit={isDirty(channel, draft)}
+          extra={
+            <Button variant="outline" onClick={runPreview} disabled={form.busy}>
+              {t('routing.template.preview')}
+            </Button>
+          }
+        />
       }
     >
       <p className="tpl-intro">{t('routing.template.intro')}</p>
@@ -157,6 +155,8 @@ export function ChannelTemplateModal({
           ))}
         </div>
       </div>
+
+      <FormError form={form} />
 
       {preview && (
         <div className={stale ? 'tpl-preview is-stale' : 'tpl-preview'}>
