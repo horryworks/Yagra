@@ -724,11 +724,7 @@ pub(crate) fn parse_node_filter(
             |s| {
                 format!(
                     "unknown node state {s:?}; must be one of: {}",
-                    NodeState::ALL
-                        .iter()
-                        .map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    super::util::token_list(NodeState::ALL.iter().map(|v| v.as_str()))
                 )
             },
             NodeState::from_token,
@@ -740,22 +736,12 @@ pub(crate) fn parse_node_filter(
             |s| {
                 format!(
                     "unknown node kind {s:?}; must be one of: {}",
-                    NodeKind::ALL
-                        .iter()
-                        .map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    super::util::token_list(NodeKind::ALL.iter().map(|v| v.as_str()))
                 )
             },
             NodeKind::from_token,
         )?,
-        pool: pool
-            .unwrap_or("")
-            .split(',')
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_owned)
-            .collect(),
+        pool: super::util::split_set(pool),
     })
 }
 

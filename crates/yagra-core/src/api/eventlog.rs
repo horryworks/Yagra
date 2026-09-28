@@ -60,16 +60,12 @@ const NAME_SEARCH_NODE_LIMIT: i64 = 50;
 /// list off [`EventKind::ALL`] means a fourth source cannot be accepted here but missing from the
 /// message, or the reverse.
 fn kind_list() -> String {
-    EventKind::ALL.map(EventKind::as_str).join(", ")
+    super::util::token_list(EventKind::ALL.iter().map(|k| k.as_str()))
 }
 
 /// The rule outcomes a filter may name, read off the enum for the same reason as [`kind_list`].
 fn action_list() -> String {
-    crate::events::EventAction::ALL
-        .iter()
-        .map(|a| a.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+    super::util::token_list(crate::events::EventAction::TOKENS.iter().copied())
 }
 
 /// Build one column's text condition, or `None` when the term is blank.
@@ -138,18 +134,7 @@ pub(crate) struct EventFilterInput<'a> {
 /// Parse and validate the shared event-filter fields — the same set for the event log and
 /// `/events/stats`, and for the MCP `search_events` tool.
 pub(crate) fn parse_event_filter(input: EventFilterInput<'_>) -> Result<EventFilter, ApiError> {
-    fn ts(
-        value: Option<&str>,
-        field: &str,
-        code: &'static str,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
-        match value {
-            None => Ok(None),
-            Some(s) => super::parse_rfc3339(s).map(Some).ok_or_else(|| {
-                ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
-            }),
-        }
-    }
+    use super::util::ts_param as ts;
     // The cursor and the range bounds get different codes: a bad cursor is a client paging bug,
     // a bad bound is operator input, and the UI surfaces them differently.
     let before = ts(input.before, "before", "invalid_cursor")?;

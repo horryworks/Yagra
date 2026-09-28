@@ -565,12 +565,7 @@ async fn create_mutes_bulk(
             ));
         }
     }
-    let Some(until) = parse_rfc3339(&body.until) else {
-        return Err(ApiError::bad_request(
-            "invalid_mute",
-            "until must be an RFC 3339 timestamp",
-        ));
-    };
+    let until = super::util::ts_required(&body.until, "until", "invalid_mute")?;
     // A mute that has already expired silences nothing while reading as success.
     if until <= Utc::now() {
         return Err(ApiError::bad_request(
@@ -917,12 +912,7 @@ async fn create_mute(
     if group {
         validate_group_scope(&admin, &body.scope_id.to_string()).await?;
     }
-    let Some(until) = parse_rfc3339(&body.until) else {
-        return Err(ApiError::bad_request(
-            "invalid_mute",
-            "until must be an RFC 3339 timestamp",
-        ));
-    };
+    let until = super::util::ts_required(&body.until, "until", "invalid_mute")?;
     // A mute that has already expired silences nothing while reading as success — the same trap as
     // a backwards window.
     if until <= Utc::now() {

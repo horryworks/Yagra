@@ -474,12 +474,7 @@ pub(crate) fn parse_run_filter(
         ),
         None => None,
     };
-    let since = match since {
-        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
-            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
-        })?),
-        None => None,
-    };
+    let since = super::util::ts_param(since, "since", "invalid_since")?;
     Ok(reports::RunFilter {
         definition_id,
         state,

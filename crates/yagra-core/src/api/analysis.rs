@@ -422,12 +422,7 @@ pub(crate) fn job_filter(
         })?),
         None => None,
     };
-    let since = match since {
-        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
-            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
-        })?),
-        None => None,
-    };
+    let since = super::util::ts_param(since, "since", "invalid_since")?;
     Ok(crate::analysis::JobFilter { tool, state, since })
 }
 
@@ -638,7 +633,7 @@ pub(crate) async fn search_saved_findings(
         |s| {
             format!(
                 "unknown severity {s:?}; must be one of: {}",
-                crate::analysis::FINDING_SEVERITIES.join(", ")
+                super::util::token_list(crate::analysis::FINDING_SEVERITIES.iter().copied())
             )
         },
         |t| {

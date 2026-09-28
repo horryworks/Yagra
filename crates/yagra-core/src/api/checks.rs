@@ -1044,19 +1044,7 @@ pub(crate) fn parse_history_cursor(
     before_at: Option<&str>,
     before_id: Option<i64>,
 ) -> Result<Option<(chrono::DateTime<chrono::Utc>, i64)>, ApiError> {
-    match (before_at, before_id) {
-        (Some(at), Some(id)) => {
-            let ts = super::parse_rfc3339(at).ok_or_else(|| {
-                ApiError::bad_request("invalid_cursor", "before_at must be RFC 3339")
-            })?;
-            Ok(Some((ts, id)))
-        }
-        (None, None) => Ok(None),
-        _ => Err(ApiError::bad_request(
-            "invalid_cursor",
-            "before_at and before_id must be given together",
-        )),
-    }
+    super::util::keyset_cursor(before_at, before_id, "before_at")
 }
 
 #[utoipa::path(
@@ -1110,13 +1098,10 @@ pub(crate) async fn dns_chain_history(
         })?;
     // A cursor only when the page came back full — a short page is the end of the history, and
     // handing back a cursor there makes a client fetch an empty page to discover that.
-    let next = rows
-        .last()
-        .filter(|_| i64::try_from(rows.len()).unwrap_or(0) == limit)
-        .map(|r| DnsHistoryCursor {
-            at: r.at.to_rfc3339(),
-            id: r.id,
-        });
+    let next = super::util::cursor_if_full(&rows, limit, |r| DnsHistoryCursor {
+        at: r.at.to_rfc3339(),
+        id: r.id,
+    });
     Ok(DnsChainHistory {
         changes: rows
             .into_iter()

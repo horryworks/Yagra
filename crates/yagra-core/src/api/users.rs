@@ -64,7 +64,7 @@ fn checked_role(role: &str) -> ApiResult<&str> {
     if Role::parse(role).is_some() {
         Ok(role)
     } else {
-        let allowed = Role::ALL.map(Role::key).join(", ");
+        let allowed = super::util::token_list(Role::ALL.iter().map(|r| r.key()));
         Err(ApiError::bad_request(
             "invalid_role",
             format!("role must be one of: {allowed}"),

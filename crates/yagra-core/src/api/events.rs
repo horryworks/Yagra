@@ -483,12 +483,14 @@ fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams
             .map_err(|e| bad(format!("clear_pattern: {e}")))?;
     }
     if yagra_common::Severity::from_token(&body.severity).is_none() {
-        let allowed = yagra_common::Severity::ALL.map(|s| s.as_str()).join(", ");
+        let allowed =
+            super::util::token_list(yagra_common::Severity::ALL.iter().map(|s| s.as_str()));
         return Err(bad(format!("severity must be one of: {allowed}")));
     }
     if let Some(kind) = body.source_kind.as_deref() {
         if yagra_bus::EventKind::from_token(kind).is_none() {
-            let allowed = yagra_bus::EventKind::ALL.map(|k| k.as_str()).join(", ");
+            let allowed =
+                super::util::token_list(yagra_bus::EventKind::ALL.iter().map(|k| k.as_str()));
             return Err(bad(format!("source_kind must be one of: {allowed}")));
         }
     }

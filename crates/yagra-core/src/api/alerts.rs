@@ -400,18 +400,7 @@ pub(crate) async fn history_page(
 ) -> Result<Vec<AlertHistoryRow>, ApiError> {
     // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
     // bad bound is operator input, and the UI surfaces them differently.
-    fn ts(
-        value: Option<&str>,
-        field: &str,
-        code: &'static str,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
-        match value {
-            None => Ok(None),
-            Some(s) => super::parse_rfc3339(s).map(Some).ok_or_else(|| {
-                ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
-            }),
-        }
-    }
+    use super::util::ts_param as ts;
     // Parse before checking for a store: a malformed cursor is the client's bug whether or not this
     // deployment has history, and answering `200 []` to it would let a paging bug look like "you
     // have reached the end".
@@ -432,11 +421,7 @@ pub(crate) async fn history_page(
     let state = super::util::parse_set(
         "state",
         input.state,
-        &NodeState::ALL
-            .iter()
-            .map(NodeState::as_str)
-            .collect::<Vec<_>>()
-            .join(", "),
+        &super::util::token_list(NodeState::ALL.iter().map(NodeState::as_str)),
         NodeState::from_token,
     )?;
     let metric = super::util::normalize_search(input.metric);

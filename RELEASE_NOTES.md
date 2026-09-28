@@ -18,6 +18,7 @@
 
 - **The maker and model a node gets from polling now follow your classification rules, as Discovery already did.** A rule under Settings ▸ Classification that names a vendor or a model was used when a device was found by a scan, but the hourly identity read of a monitored node ignored it and used only the guess from `sysDescr`. Both now ask the rules first and fall back to the guess. As before, polling fills the maker and model only on a node that has none, so a value already stored or typed by an operator does not change.
 - **A support bundle now records every setting core reads, except the secrets.** Twenty-five more environment variables are carried (the analysis and RCA caps, the SMTP host and addresses, the bus and TLS directories, the MCP host allow-list, the upgrade directory and others). Passwords, the SNMP community, the SMTP login and the webhook URL are deliberately left out, and a test now fails when core starts reading a variable that is in neither list. Settings that take a number or a path also ignore surrounding spaces in every binary now, where some readers used to treat `" 4"` as unset.
+- **An API error that lists the allowed values now lists them the same way everywhere** — `a, b or c`. Eleven 400 messages (alert history and node states, node kinds, audit actions and statuses, event kinds and actions, event-rule severities and source kinds, finding severities, user roles) joined them as `a, b, c`; the error codes are unchanged.
 
 ### Bug Fixes
 

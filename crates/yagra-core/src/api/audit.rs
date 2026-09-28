@@ -8,7 +8,7 @@
 
 use super::error::{ApiError, ApiResult};
 use super::extract::RequireViewAudit;
-use super::util::{normalize_search, parse_rfc3339};
+use super::util::normalize_search;
 use super::ApiState;
 use crate::audit::{AuditAction, AuditFilter, AuditStatusClass};
 use axum::response::IntoResponse;
@@ -269,18 +269,7 @@ pub(crate) async fn audit_page(
 ) -> Result<Vec<crate::audit::AuditRow>, ApiError> {
     // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
     // bad bound is operator input, and the UI surfaces them differently. Same split as the event log.
-    fn ts(
-        value: Option<&str>,
-        field: &str,
-        code: &'static str,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
-        match value {
-            None => Ok(None),
-            Some(s) => parse_rfc3339(s).map(Some).ok_or_else(|| {
-                ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
-            }),
-        }
-    }
+    use super::util::ts_param as ts;
     // An unparseable cursor is rejected, not dropped: silently returning the newest page instead of
     // the requested one makes a paging bug look like "you have reached the end".
     let filter = AuditFilter {
@@ -294,21 +283,13 @@ pub(crate) async fn audit_page(
         action: super::util::parse_set(
             "action",
             input.action,
-            &AuditAction::ALL
-                .iter()
-                .map(|a| a.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            &super::util::token_list(AuditAction::TOKENS.iter().copied()),
             AuditAction::from_token,
         )?,
         status: super::util::parse_set(
             "status",
             input.status,
-            &AuditStatusClass::ALL
-                .iter()
-                .map(|c| c.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+            &super::util::token_list(AuditStatusClass::TOKENS.iter().copied()),
             AuditStatusClass::from_token,
         )?,
         limit: input.limit.unwrap_or(crate::audit::DEFAULT_LIMIT),

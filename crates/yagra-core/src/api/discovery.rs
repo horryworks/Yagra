@@ -1194,19 +1194,7 @@ pub(crate) fn endpoint_cursor(
     before_last_seen: Option<&str>,
     before_id: Option<Uuid>,
 ) -> Result<Option<(chrono::DateTime<chrono::Utc>, Uuid)>, ApiError> {
-    match (before_last_seen, before_id) {
-        (Some(at), Some(id)) => {
-            let ts = super::parse_rfc3339(at).ok_or_else(|| {
-                ApiError::bad_request("invalid_cursor", "before_last_seen must be RFC 3339")
-            })?;
-            Ok(Some((ts, id)))
-        }
-        (None, None) => Ok(None),
-        _ => Err(ApiError::bad_request(
-            "invalid_cursor",
-            "before_last_seen and before_id must be given together",
-        )),
-    }
+    super::util::keyset_cursor(before_last_seen, before_id, "before_last_seen")
 }
 
 /// One page of discovered endpoints — the seam REST and MCP share (api-conventions).
@@ -1270,13 +1258,10 @@ pub(crate) async fn discovered_endpoint_page(
     }
     // A cursor only when the page came back full — a short page is the end of the list, and handing
     // one back there makes a client fetch an empty page to discover that.
-    let next = rows
-        .last()
-        .filter(|_| i64::try_from(rows.len()).unwrap_or(0) == limit)
-        .map(|r| DiscoveredEndpointCursor {
-            last_seen: r.last_seen.to_rfc3339(),
-            id: r.id,
-        });
+    let next = super::util::cursor_if_full(&rows, limit, |r| DiscoveredEndpointCursor {
+        last_seen: r.last_seen.to_rfc3339(),
+        id: r.id,
+    });
     let (observed_total, nodes_reporting, truncated_nodes) =
         admin.arp.totals().await.unwrap_or((0, 0, 0));
     let unmonitored_total = admin

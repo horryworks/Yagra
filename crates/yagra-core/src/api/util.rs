@@ -81,16 +81,6 @@ pub(crate) fn split_set(raw: Option<&str>) -> Vec<String> {
     out
 }
 
-/// Validate one set parameter: cap its size, then map each token through `parse`, rejecting the
-/// first one that is not a member. Rejecting rather than dropping is the whole point — a dropped
-/// token silently widens the result to everything, and the operator reads the widened list as the
-/// answer to the question they asked.
-///
-/// **This lives here rather than in one domain because the spelling is the contract.** It was
-/// `eventlog`'s private helper while events were the only multi-value surface; when alert history,
-/// audit, thresholds and findings each gained set parameters (ADR-053 Inc.4b), a second copy would
-/// have been four chances to differ from Events on the empty-string case, the cap, or whether an
-/// unknown token is rejected or dropped — and the *dropped* spelling is the one that fails silently.
 /// `a, b or c` — the human half of a rejection message, built from the enum that defines the set.
 ///
 /// Beside [`parse_set`] for the reason that helper is here: the spelling is the contract. Both
@@ -107,6 +97,16 @@ pub(crate) fn token_list<'a>(tokens: impl Iterator<Item = &'a str>) -> String {
     }
 }
 
+/// Validate one set parameter: cap its size, then map each token through `parse`, rejecting the
+/// first one that is not a member. Rejecting rather than dropping is the whole point — a dropped
+/// token silently widens the result to everything, and the operator reads the widened list as the
+/// answer to the question they asked.
+///
+/// **This lives here rather than in one domain because the spelling is the contract.** It was
+/// `eventlog`'s private helper while events were the only multi-value surface; when alert history,
+/// audit, thresholds and findings each gained set parameters (ADR-053 Inc.4b), a second copy would
+/// have been four chances to differ from Events on the empty-string case, the cap, or whether an
+/// unknown token is rejected or dropped — and the *dropped* spelling is the one that fails silently.
 pub(crate) fn parse_set<T>(
     field: &str,
     raw: Option<&str>,
@@ -401,6 +401,71 @@ pub(crate) fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|t| t.with_timezone(&chrono::Utc))
 }
 
+/// An optional timestamp parameter: absent is `None`, present-but-unparseable is a 400 naming the
+/// field (ADR-184). The error code is the caller's, because a bad **cursor** is a client paging bug
+/// (`invalid_cursor`) and a bad **bound** is operator input (`invalid_filter`), and the WebUI
+/// surfaces the two differently.
+pub(crate) fn ts_param(
+    value: Option<&str>,
+    field: &str,
+    code: &'static str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
+    value.map(|s| ts_required(s, field, code)).transpose()
+}
+
+/// A timestamp the request must carry: a 400 naming the field when it does not parse.
+pub(crate) fn ts_required(
+    value: &str,
+    field: &str,
+    code: &'static str,
+) -> Result<chrono::DateTime<chrono::Utc>, ApiError> {
+    parse_rfc3339(value).ok_or_else(|| {
+        ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
+    })
+}
+
+/// A keyset cursor — a timestamp named `at_field` and a `before_id` — given both halves or neither.
+///
+/// A half-specified cursor is **rejected rather than ignored**: silently dropping it restarts paging
+/// from the top, so a client walking the list loops over the first page forever while looking like
+/// it is making progress. The DNS history, the neighbour history and the discovered endpoints each
+/// wrote this out by hand (ADR-184).
+pub(crate) fn keyset_cursor<I>(
+    at: Option<&str>,
+    id: Option<I>,
+    at_field: &str,
+) -> Result<Option<(chrono::DateTime<chrono::Utc>, I)>, ApiError> {
+    match (at, id) {
+        (Some(at), Some(id)) => {
+            let ts = parse_rfc3339(at).ok_or_else(|| {
+                ApiError::bad_request("invalid_cursor", format!("{at_field} must be RFC 3339"))
+            })?;
+            Ok(Some((ts, id)))
+        }
+        (None, None) => Ok(None),
+        _ => Err(ApiError::bad_request(
+            "invalid_cursor",
+            format!("{at_field} and before_id must be given together"),
+        )),
+    }
+}
+
+/// The cursor for the next page, only when this page came back **full**. A short page is the last
+/// one, and handing back a cursor there makes a client fetch an empty page to discover that.
+///
+/// ⚠️ Not the `limit + 1` rule the node list and the topology pages use — those fetch one extra row
+/// and know for certain; this one may hand back a cursor to an empty last page when the total is an
+/// exact multiple of the limit, which is the trade the history pages chose.
+pub(crate) fn cursor_if_full<R, C>(
+    rows: &[R],
+    limit: i64,
+    make: impl FnOnce(&R) -> C,
+) -> Option<C> {
+    rows.last()
+        .filter(|_| i64::try_from(rows.len()).unwrap_or(0) == limit)
+        .map(make)
+}
+
 /// The current Unix time in whole seconds.
 ///
 /// Saturating rather than fallible: a clock before the epoch yields `0` and one past `i64::MAX`
@@ -634,5 +699,65 @@ mod tests {
         let now = now_unix_s();
         assert!(now > 1_700_000_000, "{now} is before 2023");
         assert!(now < 4_000_000_000, "{now} is after 2096");
+    }
+
+    /// Files under `api/` that join a list for a message, and why that list is not a vocabulary.
+    const JOINS_THAT_ARE_NOT_VOCABULARIES: &[(&str, &str)] = &[
+        (
+            "api/pools.rs",
+            "the pollers and nodes still holding a pool — ids, not allowed values",
+        ),
+        (
+            "api/topology.rs",
+            "the nodes blocking a change — ids, not allowed values",
+        ),
+    ];
+
+    /// ADR-184: the sentences an API edge says about a timestamp, a cursor and a set of allowed
+    /// values are built here and nowhere else in `api/`. A hand-written one rots the moment the enum
+    /// grows — `list_thresholds` once listed four scope levels while there were six.
+    #[test]
+    fn the_vocabulary_sentence_is_built_once() {
+        let files = crate::module_source::crate_code();
+        let api: Vec<&(String, String)> = files
+            .iter()
+            .filter(|(n, _)| n.starts_with("api/") && n != "api/util.rs")
+            .collect();
+        assert!(api.len() >= 50, "only {} api files were read", api.len());
+        let sentences = [
+            format!("must be an RFC 3339 {}", "timestamp"),
+            format!("and before_id must be {}\"", "given together"),
+            format!("{}(\", \")", "join"),
+        ];
+        let mut offenders = Vec::new();
+        for (name, code) in &api {
+            if JOINS_THAT_ARE_NOT_VOCABULARIES
+                .iter()
+                .any(|(f, _)| f == name)
+            {
+                continue;
+            }
+            for s in &sentences {
+                if code.contains(s.as_str()) {
+                    offenders.push(format!("{name}: {s}"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} write a parameter's rejection sentence by hand — use `util::ts_param`,              `util::keyset_cursor` or `util::token_list`"
+        );
+        let callers = api
+            .iter()
+            .filter(|(_, c)| {
+                c.contains(&format!("{}(", "ts_param"))
+                    || c.contains(&format!("{}(", "keyset_cursor"))
+                    || c.contains(&format!("{}(", "token_list"))
+            })
+            .count();
+        assert!(
+            callers >= 10,
+            "only {callers} api files use the shared sentences"
+        );
     }
 }
