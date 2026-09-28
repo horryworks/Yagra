@@ -110,7 +110,7 @@ pub async fn run_stream<S>(
     // When each node's vendor-table rows are named again (ADR-143). The same bookkeeping in a second
     // map: the walk rides a table job, not the scalar GET, so the two are due at different times.
     let row_cadence = Arc::new(std::sync::Mutex::new(identity::IdentityCadence::default()));
-    while let Some(mut job) = jobs.next().await {
+    while let Some(job) = jobs.next().await {
         // Meraki org collectors share a sentinel target (0.0.0.0) and are single-flighted per org
         // and lane by core (two lanes, ADR-169), so they use only the global concurrency cap (not per-device single-flight, which
         // would wrongly drop concurrent collects for different orgs) and fan out to many results.
@@ -185,10 +185,10 @@ pub async fn run_stream<S>(
         // The hourly identity re-probe (ADR-138). Decided here because every job — a working-set
         // one, a legacy per-job one, an operator's "poll now" — passes this point, and before the
         // spawn because the task takes the job by value. Core's own `probe_identity` (a node whose
-        // maker is still unknown) still reads something on every poll, but only the two scalars
-        // core classifies from; the version, patch and serial wait for the cadence like any other
-        // node's (ADR-138 Increment 6). An operator's "poll now" (`on_demand`, ADR-149) reads in
-        // full whatever the cadence says.
+        // maker is still unknown) reads the two scalars core classifies from between full reads,
+        // once one has answered; the version, patch and serial wait for the cadence (ADR-138
+        // Increments 6 and 7). An operator's "poll now" (`on_demand`, ADR-149) reads in full
+        // whatever the cadence says. `job.probe_identity` is left as core sent it and read only here.
         let identity_read = if identity::carries_identity_probe(&job.check) {
             cadence
                 .lock()
@@ -203,7 +203,6 @@ pub async fn run_stream<S>(
         } else {
             identity::IdentityRead::Skip
         };
-        job.probe_identity = identity_read != identity::IdentityRead::Skip;
         let task_cadence = cadence.clone();
         // The hourly row-name walk (ADR-143), claimed out here for the identity probe's reason: every
         // job passes this point, and the task takes the job by value. "Poll now" walks it regardless.
@@ -315,16 +314,18 @@ pub async fn run_stream<S>(
                         .succeeded(job.node_id, Instant::now());
                 }
                 record_phase(kind, "execute", probed_at);
-                // Answered ⇒ not due again for a period. Unanswered (or shed above, which returned
-                // before reaching this) keeps the short retry `claim` already set. 🚨 Only a full
-                // read: a classify read answers `sysDescr` on every poll, and reporting it would
-                // push the full read a period away every poll — the version would never be read.
-                if identity_read == identity::IdentityRead::Full && result.sys_descr.is_some() {
-                    task_cadence
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .succeeded(job.node_id, Instant::now());
-                }
+                // Whether this read moves the schedule is `finished`'s to decide, not this loop's
+                // (ADR-138 Increment 7): only an answered full read does. A shed job returned above
+                // and never reaches this, so it keeps the short retry the claim already set.
+                task_cadence
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .finished(
+                        job.node_id,
+                        Instant::now(),
+                        identity_read,
+                        result.sys_descr.is_some(),
+                    );
                 stamp_poller_id(&mut result, &poller_id);
                 // Carry the poll span's context so core's result-ingest span joins this trace.
                 result.trace_context = yagra_telemetry::current_trace_context();

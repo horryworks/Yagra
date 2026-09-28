@@ -498,6 +498,9 @@ pub(crate) struct MetaRecord {
     /// It beats the model `sysDescr` would give — see [`record_identity`], which turns this record
     /// into the `(vendor, model)` the writer fills.
     hardware_model: Option<String>,
+    /// The identity is the poller's light read (ADR-138 Increment 8): it fills the vendor and never
+    /// the model — see [`record_identity`].
+    identity_partial: bool,
     /// The OS version the device reported on this poll, sanitized again here (ADR-138) — the poller
     /// already caps it, but this is the edge a value from an older or misbehaving poller crosses.
     /// `None` means nothing was read and nothing is written, never "the device has no version".
@@ -789,6 +792,7 @@ fn persist_metrics_and_meta(
             node_id: result.node_id.as_uuid(),
             interfaces,
             hardware_model,
+            identity_partial: result.identity_partial,
             os_version,
             os_version_without_patch,
             sys_object_id,
@@ -1140,6 +1144,11 @@ pub(crate) struct MetaStores {
 /// `sysDescr` guess — an AireOS controller's `sysDescr` is only `Cisco Controller` (ADR-147 Inc.6).
 /// Nothing is decided without a `sysDescr` or a `sysObjectID`, which is what the identity probe
 /// sends; the PG fill writes only into a node that has no value, so an operator's own value stays.
+///
+/// 🚨 **A light read fills the vendor and never the model** (ADR-138 Increment 8). It carries no
+/// `hardware_model`, and this tier sheds: were the full read's record dropped, a model guessed here
+/// would fill the empty column first and the device's own would never replace it. So the model
+/// comes from a full read only, and a dropped one costs an hour's wait rather than a wrong model.
 fn record_identity(
     classifier: &crate::classification::Classifier,
     rec: &MetaRecord,
@@ -1152,7 +1161,11 @@ fn record_identity(
         rec.sys_object_id.as_deref(),
         rec.sys_descr.as_deref(),
     );
-    let model = rec.hardware_model.clone().or(model);
+    let model = if rec.identity_partial {
+        None
+    } else {
+        rec.hardware_model.clone().or(model)
+    };
     (vendor.is_some() || model.is_some()).then_some((vendor, model))
 }
 
@@ -1625,6 +1638,40 @@ mod tests {
         assert_eq!(
             serial_number.chars().count(),
             yagra_discovery::serial::SERIAL_MAX_CHARS
+        );
+    }
+
+    /// ADR-138 Increment 8: a light read fills the vendor and no model, even where its `sysDescr`
+    /// names one — the same `sysDescr` from a full read still does.
+    #[test]
+    fn a_light_read_fills_the_vendor_and_never_the_model() {
+        let record = |identity_partial: bool| {
+            let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+            let vm = VmWriters::from_senders(vec![metrics_tx]);
+            let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+            let mut result: PollResult = serde_json::from_str(
+                r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                    "node_id":"00000000-0000-0000-0000-000000000000",
+                    "at_unix_ms":0,"outcome":"reachable"}"#,
+            )
+            .expect("a result");
+            result.sys_descr = Some(
+                "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.0(2a)EX5"
+                    .to_owned(),
+            );
+            result.identity_partial = identity_partial;
+            persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
+            let rec = meta_rx
+                .try_recv()
+                .expect("the record reaches the PG writer");
+            record_identity(&crate::classification::Classifier::empty(), &rec)
+        };
+        let (full_vendor, full_model) = record(false).expect("a full read decides");
+        assert!(full_model.is_some(), "the full read guesses a model");
+        assert_eq!(
+            record(true),
+            Some((full_vendor, None)),
+            "the light read: the same vendor, no model"
         );
     }
 

@@ -21,6 +21,10 @@ use yagra_discovery::{os_version, serial};
 /// and implements neither the profile's scalars nor `sysDescr`.
 /// The ratio of the first two is the table's real coverage of a fleet (ADR-138).
 pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_total";
+/// Classify reads — `sysDescr` and `sysObjectID` only, for a node whose maker core does not know
+/// (ADR-138 Increments 6 and 7) — by `result`: `answered` (a `sysDescr` came back) or `silent`.
+/// Separate from [`IDENTITY_PROBES_METRIC`], which counts full reads only.
+pub(super) const IDENTITY_CLASSIFY_METRIC: &str = "yagra_poll_identity_classify_total";
 
 /// The most rows the identity probe takes from the table columns it walks whole. A patch table
 /// holds a handful per slot; the cap is what stops a device that answers with thousands of rows
@@ -103,6 +107,13 @@ impl IdentityProbe {
     }
 }
 
+/// What [`SnmpWalker::read_classifying`] brought back: `sysDescr` when it was answered and not
+/// empty, and `sysObjectID` as the device spelled it (each caller normalises it for its own use).
+struct Classifiers {
+    sys_descr: Option<String>,
+    sys_object_id: Option<String>,
+}
+
 /// What one scalar GET reads: the check's scalars and columns, and how much of the node's identity
 /// rides along (ADR-138 Increment 6). The v2c and v3 arms differ only in the credential, which is
 /// [`SnmpWalker`]; this is the half they share.
@@ -139,20 +150,28 @@ impl SnmpWalker {
     }
 
     /// `sysDescr` and `sysObjectID`, in one GET: what core classifies a device's maker and model
-    /// from, and what the full probe reads first to decide which OIDs hold the version.
+    /// from, and what the full probe reads first to decide which OIDs hold the version. The one
+    /// place that decides what counts as an answered `sysDescr` — an empty string does not.
     async fn read_classifying(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         timeout: Duration,
-    ) -> HashMap<String, String> {
-        self.read_strings(
-            transport,
-            target,
-            &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
-            timeout,
-        )
-        .await
+    ) -> Classifiers {
+        let mut first = self
+            .read_strings(
+                transport,
+                target,
+                &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
+                timeout,
+            )
+            .await;
+        Classifiers {
+            sys_descr: first
+                .remove(os_version::OID_SYS_DESCR)
+                .filter(|v| !v.is_empty()),
+            sys_object_id: first.remove(os_version::OID_SYS_OBJECT_ID),
+        }
     }
 
     /// The light form of the identity probe (ADR-138 Increment 6): only what [`Self::read_classifying`]
@@ -165,15 +184,11 @@ impl SnmpWalker {
         timeout: Duration,
     ) -> (Option<String>, Option<String>) {
         let first = self.read_classifying(transport, target, timeout).await;
-        let sys_descr = first
-            .get(os_version::OID_SYS_DESCR)
-            .filter(|v| !v.is_empty())
-            .cloned();
         let sys_object_id = first
-            .get(os_version::OID_SYS_OBJECT_ID)
-            .map(String::as_str)
+            .sys_object_id
+            .as_deref()
             .and_then(yagra_discovery::normalize_sys_object_id);
-        (sys_descr, sys_object_id)
+        (first.sys_descr, sys_object_id)
     }
 
     /// The identity probe: `sysDescr` (so core can fill the node's maker/model) and the OS version
@@ -198,11 +213,8 @@ impl SnmpWalker {
         timeout: Duration,
     ) -> IdentityProbe {
         let first = self.read_classifying(transport, target, timeout).await;
-        let sys_descr = first
-            .get(os_version::OID_SYS_DESCR)
-            .filter(|v| !v.is_empty())
-            .cloned();
-        let sys_object_id = first.get(os_version::OID_SYS_OBJECT_ID).map(String::as_str);
+        let sys_descr = first.sys_descr;
+        let sys_object_id = first.sys_object_id.as_deref();
         let reads = os_version::oids_to_read(sys_object_id, sys_descr.as_deref());
         let mut answers = os_version::Answers::default();
         if !reads.strings.is_empty() {
@@ -695,17 +707,25 @@ pub(super) async fn execute_scalar_get(
             // most needs identified, to correct its profile. A silent agent never reaches here, so
             // this adds no wait to an outage.
             //
-            // How much is read is the caller's (ADR-138 Increment 6): a node whose maker core does
-            // not know yet reads only the two classifying scalars between its hourly full probes,
-            // and the fields it does not read go out `None`, which core never writes.
+            // How much is read is the caller's (ADR-138 Increments 6 and 7): a node whose maker core
+            // does not know yet reads only the two classifying scalars between its hourly full
+            // probes, and the fields it does not read go out `None`, which core never writes.
             match identity {
                 IdentityRead::Skip => {}
                 IdentityRead::Classify => {
                     let (sys_descr, sys_object_id) = walker
                         .fetch_classifiers(transport, job.target, timeout)
                         .await;
+                    let heard = if sys_descr.is_some() {
+                        "answered"
+                    } else {
+                        "silent"
+                    };
+                    metrics::counter!(IDENTITY_CLASSIFY_METRIC, "result" => heard).increment(1);
                     r.sys_descr = sys_descr;
                     r.sys_object_id = sys_object_id;
+                    // Core fills the vendor from this and not the model (ADR-138 Increment 8).
+                    r.identity_partial = true;
                 }
                 IdentityRead::Full => {
                     let probe = walker.fetch_identity(transport, job.target, timeout).await;
@@ -1371,6 +1391,10 @@ mod tests {
             r.sys_descr.is_some(),
             "core still gets what it classifies from"
         );
+        assert!(
+            r.identity_partial,
+            "core fills no model from it (Increment 8)"
+        );
         assert_eq!(r.serial_number, None);
         assert_eq!(r.os_version, None);
         assert_eq!(r.hardware_model, None);
@@ -1389,6 +1413,7 @@ mod tests {
             r.serial_number.is_some(),
             "the full read of the same device"
         );
+        assert!(!r.identity_partial);
         assert!(walked_for_a_serial(&full));
         assert!(full.asked().len() > 2, "{:?}", full.asked());
     }

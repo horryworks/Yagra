@@ -365,10 +365,13 @@ fn push_snmp_jobs<S: SnmpJobSource>(
 
     let (scalar, table) = src.scalar_and_table(items, SNMP_TIMEOUT_MS);
     if let Some(spec) = scalar {
-        // Identity probing rides the scalar job only: it is the one that already does a GET, so
-        // asking for sysDescr.0 alongside costs no extra round trip. The poller answers this ask
-        // with sysDescr and sysObjectID only; the version, patch and serial it reads on first
-        // sight and then hourly, as for every node (ADR-138 Increment 6).
+        // Identity probing rides the scalar job only: it is the one that already talks to the
+        // device, and a silent agent never reaches the probe. It is still a GET of its own, one
+        // more round trip per poll: sysDescr is a string and the check's GET returns numbers, and
+        // folding it in would make `snmp_up` read 1 on a device whose scalars all fail (ADR-075
+        // 決定 3). The poller answers this ask with sysDescr and sysObjectID only between full
+        // reads; the version, patch and serial it reads on first sight, hourly, and on a poll now
+        // (ADR-138 Increments 6 and 7).
         let (mut j, kind) = job(spec, interval_secs);
         j.probe_identity = node.vendor.is_none();
         jobs.push((j, kind));

@@ -244,6 +244,11 @@ pub struct PollJob {
     /// maker/model (set by core only while a node's vendor is still blank). Honoured for the
     /// scalar SNMP checks. Defaulted for N-1 compatibility (ADR-017): an older poller ignores it
     /// and simply never probes identity.
+    ///
+    /// ⚠️ **"Probe" is not how much is read** (ADR-138 Increments 6 and 7). A current poller answers
+    /// this with `sysDescr` and `sysObjectID` only between full reads, and reads the version,
+    /// patch and serial on first sight, hourly, and on a poll now (`worker/identity.rs`). A poller
+    /// older than Increment 6 still answers every poll with the full read.
     #[serde(default)]
     pub probe_identity: bool,
     /// An operator asked for this poll — "poll now" (ADR-149). The poller then reads, on this job,
@@ -2276,6 +2281,16 @@ pub struct PollResult {
     /// wire form is unchanged (ADR-017).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hardware_model: Option<String>,
+    /// The identity on this result is the poller's light read — `sysDescr` and `sysObjectID` only,
+    /// for a node whose maker core does not know yet (ADR-138 Increments 6 and 8). Core fills the
+    /// node's vendor from it but **not its model**: the read carries no `hardware_model`, so a
+    /// model guessed from `sysDescr` here could land ahead of the device's own and be kept for
+    /// good. The model comes from a full read only.
+    ///
+    /// Defaulted to `false` and skipped when false (ADR-017): an N-1 poller sends only full reads,
+    /// which is what `false` says; an N-1 core ignores it and fills the model as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identity_partial: bool,
     /// The DNS resolution chain observed on this poll (DNS checks only, ADR-033). Structured
     /// metadata core persists into PostgreSQL — **never a TSDB label** (ADR-011), the same tier as
     /// `interfaces` and `sys_descr`. Defaulted so an older poller that doesn't send it stays N-1
@@ -2431,6 +2446,7 @@ impl PollResult {
             sys_object_id: None,
             serial_number: None,
             hardware_model: None,
+            identity_partial: false,
             dns_chain: None,
             neighbors: None,
             l3: None,
@@ -4128,6 +4144,32 @@ mod tests {
         let back: PollResult =
             serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
         assert_eq!(back.hardware_model.as_deref(), Some("AIR-CT3504-K9"));
+    }
+
+    /// ADR-138 Increment 8's field, the same three ways: absent from an N-1 poller (a full read),
+    /// absent from the wire when unset, and a set mark survives the round trip.
+    #[test]
+    fn poll_result_identity_partial_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "sys_descr": "Cisco Controller",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(
+            !result.identity_partial,
+            "an N-1 poller's read is a full one"
+        );
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("identity_partial"), "{wire}");
+
+        result.identity_partial = true;
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert!(back.identity_partial);
     }
 
     /// `None` (no set observed) and `Some(empty)` (this device has no neighbours) must survive the
