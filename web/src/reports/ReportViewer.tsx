@@ -10,7 +10,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
+import { saveBlob } from '../lib/download';
 import { formatTimestamp } from '../lib/format';
 import type { ReportRunDetail } from '../types/api';
 import { isRunInFlight } from './runStatus';
@@ -50,7 +51,7 @@ export function ReportViewer({ runId, onClose }: Props) {
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setError(e instanceof ApiError ? e.message : t('viewer.err.loadFailed'));
+          setError(errMsg(e, t('viewer.err.loadFailed')));
           if (inFlight) timer = setTimeout(load, 2500);
         });
     };
@@ -66,20 +67,9 @@ export function ReportViewer({ runId, onClose }: Props) {
     setError(null);
     try {
       const blob = await api.exportReportRun(runId, format);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report-${runId}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      saveBlob(blob, `report-${runId}.${format}`);
     } catch (e) {
-      setError(
-        e instanceof ApiError
-          ? e.message
-          : t('viewer.err.exportFailed', { format: format.toUpperCase() }),
-      );
+      setError(errMsg(e, t('viewer.err.exportFailed', { format: format.toUpperCase() })));
     } finally {
       setBusy(null);
     }

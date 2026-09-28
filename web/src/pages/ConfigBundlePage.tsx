@@ -14,6 +14,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
+import { saveBlob } from '../lib/download';
 import { useCan } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -81,12 +82,7 @@ function ExportPanel() {
         const blob = new Blob([JSON.stringify(bundle, null, 2)], {
           type: 'application/json;charset=utf-8',
         });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = bundleFilename(bundle.exported_at);
-        a.click();
-        URL.revokeObjectURL(url);
+        saveBlob(blob, bundleFilename(bundle.exported_at));
         setDone(bundle);
       })
       .catch((e: unknown) => setError(errMsg(e, t('bundle.export.err'))))

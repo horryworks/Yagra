@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import type {
   ReportDefinition,
   ReportSectionDef,
@@ -111,7 +111,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
       else await api.createReportDefinition(body);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : t('builder.err.saveFailed'));
+      setError(errMsg(e, t('builder.err.saveFailed')));
       setSaving(false);
     }
   }

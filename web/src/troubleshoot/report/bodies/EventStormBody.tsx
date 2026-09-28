@@ -6,7 +6,7 @@
 // rank and filter by the *multiple*, not the raw count, and each carries a baseline-vs-peak meter.
 //
 // `when_label` is `rel_label(peak_bucket)` in Rust and cannot be localized, so the peak time is read
-// from the additive `detail.peak_at` (unix seconds) and formatted with the shared `relTime`. Rows
+// from the additive `detail.peak_at` (unix seconds) and formatted with the shared `relativeTimeMs`. Rows
 // written by an older core lack the key and fall back to the backend string.
 
 import { useMemo } from 'react';
@@ -14,7 +14,7 @@ import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
-import { relTime } from '../../format';
+import { relativeTimeMs } from '../../../lib/format';
 import {
   Chips,
   EmptyList,
@@ -65,7 +65,7 @@ function StormRow({ finding }: { finding: AnalysisFinding }) {
         <RightRail
           // Derived from `peak_at` so JA gets a localized relative time; the English label is the
           // fallback for rows written before that field existed.
-          when={peakAt !== undefined ? relTime(peakAt * 1000) : finding.when_label}
+          when={peakAt !== undefined ? relativeTimeMs(peakAt * 1000) : finding.when_label}
           detail={t('report.event_storm.baseline', { count: Math.round(baseOf(finding)) })}
         />
       }

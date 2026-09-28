@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import i18n from '../i18n';
+import { readSources } from '../testSupport/sources';
 import metricUnits from '../api/metricUnits.json';
 import {
   agoSec,
@@ -15,6 +16,7 @@ import {
   formatCount,
   formatDaysToExpiry,
   formatDbm,
+  formatDuration,
   formatPps,
   formatSi,
   formatUptimeTicks,
@@ -28,6 +30,7 @@ import {
   metricUnitSuffix,
   pointsToSeries,
   relativeTime,
+  relativeTimeMs,
   scalarDisplay,
   scalarValueFormat,
   severityColorVar,
@@ -480,6 +483,52 @@ describe('format', () => {
     expect(relativeTime('2026-06-10T09:00:00Z', now)).toBe('5d ago');
   });
 
+  it('relativeTimeMs is the same buckets from epoch millis, and empty for a missing instant', () => {
+    const now = Date.UTC(2026, 5, 15, 9, 0, 0);
+    expect(relativeTimeMs(null, now)).toBe('');
+    expect(relativeTimeMs(undefined, now)).toBe('');
+    expect(relativeTimeMs(0, now)).toBe('');
+    expect(relativeTimeMs(now - 5_000, now)).toBe('just now');
+    expect(relativeTimeMs(now - 18 * 60_000, now)).toBe('18m ago');
+    expect(relativeTimeMs(now - 2 * 3_600_000, now)).toBe('2h ago');
+    // The bucket Troubleshoot's own copy did not have (ADR-184).
+    expect(relativeTimeMs(now - 30 * 3_600_000, now)).toBe('Yesterday');
+    expect(relativeTimeMs(now - 3 * 86_400_000, now)).toBe('3d ago');
+  });
+
+  it('formatDuration shows the largest unit and the one below it, truncating', () => {
+    expect(formatDuration(0)).toBe('0s');
+    expect(formatDuration(42)).toBe('42s');
+    expect(formatDuration(90)).toBe('1m 30s');
+    expect(formatDuration(3599)).toBe('59m 59s');
+    expect(formatDuration(3700)).toBe('1h 1m');
+    expect(formatDuration(90_061)).toBe('1d 1h');
+    expect(formatDuration(90_061, { units: 1 })).toBe('1d');
+  });
+
+  it('formatDuration never goes finer than `smallest` (the core-uptime row)', () => {
+    // Moved from upgradeStatus.ts's own `uptime`, whose outputs these are.
+    const up = (s: number) => formatDuration(s, { smallest: 'm' });
+    expect(up(0)).toBe('0m');
+    expect(up(59)).toBe('0m');
+    expect(up(60)).toBe('1m');
+    expect(up(3600)).toBe('1h 0m');
+    expect(up(3660)).toBe('1h 1m');
+    expect(up(86_400)).toBe('1d 0h');
+    expect(up(90_000)).toBe('1d 1h');
+    // A process up for weeks is read for "is this the restart I just did"; minutes are noise.
+    expect(up(1_000_000)).toBe('11d 13h');
+  });
+
+  it('formatDuration speaks the interface language', async () => {
+    await i18n.changeLanguage('ja');
+    try {
+      expect(formatDuration(3700)).toBe('1 時間 1 分');
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
   it('gives known scalars a friendly label + formatted value, unknowns the raw name', () => {
     const up = scalarDisplay('snmp_sys_uptime_ticks', 337326072);
     expect(up).toEqual({ label: 'Uptime', value: '1mo 9d 01:01', known: true });
@@ -691,5 +740,35 @@ describe('rounding that carries a value over a unit boundary', () => {
 
   it('the largest unit has nowhere to carry to, and says so rather than overflowing the table', () => {
     expect(formatBps(999_999_999_999_999)).toBe('1000 Tbps');
+  });
+});
+
+/**
+ * ADR-184: relative time and durations are bucketed in this module only. Troubleshoot had its own
+ * relative-time copy (with no "Yesterday"), and the poller-gap and core-uptime columns each had a
+ * duration formatter, one of them English-only. A screen that asks for `format:relative.*` or
+ * `format:duration.*` itself is doing the bucketing again.
+ *
+ * ⚠️ Assembled at runtime, or it would match this file.
+ */
+describe('no screen buckets a relative time or a duration by hand', () => {
+  const NEEDLES = [`format:${'relative'}.`, `format:${'duration'}.`];
+
+  it('only lib/format.ts asks for those keys', () => {
+    const offenders = readSources()
+      .filter(([p, src]) => p !== 'lib/format.ts' && NEEDLES.some((n) => src.includes(n)))
+      .map(([p]) => p);
+    expect(
+      offenders,
+      `use relativeTime / relativeTimeMs / formatDuration from lib/format:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('finds the sources it is supposed to be reading', () => {
+    const files = readSources();
+    expect(files.length).toBeGreaterThan(300);
+    const own = files.find(([p]) => p === 'lib/format.ts')?.[1] ?? '';
+    expect(NEEDLES.every((n) => own.includes(n))).toBe(true);
+    expect(files.filter(([, src]) => src.includes('relativeTimeMs(')).length).toBeGreaterThanOrEqual(6);
   });
 });

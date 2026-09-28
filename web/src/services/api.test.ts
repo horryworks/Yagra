@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, errMsg, getToken, setToken, setUnauthorizedHandler } from './api';
+import { readSources } from '../testSupport/sources';
 
 function mockFetch(status: number, body: unknown) {
   globalThis.fetch = vi.fn().mockResolvedValue({
@@ -1873,5 +1874,32 @@ describe('api client', () => {
       code: 'rca_not_configured',
       status: 503,
     });
+  });
+});
+
+/**
+ * ADR-184: the choice between the server's message and a local fallback is `errMsg`'s, and no
+ * screen writes it out again. Eleven had, three of them under a variable other than `e` and one
+ * split over three lines — which is why the needle is a pattern and not a string.
+ *
+ * ⚠️ Assembled at runtime, or it would match this file.
+ */
+describe('no screen picks an error message by hand', () => {
+  const COPY = new RegExp(['instanceof', 'ApiError', '\\?', '\\w+\\.message'].join('\\s*'));
+
+  it('every "server message or fallback" goes through errMsg', () => {
+    const offenders = readSources()
+      .filter(([p, src]) => p !== 'services/api.ts' && COPY.test(src))
+      .map(([p]) => p);
+    expect(offenders, `use errMsg(e, fallback) from services/api:\n  ${offenders.join('\n  ')}`).toEqual(
+      [],
+    );
+  });
+
+  it('finds the sources it is supposed to be reading', () => {
+    const files = readSources();
+    expect(files.length).toBeGreaterThan(300);
+    expect(COPY.test(files.find(([p]) => p === 'services/api.ts')?.[1] ?? '')).toBe(true);
+    expect(files.filter(([, src]) => src.includes('errMsg(')).length).toBeGreaterThan(50);
   });
 });

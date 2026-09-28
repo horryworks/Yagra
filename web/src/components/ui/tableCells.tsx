@@ -3,7 +3,7 @@
 // These encode the cell vocabulary the design defines once and every list reuses: sealed
 // secrets, copyable mono ids, HTTP status, method chips, two-line timestamps, monograms.
 
-import { useState } from 'react';
+import { useCopy } from '../../lib/useCopy';
 import { useTranslation } from 'react-i18next';
 import {
   formatExactTime,
@@ -35,12 +35,8 @@ export function SealedSecret() {
  *  copy of that idea that had been left without it (ADR-088). */
 export function CopyableId({ id }: { id: string }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
+  const { copied, copy: copyText } = useCopy();
+  const copy = () => copyText(id);
   return (
     <span className="yt-copy">
       <span className="yt-copy-id" title={id}>

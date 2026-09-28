@@ -14,8 +14,7 @@ import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
-import { formatBytes } from '../../../lib/format';
-import { relTime } from '../../format';
+import { formatBytes, relativeTimeMs } from '../../../lib/format';
 import { Chips, EmptyList, FindingRow, NodeRef, RatioMeter, ReportToolbar, RightRail } from '../kit';
 import { detailNum, ratioBucket, sevOf, sortByDetail, sortCommon } from '../format';
 import {
@@ -51,7 +50,7 @@ function TrafficRow({ finding }: { finding: AnalysisFinding }) {
       }
       right={
         <RightRail
-          when={peakAt !== undefined ? relTime(peakAt * 1000) : finding.when_label}
+          when={peakAt !== undefined ? relativeTimeMs(peakAt * 1000) : finding.when_label}
           detail={t('report.traffic_anomaly.baseline', { bytes: formatBytes(baseOf(finding)) })}
         />
       }

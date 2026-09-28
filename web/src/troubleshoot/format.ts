@@ -1,22 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Small Troubleshoot display helpers: relative timestamps and turning a stored job's params
-// back into a re-run request (the "Retry" / "Re-run" path).
+// Turning a stored Troubleshoot job's params back into a re-run request (the "Retry" / "Re-run"
+// path). Relative timestamps used to live here too; they are `lib/format.ts`'s `relativeTimeMs`.
 
-import i18n from '../i18n';
 import type { AnalysisJob, AnalysisJobInput } from '../types/api';
 import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
-
-/** Compact "just now" / "Xm ago" / "Xh ago" / "Xd ago" from an epoch-millis timestamp, empty for a
- *  missing one. Reuses the shared `format:relative.*` keys (resolved at call time via the global
- *  i18n instance — not at module load — so it follows the active language, like lib/format.ts). */
-export function relTime(ms: number | null | undefined): string {
-  if (!ms) return '';
-  const d = Date.now() - ms;
-  if (d < 60_000) return i18n.t('format:relative.justNow');
-  if (d < 3_600_000) return i18n.t('format:relative.min', { count: Math.floor(d / 60_000) });
-  if (d < 86_400_000) return i18n.t('format:relative.hour', { count: Math.floor(d / 3_600_000) });
-  return i18n.t('format:relative.day', { count: Math.floor(d / 86_400_000) });
-}
 
 /** A job's `params` is typed `unknown` because the contract describes it as an untyped object,
  *  not because its content is arbitrary: the backend stores what `JobParams::to_json` builds from

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { inputFromJob, relTime } from './format';
+import { inputFromJob } from './format';
 import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
 import type { AnalysisJob } from '../types/api';
 
@@ -75,21 +75,5 @@ describe('inputFromJob', () => {
     // test is about the behaviour an operator sees and not about which name the code reads.
     const inp = inputFromJob(job({ params: {} }));
     expect(inp.window_secs).toBe(7 * 24 * 3600);
-  });
-});
-
-describe('relTime', () => {
-  it('is empty for a missing timestamp', () => {
-    expect(relTime(null)).toBe('');
-    expect(relTime(undefined)).toBe('');
-    expect(relTime(0)).toBe('');
-  });
-
-  it('buckets a recent timestamp into just-now / minutes / hours / days', () => {
-    const now = Date.now();
-    expect(relTime(now - 5_000)).toBe('just now');
-    expect(relTime(now - 18 * 60_000)).toBe('18m ago');
-    expect(relTime(now - 2 * 3_600_000)).toBe('2h ago');
-    expect(relTime(now - 3 * 86_400_000)).toBe('3d ago');
   });
 });

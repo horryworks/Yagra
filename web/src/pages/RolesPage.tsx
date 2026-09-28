@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import type { Permission, RoleMatrix } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -28,7 +28,7 @@ export function RolesPage() {
       .listRoles()
       .then(setMatrix)
       .catch((e: unknown) =>
-        setError(e instanceof ApiError ? e.message : t('roles.err.load')),
+        setError(errMsg(e, t('roles.err.load'))),
       );
   }, [t]);
 

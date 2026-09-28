@@ -20,8 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
 import { EntityName } from '../../../components/ui/EntityName';
-import { relTime } from '../../format';
-import { formatTimestamp } from '../../../lib/format';
+import { formatTimestamp, relativeTimeMs } from '../../../lib/format';
 import {
   IncidentTimeline,
   LANES,
@@ -80,7 +79,7 @@ function IncidentCard({ finding }: { finding: AnalysisFinding }) {
           {peers > 0 && (
             <>{t('report.incident_correlate.peers', { count: peers })} ·{' '}</>
           )}
-          {t('report.incident_correlate.began', { time: relTime(from * 1000) })}
+          {t('report.incident_correlate.began', { time: relativeTimeMs(from * 1000) })}
         </span>
       </div>
 

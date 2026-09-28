@@ -23,6 +23,12 @@
     "day_one": "{{count}}d ago",
     "day_other": "{{count}}d ago"
   },
+  "duration": {
+    "d": "{{count}}d",
+    "h": "{{count}}h",
+    "m": "{{count}}m",
+    "s": "{{count}}s"
+  },
   "http": {
     "ok": "OK",
     "denied": "Denied",

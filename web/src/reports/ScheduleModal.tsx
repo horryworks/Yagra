@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import type { ReportDefinition, Cadence, ReportSchedule } from '../types/api';
 import { WEEKDAY_OPTIONS } from '../lib/cadence';
 import { SELECTABLE_CADENCES } from '../lib/cadence';
@@ -73,7 +73,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       else await api.createReportSchedule(body);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : t('schedule.err.saveFailed'));
+      setError(errMsg(e, t('schedule.err.saveFailed')));
       setSaving(false);
     }
   }

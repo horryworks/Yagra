@@ -25,7 +25,7 @@ import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { ProgressBar } from '../components/ui/ProgressBar';
 import { api, errMsg } from '../services/api';
-import { formatTimestamp, relativeTime } from '../lib/format';
+import { formatDuration, formatTimestamp, relativeTime } from '../lib/format';
 import type { UpgradeStatus } from '../types/api';
 import type { ComponentRow, ConvergePhase, Offer, RunPhase } from './upgradeStatus';
 import {
@@ -60,7 +60,6 @@ import {
   upgrades,
 } from './upgradeStatus';
 import './UpgradePage.css';
-import { uptime } from './upgradeStatus';
 
 /** How often to re-read the status while a run is in flight.
  *
@@ -643,7 +642,11 @@ export function UpgradePage() {
           <Row label={t('build.hostname')} mono>
             {status.current.hostname ?? <span className="muted">{t('build.unknown')}</span>}
           </Row>
-          <Row label={t('build.uptime')}>{uptime(status.current.uptime_seconds)}</Row>
+          <Row label={t('build.uptime')}>{
+            // Coarse on purpose: this answers "did core restart while nobody was looking?", not
+            // "how long exactly" — so never finer than a minute.
+            formatDuration(status.current.uptime_seconds, { smallest: 'm' })
+          }</Row>
         </div>
 
         <Sub>{t('schema.heading')}</Sub>

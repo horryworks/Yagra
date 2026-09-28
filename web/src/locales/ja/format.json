@@ -20,6 +20,12 @@
     "hour_other": "{{count}} 時間前",
     "day_other": "{{count}} 日前"
   },
+  "duration": {
+    "d": "{{count}} 日",
+    "h": "{{count}} 時間",
+    "m": "{{count}} 分",
+    "s": "{{count}} 秒"
+  },
   "http": {
     "ok": "OK",
     "denied": "拒否",

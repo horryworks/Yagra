@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import './LoginPage.css';
 
@@ -45,7 +45,7 @@ export function OidcCallbackPage() {
         navigate('/dashboard', { replace: true });
       })
       .catch((x: unknown) => {
-        setError(x instanceof ApiError ? x.message : t('ssoFailed'));
+        setError(errMsg(x, t('ssoFailed')));
       });
   }, [params, navigate, setAuthed, setRole, t]);
 

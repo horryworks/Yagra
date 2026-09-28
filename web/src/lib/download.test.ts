@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
 import { filenameFromDisposition } from './download';
+import { readSources } from '../testSupport/sources';
 
 describe('filenameFromDisposition', () => {
   it('reads the quoted filename the API actually sends', () => {
@@ -42,5 +43,30 @@ describe('filenameFromDisposition', () => {
     for (const header of [null, '', 'attachment', 'inline', 'attachment; filename=""', 'attachment; filename=".."']) {
       expect(filenameFromDisposition(header)).toBeNull();
     }
+  });
+});
+
+/**
+ * ADR-184: `saveBlob` is the one place a file is handed to the browser. Four screens had built
+ * their own anchor, and three of them left it detached — which Firefox ignores.
+ *
+ * ⚠️ Assembled at runtime, or it would match this file.
+ */
+describe('no screen saves a file by hand', () => {
+  const NEEDLES = [`.${'download'} =`, `URL.${'createObjectURL'}(`];
+
+  it('every download goes through saveBlob', () => {
+    const offenders = readSources()
+      .filter(([p, src]) => p !== 'lib/download.ts' && NEEDLES.some((n) => src.includes(n)))
+      .map(([p]) => p);
+    expect(offenders, `use saveBlob from lib/download:\n  ${offenders.join('\n  ')}`).toEqual([]);
+  });
+
+  it('finds the sources it is supposed to be reading', () => {
+    const files = readSources();
+    expect(files.length).toBeGreaterThan(300);
+    const own = files.find(([p]) => p === 'lib/download.ts')?.[1] ?? '';
+    expect(NEEDLES.every((n) => own.includes(n))).toBe(true);
+    expect(files.filter(([, src]) => src.includes('saveBlob(')).length).toBeGreaterThanOrEqual(7);
   });
 });

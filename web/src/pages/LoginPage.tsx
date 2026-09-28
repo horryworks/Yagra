@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { api, ApiError } from '../services/api';
+import { api, ApiError, errMsg } from '../services/api';
 import { useAuthStore, useConfigStore } from '../store';
 import { Logo } from '../components/shell/Logo';
 import { Button } from '../components/ui/Button';
@@ -57,7 +57,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
       })
       .catch((x: unknown) => {
         setBusy(false);
-        setError({ tone: 'danger', message: x instanceof ApiError ? x.message : t('ssoFailed') });
+        setError({ tone: 'danger', message: errMsg(x, t('ssoFailed')) });
       });
   };
 
@@ -84,7 +84,7 @@ export function LoginPage({ embedded = false }: { embedded?: boolean }) {
           x instanceof ApiError && (x.code === 'locked_out' || x.code === 'expired');
         setError({
           tone: recoverable ? 'warning' : 'danger',
-          message: x instanceof ApiError ? x.message : t('signInFailed'),
+          message: errMsg(x, t('signInFailed')),
         });
       })
       .finally(() => setBusy(false));

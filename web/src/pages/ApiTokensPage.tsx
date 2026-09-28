@@ -8,6 +8,7 @@
 // OverflowMenu action with a confirm modal. Modeled on AuditPage (table) + AuthSettingsPage (modals).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCopy } from '../lib/useCopy';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
@@ -407,15 +408,9 @@ function CreateTokenModal({
 /** Reveal the raw token exactly once, with copy + a ready-to-paste MCP client command. */
 function RevealTokenModal({ created, onClose }: { created: CreatedApiToken; onClose: () => void }) {
   const { t } = useTranslation('settings-tokens');
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopy();
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://yagra.example';
   const command = `claude mcp add --transport http yagra ${origin}/mcp --header "Authorization: Bearer ${created.token}"`;
-
-  const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
 
   return (
     <Modal

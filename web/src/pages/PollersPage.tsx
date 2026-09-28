@@ -10,6 +10,7 @@
 // destructive-consent via the shared Modal.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCopy } from '../lib/useCopy';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
@@ -38,7 +39,14 @@ import { ActionMenu } from '../components/ui/ActionMenu';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
-import { dateOnly, formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
+import {
+  dateOnly,
+  formatCount,
+  formatDuration,
+  formatUtil,
+  formatExactTime,
+  relativeTime,
+} from '../lib/format';
 import {
   buildPollerEnv,
   isValidPollerToken,
@@ -975,7 +983,7 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   const [pool, setPool] = useState('');
   const [busUrl, setBusUrl] = useState('');
   const [caFile, setCaFile] = useState('');
-  const [copied, setCopied] = useState<'env' | 'cmd' | null>(null);
+  const { copied, copy } = useCopy();
   const [issuing, setIssuing] = useState(false);
   const [issued, setIssued] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
@@ -987,12 +995,6 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   const env = ready
     ? buildPollerEnv({ id, pool, busUrl: busUrl.trim(), caFile })
     : '';
-
-  const copy = (text: string, mark: 'env' | 'cmd') => {
-    void navigator.clipboard?.writeText(text);
-    setCopied(mark);
-    setTimeout(() => setCopied(null), 1200);
-  };
 
   // Only the id and the pool: the address is left to the server, which falls back to the name the
   // operator typed when they turned remote acceptance on. Asking for it again here would be asking
@@ -1123,14 +1125,6 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
   const { t } = useTranslation('system');
   if (gaps.length === 0) return null;
 
-  const duration = (secs: number): string => {
-    if (secs < 60) return t('pollers.gaps.durSecs', { count: secs });
-    if (secs < 3600) return t('pollers.gaps.durMins', { count: Math.round(secs / 60) });
-    const h = Math.floor(secs / 3600);
-    const m = Math.round((secs % 3600) / 60);
-    return t('pollers.gaps.durHours', { hours: h, mins: m });
-  };
-
   return (
     <div className="poller-gaps">
       <h2 className="poller-gaps-title">{t('pollers.gaps.title')}</h2>
@@ -1176,7 +1170,7 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
                   </span>
                 )}
               </div>
-              <div className="ytable-cell right mono">{duration(g.duration_secs)}</div>
+              <div className="ytable-cell right mono">{formatDuration(g.duration_secs)}</div>
             </div>
           ))}
         </div>

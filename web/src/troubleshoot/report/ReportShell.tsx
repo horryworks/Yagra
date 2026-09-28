@@ -17,7 +17,8 @@ import { Select } from '../../components/ui/Field';
 import { api, errMsg } from '../../services/api';
 import { ScopePicker } from '../../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../../components/ScopePicker/scope';
-import { relTime } from '../format';
+import { relativeTimeMs } from '../../lib/format';
+import { saveBlob } from '../../lib/download';
 import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
 import { useCan } from '../../store';
@@ -201,12 +202,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
       return;
     }
     const csv = toCsv(descriptor.csv, findings);
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${descriptor.tool}-findings.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${descriptor.tool}-findings.csv`);
   };
 
   const running = runningCount(jobs);
@@ -366,7 +362,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
               </span>
             ))}
             <div className="ts-res-meta">
-              {t('report.common.finished', { time: relTime(job.finished_ms) })}
+              {t('report.common.finished', { time: relativeTimeMs(job.finished_ms) })}
               <br />
               {job.summary ?? ''}
             </div>

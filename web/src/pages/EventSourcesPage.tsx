@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCopy } from '../lib/useCopy';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -364,15 +365,8 @@ function TokenModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
-  const [copiedToken, setCopiedToken] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
+  const { copied, copy } = useCopy();
   const url = `${window.location.origin}/api/v1/ingest/webhook/${issued.id}`;
-
-  const copy = (text: string, mark: (v: boolean) => void) => {
-    void navigator.clipboard?.writeText(text);
-    mark(true);
-    setTimeout(() => mark(false), 1200);
-  };
 
   return (
     <Modal
@@ -392,8 +386,8 @@ function TokenModal({
         <label className="modal-field-label">{t('eventSources.token.label')}</label>
         <div className="eventsources-copyrow">
           <code className="eventsources-token mono">{issued.token}</code>
-          <Button variant="outline" onClick={() => copy(issued.token, setCopiedToken)}>
-            {copiedToken ? t('common:copy.copied') : t('eventSources.token.copy')}
+          <Button variant="outline" onClick={() => copy(issued.token, 'token')}>
+            {copied === 'token' ? t('common:copy.copied') : t('eventSources.token.copy')}
           </Button>
         </div>
       </div>
@@ -401,8 +395,8 @@ function TokenModal({
         <label className="modal-field-label">{t('eventSources.token.url')}</label>
         <div className="eventsources-copyrow">
           <code className="eventsources-token mono">{url}</code>
-          <Button variant="outline" onClick={() => copy(url, setCopiedUrl)}>
-            {copiedUrl ? t('common:copy.copied') : t('eventSources.token.copy')}
+          <Button variant="outline" onClick={() => copy(url, 'url')}>
+            {copied === 'url' ? t('common:copy.copied') : t('eventSources.token.copy')}
           </Button>
         </div>
       </div>

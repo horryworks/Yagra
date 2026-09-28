@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
@@ -135,7 +135,7 @@ export function AuditPage() {
         if (cancelled) return;
         const b = classifyLoadError(e);
         if (b) setBlock(b);
-        else setError(e instanceof ApiError ? e.message : t('audit.err.load'));
+        else setError(errMsg(e, t('audit.err.load')));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -154,7 +154,7 @@ export function AuditPage() {
         setRows((cur) => appendPage(cur, page));
         setCursor(nextCursor(page));
       })
-      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : t('audit.err.loadMore')))
+      .catch((e: unknown) => setError(errMsg(e, t('audit.err.loadMore'))))
       .finally(() => {
         loadingMore.current = false;
       });

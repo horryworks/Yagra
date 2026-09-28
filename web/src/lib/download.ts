@@ -40,7 +40,11 @@ function sanitize(name: string): string | null {
 }
 
 /**
- * Save a blob under `filename`, via a temporary object URL.
+ * Save a blob under `filename`, via a temporary object URL. **The only place the WebUI saves a
+ * file** — `download.test.ts` fails the build on a second `.download =` (ADR-184).
+ *
+ * The anchor is attached for the click and removed after: Firefox ignores a click on a detached
+ * anchor, which only one of the four hand-written copies this replaced had remembered.
  *
  * The revoke is what stops the blob leaking for the life of the tab — a support bundle is tens of
  * megabytes, so an un-revoked URL is a real cost, not a tidiness point.
@@ -50,6 +54,8 @@ export function saveBlob(blob: Blob, filename: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }

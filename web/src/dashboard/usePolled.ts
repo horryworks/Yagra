@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import i18n from '../i18n';
-import { ApiError } from '../services/api';
+import { ApiError, errMsg } from '../services/api';
 
 export interface Polled<T> {
   data: T | null;
@@ -51,7 +51,7 @@ export function usePolled<T>(
             setState((s) => ({
               ...s,
               loading: false,
-              error: e instanceof ApiError ? e.message : i18n.t('dashboard:err.requestFailed'),
+              error: errMsg(e, i18n.t('dashboard:err.requestFailed')),
               errorStatus: e instanceof ApiError ? e.status : null,
             }));
           }

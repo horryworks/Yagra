@@ -6,7 +6,7 @@
 // once here so every list reuses the same treatment instead of hand-rolling per-page resolvers.
 // The resolvers and the `useEntityNames` hook are in `entityNames.ts`; this file renders.
 
-import { useState } from 'react';
+import { useCopy } from '../../lib/useCopy';
 import { useTranslation } from 'react-i18next';
 import { isEntityResolved } from './entityNames';
 import { IconButton } from './IconButton';
@@ -29,12 +29,8 @@ export function EntityName({ name, id }: { name: string; id?: string }) {
 
 function EntityNameResolved({ name, id }: { name: string; id: string }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
+  const { copied, copy: copyText } = useCopy();
+  const copy = () => copyText(id);
   return (
     <span className="yt-entity" title={id}>
       <span className="yt-entity-name">{name}</span>

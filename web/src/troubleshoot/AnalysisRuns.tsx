@@ -24,7 +24,8 @@ import { useTroubleshootStore } from './store';
 import { useCan } from '../store';
 import { seedAnalysisJobs } from './useTroubleshootStream';
 import { reportPathFor, toolById } from './data';
-import { relTime, inputFromJob } from './format';
+import { inputFromJob } from './format';
+import { relativeTimeMs } from '../lib/format';
 import type { AnalysisJob } from '../types/api';
 
 function RunRow({ job }: { job: AnalysisJob }) {
@@ -80,7 +81,7 @@ function RunRow({ job }: { job: AnalysisJob }) {
           <span className="ts-run-phase">{job.phase ?? t('runs.running')}</span>
         </div>
         <div className="ts-run-eta">{pct}%</div>
-        <div className="ts-run-time">{relTime(job.created_ms)}</div>
+        <div className="ts-run-time">{relativeTimeMs(job.created_ms)}</div>
         <div className="ts-run-action">
           {canRun && (
             <button className="ts-linkbtn ts-run-link" onClick={() => void cancelJob(job.id)}>
@@ -103,7 +104,7 @@ function RunRow({ job }: { job: AnalysisJob }) {
           {job.summary ?? t('runs.findingCount', { count: job.finding_count })}
         </div>
         <div className="ts-run-eta">{t('runs.done')}</div>
-        <div className="ts-run-time">{relTime(job.finished_ms)}</div>
+        <div className="ts-run-time">{relativeTimeMs(job.finished_ms)}</div>
         <div className="ts-run-action">
           <button className="ts-linkbtn ts-run-link" onClick={view}>
             {t('actions.view')} →
@@ -130,7 +131,7 @@ function RunRow({ job }: { job: AnalysisJob }) {
           : t('runs.state.cancelled')}
       </div>
       <div className="ts-run-eta">—</div>
-      <div className="ts-run-time">{relTime(job.finished_ms)}</div>
+      <div className="ts-run-time">{relativeTimeMs(job.finished_ms)}</div>
       <div className="ts-run-action">
         {canRun && (
           <button className="ts-linkbtn ts-run-link" onClick={() => void retry()}>

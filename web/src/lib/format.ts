@@ -134,12 +134,55 @@ export function dateOnly(iso: string): string {
  *  "Never" for a null timestamp. `now` is injectable so callers/tests are deterministic. */
 export function relativeTime(iso: string | null, now: number = Date.now()): string {
   if (!iso) return i18n.t('format:relative.never');
-  const mins = Math.floor((now - new Date(iso).getTime()) / 60000);
+  return relativeTimeMs(new Date(iso).getTime(), now);
+}
+
+/** {@link relativeTime} for an epoch-millis instant, and the one place the buckets are decided.
+ *  A missing instant (`null`, `undefined`, `0`) is an empty string: what to show instead — "Never",
+ *  a dash, nothing — is the caller's word, and the callers disagree on purpose.
+ *
+ *  Troubleshoot used to carry its own copy with no "Yesterday" bucket, so a run from 30 hours ago
+ *  read "1d ago" there and "Yesterday" everywhere else (ADR-184). */
+export function relativeTimeMs(ms: number | null | undefined, now: number = Date.now()): string {
+  if (!ms) return '';
+  const mins = Math.floor((now - ms) / 60000);
   if (mins < 1) return i18n.t('format:relative.justNow');
   if (mins < 60) return i18n.t('format:relative.min', { count: mins });
   if (mins < 1440) return i18n.t('format:relative.hour', { count: Math.floor(mins / 60) });
   if (mins < 2880) return i18n.t('format:relative.yesterday');
   return i18n.t('format:relative.day', { count: Math.floor(mins / 1440) });
+}
+
+const DURATION_UNITS = [
+  { key: 'd', secs: 86_400 },
+  { key: 'h', secs: 3_600 },
+  { key: 'm', secs: 60 },
+  { key: 's', secs: 1 },
+] as const;
+
+/** A length of time as its largest non-zero unit and the `units - 1` below it — `3d 4h`, `1h 0m`,
+ *  `42s` — in the interface language. Lower units are truncated, never rounded up, so 3599 seconds
+ *  is `59m 59s` and never `60m`. `smallest` is the finest unit ever shown: `'m'` makes 59 seconds
+ *  `0m`.
+ *
+ *  One implementation for the poller-gap and the core-uptime columns, which had one each — the
+ *  uptime one in English only (ADR-184). Deliberately *not* used for a window label (`24h`, `7d`)
+ *  or a cadence, which are exact values in their own vocabularies. */
+export function formatDuration(
+  secs: number,
+  opts: { units?: 1 | 2; smallest?: 'm' | 's' } = {},
+): string {
+  const units = opts.units ?? 2;
+  const last = DURATION_UNITS.findIndex((u) => u.key === (opts.smallest ?? 's'));
+  let rest = Math.max(0, Math.floor(secs));
+  const first = DURATION_UNITS.findIndex((u, i) => i === last || rest >= u.secs);
+  const parts: string[] = [];
+  for (let i = first; i <= last && parts.length < units; i++) {
+    const n = Math.floor(rest / DURATION_UNITS[i].secs);
+    rest -= n * DURATION_UNITS[i].secs;
+    parts.push(i18n.t(`format:duration.${DURATION_UNITS[i].key}`, { count: n }));
+  }
+  return parts.join(' ');
 }
 
 /** Tone for an HTTP status code, on the status palette only (2xx up / 4xx warning / 5xx
@@ -702,7 +745,7 @@ export function formatSi(n: number): string {
 }
 
 export const agoSec = (sec: number | null): string =>
-  sec == null ? '—' : relativeTime(new Date(sec * 1000).toISOString());
+  sec == null ? '—' : relativeTimeMs(sec * 1000);
 
 export const toRfc3339 = (local: string) => new Date(local).toISOString();
 

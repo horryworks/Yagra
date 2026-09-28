@@ -10,7 +10,8 @@
 // All judgement lives in `lib/busCert.ts` so it can be tested (Vitest never executes a `.tsx`).
 // What is left here is layout and the three dialogs.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useCopy } from '../lib/useCopy';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -23,18 +24,9 @@ import { TextInput, FieldHint } from '../components/ui/Field';
 import { busCertState, namesNotCovered, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
 
-/** Copy to the clipboard and flash a confirmation. Local because the shared table-cell copy helper
- *  is about entity ids; this is about a secret shown once, where the operator needs to *see* that
- *  the copy happened before they close the dialog. */
-function useCopy() {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = useCallback((text: string, mark: string) => {
-    void navigator.clipboard?.writeText(text);
-    setCopied(mark);
-    setTimeout(() => setCopied(null), 1400);
-  }, []);
-  return { copied, copy };
-}
+/** The confirmation stays up a little longer than elsewhere: this is a secret shown once, and the
+ *  operator needs to *see* that the copy happened before they close the dialog. */
+const SECRET_COPY_FLASH_MS = 1400;
 
 /** Reissue the certificate with names an operator supplies. No restart: the stored certificate
  *  changes immediately and the bus serves it when it is next recreated, which the dialog says. */
@@ -185,7 +177,7 @@ function HandoffModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation('system');
-  const { copied, copy } = useCopy();
+  const { copied, copy } = useCopy(SECRET_COPY_FLASH_MS);
   return (
     <Modal
       title={t('pollers.bus.handoff.title')}

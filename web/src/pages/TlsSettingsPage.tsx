@@ -11,6 +11,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { api, errMsg } from '../services/api';
+import { saveBlob } from '../lib/download';
+import { formatTimestamp } from '../lib/format';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import type { WebTlsStatus } from '../types/api';
@@ -111,12 +113,7 @@ export function TlsSettingsPage() {
   function onDownload() {
     if (!view) return;
     const blob = new Blob([view.certificate], { type: 'application/x-pem-file' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = certificateFilename(view);
-    a.click();
-    URL.revokeObjectURL(url);
+    saveBlob(blob, certificateFilename(view));
   }
 
   async function onPickFile(e: React.ChangeEvent<HTMLInputElement>, into: (s: string) => void) {
@@ -193,8 +190,8 @@ export function TlsSettingsPage() {
               <dt>{t('current.validity')}</dt>
               <dd>
                 {t('current.validityRange', {
-                  from: new Date(view.not_before).toLocaleString(),
-                  to: new Date(view.not_after).toLocaleString(),
+                  from: formatTimestamp(Date.parse(view.not_before)),
+                  to: formatTimestamp(Date.parse(view.not_after)),
                 })}
               </dd>
               <dt>{t('current.keyAlgorithm')}</dt>
@@ -203,7 +200,7 @@ export function TlsSettingsPage() {
               <dd className="mono tls-fingerprint">{view.fingerprint_sha256}</dd>
               <dt>{t('current.importedAt')}</dt>
               <dd>
-                {new Date(view.imported_at).toLocaleString()}
+                {formatTimestamp(Date.parse(view.imported_at))}
                 {view.imported_by ? ` (${t('current.importedBy', { user: view.imported_by })})` : ''}
               </dd>
             </dl>
