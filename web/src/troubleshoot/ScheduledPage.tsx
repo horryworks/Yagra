@@ -20,9 +20,8 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { scheduleFilters } from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
@@ -138,7 +137,6 @@ export function ScheduledPage() {
   const [editing, setEditing] = useState<AnalysisSchedule | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<AnalysisSchedule | null>(null);
-  const [sheet, setSheet] = useState(false);
 
   // Creating or editing a schedule is `AckAlerts` at the edge, like launching a run — so the
   // action is offered only to a caller who holds it, rather than failing on save.
@@ -172,10 +170,8 @@ export function ScheduledPage() {
   );
   // Client-side: the list is bounded by what an operator set up, not by fleet size
   // (ui-conventions). URL-backed — one table on this route.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   const saved = () => {
     setCreating(false);
@@ -200,25 +196,21 @@ export function ScheduledPage() {
         </Card>
       ) : (
         <>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('schedule.schedule', { count: shown.length })}
-            />
+          <ListToolbar
+            list={filtering}
+            labels={columnLabels(columns)}
+            count={{
+              shown: shown.length,
+              total: rows.length,
+              noun: (n) => t('schedule.schedule', { count: n }),
+            }}
+          >
             {canWrite && (
               <Button variant="primary" onClick={() => setCreating(true)}>
                 {t('schedule.add')}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
@@ -233,21 +225,6 @@ export function ScheduledPage() {
             loading={loading}
             empty={anyFiltered ? t('common:filter.noMatch') : t('schedule.empty')}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={{
-                tool: t('schedule.cols.analysis'),
-                scope: t('schedule.cols.scope'),
-                next: t('schedule.cols.next'),
-                last: t('schedule.cols.last'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
 

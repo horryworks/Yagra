@@ -22,10 +22,9 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { sortRows } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
@@ -548,7 +547,6 @@ function DeleteCredentialModal({
 export function CredentialsPage() {
   const { t } = useTranslation('access');
   const canCredentials = useCan('manage_credentials');
-  const [sheet, setSheet] = useState(false);
   // In the URL (ADR-153), so a reload keeps the order.
   const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
   const [adding, setAdding] = useState(false);
@@ -651,8 +649,8 @@ export function CredentialsPage() {
   }, [t, canCredentials, rows]);
 
   // URL-backed: one table on this route.
-  const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
-    useClientFilters(columns, rows);
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown: matched, counts, anyFiltered } = filtering;
   // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
   // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
   const shown = useMemo(() => sortRows(matched, sort, credentialSortValues()), [matched, sort]);
@@ -666,25 +664,21 @@ export function CredentialsPage() {
       />
 
       <LoadGate load={creds} permission="manage_credentials" unavailable={t('cred.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? rows.length : undefined}
-            noun={t('common:noun.credential', { count: rows.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.credential', { count: n }),
+          }}
+        >
           {canCredentials && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('cred.add.title')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         <DataTable
           tableId="settings.credentials"
@@ -699,16 +693,6 @@ export function CredentialsPage() {
           loading={loading}
           empty={anyFiltered ? t('cred.empty.filtered') : t('cred.empty.none')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
 
       {adding && <AddCredentialModal onClose={() => setAdding(false)} onSaved={load} />}

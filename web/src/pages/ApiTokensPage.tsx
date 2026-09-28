@@ -50,9 +50,8 @@ import { TextInput, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { sortRows } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { DEFAULT_TOKEN_SORT, TOKEN_SORT_KEYS, tokenFilters, tokenSortValues } from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
@@ -473,7 +472,6 @@ export function ApiTokensPage() {
   const [adding, setAdding] = useState(false);
   const [created, setCreated] = useState<CreatedApiToken | null>(null);
   const [revoking, setRevoking] = useState<ApiTokenSummary | null>(null);
-  const [sheet, setSheet] = useState(false);
   const tokens = useLoad(() => api.listApiTokens(), [], {
     initial: [] as ApiTokenSummary[],
     enabled: authed,
@@ -513,8 +511,8 @@ export function ApiTokensPage() {
   );
   // URL-backed: one table on this route, so the column keys are free and a filtered view can be
   // sent to someone. Counts are exact and free here — every token is already in the browser.
-  const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
-    useClientFilters(columns, rows);
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown: matched, counts, anyFiltered } = filtering;
   const shown = useMemo(
     () => sortRows(matched, sort, tokenSortValues(now)),
     [matched, sort, now],
@@ -534,29 +532,21 @@ export function ApiTokensPage() {
         </Card>
       ) : (
         <LoadGate load={tokens} unavailable={t('unavailable')} permission="manage_users">
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters
-              columns={filterCols}
-              filters={filters}
-              onClear={clear}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('count', { count: shown.length })}
-            />
+          <ListToolbar
+            list={filtering}
+            labels={columnLabels(columns)}
+            count={{
+              shown: shown.length,
+              total: rows.length,
+              noun: (n) => t('count', { count: n }),
+            }}
+          >
             {canUsers && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('add.button')}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
@@ -573,16 +563,6 @@ export function ApiTokensPage() {
             loading={loading}
             empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, t(`cols.${c.key}`)]))}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </LoadGate>
       )}
 

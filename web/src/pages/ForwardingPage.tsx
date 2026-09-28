@@ -44,9 +44,8 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -570,7 +569,6 @@ export function ForwardingPage() {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<ForwardDestination | null>(null);
   const [testResult, setTestResult] = useState<{ name: string; text: string } | null>(null);
-  const [sheet, setSheet] = useState(false);
 
   const destinations = useLoad(() => api.listForwardDestinations(), [], {
     initial: [] as ForwardDestination[],
@@ -617,10 +615,8 @@ export function ForwardingPage() {
   );
   // Client-side: the destination list is bounded by what an operator configured, not by fleet size
   // (ui-conventions). URL-backed — one table on this route, so a filtered view is linkable.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   // A byte-exact destination cannot be honoured for traffic from a poller that predates raw
   // capture — say so rather than silently shipping re-rendered output.
@@ -664,25 +660,21 @@ export function ForwardingPage() {
             </Card>
           )}
 
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? rows.length : undefined}
-              noun={t('count', { count: shown.length })}
-            />
+          <ListToolbar
+            list={filtering}
+            labels={columnLabels(columns)}
+            count={{
+              shown: shown.length,
+              total: rows.length,
+              noun: (n) => t('count', { count: n }),
+            }}
+          >
             {canSystem && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('add.button')}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
@@ -697,16 +689,6 @@ export function ForwardingPage() {
             loading={loading}
             empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={Object.fromEntries(columns.map((c) => [c.key, t(`cols.${c.key}`)]))}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </LoadGate>
       )}
 

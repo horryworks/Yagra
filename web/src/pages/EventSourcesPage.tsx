@@ -12,10 +12,9 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { eventSourceFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
@@ -26,7 +25,6 @@ import { LoadGate } from '../components/ui/LoadGate';
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
-  const [sheet, setSheet] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventSource | null>(null);
   const [deleting, setDeleting] = useState<EventSource | null>(null);
@@ -117,10 +115,8 @@ export function EventSourcesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, canConfig, rows]);
 
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <div>
@@ -129,25 +125,21 @@ export function EventSourcesPage() {
         load={sources}
         permission="manage_config"
         unavailable={t('eventSources.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? rows.length : undefined}
-            noun={t('noun.source', { count: rows.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('noun.source', { count: n }),
+          }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               {t('eventSources.add')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
         {error && <p className="form-error">{error}</p>}
         <DataTable
           tableId="events.sources"
@@ -160,16 +152,6 @@ export function EventSourcesPage() {
           loading={loading}
           empty={anyFiltered ? t('eventSources.emptyMatch') : t('eventSources.empty')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
       {adding && (
         <AddSourceModal

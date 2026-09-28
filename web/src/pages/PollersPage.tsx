@@ -28,10 +28,9 @@ import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { pollerFilters } from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
@@ -1306,7 +1305,6 @@ export function PollersPage() {
   // Client-side: a 50k-node deployment still has a handful of pollers, so the list is bounded by
   // how many were deployed rather than by fleet size (ui-conventions). The pool choices come from
   // the pools the page already loaded, not from a second list to keep in step.
-  const [sheet, setSheet] = useState(false);
   const columns = useMemo<Column<PollerInfo>[]>(() => {
     const specs = pollerFilters(t, pools.map((p) => p.pool));
     const cols: Column<PollerInfo>[] = [
@@ -1562,10 +1560,8 @@ export function PollersPage() {
 
   // URL-backed: the pollers table is the only filtered table on this route — the gap and
   // drill-down subsections below carry no filters of their own.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    pollers,
-  );
+  const filtering = useClientFilters(columns, pollers);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   // 🚨 **The strip's selection IS the pool column filter.** Not a mirror of it and not a second
   // piece of state that has to be kept in step: a card reads `filters.pool` to know whether it is
@@ -1735,25 +1731,21 @@ export function PollersPage() {
           )}
         </div>
 
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? pollers.length : undefined}
-            noun={t('common:noun.poller', { count: shown.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: pollers.length,
+            noun: (n) => t('common:noun.poller', { count: n }),
+          }}
+        >
           {canSystem && (
             <Button variant="primary" onClick={() => setRegistering(true)}>
               {t('pollers.registerButton')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         <DataTable
           tableId="settings.pollers"
@@ -1767,16 +1759,6 @@ export function PollersPage() {
           empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
         />
         </DndContext>
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
 
         {creatingPool && (
           <CreatePoolModal onClose={() => setCreatingPool(false)} onDone={load} />

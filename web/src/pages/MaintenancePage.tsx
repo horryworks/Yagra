@@ -19,10 +19,9 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
@@ -106,7 +105,6 @@ export function MaintenancePage() {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
   const [clearing, setClearing] = useState(false);
-  const [sheet, setSheet] = useState(false);
 
   // All three re-read when someone else opens, edits or closes a window (ADR-019 増分 2).
   const windows = useLoad(() => api.listMaintenanceWindows(), [], {
@@ -238,10 +236,8 @@ export function MaintenancePage() {
   }, [t, now, canMaintenance, groups, profiles, nodeName]);
 
   // URL-backed: one table on this route, so a narrowed view is linkable.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <div>
@@ -258,19 +254,15 @@ export function MaintenancePage() {
       />
 
       <LoadGate load={windows} unavailable={t('maintenance.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? rows.length : undefined}
-            noun={t('common:noun.window', { count: shown.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.window', { count: n }),
+          }}
+        >
           {canMaintenance && (
             <>
               {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
@@ -287,7 +279,7 @@ export function MaintenancePage() {
               </Button>
             </>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         {error && <p className="form-error">{error}</p>}
 
@@ -302,16 +294,6 @@ export function MaintenancePage() {
           loading={loading}
           empty={anyFiltered ? t('maintenance.empty.filtered') : t('maintenance.empty.title')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, t(`maintenance.cols.${c.key}`)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
 
       {adding && (

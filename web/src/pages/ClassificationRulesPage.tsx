@@ -23,10 +23,9 @@ import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Fie
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { classificationRuleFilters } from './classificationFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
@@ -38,7 +37,6 @@ import { ruleToInput } from './classificationRuleForm';
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [sheet, setSheet] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ClassificationRule | null>(null);
   const [deleting, setDeleting] = useState<ClassificationRule | null>(null);
@@ -154,10 +152,8 @@ export function ClassificationRulesPage() {
   }, [t, canConfig, profiles]);
 
   // URL-backed: one table on this route, so a narrowed view is linkable.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <div>
@@ -168,25 +164,21 @@ export function ClassificationRulesPage() {
       />
 
       <LoadGate load={rules} permission="manage_config" unavailable={t('rules.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? rows.length : undefined}
-            noun={t('common:noun.rule', { count: rows.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.rule', { count: n }),
+          }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('rules.addRule')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         {error && <p className="form-error">{error}</p>}
 
@@ -201,16 +193,6 @@ export function ClassificationRulesPage() {
           loading={loading}
           empty={anyFiltered ? t('rules.empty.noMatch') : t('rules.empty.none')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
 
       {adding && (

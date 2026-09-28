@@ -17,10 +17,9 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
@@ -42,7 +41,6 @@ function SeverityBadge({ value }: { value: Severity }) {
 export function EventRulesPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
-  const [sheet, setSheet] = useState(false);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventRule | null>(null);
   const [deleting, setDeleting] = useState<EventRule | null>(null);
@@ -160,34 +158,28 @@ export function EventRulesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, canConfig]);
 
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-  );
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <div>
       <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
       <LoadGate load={rules} permission="manage_config" unavailable={t('eventRules.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={anyFiltered ? rows.length : undefined}
-            noun={t('common:noun.rule', { count: rows.length })}
-          />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.rule', { count: n }),
+          }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               {t('eventRules.add')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
         {error && <p className="form-error">{error}</p>}
         <DataTable
           tableId="alerts.eventRules"
@@ -200,16 +192,6 @@ export function EventRulesPage() {
           loading={loading}
           empty={anyFiltered ? t('eventRules.emptyMatch') : t('eventRules.empty')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
       {adding && (
         <RuleModal

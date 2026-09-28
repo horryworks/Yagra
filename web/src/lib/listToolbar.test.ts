@@ -119,22 +119,13 @@ describe('a list draws its filter controls through ListToolbar', () => {
     'components/NodeDetail/InterfacesTab.tsx',
     'components/NodeDetail/NeighborsTab.tsx',
     'pages/ActiveAlertsPage.tsx',
-    'pages/ApiTokensPage.tsx',
     'pages/AuditPage.tsx',
-    'pages/ClassificationRulesPage.tsx',
     'pages/CollectionTemplatesPage.tsx',
-    'pages/CredentialsPage.tsx',
     'pages/DependencyPage.tsx',
     'pages/DiscoveryPage.tsx',
-    'pages/EventRulesPage.tsx',
-    'pages/EventSourcesPage.tsx',
     'pages/EventsPage.tsx',
-    'pages/ForwardingPage.tsx',
     'pages/HistoryPage.tsx',
-    'pages/MaintenancePage.tsx',
     'pages/MibRepositoryPage.tsx',
-    'pages/MutesPage.tsx',
-    'pages/PollersPage.tsx',
     'pages/ProfilesPage.tsx',
     'pages/RoutingPage.tsx',
     'pages/ThresholdsPage.tsx',
@@ -143,13 +134,12 @@ describe('a list draws its filter controls through ListToolbar', () => {
     'reports/ReportsPage.tsx',
     'troubleshoot/AnalysisRuns.tsx',
     'troubleshoot/SavedFindingsPage.tsx',
-    'troubleshoot/ScheduledPage.tsx',
     'troubleshoot/report/bodies/AuthProbeBody.tsx',
     'troubleshoot/report/bodies/FlowScanBody.tsx',
     'troubleshoot/report/bodies/RuleGapBody.tsx',
   ];
   /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 35;
+  const CEILING = 25;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const drawing = (needle: string) =>
