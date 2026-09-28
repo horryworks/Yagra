@@ -330,7 +330,6 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
-    use tokio::net::TcpListener;
 
     // ── Target parsing ───────────────────────────────────────────────────────────────────────
 
@@ -396,87 +395,41 @@ mod tests {
 
     // ── A fake Google, for the request-shaping tests ─────────────────────────────────────────
 
-    /// Records every request it serves and replies from a scripted queue of `(status, body)`.
-    #[derive(Default)]
+    /// A scripted queue of `(status, body)`, served by [`crate::httpfake`] once a test asks for an
+    /// address, and the requests it saw as `(method, path, body)`.
     struct FakeGoogle {
-        seen: Mutex<Vec<(String, String, String)>>, // method, path, body
         replies: Mutex<Vec<(u16, String)>>,
+        seen: Mutex<Option<Arc<Mutex<Vec<crate::httpfake::Seen>>>>>,
     }
 
     impl FakeGoogle {
         fn with(replies: Vec<(u16, String)>) -> Arc<Self> {
             Arc::new(Self {
-                seen: Mutex::new(Vec::new()),
                 replies: Mutex::new(replies),
+                seen: Mutex::new(None),
             })
         }
 
         fn requests(&self) -> Vec<(String, String, String)> {
-            self.seen.lock().unwrap().clone()
+            self.seen
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|log| {
+                    log.lock()
+                        .unwrap()
+                        .iter()
+                        .map(|r| (r.method.clone(), r.path.clone(), r.body.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
         }
     }
 
-    /// Minimal HTTP/1.1 server: enough to answer reqwest, not a general implementation.
     async fn serve(fake: Arc<FakeGoogle>) -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut sock, _)) = listener.accept().await else {
-                    return;
-                };
-                let fake = fake.clone();
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = Vec::new();
-                    let mut chunk = [0u8; 4096];
-                    // Read until the body is complete (headers + Content-Length).
-                    loop {
-                        let n = sock.read(&mut chunk).await.unwrap_or(0);
-                        if n == 0 {
-                            break;
-                        }
-                        buf.extend_from_slice(&chunk[..n]);
-                        let text = String::from_utf8_lossy(&buf).to_string();
-                        let Some(head_end) = text.find("\r\n\r\n") else {
-                            continue;
-                        };
-                        let len: usize = text
-                            .to_ascii_lowercase()
-                            .split("content-length:")
-                            .nth(1)
-                            .and_then(|r| r.split("\r\n").next())
-                            .and_then(|v| v.trim().parse().ok())
-                            .unwrap_or(0);
-                        if buf.len() >= head_end + 4 + len {
-                            break;
-                        }
-                    }
-                    let text = String::from_utf8_lossy(&buf).to_string();
-                    let mut lines = text.lines();
-                    let first = lines.next().unwrap_or_default().to_owned();
-                    let mut it = first.split_whitespace();
-                    let method = it.next().unwrap_or_default().to_owned();
-                    let path = it.next().unwrap_or_default().to_owned();
-                    let body = text.split("\r\n\r\n").nth(1).unwrap_or_default().to_owned();
-                    fake.seen.lock().unwrap().push((method, path, body));
-                    let (status, payload) = {
-                        let mut replies = fake.replies.lock().unwrap();
-                        if replies.is_empty() {
-                            (200, "{}".to_owned())
-                        } else {
-                            replies.remove(0)
-                        }
-                    };
-                    let res = format!(
-                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-                        payload.len()
-                    );
-                    let _ = sock.write_all(res.as_bytes()).await;
-                    let _ = sock.shutdown().await;
-                });
-            }
-        });
+        let replies = std::mem::take(&mut *fake.replies.lock().unwrap());
+        let (addr, seen) = crate::httpfake::serve(replies).await;
+        *fake.seen.lock().unwrap() = Some(seen);
         addr
     }
 

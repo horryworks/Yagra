@@ -57,6 +57,9 @@ mod host_collector;
 // The outbound HTTP client core builds for its own stores and integrations (ADR-184). Apart from
 // `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.
 mod http;
+// The HTTP stand-in outbound-client tests point at (ADR-184).
+#[cfg(test)]
+mod httpfake;
 mod interface_util;
 mod ipasn;
 mod l3;

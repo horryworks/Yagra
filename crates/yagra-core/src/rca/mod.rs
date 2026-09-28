@@ -35,8 +35,6 @@ pub(crate) mod orchestrator;
 pub(crate) mod prompt;
 pub(crate) mod provider;
 pub(crate) mod store;
-#[cfg(test)]
-pub(crate) mod testsupport;
 pub(crate) mod vertex;
 
 use std::sync::Arc;

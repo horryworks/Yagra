@@ -706,6 +706,15 @@ pub struct ProbeResult {
     pub authenticated: bool,
 }
 
+/// What a `403`/`404` on a listing's first page means — see [`NetboxClient::pages`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refusal {
+    /// The listing is required; being refused it is a failure.
+    IsAnError,
+    /// The listing is optional; being refused it is the answer "not allowed to look".
+    IsAnAnswer,
+}
+
 /// The path-and-query of a paginator's `next`, ready to be re-joined to the base we validated.
 ///
 /// 🚨 NetBox builds `next` from **its own configured host**, which need not be the address we
@@ -810,17 +819,49 @@ impl NetboxClient {
         &self,
         path: &str,
     ) -> anyhow::Result<Vec<T>> {
-        let mut out = Vec::new();
-        let mut next = Some(format!("{path}?limit={PAGE_LIMIT}"));
-        let mut pages = 0u32;
+        self.pages(path, Refusal::IsAnError)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("netbox listing {path} was refused"))
+    }
+
+    /// The one pagination loop (ADR-184): the first page, then every `next` NetBox hands back,
+    /// re-joined to the base we validated through [`relative_target`] and bounded by [`MAX_PAGES`].
+    ///
+    /// `first_refusal` is the only thing the two listings disagreed on: whether a `403`/`404` on the
+    /// **first** page is an error or the answer "this token may not read this". A refusal on a
+    /// later page is always an error — the listing was readable a moment ago, so a half-read one
+    /// must not pass for the whole.
+    ///
+    /// The first request is the caller's own path, which has no base prefix to strip, so it is sent
+    /// as it is rather than through [`relative_target`].
+    async fn pages<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        first_refusal: Refusal,
+    ) -> anyhow::Result<Option<Vec<T>>> {
+        let first = self
+            .get(&format!("{path}?limit={PAGE_LIMIT}"))
+            .send()
+            .await?;
+        if first_refusal == Refusal::IsAnAnswer
+            && matches!(
+                first.status(),
+                reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
+            )
+        {
+            return Ok(None);
+        }
+        let page: Page<T> = first.error_for_status()?.json().await?;
+        let mut out = page.results;
+        let mut next = page.next;
+        let mut pages = 1u32;
         while let Some(target) = next {
             pages += 1;
             if pages > MAX_PAGES {
                 anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
             }
-            let rel = relative_target(&target, base_path_of(&self.base))?;
             let page: Page<T> = self
-                .get(&rel)
+                .get(&relative_target(&target, base_path_of(&self.base))?)
                 .send()
                 .await?
                 .error_for_status()?
@@ -829,7 +870,7 @@ impl NetboxClient {
             out.extend(page.results);
             next = page.next;
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     /// Every region, ordered shallowest-first so a parent is always written before its child.
@@ -869,36 +910,7 @@ impl NetboxClient {
         &self,
         path: &str,
     ) -> anyhow::Result<Option<Vec<T>>> {
-        let first = self
-            .get(&format!("{path}?limit={PAGE_LIMIT}"))
-            .send()
-            .await?;
-        if matches!(
-            first.status(),
-            reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::NOT_FOUND
-        ) {
-            return Ok(None);
-        }
-        let page: Page<T> = first.error_for_status()?.json().await?;
-        let mut out = page.results;
-        let mut next = page.next;
-        let mut pages = 1u32;
-        while let Some(target) = next {
-            pages += 1;
-            if pages > MAX_PAGES {
-                anyhow::bail!("netbox listing {path} exceeded {MAX_PAGES} pages");
-            }
-            let page: Page<T> = self
-                .get(&relative_target(&target, base_path_of(&self.base))?)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            out.extend(page.results);
-            next = page.next;
-        }
-        Ok(Some(out))
+        self.pages(path, Refusal::IsAnAnswer).await
     }
 
     /// The custom-field definitions that apply to `dcim.site` and could supply a site code.
@@ -3714,5 +3726,69 @@ mod tests {
         assert!(folder_prefixes(&pool, site_group_id(second, 6))
             .await
             .is_empty());
+    }
+
+    /// ADR-184 Inc.13: both listings walk the one loop, against a NetBox served under a path. Its
+    /// `next` names NetBox's own host and repeats the prefix; the second request must go to the
+    /// address we validated, once-prefixed, with the token.
+    #[tokio::test]
+    async fn a_listing_under_a_base_path_reads_both_pages_from_the_validated_host() {
+        let page = |next: &str, id: u32| {
+            format!(
+                r#"{{"count":2,"next":{next},"previous":null,"results":[
+                   {{"id":{id},"name":"site-{id}","slug":"site-{id}","region":null,
+                     "latitude":null,"longitude":null}}]}}"#
+            )
+        };
+        let (addr, seen) = crate::httpfake::serve(vec![
+            (
+                200,
+                page(
+                    r#""https://netbox.example.com/netbox/api/dcim/sites/?limit=250&offset=250""#,
+                    1,
+                ),
+            ),
+            (200, page("null", 2)),
+        ])
+        .await;
+        let client = NetboxClient::new(
+            &format!("http://localhost:{}/netbox", addr.port()),
+            "t0k",
+            None,
+        )
+        .expect("a hostname is not refused");
+        let sites = client.sites().await.expect("both pages read");
+        assert_eq!(sites.iter().map(|s| s.id).collect::<Vec<_>>(), vec![1, 2]);
+        let seen = seen.lock().unwrap();
+        let paths: Vec<&str> = seen.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/netbox/api/dcim/sites/?limit=250",
+                "/netbox/api/dcim/sites/?limit=250&offset=250",
+            ]
+        );
+        assert!(seen.iter().all(|r| r.head.contains("Token t0k")));
+    }
+
+    /// The one difference the two listings keep: a refused first page is an answer for an optional
+    /// listing and an error for a required one.
+    #[tokio::test]
+    async fn a_refused_first_page_is_an_answer_only_where_the_listing_is_optional() {
+        let (addr, _) = crate::httpfake::serve(vec![(403, "{}".to_owned())]).await;
+        let client =
+            NetboxClient::new(&format!("http://localhost:{}", addr.port()), "t", None).unwrap();
+        assert!(client
+            .prefixes()
+            .await
+            .expect("a refusal is an answer")
+            .is_none());
+        let (addr, _) = crate::httpfake::serve(vec![(403, "{}".to_owned())]).await;
+        let client =
+            NetboxClient::new(&format!("http://localhost:{}", addr.port()), "t", None).unwrap();
+        assert!(
+            client.sites().await.is_err(),
+            "a required listing must not read as empty"
+        );
     }
 }

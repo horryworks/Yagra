@@ -210,7 +210,7 @@ mod tests {
     #[tokio::test]
     async fn a_completion_mints_a_token_then_posts_with_it() {
         // First reply is the metadata server's token (Workload Identity path), second the model's.
-        let (addr, seen) = super::super::testsupport::serve(vec![
+        let (addr, seen) = crate::httpfake::serve(vec![
             (
                 200,
                 json!({ "access_token": "ya29.test", "expires_in": 3600 }).to_string(),
@@ -268,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejected_token_is_dropped_so_the_next_attempt_re_mints() {
-        let (addr, seen) = super::super::testsupport::serve(vec![
+        let (addr, seen) = crate::httpfake::serve(vec![
             (200, json!({ "access_token": "t1", "expires_in": 3600 }).to_string()),
             (401, json!({ "error": { "status": "UNAUTHENTICATED" } }).to_string()),
             (200, json!({ "access_token": "t2", "expires_in": 3600 }).to_string()),

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! A minimal HTTP stand-in shared by the provider-adapter tests.
+//! A minimal HTTP stand-in for tests that need an outbound client to talk to something (ADR-184).
 //!
-//! The adapters pin their hosts to constants, so the only way to exercise request shaping end to
-//! end is to point a test-only URL override at a local socket. This is deliberately the same shape
-//! as the fake in `bigquery.rs` — enough to answer `reqwest`, not a general server.
+//! Enough to answer `reqwest`, not a general server: it reads one request per connection (headers
+//! plus `Content-Length` bytes), records it, and answers the next `(status, body)` from a scripted
+//! queue — `200 {}` once the queue is empty. The LLM adapters, the BigQuery sink and the NetBox
+//! paginator each had, or needed, one; the first two were the same eighty lines.
 //!
-//! No `#![cfg(test)]` here: `rca/mod.rs` already declares this module under `#[cfg(test)]`, so the
-//! inner attribute gated nothing and only duplicated the outer one. clippy 0.1.90 fails the build
-//! on it (`clippy::duplicated_attributes`) while 0.1.95 does not — which is how it surfaced, but
-//! the redundancy was real either way.
+//! Test-only: `main.rs` declares it under `#[cfg(test)]`.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -16,7 +14,12 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 /// One request as the fake saw it.
+#[derive(Debug, Clone)]
 pub(crate) struct Seen {
+    /// `GET`, `POST`, …
+    pub method: String,
+    /// The request target: path and query, exactly as sent.
+    pub path: String,
     /// Request line + headers, verbatim, for asserting on auth headers.
     pub head: String,
     /// Request body.
@@ -68,7 +71,15 @@ pub(crate) async fn serve(replies: Vec<(u16, String)>) -> (SocketAddr, Arc<Mutex
                 let mut parts = text.splitn(2, "\r\n\r\n");
                 let head = parts.next().unwrap_or_default().to_owned();
                 let body = parts.next().unwrap_or_default().to_owned();
-                log.lock().unwrap().push(Seen { head, body });
+                let mut request_line = head.lines().next().unwrap_or_default().split_whitespace();
+                let method = request_line.next().unwrap_or_default().to_owned();
+                let path = request_line.next().unwrap_or_default().to_owned();
+                log.lock().unwrap().push(Seen {
+                    method,
+                    path,
+                    head,
+                    body,
+                });
                 let (status, payload) = {
                     let mut q = queue.lock().unwrap();
                     if q.is_empty() {
