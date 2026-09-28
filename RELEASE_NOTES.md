@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.35 — A device whose maker Yagra does not know yet is read in full once an hour and asked only for sysDescr and sysObjectID in between, every list toolbar and every dialog work the same way, a metrics query VictoriaMetrics refuses is logged instead of read as no data, dashboards and lists stop refreshing in a background tab, MCP list_analyses narrows by tool, state and since
+
 ### New Features
 
 - **MCP `list_analyses` can narrow the runs list by `tool`, `state` and `since`, as the WebUI's runs list can.** The tool used to take none of them and always listed every recent run. An unknown value is refused, as it is on the REST edge, rather than ignored.
