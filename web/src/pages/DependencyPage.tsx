@@ -24,9 +24,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../components/ui/ListToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
@@ -59,7 +57,6 @@ export function DependencyPage() {
   const { t } = useTranslation('topology');
   const canConfig = useCan('manage_config');
   const navigate = useNavigate();
-  const [sheet, setSheet] = useState(false);
   const [editing, setEditing] = useState<TopologyNode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -249,8 +246,8 @@ export function DependencyPage() {
   // Client-side, and URL-backed: one table on this route. ⚠️ The row list is fleet-scaled, which
   // `ui-conventions.md` says needs a server-side path — that predates this change and is unchanged
   // by it; the filter row narrows the same array the page already held.
-  const { filterCols, filters, setFilters, clear, shown: rows, counts, anyFiltered } =
-    useClientFilters(columns, nodes);
+  const filtering = useClientFilters(columns, nodes);
+  const { filters, setFilters, shown: rows, counts } = filtering;
 
   return (
     <div className="page-fill">
@@ -352,20 +349,21 @@ export function DependencyPage() {
       ) : (
         <>
           {mode === 'derived' && <p className="muted">{t('dependency.editHiddenInDerived')}</p>}
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-            <ResultCount
-              shown={rows.length}
-              total={anyFiltered ? nodes.length : undefined}
-              noun={t('common:noun.node', { count: rows.length })}
-            />
-          </TableToolbar>
+          <ListToolbar
+            list={filtering}
+            labels={{
+              node: t('dependency.cols.node'),
+              upstream: t('dependency.cols.upstream'),
+              status: t('dependency.cols.status'),
+              root: t('dependency.cols.root'),
+              verdict: t('dependency.cols2.verdict'),
+            }}
+            count={{
+              shown: rows.length,
+              total: nodes.length,
+              noun: (n) => t('common:noun.node', { count: n }),
+            }}
+          />
 
           <DataTable
             tableId="nodes.dependencies"
@@ -383,22 +381,6 @@ export function DependencyPage() {
                 : t('dependency.emptyFiltered')
             }
           />
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={{
-                node: t('dependency.cols.node'),
-                upstream: t('dependency.cols.upstream'),
-                status: t('dependency.cols.status'),
-                root: t('dependency.cols.root'),
-                verdict: t('dependency.cols2.verdict'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
 

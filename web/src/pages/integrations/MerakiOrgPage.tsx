@@ -33,9 +33,7 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { TextInput } from '../../components/ui/Field';
 import { DataTable, type Column } from '../../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../../components/ui/TableToolbar';
-import { ClearFilters } from '../../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../../components/ui/ListToolbar';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { EntityName } from '../../components/ui/EntityName';
 import { useEntityNames } from '../../components/ui/entityNames';
@@ -255,7 +253,6 @@ export function MerakiOrgPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [sheet, setSheet] = useState(false);
 
   // Returns its promise — it never rejects — so a caller can wait for the new values to be in
   // (`ImportSettingsCard` does, before it lets the form follow the server again).
@@ -445,10 +442,8 @@ export function MerakiOrgPage() {
     return cols;
   }, [t, canConfig, selected, busy, toggle, orgName, groupName, filterColumns]);
 
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    filterColumns,
-    devices,
-  );
+  const filtering = useClientFilters(filterColumns, devices);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   const importSelected = () => {
     if (!org) return;
@@ -585,37 +580,43 @@ export function MerakiOrgPage() {
             </div>
           )}
 
-          <TableToolbar>
-            <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            {canConfig && selectable.length > 0 && (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() => setSelected(new Set([...selected, ...selectable]))}
-              >
-                {t('meraki.devices.selectAll')}
-              </Button>
-            )}
-            {canConfig && selected.size > 0 && (
-              <Button variant="outline" disabled={busy} onClick={() => setSelected(new Set())}>
-                {t('meraki.devices.clearSelection')}
-              </Button>
-            )}
-            <TableSpacer />
-            <ResultCount
-              shown={shown.length}
-              total={anyFiltered ? devices.length : undefined}
-              noun={t('meraki.devices.noun', {
-                count: anyFiltered ? devices.length : shown.length,
-              })}
-            />
+          <ListToolbar
+            list={filtering}
+            labels={{
+              name: t('meraki.devices.cols.name'),
+              network: t('meraki.devices.cols.network'),
+              state: t('meraki.devices.cols.state'),
+            }}
+            count={{
+              shown: shown.length,
+              total: devices.length,
+              noun: (n) => t('meraki.devices.noun', { count: n }),
+            }}
+            tools={
+              <>
+                {canConfig && selectable.length > 0 && (
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => setSelected(new Set([...selected, ...selectable]))}
+                  >
+                    {t('meraki.devices.selectAll')}
+                  </Button>
+                )}
+                {canConfig && selected.size > 0 && (
+                  <Button variant="outline" disabled={busy} onClick={() => setSelected(new Set())}>
+                    {t('meraki.devices.clearSelection')}
+                  </Button>
+                )}
+              </>
+            }
+          >
             {canConfig && selected.size > 0 && (
               <Button variant="primary" onClick={importSelected} disabled={busy}>
                 {t('meraki.import.importBtn', { count: selected.size })}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
 
           {actionError && <p className="form-error meraki-orgpage-line">{actionError}</p>}
           {note && <p className="meraki-orgpage-line meraki-orgpage-ok">✓ {note}</p>}
@@ -632,20 +633,6 @@ export function MerakiOrgPage() {
               empty={anyFiltered ? t('common:filter.noMatch') : t('meraki.devices.empty')}
             />
           </div>
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={{
-                name: t('meraki.devices.cols.name'),
-                network: t('meraki.devices.cols.network'),
-                state: t('meraki.devices.cols.state'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
     </div>

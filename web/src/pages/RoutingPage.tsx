@@ -28,10 +28,9 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import {
   CHANNEL_FILTER_PREFIX,
@@ -137,7 +136,6 @@ function ChannelsSection({
 
   // Client-side: the channel list is bounded by what an operator configured, not by fleet size
   // (ui-conventions). The judgement lives in `routingFilters.ts`.
-  const [sheet, setSheet] = useState(false);
   const columns = useMemo<Column<NotificationChannel>[]>(() => {
     const kinds = [...new Set(channels.map((c) => c.kind))].sort();
     const specs = channelFilters(t, kinds);
@@ -212,30 +210,29 @@ function ChannelsSection({
   // In the URL, under `channels.` (ADR-153). This route has two tables and both have a `name` and a
   // `status` column, so each carries its own prefix — which is what used to keep both of them out of
   // the URL altogether, and a reload threw the filters away.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    channels,
-    { prefix: CHANNEL_FILTER_PREFIX },
-  );
+  const filtering = useClientFilters(columns, channels, { prefix: CHANNEL_FILTER_PREFIX });
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <section>
-      <div className="table-toolbar">
-        <h2 className="table-section-title">{t('routing.channels.title')}</h2>
-        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-        <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-        <TableSpacer />
-        <ResultCount
-          shown={shown.length}
-          total={anyFiltered ? channels.length : undefined}
-          noun={t('noun.channel', { count: shown.length })}
-        />
+      <ListToolbar
+        list={filtering}
+        labels={columnLabels(columns)}
+        count={{
+          shown: shown.length,
+          total: channels.length,
+          noun: (n) => t('noun.channel', { count: n }),
+        }}
+        leading={
+          <h2 className="table-section-title">{t('routing.channels.title')}</h2>
+        }
+      >
         {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)}>
             {t('routing.channels.add')}
           </Button>
         )}
-      </div>
+      </ListToolbar>
 
       <DataTable
         tableId="settings.notificationChannels"
@@ -249,16 +246,6 @@ function ChannelsSection({
         loading={loading}
         empty={anyFiltered ? t('common:filter.noMatch') : t('routing.channels.empty')}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-          onClose={() => setSheet(false)}
-        />
-      )}
 
       {adding && (
         <AddChannelModal
@@ -506,7 +493,6 @@ function RulesSection({
       .catch((e: unknown) => onError(errMsg(e, t('routing.err.update'))));
 
   // Client-side, same reason as the channels table above.
-  const [sheet, setSheet] = useState(false);
   const columns = useMemo<Column<RoutingRule>[]>(() => {
     const specs = routingRuleFilters(t, severityLabel);
     const cols: Column<RoutingRule>[] = [
@@ -576,30 +562,29 @@ function RulesSection({
   }, [t, canSystem, channels]);
 
   // In the URL, under `rules.` — see the channels table above.
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rules,
-    { prefix: ROUTING_RULE_FILTER_PREFIX },
-  );
+  const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   return (
     <section className="routing-rules-section">
-      <div className="table-toolbar">
-        <h2 className="table-section-title">{t('routing.rules.title')}</h2>
-        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-        <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-        <TableSpacer />
-        <ResultCount
-          shown={shown.length}
-          total={anyFiltered ? rules.length : undefined}
-          noun={t('common:noun.rule', { count: shown.length })}
-        />
+      <ListToolbar
+        list={filtering}
+        labels={columnLabels(columns)}
+        count={{
+          shown: shown.length,
+          total: rules.length,
+          noun: (n) => t('common:noun.rule', { count: n }),
+        }}
+        leading={
+          <h2 className="table-section-title">{t('routing.rules.title')}</h2>
+        }
+      >
         {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)} disabled={channels.length === 0}>
             {t('routing.rules.add')}
           </Button>
         )}
-      </div>
+      </ListToolbar>
 
       <DataTable
         tableId="settings.routingRules"
@@ -613,16 +598,6 @@ function RulesSection({
         loading={loading}
         empty={anyFiltered ? t('common:filter.noMatch') : t('routing.rules.empty')}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-          onClose={() => setSheet(false)}
-        />
-      )}
 
       {adding && (
         <AddRuleModal

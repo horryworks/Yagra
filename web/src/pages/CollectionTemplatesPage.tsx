@@ -19,11 +19,9 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { buildPredicate } from '../lib/filterPredicate';
 import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfigFilters';
@@ -37,7 +35,6 @@ import { LoadGate } from '../components/ui/LoadGate';
 export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [sheet, setSheet] = useState(false);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<CollectionTemplate | null>(null);
   const [openItems, setOpenItems] = useState<string | null>(null);
@@ -125,38 +122,21 @@ export function CollectionTemplatesPage() {
       />
 
       <LoadGate load={sets} permission="manage_config" unavailable={t('sets.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters
-            columns={filterCols}
-            filters={filters}
-            onClear={() => setFilters(defaultFilters(filterCols))}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={filtered.length}
-            total={rows.length}
-            noun={t('sets.noun', { count: rows.length })}
-          />
+        <ListToolbar
+          list={serverToolbarFilters(filterCols, { filters, setFilters })}
+          labels={setFilterLabels(t)}
+          count={{
+            shown: filtered.length,
+            total: rows.length,
+            noun: (n) => t('sets.noun', { count: n }),
+          }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('sets.addSet')}
             </Button>
           )}
-        </TableToolbar>
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            labels={setFilterLabels(t)}
-            filters={filters}
-            onChange={setFilters}
-            onClose={() => setSheet(false)}
-          />
-        )}
+        </ListToolbar>
 
         {/* Virtualized since ADR-053 Inc.6 — the last of the twelve hand-rolled `ytable` screens
             to move, held back only because its rows expand. `expandedKey` is what drops the

@@ -12,9 +12,7 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { ListToolbar } from '../components/ui/ListToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { useEnumParam } from '../lib/useEnumParam';
 import {
@@ -114,7 +112,6 @@ export function ReportsPage() {
   // an admin authored rather than by fleet size (ui-conventions); saved runs because the store
   // behind it is SSE-fed and would undo a filtered fetch on the next progress frame — the reason is
   // written out in `reportListFilters.ts`, beside the predicate it explains.
-  const [sheet, setSheet] = useState<ReportTab | null>(null);
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
@@ -340,24 +337,20 @@ export function ReportsPage() {
               <Button onClick={seedRuns}>{t('common:actions.retry')}</Button>
             </p>
           )}
-          <TableToolbar>
-            <FilterButton
-              columns={runF.filterCols}
-              filters={runF.filters}
-              onOpen={() => setSheet('saved')}
-            />
-            <ClearFilters
-              columns={runF.filterCols}
-              filters={runF.filters}
-              onClear={runF.clear}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={runF.shown.length}
-              total={runF.anyFiltered ? runs.length : undefined}
-              noun={t('noun.savedReport', { count: runF.shown.length })}
-            />
-          </TableToolbar>
+          <ListToolbar
+            list={runF}
+            labels={{
+              name: t('runs.cols.report'),
+              status: t('runs.cols.status'),
+              trigger: t('runs.cols.trigger'),
+              when: t('runs.cols.generated'),
+            }}
+            count={{
+              shown: runF.shown.length,
+              total: runs.length,
+              noun: (n) => t('noun.savedReport', { count: n }),
+            }}
+          />
           <DataTable
             tableId="reports.runs"
             rows={runF.shown}
@@ -376,49 +369,26 @@ export function ReportsPage() {
             }
             loading={!runsLoaded && !runsFailed}
           />
-          {sheet === 'saved' && (
-            <MobileFilterSheet
-              columns={runF.filterCols}
-              filters={runF.filters}
-              onChange={runF.setFilters}
-              counts={runF.counts}
-              labels={{
-                name: t('runs.cols.report'),
-                status: t('runs.cols.status'),
-                trigger: t('runs.cols.trigger'),
-                when: t('runs.cols.generated'),
-              }}
-              onClose={() => setSheet(null)}
-            />
-          )}
         </>
       )}
 
       {tab === 'templates' && (
         <>
-          <TableToolbar>
-            <FilterButton
-              columns={defF.filterCols}
-              filters={defF.filters}
-              onOpen={() => setSheet('templates')}
-            />
-            <ClearFilters
-              columns={defF.filterCols}
-              filters={defF.filters}
-              onClear={defF.clear}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={defF.shown.length}
-              total={defF.anyFiltered ? definitions.length : undefined}
-              noun={t('common:noun.template', { count: defF.shown.length })}
-            />
+          <ListToolbar
+            list={defF}
+            labels={{ name: t('defs.cols.template'), updated: t('defs.cols.updated') }}
+            count={{
+              shown: defF.shown.length,
+              total: definitions.length,
+              noun: (n) => t('common:noun.template', { count: n }),
+            }}
+          >
             {canConfig && (
               <Button variant="primary" onClick={() => setBuilderFor('new')}>
                 {t('defs.newReport')}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
           <DataTable
             tableId="reports.definitions"
             rows={defF.shown}
@@ -438,41 +408,24 @@ export function ReportsPage() {
             }
             loading={defs.loading && definitions.length === 0}
           />
-          {sheet === 'templates' && (
-            <MobileFilterSheet
-              columns={defF.filterCols}
-              filters={defF.filters}
-              onChange={defF.setFilters}
-              counts={defF.counts}
-              labels={{
-                name: t('defs.cols.template'),
-                updated: t('defs.cols.updated'),
-              }}
-              onClose={() => setSheet(null)}
-            />
-          )}
         </>
       )}
 
       {tab === 'schedules' && (
         <>
-          <TableToolbar>
-            <FilterButton
-              columns={schedF.filterCols}
-              filters={schedF.filters}
-              onOpen={() => setSheet('schedules')}
-            />
-            <ClearFilters
-              columns={schedF.filterCols}
-              filters={schedF.filters}
-              onClear={schedF.clear}
-            />
-            <TableSpacer />
-            <ResultCount
-              shown={schedF.shown.length}
-              total={schedF.anyFiltered ? schedules.length : undefined}
-              noun={t('noun.schedule', { count: schedF.shown.length })}
-            />
+          <ListToolbar
+            list={schedF}
+            labels={{
+              name: t('scheds.cols.report'),
+              next: t('scheds.cols.nextRun'),
+              enabled: t('scheds.cols.state'),
+            }}
+            count={{
+              shown: schedF.shown.length,
+              total: schedules.length,
+              noun: (n) => t('noun.schedule', { count: n }),
+            }}
+          >
             {canConfig && (
               <Button
                 variant="primary"
@@ -482,7 +435,7 @@ export function ReportsPage() {
                 {t('scheds.newSchedule')}
               </Button>
             )}
-          </TableToolbar>
+          </ListToolbar>
           <DataTable
             tableId="reports.schedules"
             rows={schedF.shown}
@@ -502,20 +455,6 @@ export function ReportsPage() {
             }
             loading={scheds.loading && schedules.length === 0}
           />
-          {sheet === 'schedules' && (
-            <MobileFilterSheet
-              columns={schedF.filterCols}
-              filters={schedF.filters}
-              onChange={schedF.setFilters}
-              counts={schedF.counts}
-              labels={{
-                name: t('scheds.cols.report'),
-                next: t('scheds.cols.nextRun'),
-                enabled: t('scheds.cols.state'),
-              }}
-              onClose={() => setSheet(null)}
-            />
-          )}
         </>
       )}
 

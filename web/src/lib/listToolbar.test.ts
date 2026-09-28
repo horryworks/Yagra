@@ -112,26 +112,17 @@ describe('a list draws its filter controls through ListToolbar', () => {
 
   /** Toolbars still to move. Only ever shorter; deleted when empty (increment 33). */
   const NOT_YET_MIGRATED: string[] = [
-    'components/NodeDetail/ApTab.tsx',
     'components/NodeDetail/CollectionTab.tsx',
     'components/NodeDetail/EventsTab.tsx',
     'components/NodeDetail/FlowTab.tsx',
     'components/NodeDetail/InterfacesTab.tsx',
-    'components/NodeDetail/NeighborsTab.tsx',
     'pages/ActiveAlertsPage.tsx',
     'pages/AuditPage.tsx',
-    'pages/CollectionTemplatesPage.tsx',
-    'pages/DependencyPage.tsx',
     'pages/DiscoveryPage.tsx',
     'pages/EventsPage.tsx',
     'pages/HistoryPage.tsx',
-    'pages/MibRepositoryPage.tsx',
-    'pages/ProfilesPage.tsx',
-    'pages/RoutingPage.tsx',
     'pages/ThresholdsPage.tsx',
     'pages/UsersPage.tsx',
-    'pages/integrations/MerakiOrgPage.tsx',
-    'reports/ReportsPage.tsx',
     'troubleshoot/AnalysisRuns.tsx',
     'troubleshoot/SavedFindingsPage.tsx',
     'troubleshoot/report/bodies/AuthProbeBody.tsx',
@@ -139,7 +130,7 @@ describe('a list draws its filter controls through ListToolbar', () => {
     'troubleshoot/report/bodies/RuleGapBody.tsx',
   ];
   /** The ratchet: lowered by each batch, never raised. */
-  const CEILING = 25;
+  const CEILING = 16;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const drawing = (needle: string) =>

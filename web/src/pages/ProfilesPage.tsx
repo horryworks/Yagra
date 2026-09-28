@@ -27,12 +27,10 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { serverToolbarFilters } from '../lib/listToolbar';
 import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
-import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -100,7 +98,6 @@ export function ProfilesPage() {
   const allFilterCols = useMemo(() => [...colFilters, ...catCols], [colFilters, catCols]);
   // In the URL (ADR-153). The category bar and the column cells are one state, so one set of keys.
   const { filters, setFilters } = useFilterParams(allFilterCols);
-  const [sheet, setSheet] = useState(false);
 
   const filtered = useMemo(
     () => rows.filter(buildPredicate(allFilterCols, filters, Date.now())),
@@ -154,39 +151,21 @@ export function ProfilesPage() {
       />
 
       <LoadGate load={profiles} permission="manage_config" unavailable={t('profiles.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={allFilterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters
-            columns={allFilterCols}
-            filters={filters}
-            onClear={() => setFilters(defaultFilters(allFilterCols))}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={filtered.length}
-            total={rows.length}
-            noun={t('common:noun.profile', { count: rows.length })}
-          />
+        <ListToolbar
+          list={serverToolbarFilters(allFilterCols, { filters, setFilters }, undefined, filterCounts)}
+          labels={filterLabels}
+          count={{
+            shown: filtered.length,
+            total: rows.length,
+            noun: (n) => t('common:noun.profile', { count: n }),
+          }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('profiles.addProfile')}
             </Button>
           )}
-        </TableToolbar>
-        {sheet && (
-          <MobileFilterSheet
-            columns={allFilterCols}
-            labels={filterLabels}
-            filters={filters}
-            onChange={setFilters}
-            counts={filterCounts}
-            onClose={() => setSheet(false)}
-          />
-        )}
+        </ListToolbar>
         {/* Category has no column of its own — it is the group heading below. */}
         <FilterBar
           columns={catCols}

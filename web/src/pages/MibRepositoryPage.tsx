@@ -34,10 +34,9 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
+import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ClearFilters } from '../components/ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { TrashIcon } from '../components/ui/icons';
@@ -193,7 +192,6 @@ export function MibRepositoryPage() {
   );
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MibCatalogEntry | null>(null);
-  const [sheet, setSheet] = useState(false);
 
   // The term settles, then one load runs for it; an answer to an earlier term that arrives late
   // is dropped (useLoad).
@@ -278,6 +276,13 @@ export function MibRepositoryPage() {
     [query],
   );
   const onFiltersChange = (next: FilterState) => setQuery(decodeCondition(next.metric ?? '').term);
+  const list = {
+    filterCols,
+    filters,
+    setFilters: onFiltersChange,
+    clear: () => setQuery(''),
+    anyFiltered: !!query,
+  };
 
   return (
     <div>
@@ -288,21 +293,17 @@ export function MibRepositoryPage() {
       />
 
       <LoadGate load={catalog} unavailable={t('mib.unavailable')}>
-        <TableToolbar>
-          <FilterButton
-            columns={filterCols}
-            filters={filters}
-            onOpen={() => setSheet(true)}
-          />
-          <ClearFilters columns={filterCols} filters={filters} onClear={() => setQuery('')} />
-          <TableSpacer />
-          <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
+        <ListToolbar
+          list={list}
+          labels={columnLabels(columns)}
+          count={{ shown: rows.length, noun: (n) => t('mib.noun', { count: n }) }}
+        >
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('mib.addEntry')}
             </Button>
           )}
-        </TableToolbar>
+        </ListToolbar>
 
         <DataTable
           tableId="nodes.mib"
@@ -314,16 +315,6 @@ export function MibRepositoryPage() {
           loading={loading}
           empty={t('mib.empty.noMatch')}
         />
-        {sheet && (
-          <MobileFilterSheet
-            columns={filterCols}
-            filters={filters}
-            onChange={onFiltersChange}
-            counts={{}}
-            labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
-            onClose={() => setSheet(false)}
-          />
-        )}
       </LoadGate>
 
       {adding && (

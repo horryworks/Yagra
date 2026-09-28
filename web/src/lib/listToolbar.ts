@@ -75,7 +75,8 @@ export function resultCount(i: { shown: number; total?: number; anyFiltered: boo
 }
 
 /**
- * `ToolbarFilters` for a list filtered by the server (`useFilterParams`).
+ * `ToolbarFilters` for a list whose filter state is `useFilterParams` — filtered by the server, or
+ * in the browser by a predicate of the screen's own (Metric sets, Device profiles).
  *
  * `extra` is a narrowing control outside the filter row. Its reset is folded into the **same** URL
  * write as the columns' (`also`): two writes in one handler are both built from one render's

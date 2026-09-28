@@ -45,9 +45,7 @@ import {
 } from '../../pages/discoveredEndpoints';
 import { Button } from '../ui/Button';
 import { DataTable, type Column } from '../ui/DataTable';
-import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
-import { ClearFilters } from '../ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { ListToolbar } from '../../components/ui/ListToolbar';
 import { useClientFilters } from '../../lib/useClientFilters';
 import { neighborFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
@@ -97,7 +95,6 @@ export function NeighborsTab({ node }: Props) {
   // Bumped after a neighbour is added, so its row reads as monitored without waiting for the tick.
   const [reloads, setReloads] = useState(0);
   // Client-side: one device has neighbours in the dozens, and the tab already has them all.
-  const [sheet, setSheet] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -337,8 +334,8 @@ export function NeighborsTab({ node }: Props) {
 
   // In the URL under `neighbors.` (ADR-153): it survives a reload, and it stays on while the
   // operator walks the tree to the next device — the tab's own "Clear all filters (N)" says why.
-  const { filterCols, filters, setFilters, clear, shown: shownNeighbors, counts, anyFiltered } =
-    useClientFilters(columns, neighbors, { prefix: nodeTabFilterPrefix('neighbors') });
+  const filtering = useClientFilters(columns, neighbors, { prefix: nodeTabFilterPrefix('neighbors') });
+  const { filters, setFilters, shown: shownNeighbors, counts, anyFiltered } = filtering;
 
   return (
     <div className="nd-nb">
@@ -360,15 +357,18 @@ export function NeighborsTab({ node }: Props) {
             )}
             {neighbors.length > 0 && <span className="nd-muted">{t('neighbors.rowHint')}</span>}
           </div>
-          <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={filters}
-              onOpen={() => setSheet(true)}
-            />
-            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-            <TableSpacer />
-          </TableToolbar>
+          <ListToolbar
+            list={filtering}
+            labels={{
+              local: t('neighbors.colLocalPort'),
+              peer: t('neighbors.colPeer'),
+              remote_port: t('neighbors.colRemotePort'),
+              address: t('neighbors.colAddress'),
+              monitoring: t('neighbors.colMonitoring'),
+              platform: t('neighbors.colPlatform'),
+              proto: t('neighbors.colProto'),
+            }}
+          />
           {/* Taller while an opened row holds a setup panel: at the tab's usual 40vh the panel sat
               in a scroll box a few lines high. */}
           <div
@@ -411,24 +411,6 @@ export function NeighborsTab({ node }: Props) {
               )}
             />
           </div>
-          {sheet && (
-            <MobileFilterSheet
-              columns={filterCols}
-              filters={filters}
-              onChange={setFilters}
-              counts={counts}
-              labels={{
-                local: t('neighbors.colLocalPort'),
-                peer: t('neighbors.colPeer'),
-                remote_port: t('neighbors.colRemotePort'),
-                address: t('neighbors.colAddress'),
-                monitoring: t('neighbors.colMonitoring'),
-                platform: t('neighbors.colPlatform'),
-                proto: t('neighbors.colProto'),
-              }}
-              onClose={() => setSheet(false)}
-            />
-          )}
         </>
       )}
 

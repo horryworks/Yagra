@@ -31,9 +31,7 @@ import type {
   WirelessApRow,
 } from '../../types/api';
 import { DataTable, type Column } from '../ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
-import { ClearFilters } from '../ui/ClearFilters';
-import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { ListToolbar } from '../../components/ui/ListToolbar';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { GroupPicker } from '../ui/GroupPicker';
@@ -73,7 +71,6 @@ export function ApTab({ node, groups, onChanged }: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
-  const [sheet, setSheet] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -202,11 +199,8 @@ export function ApTab({ node, groups, onChanged }: Props) {
     return cols;
   }, [t, canConfig, busyId, importOne]);
 
-  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
-    columns,
-    rows,
-    { prefix: nodeTabFilterPrefix('ap') },
-  );
+  const filtering = useClientFilters(columns, rows, { prefix: nodeTabFilterPrefix('ap') });
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   const overCap = apsOverCap(summary);
 
@@ -233,16 +227,11 @@ export function ApTab({ node, groups, onChanged }: Props) {
           failure this list could not otherwise show. */}
       {page?.next && <p className="form-error nd-tabpad">{t('ap.morePages')}</p>}
 
-      <TableToolbar>
-        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
-        <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
-        <TableSpacer />
-        <ResultCount
-          shown={shown.length}
-          total={anyFiltered ? rows.length : undefined}
-          noun={t('ap.noun', { count: anyFiltered ? rows.length : shown.length })}
-        />
-      </TableToolbar>
+      <ListToolbar
+        list={filtering}
+        labels={{ ap: t('ap.colAp'), state: t('ap.colState'), imported: t('ap.colImported') }}
+        count={{ shown: shown.length, total: rows.length, noun: (n) => t('ap.noun', { count: n }) }}
+      />
       <div className="nd-ap-table">
         <DataTable
           tableId="node.wirelessAps"
@@ -262,20 +251,6 @@ export function ApTab({ node, groups, onChanged }: Props) {
           }
         />
       </div>
-      {sheet && (
-        <MobileFilterSheet
-          columns={filterCols}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={{
-            ap: t('ap.colAp'),
-            state: t('ap.colState'),
-            imported: t('ap.colImported'),
-          }}
-          onClose={() => setSheet(false)}
-        />
-      )}
     </div>
   );
 }
