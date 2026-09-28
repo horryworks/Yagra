@@ -10,9 +10,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
-import { Button } from '../components/ui/Button';
 import { Select, FieldHint } from '../components/ui/Field';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 import type { AnalysisSchedule, AnalysisToolKey, Cadence } from '../types/api';
 import { SELECTABLE_CADENCES, WEEKDAY_OPTIONS } from '../lib/cadence';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
@@ -44,8 +46,7 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
   const [form, setForm] = useState<ScheduleForm>(() =>
     schedule ? formFromSchedule(schedule, allScope(t)) : blankSchedule(allScope(t)),
   );
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const save = useSubmit({ errorFallback: t('schedule.err.saveFailed'), onDone: onSaved });
 
   const set = <K extends keyof ScheduleForm>(k: K, v: ScheduleForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -59,24 +60,19 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
     t('launch.sens.veryStrict'),
   ];
 
-  async function save() {
+  function submit() {
     const problem = scheduleFormError(form);
     if (problem) {
-      setError(t(`schedule.err.${problem}`));
+      save.refuse(t(`schedule.err.${problem}`));
       return;
     }
-    setSaving(true);
-    setError(null);
     const windowLabel = t(analysisWindowLabelKey(form.windowSecs));
     const body = scheduleBody(form, windowLabel);
-    try {
+    save.submit(async () => {
       if (schedule) await api.updateAnalysisSchedule(schedule.id, body);
       else await api.createAnalysisSchedule(body);
-      onSaved();
-    } catch (e) {
-      setError(errMsg(e, t('schedule.err.saveFailed')));
-      setSaving(false);
-    }
+      return done();
+    });
   }
 
   return (
@@ -84,14 +80,13 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
       title={schedule ? t('schedule.editTitle') : t('schedule.newTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" disabled={saving} onClick={() => void save()}>
-            {saving ? t('schedule.saving') : t('schedule.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={save}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('schedule.save')}
+          busyLabel={t('schedule.saving')}
+        />
       }
     >
       <div className="rb">
@@ -229,7 +224,7 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
           <span>{t('reports:schedule.enabled')}</span>
         </label>
 
-        {error && <FieldHint error>{error}</FieldHint>}
+        <FormError form={save} />
       </div>
     </Modal>
   );

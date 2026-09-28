@@ -33,6 +33,9 @@ import './ClassificationRulesPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import { ruleToInput } from './classificationRuleForm';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
@@ -255,8 +258,7 @@ function RuleModal({
   const [vendor, setVendor] = useState(rule?.vendor ?? '');
   const [model, setModel] = useState(rule?.model ?? '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('rules.err.save'), onDone });
 
   const hasMatcher = prefix.trim() !== '' || regex.trim() !== '';
   const valid = hasMatcher && profileId !== '' && priority.trim() !== '';
@@ -272,15 +274,12 @@ function RuleModal({
       model: model.trim() || null,
       enabled,
     };
-    setBusy(true);
-    setError(null);
-    const call =
-      mode === 'edit' && rule
-        ? api.updateClassificationRule(rule.id, body)
-        : api.createClassificationRule(body).then(() => undefined);
-    call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, t('rules.err.save')));
-      setBusy(false);
+    form.submit(() => {
+      const call =
+        mode === 'edit' && rule
+          ? api.updateClassificationRule(rule.id, body)
+          : api.createClassificationRule(body);
+      return call.then(() => done());
     });
   };
 
@@ -289,14 +288,13 @@ function RuleModal({
       title={mode === 'edit' ? t('rules.modal.editTitle') : t('rules.modal.addTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {mode === 'edit' ? t('common:actions.save') : t('rules.addRule')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={mode === 'edit' ? t('common:actions.save') : t('rules.addRule')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -367,7 +365,7 @@ function RuleModal({
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         <span>{t('rules.modal.enabledLabel')}</span>
       </label>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

@@ -44,6 +44,9 @@ import './ProfilesPage.css';
 import { useLoad } from '../lib/useLoad';
 import { collectedMetrics, profileRuleGap } from '../lib/profileRuleGap';
 import { LoadGate } from '../components/ui/LoadGate';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 const COLS = '1.8fr 1fr 120px 130px 96px';
 
@@ -353,8 +356,7 @@ function ProfileModal({
   const [pollInterval, setPollInterval] = useState(
     profile?.poll_interval_secs != null ? String(profile.poll_interval_secs) : '',
   );
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('profiles.err.save'), onDone });
 
   const submit = () => {
     if (!name.trim()) return;
@@ -362,25 +364,22 @@ function ProfileModal({
     if (trimmedInterval !== '') {
       const n = Number(trimmedInterval);
       if (!Number.isInteger(n) || n < 10 || n > 3600) {
-        setError(t('profiles.err.pollInterval'));
+        form.refuse(t('profiles.err.pollInterval'));
         return;
       }
     }
-    setBusy(true);
-    setError(null);
-    const body: ProfileInput = {
-      name: name.trim(),
-      category,
-      vendor: vendor.trim() || null,
-      poll_interval_secs: trimmedInterval === '' ? null : Number(trimmedInterval),
-    };
-    const call =
-      mode === 'edit' && profile
-        ? api.updateProfile(profile.id, body)
-        : api.createProfile(body).then(() => undefined);
-    call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, t('profiles.err.save')));
-      setBusy(false);
+    form.submit(() => {
+      const body: ProfileInput = {
+        name: name.trim(),
+        category,
+        vendor: vendor.trim() || null,
+        poll_interval_secs: trimmedInterval === '' ? null : Number(trimmedInterval),
+      };
+      const call =
+        mode === 'edit' && profile
+          ? api.updateProfile(profile.id, body)
+          : api.createProfile(body);
+      return call.then(() => done());
     });
   };
 
@@ -389,14 +388,13 @@ function ProfileModal({
       title={mode === 'edit' ? t('profiles.modal.editTitle') : t('profiles.modal.addTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            {mode === 'edit' ? t('common:actions.save') : t('profiles.addProfile')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={mode === 'edit' ? t('common:actions.save') : t('profiles.addProfile')}
+          canSubmit={!!name.trim()}
+        />
       }
     >
       <div className="modal-field">
@@ -440,7 +438,7 @@ function ProfileModal({
         />
         <span className="modal-hint">{t('profiles.modal.pollIntervalHint')}</span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

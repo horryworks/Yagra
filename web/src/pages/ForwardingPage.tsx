@@ -60,6 +60,9 @@ import {
   type DraftCondition,
 } from './forwardingDraft';
 import './ForwardingPage.css';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 const STATUS_POLL_MS = 10_000;
 
@@ -264,8 +267,12 @@ function DestinationModal({
 }) {
   const { t } = useTranslation('settings-forwarding');
   const [draft, setDraft] = useState<Draft>(() => (existing ? draftFrom(existing) : emptyDraft()));
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('err.save'),
+    describeError: (e) =>
+      e instanceof ApiError && e.code === 'duplicate_name' ? t('err.duplicate') : null,
+    onDone: onSaved,
+  });
 
   // Every mutation goes through this so the draft can never hold a combination core would reject.
   const update = (patch: Partial<Draft>) => setDraft((d) => reconcileDraft({ ...d, ...patch }));
@@ -278,19 +285,12 @@ function DestinationModal({
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
-    const body = toInput(draft);
-    const call = existing
-      ? api.updateForwardDestination(existing.id, body)
-      : api.createForwardDestination(body).then(() => undefined);
-    call.then(onSaved).catch((e: unknown) => {
-      setError(
-        e instanceof ApiError && e.code === 'duplicate_name'
-          ? t('err.duplicate')
-          : errMsg(e, t('err.save')),
-      );
-      setBusy(false);
+    form.submit(() => {
+      const body = toInput(draft);
+      const call = existing
+        ? api.updateForwardDestination(existing.id, body)
+        : api.createForwardDestination(body);
+      return call.then(() => done());
     });
   };
 
@@ -300,14 +300,13 @@ function DestinationModal({
       size="wide"
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -529,7 +528,7 @@ function DestinationModal({
       </div>
 
       <p className="modal-hint fwd-warn">{t('securityNote')}</p>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

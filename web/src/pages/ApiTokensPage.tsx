@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCopy } from '../lib/useCopy';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, ApiError } from '../services/api';
 import { useAuthStore, useCan } from '../store';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
@@ -59,6 +59,9 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
 import './ApiTokensPage.css';
 import { roleTone } from './tokenForm';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** Tone per token state. Every non-active state reads as a problem, because each one means the
  *  token is refused — and an admin looking at the list needs "this does not work" to be visible
@@ -251,8 +254,12 @@ function CreateTokenModal({
   const [owner, setOwner] = useState('');
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [scopeGroups, setScopeGroups] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('err.create'),
+    describeError: (e) =>
+      e instanceof ApiError && e.code === 'duplicate_name' ? t('err.duplicate') : null,
+    onDone: onCreated,
+  });
   const choices = useMemo(() => ownerChoices(owners, username ?? ''), [owners, username]);
   const ready = canSubmit(name, surfaces);
   // A token owned by a group-scoped account inherits that scope, so the picker is not offered —
@@ -265,29 +272,21 @@ function CreateTokenModal({
 
   const submit = () => {
     if (!ready) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createApiToken({
-        name: name.trim(),
-        role,
-        surfaces,
-        expires_at: expiryFromChoice(expiry, new Date()),
-        // Omitted means "me" — the server defaults the owner to the caller.
-        owner_user_id: owner || undefined,
-        // Omitted when the owner is scoped: the token inherits, and sending anything else is a
-        // `400`. Otherwise an empty selection means the whole fleet, never an empty group set.
-        scope: inherits ? undefined : scopeFromSelection(scopeGroups),
-      })
-      .then((created) => onCreated(created))
-      .catch((e: unknown) => {
-        setError(
-          e instanceof ApiError && e.code === 'duplicate_name'
-            ? t('err.duplicate')
-            : errMsg(e, t('err.create')),
-        );
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createApiToken({
+          name: name.trim(),
+          role,
+          surfaces,
+          expires_at: expiryFromChoice(expiry, new Date()),
+          // Omitted means "me" — the server defaults the owner to the caller.
+          owner_user_id: owner || undefined,
+          // Omitted when the owner is scoped: the token inherits, and sending anything else is a
+          // `400`. Otherwise an empty selection means the whole fleet, never an empty group set.
+          scope: inherits ? undefined : scopeFromSelection(scopeGroups),
+        })
+        .then((created) => done(created)),
+    );
   };
 
   return (
@@ -295,14 +294,13 @@ function CreateTokenModal({
       title={t('add.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('common:actions.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('common:actions.save')}
+          canSubmit={ready}
+        />
       }
     >
       <div className="modal-field">
@@ -399,7 +397,7 @@ function CreateTokenModal({
         </Select>
         <span className="modal-hint">{t('field.expiryHint')}</span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

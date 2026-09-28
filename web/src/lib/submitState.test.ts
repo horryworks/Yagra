@@ -93,25 +93,14 @@ describe('a dialog saves through useSubmit and draws its footer through FormFoot
     'components/SetPoolModal/SetPoolModal.tsx',
     'components/suppression/AddMaintenanceWindowModal.tsx',
     'components/suppression/AddMuteModal.tsx',
-    'pages/ApiTokensPage.tsx',
     'pages/AuthSettingsPage.tsx',
-    'pages/BusPanel.tsx',
     'pages/ChannelTemplateModal.tsx',
-    'pages/ClassificationRulesPage.tsx',
-    'pages/CollectionTemplatesPage.tsx',
-    'pages/EventRulesPage.tsx',
-    'pages/ForwardingPage.tsx',
-    'pages/MibRepositoryPage.tsx',
     'pages/PollersPage.tsx',
-    'pages/ProfilesPage.tsx',
     'pages/RoutingPage.tsx',
     'pages/integrations/MerakiIntegrationPage.tsx',
     'pages/integrations/NetboxIntegrationPage.tsx',
-    'reports/ReportBuilder.tsx',
-    'reports/ScheduleModal.tsx',
-    'troubleshoot/ScheduleModal.tsx',
   ];
-  const CEILING = 24;
+  const CEILING = 13;
 
   const sources = readSources().map(([p, src]) => [p, codeOnly(src)] as const);
   const handWritten = sources.filter(([, code]) => NEEDLE.test(code)).map(([p]) => p);

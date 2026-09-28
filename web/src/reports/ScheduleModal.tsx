@@ -5,9 +5,11 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
-import { Button } from '../components/ui/Button';
-import { Select, RequiredMark, FieldHint } from '../components/ui/Field';
-import { api, errMsg } from '../services/api';
+import { Select, RequiredMark } from '../components/ui/Field';
+import { api } from '../services/api';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 import type { ReportDefinition, Cadence, ReportSchedule } from '../types/api';
 import { WEEKDAY_OPTIONS } from '../lib/cadence';
 import { SELECTABLE_CADENCES } from '../lib/cadence';
@@ -38,27 +40,24 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
     timeValue(schedule?.at_hour ?? 9, schedule?.at_minute ?? 0),
   );
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const form = useSubmit({ errorFallback: t('schedule.err.saveFailed'), onDone: onSaved });
 
-  async function save() {
+  function save() {
     if (!definitionId) {
-      setError(t('schedule.err.chooseReport'));
+      form.refuse(t('schedule.err.chooseReport'));
       return;
     }
     if (frequency === 'unknown') {
-      setError(t('schedule.err.chooseFrequency'));
+      form.refuse(t('schedule.err.chooseFrequency'));
       return;
     }
     const [h, m] = time.split(':');
     const at_hour = Number(h);
     const at_minute = Number(m);
     if (!Number.isFinite(at_hour) || !Number.isFinite(at_minute)) {
-      setError(t('schedule.err.invalidTime'));
+      form.refuse(t('schedule.err.invalidTime'));
       return;
     }
-    setSaving(true);
-    setError(null);
     const body = {
       definition_id: definitionId,
       frequency,
@@ -68,14 +67,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       at_minute,
       enabled,
     };
-    try {
+    form.submit(async () => {
       if (schedule) await api.updateReportSchedule(schedule.id, body);
       else await api.createReportSchedule(body);
-      onSaved();
-    } catch (e) {
-      setError(errMsg(e, t('schedule.err.saveFailed')));
-      setSaving(false);
-    }
+      return done();
+    });
   }
 
   return (
@@ -83,14 +79,13 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       title={schedule ? t('schedule.editTitle') : t('schedule.newTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" disabled={saving} onClick={save}>
-            {saving ? t('schedule.saving') : t('schedule.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('schedule.save')}
+          busyLabel={t('schedule.saving')}
+        />
       }
     >
       <div className="rb">
@@ -172,7 +167,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
           <span>{t('schedule.enabled')}</span>
         </label>
 
-        {error && <FieldHint error>{error}</FieldHint>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

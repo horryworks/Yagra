@@ -24,7 +24,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -44,6 +44,9 @@ import { mibEntryReady } from './mibEntryForm';
 import './MibRepositoryPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
 function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -53,31 +56,29 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [collection, setCollection] = useState<CollectionKind>('scalar');
   const [metricKind, setMetricKind] = useState<MetricKind>('gauge');
   const [vendor, setVendor] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({
+    errorFallback: t('mib.err.add'),
+    onDone: () => {
+      onSaved();
+      onClose();
+    },
+  });
 
   const valid = mibEntryReady(metricName, oid);
 
   const submit = () => {
     if (!valid) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createMibEntry({
-        metric_name: metricName.trim(),
-        oid: oid.trim(),
-        collection,
-        metric_kind: metricKind,
-        vendor: vendor.trim() || undefined,
-      })
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('mib.err.add')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createMibEntry({
+          metric_name: metricName.trim(),
+          oid: oid.trim(),
+          collection,
+          metric_kind: metricKind,
+          vendor: vendor.trim() || undefined,
+        })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -85,14 +86,13 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
       title={t('mib.addTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {t('mib.addEntry')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('mib.addEntry')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -139,7 +139,7 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
         />
         <span className="modal-hint">{t('mib.modal.vendorHint')}</span>
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

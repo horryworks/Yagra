@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionTemplate } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -30,6 +30,9 @@ import { CollectionEditor } from '../components/CollectionEditor/CollectionEdito
 import './CollectionTemplatesPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 
 export function CollectionTemplatesPage() {
@@ -200,20 +203,15 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
   const { t } = useTranslation('monitoring');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('sets.err.create'), onDone });
 
   const submit = () => {
     if (!name.trim()) return;
-    setBusy(true);
-    setError(null);
-    api
-      .createCollectionTemplate({ name: name.trim(), description: description.trim() || undefined })
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('sets.err.create')));
-        setBusy(false);
-      });
+    form.submit(() =>
+      api
+        .createCollectionTemplate({ name: name.trim(), description: description.trim() || undefined })
+        .then(() => done()),
+    );
   };
 
   return (
@@ -221,14 +219,13 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
       title={t('sets.addSet')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!name.trim() || busy}>
-            {t('sets.modal.addSubmit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('sets.modal.addSubmit')}
+          canSubmit={!!name.trim()}
+        />
       }
     >
       <div className="modal-field">
@@ -250,7 +247,7 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }

@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import { useCopy } from '../lib/useCopy';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useCan } from '../store';
 import type { BusRemoteAccepted, BusStatus } from '../types/api';
 import { Badge } from '../components/ui/Badge';
@@ -23,6 +23,9 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, FieldHint } from '../components/ui/Field';
 import { busCertState, namesNotCovered, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** The confirmation stays up a little longer than elsewhere: this is a secret shown once, and the
  *  operator needs to *see* that the copy happened before they close the dialog. */
@@ -46,32 +49,22 @@ function ReissueModal({
   const [text, setText] = useState(
     currentSans.filter((s) => !['nats', 'localhost', '127.0.0.1', '::1'].includes(s)).join(', '),
   );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({ errorFallback: t('pollers.bus.reissue.failed'), onDone });
 
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .regenerateBusCert(parseBusNames(text))
-      .then(onDone)
-      .catch((e) => setError(errMsg(e, t('pollers.bus.reissue.failed'))))
-      .finally(() => setBusy(false));
-  };
+  const save = () =>
+    form.submit(() => api.regenerateBusCert(parseBusNames(text)).then((s) => done(s)));
 
   return (
     <Modal
       title={t('pollers.bus.reissue.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy}>
-            {t('pollers.bus.reissue.submit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('pollers.bus.reissue.submit')}
+        />
       }
     >
       <div className="form-stack">
@@ -87,7 +80,7 @@ function ReissueModal({
         </label>
         <FieldHint>{t('pollers.bus.names.hint')}</FieldHint>
         <p className="form-hint">{t('pollers.bus.reissue.afterward')}</p>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );
@@ -110,34 +103,25 @@ function SwitchModal({
   const [text, setText] = useState(
     currentSans.filter((s) => !['nats', 'localhost', '127.0.0.1', '::1'].includes(s)).join(', '),
   );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useSubmit({ errorFallback: t('pollers.bus.switchFailed'), onDone: onAccepted });
   const names = parseBusNames(text);
   const ready = !enabling || names.length > 0;
 
-  const go = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setBusRemote(enabling, names)
-      .then(onAccepted)
-      .catch((e) => setError(errMsg(e, t('pollers.bus.switchFailed'))))
-      .finally(() => setBusy(false));
-  };
+  const go = () => form.submit(() => api.setBusRemote(enabling, names).then((a) => done(a)));
 
   return (
     <Modal
       title={enabling ? t('pollers.bus.enable.title') : t('pollers.bus.disable.title')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant={enabling ? 'primary' : 'danger'} onClick={go} disabled={busy || !ready}>
-            {enabling ? t('pollers.bus.enable.submit') : t('pollers.bus.disable.submit')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={go}
+          submitLabel={enabling ? t('pollers.bus.enable.submit') : t('pollers.bus.disable.submit')}
+          canSubmit={ready}
+          variant={enabling ? 'primary' : 'danger'}
+        />
       }
     >
       <div className="form-stack">
@@ -162,7 +146,7 @@ function SwitchModal({
         )}
         {/* The cost, stated before the click rather than discovered after it. */}
         <p className="form-hint">{t('pollers.bus.outage')}</p>
-        {error && <p className="form-error">{error}</p>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

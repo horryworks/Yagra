@@ -8,8 +8,11 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
-import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
-import { api, errMsg } from '../services/api';
+import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { api } from '../services/api';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 import type {
   ReportDefinition,
   ReportSectionDef,
@@ -47,8 +50,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
   );
   const [sections, setSections] = useState<ReportSectionInstance[]>(initial?.sections ?? []);
   const [showCatalog, setShowCatalog] = useState(sections.length === 0);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const form = useSubmit({ errorFallback: t('builder.err.saveFailed'), onDone: onSaved });
 
   const defByKind = useMemo(() => {
     const m = new Map<string, ReportSectionDef>();
@@ -89,31 +91,26 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
     );
   }
 
-  async function save() {
+  function save() {
     const trimmed = name.trim();
     if (!trimmed) {
-      setError(t('builder.err.nameRequired'));
+      form.refuse(t('builder.err.nameRequired'));
       return;
     }
     if (sections.length === 0) {
-      setError(t('builder.err.noSections'));
+      form.refuse(t('builder.err.noSections'));
       return;
     }
-    setSaving(true);
-    setError(null);
     const body = {
       name: trimmed,
       description: description.trim() || undefined,
       spec: { version: 1, params: { range_secs: rangeSecs }, sections },
     };
-    try {
+    form.submit(async () => {
       if (definition) await api.updateReportDefinition(definition.id, body);
       else await api.createReportDefinition(body);
-      onSaved();
-    } catch (e) {
-      setError(errMsg(e, t('builder.err.saveFailed')));
-      setSaving(false);
-    }
+      return done();
+    });
   }
 
   return (
@@ -121,14 +118,13 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
       title={definition ? t('builder.editTitle') : t('builder.newTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" disabled={saving} onClick={save}>
-            {saving ? t('builder.saving') : t('builder.save')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={save}
+          submitLabel={t('builder.save')}
+          busyLabel={t('builder.saving')}
+        />
       }
     >
       <div className="rb">
@@ -268,7 +264,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
           })}
         </div>
 
-        {error && <FieldHint error>{error}</FieldHint>}
+        <FormError form={form} />
       </div>
     </Modal>
   );

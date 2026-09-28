@@ -33,6 +33,9 @@ import {
   ruleToInput,
   type EventRuleNumberField,
 } from './eventRuleForm';
+import { done } from '../lib/submitState';
+import { useSubmit } from '../lib/useSubmit';
+import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 function SeverityBadge({ value }: { value: Severity }) {
   return <Badge tone={SEVERITY_TONE[value]}>{severityLabel(value)}</Badge>;
@@ -266,8 +269,7 @@ function RuleModal({
   const [minCount, setMinCount] = useState(String(rule?.min_count ?? 1));
   const [windowSecs, setWindowSecs] = useState(String(rule?.window_secs ?? 60));
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const form = useSubmit({ errorFallback: t('eventRules.err.save'), onDone });
 
   // Interactive tester.
   const [sample, setSample] = useState('');
@@ -315,15 +317,12 @@ function RuleModal({
       min_count: Number(minCount),
       window_secs: Number(windowSecs),
     };
-    setBusy(true);
-    setError(null);
-    const call =
-      mode === 'edit' && rule
-        ? api.updateEventRule(rule.id, body)
-        : api.createEventRule(body).then(() => undefined);
-    call.then(onDone).catch((e: unknown) => {
-      setError(errMsg(e, t('eventRules.err.save')));
-      setBusy(false);
+    form.submit(() => {
+      const call =
+        mode === 'edit' && rule
+          ? api.updateEventRule(rule.id, body)
+          : api.createEventRule(body);
+      return call.then(() => done());
     });
   };
 
@@ -332,14 +331,13 @@ function RuleModal({
       title={mode === 'edit' ? t('eventRules.modal.editTitle') : t('eventRules.modal.addTitle')}
       onClose={onClose}
       footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>
-            {mode === 'edit' ? t('common:actions.save') : t('eventRules.modal.add')}
-          </Button>
-        </>
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={mode === 'edit' ? t('common:actions.save') : t('eventRules.modal.add')}
+          canSubmit={valid}
+        />
       }
     >
       <div className="modal-field">
@@ -471,7 +469,7 @@ function RuleModal({
         {testResult && <p className="eventrules-tester-result">{testResult}</p>}
       </div>
 
-      {error && <p className="form-error">{error}</p>}
+      <FormError form={form} />
     </Modal>
   );
 }
