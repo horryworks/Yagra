@@ -396,10 +396,12 @@ fn same_device_matches(
         .chain(named.iter())
         .map(|n| (n.id, n))
         .collect();
-    let spelled: HashMap<IpAddr, &str> = parsed
-        .iter()
-        .map(|(a, c)| (*a, c.address.as_str()))
-        .collect();
+    // The first candidate's spelling, as `same_device_candidates` and `inventory_matches` both
+    // judge the first of two spellings of one address — a `collect` would keep the last.
+    let mut spelled: HashMap<IpAddr, &str> = HashMap::new();
+    for (a, c) in &parsed {
+        spelled.entry(*a).or_insert(c.address.as_str());
+    }
     let mut out: Vec<SameDeviceMatch> = Vec::new();
     for f in found {
         let Some(node) = nodes.get(&f.node) else {
@@ -510,8 +512,7 @@ pub(crate) async fn scan_view(
         .candidates
         .iter()
         .filter_map(|c| c.sysname.as_deref())
-        .map(|n| n.trim().to_lowercase())
-        .filter(|n| !n.is_empty())
+        .filter_map(crate::duplicates::name_key)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -2650,6 +2651,27 @@ mod tests {
                 }],
             }])
         );
+    }
+
+    /// Two spellings of one address: the entry names the **first**, the one `existing` and the
+    /// judgement both use, so the WebUI marks the row it judged rather than its twin.
+    #[test]
+    fn same_device_entry_uses_the_first_spelling_of_an_address() {
+        let oid = "1.3.6.1.4.1.9.1.1208";
+        let core = crate::repo::DeviceIdentity {
+            id: Uuid::from_u128(1),
+            name: "core-1".to_owned(),
+            address: "192.0.2.1".parse().expect("address"),
+            sys_object_id: Some(oid.to_owned()),
+        };
+        let mut first = candidate("2001:db8:0:0::7");
+        first.sysobjectid = Some(oid.to_owned());
+        let mut second = candidate("2001:db8::7");
+        second.sysobjectid = Some(oid.to_owned());
+        let carriers = vec![("2001:db8::7".parse().expect("address"), core)];
+        let got = same_device_matches(&[first, second], &[], &carriers, &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].address, "2001:db8:0:0::7");
     }
 
     /// The view is the scan's own fields plus `existing`, flat — so a client that read the scan

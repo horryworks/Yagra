@@ -1388,6 +1388,10 @@ impl NodeRepo {
     /// At most `SHARED_VALUE_MAX + 1` rows come back per name: a name more nodes than that share
     /// identifies none of them (ADR-148 決定 3), and one past the cap is all the caller needs to see
     /// that. Without the bound, a candidate named `switch` would read every node called that.
+    ///
+    /// ⚠️ `lower(btrim(n.name))` is the expression migration 0142 indexes, and the key
+    /// `duplicates::name_key` builds — change all three together, or the read falls back to a full
+    /// scan of the inventory every two seconds while a sweep runs.
     pub async fn device_nodes_named(
         &self,
         keys: &[String],

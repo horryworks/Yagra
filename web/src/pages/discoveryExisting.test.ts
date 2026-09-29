@@ -103,4 +103,10 @@ describe('the same device at another address (ADR-139 increment 3)', () => {
     expect(sameDeviceReasonKey('name')).toBe('discovery.sameDevice.reason.name');
     expect(sameDeviceReasonKey('serial')).toBeNull();
   });
+
+  it('names nothing for a kind a newer core added — never the raw token as a key', () => {
+    // An open tab on an older bundle receives whatever the upgraded core sends (N-1).
+    const future = 'a_kind_from_a_newer_core' as unknown as Parameters<typeof sameDeviceReasonKey>[0];
+    expect(sameDeviceReasonKey(future)).toBeNull();
+  });
 });

@@ -88,8 +88,11 @@ export function sameDeviceReasonKey(kind: EvidenceKind): string | null {
     case 'cdp_device_id':
       return null;
     default: {
+      // A kind a newer core added reaches an open tab on this bundle (N-1): no sentence, rather
+      // than the raw token handed to `t()` as a key.
       const unhandled: never = kind;
-      return unhandled;
+      void unhandled;
+      return null;
     }
   }
 }

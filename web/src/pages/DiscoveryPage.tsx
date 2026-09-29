@@ -1218,7 +1218,8 @@ export function DiscoveryPage() {
                     {inTree ? (
                       <Badge tone="neutral">{t('discovery.badge.inTree')}</Badge>
                     ) : alike ? (
-                      <Badge tone="warning" title={t('discovery.sameDevice.hint')}>
+                      // Neutral, like `inTree`: a status tone would claim a monitoring state.
+                      <Badge tone="neutral">
                         {t(sameDeviceBadgeKey(alike))}
                       </Badge>
                     ) : c.reachable ? (
@@ -1278,13 +1279,11 @@ export function DiscoveryPage() {
                       </>
                     ) : (
                       <>
+                        {/* Wraps rather than truncating like `.disco-dest-to`: the evidence and the
+                            hint are the whole point of the mark, and a title= is unreadable on
+                            touch (ADR-055 R4). */}
                         {alike && (
-                          <span
-                            className="disco-dest-to disco-same"
-                            title={alike.nodes
-                              .map((n) => `${n.name} (${n.address})`)
-                              .join(', ')}
-                          >
+                          <span className="disco-same">
                             <span className="muted">{t('discovery.sameDevice.as')}</span>{' '}
                             {alike.nodes.map((n, i) => {
                               const why = n.evidence
@@ -1293,7 +1292,7 @@ export function DiscoveryPage() {
                                 .map((k) => t(k))
                                 .join(' · ');
                               return (
-                                <span key={n.id} title={why}>
+                                <span key={n.id}>
                                   {i > 0 && ', '}
                                   <Link to={nodeHref(n.id)}>{n.name}</Link>{' '}
                                   <span className="mono muted">({n.address})</span>
@@ -1301,6 +1300,9 @@ export function DiscoveryPage() {
                                 </span>
                               );
                             })}
+                            <span className="muted disco-dest-why disco-same-hint">
+                              {t('discovery.sameDevice.hint')}
+                            </span>
                           </span>
                         )}
                         {destinationCell(c.address, r)}

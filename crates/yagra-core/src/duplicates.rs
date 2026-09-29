@@ -382,7 +382,13 @@ fn each_a_different_meraki_device(
     })
 }
 
-fn name_key(name: &str) -> Option<String> {
+/// A node name as two names are compared: trimmed and lower-cased, `None` when nothing is left.
+///
+/// `NodeRepo::device_nodes_named` narrows in SQL by `lower(btrim(name))` — the expression
+/// migration 0142 indexes — so the two spellings must stay alike. They are not identical: `btrim`
+/// strips spaces only, so a stored name ending in a tab or NBSP is not fetched by that query.
+/// Names written through the API are trimmed on the way in, which keeps that case to imports.
+pub(crate) fn name_key(name: &str) -> Option<String> {
     let key = name.trim().to_lowercase();
     (!key.is_empty()).then_some(key)
 }
