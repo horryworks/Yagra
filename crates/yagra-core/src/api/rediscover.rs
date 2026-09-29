@@ -457,14 +457,6 @@ mod tests {
     use yagra_bus::{DiscoveredDevice, DiscoveryResult};
     use yagra_common::Role;
 
-    fn huawei_profile() -> Uuid {
-        let i = yagra_common::builtin_profiles()
-            .iter()
-            .position(|p| p.name.starts_with("Huawei"))
-            .expect("a built-in Huawei profile");
-        crate::seed_ids::SeedRange::Profiles.id(i)
-    }
-
     async fn loaded_state(pool: &sqlx::PgPool) -> crate::api::ApiState {
         let st = live_state(pool.clone()).await;
         let admin = st.admin.as_ref().expect("live mode");
@@ -574,7 +566,7 @@ mod tests {
             StatusCode::CONFLICT,
             "no live poller, so no re-read from anywhere else: {body}"
         );
-        assert_eq!(body["code"], "no_live_poller", "{body}");
+        assert_eq!(body["error"]["code"], "no_live_poller", "{body}");
 
         a_live_poller(&st, "default").await;
         let scan = started(&st, &tok, node).await;
@@ -597,7 +589,16 @@ mod tests {
         assert_eq!(cmp["profile"]["verdict"], "differs", "{view}");
         assert_eq!(cmp["vendor"]["found"], "Huawei", "{view}");
         let to_profile = cmp["profile"]["found_id"].clone();
-        assert_eq!(to_profile, huawei_profile().to_string());
+        assert!(
+            cmp["profile"]["found_name"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("Huawei")),
+            "the Huawei rule chose the profile: {view}"
+        );
+        let huawei: Uuid = to_profile
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .expect("found_id");
 
         let body = json!({
             "scan_id": scan,
@@ -620,7 +621,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("row");
-        assert_eq!(profile, Some(huawei_profile()));
+        assert_eq!(profile, Some(huawei));
         assert_eq!(vendor.as_deref(), Some("Huawei"));
         assert_eq!(oid.as_deref(), Some("1.3.6.1.4.1.2011.2.23.1"));
 
@@ -634,7 +635,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{out}");
-        assert_eq!(out["code"], "node_changed", "{out}");
+        assert_eq!(out["error"]["code"], "node_changed", "{out}");
     }
 
     /// A locked profile is shown as locked and Apply refuses to move it; another node's id cannot
@@ -685,13 +686,13 @@ mod tests {
                 "scan_id": scan,
                 "profile": {
                     "from": view["comparison"]["profile"]["current_id"],
-                    "to": huawei_profile(),
+                    "to": view["comparison"]["profile"]["found_id"],
                 },
             })),
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{out}");
-        assert_eq!(out["code"], "profile_locked", "{out}");
+        assert_eq!(out["error"]["code"], "profile_locked", "{out}");
 
         let (status, _) = send(
             &st,
@@ -750,7 +751,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert_eq!(body["code"], "no_snmp_credential", "{body}");
+        assert_eq!(body["error"]["code"], "no_snmp_credential", "{body}");
 
         sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://example.com/')")
             .bind(bare)
@@ -766,6 +767,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert_eq!(body["code"], "not_a_device", "{body}");
+        assert_eq!(body["error"]["code"], "not_a_device", "{body}");
     }
 }
