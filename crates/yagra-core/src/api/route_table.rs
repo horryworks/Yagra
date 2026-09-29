@@ -1375,6 +1375,26 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("poll_now"),
     ),
     (
+        "POST",
+        "/api/v1/nodes/:node_id/rediscover",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/nodes/:node_id/rediscover/apply",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/rediscover/:scan_id",
+        NodeScoped,
+        Exempt(
+            "a proposal for a write, not an answer about the fleet (ADR-186): it compares one node              with what a re-read of the device found, and the only thing to do with it is press              Apply. MCP is read-only and cannot start the re-read, so the scan id this needs does              not exist on that surface — the raw sweep is get_config(kind=discovery_scan) and the              node's stored identity is get_node_status",
+        ),
+    ),
+    (
         "PUT",
         "/api/v1/nodes/:node_id/pool",
         NodeScoped,

@@ -190,6 +190,8 @@ import type {
   RetentionPolicy,
   RetentionValues,
   CredentialHealth,
+  RediscoverApplyBody,
+  RediscoverView,
 } from '../types/api';
 import type { DiscoverySettingsBody } from '../pages/neighborSettings';
 import { filenameFromDisposition } from '../lib/download';
@@ -1969,6 +1971,24 @@ export const api = {
   /** Fix (or release) the profile of the given nodes against reclassification. */
   lockReclassify: (nodeIds: string[], locked: boolean): Promise<ReclassifyLocked> =>
     apiPost('/api/v1/reclassify/lock', { body: { node_ids: nodeIds, locked } }),
+
+  /** Nodes ▸ Rediscover (ADR-186): re-read one node with its own credential, on its own pool. */
+  startRediscovery: (nodeId: string): Promise<{ scan_id: string; pool: string }> =>
+    apiPost('/api/v1/nodes/{node_id}/rediscover', { path: { node_id: nodeId } }),
+
+  /** Where a rediscovery is, and the comparison once the device answered. */
+  getRediscovery: (nodeId: string, scanId: string): Promise<RediscoverView> =>
+    apiGet('/api/v1/nodes/{node_id}/rediscover/{scan_id}', {
+      path: { node_id: nodeId, scan_id: scanId },
+    }),
+
+  /** Write what the person accepted. Each field echoes what the dialog showed as current, so the
+   *  server refuses (409) rather than overwrite a node someone edited since. */
+  applyRediscovery: (
+    nodeId: string,
+    body: RediscoverApplyBody,
+  ): Promise<{ applied: ('profile' | 'vendor' | 'model')[] }> =>
+    apiPost('/api/v1/nodes/{node_id}/rediscover/apply', { path: { node_id: nodeId }, body }),
 
   /** The metrics in a template. */
   listTemplateItems: (id: string): Promise<StoredCollectionItem[]> =>

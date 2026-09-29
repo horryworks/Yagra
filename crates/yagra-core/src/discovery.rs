@@ -78,6 +78,19 @@ pub enum SilentTargets {
     ProbeSnmp,
 }
 
+/// Who started a scan, and so where its result is shown (ADR-186).
+///
+/// A rediscovery is a one-address sweep started from a monitored node's context menu, and its
+/// answer belongs to that node's dialog: listing it on the Discovery screen, or feeding its device
+/// into the dashboard's discovery queue, would offer an **already monitored** device for import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanOrigin {
+    /// A sweep an operator started on the Discovery screen, or a Detect of one unregistered device.
+    Sweep,
+    /// A re-read of this node, started from Nodes ▸ Rediscover.
+    Rediscover(Uuid),
+}
+
 /// How long a finished scan stays listable.
 ///
 /// ⚠️ **This is also the Discovery-queue widget's window.** [`DiscoveryRunner::recent_candidates`]
@@ -262,6 +275,8 @@ struct ScanState {
     /// has no live poller, so storing the request would make Increment 2 address a cancel at a pool
     /// that never received the job.
     pool: Option<String>,
+    /// [`ScanOrigin::Sweep`] unless [`DiscoveryRunner::start_rediscovery`] set it.
+    origin: ScanOrigin,
 }
 
 impl ScanState {
@@ -295,6 +310,7 @@ impl ScanState {
             started_at: now,
             updated_at: now,
             pool,
+            origin: ScanOrigin::Sweep,
         }
     }
 
@@ -549,6 +565,53 @@ impl DiscoveryRunner {
         pool: Option<&str>,
         silent: SilentTargets,
     ) -> anyhow::Result<Uuid> {
+        self.start_as(
+            ScanOrigin::Sweep,
+            targets,
+            communities,
+            credentials,
+            pool,
+            silent,
+        )
+        .await
+    }
+
+    /// Re-read one monitored node's address with its own credential (ADR-186).
+    ///
+    /// Always pool-routed: the caller has confirmed a live poller serves `pool`. Unlike a range
+    /// sweep there is no global fallback, because a poller on another network answering "nothing
+    /// there" would read as "this credential does not work".
+    ///
+    /// Silent addresses are still asked over SNMP: the node is monitored, so a dropped ping is not
+    /// evidence that nobody is there.
+    pub async fn start_rediscovery(
+        &self,
+        node: Uuid,
+        target: IpAddr,
+        communities: Vec<String>,
+        credentials: Vec<DiscoveryCredential>,
+        pool: &str,
+    ) -> anyhow::Result<Uuid> {
+        self.start_as(
+            ScanOrigin::Rediscover(node),
+            vec![target],
+            communities,
+            credentials,
+            Some(pool),
+            SilentTargets::ProbeSnmp,
+        )
+        .await
+    }
+
+    async fn start_as(
+        &self,
+        origin: ScanOrigin,
+        targets: Vec<IpAddr>,
+        communities: Vec<String>,
+        credentials: Vec<DiscoveryCredential>,
+        pool: Option<&str>,
+        silent: SilentTargets,
+    ) -> anyhow::Result<Uuid> {
         let scan_id = Uuid::new_v4();
         // One job per part, cut here rather than at publish so the ids the consumer matches on are
         // the ids that went out (ADR-173). A scan no wider than [`JOB_TARGETS`] is one job carrying
@@ -557,7 +620,8 @@ impl DiscoveryRunner {
             let now = Utc::now();
             // The route actually taken is stored, not the pool the caller asked for — see
             // `ScanState::pool`.
-            let scan = ScanState::new(scan_id, targets, pool.map(str::to_owned), now);
+            let mut scan = ScanState::new(scan_id, targets, pool.map(str::to_owned), now);
+            scan.origin = origin;
             let jobs = scan.jobs().map(|(id, t)| (id, t.to_vec())).collect();
             let mut g = self.scans.lock().expect("scans mutex poisoned");
             g.insert(scan_id, scan);
@@ -592,6 +656,18 @@ impl DiscoveryRunner {
     pub fn get(&self, scan_id: Uuid) -> Option<ScanStatus> {
         let g = self.scans.lock().expect("scans mutex poisoned");
         g.get(&scan_id).map(|s| s.status(scan_id))
+    }
+
+    /// A rediscovery's status — only if `scan_id` is a rediscovery **of `node`** (ADR-186).
+    ///
+    /// Asking with another node's id answers `None`, the same as an evicted scan, so a dialog can
+    /// never show one node's device as another's.
+    #[must_use]
+    pub fn get_rediscovery(&self, scan_id: Uuid, node: Uuid) -> Option<ScanStatus> {
+        let g = self.scans.lock().expect("scans mutex poisoned");
+        g.get(&scan_id)
+            .filter(|s| s.origin == ScanOrigin::Rediscover(node))
+            .map(|s| s.status(scan_id))
     }
 
     /// Ask whoever is sweeping `scan_id` to stop (ADR-068 Inc.2).
@@ -667,7 +743,11 @@ impl DiscoveryRunner {
         // life of the process. [`MAX_SCANS`] bounded the memory, so this was never a leak — it was
         // [`FINISHED_TTL`] not being a window, because nothing ever closed it.
         evict(&mut g, Utc::now());
-        let mut ordered: Vec<(&Uuid, &ScanState)> = g.iter().collect();
+        // A rediscovery belongs to its node's dialog, not to this list (ADR-186).
+        let mut ordered: Vec<(&Uuid, &ScanState)> = g
+            .iter()
+            .filter(|(_, s)| s.origin == ScanOrigin::Sweep)
+            .collect();
         // Newest first — the scan an operator is coming back to is the one they just started.
         // Ordered on the `DateTime`, never on the rendered RFC 3339 string: they happen to sort
         // alike today only because every value is UTC with the same precision.
@@ -704,7 +784,8 @@ impl DiscoveryRunner {
         evict(&mut g, Utc::now());
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for scan in g.values() {
+        // A rediscovered device is already monitored; offering it here would invite a second node.
+        for scan in g.values().filter(|s| s.origin == ScanOrigin::Sweep) {
             for c in scan.candidates() {
                 if seen.insert(c.address.clone()) {
                     out.push(c.clone());
@@ -731,20 +812,26 @@ impl DiscoveryRunner {
                 done = r.done,
                 "discovery result received"
             );
-            let mut g = self.scans.lock().expect("scans mutex poisoned");
-            // A result names its *job*, which is the scan's own id only for the first part
-            // (ADR-173), so the scan is found by the part it owns. At most twenty scans of at most
-            // four parts each are retained, so the walk costs nothing worth an index — and an
-            // index would be a second record of which job belongs where, to keep in step with
-            // `evict`.
-            if let Some(s) = g.values_mut().find(|s| s.owns(r.scan_id)) {
-                s.apply(r, &self.classifier, Utc::now());
-            }
-            // An unknown scan_id is dropped on purpose: this core restarted (or was never the
-            // leader) while a poller kept sweeping. Registering a scan here would report progress
-            // for a sweep whose targets and credentials this process never knew.
+            self.fold(r);
         }
         tracing::warn!("discovery result stream ended");
+    }
+
+    /// Fold one poller result into the scan that owns it — the body of [`Self::run_consumer`],
+    /// callable on its own so a test can finish a scan without a bus.
+    pub(crate) fn fold(&self, r: DiscoveryResult) {
+        let mut g = self.scans.lock().expect("scans mutex poisoned");
+        // A result names its *job*, which is the scan's own id only for the first part
+        // (ADR-173), so the scan is found by the part it owns. At most twenty scans of at most
+        // four parts each are retained, so the walk costs nothing worth an index — and an
+        // index would be a second record of which job belongs where, to keep in step with
+        // `evict`.
+        if let Some(s) = g.values_mut().find(|s| s.owns(r.scan_id)) {
+            s.apply(r, &self.classifier, Utc::now());
+        }
+        // An unknown scan_id is dropped on purpose: this core restarted (or was never the
+        // leader) while a poller kept sweeping. Registering a scan here would report progress
+        // for a sweep whose targets and credentials this process never knew.
     }
 }
 
@@ -1187,6 +1274,57 @@ mod tests {
         // The oldest *finished* one went instead.
         assert!(!scans.contains_key(&Uuid::from_u128(100 + (MAX_SCANS - 1) as u128)));
         assert!(scans.contains_key(&Uuid::from_u128(100)));
+    }
+
+    /// ADR-186: a rediscovery answers its own node's dialog and nobody else — it is not listed on
+    /// the Discovery screen, its already-monitored device is not offered by the discovery queue,
+    /// and asking for it under another node's id finds nothing.
+    #[tokio::test]
+    async fn a_rediscovery_is_kept_out_of_the_list_and_the_queue_and_away_from_other_nodes() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(64));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let node = Uuid::from_u128(0xA);
+        let target = targets(1)[0];
+        let id = runner
+            .start_rediscovery(node, target, vec!["public".into()], Vec::new(), "default")
+            .await
+            .expect("publish succeeds");
+        runner.fold(DiscoveryResult {
+            scan_id: id,
+            ..partial(1, true, vec![device(1, None)])
+        });
+
+        assert!(runner.list(50).is_empty(), "a rediscovery is not a sweep");
+        assert!(
+            runner.recent_candidates(50).is_empty(),
+            "a monitored device must not be offered for import"
+        );
+        let own = runner
+            .get_rediscovery(id, node)
+            .expect("its own node reads it");
+        assert_eq!(own.state, DiscoveryScanState::Done);
+        assert_eq!(own.pool.as_deref(), Some("default"));
+        assert!(runner.get_rediscovery(id, Uuid::from_u128(0xB)).is_none());
+
+        let sweep = runner
+            .start(
+                targets(1),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
+            .await
+            .expect("publish succeeds");
+        assert!(
+            runner.get_rediscovery(sweep, node).is_none(),
+            "a sweep is nobody's rediscovery"
+        );
+        assert_eq!(
+            runner.list(50).len(),
+            1,
+            "the sweep beside it is still listed"
+        );
     }
 
     #[tokio::test]

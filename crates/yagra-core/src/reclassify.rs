@@ -59,8 +59,23 @@ pub struct ProposalSet<'a> {
 /// Also `None` when the rules match nothing and no "Generic SNMP" profile exists to fall back to.
 #[must_use]
 pub fn suggestion(node: &ReclassifyInput, classifier: &Classifier) -> Option<ClassificationMatch> {
-    let oid = node.sys_object_id.as_deref()?;
-    classifier.classify(Some(oid), node.sys_descr.as_deref())
+    suggestion_for(
+        node.sys_object_id.as_deref(),
+        node.sys_descr.as_deref(),
+        classifier,
+    )
+}
+
+/// [`suggestion`] over what a device said rather than what a node stores — the same rule, for a
+/// rediscovery that has read the device but not yet written anything (ADR-186).
+#[must_use]
+pub fn suggestion_for(
+    sys_object_id: Option<&str>,
+    sys_descr: Option<&str>,
+    classifier: &Classifier,
+) -> Option<ClassificationMatch> {
+    let oid = sys_object_id?;
+    classifier.classify(Some(oid), sys_descr)
 }
 
 /// The proposals for `nodes` under `classifier`, listing at most `limit`.

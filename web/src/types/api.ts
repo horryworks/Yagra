@@ -715,6 +715,19 @@ export type ReclassifyApplied = components['schemas']['ReclassifyApplied'];
 /** What `POST /api/v1/reclassify/lock` did. */
 export type ReclassifyLocked = components['schemas']['ReclassifyLocked'];
 
+/** Nodes ▸ Rediscover (`GET /api/v1/nodes/{node_id}/rediscover/{scan_id}`, ADR-186): where a
+ *  re-read of one node is, and — once the device answered — the node beside what it now says. */
+export type RediscoverView = components['schemas']['RediscoverView'];
+
+/** The three rows of a rediscovery that answered. */
+export type RediscoverComparison = components['schemas']['RediscoverComparison'];
+
+/** How one row of a rediscovery reads. */
+export type RediscoverVerdict = components['schemas']['RediscoverVerdict'];
+
+/** The body `POST /api/v1/nodes/{node_id}/rediscover/apply` takes. */
+export type RediscoverApplyBody = components['schemas']['RediscoverApplyBody'];
+
 /** Nodes ▸ Duplicates (`GET /api/v1/nodes/duplicates`, ADR-148): device nodes that look like one
  *  device registered more than once, grouped with the evidence for each group. */
 export type DuplicateNodesView = components['schemas']['DuplicateNodesView'];

@@ -97,6 +97,28 @@ pub struct ReclassifyInput {
     pub profile_locked: bool,
 }
 
+/// What Nodes ▸ Rediscover compares against and guards its write with (ADR-186) — see
+/// [`NodeRepo::rediscover_current`].
+#[derive(Debug, Clone)]
+pub struct RediscoverCurrent {
+    pub profile_id: Option<Uuid>,
+    pub profile_locked: bool,
+    pub vendor: Option<String>,
+    pub model: Option<String>,
+}
+
+/// One accepted rediscovery — see [`NodeRepo::apply_rediscovery`]. Each field that is `Some` is a
+/// change `(from, to)`; `None` leaves the column alone.
+#[derive(Debug, Clone, Default)]
+pub struct RediscoverWrite {
+    pub profile: Option<(Option<Uuid>, Uuid)>,
+    pub vendor: Option<(Option<String>, String)>,
+    pub model: Option<(Option<String>, String)>,
+    /// What the device reported. `None` leaves the stored value.
+    pub sys_object_id: Option<String>,
+    pub sys_descr: Option<String>,
+}
+
 /// One device node as Nodes ▸ Duplicates compares it (ADR-148) — see [`NodeRepo::duplicate_inputs`].
 #[derive(Debug, Clone)]
 pub struct DuplicateInput {
@@ -1475,6 +1497,82 @@ impl NodeRepo {
             .fetch_all(&self.pool)
             .await?;
         Ok(moved)
+    }
+
+    /// What Nodes ▸ Rediscover compares with (ADR-186): one device node the caller may see, or
+    /// `None` when it is not a device node, is outside the caller's folders, or does not exist.
+    pub async fn rediscover_current(
+        &self,
+        id: Uuid,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Option<RediscoverCurrent>> {
+        let sql = format!(
+            "SELECT n.profile_id, n.profile_locked, n.vendor, n.model FROM nodes n              WHERE n.id = $2 AND {scope} AND {device}",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let row = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| {
+            Ok(RediscoverCurrent {
+                profile_id: row.try_get("profile_id")?,
+                profile_locked: row.try_get("profile_locked")?,
+                vendor: row.try_get("vendor")?,
+                model: row.try_get("model")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Write what a person accepted in Nodes ▸ Rediscover (ADR-186) — **only while every changed
+    /// column still holds what they were shown**, and never a profile a person locked. Returns
+    /// whether the row was written.
+    ///
+    /// 🚨 One statement, one guard for all three fields: the dialog was read seconds or minutes
+    /// ago, and a partial write that took the vendor but refused the profile would leave a node the
+    /// person never agreed to. Like [`Self::apply_reclassification`] it does not set the lock.
+    pub async fn apply_rediscovery(
+        &self,
+        id: Uuid,
+        write: &RediscoverWrite,
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<bool> {
+        let sql = format!(
+            "UPDATE nodes n SET                  profile_id = CASE WHEN $3 THEN $5 ELSE n.profile_id END,                  vendor = CASE WHEN $6 THEN $8 ELSE n.vendor END,                  model = CASE WHEN $9 THEN $11 ELSE n.model END,                  sys_object_id = COALESCE($12, n.sys_object_id),                  sys_descr = COALESCE($13, n.sys_descr),                  updated_at = now()              WHERE n.id = $2                AND (NOT $3 OR (n.profile_id IS NOT DISTINCT FROM $4 AND NOT n.profile_locked))                AND (NOT $6 OR n.vendor IS NOT DISTINCT FROM $7)                AND (NOT $9 OR n.model IS NOT DISTINCT FROM $10)                AND {scope} AND {device}              RETURNING n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let (p_from, p_to) = write
+            .profile
+            .map_or((None, None), |(from, to)| (from, Some(to)));
+        let (v_from, v_to) = write
+            .vendor
+            .clone()
+            .map_or((None, None), |(from, to)| (from, Some(to)));
+        let (m_from, m_to) = write
+            .model
+            .clone()
+            .map_or((None, None), |(from, to)| (from, Some(to)));
+        let written: Option<Uuid> = sqlx::query_scalar(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(id)
+            .bind(write.profile.is_some())
+            .bind(p_from)
+            .bind(p_to)
+            .bind(write.vendor.is_some())
+            .bind(v_from)
+            .bind(v_to)
+            .bind(write.model.is_some())
+            .bind(m_from)
+            .bind(m_to)
+            .bind(&write.sys_object_id)
+            .bind(&write.sys_descr)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(written.is_some())
     }
 
     /// Lock or unlock the profile of each node the caller may see (ADR-140). Returns the ids written;

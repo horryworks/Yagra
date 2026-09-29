@@ -2989,6 +2989,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/rediscover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["start_rediscovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/rediscover/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["apply_rediscovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/rediscover/{scan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_rediscovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/status": {
         parameters: {
             query?: never;
@@ -11185,6 +11233,16 @@ export interface components {
             poll_interval_secs?: number | null;
             vendor?: string | null;
         };
+        /** @description One profile change, echoing what the dialog showed. */
+        ProfileChange: {
+            /**
+             * Format: uuid
+             * @description The profile the dialog showed as current; `null` ⇒ none.
+             */
+            from?: string | null;
+            /** Format: uuid */
+            to: string;
+        };
         /**
          * Format: uuid
          * @description Stable identifier for a device profile / device-class (e.g. "Cisco router").
@@ -11501,6 +11559,87 @@ export interface components {
              *     this in within the hour; a node that is not SNMP-polled never has one.
              */
             unidentified: number;
+        };
+        /** @description What an Apply wrote. */
+        RediscoverApplied: {
+            applied: components["schemas"]["RediscoverField"][];
+        };
+        /** @description The changes a person accepted. Name at least one. */
+        RediscoverApplyBody: {
+            model?: null | components["schemas"]["TextChange"];
+            profile?: null | components["schemas"]["ProfileChange"];
+            /**
+             * Format: uuid
+             * @description The rediscovery the dialog showed.
+             */
+            scan_id: string;
+            vendor?: null | components["schemas"]["TextChange"];
+        };
+        /** @description The node beside what the device now says it is. */
+        RediscoverComparison: {
+            model: components["schemas"]["RediscoverTextRow"];
+            profile: components["schemas"]["RediscoverProfileRow"];
+            /** @description A person fixed this node's profile (ADR-140); the profile row reads `locked` when it differs. */
+            profile_locked: boolean;
+            sys_descr?: string | null;
+            sys_name?: string | null;
+            /** @description What the device reported. Apply stores the first two with the accepted changes. */
+            sys_object_id?: string | null;
+            vendor: components["schemas"]["RediscoverTextRow"];
+        };
+        /**
+         * @description Which fields an Apply wrote.
+         * @enum {string}
+         */
+        RediscoverField: "profile" | "vendor" | "model";
+        /**
+         * @description The profile row. `found_id` is chosen by the classification rules from the device's
+         *     `sysObjectID`; with no `sysObjectID` no profile is proposed (`undetermined`).
+         */
+        RediscoverProfileRow: {
+            /** Format: uuid */
+            current_id?: string | null;
+            current_name?: string | null;
+            /** Format: uuid */
+            found_id?: string | null;
+            found_name?: string | null;
+            /**
+             * Format: uuid
+             * @description The rule that chose `found_id`; `null` ⇒ the device fell through to "Generic SNMP".
+             */
+            rule_id?: string | null;
+            verdict: components["schemas"]["RediscoverVerdict"];
+        };
+        /**
+         * @description Where a rediscovery is.
+         *
+         *     🚨 **Only `answered` carries a comparison.** The two waiting states say nothing about
+         *     the device, and neither may be read as "nothing changed" — that is the mistake this whole
+         *     feature was built around (a poll's result cannot tell "unchanged" from "not arrived yet").
+         * @enum {string}
+         */
+        RediscoverState: "waiting" | "reading" | "answered" | "no_snmp_answer" | "no_answer" | "stopped";
+        /**
+         * @description A vendor or model row. `found` is `null` when nothing could be derived — Apply never blanks the
+         *     node's value.
+         */
+        RediscoverTextRow: {
+            current?: string | null;
+            found?: string | null;
+            verdict: components["schemas"]["RediscoverVerdict"];
+        };
+        /**
+         * @description How one row of the comparison reads.
+         * @enum {string}
+         */
+        RediscoverVerdict: "same" | "differs" | "undetermined" | "locked";
+        /** @description What Nodes ▸ Rediscover shows. */
+        RediscoverView: {
+            comparison?: null | components["schemas"]["RediscoverComparison"];
+            /** Format: uuid */
+            scan_id: string;
+            /** @description `waiting` and `reading` say nothing about the device yet — never "nothing changed". */
+            state: components["schemas"]["RediscoverState"];
         };
         /**
          * @description A release the operator could move to, with the direction and the verdict already decided by the
@@ -12399,6 +12538,13 @@ export interface components {
             /** Format: uuid */
             scan_id: string;
         };
+        /** @description A rediscovery accepted: read its comparison from `GET …/rediscover/{scan_id}`. */
+        StartedRediscovery: {
+            /** @description The pool whose pollers were asked — the node's own. */
+            pool: string;
+            /** Format: uuid */
+            scan_id: string;
+        };
         /** @description The accepted scan's id, for polling its status. */
         StartedScan: {
             /** Format: uuid */
@@ -12685,6 +12831,12 @@ export interface components {
         TestResult: {
             delivered: boolean;
             error?: string | null;
+        };
+        /** @description One vendor or model change, echoing what the dialog showed. */
+        TextChange: {
+            /** @description The value the dialog showed as current; `null` ⇒ none. */
+            from?: string | null;
+            to: string;
         };
         /**
          * @description A threshold rule as the caller states it — the body of both `POST` and `PUT`.
@@ -25148,6 +25300,225 @@ export interface operations {
                 };
             };
             /** @description No such node, or the node is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    start_rediscovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Re-read started on the node's own pool; read the comparison by scan id */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedRediscovery"];
+                };
+            };
+            /** @description The node's bound credential is missing or unusable */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node, or not one the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `not_a_device`: a URL, DNS, Meraki or controller-managed AP node, which is not read over SNMP. `no_snmp_credential`: the node has no credential and the deployment no fallback community. `no_live_poller`: no poller of the node's pool is alive — the re-read is never sent from another network */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side, or this core is not the HA leader */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    apply_rediscovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RediscoverApplyBody"];
+            };
+        };
+        responses: {
+            /** @description The accepted changes were written, with the device's sysObjectID and sysDescr */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RediscoverApplied"];
+                };
+            };
+            /** @description `nothing_to_apply`: the body names no field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such device node the caller can see, or (`scan_not_found`) no such rediscovery of this node on this core */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Nothing was written. `not_answered`: the device has not answered SNMP. `profile_locked`: a person locked the profile. `node_changed`: the node no longer holds what the dialog showed. `judgement_changed`: the rules no longer derive what the dialog showed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_rediscovery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+                /** @description The id `POST …/rediscover` returned */
+                scan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where the re-read is, and — once the device answered — the node beside what it now says */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RediscoverView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such device node the caller can see, or (`scan_not_found`) no such rediscovery of this node on this core */
             404: {
                 headers: {
                     [name: string]: unknown;

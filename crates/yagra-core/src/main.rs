@@ -118,6 +118,7 @@ mod public_access;
 mod ratelimit;
 mod rca;
 mod reclassify;
+mod rediscover;
 /// Moving this whole deployment to another host (ADR-121). Named apart from `config_bundle`,
 /// which moves a *configuration* between deployments and carries no secret; this one carries the
 /// KEK and every sealed row, which is why it is Admin-only and audited.

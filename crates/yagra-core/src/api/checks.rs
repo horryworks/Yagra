@@ -255,7 +255,10 @@ async fn reject_conflicting_monitor<K: CheckKind>(
 ///
 /// Unlike the scheduler's per-sweep resolution, this pays for all four lookups: it runs on an
 /// operator write, not in the hot loop, and a guard that skips a lookup is a guard with a hole.
-async fn current_node_rows(admin: &AdminState, node_id: Uuid) -> Result<NodeRows, ApiError> {
+pub(super) async fn current_node_rows(
+    admin: &AdminState,
+    node_id: Uuid,
+) -> Result<NodeRows, ApiError> {
     let failed = |what: &'static str| {
         move |e: anyhow::Error| {
             ApiError::from_internal(e.as_ref(), what, "failed to check monitor kind")

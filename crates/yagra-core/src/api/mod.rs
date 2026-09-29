@@ -76,6 +76,7 @@ mod profiles;
 mod public_dashboard;
 pub(crate) mod rca;
 pub(crate) mod reclassify;
+pub(crate) mod rediscover;
 /// Moving this whole deployment to another server (ADR-121). Named apart from `config_bundle`,
 /// which moves a configuration and carries no secret.
 pub(crate) mod relocation;
@@ -477,6 +478,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(collection::routes())
         .merge(classification::routes())
         .merge(reclassify::routes())
+        .merge(rediscover::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
         .merge(openapi::routes())
         .merge(discovery::routes())
@@ -738,6 +740,11 @@ fn changes_monitoring_config(path: &str) -> bool {
         // Counted, every press re-resolved the whole fleet (ADR-179 増分 5). Invisible to the
         // mechanical check for the same reason as the previews: the handler demands ManageConfig.
         || (path.starts_with("/api/v1/discovered-endpoints/") && path.ends_with("/probe"))
+        // Rediscover on one monitored node (ADR-186): the same one-address scan held in memory. The
+        // Apply that may follow is `…/rediscover/apply`, which does **not** end in `/rediscover`
+        // and so does bump — it can move the node's profile. Invisible to the mechanical check for
+        // the same reason as Detect: the handler demands ManageConfig.
+        || (path.starts_with("/api/v1/nodes/") && path.ends_with("/rediscover"))
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1798,6 +1805,19 @@ mod tests {
             changes_monitoring_config(&format!("/api/v1/discovered-endpoints/{id}/import")),
             "an import creates a node"
         );
+    }
+
+    /// ADR-186: starting a rediscovery writes nothing a rebuild reads; applying one may move the
+    /// node's profile, so it must invalidate.
+    #[test]
+    fn rediscovering_does_not_dirty_the_config_generation_but_applying_it_does() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        assert!(!changes_monitoring_config(&format!(
+            "/api/v1/nodes/{id}/rediscover"
+        )));
+        assert!(changes_monitoring_config(&format!(
+            "/api/v1/nodes/{id}/rediscover/apply"
+        )));
     }
 
     #[test]

@@ -189,6 +189,15 @@ impl PollDispatcher {
         node.credential.is_some() || self.env_community.is_some()
     }
 
+    /// The deployment-wide `YAGRA_SNMP_COMMUNITY` that [`resolve_snmp_auth`] falls back to for a
+    /// node with no bound credential. Read by Nodes ▸ Rediscover (ADR-186), which re-reads a node
+    /// with the credential its polls use. A secret: it goes into a discovery job and nowhere else —
+    /// never a log line, a response or an audit row.
+    #[must_use]
+    pub fn fallback_community(&self) -> Option<&str> {
+        self.env_community.as_deref()
+    }
+
     /// The deployment's adjacency policy, degrading to the compiled default on a read failure —
     /// resolved once per sweep, and once per action on the on-demand path.
     pub async fn adjacency_policy(&self) -> AdjacencyPolicy {

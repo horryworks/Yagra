@@ -794,6 +794,8 @@
     "open": "Open",
     "editNodeEllipsis": "Edit node…",
     "editNodeNamed": "Edit \"{{name}}\"…",
+    "rediscoverEllipsis": "Rediscover…",
+    "rediscoverNamed": "Rediscover \"{{name}}\"…",
     "addNodeEllipsis": "Add node…",
     "addGroupEllipsis": "Add group…",
     "deleteEllipsis": "Delete…",
@@ -839,6 +841,49 @@
     "ungroupedOption": "— Ungrouped —",
     "titleMany": "Move {{count}} nodes",
     "partial": "Moved {{moved}} of {{requested}}. The rest could not be found."
+  },
+  "rediscover": {
+    "title": "Rediscover {{name}}",
+    "intro": "Reads the device again with this node's SNMP credential, from this node's own poller pool, and shows what would change. Nothing is written until you press Apply.",
+    "apply": "Apply",
+    "applyHint": "Only the ticked rows are written, together with the sysObjectID and sysDescr the device just reported. OS version and serial number refresh on the next hourly read — press Poll now if you need them sooner.",
+    "phase": {
+      "starting": "Starting the re-read…",
+      "waiting": "Waiting for a poller to pick this up…",
+      "waitingLong": "No poller has picked this up for a minute, so nothing has been read yet. Check this node's pool in Settings ▸ Pollers.",
+      "reading": "Asking the device…",
+      "nothingToApply": "The device answered, and nothing it says differs from what this node holds.",
+      "noSnmpAnswer": "The device answers ping but not SNMP with this node's credential. Check the community (or the SNMPv3 settings) in Edit node. Nothing has been changed.",
+      "noAnswer": "The device answered neither ping nor SNMP. Nothing has been changed.",
+      "stopped": "The re-read was stopped before it finished. Nothing has been changed."
+    },
+    "col": {
+      "field": "Field",
+      "current": "Now",
+      "found": "Device says",
+      "verdict": "Result"
+    },
+    "field": {
+      "profile": "Device profile",
+      "vendor": "Maker",
+      "model": "Model"
+    },
+    "verdict": {
+      "same": "Same",
+      "differs": "Will change",
+      "undetermined": "Could not tell",
+      "locked": "Locked"
+    },
+    "err": {
+      "start": "Could not start the re-read.",
+      "apply": "Could not apply the changes.",
+      "noLivePoller": "No poller of this node's pool is running, so the device cannot be read from its own network. Check Settings ▸ Pollers.",
+      "noCredential": "This node has no SNMP credential. Bind one in Edit node first.",
+      "notADevice": "This node is not read over SNMP, so there is nothing to rediscover.",
+      "locked": "This node's profile is locked. Unlock it in Edit node to change it.",
+      "changed": "The node or the classification rules changed after this was read. Close the dialog and rediscover again.",
+      "lost": "The server no longer has this result. Close the dialog and rediscover again."
+    }
   },
   "setPool": {
     "title": "Poller pool for {{name}}",

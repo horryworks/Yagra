@@ -108,6 +108,7 @@ import {
 } from '../components/MoveByPrefixModal/MoveByPrefixModal';
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
+import { RediscoverModal } from '../components/NodeTree/RediscoverModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -343,6 +344,7 @@ export function NodesPage() {
    *  the dialog loads the detail itself (`EditNodeModalById`) — like Delete/Move above, editing does
    *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
   const [editingNode, setEditingNode] = useState<NodeSummary | null>(null);
+  const [rediscovering, setRediscovering] = useState<NodeSummary | null>(null);
   /** Bumped when that edit rewrote the node the right pane is showing. It rides in `NodeDetail`'s
    *  `key`: the pane fetches a node's config once per mount (plus its own post-save refetch), so
    *  without this an edit from the tree would leave the operator looking at the values they just
@@ -1322,6 +1324,7 @@ export function NodesPage() {
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
             onEditNode={canConfig ? (n) => setEditingNode(n) : undefined}
+            onRediscoverNode={canConfig ? (n) => setRediscovering(n) : undefined}
             onAddNode={canConfig ? openAddNode : undefined}
             onDeleteNode={canConfig ? (n) => setDeletingNode(n) : undefined}
             onDeleteChecked={canConfig ? () => setDeletingNodes([...checked.values()]) : undefined}
@@ -1642,6 +1645,21 @@ export function NodesPage() {
               setDetailNonce((v) => v + 1);
             }
             setEditingNode(null);
+            void reload();
+          }}
+        />
+      )}
+
+      {rediscovering && (
+        <RediscoverModal
+          nodeId={rediscovering.id}
+          name={rediscovering.name}
+          onClose={() => setRediscovering(null)}
+          onApplied={() => {
+            if (selected?.kind === 'node' && selected.id === rediscovering.id) {
+              setDetailNonce((v) => v + 1);
+            }
+            setRediscovering(null);
             void reload();
           }}
         />

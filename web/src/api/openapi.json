@@ -14952,6 +14952,282 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/rediscover": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "start_rediscovery",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Re-read started on the node's own pool; read the comparison by scan id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedRediscovery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The node's bound credential is missing or unusable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node, or not one the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_a_device`: a URL, DNS, Meraki or controller-managed AP node, which is not read over SNMP. `no_snmp_credential`: the node has no credential and the deployment no fallback community. `no_live_poller`: no poller of the node's pool is alive — the re-read is never sent from another network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side, or this core is not the HA leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/rediscover/apply": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "apply_rediscovery",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RediscoverApplyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The accepted changes were written, with the device's sysObjectID and sysDescr",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RediscoverApplied"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`nothing_to_apply`: the body names no field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such device node the caller can see, or (`scan_not_found`) no such rediscovery of this node on this core",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing was written. `not_answered`: the device has not answered SNMP. `profile_locked`: a person locked the profile. `node_changed`: the node no longer holds what the dialog showed. `judgement_changed`: the rules no longer derive what the dialog showed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/rediscover/{scan_id}": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_rediscovery",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "scan_id",
+            "in": "path",
+            "description": "The id `POST …/rediscover` returned",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the re-read is, and — once the device answered — the node beside what it now says",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RediscoverView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such device node the caller can see, or (`scan_not_found`) no such rediscovery of this node on this core",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/status": {
       "get": {
         "tags": [
@@ -36271,6 +36547,27 @@
           }
         }
       },
+      "ProfileChange": {
+        "type": "object",
+        "description": "One profile change, echoing what the dialog showed.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The profile the dialog showed as current; `null` ⇒ none."
+          },
+          "to": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ProfileId": {
         "type": "string",
         "format": "uuid",
@@ -36962,6 +37259,239 @@
             "type": "integer",
             "description": "Device nodes the rules cannot be run for yet, because no `sysObjectID` is stored for them.\nThe poller reads it on its hourly identity probe, so a new or just-upgraded deployment fills\nthis in within the hour; a node that is not SNMP-polled never has one.",
             "minimum": 0
+          }
+        }
+      },
+      "RediscoverApplied": {
+        "type": "object",
+        "description": "What an Apply wrote.",
+        "required": [
+          "applied"
+        ],
+        "properties": {
+          "applied": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RediscoverField"
+            }
+          }
+        }
+      },
+      "RediscoverApplyBody": {
+        "type": "object",
+        "description": "The changes a person accepted. Name at least one.",
+        "required": [
+          "scan_id"
+        ],
+        "properties": {
+          "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextChange"
+              }
+            ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProfileChange"
+              }
+            ]
+          },
+          "scan_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The rediscovery the dialog showed."
+          },
+          "vendor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextChange"
+              }
+            ]
+          }
+        }
+      },
+      "RediscoverComparison": {
+        "type": "object",
+        "description": "The node beside what the device now says it is.",
+        "required": [
+          "profile_locked",
+          "profile",
+          "vendor",
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/RediscoverTextRow"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/RediscoverProfileRow"
+          },
+          "profile_locked": {
+            "type": "boolean",
+            "description": "A person fixed this node's profile (ADR-140); the profile row reads `locked` when it differs."
+          },
+          "sys_descr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sys_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sys_object_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the device reported. Apply stores the first two with the accepted changes."
+          },
+          "vendor": {
+            "$ref": "#/components/schemas/RediscoverTextRow"
+          }
+        }
+      },
+      "RediscoverField": {
+        "type": "string",
+        "description": "Which fields an Apply wrote.",
+        "enum": [
+          "profile",
+          "vendor",
+          "model"
+        ]
+      },
+      "RediscoverProfileRow": {
+        "type": "object",
+        "description": "The profile row. `found_id` is chosen by the classification rules from the device's\n`sysObjectID`; with no `sysObjectID` no profile is proposed (`undetermined`).",
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "current_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "current_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "found_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "found_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The rule that chose `found_id`; `null` ⇒ the device fell through to \"Generic SNMP\"."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/RediscoverVerdict"
+          }
+        }
+      },
+      "RediscoverState": {
+        "type": "string",
+        "description": "Where a rediscovery is.\n\n🚨 **Only `answered` carries a comparison.** The two waiting states say nothing about\nthe device, and neither may be read as \"nothing changed\" — that is the mistake this whole\nfeature was built around (a poll's result cannot tell \"unchanged\" from \"not arrived yet\").",
+        "enum": [
+          "waiting",
+          "reading",
+          "answered",
+          "no_snmp_answer",
+          "no_answer",
+          "stopped"
+        ]
+      },
+      "RediscoverTextRow": {
+        "type": "object",
+        "description": "A vendor or model row. `found` is `null` when nothing could be derived — Apply never blanks the\nnode's value.",
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "found": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/RediscoverVerdict"
+          }
+        }
+      },
+      "RediscoverVerdict": {
+        "type": "string",
+        "description": "How one row of the comparison reads.",
+        "enum": [
+          "same",
+          "differs",
+          "undetermined",
+          "locked"
+        ]
+      },
+      "RediscoverView": {
+        "type": "object",
+        "description": "What Nodes ▸ Rediscover shows.",
+        "required": [
+          "scan_id",
+          "state"
+        ],
+        "properties": {
+          "comparison": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RediscoverComparison",
+                "description": "Present exactly when `state` is `answered`."
+              }
+            ]
+          },
+          "scan_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RediscoverState",
+            "description": "`waiting` and `reading` say nothing about the device yet — never \"nothing changed\"."
           }
         }
       },
@@ -38921,6 +39451,24 @@
           }
         }
       },
+      "StartedRediscovery": {
+        "type": "object",
+        "description": "A rediscovery accepted: read its comparison from `GET …/rediscover/{scan_id}`.",
+        "required": [
+          "scan_id",
+          "pool"
+        ],
+        "properties": {
+          "pool": {
+            "type": "string",
+            "description": "The pool whose pollers were asked — the node's own."
+          },
+          "scan_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "StartedScan": {
         "type": "object",
         "description": "The accepted scan's id, for polling its status.",
@@ -39619,6 +40167,25 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "TextChange": {
+        "type": "object",
+        "description": "One vendor or model change, echoing what the dialog showed.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The value the dialog showed as current; `null` ⇒ none."
+          },
+          "to": {
+            "type": "string"
           }
         }
       },

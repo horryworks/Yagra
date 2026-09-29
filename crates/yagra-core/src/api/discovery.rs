@@ -187,7 +187,7 @@ pub(crate) struct ImportResult {
 ///
 /// Every error names an id and a static reason. None of them can carry secret content — that is a
 /// deliberate property of this function, not an accident of the current messages.
-async fn resolve_scan_credentials(
+pub(super) async fn resolve_scan_credentials(
     creds: &CredentialStore,
     ids: &[String],
 ) -> Result<Vec<yagra_bus::DiscoveryCredential>, ApiError> {

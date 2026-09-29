@@ -861,3 +861,52 @@ button.ntree-supp-icon:hover {
   font-weight: var(--weight-medium);
   font-size: var(--font-sm);
 }
+
+/* Nodes ▸ Rediscover (ADR-186): three rows, the node beside what the device now says. A grid, not a
+   DataTable — it is a fixed comparison inside a dialog, not a list anyone sorts or filters. */
+.rediscover-descr {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rediscover-grid {
+  display: grid;
+  grid-template-columns: auto minmax(5em, auto) minmax(0, 1fr) minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 6px;
+  align-items: center;
+  font-size: var(--font-sm);
+}
+
+.rediscover-head,
+.rediscover-row {
+  display: contents;
+}
+
+.rediscover-head span {
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.rediscover-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.rediscover-row .rediscover-verdict.is-differs {
+  color: var(--status-warning);
+  font-weight: var(--weight-medium);
+}
+
+.rediscover-row .rediscover-verdict.is-same,
+.rediscover-row .rediscover-verdict.is-undetermined,
+.rediscover-row .rediscover-verdict.is-locked {
+  color: var(--text-secondary);
+}

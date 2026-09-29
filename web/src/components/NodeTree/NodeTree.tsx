@@ -241,6 +241,9 @@ interface Props {
    *  the detail pane's "Edit node" opens, reachable without selecting the row first. Omit to hide
    *  the menu item. */
   onEditNode?: (node: NodeSummary) => void;
+  /** Right-click → re-read a device node with its own credential and compare (ADR-186). Offered on
+   *  `device` rows only — a URL, DNS, Meraki or AP node is not read over SNMP. Omit to hide it. */
+  onRediscoverNode?: (node: NodeSummary) => void;
   /** Right-click → add a monitoring node, placed into `groupId` (`null` = top level / Ungrouped).
    *  The manual, Discovery-free way to add a target. Omit to hide the menu item. */
   onAddNode?: (groupId: string | null) => void;
@@ -375,6 +378,7 @@ export function NodeTree({
   onEditGroup,
   onDeleteGroup,
   onEditNode,
+  onRediscoverNode,
   onAddNode,
   onDeleteNode,
   onDeleteChecked,
@@ -2304,6 +2308,20 @@ export function NodeTree({
                   {actsOnBatch
                     ? t('tree.editNodeNamed', { name: menu.node.name })
                     : t('tree.editNodeEllipsis')}
+                </button>
+              )}
+              {/* One node's device, never a batch: the dialog compares one row set (ADR-186). */}
+              {onRediscoverNode && menu.node.kind === 'device' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRediscoverNode(menu.node);
+                    setMenu(null);
+                  }}
+                >
+                  {actsOnBatch
+                    ? t('tree.rediscoverNamed', { name: menu.node.name })
+                    : t('tree.rediscoverEllipsis')}
                 </button>
               )}
               {/* The move items, and what they act on (ADR-124 Inc.2). A right-click on a row that

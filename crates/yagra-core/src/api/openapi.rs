@@ -124,6 +124,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::collection::Doc::openapi(),
         super::classification::Doc::openapi(),
         super::reclassify::Doc::openapi(),
+        super::rediscover::Doc::openapi(),
         super::discovery::Doc::openapi(),
         super::notifications::Doc::openapi(),
         super::rca::Doc::openapi(),
