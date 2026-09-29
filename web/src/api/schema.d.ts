@@ -11970,6 +11970,31 @@ export interface components {
              */
             uptime_seconds: number;
         };
+        /** @description One candidate that looks like a device node monitored at another address. */
+        SameDeviceMatch: {
+            /** @description The candidate's address, spelled exactly as the candidate spells it. */
+            address: string;
+            /** @description The nodes it may be, the most convincing first. */
+            nodes: components["schemas"]["SameDeviceNode"][];
+        };
+        /** @description A device node a candidate may be, and why. */
+        SameDeviceNode: {
+            /** @description The address the node is monitored at. */
+            address: string;
+            /**
+             * @description `confident` when the node's interface list carries the candidate's address and both report
+             *     the same `sysObjectID`; `possible` otherwise.
+             */
+            confidence: components["schemas"]["DuplicateConfidence"];
+            /**
+             * @description `own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`
+             *     (same name and the same `sysObjectID`).
+             */
+            evidence: components["schemas"]["DuplicateEvidenceKind"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         /** @description One finding as the cross-run search returns it: the finding, plus the run it came from. */
         SavedFinding: {
             /**
@@ -12072,6 +12097,14 @@ export interface components {
              *     the sweep is reflected.
              */
             existing: components["schemas"]["InventoryMatch"][];
+            /**
+             * @description Candidates that look like a device node already monitored at **another** address — its
+             *     interface list carries the candidate's address, or its name and model match (ADR-139 増分 3).
+             *     A mark, not a refusal: importing such a candidate is still accepted, because a site that
+             *     reuses one private address plan can make either piece of evidence wrong. Only nodes the caller
+             *     can see are named. A candidate in `existing` is never here.
+             */
+            same_device: components["schemas"]["SameDeviceMatch"][];
         };
         /** @description A point-in-time view of [`SchedulerStats`] for the API. */
         SchedulerStatsSnapshot: {

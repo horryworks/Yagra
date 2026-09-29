@@ -11,7 +11,7 @@
 // and coming back — offered the same devices for import again, and the server created a second
 // node at the same address every time.
 
-import type { InventoryMatch } from '../types/api';
+import type { InventoryMatch, SameDeviceMatch } from '../types/api';
 
 /** The server's answer, keyed by the candidate's own address string.
  *
@@ -55,4 +55,48 @@ export function selectedForImport<C extends { address: string }>(
   existing: ReadonlyMap<string, InventoryMatch>,
 ): C[] {
   return candidates.filter((c) => rows[c.address]?.selected && isImportable(c.address, existing));
+}
+
+/** Candidates that look like a device node monitored at **another** address (ADR-139 増分 3), keyed
+ *  by the candidate's own address string.
+ *
+ *  A mark only: such a row stays importable, because a site that reuses one private address plan
+ *  can make the evidence wrong. `undefined` is what a core that predates the list sends. */
+export function sameDeviceByAddress(
+  sameDevice: readonly SameDeviceMatch[] | undefined,
+): Map<string, SameDeviceMatch> {
+  const out = new Map<string, SameDeviceMatch>();
+  for (const m of sameDevice ?? []) out.set(m.address, m);
+  return out;
+}
+
+type EvidenceKind = SameDeviceMatch['nodes'][number]['evidence'][number];
+
+/** The sentence key for one piece of evidence, or `null` for a kind a candidate is never judged by
+ *  (the server only sends the two below — the rest belong to Nodes ▸ Duplicates). */
+export function sameDeviceReasonKey(kind: EvidenceKind): string | null {
+  switch (kind) {
+    case 'own_ip_one_way':
+      return 'discovery.sameDevice.reason.ownIp';
+    case 'name':
+      return 'discovery.sameDevice.reason.name';
+    case 'address':
+    case 'serial':
+    case 'own_ip':
+    case 'arp_mac':
+    case 'lldp_chassis':
+    case 'cdp_device_id':
+      return null;
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
+  }
+}
+
+/** The badge a marked row carries: the most convincing of its nodes decides it. */
+export function sameDeviceBadgeKey(m: SameDeviceMatch): string {
+  return m.nodes.some((n) => n.confidence === 'confident')
+    ? 'discovery.sameDevice.likely'
+    : 'discovery.sameDevice.maybe';
 }

@@ -2,11 +2,14 @@
 // Reading the server's "already in the tree" answer on the Discovery screen (ADR-139).
 
 import { describe, expect, it } from 'vitest';
-import type { InventoryMatch } from '../types/api';
+import type { InventoryMatch, SameDeviceMatch } from '../types/api';
 import {
   existingByAddress,
   importableCandidates,
   isImportable,
+  sameDeviceBadgeKey,
+  sameDeviceByAddress,
+  sameDeviceReasonKey,
   selectedForImport,
 } from './discoveryExisting';
 
@@ -58,5 +61,46 @@ describe('existing devices', () => {
     };
     const candidates = [cand('10.0.0.1'), cand('10.0.0.2'), cand('10.0.0.3'), cand('10.0.0.4'), cand('10.0.0.5')];
     expect(selectedForImport(candidates, rows, map)).toEqual([cand('10.0.0.1'), cand('10.0.0.3')]);
+  });
+});
+
+describe('the same device at another address (ADR-139 increment 3)', () => {
+  const node = (confidence: 'confident' | 'possible') => ({
+    id: '00000000-0000-0000-0000-00000000000b',
+    name: 'core-1',
+    address: '192.0.2.1',
+    confidence,
+    evidence: ['own_ip_one_way' as const],
+  });
+  const marked = (address: string, ...conf: ('confident' | 'possible')[]): SameDeviceMatch => ({
+    address,
+    nodes: conf.map(node),
+  });
+
+  it('keys the answer by the candidate address and treats a missing list as nothing marked', () => {
+    const map = sameDeviceByAddress([marked('198.51.100.1', 'possible')]);
+    expect([...map.keys()]).toEqual(['198.51.100.1']);
+    expect(sameDeviceByAddress(undefined).size).toBe(0);
+  });
+
+  it('leaves a marked row importable — the mark is not a refusal', () => {
+    const existing = existingByAddress([]);
+    expect(isImportable('198.51.100.1', existing)).toBe(true);
+    expect(
+      selectedForImport([cand('198.51.100.1')], { '198.51.100.1': { selected: true } }, existing),
+    ).toEqual([cand('198.51.100.1')]);
+  });
+
+  it('badges the row by its most convincing node', () => {
+    expect(sameDeviceBadgeKey(marked('a', 'possible'))).toBe('discovery.sameDevice.maybe');
+    expect(sameDeviceBadgeKey(marked('a', 'possible', 'confident'))).toBe(
+      'discovery.sameDevice.likely',
+    );
+  });
+
+  it('names a sentence for each kind the server judges a candidate by, and none for the rest', () => {
+    expect(sameDeviceReasonKey('own_ip_one_way')).toBe('discovery.sameDevice.reason.ownIp');
+    expect(sameDeviceReasonKey('name')).toBe('discovery.sameDevice.reason.name');
+    expect(sameDeviceReasonKey('serial')).toBeNull();
   });
 });

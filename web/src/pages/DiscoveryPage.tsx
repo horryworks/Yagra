@@ -84,7 +84,14 @@ import {
 } from './discoveredEndpoints';
 import { Tabs } from '../components/ui/Tabs';
 import { useEnumParam } from '../lib/useEnumParam';
-import { existingByAddress, importableCandidates, selectedForImport } from './discoveryExisting';
+import {
+  existingByAddress,
+  importableCandidates,
+  sameDeviceBadgeKey,
+  sameDeviceByAddress,
+  sameDeviceReasonKey,
+  selectedForImport,
+} from './discoveryExisting';
 import {
   candidateColumns,
   candidateLabels,
@@ -272,6 +279,7 @@ export function DiscoveryPage() {
   /** The candidates a device node already stands at, as the server answered with this scan
    *  (ADR-139). Read from `shown` like everything else, so it cannot describe another sweep. */
   const existing = useMemo(() => existingByAddress(shown?.existing), [shown]);
+  const sameDevice = useMemo(() => sameDeviceByAddress(shown?.same_device), [shown]);
 
   /** Point the page at a scan — or at none — and clear everything that described the last one.
    *
@@ -1186,8 +1194,15 @@ export function DiscoveryPage() {
               // A device node already stands at this address (ADR-139). The row stays — it is part
               // of what the sweep found — but it cannot be picked, and it says which node it is.
               const inTree = existing.get(c.address);
+              // Looks like a node monitored at another address (ADR-139 増分 3). Marked and
+              // muted like `inTree`, but still pickable: the evidence can be wrong where sites
+              // reuse one private address plan, so the operator keeps the last word.
+              const alike = inTree ? undefined : sameDevice.get(c.address);
               return (
-                <div className={inTree ? 'disco-row existing' : 'disco-row'} key={c.address}>
+                <div
+                  className={inTree || alike ? 'disco-row existing' : 'disco-row'}
+                  key={c.address}
+                >
                   {/* Wrapper is display:contents on desktop (input stays the grid cell) and a real
                       sticky cell on mobile so the select column stays pinned during h-scroll. */}
                   <div className="disco-check">
@@ -1202,6 +1217,10 @@ export function DiscoveryPage() {
                     {c.address}{' '}
                     {inTree ? (
                       <Badge tone="neutral">{t('discovery.badge.inTree')}</Badge>
+                    ) : alike ? (
+                      <Badge tone="warning" title={t('discovery.sameDevice.hint')}>
+                        {t(sameDeviceBadgeKey(alike))}
+                      </Badge>
                     ) : c.reachable ? (
                       <Badge tone="up">{t('discovery.badge.ping')}</Badge>
                     ) : (
@@ -1258,7 +1277,34 @@ export function DiscoveryPage() {
                         )}
                       </>
                     ) : (
-                      destinationCell(c.address, r)
+                      <>
+                        {alike && (
+                          <span
+                            className="disco-dest-to disco-same"
+                            title={alike.nodes
+                              .map((n) => `${n.name} (${n.address})`)
+                              .join(', ')}
+                          >
+                            <span className="muted">{t('discovery.sameDevice.as')}</span>{' '}
+                            {alike.nodes.map((n, i) => {
+                              const why = n.evidence
+                                .map(sameDeviceReasonKey)
+                                .filter((k): k is string => k !== null)
+                                .map((k) => t(k))
+                                .join(' · ');
+                              return (
+                                <span key={n.id} title={why}>
+                                  {i > 0 && ', '}
+                                  <Link to={nodeHref(n.id)}>{n.name}</Link>{' '}
+                                  <span className="mono muted">({n.address})</span>
+                                  {why && <span className="muted disco-dest-why"> {why}</span>}
+                                </span>
+                              );
+                            })}
+                          </span>
+                        )}
+                        {destinationCell(c.address, r)}
+                      </>
                     )}
                   </span>
                   <TextInput

@@ -44,6 +44,14 @@
 //! "shared" by many nodes, and grouping on it would draw one enormous false group. Such a value is
 //! not used, and is reported in [`Findings::ignored`] rather than dropped silently. `address` is the
 //! one kind exempt — device nodes at one address are the duplicate ADR-139 exists for, however many.
+//!
+//! ## A Discovery candidate that is already a node at another address
+//!
+//! [`same_device_candidates`] asks the same question of a scan's candidates (ADR-139 増分 3). A
+//! candidate has only an address, a sysName and a `sysObjectID`, so two kinds are usable: a node's
+//! interface list carrying the candidate's address (`own_ip_one_way` — one direction only, since
+//! the candidate has no list), and the name. The screen only marks what this returns; nothing is
+//! refused, because the reused-private-address case can make either kind wrong.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
@@ -710,6 +718,156 @@ fn build_group(
     }
 }
 
+/// A Discovery candidate, as far as saying it is a known device goes (ADR-139 増分 3).
+#[derive(Debug, Clone, Copy)]
+pub struct CandidateIdentity<'a> {
+    pub address: IpAddr,
+    pub sysname: Option<&'a str>,
+    pub sys_object_id: Option<&'a str>,
+}
+
+/// One device node a candidate looks like, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SameDevice {
+    pub candidate: IpAddr,
+    pub node: Uuid,
+    pub confidence: DuplicateConfidence,
+    /// Strongest first.
+    pub evidence: Vec<DuplicateEvidenceKind>,
+}
+
+/// A `sysObjectID` as a comparable key: trimmed, with no leading dot (`.1.3.6…` and `1.3.6…` are
+/// one OID), and `None` when there is nothing left.
+fn oid_key(oid: Option<&str>) -> Option<&str> {
+    oid.map(|s| s.trim().trim_start_matches('.'))
+        .filter(|s| !s.is_empty())
+}
+
+/// Which device nodes each Discovery candidate may be, at another address (ADR-139 増分 3).
+///
+/// - `carriers`: a node whose own interface-address list carries a candidate's address, paired with
+///   that address. `named`: nodes whose name matches some candidate's sysName (the reader returns at
+///   most one more than [`SHARED_VALUE_MAX`] per name).
+/// - `already_at`: addresses a device node is monitored at. Those candidates are ADR-139's
+///   `existing` and are not judged again here.
+///
+/// The rules, and why each one is the strength it is:
+/// - **The interface list** is `confident` only when both sides report the same `sysObjectID`. On
+///   its own it is one direction of ADR-148's `own_ip` — a candidate has no list to confirm it — and
+///   sites that reuse one private address plan put the same address on different routers.
+/// - **The name** counts only with the same `sysObjectID`, and only as `possible`: two devices of
+///   one model called `core-sw` is ordinary.
+/// - **Two `sysObjectID`s that differ** end the pair: those are different models, so different
+///   devices. This is what drops most of the reused-address case.
+/// - A value more than [`SHARED_VALUE_MAX`] nodes share names none of them.
+#[must_use]
+pub fn same_device_candidates(
+    candidates: &[CandidateIdentity<'_>],
+    already_at: &HashSet<IpAddr>,
+    carriers: &[(IpAddr, crate::repo::DeviceIdentity)],
+    named: &[crate::repo::DeviceIdentity],
+) -> Vec<SameDevice> {
+    let mut by_carried: HashMap<IpAddr, Vec<&crate::repo::DeviceIdentity>> = HashMap::new();
+    for (ip, node) in carriers {
+        let list = by_carried.entry(*ip).or_default();
+        if !list.iter().any(|n| n.id == node.id) {
+            list.push(node);
+        }
+    }
+    let mut by_name: HashMap<String, Vec<&crate::repo::DeviceIdentity>> = HashMap::new();
+    for node in named {
+        if let Some(key) = name_key(&node.name) {
+            let list = by_name.entry(key).or_default();
+            if !list.iter().any(|n| n.id == node.id) {
+                list.push(node);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut seen: HashSet<IpAddr> = HashSet::new();
+    for c in candidates {
+        if !address_identifies(c.address)
+            || already_at.contains(&c.address)
+            || !seen.insert(c.address)
+        {
+            continue;
+        }
+        let carried: &[&crate::repo::DeviceIdentity] = by_carried
+            .get(&c.address)
+            .map(Vec::as_slice)
+            .filter(|l| l.len() <= SHARED_VALUE_MAX)
+            .unwrap_or(&[]);
+        let same_name: &[&crate::repo::DeviceIdentity] = c
+            .sysname
+            .and_then(name_key)
+            .and_then(|k| by_name.get(&k))
+            .map(Vec::as_slice)
+            .filter(|l| l.len() <= SHARED_VALUE_MAX)
+            .unwrap_or(&[]);
+        let cand_oid = oid_key(c.sys_object_id);
+
+        let mut hits: BTreeMap<Uuid, (&crate::repo::DeviceIdentity, Vec<DuplicateEvidenceKind>)> =
+            BTreeMap::new();
+        for n in carried {
+            hits.entry(n.id)
+                .or_insert_with(|| (n, Vec::new()))
+                .1
+                .push(DuplicateEvidenceKind::OwnIpOneWay);
+        }
+        for n in same_name {
+            hits.entry(n.id)
+                .or_insert_with(|| (n, Vec::new()))
+                .1
+                .push(DuplicateEvidenceKind::Name);
+        }
+
+        let mut found: Vec<(SameDevice, &str)> = Vec::new();
+        for (id, (node, mut evidence)) in hits {
+            if node.address == c.address {
+                continue;
+            }
+            let node_oid = oid_key(node.sys_object_id.as_deref());
+            let same_model = match (cand_oid, node_oid) {
+                (Some(a), Some(b)) if a != b => continue,
+                (Some(_), Some(_)) => true,
+                _ => false,
+            };
+            // A name is evidence only beside a model both sides reported (decision A).
+            if !same_model {
+                evidence.retain(|k| *k != DuplicateEvidenceKind::Name);
+            }
+            if evidence.is_empty() {
+                continue;
+            }
+            evidence.sort();
+            let confidence = if same_model && evidence.contains(&DuplicateEvidenceKind::OwnIpOneWay)
+            {
+                DuplicateConfidence::Confident
+            } else {
+                DuplicateConfidence::Possible
+            };
+            found.push((
+                SameDevice {
+                    candidate: c.address,
+                    node: id,
+                    confidence,
+                    evidence,
+                },
+                node.name.as_str(),
+            ));
+        }
+        found.sort_by(|(a, an), (b, bn)| {
+            a.confidence
+                .cmp(&b.confidence)
+                .then_with(|| an.cmp(bn))
+                .then_with(|| a.node.cmp(&b.node))
+        });
+        out.extend(found.into_iter().map(|(s, _)| s));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1298,6 +1456,208 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DuplicateConfidence::Possible).expect("serializes"),
             "possible"
+        );
+    }
+
+    // ── Discovery candidates at another address (ADR-139 増分 3) ──
+
+    const CATALYST: &str = "1.3.6.1.4.1.9.1.1208";
+    const NEXUS: &str = "1.3.6.1.4.1.9.12.3.1.3.1238";
+
+    fn device(
+        n: u128,
+        name: &str,
+        address: &str,
+        oid: Option<&str>,
+    ) -> crate::repo::DeviceIdentity {
+        crate::repo::DeviceIdentity {
+            id: id(n),
+            name: name.to_owned(),
+            address: address.parse().expect("a test address"),
+            sys_object_id: oid.map(str::to_owned),
+        }
+    }
+
+    fn cand<'a>(
+        address: &str,
+        sysname: Option<&'a str>,
+        oid: Option<&'a str>,
+    ) -> CandidateIdentity<'a> {
+        CandidateIdentity {
+            address: address.parse().expect("a test address"),
+            sysname,
+            sys_object_id: oid,
+        }
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().expect("a test address")
+    }
+
+    #[test]
+    fn a_candidate_on_a_nodes_interface_list_with_the_same_model_is_confident() {
+        let core = device(1, "core-1", "192.0.2.1", Some(CATALYST));
+        let found = same_device_candidates(
+            // A leading dot is the same OID.
+            &[cand(
+                "198.51.100.1",
+                Some("core-1"),
+                Some(".1.3.6.1.4.1.9.1.1208"),
+            )],
+            &HashSet::new(),
+            &[(ip("198.51.100.1"), core.clone())],
+            &[core],
+        );
+        assert_eq!(
+            found,
+            vec![SameDevice {
+                candidate: ip("198.51.100.1"),
+                node: id(1),
+                confidence: DuplicateConfidence::Confident,
+                evidence: vec![
+                    DuplicateEvidenceKind::OwnIpOneWay,
+                    DuplicateEvidenceKind::Name
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn the_interface_list_without_a_model_on_both_sides_is_only_possible() {
+        let core = device(1, "core-1", "192.0.2.1", None);
+        let found = same_device_candidates(
+            &[cand("198.51.100.1", None, Some(CATALYST))],
+            &HashSet::new(),
+            &[(ip("198.51.100.1"), core)],
+            &[],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].confidence, DuplicateConfidence::Possible);
+        assert_eq!(found[0].evidence, vec![DuplicateEvidenceKind::OwnIpOneWay]);
+    }
+
+    #[test]
+    fn a_different_model_is_a_different_device_whatever_else_matches() {
+        // The reused-address case: another site's router carries the same private address.
+        let other = device(1, "core-1", "192.0.2.1", Some(NEXUS));
+        let found = same_device_candidates(
+            &[cand("10.0.0.1", Some("core-1"), Some(CATALYST))],
+            &HashSet::new(),
+            &[(ip("10.0.0.1"), other.clone())],
+            &[other],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_name_counts_only_beside_the_same_model_and_only_as_possible() {
+        let a = device(1, "Core-1", "192.0.2.1", Some(CATALYST));
+        let b = device(2, "core-1", "192.0.2.2", None);
+        let found = same_device_candidates(
+            &[cand("198.51.100.1", Some("  core-1 "), Some(CATALYST))],
+            &HashSet::new(),
+            &[],
+            &[a, b],
+        );
+        assert_eq!(
+            found,
+            vec![SameDevice {
+                candidate: ip("198.51.100.1"),
+                node: id(1),
+                confidence: DuplicateConfidence::Possible,
+                evidence: vec![DuplicateEvidenceKind::Name],
+            }]
+        );
+        // No model on the candidate: the name alone says nothing.
+        let named = [device(1, "core-1", "192.0.2.1", Some(CATALYST))];
+        let none = same_device_candidates(
+            &[cand("198.51.100.1", Some("core-1"), None)],
+            &HashSet::new(),
+            &[],
+            &named,
+        );
+        assert!(none.is_empty(), "{none:?}");
+    }
+
+    #[test]
+    fn a_name_more_nodes_share_than_the_cap_names_none_of_them() {
+        let named: Vec<crate::repo::DeviceIdentity> = (0..=SHARED_VALUE_MAX as u128)
+            .map(|n| {
+                device(
+                    n + 1,
+                    "switch",
+                    &format!("192.0.2.{}", n + 1),
+                    Some(CATALYST),
+                )
+            })
+            .collect();
+        assert_eq!(named.len(), SHARED_VALUE_MAX + 1);
+        let found = same_device_candidates(
+            &[cand("198.51.100.1", Some("switch"), Some(CATALYST))],
+            &HashSet::new(),
+            &[],
+            &named,
+        );
+        assert!(found.is_empty(), "{found:?}");
+        // At the cap it still counts.
+        let found = same_device_candidates(
+            &[cand("198.51.100.1", Some("switch"), Some(CATALYST))],
+            &HashSet::new(),
+            &[],
+            &named[..SHARED_VALUE_MAX],
+        );
+        assert_eq!(found.len(), SHARED_VALUE_MAX);
+    }
+
+    #[test]
+    fn a_candidate_already_in_the_tree_or_at_loopback_is_not_judged() {
+        let core = device(1, "core-1", "192.0.2.1", Some(CATALYST));
+        let carriers = [
+            (ip("198.51.100.1"), core.clone()),
+            (ip("127.0.0.1"), core.clone()),
+        ];
+        let already: HashSet<IpAddr> = [ip("198.51.100.1")].into_iter().collect();
+        let found = same_device_candidates(
+            &[
+                cand("198.51.100.1", None, Some(CATALYST)),
+                cand("127.0.0.1", None, Some(CATALYST)),
+            ],
+            &already,
+            &carriers,
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+        // A node's own monitored address on its list is not "another address".
+        let found = same_device_candidates(
+            &[cand("192.0.2.1", None, Some(CATALYST))],
+            &HashSet::new(),
+            &[(ip("192.0.2.1"), core)],
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn confident_matches_come_first_and_each_candidate_is_judged_once() {
+        let a = device(1, "b-router", "192.0.2.1", Some(CATALYST));
+        let b = device(2, "a-router", "192.0.2.2", None);
+        let found = same_device_candidates(
+            &[
+                cand("198.51.100.1", None, Some(CATALYST)),
+                cand("198.51.100.1", None, Some(CATALYST)),
+            ],
+            &HashSet::new(),
+            &[(ip("198.51.100.1"), b), (ip("198.51.100.1"), a)],
+            &[],
+        );
+        let order: Vec<(Uuid, DuplicateConfidence)> =
+            found.iter().map(|f| (f.node, f.confidence)).collect();
+        assert_eq!(
+            order,
+            vec![
+                (id(1), DuplicateConfidence::Confident),
+                (id(2), DuplicateConfidence::Possible)
+            ]
         );
     }
 }

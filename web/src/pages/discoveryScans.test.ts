@@ -60,6 +60,7 @@ function status(over: Partial<DiscoveryScan> = {}): DiscoveryScan {
     pool: null,
     candidates: [],
     existing: [],
+    same_device: [],
     ...over,
   };
 }

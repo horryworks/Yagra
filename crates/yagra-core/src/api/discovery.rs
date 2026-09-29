@@ -336,6 +336,94 @@ pub(crate) struct ScanView {
     /// list is not a device node. Read when the scan is read, so a node added or removed after
     /// the sweep is reflected.
     existing: Vec<InventoryMatch>,
+    /// Candidates that look like a device node already monitored at **another** address — its
+    /// interface list carries the candidate's address, or its name and model match (ADR-139 増分 3).
+    /// A mark, not a refusal: importing such a candidate is still accepted, because a site that
+    /// reuses one private address plan can make either piece of evidence wrong. Only nodes the caller
+    /// can see are named. A candidate in `existing` is never here.
+    same_device: Vec<SameDeviceMatch>,
+}
+
+/// One candidate that looks like a device node monitored at another address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct SameDeviceMatch {
+    /// The candidate's address, spelled exactly as the candidate spells it.
+    address: String,
+    /// The nodes it may be, the most convincing first.
+    nodes: Vec<SameDeviceNode>,
+}
+
+/// A device node a candidate may be, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct SameDeviceNode {
+    id: Uuid,
+    name: String,
+    /// The address the node is monitored at.
+    address: String,
+    /// `confident` when the node's interface list carries the candidate's address and both report
+    /// the same `sysObjectID`; `possible` otherwise.
+    confidence: crate::duplicates::DuplicateConfidence,
+    /// `own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`
+    /// (same name and the same `sysObjectID`).
+    evidence: Vec<crate::duplicates::DuplicateEvidenceKind>,
+}
+
+/// Fold [`crate::duplicates::same_device_candidates`]'s answer into one entry per candidate address.
+fn same_device_matches(
+    candidates: &[crate::discovery::Candidate],
+    existing: &[crate::repo::AddressMatch],
+    carriers: &[(IpAddr, crate::repo::DeviceIdentity)],
+    named: &[crate::repo::DeviceIdentity],
+) -> Vec<SameDeviceMatch> {
+    let parsed: Vec<(IpAddr, &crate::discovery::Candidate)> = candidates
+        .iter()
+        .filter_map(|c| c.address.parse().ok().map(|a| (a, c)))
+        .collect();
+    let identities: Vec<crate::duplicates::CandidateIdentity<'_>> = parsed
+        .iter()
+        .map(|(address, c)| crate::duplicates::CandidateIdentity {
+            address: *address,
+            sysname: c.sysname.as_deref(),
+            sys_object_id: c.sysobjectid.as_deref(),
+        })
+        .collect();
+    let already_at: HashSet<IpAddr> = existing.iter().map(|m| m.address).collect();
+    let found =
+        crate::duplicates::same_device_candidates(&identities, &already_at, carriers, named);
+    let nodes: HashMap<Uuid, &crate::repo::DeviceIdentity> = carriers
+        .iter()
+        .map(|(_, n)| n)
+        .chain(named.iter())
+        .map(|n| (n.id, n))
+        .collect();
+    let spelled: HashMap<IpAddr, &str> = parsed
+        .iter()
+        .map(|(a, c)| (*a, c.address.as_str()))
+        .collect();
+    let mut out: Vec<SameDeviceMatch> = Vec::new();
+    for f in found {
+        let Some(node) = nodes.get(&f.node) else {
+            continue;
+        };
+        let entry = SameDeviceNode {
+            id: node.id,
+            name: node.name.clone(),
+            address: node.address.to_string(),
+            confidence: f.confidence,
+            evidence: f.evidence,
+        };
+        let address = spelled
+            .get(&f.candidate)
+            .map_or_else(|| f.candidate.to_string(), |s| (*s).to_owned());
+        match out.last_mut() {
+            Some(last) if last.address == address => last.nodes.push(entry),
+            _ => out.push(SameDeviceMatch {
+                address,
+                nodes: vec![entry],
+            }),
+        }
+    }
+    out
 }
 
 /// One candidate address that is already a device node.
@@ -417,19 +505,37 @@ pub(crate) async fn scan_view(
         .iter()
         .filter_map(|c| c.address.parse().ok())
         .collect();
-    let found = admin
-        .repo
-        .device_nodes_at(&addresses, scope.group_filter())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "match scan candidates to device nodes",
-                "failed to read the inventory",
-            )
-        })?;
+    // Candidate names, as `duplicates::same_device_candidates` compares them.
+    let names: Vec<String> = status
+        .candidates
+        .iter()
+        .filter_map(|c| c.sysname.as_deref())
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let (found, carriers, named) = tokio::try_join!(
+        admin.repo.device_nodes_at(&addresses, scope.group_filter()),
+        admin
+            .repo
+            .device_nodes_carrying(&addresses, scope.group_filter()),
+        admin.repo.device_nodes_named(&names, scope.group_filter()),
+    )
+    .map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "match scan candidates to device nodes",
+            "failed to read the inventory",
+        )
+    })?;
     let existing = inventory_matches(&status.candidates, &found);
-    Ok(Some(ScanView { status, existing }))
+    let same_device = same_device_matches(&status.candidates, &found, &carriers, &named);
+    Ok(Some(ScanView {
+        status,
+        existing,
+        same_device,
+    }))
 }
 
 #[utoipa::path(
@@ -2509,6 +2615,43 @@ mod tests {
         );
     }
 
+    /// ADR-139 増分 3: one entry per candidate address, in the candidate's own spelling, naming the
+    /// node and its monitored address; a candidate already standing at a node's address — even one
+    /// the caller cannot see — is `existing`'s and never appears here.
+    #[test]
+    fn same_device_entries_are_per_candidate_and_skip_the_existing_ones() {
+        let oid = "1.3.6.1.4.1.9.1.1208";
+        let core = crate::repo::DeviceIdentity {
+            id: Uuid::from_u128(1),
+            name: "core-1".to_owned(),
+            address: "192.0.2.1".parse().expect("address"),
+            sys_object_id: Some(oid.to_owned()),
+        };
+        let mut lan = candidate("2001:db8:0:0::7");
+        lan.sysobjectid = Some(oid.to_owned());
+        let mut taken = candidate("198.51.100.9");
+        taken.sysobjectid = Some(oid.to_owned());
+        let carriers = vec![
+            ("2001:db8::7".parse().expect("address"), core.clone()),
+            ("198.51.100.9".parse().expect("address"), core),
+        ];
+        let existing = vec![device("198.51.100.9", "elsewhere", false)];
+        let got = same_device_matches(&[lan, taken], &existing, &carriers, &[]);
+        assert_eq!(
+            serde_json::to_value(&got).expect("serialize"),
+            serde_json::json!([{
+                "address": "2001:db8:0:0::7",
+                "nodes": [{
+                    "id": Uuid::from_u128(1),
+                    "name": "core-1",
+                    "address": "192.0.2.1",
+                    "confidence": "confident",
+                    "evidence": ["own_ip_one_way"],
+                }],
+            }])
+        );
+    }
+
     /// The view is the scan's own fields plus `existing`, flat — so a client that read the scan
     /// before this existed reads it unchanged — and a withheld node carries no id or name.
     #[test]
@@ -2531,6 +2674,7 @@ mod tests {
                 nodes: vec![],
                 outside_scope: true,
             }],
+            same_device: vec![],
         };
         let json = serde_json::to_value(&view).expect("serialize");
         assert_eq!(json["state"], "done");

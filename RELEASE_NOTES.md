@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Discovery marks a device that is already monitored at another address.** A router registered by its loopback and swept again on a LAN address used to be offered as a new device. When a registered device node's interface list carries the scanned address, or its name and model (`sysObjectID`) match the scanned device's, the row is now muted and badged *Likely the same device* or *Maybe the same device*, with a link to that node and its address. Two devices that report different models are never marked. The row stays importable — where sites reuse one private address plan the evidence can be wrong — and nodes in folders you cannot see are not named. `GET /api/v1/discovery/scan/{id}` and the MCP `get_config(kind="discovery_scan")` return the same answer as `same_device`.
+
 ### Improvements
 
 - **A Meraki device's header says which organization and network it belongs to.** The line under its name now reads `address · model · Organization / Network`, using the names from the last inventory sync (the organization alone until a sync has named the network). The node detail API and the MCP `get_node_status` tool return the same thing as `meraki_site`: the organization's id and name, and the network's id and name.

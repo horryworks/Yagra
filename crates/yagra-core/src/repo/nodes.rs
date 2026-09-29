@@ -1382,6 +1382,53 @@ impl NodeRepo {
         Ok(out)
     }
 
+    /// The device nodes the caller may see whose name, trimmed and lower-cased, is one of `keys`
+    /// (ADR-139 増分 3) — what a Discovery candidate's sysName is compared against.
+    ///
+    /// At most `SHARED_VALUE_MAX + 1` rows come back per name: a name more nodes than that share
+    /// identifies none of them (ADR-148 決定 3), and one past the cap is all the caller needs to see
+    /// that. Without the bound, a candidate named `switch` would read every node called that.
+    pub async fn device_nodes_named(
+        &self,
+        keys: &[String],
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<DeviceIdentity>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT id, name, address, sys_object_id FROM ( \
+               SELECT n.id, n.name, host(n.address) AS address, n.sys_object_id, \
+                      row_number() OVER (PARTITION BY lower(btrim(n.name)) ORDER BY n.id) AS rn \
+               FROM nodes n \
+               WHERE lower(btrim(n.name)) = ANY($2::text[]) AND n.address IS NOT NULL \
+                 AND {scope} AND {device} \
+             ) named WHERE rn <= $3",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let per_name = i64::try_from(crate::duplicates::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
+        let rows = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(keys)
+            .bind(per_name)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let Ok(address) = row.try_get::<String, _>("address")?.parse::<IpAddr>() else {
+                continue;
+            };
+            out.push(DeviceIdentity {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                address,
+                sys_object_id: row.try_get("sys_object_id")?,
+            });
+        }
+        Ok(out)
+    }
+
     /// Move each node to the profile the rules chose for it — **only while it is still on the
     /// profile the caller saw and nobody has locked it** (ADR-140). Returns the ids actually moved.
     ///

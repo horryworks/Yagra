@@ -247,6 +247,18 @@ pub struct AddressMatch {
     pub visible: bool,
 }
 
+/// A device node the caller may see, with what a Discovery candidate is compared against to say it
+/// may be the same device at another address (ADR-139 増分 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdentity {
+    pub id: Uuid,
+    pub name: String,
+    /// The monitored address.
+    pub address: IpAddr,
+    /// What the device last said it is; `None` ⇒ never read (see `migrations/0113`).
+    pub sys_object_id: Option<String>,
+}
+
 /// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).
 ///
 /// This is deliberately a **group** filter and not a node-id list: expanding a scope to node ids

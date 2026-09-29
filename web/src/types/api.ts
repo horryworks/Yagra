@@ -754,6 +754,7 @@ export type DiscoveryScan = components['schemas']['ScanView'];
 /** One scan candidate whose address a device node already stands at (ADR-139). `nodes` is what the
  *  caller may see; `outside_scope` says one stands in a folder they cannot, name withheld. */
 export type InventoryMatch = components['schemas']['InventoryMatch'];
+export type SameDeviceMatch = components['schemas']['SameDeviceMatch'];
 
 /** One curated OID-catalog entry (`GET /api/v1/mib-catalog`). A reference metric_name → (oid, kind)
  *  so the collection editor can pick by name. */

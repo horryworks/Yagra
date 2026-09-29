@@ -38093,6 +38093,62 @@
           }
         }
       },
+      "SameDeviceMatch": {
+        "type": "object",
+        "description": "One candidate that looks like a device node monitored at another address.",
+        "required": [
+          "address",
+          "nodes"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The candidate's address, spelled exactly as the candidate spells it."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SameDeviceNode"
+            },
+            "description": "The nodes it may be, the most convincing first."
+          }
+        }
+      },
+      "SameDeviceNode": {
+        "type": "object",
+        "description": "A device node a candidate may be, and why.",
+        "required": [
+          "id",
+          "name",
+          "address",
+          "confidence",
+          "evidence"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address the node is monitored at."
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/DuplicateConfidence",
+            "description": "`confident` when the node's interface list carries the candidate's address and both report\nthe same `sysObjectID`; `possible` otherwise."
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateEvidenceKind"
+            },
+            "description": "`own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`\n(same name and the same `sysObjectID`)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "SavedFinding": {
         "type": "object",
         "description": "One finding as the cross-run search returns it: the finding, plus the run it came from.",
@@ -38285,7 +38341,8 @@
           {
             "type": "object",
             "required": [
-              "existing"
+              "existing",
+              "same_device"
             ],
             "properties": {
               "existing": {
@@ -38294,6 +38351,13 @@
                   "$ref": "#/components/schemas/InventoryMatch"
                 },
                 "description": "The candidates already in the inventory, in candidate order. A candidate absent from this\nlist is not a device node. Read when the scan is read, so a node added or removed after\nthe sweep is reflected."
+              },
+              "same_device": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SameDeviceMatch"
+                },
+                "description": "Candidates that look like a device node already monitored at **another** address — its\ninterface list carries the candidate's address, or its name and model match (ADR-139 増分 3).\nA mark, not a refusal: importing such a candidate is still accepted, because a site that\nreuses one private address plan can make either piece of evidence wrong. Only nodes the caller\ncan see are named. A candidate in `existing` is never here."
               }
             }
           }
