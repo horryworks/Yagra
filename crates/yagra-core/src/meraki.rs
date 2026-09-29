@@ -1612,7 +1612,8 @@ impl MerakiDeviceRepo {
 pub struct MerakiSite {
     /// Yagra's id for the organization (the `id` of `GET /api/v1/meraki/orgs`), not Meraki's.
     pub org_id: Uuid,
-    /// The organization's name as its last sync recorded it.
+    /// The organization's name as it was recorded when the organization was registered — a sync
+    /// does not rewrite it.
     pub org_name: String,
     /// Meraki's network id.
     pub network_id: String,

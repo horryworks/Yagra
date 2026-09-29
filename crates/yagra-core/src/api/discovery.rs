@@ -333,7 +333,8 @@ pub(crate) struct ScanView {
     #[serde(flatten)]
     status: crate::discovery::ScanStatus,
     /// The candidates already in the inventory, in candidate order. A candidate absent from this
-    /// list is not a device node. Read when the scan is read, so a node added or removed after
+    /// list is not monitored at its own address — `same_device` names one that may be monitored at
+    /// another. Read when the scan is read, so a node added or removed after
     /// the sweep is reflected.
     existing: Vec<InventoryMatch>,
     /// Candidates that look like a device node already monitored at **another** address — its

@@ -16,7 +16,7 @@
 
 ### 改善
 
-- **Meraki の機器の見出しに、所属する Organization と Network を出すようにしました。** 名前の下の行が `アドレス · 機種 · Organization / Network` になります。名前は直近のインベントリ同期のものです（同期が Network の名前をまだ入れていないあいだは Organization だけ）。ノード詳細の API と MCP の `get_node_status` も、同じ内容を `meraki_site`（Organization と Network それぞれの ID と名前）として返します。
+- **Meraki の機器の見出しに、所属する Organization と Network を出すようにしました。** 名前の下の行が `アドレス · 機種 · Organization / Network` になります。Organization の名前は Yagra に登録したときのもの、Network の名前は直近のインベントリ同期のものです（同期が Network の名前をまだ入れていないあいだは Organization だけ）。ノード詳細の API と MCP の `get_node_status` も、同じ内容を `meraki_site`（Organization と Network それぞれの ID と名前）として返します。
 - **ノードツリーのバッジを静かにしました。** Meraki の機器と、Meraki や NetBox が管理するフォルダには、ブランド名を書いた塗りつぶしのピルが全部の行に付いていました。Meraki の塗りの緑は、稼働中を表す緑の点のすぐ横に並んでいました。ツリーでは、ブランド色をうすく敷いた 1 文字（**M** か **N**）にして、右端に揃えました。正式名は、マウスを乗せるか画面読み上げで分かります。アクセスポイントの Wi-Fi の印は灰色の印だけにし、URL・DNS・Repeater のバッジは低い灰色の札にしました。ノードの見出しは今までどおり名前入りのピルです。フォルダの見出しにも名前の横に「NetBox」「Meraki」を出すようにしたので、タッチ端末でも名前を読めます。
 
 ## v0.3.35 — メーカーがまだ分からない機器は 1 時間に 1 回だけ全部読み、その間は sysDescr と sysObjectID だけを聞く、一覧のツールバーとダイアログの動きが全画面でそろう、VictoriaMetrics が断った問い合わせを「データなし」と読まずにログに残す、ダッシュボードと一覧は裏のタブで更新を止める、MCP の list_analyses が tool・state・since で絞れる

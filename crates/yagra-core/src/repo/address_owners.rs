@@ -25,6 +25,12 @@ impl NodeRepo {
     /// address is carried by more than the one device. The monitored address itself is not asked:
     /// a node standing at the candidate's address is [`Self::device_nodes_at`]'s answer.
     ///
+    /// At most `SHARED_VALUE_MAX + 1` nodes come back per address, as [`Self::device_nodes_named`]
+    /// does per name: an address more nodes than that carry identifies none of them (ADR-148 決定
+    /// 3), and a private address plan reused at every site would otherwise return one row per site
+    /// on every refresh. The type filter runs in the statement, before the cap, so the rows the cap
+    /// keeps are ones that count.
+    ///
     /// ⚠️ Read on every scan refresh (2 s while a sweep runs), so each address is probed through the
     /// GIN index of migration `0138` exactly as `address_claims` does; the lateral expansion only
     /// runs over the lists that already matched.
@@ -37,33 +43,42 @@ impl NodeRepo {
             return Ok(Vec::new());
         }
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        // The types that do not identify a node, from the one rule that says so. A missing or
+        // unrecognised token reads as `Unknown`, which counts — hence the `COALESCE` to a token
+        // no list can contain.
+        let not_identifying: Vec<&str> = yagra_common::L3AddrType::ALL
+            .into_iter()
+            .filter(|t| !t.identifies_a_node())
+            .map(yagra_common::L3AddrType::as_str)
+            .collect();
         let sql = format!(
-            "SELECT DISTINCT q.ip AS carried, a->>'addr_type' AS addr_type, n.id, n.name, \
-                    host(n.address) AS address, n.sys_object_id \
-             FROM unnest($2::text[]) AS q(ip) \
-             JOIN node_l3 l \
-               ON l.addresses->'addresses' @> jsonb_build_array(jsonb_build_object('ip', q.ip)) \
-             JOIN nodes n ON n.id = l.node_id \
-             CROSS JOIN LATERAL jsonb_array_elements(l.addresses->'addresses') a \
-             WHERE a->>'ip' = q.ip AND n.address IS NOT NULL AND {scope} AND {device}",
+            "SELECT carried, id, name, address, sys_object_id FROM ( \
+               SELECT q.ip AS carried, n.id, n.name, host(n.address) AS address, n.sys_object_id, \
+                      row_number() OVER (PARTITION BY q.ip ORDER BY n.id) AS rn \
+               FROM unnest($2::text[]) AS q(ip) \
+               JOIN node_l3 l \
+                 ON l.addresses->'addresses' @> jsonb_build_array(jsonb_build_object('ip', q.ip)) \
+               JOIN nodes n ON n.id = l.node_id \
+               CROSS JOIN LATERAL jsonb_array_elements(l.addresses->'addresses') a \
+               WHERE a->>'ip' = q.ip \
+                 AND COALESCE(a->>'addr_type', '') <> ALL($3::text[]) \
+                 AND n.address IS NOT NULL AND {scope} AND {device} \
+               GROUP BY q.ip, n.id \
+             ) carriers WHERE rn <= $4",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );
+        let per_address =
+            i64::try_from(crate::duplicates::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
         let rows = sqlx::query(&sql)
             .bind(Self::scope_bind(groups))
             .bind(&text)
+            .bind(&not_identifying)
+            .bind(per_address)
             .fetch_all(&self.pool)
             .await?;
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let kind = row
-                .try_get::<Option<String>, _>("addr_type")?
-                .as_deref()
-                .and_then(yagra_common::L3AddrType::from_token)
-                .unwrap_or_default();
-            if !kind.identifies_a_node() {
-                continue;
-            }
             // `host()`, never `::TEXT`: the cast renders the netmask and every parse would fail.
             let (Ok(carried), Ok(address)) = (
                 row.try_get::<String, _>("carried")?.parse::<IpAddr>(),
@@ -150,13 +165,20 @@ mod tests {
 
     /// Interface addresses for `node`, through the production writer.
     async fn l3(pool: &sqlx::PgPool, node: Uuid, ips: &[&str]) {
+        let typed: Vec<(&str, L3AddrType)> =
+            ips.iter().map(|a| (*a, L3AddrType::Unicast)).collect();
+        l3_typed(pool, node, &typed).await;
+    }
+
+    /// [`l3`], with each address's `ipAddressType` given.
+    async fn l3_typed(pool: &sqlx::PgPool, node: Uuid, ips: &[(&str, L3AddrType)]) {
         let snapshot = L3Snapshot::new(
             ips.iter()
-                .map(|a| L3Address {
+                .map(|(a, addr_type)| L3Address {
                     ifindex: 1,
                     ip: ip(a),
                     prefix_len: 24,
-                    addr_type: L3AddrType::Unicast,
+                    addr_type: *addr_type,
                     source_table: L3SourceTable::IpAddressTable,
                 })
                 .collect(),
@@ -310,6 +332,70 @@ mod tests {
         assert_eq!(node.name, "core-1");
         assert_eq!(node.address, ip("192.0.2.1"));
         assert_eq!(node.sys_object_id.as_deref(), Some("1.3.6.1.4.1.9.1.1208"));
+    }
+
+    /// A VRRP/HSRP virtual address (`anycast`) and a broadcast address are carried by more than one
+    /// device, so neither makes its node a carrier; `unknown` (an `ipAddrTable`-only agent) does.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_addresses_that_identify_a_node_make_it_a_carrier(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let vip = pgtest::node_at(&pool, "rtr-vip", ip("192.0.2.1"), None).await;
+        let bcast = pgtest::node_at(&pool, "rtr-bcast", ip("192.0.2.2"), None).await;
+        let old = pgtest::node_at(&pool, "rtr-old", ip("192.0.2.3"), None).await;
+        l3_typed(&pool, vip, &[("198.51.100.1", L3AddrType::Anycast)]).await;
+        l3_typed(&pool, bcast, &[("198.51.100.1", L3AddrType::Broadcast)]).await;
+        l3_typed(&pool, old, &[("198.51.100.1", L3AddrType::Unknown)]).await;
+
+        let found = repo
+            .device_nodes_carrying(&[ip("198.51.100.1")], None)
+            .await
+            .unwrap();
+        let ids: Vec<Uuid> = found.iter().map(|(_, n)| n.id).collect();
+        assert_eq!(ids, vec![old]);
+    }
+
+    /// One address returns at most one carrier more than the cap — enough to see that it names
+    /// nobody — however many sites reuse it, and a node carrying it twice counts once.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn carriers_are_found_up_to_one_past_the_cap_per_address(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let cap = crate::duplicates::SHARED_VALUE_MAX;
+        let lone = pgtest::node_at(&pool, "rtr-lone", ip("192.0.2.1"), None).await;
+        l3(&pool, lone, &["203.0.113.1"]).await;
+        let twice = pgtest::node_at(&pool, "rtr-twice", ip("192.0.2.2"), None).await;
+        l3_typed(
+            &pool,
+            twice,
+            &[
+                ("203.0.113.2", L3AddrType::Unicast),
+                ("203.0.113.2", L3AddrType::Unknown),
+            ],
+        )
+        .await;
+        for i in 0..cap + 3 {
+            let site = pgtest::node_at(
+                &pool,
+                &format!("site-{i}"),
+                ip(&format!("198.51.100.{}", i + 1)),
+                None,
+            )
+            .await;
+            l3(&pool, site, &["10.0.0.1"]).await;
+        }
+
+        let found = repo
+            .device_nodes_carrying(
+                &[ip("10.0.0.1"), ip("203.0.113.1"), ip("203.0.113.2")],
+                None,
+            )
+            .await
+            .unwrap();
+        let on = |a: &str| found.iter().filter(|(c, _)| *c == ip(a)).count();
+        assert_eq!(on("10.0.0.1"), cap + 1);
+        assert_eq!(on("203.0.113.1"), 1);
+        assert_eq!(on("203.0.113.2"), 1);
     }
 
     /// Names are matched trimmed and case-folded, and one name returns at most one row more than

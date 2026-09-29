@@ -9445,7 +9445,10 @@ export interface components {
              * @description Yagra's id for the organization (the `id` of `GET /api/v1/meraki/orgs`), not Meraki's.
              */
             org_id: string;
-            /** @description The organization's name as its last sync recorded it. */
+            /**
+             * @description The organization's name as it was recorded when the organization was registered — a sync
+             *     does not rewrite it.
+             */
             org_name: string;
         };
         /**
@@ -12093,7 +12096,8 @@ export interface components {
         ScanView: components["schemas"]["ScanStatus"] & {
             /**
              * @description The candidates already in the inventory, in candidate order. A candidate absent from this
-             *     list is not a device node. Read when the scan is read, so a node added or removed after
+             *     list is not monitored at its own address — `same_device` names one that may be monitored at
+             *     another. Read when the scan is read, so a node added or removed after
              *     the sweep is reflected.
              */
             existing: components["schemas"]["InventoryMatch"][];
