@@ -293,11 +293,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
 
     // What a node is comes from the one resolution every surface asks (ADR NodeKind); a failed
     // read degrades to Device there, which over-counts rather than hiding a device.
-    let visible_ids: Vec<Uuid> = nodes
-        .iter()
-        .map(|(id, ..)| *id)
-        .filter(|id| sees(id))
-        .collect();
+    let visible_ids: Vec<Uuid> = nodes.iter().map(|(id, ..)| *id).filter(&sees).collect();
     let kinds = super::nodes::node_kinds(admin, &visible_ids).await;
     let nodes_total = visible_ids
         .iter()
