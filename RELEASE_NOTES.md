@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **NetBox sync imports only sites whose Status is Active.** Planned, staging, decommissioning and retired sites no longer become folders, and their prefixes are no longer offered as Discovery targets. A folder already created for a site that is no longer Active is kept, together with the nodes in it, and counted under "folders not in NetBox". A site whose response carries no status is still imported.
+
 ## v0.3.37 — Rediscover a monitored node from its right-click menu, Subnet overlaps lists address ranges used at more than one site
 
 ### New Features

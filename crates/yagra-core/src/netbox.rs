@@ -558,6 +558,31 @@ pub struct NetboxSite {
     /// the same trap `parent` sets on [`NetboxRegion`].
     #[serde(default)]
     pub custom_fields: BTreeMap<String, serde_json::Value>,
+    /// NetBox's lifecycle choice (`active`, `planned`, `staging`, `decommissioning`, `retired`, or
+    /// a value an operator added). Only an `active` site becomes a folder (ADR-100 decision 11).
+    #[serde(default)]
+    pub status: Option<NetboxChoice>,
+}
+
+impl NetboxSite {
+    /// Whether this site is one the sync turns into a folder (ADR-100 decision 11).
+    ///
+    /// ⚠️ **A site with no `status` at all counts as active.** Every NetBox this integration has
+    /// met sends it, so an absent field means an older server or a token that cannot see it — and
+    /// reading that as "inactive" would take the whole tree off the screen over one hidden field.
+    /// A site that *is* marked something else is left out, and its folder, if one was already
+    /// written, is kept and counted as missing (decision 5), never deleted.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.status.as_ref().is_none_or(|s| s.value == "active")
+    }
+}
+
+/// NetBox's representation of a choice field — `{"value": "active", "label": "Active"}`. Only the
+/// `value` is read: the label is translated and operator-editable, the value is not.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NetboxChoice {
+    pub value: String,
 }
 
 /// One custom-field **definition**, from `/api/extras/custom-fields/`.
@@ -1077,6 +1102,12 @@ pub struct SyncReport {
     /// an operator can act on. A feature that ships inert while every signal reads success is this
     /// repository's most repeated failure shape.
     pub sites_without_site_id: usize,
+    /// Sites NetBox returned whose status is not `active`, and so became no folder (ADR-100
+    /// decision 11). **Not** in `sites`, which counts only what was written.
+    ///
+    /// ⚠️ Only the completion log carries it. Without it, "NetBox has 40 sites and Yagra shows 12"
+    /// reads the same as a sync that silently dropped 28.
+    pub sites_inactive: usize,
     /// Whether this token was allowed to read `/api/ipam/prefixes/` at all.
     ///
     /// 🚨 `false` means **refused**, not "there are none" — and no prefix was written *or swept*
@@ -1600,6 +1631,20 @@ pub async fn apply(
     // 🚨 Before the first write. See `SyncReport::started_at` for what goes wrong otherwise.
     let started_at = repo.db_now().await?;
 
+    // Only an active site becomes a folder (decision 11). Filtered here, before anything else reads
+    // the list, so the names, the sibling order, the Site-ID count and the prefix guard below all
+    // agree on one set: a prefix scoped to a planned site falls to the "did not see" skip, and a
+    // folder written before the site was retired is left to `count_missing`, never deleted.
+    let sites_inactive = sites.iter().filter(|s| !s.is_active()).count();
+    for s in sites.iter().filter(|s| !s.is_active()) {
+        tracing::debug!(
+            site = s.id,
+            status = s.status.as_ref().map_or("", |c| c.value.as_str()),
+            "netbox site is not active; not synced as a folder"
+        );
+    }
+    let sites: Vec<NetboxSite> = sites.iter().filter(|s| s.is_active()).cloned().collect();
+
     // Which region ids this server actually returned. A site whose region is filtered out of the
     // caller's view (NetBox permissions) must land at the root rather than pointing at a folder
     // that was never written — a dangling `parent_id` is a foreign-key error that would fail the
@@ -1757,6 +1802,7 @@ pub async fn apply(
         missing: 0,
         folders_changed,
         sites_without_site_id,
+        sites_inactive,
         prefixes_readable: prefixes.is_some(),
         prefixes: prefixes_stored,
         prefixes_skipped,
@@ -1816,6 +1862,7 @@ async fn sync_server_marked(
                 sites = report.sites,
                 missing = report.missing,
                 without_site_id = report.sites_without_site_id,
+                inactive = report.sites_inactive,
                 // Since "Sync now" became a request (ADR-172) no response carries the report, so
                 // this line is the only place a token refused `ipam.view_prefix` is told apart
                 // from a NetBox with no prefixes.
@@ -2157,6 +2204,7 @@ mod tests {
             facility: Some(String::new()),
             description: Some(String::new()),
             custom_fields: BTreeMap::new(),
+            status: None,
         }
     }
 
@@ -2785,6 +2833,139 @@ mod tests {
         // A site with no region is legal in NetBox and must land at the root rather than fail.
         assert!(page.results[1].region.is_none());
         assert_eq!(page.results[1].latitude, None);
+    }
+
+    /// A site with its NetBox `status` set, as the listing sends it.
+    fn with_status(mut s: NetboxSite, value: &str) -> NetboxSite {
+        s.status = Some(NetboxChoice {
+            value: value.to_owned(),
+        });
+        s
+    }
+
+    #[test]
+    fn a_site_is_active_only_when_netbox_says_so_or_says_nothing() {
+        let body = r#"{"count":3,"next":null,"previous":null,"results":[
+            {"id":1,"name":"Site A","status":{"value":"active","label":"Active"}},
+            {"id":2,"name":"Site B","status":{"value":"planned","label":"Planned"}},
+            {"id":3,"name":"Site C"}]}"#;
+        let page: Page<NetboxSite> = serde_json::from_str(body).expect("parses");
+        let active: Vec<bool> = page.results.iter().map(NetboxSite::is_active).collect();
+        assert_eq!(
+            active,
+            vec![true, false, true],
+            "planned is left out; an absent status must not empty the tree (decision 11)"
+        );
+        // Every lifecycle value NetBox ships besides `active`, plus the label read by mistake.
+        for v in [
+            "planned",
+            "staging",
+            "decommissioning",
+            "retired",
+            "Active",
+            "",
+        ] {
+            assert!(
+                !with_status(site(1, "x", None, None), v).is_active(),
+                "{v:?} is not active"
+            );
+        }
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_an_active_site_becomes_a_folder(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let mut sites = lab_sites();
+        sites[0] = with_status(sites[0].clone(), "active");
+        sites.push(with_status(site(8, "Site C", Some(7), None), "planned"));
+        sites.push(with_status(site(9, "Site D", None, None), "retired"));
+        // Scoped to the planned site: it must not reach a folder, and must not fail the sync.
+        let prefixes = vec![scoped_prefix(9, "10.0.8.0/24", "", "dcim.site", 8)];
+
+        let report = apply(&repo, server, &lab_regions(), &sites, Some(&prefixes), None)
+            .await
+            .expect("apply");
+
+        assert_eq!(
+            (report.sites, report.sites_inactive),
+            (2, 2),
+            "the active site and the one with no status are written; planned and retired are not"
+        );
+        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 5);
+        assert!(folder(&pool, site_group_id(server, 6)).await.is_some());
+        assert!(folder(&pool, site_group_id(server, 7)).await.is_some());
+        assert!(folder(&pool, site_group_id(server, 8)).await.is_none());
+        assert!(folder(&pool, site_group_id(server, 9)).await.is_none());
+        assert_eq!((report.prefixes, report.prefixes_skipped), (0, 1));
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_site_that_stops_being_active_keeps_its_folder_and_loses_its_prefixes(
+        pool: sqlx::PgPool,
+    ) {
+        let (repo, server) = lab_server(&pool).await;
+        let first = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("sync");
+        repo.record_success(server, &first, Some("4.6.9"))
+            .await
+            .expect("record");
+        let site7 = site_group_id(server, 7);
+        assert_eq!(folder_prefixes(&pool, site7).await.len(), 1);
+
+        // Site 7 is marked decommissioning in NetBox; it is still returned by the listing.
+        let sites: Vec<NetboxSite> = lab_sites()
+            .into_iter()
+            .map(|s| {
+                if s.id == 7 {
+                    with_status(s, "decommissioning")
+                } else {
+                    s
+                }
+            })
+            .collect();
+        let second = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &sites,
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("re-sync");
+        repo.record_success(server, &second, Some("4.6.9"))
+            .await
+            .expect("record");
+
+        assert_eq!((second.sites, second.sites_inactive), (1, 1));
+        assert!(
+            folder(&pool, site7).await.is_some(),
+            "the folder stays — deleting it would re-parent its nodes (decision 5)"
+        );
+        assert_eq!(
+            repo.count_missing(server).await.expect("count"),
+            1,
+            "…and is counted as no longer in NetBox"
+        );
+        assert!(
+            folder_prefixes(&pool, site7).await.is_empty(),
+            "a subnet of a site that is not active must not stay a Discovery target"
+        );
+        assert_eq!(
+            folder_prefixes(&pool, site_group_id(server, 6)).await.len(),
+            3,
+            "the active site's prefixes are untouched"
+        );
     }
 
     /// A server row with nothing about it set, for the pure tests.
