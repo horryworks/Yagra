@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.35 — A device whose maker Yagra does not know yet is read in full once an hour and asked only for sysDescr and sysObjectID in between, every list toolbar and every dialog work the same way, a metrics query VictoriaMetrics refuses is logged instead of read as no data, dashboards and lists stop refreshing in a background tab, MCP list_analyses narrows by tool, state and since**
+> Status: **v0.3.36 — Discovery marks a device already monitored at another address, a Meraki device's header names its organization and network, the node tree's badges are quieter**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

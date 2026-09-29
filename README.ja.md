@@ -26,7 +26,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > アラートも上がりません。規模が小さいほど症状は重く、初めて導入した環境ほど強く踏みます。v0.2.6 で
 > 修正済みです。詳細は [RELEASE_NOTES.ja.md](RELEASE_NOTES.ja.md) を参照してください。
 
-> ステータス: **v0.3.35 — メーカーがまだ分からない機器は 1 時間に 1 回だけ全部読み、その間は sysDescr と sysObjectID だけを聞く、一覧のツールバーとダイアログの動きが全画面でそろう、VictoriaMetrics が断った問い合わせを「データなし」と読まずにログに残す、ダッシュボードと一覧は裏のタブで更新を止める、MCP の list_analyses が tool・state・since で絞れる**
+> ステータス: **v0.3.36 — Discovery は別のアドレスで監視中の機器に印を付ける、Meraki の機器の見出しに Organization と Network を出す、ノードツリーのバッジを静かにする**
 > ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、NetBox からのフォルダーツリー同期（読み取り専用）、受動イベント監視、探索・分類、
 > アラート、ダッシュボード、レポートを備えたスタックが、

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.36 — Discovery marks a device already monitored at another address, a Meraki device's header names its organization and network, the node tree's badges are quieter
+
 ### New Features
 
 - **Discovery marks a device that is already monitored at another address.** A router registered by its loopback and swept again on a LAN address used to be offered as a new device. When a registered device node's interface list carries the scanned address, or its name and model (`sysObjectID`) match the scanned device's, the row is now muted and badged *Likely the same device* or *Maybe the same device*, with a link to that node, its address, the evidence, and a line saying the row can still be ticked for import. Two devices that report different models are never marked. The row stays importable — where sites reuse one private address plan the evidence can be wrong — and nodes in folders you cannot see are not named. `GET /api/v1/discovery/scan/{id}` and the MCP `get_config(kind="discovery_scan")` return the same answer as `same_device`.
