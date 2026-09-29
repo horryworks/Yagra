@@ -115,6 +115,7 @@ const schemaEnumPins: {
   OverlapStatus: AssertEqual<OverlapStatus, components['schemas']['OverlapStatus']>;
   OverlapHintKind: AssertEqual<OverlapHintKind, components['schemas']['OverlapHint']['kind']>;
   ExclusionReason: AssertEqual<ExclusionReason, components['schemas']['ExclusionReason']>;
+  RediscoverField: AssertEqual<RediscoverField, components['schemas']['RediscoverField']>;
 } = {
   Severity: true,
   Role: true,
@@ -164,6 +165,7 @@ const schemaEnumPins: {
   OverlapStatus: true,
   OverlapHintKind: true,
   ExclusionReason: true,
+  RediscoverField: true,
 };
 void schemaEnumPins;
 
@@ -737,6 +739,17 @@ export type RediscoverVerdict = components['schemas']['RediscoverVerdict'];
 
 /** The body `POST /api/v1/nodes/{node_id}/rediscover/apply` takes. */
 export type RediscoverApplyBody = components['schemas']['RediscoverApplyBody'];
+
+/** What `POST /api/v1/nodes/{node_id}/rediscover` answers: the scan to read, and the pool it runs on. */
+export type StartedRediscovery = components['schemas']['StartedRediscovery'];
+
+/** What an accepted Apply wrote. */
+export type RediscoverApplied = components['schemas']['RediscoverApplied'];
+
+/** The three rows of a rediscovery, in the order the dialog lists them. The dialog iterates it, so
+ *  it exists at runtime; `schemaEnumPins` ties it to the schema. */
+export const REDISCOVER_FIELDS = ['profile', 'vendor', 'model'] as const;
+export type RediscoverField = (typeof REDISCOVER_FIELDS)[number];
 
 /** Nodes ▸ Duplicates (`GET /api/v1/nodes/duplicates`, ADR-148): device nodes that look like one
  *  device registered more than once, grouped with the evidence for each group. */

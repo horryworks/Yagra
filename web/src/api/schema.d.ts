@@ -11838,7 +11838,8 @@ export interface components {
             found_name?: string | null;
             /**
              * Format: uuid
-             * @description The rule that chose `found_id`; `null` ⇒ the device fell through to "Generic SNMP".
+             * @description The rule that chose `found_id`; `null` ⇒ the device fell through to "Generic SNMP", or no
+             *     profile was suggested at all (the device gave no sysObjectID).
              */
             rule_id?: string | null;
             verdict: components["schemas"]["RediscoverVerdict"];

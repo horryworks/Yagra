@@ -99,7 +99,8 @@ pub(crate) struct RediscoverProfileRow {
     current_name: Option<String>,
     found_id: Option<Uuid>,
     found_name: Option<String>,
-    /// The rule that chose `found_id`; `null` ⇒ the device fell through to "Generic SNMP".
+    /// The rule that chose `found_id`; `null` ⇒ the device fell through to "Generic SNMP", or no
+    /// profile was suggested at all (the device gave no sysObjectID).
     rule_id: Option<Uuid>,
     verdict: RediscoverVerdict,
 }

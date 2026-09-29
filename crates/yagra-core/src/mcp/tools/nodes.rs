@@ -728,7 +728,7 @@ impl YagraMcp {
                        is configured at both, which is almost certainly a reuse; same_range when \
                        every address differs, which is a reuse or a line the sites share), or one \
                        site's range inside another's (nested). A site is the nearest folder of type \
-                       Site above a device. Each overlap has a status: open, intentional (an \
+                       Site above a device, or its own folder when there is none. Each overlap has a status: open, intentional (an \
                        operator said it is deliberate), or excluded (a link between two sites, or \
                        an exclusion rule such as a WAN port or the carrier CGNAT range), and may \
                        carry a hint (wan, redundancy, shared_line, template), which is a suggestion \

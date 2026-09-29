@@ -1332,6 +1332,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('overlap kind help', locales, 'subnetOverlaps.kindHelp.', OVERLAP_KINDS);
     expectKeys('overlap tab', locales, 'subnetOverlaps.tabs.', OVERLAP_STATUSES);
     expectKeys('overlap column', locales, 'subnetOverlaps.whyHeader.', OVERLAP_STATUSES);
+    expectKeys('overlap empty state', locales, 'subnetOverlaps.empty.', OVERLAP_STATUSES);
     expectKeys('overlap hint', locales, 'subnetOverlaps.hint.', OVERLAP_HINT_KINDS);
     expectKeys('overlap hint tag', locales, 'subnetOverlaps.hintTag.', OVERLAP_HINT_KINDS);
     expectKeys('exclusion reason', locales, 'subnetOverlaps.rules.reason.', EXCLUSION_REASONS);

@@ -146,8 +146,8 @@
   font-weight: var(--weight-semibold);
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  color: var(--accent-color);
-  border: 1px solid var(--accent-color);
+  color: var(--tag-fg);
+  background: var(--tag-bg);
 }
 
 /* ── The expanded row ── */

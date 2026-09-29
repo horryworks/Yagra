@@ -94,13 +94,14 @@ pub enum ScanOrigin {
 /// How long a finished scan stays listable.
 ///
 /// ⚠️ **This is also the Discovery-queue widget's window.** [`DiscoveryRunner::recent_candidates`]
-/// reads the candidates of *every* retained scan, so whatever is evicted here leaves that widget
+/// reads the candidates of every retained **sweep**, so whatever is evicted here leaves that widget
 /// too. The value is therefore chosen for the widget, not for memory — 20 scans of at most 4096
 /// candidates is not a memory problem, and picking a shorter window to "tidy up" would silently
 /// empty a dashboard panel.
 const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// Hard cap on retained scans. Only **finished** ones are dropped to honour it — evicting a running
+/// Hard cap on retained **sweeps** ([`ScanOrigin::Sweep`]; rediscoveries have their own,
+/// [`MAX_REDISCOVERIES`]). Only **finished** ones are dropped to honour it — evicting a running
 /// scan would lose the operator's only handle on a sweep that is still putting traffic on the wire.
 /// A deployment that somehow accumulates this many concurrently-running scans keeps them all until
 /// [`RUNNING_MAX_AGE`] retires them.
@@ -741,7 +742,7 @@ impl DiscoveryRunner {
         Ok(route)
     }
 
-    /// Every retained scan's summary, newest first, capped at `limit`.
+    /// Every retained sweep's summary, newest first, capped at `limit`. Rediscoveries are not listed.
     ///
     /// This is what makes a sweep survivable in the UI: the scan id used to live only in the
     /// browser tab that started it, so navigating away lost the sweep even though the poller kept
@@ -777,7 +778,7 @@ impl DiscoveryRunner {
             .collect()
     }
 
-    /// Recent discovered candidates across all in-memory scans, deduped by address (first seen
+    /// Recent discovered candidates across all in-memory sweeps (never a rediscovery), deduped by address (first seen
     /// wins), capped at `limit`. Backs the dashboard "discovery queue" widget — a standing view of
     /// unclassified finds without needing a scan id.
     ///
@@ -834,8 +835,8 @@ impl DiscoveryRunner {
     pub(crate) fn fold(&self, r: DiscoveryResult) {
         let mut g = self.scans.lock().expect("scans mutex poisoned");
         // A result names its *job*, which is the scan's own id only for the first part
-        // (ADR-173), so the scan is found by the part it owns. At most twenty scans of at most
-        // four parts each are retained, so the walk costs nothing worth an index — and an
+        // (ADR-173), so the scan is found by the part it owns. At most forty scans (twenty sweeps,
+        // twenty rediscoveries) of at most four parts each are retained, so the walk costs nothing worth an index — and an
         // index would be a second record of which job belongs where, to keep in step with
         // `evict`.
         if let Some(s) = g.values_mut().find(|s| s.owns(r.scan_id)) {

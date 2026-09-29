@@ -162,18 +162,42 @@ fn sites_by_node(
     groups: &[crate::groups::GroupSummary],
     nodes: &[(Uuid, String, Option<Uuid>)],
 ) -> HashMap<Uuid, SiteId> {
-    let by_id: HashMap<Uuid, &crate::groups::GroupSummary> =
-        groups.iter().map(|g| (g.id, g)).collect();
+    let folders: HashMap<Uuid, Folder> = groups
+        .iter()
+        .map(|g| {
+            (
+                g.id,
+                Folder {
+                    is_site: g.group_type == "site",
+                    parent: g.parent_id,
+                },
+            )
+        })
+        .collect();
+    sites_from(&folders, nodes)
+}
+
+/// What deciding a site needs to know about one folder.
+struct Folder {
+    is_site: bool,
+    parent: Option<Uuid>,
+}
+
+/// [`sites_by_node`]'s rule, over just the folder tree's shape.
+fn sites_from(
+    folders: &HashMap<Uuid, Folder>,
+    nodes: &[(Uuid, String, Option<Uuid>)],
+) -> HashMap<Uuid, SiteId> {
     let site_of_folder = |folder: Option<Uuid>| -> SiteId {
         let mut at = folder;
         // Bounded by the number of folders, so a cycle a bad import left cannot spin forever.
-        for _ in 0..=groups.len() {
+        for _ in 0..=folders.len() {
             let Some(id) = at else { break };
-            let Some(g) = by_id.get(&id) else { break };
-            if g.group_type == "site" {
+            let Some(f) = folders.get(&id) else { break };
+            if f.is_site {
                 return Some(id);
             }
-            at = g.parent_id;
+            at = f.parent;
         }
         folder
     };
@@ -195,7 +219,9 @@ struct Compared {
     stored_rules: Vec<StoredOverlapRule>,
     notes: HashMap<String, String>,
     findings: subnet_overlaps::Findings,
-    visible: Option<HashSet<Uuid>>,
+    /// Visible **device** nodes. A URL, DNS, Meraki or wireless-AP node reports no interface
+    /// addresses, so counting one would keep "no overlaps" from ever being a complete answer.
+    nodes_total: u32,
     nodes_with_addresses: u32,
     nodes_truncated: u32,
 }
@@ -265,6 +291,22 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
         visible: visible.as_ref(),
     });
 
+    // What a node is comes from the one resolution every surface asks (ADR NodeKind); a failed
+    // read degrades to Device there, which over-counts rather than hiding a device.
+    let visible_ids: Vec<Uuid> = nodes
+        .iter()
+        .map(|(id, ..)| *id)
+        .filter(|id| sees(id))
+        .collect();
+    let kinds = super::nodes::node_kinds(admin, &visible_ids).await;
+    let nodes_total = visible_ids
+        .iter()
+        .filter(|id| {
+            kinds
+                .get(id)
+                .is_none_or(|k| *k == yagra_common::NodeKind::Device)
+        })
+        .count();
     let nodes_with_addresses = observed.iter().filter(|(n, _)| sees(n)).count();
     let nodes_truncated = observed
         .iter()
@@ -276,9 +318,9 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
         stored_rules,
         notes,
         findings,
+        nodes_total: count(nodes_total),
         nodes_with_addresses: count(nodes_with_addresses),
         nodes_truncated: count(nodes_truncated),
-        visible,
     })
 }
 
@@ -293,11 +335,10 @@ pub(crate) async fn overlaps_view(
         stored_rules,
         notes,
         findings,
-        visible,
+        nodes_total,
         nodes_with_addresses,
         nodes_truncated,
     } = compare(admin, scope).await?;
-    let sees = |n: &Uuid| visible.as_ref().is_none_or(|v| v.contains(n));
 
     let group_names: HashMap<Uuid, &str> = groups.iter().map(|g| (g.id, g.name.as_str())).collect();
     let node_names: HashMap<Uuid, &str> =
@@ -339,7 +380,7 @@ pub(crate) async fn overlaps_view(
                 builtin: r.builtin,
             })
             .collect(),
-        nodes_total: count(nodes.iter().filter(|(id, ..)| sees(id)).count()),
+        nodes_total,
         nodes_with_addresses,
         nodes_truncated,
         subnets_checked: findings.subnets_checked,
@@ -733,10 +774,20 @@ mod tests {
         let b = crate::pgtest::node(&pool, "ngy-rt-01", 2, Some(nagoya)).await;
         addresses(&st, a, &[("10.10.20.1", 24), ("100.64.1.1", 22)]).await;
         addresses(&st, b, &[("10.10.20.1", 24), ("100.64.2.9", 22)]).await;
+        // A URL monitor reports no interface addresses; counting it would make "every device
+        // answered" unreachable, and the empty state would never say "no overlaps".
+        let url = crate::pgtest::node(&pool, "web-check", 3, Some(tokyo)).await;
+        sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://example.com/')")
+            .bind(url)
+            .execute(&pool)
+            .await
+            .expect("url check");
         let admin = token(&st, Role::Admin);
 
         let (status, body) = send(&st, "GET", PATH, &admin, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["nodes_total"], 2, "devices only: {body}");
+        assert_eq!(body["nodes_with_addresses"], 2, "{body}");
         assert_eq!(body["counts"]["open"], 1, "{body}");
         assert_eq!(
             body["counts"]["excluded"], 1,
@@ -865,5 +916,84 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "a Viewer cannot write one");
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    fn folder(is_site: bool, parent: Option<Uuid>) -> Folder {
+        Folder { is_site, parent }
+    }
+
+    /// A device's site is the nearest Site folder above it, its own folder when there is none, and
+    /// nothing at the root — and a cycle a bad import left ends rather than spinning.
+    #[test]
+    fn a_site_is_the_nearest_site_folder_above_else_the_devices_own_folder() {
+        let (site, sub, plain, loop_a, loop_b) = (
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+            Uuid::from_u128(5),
+        );
+        let folders: HashMap<Uuid, Folder> = [
+            (site, folder(true, None)),
+            (sub, folder(false, Some(site))),
+            (plain, folder(false, None)),
+            (loop_a, folder(false, Some(loop_b))),
+            (loop_b, folder(false, Some(loop_a))),
+        ]
+        .into();
+        let node = |n: u128, f: Option<Uuid>| (Uuid::from_u128(100 + n), String::new(), f);
+        let nodes = vec![
+            node(1, Some(sub)),
+            node(2, Some(site)),
+            node(3, Some(plain)),
+            node(4, None),
+            node(5, Some(loop_a)),
+        ];
+        let got = sites_from(&folders, &nodes);
+        assert_eq!(got[&Uuid::from_u128(101)], Some(site), "under a site");
+        assert_eq!(got[&Uuid::from_u128(102)], Some(site), "in the site itself");
+        assert_eq!(got[&Uuid::from_u128(103)], Some(plain), "no site above");
+        assert_eq!(got[&Uuid::from_u128(104)], None, "the root is one site");
+        assert_eq!(got[&Uuid::from_u128(105)], Some(loop_a), "a cycle ends");
+    }
+
+    fn body(range: Option<&str>, port_text: Option<&str>, note: &str) -> OverlapRuleBody {
+        OverlapRuleBody {
+            range: range.map(str::to_owned),
+            port_text: port_text.map(str::to_owned),
+            reason: ExclusionReason::Wan,
+            note: note.to_owned(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn a_rule_is_refused_when_it_names_nothing_a_bad_range_or_too_much_text() {
+        let code = |b| rule_input(b).err().map(|e| e.code());
+        assert_eq!(code(body(None, Some("  "), "")), Some("empty_rule"));
+        assert_eq!(
+            code(body(Some("10.0.0.0/33"), None, "")),
+            Some("invalid_range")
+        );
+        assert_eq!(
+            code(body(Some("not a range"), None, "")),
+            Some("invalid_range")
+        );
+        let long = "x".repeat(TEXT_MAX + 1);
+        assert_eq!(code(body(None, Some(&long), "")), Some("text_too_long"));
+        assert_eq!(code(body(None, Some("wan"), &long)), Some("text_too_long"));
+    }
+
+    #[test]
+    fn an_accepted_rule_is_trimmed_and_its_range_has_no_host_bits() {
+        let rule = rule_input(body(Some(" 192.0.2.77/24 "), Some("  wan "), " n ")).unwrap();
+        assert_eq!(rule.range.as_deref(), Some("192.0.2.0/24"));
+        assert_eq!(rule.port_text.as_deref(), Some("wan"));
+        assert_eq!(rule.note, "n");
     }
 }

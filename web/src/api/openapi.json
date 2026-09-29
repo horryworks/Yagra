@@ -38280,7 +38280,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The rule that chose `found_id`; `null` ⇒ the device fell through to \"Generic SNMP\"."
+            "description": "The rule that chose `found_id`; `null` ⇒ the device fell through to \"Generic SNMP\", or no\nprofile was suggested at all (the device gave no sysObjectID)."
           },
           "verdict": {
             "$ref": "#/components/schemas/RediscoverVerdict"

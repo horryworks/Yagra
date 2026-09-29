@@ -192,8 +192,10 @@ import type {
   RetentionPolicy,
   RetentionValues,
   CredentialHealth,
+  RediscoverApplied,
   RediscoverApplyBody,
   RediscoverView,
+  StartedRediscovery,
 } from '../types/api';
 import type { DiscoverySettingsBody } from '../pages/neighborSettings';
 import { filenameFromDisposition } from '../lib/download';
@@ -1990,7 +1992,7 @@ export const api = {
     apiPost('/api/v1/reclassify/lock', { body: { node_ids: nodeIds, locked } }),
 
   /** Nodes ▸ Rediscover (ADR-186): re-read one node with its own credential, on its own pool. */
-  startRediscovery: (nodeId: string): Promise<{ scan_id: string; pool: string }> =>
+  startRediscovery: (nodeId: string): Promise<StartedRediscovery> =>
     apiPost('/api/v1/nodes/{node_id}/rediscover', { path: { node_id: nodeId } }),
 
   /** Where a rediscovery is, and the comparison once the device answered. */
@@ -2004,7 +2006,7 @@ export const api = {
   applyRediscovery: (
     nodeId: string,
     body: RediscoverApplyBody,
-  ): Promise<{ applied: ('profile' | 'vendor' | 'model')[] }> =>
+  ): Promise<RediscoverApplied> =>
     apiPost('/api/v1/nodes/{node_id}/rediscover/apply', { path: { node_id: nodeId }, body }),
 
   /** The metrics in a template. */

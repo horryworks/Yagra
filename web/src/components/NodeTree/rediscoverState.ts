@@ -5,6 +5,7 @@
 // wiring. The one rule that matters most lives here — a re-read that has not answered yet is
 // never "nothing changed". Waiting and silence are phases of their own, and only `answered`
 // carries rows at all.
+import { REDISCOVER_FIELDS, type RediscoverField } from '../../types/api';
 import type {
   RediscoverApplyBody,
   RediscoverComparison,
@@ -18,9 +19,9 @@ export const PICKUP_WARN_MS = 60_000;
 /** How often the dialog asks again while the re-read is in flight. */
 export const REDISCOVER_POLL_MS = 2_000;
 
-/** The three rows, in the order the dialog lists them. */
-export const REDISCOVER_FIELDS = ['profile', 'vendor', 'model'] as const;
-export type RediscoverField = (typeof REDISCOVER_FIELDS)[number];
+/** The three rows, in the order the dialog lists them — declared beside the generated types. */
+export { REDISCOVER_FIELDS };
+export type { RediscoverField };
 
 export type Phase =
   /** The start request has not come back. */
@@ -96,7 +97,8 @@ export interface RowView {
   verdict: RediscoverVerdict;
 }
 
-/** The three rows, with profile ids turned into names (an id is never shown). */
+/** The three rows, with profile ids turned into names. The found profile falls back to its id
+ *  only when the server could not name it (a profile deleted since the answer arrived). */
 export function rowsOf(c: RediscoverComparison): RowView[] {
   return [
     {

@@ -25,6 +25,7 @@ import {
   rowsOf,
   type RediscoverField,
 } from './rediscoverState';
+import './RediscoverModal.css';
 
 export function RediscoverModal({
   nodeId,
@@ -194,7 +195,11 @@ export function RediscoverModal({
     >
       <div className="form-stack">
         <p className="muted">{t('rediscover.intro')}</p>
-        {startError && <p className="form-error">{startError}</p>}
+        {startError && (
+          <p className="form-error" role="alert">
+            {startError}
+          </p>
+        )}
         {status && <p className={polling ? 'muted' : 'form-warning'}>{status}</p>}
         {comparison && (
           <>
