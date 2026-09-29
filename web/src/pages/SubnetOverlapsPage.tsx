@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
-import { useCan } from '../store';
+import { useCan, useScope } from '../store';
 import {
   OVERLAP_KINDS,
   OVERLAP_STATUSES,
@@ -45,7 +45,12 @@ const SITES_SHOWN = 3;
 
 export function SubnetOverlapsPage() {
   const { t } = useTranslation('monitoring');
-  const canConfig = useCan('manage_config');
+  // Every write here is refused to a folder-scoped caller (an overlap spans sites it cannot see),
+  // so the permission alone does not make a control usable.
+  const mayConfig = useCan('manage_config');
+  const scope = useScope();
+  const canConfig = mayConfig && scope === 'All';
+  const scopedOut = mayConfig && scope !== null && scope !== 'All';
   const [tab, setTab] = useState<OverlapStatus>('open');
   const [kind, setKind] = useState<OverlapKind | null>(null);
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -203,6 +208,7 @@ export function SubnetOverlapsPage() {
         <p className="so-why">
           {hintText(o) ?? t(`subnetOverlaps.kindHelp.${o.kind}`)}
         </p>
+        {o.outer_withheld && <p className="muted">{t('subnetOverlaps.detail.outerWithheld')}</p>}
         {o.shared_addresses.length > 0 && (
           <p className="so-line">
             {t('subnetOverlaps.detail.shared')}{' '}
@@ -308,6 +314,7 @@ export function SubnetOverlapsPage() {
               ` ${t('subnetOverlaps.coverageTruncated', { count: view.nodes_truncated })}`}
           </p>
         )}
+        {scopedOut && <p className="muted">{t('subnetOverlaps.scopedReadOnly')}</p>}
 
         <div className="so-tiles" role="group" aria-label={t('subnetOverlaps.tilesLabel')}>
           {OVERLAP_KINDS.map((k) => (

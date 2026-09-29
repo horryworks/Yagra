@@ -157,8 +157,8 @@ pub struct Rule {
     pub id: Uuid,
     /// Places inside this range match. `None` ⇒ any range.
     pub range: Option<SubnetKey>,
-    /// Places on a port whose name or description contains this (case-insensitive) match.
-    /// `None` ⇒ any port.
+    /// Places on a port whose name or description carries this as whole words (case-insensitive;
+    /// a word may be followed by digits) match. `None` ⇒ any port.
     pub port_text: Option<String>,
     pub enabled: bool,
 }
@@ -205,12 +205,16 @@ pub struct Place {
 pub struct Overlap {
     /// Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same
     /// range keeps its key whether an address is shared or not, so an acknowledgement survives
-    /// that changing.
+    /// that changing. `within:<range>` when `outer_withheld` — a scoped caller cannot acknowledge.
     pub key: String,
     pub kind: OverlapKind,
     pub status: OverlapStatus,
-    /// The range; for `nested`, the outer one.
+    /// The range; for `nested`, the outer one — or, when `outer_withheld`, the narrowest range
+    /// covering the caller's own inner ranges.
     pub subnet: String,
+    /// For `nested`: the outer range is carried only at sites the caller may not see, so it is
+    /// not named (ADR-014).
+    pub outer_withheld: bool,
     /// For `nested`: the ranges inside it at other sites, at most [`INNER_MAX`].
     pub inner: Vec<String>,
     pub inner_count: u32,
@@ -332,6 +336,16 @@ pub fn find(input: &Input<'_>) -> Findings {
             &b.subnet,
         ))
     });
+    // Two withheld outer ranges around the same visible inner ones name the same covering range;
+    // a key must still pick out one row.
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    for o in &mut overlaps {
+        let n = seen.entry(o.key.clone()).or_default();
+        *n += 1;
+        if *n > 1 {
+            o.key = format!("{}#{n}", o.key);
+        }
+    }
     Findings {
         overlaps,
         subnets_checked,
@@ -353,19 +367,41 @@ fn rule_matches(rule: &Rule, subnet: &SubnetKey, place: &Place) -> bool {
         }
     }
     if let Some(text) = &rule.port_text {
-        let needle = text.trim().to_lowercase();
-        if needle.is_empty() {
-            return false;
-        }
-        let on = |s: &Option<String>| {
-            s.as_deref()
-                .is_some_and(|s| s.to_lowercase().contains(&needle))
-        };
+        let on = |s: &Option<String>| s.as_deref().is_some_and(|s| carries_words(s, text));
         if !on(&place.if_name) && !on(&place.if_alias) {
             return false;
         }
     }
     true
+}
+
+/// A port name or description split into lowercase words, the way [`port_word`] reads it.
+fn words_of(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether one word of a port's text is `word`, optionally followed by digits (`Dialer1`).
+fn word_is(token: &str, word: &str) -> bool {
+    token == word || token.trim_end_matches(|c: char| c.is_ascii_digit()) == word
+}
+
+/// Whether a rule's port text appears in `text` as whole words, in order — the rule a hint uses,
+/// so a rule suggested from a hint matches the ports the hint named and no others: `ha` matches
+/// `HA sync` and not `Port-channel1`. A needle with no ASCII letter or digit (text in another
+/// script) has no words to compare and matches as plain text instead.
+fn carries_words(text: &str, needle: &str) -> bool {
+    let wanted = words_of(needle);
+    if wanted.is_empty() {
+        let needle = needle.trim().to_lowercase();
+        return !needle.is_empty() && text.to_lowercase().contains(&needle);
+    }
+    words_of(text)
+        .windows(wanted.len())
+        .any(|w| w.iter().zip(&wanted).all(|(t, n)| word_is(t, n)))
 }
 
 /// Every address that forms a subnet, as a place under its device's site.
@@ -431,8 +467,21 @@ impl Draft {
         excluded_by: Vec<Exclusion>,
         visible: Option<&HashSet<Uuid>>,
     ) -> Overlap {
-        let hint = hint_for(&self);
         let sees = |p: &Place| visible.is_none_or(|v| v.contains(&p.node_id));
+        // A hint quotes a port's words, so a scoped caller's is read from its own places only.
+        let hint = if visible.is_none() {
+            hint_for(&self)
+        } else {
+            hint_for(&Draft {
+                places: self
+                    .places
+                    .iter()
+                    .filter(|(_, p)| sees(p))
+                    .cloned()
+                    .collect(),
+                ..self.clone()
+            })
+        };
         let seen_sites: BTreeSet<SiteId> = self
             .places
             .iter()
@@ -446,6 +495,19 @@ impl Draft {
             .filter(|i| self.places.iter().any(|(k, p)| k == *i && sees(p)))
             .copied()
             .collect();
+        // The outer range of a nested overlap is itself something a site carries. When no place
+        // the caller sees carries it, it is withheld like any other hidden range, and the overlap
+        // is named by the narrowest range covering the caller's own inner ones — built from what
+        // it may see, so it discloses nothing, and the inner ranges still sit inside it.
+        let outer_withheld = self.kind == OverlapKind::Nested
+            && !self
+                .places
+                .iter()
+                .any(|(k, p)| *k == self.subnet && sees(p));
+        let (key, subnet) = match covering(&inner) {
+            Some(cover) if outer_withheld => (format!("within:{cover}"), cover),
+            _ => (self.key, self.subnet),
+        };
         let shared: Vec<IpAddr> = self
             .shared
             .iter()
@@ -467,10 +529,11 @@ impl Draft {
         places.truncate(PLACES_MAX);
         let inner_count = count(inner.len());
         Overlap {
-            key: self.key,
+            key,
             kind: self.kind,
             status,
-            subnet: self.subnet.to_string(),
+            subnet: subnet.to_string(),
+            outer_withheld,
             inner: inner
                 .iter()
                 .take(INNER_MAX)
@@ -493,6 +556,18 @@ impl Draft {
 
 fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// The narrowest range containing every one of `ranges`; `None` when there are none.
+fn covering(ranges: &[SubnetKey]) -> Option<SubnetKey> {
+    let (first, rest) = ranges.split_first()?;
+    let mut cover = *first;
+    for r in rest {
+        while !cover.contains(r) {
+            cover = subnet_key(cover.network, cover.prefix_len.checked_sub(1)?)?;
+        }
+    }
+    Some(cover)
 }
 
 /// The overlaps a set of places forms: the same range at two sites, and one site's range inside
@@ -594,9 +669,8 @@ fn port_word<'w>(place: &Place, words: &[&'w str]) -> Option<&'w str> {
         .map(str::to_lowercase)
         .collect::<Vec<_>>()
         .join(" ");
-    for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
-        let stem = token.trim_end_matches(|c: char| c.is_ascii_digit());
-        if let Some(w) = words.iter().find(|w| **w == stem) {
+    for token in words_of(&text) {
+        if let Some(w) = words.iter().find(|w| word_is(&token, w)) {
             return Some(w);
         }
     }
@@ -921,6 +995,72 @@ mod tests {
         );
     }
 
+    /// A rule suggested from a hint carries the hint's word, so it must match the way the hint
+    /// did: `ha` from `HA sync` must not take `Port-channel1` or `chassis` with it.
+    #[test]
+    fn a_port_rule_matches_whole_words_like_the_hint_it_came_from() {
+        let mut fleet = Fleet::new();
+        fleet.device(1, &[(1, "10.50.0.1", 24, "HA sync")]);
+        fleet.device(2, &[(1, "10.50.0.1", 24, "ha-link2")]);
+        fleet.device(3, &[(1, "203.0.113.1", 24, "Port-channel1")]);
+        fleet.device(4, &[(1, "203.0.113.1", 24, "chassis mgmt")]);
+        let rule = Rule {
+            id: Uuid::from_u128(3),
+            range: None,
+            port_text: Some("ha".to_owned()),
+            enabled: true,
+        };
+        let f = fleet.find(&[rule], &[]);
+        assert_eq!(
+            only(&f, "same:10.50.0.0/24").status,
+            OverlapStatus::Excluded
+        );
+        assert_eq!(only(&f, "same:203.0.113.0/24").status, OverlapStatus::Open);
+    }
+
+    #[test]
+    fn a_several_word_rule_matches_those_words_in_order() {
+        let mut fleet = Fleet::new();
+        fleet.device(1, &[(1, "10.70.0.1", 24, "to ISP-A")]);
+        fleet.device(2, &[(1, "10.70.0.1", 24, "to isp a")]);
+        fleet.device(3, &[(1, "10.80.0.1", 24, "isp to")]);
+        fleet.device(4, &[(1, "10.80.0.1", 24, "display")]);
+        let rule = Rule {
+            id: Uuid::from_u128(4),
+            range: None,
+            port_text: Some("To ISP".to_owned()),
+            enabled: true,
+        };
+        let f = fleet.find(&[rule], &[]);
+        assert_eq!(
+            only(&f, "same:10.70.0.0/24").status,
+            OverlapStatus::Excluded
+        );
+        assert_eq!(only(&f, "same:10.80.0.0/24").status, OverlapStatus::Open);
+    }
+
+    #[test]
+    fn two_withheld_outer_ranges_around_one_visible_range_keep_distinct_keys() {
+        let mut fleet = Fleet::new();
+        let mine = fleet.device(1, &[(1, "10.40.8.1", 24, "")]);
+        fleet.device(2, &[(1, "10.40.0.1", 16, "")]);
+        fleet.device(3, &[(1, "10.0.0.1", 8, "")]);
+        let visible: HashSet<Uuid> = [mine].into();
+        let observed: Vec<(Uuid, &L3Snapshot)> = fleet.snaps.iter().map(|(n, s)| (*n, s)).collect();
+        let f = find(&Input {
+            observed: &observed,
+            site_of: &fleet.site_of,
+            ports: &fleet.ports,
+            rules: &[],
+            acks: &[],
+            visible: Some(&visible),
+        });
+        let ours: Vec<&Overlap> = f.overlaps.iter().filter(|o| o.outer_withheld).collect();
+        assert_eq!(ours.len(), 2, "{:?}", keys(&f));
+        assert_ne!(ours[0].key, ours[1].key);
+        assert!(ours.iter().all(|o| o.subnet == "10.40.8.0/24"));
+    }
+
     #[test]
     fn a_word_inside_a_longer_token_is_not_a_hint() {
         let mut fleet = Fleet::new();
@@ -1033,13 +1173,24 @@ mod tests {
         assert_eq!(same.site_count, 2);
         assert!(same.places.iter().all(|p| p.node_id == mine));
         assert_eq!(same.shared_addresses, vec!["10.10.20.1".to_owned()]);
-        let nested = only(&f, "nested:10.30.0.0/16");
+        // The /16 exists only at site 2, which this caller cannot see: it is not named, in the
+        // range or in the key, and the overlap is shown around the caller's own range instead.
+        let nested = only(&f, "within:10.30.8.0/24");
+        assert!(nested.outer_withheld);
+        assert_eq!(nested.subnet, "10.30.8.0/24");
         assert_eq!(
             nested.inner,
             vec!["10.30.8.0/24"],
             "site 3's range is withheld"
         );
         assert_eq!(nested.hidden_sites, 2);
+        assert!(
+            f.overlaps
+                .iter()
+                .all(|o| !o.key.contains("10.30.0.0") && !o.subnet.contains("10.30.0.0")),
+            "the hidden outer range appears nowhere: {:?}",
+            keys(&f)
+        );
         assert!(
             f.overlaps.iter().all(|o| o.key != "same:10.99.0.0/24"),
             "an overlap with no visible place is not reported"

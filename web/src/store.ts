@@ -120,6 +120,15 @@ export function useCan(perm: Permission): boolean {
 }
 
 /**
+ * The current principal's folder scope — `'All'`, `{ Groups: [...] }`, or `null` while it is still
+ * resolving. A write the server refuses to a group-scoped caller (`scope_unsupported`, a ledger
+ * line reading `Refused`) is drawn only when this is `'All'`, beside the `useCan` it also needs.
+ */
+export function useScope(): Scope | null {
+  return useAuthStore((s) => s.scope);
+}
+
+/**
  * The server's own name for a privilege, for the screens that have to say which one is missing.
  * Falls back to the permission key before the matrix arrives.
  */

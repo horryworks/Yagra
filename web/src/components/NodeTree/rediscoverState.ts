@@ -169,3 +169,11 @@ export function refusalKey(code: string | undefined): string | null {
       return null;
   }
 }
+
+/** Whether an Apply refusal means the comparison on screen is stale: the node or the rules moved
+ *  after the device was read. The server rebuilds the comparison on every read, so one more GET
+ *  shows the current values against the same answer — no new scan (ADR-186 増分 2). Sending the
+ *  same stale body again would only earn the same refusal. */
+export function rereadOn(code: string | undefined): boolean {
+  return code === 'node_changed' || code === 'judgement_changed';
+}

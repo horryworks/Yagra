@@ -19,6 +19,7 @@ function overlap(p: Partial<SubnetOverlap>): SubnetOverlap {
     kind: 'same_address',
     status: 'open',
     subnet: '192.0.2.0/24',
+    outer_withheld: false,
     inner: [],
     inner_count: 0,
     shared_addresses: [],

@@ -8,6 +8,7 @@ import {
   phaseOf,
   PICKUP_WARN_MS,
   refusalKey,
+  rereadOn,
   rowsOf,
 } from './rediscoverState';
 
@@ -105,5 +106,15 @@ describe('refusalKey', () => {
     expect(refusalKey('judgement_changed')).toBe('rediscover.err.changed');
     expect(refusalKey('internal')).toBeNull();
     expect(refusalKey(undefined)).toBeNull();
+  });
+});
+
+describe('rereadOn', () => {
+  it('re-reads after a refusal that means the comparison is stale, and only then', () => {
+    expect(rereadOn('node_changed')).toBe(true);
+    expect(rereadOn('judgement_changed')).toBe(true);
+    expect(rereadOn('profile_locked')).toBe(false);
+    expect(rereadOn('scan_not_found')).toBe(false);
+    expect(rereadOn(undefined)).toBe(false);
   });
 });

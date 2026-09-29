@@ -1507,7 +1507,8 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
     ) -> anyhow::Result<Option<RediscoverCurrent>> {
         let sql = format!(
-            "SELECT n.profile_id, n.profile_locked, n.vendor, n.model FROM nodes n              WHERE n.id = $2 AND {scope} AND {device}",
+            "SELECT n.profile_id, n.profile_locked, n.vendor, n.model FROM nodes n \
+             WHERE n.id = $2 AND {scope} AND {device}",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );
@@ -1541,7 +1542,19 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
     ) -> anyhow::Result<bool> {
         let sql = format!(
-            "UPDATE nodes n SET                  profile_id = CASE WHEN $3 THEN $5 ELSE n.profile_id END,                  vendor = CASE WHEN $6 THEN $8 ELSE n.vendor END,                  model = CASE WHEN $9 THEN $11 ELSE n.model END,                  sys_object_id = COALESCE($12, n.sys_object_id),                  sys_descr = COALESCE($13, n.sys_descr),                  updated_at = now()              WHERE n.id = $2                AND (NOT $3 OR (n.profile_id IS NOT DISTINCT FROM $4 AND NOT n.profile_locked))                AND (NOT $6 OR n.vendor IS NOT DISTINCT FROM $7)                AND (NOT $9 OR n.model IS NOT DISTINCT FROM $10)                AND {scope} AND {device}              RETURNING n.id",
+            "UPDATE nodes n SET \
+                 profile_id = CASE WHEN $3 THEN $5 ELSE n.profile_id END, \
+                 vendor = CASE WHEN $6 THEN $8 ELSE n.vendor END, \
+                 model = CASE WHEN $9 THEN $11 ELSE n.model END, \
+                 sys_object_id = COALESCE($12, n.sys_object_id), \
+                 sys_descr = COALESCE($13, n.sys_descr), \
+                 updated_at = now() \
+             WHERE n.id = $2 \
+               AND (NOT $3 OR (n.profile_id IS NOT DISTINCT FROM $4 AND NOT n.profile_locked)) \
+               AND (NOT $6 OR n.vendor IS NOT DISTINCT FROM $7) \
+               AND (NOT $9 OR n.model IS NOT DISTINCT FROM $10) \
+               AND {scope} AND {device} \
+             RETURNING n.id",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );

@@ -181,6 +181,14 @@ const MERAKI_DEVICES: Scoping = Refused(
      device is in no folder to be inside or outside of, so there is nothing to narrow it by",
 );
 
+/// A **subnet-overlap decision** (ADR-187): an exclusion rule or "this overlap is deliberate".
+/// Both apply to every site, and a scoped caller sees only part of an overlap, so its decision
+/// would silence the rest for sites it cannot see.
+const OVERLAP_WRITE: Scoping = Refused(
+    "subnet-overlap rules and acknowledgements apply to every site; a scoped caller sees only part \
+     of an overlap and is refused",
+);
+
 /// A **Meraki write**. Refused to a group-scoped caller (ADR-164) — see
 /// `api/meraki.rs::meraki_is_deployment_wide`.
 ///
@@ -189,13 +197,6 @@ const MERAKI_DEVICES: Scoping = Refused(
 /// (`…/sync` arrived with the ADR and was never anything else.) The configuration reads are
 /// `MERAKI_CONFIG_READ` — an organization's name and cadence are configuration, not monitored-node
 /// data.
-/// A **subnet-overlap decision** (ADR-187): an exclusion rule or "this overlap is deliberate".
-/// Both apply to every site, and a scoped caller sees only part of an overlap, so its decision
-/// would silence the rest for sites it cannot see.
-const OVERLAP_WRITE: Scoping = Refused(
-    "subnet-overlap rules and acknowledgements apply to every site; a scoped caller sees only part \n     of an overlap and is refused",
-);
-
 const MERAKI_WRITE: Scoping = Refused(
     "a Meraki organization is monitored as a whole, across every folder — importing files nodes \
      wherever they belong and deleting purges all of them — so a scoped caller is refused",
@@ -1398,7 +1399,11 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/nodes/:node_id/rediscover/:scan_id",
         NodeScoped,
         Exempt(
-            "a proposal for a write, not an answer about the fleet (ADR-186): it compares one node              with what a re-read of the device found, and the only thing to do with it is press              Apply. MCP is read-only and cannot start the re-read, so the scan id this needs does              not exist on that surface — the raw sweep is get_config(kind=discovery_scan) and the              node's stored identity is get_node_status",
+            "a proposal for a write, not an answer about the fleet (ADR-186): it compares one node \
+             with what a re-read of the device found, and the only thing to do with it is press \
+             Apply. MCP is read-only and cannot start the re-read, so the scan id this needs does \
+             not exist on that surface — the raw sweep is get_config(kind=discovery_scan) and the \
+             node's stored identity is get_node_status",
         ),
     ),
     (

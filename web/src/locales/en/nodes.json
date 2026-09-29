@@ -881,7 +881,7 @@
       "noCredential": "This node has no SNMP credential. Bind one in Edit node first.",
       "notADevice": "This node is not read over SNMP, so there is nothing to rediscover.",
       "locked": "This node's profile is locked. Unlock it in Edit node to change it.",
-      "changed": "The node or the classification rules changed after this was read. Close the dialog and rediscover again.",
+      "changed": "The node or the classification rules changed after this was read. The comparison now shows the current values — check it and apply again.",
       "lost": "The server no longer has this result. Close the dialog and rediscover again."
     }
   },

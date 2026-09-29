@@ -21,6 +21,7 @@ import {
   phaseOf,
   REDISCOVER_POLL_MS,
   refusalKey,
+  rereadOn,
   rowsOf,
   type RediscoverField,
 } from './rediscoverState';
@@ -105,7 +106,28 @@ export function RediscoverModal({
   });
   const apply = () => {
     if (!body) return;
-    form.submit(() => api.applyRediscovery(nodeId, body).then(() => done()));
+    const scan = body.scan_id;
+    form.submit(() =>
+      api.applyRediscovery(nodeId, body).then(
+        () => done(),
+        (e: unknown) => {
+          // Stale comparison: read it again (the server re-compares, nothing is re-scanned) so the
+          // table and Apply reflect the node as it is now. The refusal still shows as the error.
+          if (e instanceof ApiError && rereadOn(e.code)) {
+            api.getRediscovery(nodeId, scan).then(
+              (v) => {
+                setView(v);
+                setChosen(null);
+              },
+              (err: unknown) => {
+                if (err instanceof ApiError && err.status === 404) setLost(true);
+              },
+            );
+          }
+          throw e;
+        },
+      ),
+    );
   };
 
   const toggle = (f: RediscoverField) => {

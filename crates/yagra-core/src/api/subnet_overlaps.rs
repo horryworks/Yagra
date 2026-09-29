@@ -108,8 +108,9 @@ pub(crate) struct OverlapRuleView {
     id: Uuid,
     /// Places inside this range match. `null` ⇒ any range.
     range: Option<String>,
-    /// Places on a port whose name or description contains this (case-insensitive). `null` ⇒ any
-    /// port.
+    /// Places on a port whose name or description carries this as whole words (case-insensitive;
+    /// a word may be followed by digits, so `dialer` matches `Dialer1` and `ha` does not match
+    /// `Port-channel1`). `null` ⇒ any port.
     port_text: Option<String>,
     reason: ExclusionReason,
     note: String,
@@ -126,7 +127,8 @@ pub(crate) struct OverlapRuleBody {
     /// A network, `address/length`. Host bits are cleared. At least one of `range` and
     /// `port_text` is required.
     range: Option<String>,
-    /// Text a port's name or description must contain (case-insensitive), at most 200 characters.
+    /// Words a port's name or description must carry, whole and in order (case-insensitive; a
+    /// word may be followed by digits), at most 200 characters.
     port_text: Option<String>,
     reason: ExclusionReason,
     #[serde(default)]
@@ -185,11 +187,20 @@ fn internal(e: &anyhow::Error, what: &'static str) -> ApiError {
     ApiError::from_internal(e.as_ref(), what, "failed to read subnet overlaps")
 }
 
-/// The overlaps the caller may see — the seam REST and MCP share.
-pub(crate) async fn overlaps_view(
-    admin: &AdminState,
-    scope: &NodeScope,
-) -> ApiResult<SubnetOverlapsView> {
+/// The comparison before names are filled in and the list is cut to [`OVERLAPS_MAX`] — what an
+/// acknowledgement looks its key up in, so an overlap past the cap can still be acknowledged.
+struct Compared {
+    groups: Vec<crate::groups::GroupSummary>,
+    nodes: Vec<(Uuid, String, Option<Uuid>)>,
+    stored_rules: Vec<StoredOverlapRule>,
+    notes: HashMap<String, String>,
+    findings: subnet_overlaps::Findings,
+    visible: Option<HashSet<Uuid>>,
+    nodes_with_addresses: u32,
+    nodes_truncated: u32,
+}
+
+async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
     let (groups, nodes, snapshots, stored_rules, stored_acks) = tokio::try_join!(
         admin.groups.list(),
         admin.repo.node_folders(),
@@ -243,10 +254,7 @@ pub(crate) async fn overlaps_view(
             sites: sites.iter().map(|s| (!s.is_nil()).then_some(*s)).collect(),
         })
         .collect();
-    let notes: HashMap<&str, &str> = stored_acks
-        .iter()
-        .map(|(k, _, n)| (k.as_str(), n.as_str()))
-        .collect();
+    let notes: HashMap<String, String> = stored_acks.into_iter().map(|(k, _, n)| (k, n)).collect();
 
     let findings = subnet_overlaps::find(&Input {
         observed: &observed,
@@ -256,6 +264,40 @@ pub(crate) async fn overlaps_view(
         acks: &acks,
         visible: visible.as_ref(),
     });
+
+    let nodes_with_addresses = observed.iter().filter(|(n, _)| sees(n)).count();
+    let nodes_truncated = observed
+        .iter()
+        .filter(|(n, s)| sees(n) && (s.truncated || s.addresses.len() >= MAX_ADDRESSES_PER_NODE))
+        .count();
+    Ok(Compared {
+        groups,
+        nodes,
+        stored_rules,
+        notes,
+        findings,
+        nodes_with_addresses: count(nodes_with_addresses),
+        nodes_truncated: count(nodes_truncated),
+        visible,
+    })
+}
+
+/// The overlaps the caller may see — the seam REST and MCP share.
+pub(crate) async fn overlaps_view(
+    admin: &AdminState,
+    scope: &NodeScope,
+) -> ApiResult<SubnetOverlapsView> {
+    let Compared {
+        groups,
+        nodes,
+        stored_rules,
+        notes,
+        findings,
+        visible,
+        nodes_with_addresses,
+        nodes_truncated,
+    } = compare(admin, scope).await?;
+    let sees = |n: &Uuid| visible.as_ref().is_none_or(|v| v.contains(n));
 
     let group_names: HashMap<Uuid, &str> = groups.iter().map(|g| (g.id, g.name.as_str())).collect();
     let node_names: HashMap<Uuid, &str> =
@@ -267,7 +309,7 @@ pub(crate) async fn overlaps_view(
             OverlapStatus::Open => counts.open += 1,
             OverlapStatus::Intentional => {
                 counts.intentional += 1;
-                o.note = notes.get(o.key.as_str()).map(|n| (*n).to_owned());
+                o.note = notes.get(&o.key).cloned();
             }
             OverlapStatus::Excluded => counts.excluded += 1,
         }
@@ -281,15 +323,6 @@ pub(crate) async fn overlaps_view(
     }
     overlaps.truncate(OVERLAPS_MAX);
 
-    let visible_ids: Vec<&Uuid> = observed
-        .iter()
-        .map(|(n, _)| n)
-        .filter(|n| sees(n))
-        .collect();
-    let truncated = observed
-        .iter()
-        .filter(|(n, s)| sees(n) && (s.truncated || s.addresses.len() >= MAX_ADDRESSES_PER_NODE))
-        .count();
     Ok(SubnetOverlapsView {
         overlaps,
         counts,
@@ -307,8 +340,8 @@ pub(crate) async fn overlaps_view(
             })
             .collect(),
         nodes_total: count(nodes.iter().filter(|(id, ..)| sees(id)).count()),
-        nodes_with_addresses: count(visible_ids.len()),
-        nodes_truncated: count(truncated),
+        nodes_with_addresses,
+        nodes_truncated,
         subnets_checked: findings.subnets_checked,
     })
 }
@@ -329,6 +362,7 @@ impl SubnetOverlapsView {
                 kind: OverlapKind::SameAddress,
                 status: OverlapStatus::Excluded,
                 subnet: "192.0.2.0/24".to_owned(),
+                outer_withheld: false,
                 inner: vec!["192.0.2.0/25".to_owned()],
                 inner_count: 1,
                 shared_addresses: vec!["192.0.2.1".to_owned()],
@@ -590,8 +624,14 @@ async fn set_ack(
     }
     // The sites are the ones the overlap spans now, read from the comparison itself rather than
     // taken from the client, so an acknowledgement cannot cover a site nobody was shown.
-    let view = overlaps_view(&admin, &scope).await?;
-    let Some(overlap) = view.overlaps.iter().find(|o| o.key == body.key) else {
+    // Uncut and unnamed: an overlap past the listing's cap is still one an operator can mark.
+    let compared = compare(&admin, &scope).await?;
+    let Some(overlap) = compared
+        .findings
+        .overlaps
+        .iter()
+        .find(|o| o.key == body.key)
+    else {
         return Err(ApiError::not_found(
             "overlap_not_found",
             "no current overlap has this key",

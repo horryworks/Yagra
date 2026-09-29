@@ -111,7 +111,7 @@ impl NodeRepo {
                 return Ok(Err(OverlapRuleRefusal::Builtin));
             }
         }
-        sqlx::query(
+        let done = sqlx::query(
             "UPDATE subnet_overlap_rules SET range_cidr = $2::CIDR, port_text = $3, reason = $4, \
                     note = $5, enabled = $6 WHERE id = $1",
         )
@@ -123,6 +123,10 @@ impl NodeRepo {
         .bind(rule.enabled)
         .execute(&self.pool)
         .await?;
+        // Deleted between the read above and this write: nothing was saved, so say so.
+        if done.rows_affected() == 0 {
+            return Ok(Err(OverlapRuleRefusal::NotFound));
+        }
         Ok(Ok(()))
     }
 
@@ -140,10 +144,15 @@ impl NodeRepo {
             None => Ok(Err(OverlapRuleRefusal::NotFound)),
             Some(true) => Ok(Err(OverlapRuleRefusal::Builtin)),
             Some(false) => {
-                sqlx::query("DELETE FROM subnet_overlap_rules WHERE id = $1 AND NOT builtin")
-                    .bind(id)
-                    .execute(&self.pool)
-                    .await?;
+                let done =
+                    sqlx::query("DELETE FROM subnet_overlap_rules WHERE id = $1 AND NOT builtin")
+                        .bind(id)
+                        .execute(&self.pool)
+                        .await?;
+                // Deleted by someone else in between: this call removed nothing.
+                if done.rows_affected() == 0 {
+                    return Ok(Err(OverlapRuleRefusal::NotFound));
+                }
                 Ok(Ok(()))
             }
         }

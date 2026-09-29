@@ -10774,7 +10774,7 @@ export interface components {
             /**
              * @description Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same
              *     range keeps its key whether an address is shared or not, so an acknowledgement survives
-             *     that changing.
+             *     that changing. `within:<range>` when `outer_withheld` — a scoped caller cannot acknowledge.
              */
             key: string;
             kind: components["schemas"]["OverlapKind"];
@@ -10785,6 +10785,11 @@ export interface components {
             node_count: number;
             /** @description The acknowledgement's note, when `status` is `intentional`. */
             note?: string | null;
+            /**
+             * @description For `nested`: the outer range is carried only at sites the caller may not see, so it is
+             *     not named (ADR-014).
+             */
+            outer_withheld: boolean;
             /** Format: int32 */
             place_count: number;
             /** @description Up to [`PLACES_MAX`] places, ordered by site, device, then port. */
@@ -10797,7 +10802,10 @@ export interface components {
              */
             site_count: number;
             status: components["schemas"]["OverlapStatus"];
-            /** @description The range; for `nested`, the outer one. */
+            /**
+             * @description The range; for `nested`, the outer one — or, when `outer_withheld`, the narrowest range
+             *     covering the caller's own inner ranges.
+             */
             subnet: string;
         };
         /** @description "This overlap is deliberate." */
@@ -10840,7 +10848,10 @@ export interface components {
         OverlapRuleBody: {
             enabled?: boolean;
             note?: string;
-            /** @description Text a port's name or description must contain (case-insensitive), at most 200 characters. */
+            /**
+             * @description Words a port's name or description must carry, whole and in order (case-insensitive; a
+             *     word may be followed by digits), at most 200 characters.
+             */
             port_text?: string | null;
             /**
              * @description A network, `address/length`. Host bits are cleared. At least one of `range` and
@@ -10863,8 +10874,9 @@ export interface components {
             id: string;
             note: string;
             /**
-             * @description Places on a port whose name or description contains this (case-insensitive). `null` ⇒ any
-             *     port.
+             * @description Places on a port whose name or description carries this as whole words (case-insensitive;
+             *     a word may be followed by digits, so `dialer` matches `Dialer1` and `ha` does not match
+             *     `Port-channel1`). `null` ⇒ any port.
              */
             port_text?: string | null;
             /** @description Places inside this range match. `null` ⇒ any range. */

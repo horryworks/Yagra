@@ -748,6 +748,11 @@ fn changes_monitoring_config(path: &str) -> bool {
         // and so does bump — it can move the node's profile. Invisible to the mechanical check for
         // the same reason as Detect: the handler demands ManageConfig.
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/rediscover"))
+        // The overlap screen's exclusion rules and "intentional" marks (ADR-187). Only that
+        // screen's own comparison reads them — no poll spec, alert rule or topology does — and
+        // counted, working through the Open tab re-resolved the whole fleet on every press.
+        // Invisible to the mechanical check: the handlers demand ManageConfig.
+        || path.starts_with("/api/v1/subnet-overlaps/")
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1821,6 +1826,25 @@ mod tests {
         assert!(changes_monitoring_config(&format!(
             "/api/v1/nodes/{id}/rediscover/apply"
         )));
+    }
+
+    /// ADR-187 増分 2: the overlap screen's rules and acknowledgements are read only by that
+    /// screen, so marking an overlap must not re-resolve the fleet. The trailing slash is pinned:
+    /// a sibling route merely starting with the name argues for its own exemption.
+    #[test]
+    fn subnet_overlap_writes_do_not_dirty_the_config_generation() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        for path in [
+            "/api/v1/subnet-overlaps/rules".to_owned(),
+            format!("/api/v1/subnet-overlaps/rules/{id}"),
+            "/api/v1/subnet-overlaps/acks".to_owned(),
+        ] {
+            assert!(
+                !changes_monitoring_config(&path),
+                "{path} must not invalidate"
+            );
+        }
+        assert!(changes_monitoring_config("/api/v1/subnet-overlapsx"));
     }
 
     #[test]

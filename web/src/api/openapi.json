@@ -35997,6 +35997,7 @@
           "kind",
           "status",
           "subnet",
+          "outer_withheld",
           "inner",
           "inner_count",
           "shared_addresses",
@@ -36046,7 +36047,7 @@
           },
           "key": {
             "type": "string",
-            "description": "Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same\nrange keeps its key whether an address is shared or not, so an acknowledgement survives\nthat changing."
+            "description": "Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same\nrange keeps its key whether an address is shared or not, so an acknowledgement survives\nthat changing. `within:<range>` when `outer_withheld` — a scoped caller cannot acknowledge."
           },
           "kind": {
             "$ref": "#/components/schemas/OverlapKind"
@@ -36063,6 +36064,10 @@
               "null"
             ],
             "description": "The acknowledgement's note, when `status` is `intentional`."
+          },
+          "outer_withheld": {
+            "type": "boolean",
+            "description": "For `nested`: the outer range is carried only at sites the caller may not see, so it is\nnot named (ADR-014)."
           },
           "place_count": {
             "type": "integer",
@@ -36094,7 +36099,7 @@
           },
           "subnet": {
             "type": "string",
-            "description": "The range; for `nested`, the outer one."
+            "description": "The range; for `nested`, the outer one — or, when `outer_withheld`, the narrowest range\ncovering the caller's own inner ranges."
           }
         }
       },
@@ -36240,7 +36245,7 @@
               "string",
               "null"
             ],
-            "description": "Text a port's name or description must contain (case-insensitive), at most 200 characters."
+            "description": "Words a port's name or description must carry, whole and in order (case-insensitive; a\nword may be followed by digits), at most 200 characters."
           },
           "range": {
             "type": [
@@ -36291,7 +36296,7 @@
               "string",
               "null"
             ],
-            "description": "Places on a port whose name or description contains this (case-insensitive). `null` ⇒ any\nport."
+            "description": "Places on a port whose name or description carries this as whole words (case-insensitive;\na word may be followed by digits, so `dialer` matches `Dialer1` and `ha` does not match\n`Port-channel1`). `null` ⇒ any port."
           },
           "range": {
             "type": [

@@ -106,6 +106,11 @@ const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 /// [`RUNNING_MAX_AGE`] retires them.
 const MAX_SCANS: usize = 20;
 
+/// The same cap for [`ScanOrigin::Rediscover`] scans, counted apart from sweeps (ADR-186 増分 2).
+/// Sharing one cap let a colleague's rediscoveries evict a finished sweep someone was still
+/// importing from, and sweeps evict the scan an open Rediscover dialog would apply.
+const MAX_REDISCOVERIES: usize = 20;
+
 /// A scan still marked running after this is dropped: its poller died, or its final result was
 /// lost. Comfortably longer than the slowest legitimate sweep (4096 targets, ~22s per target in the
 /// worst credential-probe case, 16 at a time ⇒ about 94 minutes, ADR-173), plus the time a sweep can
@@ -496,7 +501,8 @@ impl ScanState {
 /// 1. a **running** scan older than [`RUNNING_MAX_AGE`] is gone (its poller is never going to
 ///    report),
 /// 2. a **terminal** scan whose last update is older than [`FINISHED_TTL`] is gone,
-/// 3. if more than [`MAX_SCANS`] remain, the **oldest terminal** ones go until the cap holds.
+/// 3. if more than [`MAX_SCANS`] sweeps (or [`MAX_REDISCOVERIES`] rediscoveries) remain, the
+///    **oldest terminal** ones *of that origin* go until its cap holds.
 ///
 /// ⚠️ Rule 3 never touches a running scan. Evicting one would take away the operator's only handle
 /// on a sweep that is still probing their network — the opposite of what a cap is for.
@@ -516,17 +522,23 @@ fn evict(scans: &mut HashMap<Uuid, ScanState>, now: DateTime<Utc>) {
             !older_than(s.started_at, RUNNING_MAX_AGE)
         }
     });
-    if scans.len() <= MAX_SCANS {
-        return;
-    }
-    let mut finished: Vec<(Uuid, DateTime<Utc>)> = scans
-        .iter()
-        .filter(|(_, s)| s.state.is_terminal())
-        .map(|(id, s)| (*id, s.updated_at))
-        .collect();
-    finished.sort_by_key(|(_, at)| *at);
-    for (id, _) in finished.into_iter().take(scans.len() - MAX_SCANS) {
-        scans.remove(&id);
+    // Each origin has its own cap: a run of rediscoveries must not push a finished sweep off the
+    // Discovery list, nor a run of sweeps take the scan an open Rediscover dialog will apply.
+    for (rediscover, cap) in [(false, MAX_SCANS), (true, MAX_REDISCOVERIES)] {
+        let of_kind = |s: &ScanState| matches!(s.origin, ScanOrigin::Rediscover(_)) == rediscover;
+        let held = scans.values().filter(|s| of_kind(s)).count();
+        if held <= cap {
+            continue;
+        }
+        let mut finished: Vec<(Uuid, DateTime<Utc>)> = scans
+            .iter()
+            .filter(|(_, s)| of_kind(s) && s.state.is_terminal())
+            .map(|(id, s)| (*id, s.updated_at))
+            .collect();
+        finished.sort_by_key(|(_, at)| *at);
+        for (id, _) in finished.into_iter().take(held - cap) {
+            scans.remove(&id);
+        }
     }
 }
 
@@ -1274,6 +1286,44 @@ mod tests {
         // The oldest *finished* one went instead.
         assert!(!scans.contains_key(&Uuid::from_u128(100 + (MAX_SCANS - 1) as u128)));
         assert!(scans.contains_key(&Uuid::from_u128(100)));
+    }
+
+    /// ADR-186 増分 2: rediscoveries and sweeps are capped apart. A run of finished rediscoveries
+    /// newer than a finished sweep must not push the sweep off the Discovery list.
+    #[test]
+    fn rediscoveries_do_not_evict_a_finished_sweep() {
+        let now = Utc::now();
+        let mut scans = HashMap::new();
+        let sweep = Uuid::from_u128(1);
+        scans.insert(
+            sweep,
+            aged(
+                DiscoveryScanState::Done,
+                chrono::Duration::minutes(60),
+                chrono::Duration::minutes(60),
+                now,
+            ),
+        );
+        for i in 0..(MAX_REDISCOVERIES + 5) {
+            let mut s = aged(
+                DiscoveryScanState::Done,
+                chrono::Duration::minutes(i as i64),
+                chrono::Duration::minutes(i as i64),
+                now,
+            );
+            s.origin = ScanOrigin::Rediscover(Uuid::from_u128(500 + i as u128));
+            scans.insert(Uuid::from_u128(100 + i as u128), s);
+        }
+        evict(&mut scans, now);
+        assert!(scans.contains_key(&sweep), "the sweep is still listed");
+        let rediscoveries = scans
+            .values()
+            .filter(|s| matches!(s.origin, ScanOrigin::Rediscover(_)))
+            .count();
+        assert_eq!(rediscoveries, MAX_REDISCOVERIES);
+        // The oldest rediscoveries went, the newest stayed.
+        assert!(scans.contains_key(&Uuid::from_u128(100)));
+        assert!(!scans.contains_key(&Uuid::from_u128(100 + (MAX_REDISCOVERIES + 4) as u128)));
     }
 
     /// ADR-186: a rediscovery answers its own node's dialog and nobody else — it is not listed on
