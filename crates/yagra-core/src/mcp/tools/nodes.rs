@@ -505,6 +505,11 @@ impl YagraMcp {
             meraki.as_ref(),
         )
         .await;
+        // The organization and network by name, from the same function (ADR-185).
+        let meraki_site = match meraki {
+            Some(_) => crate::api::meraki::node_meraki_site(admin, p.node_id).await,
+            None => None,
+        };
         // The product type and the repeater mark the list carries (ADR-168 決定 11, ADR-175), read
         // only for a Meraki node.
         let product = match meraki {
@@ -534,6 +539,7 @@ impl YagraMcp {
             profile_locked,
             wireless,
             meraki_pair,
+            meraki_site,
             collection_fault: crate::api::nodes::collection_fault_of(&self.state, node.id).await,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts

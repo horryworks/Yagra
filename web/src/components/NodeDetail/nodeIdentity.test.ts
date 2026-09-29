@@ -66,6 +66,40 @@ describe('node header sub line', () => {
     );
   });
 
+  // ADR-185: where a Meraki device sits, in the Dashboard's own names.
+  it("names a Meraki node's organization and network after its model", () => {
+    const site = {
+      org_id: '00000000-0000-0000-0000-000000000009',
+      org_name: 'Example Org',
+      network_id: 'N_1',
+      network_name: 'Branch One',
+    };
+    const meraki = (meraki_site: NodeDetail['meraki_site']) =>
+      nodeSubLineParts(
+        node({ kind: 'meraki', address: '10.0.0.2', vendor: 'Cisco Meraki', model: 'MX67', meraki_site }),
+        t,
+      );
+    expect(meraki(site).map((p) => p.text)).toEqual([
+      '10.0.0.2',
+      'Cisco Meraki MX67',
+      'Example Org / Branch One',
+    ]);
+    expect(meraki(site).at(-1)?.id).toBe('merakiSite');
+    // A network no sync has named yet: the organization alone, no dangling separator.
+    expect(meraki({ ...site, network_name: null }).at(-1)?.text).toBe('Example Org');
+    // No site at all (no binding, or an older core): the part is not drawn.
+    expect(meraki(null).map((p) => p.id)).toEqual(['address', 'device']);
+    expect(meraki(undefined).map((p) => p.id)).toEqual(['address', 'device']);
+  });
+
+  it('never gives the site to a kind that is not Meraki', () => {
+    const site = { org_id: 'x', org_name: 'Example Org', network_id: 'N_1', network_name: 'Branch One' };
+    for (const kind of NODE_KINDS.filter((k) => k !== 'meraki')) {
+      const ids = nodeSubLineParts(node({ kind, meraki_site: site }), t).map((p) => p.id);
+      expect(ids, kind).not.toContain('merakiSite');
+    }
+  });
+
   // A monitor whose config row failed to load still has to say something, and the address is the
   // only fact left. Also guards the switch staying total over NodeKind.
   it('gives every kind a non-empty line, with distinct part ids', () => {

@@ -1574,11 +1574,74 @@ impl MerakiDeviceRepo {
             model: row.try_get("model")?,
         }))
     }
+
+    /// The organization and network a Meraki node sits in, by name (ADR-185). `None` for a node
+    /// with no Meraki binding.
+    ///
+    /// Kept apart from [`Self::get`] on purpose: `MerakiDeviceConfig` is what the scheduler builds
+    /// jobs from, and a display name has no business there.
+    pub async fn site(&self, node_id: Uuid) -> anyhow::Result<Option<MerakiSite>> {
+        // LEFT JOIN: a network the sync has not recorded yet has no row, and the binding is still
+        // worth naming by its organization.
+        let row = sqlx::query(
+            "SELECT d.org_id, o.name AS org_name, d.network_id, n.name AS network_name \
+             FROM meraki_devices d \
+             JOIN meraki_orgs o ON o.id = d.org_id \
+             LEFT JOIN meraki_org_networks n \
+               ON n.org_id = d.org_id AND n.network_id = d.network_id \
+             WHERE d.node_id = $1",
+        )
+        .bind(node_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(MerakiSite {
+            org_id: row.try_get("org_id")?,
+            org_name: row.try_get("org_name")?,
+            network_id: row.try_get("network_id")?,
+            network_name: blank_is_none(row.try_get("network_name")?),
+        }))
+    }
+}
+
+/// Where a Meraki node sits, in the Dashboard's own terms (ADR-185) — `GET /api/v1/nodes/{node_id}`'s
+/// and the MCP `get_node_status` tool's `meraki_site`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct MerakiSite {
+    /// Yagra's id for the organization (the `id` of `GET /api/v1/meraki/orgs`), not Meraki's.
+    pub org_id: Uuid,
+    /// The organization's name as its last sync recorded it.
+    pub org_name: String,
+    /// Meraki's network id.
+    pub network_id: String,
+    /// The network's name as the last sync recorded it; `null` when no sync has named it yet.
+    pub network_name: Option<String>,
+}
+
+/// A network the sync has seen but not named is stored as `''` (the column's default), which is
+/// no more a name than a missing row is.
+fn blank_is_none(name: Option<String>) -> Option<String> {
+    name.filter(|n| !n.trim().is_empty())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-185: the column's `''` default and a whitespace-only name are "not named yet", the same
+    /// answer as a network with no row at all.
+    #[test]
+    fn an_unnamed_network_has_no_name() {
+        assert_eq!(blank_is_none(None), None);
+        assert_eq!(blank_is_none(Some(String::new())), None);
+        assert_eq!(blank_is_none(Some("  ".to_owned())), None);
+        assert_eq!(
+            blank_is_none(Some("Branch One".to_owned())),
+            Some("Branch One".to_owned())
+        );
+    }
 
     fn org() -> MerakiOrg {
         MerakiOrg {

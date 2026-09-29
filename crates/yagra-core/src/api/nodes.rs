@@ -1163,6 +1163,9 @@ pub(crate) struct NodeDetail {
     /// A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on
     /// its spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair.
     meraki_pair: Option<super::meraki::MerakiPairView>,
+    /// The Meraki organization and network this node sits in, by name (ADR-185). `null` for a node
+    /// with no Meraki binding.
+    meraki_site: Option<crate::meraki::MerakiSite>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
     /// 🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
@@ -1279,6 +1282,10 @@ async fn get_node(
     let wireless = super::wireless::node_wireless(&st, admin, &scope, node_id).await;
     let meraki_pair =
         super::meraki::node_meraki_pair(&st, admin, &scope, node_id, meraki_device.as_ref()).await;
+    let meraki_site = match meraki_device {
+        Some(_) => super::meraki::node_meraki_site(admin, node_id).await,
+        None => None,
+    };
     let serial_number = serial_number_of(serial_number, meraki_device.as_ref());
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
@@ -1302,6 +1309,7 @@ async fn get_node(
         meraki_repeater,
         wireless,
         meraki_pair,
+        meraki_site,
         id: node.id,
         name: node.name,
         address: node.address.to_string(),

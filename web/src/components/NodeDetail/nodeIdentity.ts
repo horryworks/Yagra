@@ -16,7 +16,7 @@ import { addressText, hasAddress } from '../../lib/nodeAddress';
 
 export interface SubLinePart {
   /** Stable key for the React list — the fact this part states, not its text. */
-  id: 'address' | 'device' | 'url' | 'dnsName' | 'recordType';
+  id: 'address' | 'device' | 'url' | 'dnsName' | 'recordType' | 'merakiSite';
   text: string;
   /** Render in the monospace family (addresses, URLs, hostnames — `ui-conventions.md`). */
   mono?: boolean;
@@ -45,20 +45,36 @@ export function nodeSubLineParts(node: NodeDetail, t: TFunction): SubLinePart[] 
       return parts;
     }
     case 'device':
-    case 'meraki':
     case 'wireless_ap':
-      return [
-        {
-          id: 'address',
-          // A mesh repeater, or any node stored at the unspecified address, says it has none
-          // rather than showing `0.0.0.0` (ADR-175).
-          text: addressText(node.address, t, { meshRepeater: node.meraki_repeater }),
-          mono: hasAddress(node.address),
-        },
-        {
-          id: 'device',
-          text: [node.vendor, node.model].filter(Boolean).join(' ') || t('detail.unknownDevice'),
-        },
-      ];
+      return deviceParts(node, t);
+    case 'meraki': {
+      // Which organization and network it sits in (ADR-185) — the one thing the Dashboard knows
+      // about a Meraki device that the address and the model do not say.
+      const site = merakiSiteText(node.meraki_site);
+      return site ? [...deviceParts(node, t), { id: 'merakiSite', text: site }] : deviceParts(node, t);
+    }
   }
+}
+
+function deviceParts(node: NodeDetail, t: TFunction): SubLinePart[] {
+  return [
+    {
+      id: 'address',
+      // A mesh repeater, or any node stored at the unspecified address, says it has none
+      // rather than showing `0.0.0.0` (ADR-175).
+      text: addressText(node.address, t, { meshRepeater: node.meraki_repeater }),
+      mono: hasAddress(node.address),
+    },
+    {
+      id: 'device',
+      text: [node.vendor, node.model].filter(Boolean).join(' ') || t('detail.unknownDevice'),
+    },
+  ];
+}
+
+/** `Organization / Network`, or the organization alone when no sync has named the network yet.
+ *  `null` when there is nothing to say — no binding, or a detail from a core that predates it. */
+export function merakiSiteText(site: NodeDetail['meraki_site']): string | null {
+  if (!site) return null;
+  return [site.org_name, site.network_name].filter(Boolean).join(' / ') || null;
 }

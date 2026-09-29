@@ -9432,6 +9432,23 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * @description Where a Meraki node sits, in the Dashboard's own terms (ADR-185) — `GET /api/v1/nodes/{node_id}`'s
+         *     and the MCP `get_node_status` tool's `meraki_site`.
+         */
+        MerakiSite: {
+            /** @description Meraki's network id. */
+            network_id: string;
+            /** @description The network's name as the last sync recorded it; `null` when no sync has named it yet. */
+            network_name?: string | null;
+            /**
+             * Format: uuid
+             * @description Yagra's id for the organization (the `id` of `GET /api/v1/meraki/orgs`), not Meraki's.
+             */
+            org_id: string;
+            /** @description The organization's name as its last sync recorded it. */
+            org_name: string;
+        };
+        /**
          * @description Why a sync failed. Stored on the organization's row as its token and shown to an operator, so
          *     every variant is a closed fact and none carries upstream text — a Dashboard error body can quote
          *     the request, and the request carries the key.
@@ -10137,6 +10154,7 @@ export interface components {
              *     whose `address` is therefore `0.0.0.0` (ADR-175). Absent otherwise.
              */
             meraki_repeater?: boolean;
+            meraki_site?: null | components["schemas"]["MerakiSite"];
             model?: string | null;
             name: string;
             /**

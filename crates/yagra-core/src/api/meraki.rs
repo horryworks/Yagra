@@ -1488,6 +1488,24 @@ pub(crate) async fn node_meraki_pair(
     })
 }
 
+/// The organization and network `node` sits in, by name (ADR-185), for the node detail and the MCP
+/// tool that folds it. `None` for a node with no Meraki binding. Best effort, like the pair above:
+/// a failed read leaves the header without the names rather than failing the detail.
+///
+/// No scope narrowing, unlike the pair: this names nothing but the node the caller already reads.
+pub(crate) async fn node_meraki_site(
+    admin: &super::AdminState,
+    node: Uuid,
+) -> Option<crate::meraki::MerakiSite> {
+    match admin.meraki_devices.site(node).await {
+        Ok(site) => site,
+        Err(e) => {
+            tracing::warn!(node = %node, error = %e, "meraki site read failed");
+            None
+        }
+    }
+}
+
 /// An organization's devices as the last successful sync recorded them — monitored or not — with
 /// each one's state. Served from PostgreSQL: it never calls the Dashboard API.
 #[utoipa::path(
@@ -2845,6 +2863,91 @@ mod tests {
         assert_eq!(role_of("Q2-A"), Some(serde_json::json!("primary")));
         assert_eq!(role_of("Q2-B"), Some(serde_json::json!("spare")));
         assert_eq!(role_of("Q2-C"), None, "{list}");
+    }
+
+    /// The node detail names a Meraki node's organization and network (ADR-185): both names when
+    /// the sync recorded the network, the organization alone when it did not — no row, or the
+    /// column's `''` default — and nothing at all for a node with no Meraki binding.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_detail_names_a_meraki_nodes_organization_and_network(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = admin
+            .creds
+            .create(
+                "Meraki API — Acme",
+                crate::secrets::KIND_MERAKI_API,
+                br#"{"api_key":"not-a-real-key"}"#,
+            )
+            .await
+            .expect("seal key");
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        for (network, name) in [("N_1", "Branch One"), ("N_2", "")] {
+            sqlx::query(
+                "INSERT INTO meraki_org_networks (org_id, network_id, name) VALUES ($1, $2, $3)",
+            )
+            .bind(org)
+            .bind(network)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .expect("network row");
+        }
+        let named = crate::pgtest::node(&pool, "mx-named", 1, None).await;
+        let blank = crate::pgtest::node(&pool, "mx-blank", 2, None).await;
+        let unrecorded = crate::pgtest::node(&pool, "mx-unrecorded", 3, None).await;
+        let plain = crate::pgtest::node(&pool, "sw-01", 4, None).await;
+        for (node, serial, network) in [
+            (named, "Q2-A", "N_1"),
+            (blank, "Q2-B", "N_2"),
+            (unrecorded, "Q2-C", "N_3"),
+        ] {
+            sqlx::query(
+                "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type, model) \
+                 VALUES ($1, $2, $3, $4, 'appliance', 'MX67')",
+            )
+            .bind(node)
+            .bind(org)
+            .bind(serial)
+            .bind(network)
+            .execute(&pool)
+            .await
+            .expect("binding");
+        }
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let site_of = |body: &serde_json::Value| body["meraki_site"].clone();
+
+        let (status, body) =
+            send(&st, "GET", &format!("/api/v1/nodes/{named}"), &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let site = site_of(&body);
+        assert_eq!(site["org_id"], org.to_string(), "{body}");
+        assert_eq!(site["org_name"], "Acme", "{body}");
+        assert_eq!(site["network_id"], "N_1", "{body}");
+        assert_eq!(site["network_name"], "Branch One", "{body}");
+
+        for node in [blank, unrecorded] {
+            let (status, body) =
+                send(&st, "GET", &format!("/api/v1/nodes/{node}"), &viewer, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let site = site_of(&body);
+            assert_eq!(site["org_name"], "Acme", "{body}");
+            assert!(
+                site["network_name"].is_null(),
+                "an unnamed network is not a name: {body}"
+            );
+        }
+
+        let (status, body) =
+            send(&st, "GET", &format!("/api/v1/nodes/{plain}"), &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["meraki_site"].is_null(), "{body}");
     }
 
     /// An import is accepted, files each device by its address, and says how (ADR-164): the one

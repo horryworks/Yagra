@@ -12,6 +12,7 @@
 
 ### Improvements
 
+- **A Meraki device's header says which organization and network it belongs to.** The line under its name now reads `address · model · Organization / Network`, using the names from the last inventory sync (the organization alone until a sync has named the network). The node detail API and the MCP `get_node_status` tool return the same thing as `meraki_site`: the organization's id and name, and the network's id and name.
 - **The node tree's badges are quieter.** A Meraki device, and a folder Meraki or NetBox keeps, used to wear a filled pill with the brand's name on every row, and Meraki's filled green sat right beside the green of an up node. In the tree they are now one letter — **M** or **N** — on a faint tint of the brand's colour, lined up at the right edge; hover it, or read it aloud with a screen reader, for the full name. An access point's Wi-Fi mark is a plain grey glyph, and the URL, DNS and Repeater badges are low grey chips. The node's own header keeps the full pill, and a folder's header now shows "NetBox" or "Meraki" beside its name too, so the name stays readable on a touch screen.
 
 ## v0.3.35 — A device whose maker Yagra does not know yet is read in full once an hour and asked only for sysDescr and sysObjectID in between, every list toolbar and every dialog work the same way, a metrics query VictoriaMetrics refuses is logged instead of read as no data, dashboards and lists stop refreshing in a background tab, MCP list_analyses narrows by tool, state and since

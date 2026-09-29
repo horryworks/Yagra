@@ -490,6 +490,9 @@ pub struct NodeStatusDto {
     /// A Meraki MX's warm-spare pair (ADR-164 決定 26). Mirrors `NodeDetail.meraki_pair`, from the
     /// same function and narrowed to the same scope.
     pub meraki_pair: Option<crate::api::meraki::MerakiPairView>,
+    /// The Meraki organization and network this node sits in, by name (ADR-185). Mirrors
+    /// `NodeDetail.meraki_site`, from the same function.
+    pub meraki_site: Option<crate::meraki::MerakiSite>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -1173,6 +1176,12 @@ mod tests {
                     node_id: Some(uuid::Uuid::nil()),
                     node_state: Some(yagra_common::NodeState::Ok),
                 }),
+            }),
+            meraki_site: Some(crate::meraki::MerakiSite {
+                org_id: uuid::Uuid::nil(),
+                org_name: "Example Org".to_owned(),
+                network_id: "N_1".to_owned(),
+                network_name: Some("site-a".to_owned()),
             }),
             interfaces: vec![InterfaceDto {
                 ifindex: 1,

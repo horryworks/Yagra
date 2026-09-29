@@ -33055,6 +33055,37 @@
           }
         }
       },
+      "MerakiSite": {
+        "type": "object",
+        "description": "Where a Meraki node sits, in the Dashboard's own terms (ADR-185) — `GET /api/v1/nodes/{node_id}`'s\nand the MCP `get_node_status` tool's `meraki_site`.",
+        "required": [
+          "org_id",
+          "org_name",
+          "network_id"
+        ],
+        "properties": {
+          "network_id": {
+            "type": "string",
+            "description": "Meraki's network id."
+          },
+          "network_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The network's name as the last sync recorded it; `null` when no sync has named it yet."
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Yagra's id for the organization (the `id` of `GET /api/v1/meraki/orgs`), not Meraki's."
+          },
+          "org_name": {
+            "type": "string",
+            "description": "The organization's name as its last sync recorded it."
+          }
+        }
+      },
       "MerakiSyncFailure": {
         "type": "string",
         "description": "Why a sync failed. Stored on the organization's row as its token and shown to an operator, so\nevery variant is a closed fact and none carries upstream text — a Dashboard error body can quote\nthe request, and the request carries the key.",
@@ -34290,6 +34321,17 @@
           "meraki_repeater": {
             "type": "boolean",
             "description": "`true` when the Meraki device is a mesh repeater — an access point with no wired uplink,\nwhose `address` is therefore `0.0.0.0` (ADR-175). Absent otherwise."
+          },
+          "meraki_site": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MerakiSite",
+                "description": "The Meraki organization and network this node sits in, by name (ADR-185). `null` for a node\nwith no Meraki binding."
+              }
+            ]
           },
           "model": {
             "type": [
