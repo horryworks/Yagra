@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.37 — Rediscover a monitored node from its right-click menu, Subnet overlaps lists address ranges used at more than one site
+
 ### New Features
 
 - **Rediscover a monitored node from its right-click menu.** After changing a node's SNMP community (or its SNMPv3 settings), *Rediscover…* on a device node reads the device again with that credential, from the node's own poller pool, and shows its device profile, maker and model beside what the device now says. Nothing is written until you tick the rows you want and press Apply, and a profile you locked is left alone. While no poller has picked the re-read up, or the device answers ping but not SNMP, the dialog says so rather than showing "no change". The REST API has three new routes: `POST /api/v1/nodes/{node_id}/rediscover`, `GET /api/v1/nodes/{node_id}/rediscover/{scan_id}` and `POST /api/v1/nodes/{node_id}/rediscover/apply`. They need the manage-config permission and are not on MCP. The start is refused with `409` when no poller of the node's pool is alive, rather than being sent from another network.
