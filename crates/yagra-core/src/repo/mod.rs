@@ -69,6 +69,7 @@ mod row_names;
 mod seed;
 mod settings;
 mod snapshots;
+mod subnet_overlaps;
 
 #[cfg(test)]
 mod guards;
@@ -105,6 +106,7 @@ pub use pool_takeover::{PoolTakeoverCounts, PoolTakeoverSummary};
 pub use pools::{PoolCarry, PoolRow};
 pub use profiles::ProfileSummary;
 pub use row_names::RowNameRow;
+pub use subnet_overlaps::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
 fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {

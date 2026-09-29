@@ -109,6 +109,12 @@ const schemaEnumPins: {
   // the array's tokens with the Rust enum as text; this is the half the compiler holds, so a third
   // integration that starts keeping folders stops compiling here (ADR-164 Inc.7).
   GroupOrigin: AssertEqual<GroupOrigin, components['schemas']['GroupOrigin']>;
+  // Nodes ▸ Subnet overlaps names each kind, status, hint and rule reason from the token the server
+  // sent (`subnetOverlaps.kind.*` and siblings, ADR-187).
+  OverlapKind: AssertEqual<OverlapKind, components['schemas']['OverlapKind']>;
+  OverlapStatus: AssertEqual<OverlapStatus, components['schemas']['OverlapStatus']>;
+  OverlapHintKind: AssertEqual<OverlapHintKind, components['schemas']['OverlapHint']['kind']>;
+  ExclusionReason: AssertEqual<ExclusionReason, components['schemas']['ExclusionReason']>;
 } = {
   Severity: true,
   Role: true,
@@ -154,6 +160,10 @@ const schemaEnumPins: {
   DuplicateEvidenceKind: true,
   DuplicateConfidence: true,
   DuplicateContradiction: true,
+  OverlapKind: true,
+  OverlapStatus: true,
+  OverlapHintKind: true,
+  ExclusionReason: true,
 };
 void schemaEnumPins;
 
@@ -737,6 +747,31 @@ export type DuplicateGroup = components['schemas']['DuplicateGroup'];
 export type DuplicateMember = components['schemas']['DuplicateMember'];
 /** A value too many nodes share to count as evidence. */
 export type DuplicateIgnoredValue = components['schemas']['DuplicateIgnoredValue'];
+
+/** Nodes ▸ Subnet overlaps (`GET /api/v1/subnet-overlaps`, ADR-187): address ranges more than one
+ *  site carries, with the exclusion rules and what each excludes. */
+export type SubnetOverlapsView = components['schemas']['SubnetOverlapsView'];
+/** One range more than one site carries. */
+export type SubnetOverlap = components['schemas']['Overlap'];
+/** One place an overlapping range was seen. */
+export type OverlapPlace = components['schemas']['Place'];
+/** One exclusion rule. */
+export type OverlapRule = components['schemas']['OverlapRuleView'];
+/** The body that adds or replaces an exclusion rule. */
+export type OverlapRuleBody = components['schemas']['OverlapRuleBody'];
+/** How two sites' ranges meet, worst first. Iterated for the kind tiles and the i18n test;
+ *  `schemaEnumPins` ties it to the schema. */
+export const OVERLAP_KINDS = ['same_address', 'nested', 'same_range'] as const;
+export type OverlapKind = (typeof OVERLAP_KINDS)[number];
+/** Where an overlap stands — the screen's three tabs, in their order. */
+export const OVERLAP_STATUSES = ['open', 'intentional', 'excluded'] as const;
+export type OverlapStatus = (typeof OVERLAP_STATUSES)[number];
+/** Why an overlap looks expected. A suggestion only. */
+export const OVERLAP_HINT_KINDS = ['wan', 'redundancy', 'shared_line', 'template'] as const;
+export type OverlapHintKind = (typeof OVERLAP_HINT_KINDS)[number];
+/** Why an operator says a range is expected to repeat, as a rule stores it. */
+export const EXCLUSION_REASONS = ['wan', 'redundancy', 'shared_line', 'management', 'other'] as const;
+export type ExclusionReason = (typeof EXCLUSION_REASONS)[number];
 
 /** What two nodes can share that says they are one device. The screen names each one from the value
  *  the server sent, so the list must exist at runtime; `schemaEnumPins` ties it to the schema. */

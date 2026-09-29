@@ -57,6 +57,10 @@ import {
   DUPLICATE_CONFIDENCES,
   DUPLICATE_CONTRADICTIONS,
   DUPLICATE_EVIDENCE_KINDS,
+  OVERLAP_KINDS,
+  OVERLAP_STATUSES,
+  OVERLAP_HINT_KINDS,
+  EXCLUSION_REASONS,
   MERAKI_LISTINGS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
@@ -1320,5 +1324,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('duplicate evidence kind', locales, 'duplicates.kind.', DUPLICATE_EVIDENCE_KINDS);
     expectKeys('duplicate confidence', locales, 'duplicates.confidence.', DUPLICATE_CONFIDENCES);
     expectKeys('duplicate contradiction', locales, 'duplicates.contradiction.', DUPLICATE_CONTRADICTIONS);
+  });
+  it('every overlap kind, status, hint and rule reason has strings (monitoring:subnetOverlaps.*)', () => {
+    // Nodes ▸ Subnet overlaps names each of these from a token the server sent (ADR-187).
+    const locales = { en: enMonitoring, ja: jaMonitoring };
+    expectKeys('overlap kind', locales, 'subnetOverlaps.kind.', OVERLAP_KINDS);
+    expectKeys('overlap kind help', locales, 'subnetOverlaps.kindHelp.', OVERLAP_KINDS);
+    expectKeys('overlap tab', locales, 'subnetOverlaps.tabs.', OVERLAP_STATUSES);
+    expectKeys('overlap column', locales, 'subnetOverlaps.whyHeader.', OVERLAP_STATUSES);
+    expectKeys('overlap hint', locales, 'subnetOverlaps.hint.', OVERLAP_HINT_KINDS);
+    expectKeys('overlap hint tag', locales, 'subnetOverlaps.hintTag.', OVERLAP_HINT_KINDS);
+    expectKeys('exclusion reason', locales, 'subnetOverlaps.rules.reason.', EXCLUSION_REASONS);
   });
 });

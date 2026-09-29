@@ -170,6 +170,7 @@ impl YagraMcp {
                     .await
             }
             "get_prefix_gaps" => self.prefix_gaps_in(p!(PrefixGapsParams), scope).await,
+            "get_subnet_overlaps" => self.subnet_overlaps_in(scope).await,
             "list_wireless_aps" => self.wireless_aps_in(p!(WirelessApsParams), scope).await,
             "list_suppressions" => self.list_suppressions_in(scope).await,
             "alert_trends" => self.alert_trends_in(p!(AlertTrendsParams), scope).await,

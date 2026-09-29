@@ -21258,6 +21258,429 @@
         }
       }
     },
+    "/api/v1/subnet-overlaps": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_subnet_overlaps",
+        "responses": {
+          "200": {
+            "description": "Address ranges that more than one site carries — the same range at two sites, or one site's range inside another's — with the exclusion rules and what each excludes. A caller scoped to some folders is told how many sites it cannot see, never which",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubnetOverlapsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subnet-overlaps/acks": {
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "set_ack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlapAckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The overlap is recorded as deliberate for the sites it spans now; a site joining it later reopens it"
+          },
+          "400": {
+            "description": "`text_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`overlap_not_found`: no current overlap has this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "delete_ack",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "description": "The overlap's `key`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The overlap is open again"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`ack_not_found`: this overlap was not recorded as deliberate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subnet-overlaps/rules": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "create_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlapRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The rule was added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_range`, `empty_rule` or `text_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/subnet-overlaps/rules/{id}": {
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "update_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlapRuleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The rule was replaced"
+          },
+          "400": {
+            "description": "`invalid_range`, `empty_rule` or `text_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`rule_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`builtin_rule`: a built-in rule accepts only a change of `enabled`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "delete_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The rule was deleted"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`rule_not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`builtin_rule`: a built-in rule can be switched off, not deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/suppression-exemptions": {
       "get": {
         "tags": [
@@ -29517,6 +29940,57 @@
           }
         }
       },
+      "Exclusion": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A `/30`, `/31`, `/126` or `/127` carried by exactly two devices at two addresses: the link\nbetween two sites. Built in; no rule turns it off.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "link"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An operator's rule (or the built-in CGNAT one) matched every place that made it an overlap.",
+            "required": [
+              "rule_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "rule"
+                ]
+              },
+              "rule_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "description": "What took an overlap out of the open list."
+      },
+      "ExclusionReason": {
+        "type": "string",
+        "description": "Why an operator says a range is expected to repeat. Stored in `subnet_overlap_rules.reason`.",
+        "enum": [
+          "wan",
+          "redundancy",
+          "shared_line",
+          "management",
+          "other"
+        ]
+      },
       "ExemptionBody": {
         "type": "object",
         "description": "Whether a node is released from the suppression it inherits.",
@@ -35515,6 +35989,331 @@
           "leave"
         ]
       },
+      "Overlap": {
+        "type": "object",
+        "description": "One range more than one site carries.",
+        "required": [
+          "key",
+          "kind",
+          "status",
+          "subnet",
+          "inner",
+          "inner_count",
+          "shared_addresses",
+          "site_count",
+          "hidden_sites",
+          "node_count",
+          "places",
+          "place_count",
+          "excluded_by"
+        ],
+        "properties": {
+          "excluded_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exclusion"
+            },
+            "description": "What excluded it. Empty unless `status` is `excluded`."
+          },
+          "hidden_sites": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sites the caller may not see. Their names and devices are withheld (ADR-014).",
+            "minimum": 0
+          },
+          "hint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OverlapHint",
+                "description": "Why it looks expected, when it does. A suggestion only."
+              }
+            ]
+          },
+          "inner": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For `nested`: the ranges inside it at other sites, at most [`INNER_MAX`]."
+          },
+          "inner_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same\nrange keeps its key whether an address is shared or not, so an acknowledgement survives\nthat changing."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OverlapKind"
+          },
+          "node_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many distinct devices carry it (visible ones only, after the caller's scope).",
+            "minimum": 0
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The acknowledgement's note, when `status` is `intentional`."
+          },
+          "place_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "places": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Place"
+            },
+            "description": "Up to [`PLACES_MAX`] places, ordered by site, device, then port."
+          },
+          "shared_addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For `same_address`: the addresses configured at more than one site."
+          },
+          "site_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many distinct sites carry it (a scoped caller's hidden ones included).",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/OverlapStatus"
+          },
+          "subnet": {
+            "type": "string",
+            "description": "The range; for `nested`, the outer one."
+          }
+        }
+      },
+      "OverlapAckBody": {
+        "type": "object",
+        "description": "\"This overlap is deliberate.\"",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The overlap's `key`, as the list returned it."
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "OverlapCounts": {
+        "type": "object",
+        "description": "How many overlaps the caller can see, by status.",
+        "required": [
+          "open",
+          "intentional",
+          "excluded"
+        ],
+        "properties": {
+          "excluded": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "intentional": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "open": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "OverlapHint": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Every place is a port whose name or description carries a WAN word (`word`).",
+            "required": [
+              "word",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wan"
+                ]
+              },
+              "word": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every place is a port whose name or description carries a redundancy word (`word`).",
+            "required": [
+              "word",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "redundancy"
+                ]
+              },
+              "word": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The same range, a different address at every site, one device per site, at three or more\nsites: the shape of a line the sites share.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "shared_line"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Ten or more sites carry it: the shape of a site template.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "template"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Why an overlap looks expected. Offered, never acted on."
+      },
+      "OverlapKind": {
+        "type": "string",
+        "description": "How two sites' ranges meet.",
+        "enum": [
+          "same_address",
+          "nested",
+          "same_range"
+        ]
+      },
+      "OverlapRuleBody": {
+        "type": "object",
+        "description": "An exclusion rule as written by an operator.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          },
+          "port_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Text a port's name or description must contain (case-insensitive), at most 200 characters."
+          },
+          "range": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A network, `address/length`. Host bits are cleared. At least one of `range` and\n`port_text` is required."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ExclusionReason"
+          }
+        }
+      },
+      "OverlapRuleView": {
+        "type": "object",
+        "description": "One exclusion rule.",
+        "required": [
+          "id",
+          "reason",
+          "note",
+          "enabled",
+          "builtin",
+          "excluded_count"
+        ],
+        "properties": {
+          "builtin": {
+            "type": "boolean",
+            "description": "Built in: can be switched off, not edited or deleted."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "excluded_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many overlaps this rule currently excludes, across the deployment.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": "string"
+          },
+          "port_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Places on a port whose name or description contains this (case-insensitive). `null` ⇒ any\nport."
+          },
+          "range": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Places inside this range match. `null` ⇒ any range."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ExclusionReason"
+          }
+        }
+      },
+      "OverlapStatus": {
+        "type": "string",
+        "description": "Where an overlap stands after the exclusions and acknowledgements are applied.",
+        "enum": [
+          "open",
+          "intentional",
+          "excluded"
+        ]
+      },
       "Permission": {
         "type": "string",
         "description": "A discrete capability checked at the API edge.",
@@ -35571,6 +36370,69 @@
               "$ref": "#/components/schemas/NodeSummary"
             },
             "description": "Pinned nodes the caller may see, as full inventory rows. A pinned node usually sits in a\nfolder the tree has not loaded, so its row cannot come from anywhere else."
+          }
+        }
+      },
+      "Place": {
+        "type": "object",
+        "description": "One place a range was seen: a device, the port, and the address with its length.",
+        "required": [
+          "node_id",
+          "ifindex",
+          "address",
+          "subnet"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address as configured, `address/length`."
+          },
+          "if_alias": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "if_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ifindex": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filled by the caller."
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The site: the nearest folder of type Site above the device, else its own folder. `null` ⇒\nthe tree root."
+          },
+          "site_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Filled by the caller."
+          },
+          "subnet": {
+            "type": "string",
+            "description": "The range it forms, `network/length`."
           }
         }
       },
@@ -39778,6 +40640,62 @@
           "pool",
           "meraki_org"
         ]
+      },
+      "SubnetOverlapsView": {
+        "type": "object",
+        "description": "What Nodes ▸ Subnet overlaps shows.",
+        "required": [
+          "overlaps",
+          "counts",
+          "rules",
+          "nodes_total",
+          "nodes_with_addresses",
+          "nodes_truncated",
+          "subnets_checked"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/OverlapCounts"
+          },
+          "nodes_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices the caller may see.",
+            "minimum": 0
+          },
+          "nodes_truncated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many address lists were cut at the per-device cap.",
+            "minimum": 0
+          },
+          "nodes_with_addresses": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many have reported their interface addresses at all. A device with no SNMP,\nor whose address walk has never succeeded, contributes nothing — so **no overlaps is not the\nsame as none** unless this equals `nodes_total`.",
+            "minimum": 0
+          },
+          "overlaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Overlap"
+            },
+            "description": "Open first, then intentional, then excluded; inside each, same address, nested, then same\nrange, and more sites first. At most 2,000 — `counts` says how many there are."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OverlapRuleView"
+            },
+            "description": "Every exclusion rule, built-in first."
+          },
+          "subnets_checked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distinct ranges compared, across the whole deployment.",
+            "minimum": 0
+          }
+        }
       },
       "SubtreeMovePreviewResult": {
         "type": "object",

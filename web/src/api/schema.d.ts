@@ -4376,6 +4376,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/subnet-overlaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_subnet_overlaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subnet-overlaps/acks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_ack"];
+        post?: never;
+        delete: operations["delete_ack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subnet-overlaps/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["create_rule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/subnet-overlaps/rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["update_rule"];
+        post?: never;
+        delete: operations["delete_rule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/suppression-exemptions": {
         parameters: {
             query?: never;
@@ -7522,6 +7586,21 @@ export interface components {
             /** Format: int64 */
             ts_unix_ms: number;
         };
+        /** @description What took an overlap out of the open list. */
+        Exclusion: {
+            /** @enum {string} */
+            kind: "link";
+        } | {
+            /** @enum {string} */
+            kind: "rule";
+            /** Format: uuid */
+            rule_id: string;
+        };
+        /**
+         * @description Why an operator says a range is expected to repeat. Stored in `subnet_overlap_rules.reason`.
+         * @enum {string}
+         */
+        ExclusionReason: "wan" | "redundancy" | "shared_line" | "management" | "other";
         /** @description Whether a node is released from the suppression it inherits. */
         ExemptionBody: {
             /**
@@ -10678,6 +10757,125 @@ export interface components {
          * @enum {string}
          */
         OnSourceEmpty: "move_nodes" | "leave";
+        /** @description One range more than one site carries. */
+        Overlap: {
+            /** @description What excluded it. Empty unless `status` is `excluded`. */
+            excluded_by: components["schemas"]["Exclusion"][];
+            /**
+             * Format: int32
+             * @description Sites the caller may not see. Their names and devices are withheld (ADR-014).
+             */
+            hidden_sites: number;
+            hint?: null | components["schemas"]["OverlapHint"];
+            /** @description For `nested`: the ranges inside it at other sites, at most [`INNER_MAX`]. */
+            inner: string[];
+            /** Format: int32 */
+            inner_count: number;
+            /**
+             * @description Stable identity, used to acknowledge it: `same:<range>` or `nested:<outer range>`. The same
+             *     range keeps its key whether an address is shared or not, so an acknowledgement survives
+             *     that changing.
+             */
+            key: string;
+            kind: components["schemas"]["OverlapKind"];
+            /**
+             * Format: int32
+             * @description How many distinct devices carry it (visible ones only, after the caller's scope).
+             */
+            node_count: number;
+            /** @description The acknowledgement's note, when `status` is `intentional`. */
+            note?: string | null;
+            /** Format: int32 */
+            place_count: number;
+            /** @description Up to [`PLACES_MAX`] places, ordered by site, device, then port. */
+            places: components["schemas"]["Place"][];
+            /** @description For `same_address`: the addresses configured at more than one site. */
+            shared_addresses: string[];
+            /**
+             * Format: int32
+             * @description How many distinct sites carry it (a scoped caller's hidden ones included).
+             */
+            site_count: number;
+            status: components["schemas"]["OverlapStatus"];
+            /** @description The range; for `nested`, the outer one. */
+            subnet: string;
+        };
+        /** @description "This overlap is deliberate." */
+        OverlapAckBody: {
+            /** @description The overlap's `key`, as the list returned it. */
+            key: string;
+            note?: string;
+        };
+        /** @description How many overlaps the caller can see, by status. */
+        OverlapCounts: {
+            /** Format: int32 */
+            excluded: number;
+            /** Format: int32 */
+            intentional: number;
+            /** Format: int32 */
+            open: number;
+        };
+        /** @description Why an overlap looks expected. Offered, never acted on. */
+        OverlapHint: {
+            /** @enum {string} */
+            kind: "wan";
+            word: string;
+        } | {
+            /** @enum {string} */
+            kind: "redundancy";
+            word: string;
+        } | {
+            /** @enum {string} */
+            kind: "shared_line";
+        } | {
+            /** @enum {string} */
+            kind: "template";
+        };
+        /**
+         * @description How two sites' ranges meet.
+         * @enum {string}
+         */
+        OverlapKind: "same_address" | "nested" | "same_range";
+        /** @description An exclusion rule as written by an operator. */
+        OverlapRuleBody: {
+            enabled?: boolean;
+            note?: string;
+            /** @description Text a port's name or description must contain (case-insensitive), at most 200 characters. */
+            port_text?: string | null;
+            /**
+             * @description A network, `address/length`. Host bits are cleared. At least one of `range` and
+             *     `port_text` is required.
+             */
+            range?: string | null;
+            reason: components["schemas"]["ExclusionReason"];
+        };
+        /** @description One exclusion rule. */
+        OverlapRuleView: {
+            /** @description Built in: can be switched off, not edited or deleted. */
+            builtin: boolean;
+            enabled: boolean;
+            /**
+             * Format: int32
+             * @description How many overlaps this rule currently excludes, across the deployment.
+             */
+            excluded_count: number;
+            /** Format: uuid */
+            id: string;
+            note: string;
+            /**
+             * @description Places on a port whose name or description contains this (case-insensitive). `null` ⇒ any
+             *     port.
+             */
+            port_text?: string | null;
+            /** @description Places inside this range match. `null` ⇒ any range. */
+            range?: string | null;
+            reason: components["schemas"]["ExclusionReason"];
+        };
+        /**
+         * @description Where an overlap stands after the exclusions and acknowledgements are applied.
+         * @enum {string}
+         */
+        OverlapStatus: "open" | "intentional" | "excluded";
         /**
          * @description A discrete capability checked at the API edge.
          * @enum {string}
@@ -10698,6 +10896,29 @@ export interface components {
              *     folder the tree has not loaded, so its row cannot come from anywhere else.
              */
             nodes: components["schemas"]["NodeSummary"][];
+        };
+        /** @description One place a range was seen: a device, the port, and the address with its length. */
+        Place: {
+            /** @description The address as configured, `address/length`. */
+            address: string;
+            if_alias?: string | null;
+            if_name?: string | null;
+            /** Format: int32 */
+            ifindex: number;
+            /** Format: uuid */
+            node_id: string;
+            /** @description Filled by the caller. */
+            node_name?: string | null;
+            /**
+             * Format: uuid
+             * @description The site: the nearest folder of type Site above the device, else its own folder. `null` ⇒
+             *     the tree root.
+             */
+            site_id?: string | null;
+            /** @description Filled by the caller. */
+            site_name?: string | null;
+            /** @description The range it forms, `network/length`. */
+            subnet: string;
         };
         /** @description What an out-of-schedule poll dispatched. */
         PollNowResult: {
@@ -12664,6 +12885,39 @@ export interface components {
          * @enum {string}
          */
         SubjectKind: "node" | "pool" | "meraki_org";
+        /** @description What Nodes ▸ Subnet overlaps shows. */
+        SubnetOverlapsView: {
+            counts: components["schemas"]["OverlapCounts"];
+            /**
+             * Format: int32
+             * @description Devices the caller may see.
+             */
+            nodes_total: number;
+            /**
+             * Format: int32
+             * @description Of those, how many address lists were cut at the per-device cap.
+             */
+            nodes_truncated: number;
+            /**
+             * Format: int32
+             * @description Of those, how many have reported their interface addresses at all. A device with no SNMP,
+             *     or whose address walk has never succeeded, contributes nothing — so **no overlaps is not the
+             *     same as none** unless this equals `nodes_total`.
+             */
+            nodes_with_addresses: number;
+            /**
+             * @description Open first, then intentional, then excluded; inside each, same address, nested, then same
+             *     range, and more sites first. At most 2,000 — `counts` says how many there are.
+             */
+            overlaps: components["schemas"]["Overlap"][];
+            /** @description Every exclusion rule, built-in first. */
+            rules: components["schemas"]["OverlapRuleView"][];
+            /**
+             * Format: int32
+             * @description Distinct ranges compared, across the whole deployment.
+             */
+            subnets_checked: number;
+        };
         /**
          * @description What the IP-range match proposes for a whole subtree. **A proposal, not an action**, like
          *     [`MovePreviewResult`], and applied through the same `POST /api/v1/nodes/move-by-prefix`.
@@ -30736,6 +30990,382 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode: no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_subnet_overlaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Address ranges that more than one site carries — the same range at two sites, or one site's range inside another's — with the exclusion rules and what each excludes. A caller scoped to some folders is told how many sites it cannot see, never which */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubnetOverlapsView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_ack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverlapAckBody"];
+            };
+        };
+        responses: {
+            /** @description The overlap is recorded as deliberate for the sites it spans now; a site joining it later reopens it */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `text_too_long` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `overlap_not_found`: no current overlap has this key */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_ack: {
+        parameters: {
+            query: {
+                /** @description The overlap's `key`. */
+                key: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The overlap is open again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `ack_not_found`: this overlap was not recorded as deliberate */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverlapRuleBody"];
+            };
+        };
+        responses: {
+            /** @description The rule was added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
+            };
+            /** @description `invalid_range`, `empty_rule` or `text_too_long` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverlapRuleBody"];
+            };
+        };
+        responses: {
+            /** @description The rule was replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_range`, `empty_rule` or `text_too_long` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `rule_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `builtin_rule`: a built-in rule accepts only a change of `enabled` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Rule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule was deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `rule_not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `builtin_rule`: a built-in rule can be switched off, not deleted */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

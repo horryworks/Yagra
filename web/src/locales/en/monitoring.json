@@ -237,6 +237,134 @@
     "emptyNoEvidence": "No duplicates by address or name. None of the {{count}} nodes has a serial number or an address list yet; the poller reads both over SNMP once an hour, so look again later.",
     "hint": "A likely duplicate shares an address, a serial number, a MAC address or an LLDP chassis ID, or each node lists the other's address. A group to check shares only weaker signs, or has something that disagrees. Two routers sharing a VRRP or HSRP address can show up as one device: keep both."
   },
+  "subnetOverlaps": {
+    "note": "Address ranges that devices at more than one site carry, read from the interface addresses they report. A site is the nearest folder of type Site above a device.",
+    "unavailable": "Subnet overlaps need the live inventory, which this deployment does not have.",
+    "coverage": "Compared {{withAddresses}} of {{total}} devices ({{subnets}} ranges). A device that has not reported its interface addresses is not included.",
+    "coverageTruncated": "{{count}} address lists were cut short at the per-device limit.",
+    "tilesLabel": "Show one kind of overlap",
+    "rulesButton": "Exclusion rules ({{count}})",
+    "truncated": "Showing the first {{shown}} of {{total}}.",
+    "reopenErr": "Could not move it back.",
+    "noHint": "No hint — possibly a reuse",
+    "noNote": "No note",
+    "root": "(root)",
+    "sitesMore": "+{{count}}",
+    "hiddenSites": "+{{count}} not visible to you",
+    "tabs": {
+      "open": "To check",
+      "intentional": "Intentional",
+      "excluded": "Excluded"
+    },
+    "kind": {
+      "same_address": "Same address",
+      "nested": "Range inside another",
+      "same_range": "Same range, other addresses"
+    },
+    "kindHelp": {
+      "same_address": "The same address is configured at two sites, which one shared segment cannot hold",
+      "nested": "One site's range contains another site's",
+      "same_range": "A reuse, or a line the sites share"
+    },
+    "hintTag": {
+      "wan": "WAN?",
+      "redundancy": "Redundancy?",
+      "shared_line": "Shared line?",
+      "template": "Template?"
+    },
+    "hint": {
+      "wan": "Looks like WAN: every port carries “{{word}}” in its name or description",
+      "redundancy": "Looks like a redundancy link: every port carries “{{word}}”",
+      "shared_line": "Looks like a line the sites share: a different address at each of the {{count}} sites, one device each",
+      "template": "Looks like a site template: {{count}} sites carry it"
+    },
+    "exclusion": {
+      "link": "A link between two sites",
+      "rule": "Rule: {{rule}}"
+    },
+    "whyHeader": {
+      "open": "Hint",
+      "intentional": "Note",
+      "excluded": "Excluded by"
+    },
+    "cols": {
+      "subnet": "Range",
+      "kind": "Kind",
+      "sites": "Sites",
+      "devices": "Devices"
+    },
+    "detail": {
+      "shared": "Configured at more than one site:",
+      "inner": "Where the ranges sit",
+      "innerMore": "Showing {{shown}} of {{total}} ranges inside it.",
+      "placesMore": "Showing {{shown}} of {{total}} places.",
+      "site": "Site",
+      "node": "Device",
+      "port": "Port",
+      "alias": "Port description",
+      "address": "Address"
+    },
+    "actions": {
+      "intentional": "Mark as intentional",
+      "suggest": "Exclude ports carrying “{{word}}”…",
+      "reopen": "Move back to To check"
+    },
+    "ack": {
+      "title": "Mark {{subnet}} as intentional",
+      "text_one": "It moves to Intentional for the {{count}} site it spans now. If another site starts using it, it comes back to To check.",
+      "text_other": "It moves to Intentional for the {{count}} sites it spans now. If another site starts using it, it comes back to To check.",
+      "note": "Note",
+      "notePlaceholder": "e.g. Behind NAT at every store",
+      "save": "Mark as intentional",
+      "err": "Could not save."
+    },
+    "empty": {
+      "open": "No range is used at more than one site.",
+      "openPartial": "No range overlaps among the devices compared. {{missing}} devices have not reported their addresses and are not included.",
+      "noAddresses": "No device has reported its interface addresses yet, so there is nothing to compare.",
+      "intentional": "Nothing is marked as intentional.",
+      "excluded": "Nothing is excluded."
+    },
+    "rules": {
+      "title": "Exclusion rules",
+      "text": "A place that matches a rule is left out before ranges are compared, and an overlap left with one site moves to Excluded. A link between two sites — a /30 or /31 carried by two devices — is always excluded.",
+      "range": "Range {{range}}",
+      "port": "Port name or description contains “{{text}}”",
+      "both": "Range {{range}} and a port containing “{{text}}”",
+      "builtin": "Built in",
+      "hits_one": "Excludes {{count}} overlap",
+      "hits_other": "Excludes {{count}} overlaps",
+      "off": "Off",
+      "enable": "Turn on",
+      "disable": "Turn off",
+      "delete": "Delete",
+      "add": "Add rule",
+      "toggleErr": "Could not change the rule.",
+      "deleteTitle": "Delete this rule?",
+      "deleteText": "“{{rule}}” stops excluding anything, and what it excluded comes back to To check.",
+      "deleteErr": "Could not delete the rule.",
+      "reason": {
+        "wan": "WAN line",
+        "redundancy": "Redundancy link",
+        "shared_line": "Line the sites share",
+        "management": "Management network",
+        "other": "Other"
+      },
+      "form": {
+        "title": "Add an exclusion rule",
+        "portText": "Port name or description contains",
+        "portHint": "Not case-sensitive. Leave empty to match any port.",
+        "range": "Range",
+        "rangeHint": "Only places inside this range match. Leave empty to match any range.",
+        "reason": "Why it repeats",
+        "note": "Note",
+        "save": "Add rule",
+        "err": "Could not add the rule.",
+        "needSomething": "Enter a port text, a range, or both.",
+        "badRange": "Write the range as address/length, e.g. 192.168.1.0/24."
+      }
+    }
+  },
   "sets": {
     "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
     "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",

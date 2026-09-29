@@ -32,6 +32,8 @@ import type {
   ReclassifyApplied,
   ReclassifyLocked,
   DuplicateNodesView,
+  OverlapRuleBody,
+  SubnetOverlapsView,
   ReclassifyView,
   CollectionKind,
   CollectionTemplate,
@@ -1961,6 +1963,21 @@ export const api = {
    *  grouped with the evidence for each group. Computed on the server on every read; the cleanup is
    *  `deleteNodes`. */
   getDuplicateNodes: (): Promise<DuplicateNodesView> => apiGet('/api/v1/nodes/duplicates'),
+
+  /** Nodes ▸ Subnet overlaps (ADR-187): address ranges more than one site carries. Computed on the
+   *  server on every read; only the rules and the acknowledgements are stored. */
+  getSubnetOverlaps: (): Promise<SubnetOverlapsView> => apiGet('/api/v1/subnet-overlaps'),
+  createOverlapRule: (body: OverlapRuleBody): Promise<{ id: string }> =>
+    apiPost('/api/v1/subnet-overlaps/rules', { body }),
+  updateOverlapRule: (id: string, body: OverlapRuleBody): Promise<void> =>
+    apiPut('/api/v1/subnet-overlaps/rules/{id}', { path: { id }, body }),
+  deleteOverlapRule: (id: string): Promise<void> =>
+    apiDelete('/api/v1/subnet-overlaps/rules/{id}', { path: { id } }),
+  /** Record an overlap as deliberate for the sites it spans now. */
+  ackOverlap: (key: string, note: string): Promise<void> =>
+    apiPut('/api/v1/subnet-overlaps/acks', { body: { key, note } }),
+  unackOverlap: (key: string): Promise<void> =>
+    apiDelete('/api/v1/subnet-overlaps/acks', { query: { key } }),
 
   /** Move nodes to the profile the rules choose. Each item echoes the profile the screen showed, so
    *  the server skips — and counts — a node someone re-profiled or locked since. */

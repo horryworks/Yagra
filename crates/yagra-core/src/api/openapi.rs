@@ -92,6 +92,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         Doc::openapi(),
         super::nodes::Doc::openapi(),
         super::duplicates::Doc::openapi(),
+        super::subnet_overlaps::Doc::openapi(),
         super::pools::Doc::openapi(),
         super::checks::Doc::openapi(),
         super::metrics::Doc::openapi(),

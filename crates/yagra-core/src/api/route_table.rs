@@ -189,6 +189,13 @@ const MERAKI_DEVICES: Scoping = Refused(
 /// (`…/sync` arrived with the ADR and was never anything else.) The configuration reads are
 /// `MERAKI_CONFIG_READ` — an organization's name and cadence are configuration, not monitored-node
 /// data.
+/// A **subnet-overlap decision** (ADR-187): an exclusion rule or "this overlap is deliberate".
+/// Both apply to every site, and a scoped caller sees only part of an overlap, so its decision
+/// would silence the rest for sites it cannot see.
+const OVERLAP_WRITE: Scoping = Refused(
+    "subnet-overlap rules and acknowledgements apply to every site; a scoped caller sees only part \n     of an overlap and is refused",
+);
+
 const MERAKI_WRITE: Scoping = Refused(
     "a Meraki organization is monitored as a whole, across every folder — importing files nodes \
      wherever they belong and deleting purges all of them — so a scoped caller is refused",
@@ -1921,6 +1928,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         PENDING_STREAM,
     ),
     ("GET", "/api/v1/stream/report-runs", REPORT, PENDING_STREAM),
+    (
+        "GET",
+        "/api/v1/subnet-overlaps",
+        // `GroupFiltered` (ADR-187): computed across every site, then narrowed to the places a
+        // caller may see; another site is counted, never named — ADR-170's line.
+        GroupFiltered,
+        Tool("get_subnet_overlaps"),
+    ),
+    ("PUT", "/api/v1/subnet-overlaps/acks", OVERLAP_WRITE, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/subnet-overlaps/acks", OVERLAP_WRITE, NO_MCP_WRITE),
+    ("POST", "/api/v1/subnet-overlaps/rules", OVERLAP_WRITE, NO_MCP_WRITE),
+    ("PUT", "/api/v1/subnet-overlaps/rules/:id", OVERLAP_WRITE, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/subnet-overlaps/rules/:id", OVERLAP_WRITE, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/suppression-exemptions",

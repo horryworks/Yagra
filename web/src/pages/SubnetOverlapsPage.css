@@ -1,0 +1,300 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Nodes ▸ Subnet overlaps (ADR-187). The table is DataTable's; these are the kind tiles above it,
+   the cells that carry a label, the row's expanded detail, and the rules dialog's list. */
+
+.so-coverage {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  margin: 0 0 var(--space-3);
+}
+
+/* ── Kind tiles: a count per kind of open overlap, and a filter when pressed ── */
+.so-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.so-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--space-3);
+  align-items: center;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.so-tile:hover {
+  background: var(--bg-secondary);
+}
+
+.so-tile:focus-visible,
+.so-tile[aria-pressed='true'] {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.so-tile-n {
+  grid-row: span 2;
+  font-size: var(--font-5xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  min-width: 1.4em;
+}
+
+.so-tile-same_address .so-tile-n {
+  color: var(--status-critical);
+}
+.so-tile-nested .so-tile-n {
+  color: var(--status-warning);
+}
+.so-tile-same_range .so-tile-n {
+  color: var(--severity-info);
+}
+
+.so-tile-t {
+  font-weight: var(--weight-semibold);
+  font-size: var(--font-sm);
+}
+
+.so-tile-d {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+/* ── Cells ── */
+.so-caret {
+  color: var(--text-tertiary);
+}
+
+/* The kind is said in words as well as colour (ui-conventions: never colour alone). */
+.so-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+}
+
+.so-kind::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.so-kind-same_address {
+  color: var(--status-critical);
+}
+.so-kind-nested {
+  color: var(--status-warning);
+}
+.so-kind-same_range {
+  color: var(--severity-info);
+}
+
+.so-sites {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.so-chip {
+  font-size: var(--font-xs);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.so-chip-more {
+  background: none;
+  border: 1px dashed var(--border-color);
+}
+
+.so-hint {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.so-hint-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.so-hint-tag {
+  flex: none;
+  font-size: var(--font-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--accent-color);
+  border: 1px solid var(--accent-color);
+}
+
+/* ── The expanded row ── */
+.so-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  border-left: 3px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.so-detail-same_address {
+  border-left-color: var(--status-critical);
+}
+.so-detail-nested {
+  border-left-color: var(--status-warning);
+}
+.so-detail-same_range {
+  border-left-color: var(--severity-info);
+}
+
+.so-why,
+.so-line {
+  margin: 0;
+  max-width: 90ch;
+}
+
+.so-hit {
+  color: var(--status-critical);
+  font-weight: var(--weight-semibold);
+}
+
+.so-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 640px;
+}
+
+.so-bar {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.so-bar-label {
+  font-size: var(--font-xs);
+}
+
+.so-lane {
+  position: relative;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.so-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--series-2);
+}
+
+.so-seg-outer {
+  background: var(--series-1);
+}
+
+.so-places-wrap {
+  overflow-x: auto;
+}
+
+.so-places {
+  border-collapse: collapse;
+  font-size: var(--font-sm);
+}
+
+.so-places th {
+  text-align: left;
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  padding: 2px var(--space-3) 2px 0;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.so-places td {
+  padding: 2px var(--space-3) 2px 0;
+  white-space: nowrap;
+}
+
+.so-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ── Rules dialog ── */
+.so-rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.so-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.so-rule-what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.so-rule-meta {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.so-rule-hits {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.so-rule-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+html[data-viewport='mobile'] .so-tiles {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-viewport='mobile'] .so-rule {
+  grid-template-columns: minmax(0, 1fr);
+}

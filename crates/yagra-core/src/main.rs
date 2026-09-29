@@ -144,6 +144,8 @@ mod sink;
 mod sql_tables;
 mod store;
 mod stored_enum;
+/// Which address ranges two sites both use (ADR-187). Pure; `api::subnet_overlaps` reads the stores.
+mod subnet_overlaps;
 // Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from
 // `config_bundle`, which moves configuration *between* deployments; this one describes one.
 mod support_bundle;

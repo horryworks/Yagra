@@ -116,6 +116,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/classification-rules': MARKER,
   '/nodes/reclassify': MARKER,
   '/nodes/duplicates': MARKER,
+  '/nodes/subnet-overlaps': MARKER,
   '/nodes/collection-templates': MARKER,
   '/nodes/mib': MARKER,
   '/topology/map': { kind: 'text', text: 'node in the inventory' },

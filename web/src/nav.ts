@@ -112,6 +112,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/duplicates',
             implemented: true,
           },
+          // Where Duplicates finds one device registered twice, this finds one address range used at
+          // two sites — read from the interface addresses devices already report (ADR-187).
+          {
+            labelKey: 'nodes.subnetOverlaps',
+            descKey: 'descriptions.nodesSubnetOverlaps',
+            path: '/nodes/subnet-overlaps',
+            implemented: true,
+          },
         ],
       },
       {

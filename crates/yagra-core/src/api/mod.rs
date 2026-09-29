@@ -89,6 +89,7 @@ pub(crate) mod route_path;
 pub(crate) mod route_table;
 pub(crate) mod scope;
 mod session;
+pub(crate) mod subnet_overlaps;
 mod support;
 pub(crate) mod system;
 #[cfg(test)]
@@ -407,6 +408,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(nodes::routes())
         // Nodes ▸ Duplicates (ADR-148): one read, whose cleanup is the bulk delete in `nodes`.
         .merge(duplicates::routes())
+        // Nodes ▸ Subnet overlaps (ADR-187): ranges two sites both use, and the rules that excuse them.
+        .merge(subnet_overlaps::routes())
         // Which pool the node effectively belongs to, and which poller currently holds it. Stays
         // with the Pollers view below, whose resolution helpers it shares.
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.

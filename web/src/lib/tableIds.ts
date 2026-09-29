@@ -46,6 +46,7 @@ export const TABLE_IDS = [
   'nodes.duplicates',
   'nodes.mib',
   'nodes.reclassify',
+  'nodes.subnetOverlaps',
   // Events
   'events.log',
   'events.sources',

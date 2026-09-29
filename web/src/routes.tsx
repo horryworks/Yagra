@@ -32,6 +32,7 @@ import { ProfilesPage } from './pages/ProfilesPage';
 import { ClassificationRulesPage } from './pages/ClassificationRulesPage';
 import { ReclassifyPage } from './pages/ReclassifyPage';
 import { DuplicateNodesPage } from './pages/DuplicateNodesPage';
+import { SubnetOverlapsPage } from './pages/SubnetOverlapsPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
@@ -103,6 +104,7 @@ export function AppRoutes() {
         <Route path="nodes" element={<NodesPage />} />
         <Route path="nodes/discovery" element={<DiscoveryPage />} />
         <Route path="nodes/duplicates" element={<DuplicateNodesPage />} />
+        <Route path="nodes/subnet-overlaps" element={<SubnetOverlapsPage />} />
         {/* Dependencies live under Topology now; keep this path as a redirect so old links/bookmarks
             resolve (and don't get captured by the nodes/:nodeId dynamic segment below). */}
         <Route

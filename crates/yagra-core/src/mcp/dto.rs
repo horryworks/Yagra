@@ -1437,6 +1437,13 @@ mod tests {
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&gaps).unwrap(), "PrefixGapReport");
 
+        // Served straight through from the REST handler (ADR-187).
+        let overlaps = crate::api::subnet_overlaps::SubnetOverlapsView::sample();
+        assert_inventory_dto_is_clean(
+            &serde_json::to_value(&overlaps).unwrap(),
+            "SubnetOverlapsView",
+        );
+
         let history = AlertHistoryDto::from_row(
             &AlertHistoryRow {
                 id: Uuid::new_v4(),
@@ -1614,6 +1621,7 @@ mod tests {
         ("top_interfaces", "RankedInterfaceTopEntry"),
         ("list_node_groups", "NodeGroup"),
         ("get_prefix_gaps", "PrefixGapReport"),
+        ("get_subnet_overlaps", "SubnetOverlapsView"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("search_events", "Event"),

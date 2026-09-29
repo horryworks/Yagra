@@ -106,6 +106,12 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ("row_names.rs", &["entity_row_names"]),
     ("settings.rs", &["app_settings"]),
     ("snapshots.rs", &["node_state_snapshots"]),
+    // What an operator said about ranges two sites both use (ADR-187), plus the one inventory read
+    // the comparison files addresses by — `nodes` for a node's name and folder, nothing else.
+    (
+        "subnet_overlaps.rs",
+        &["subnet_overlap_rules", "subnet_overlap_acks", "nodes"],
+    ),
     // sqlx's own bookkeeping table; no migration declares it, so `table_vocabulary` adds it by hand.
     ("migrate.rs", &["_sqlx_migrations"]),
     // 🚨 The one file that is not about a table, and the exemption is structural rather than

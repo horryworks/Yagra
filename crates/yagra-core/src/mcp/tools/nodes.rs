@@ -723,6 +723,46 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "Address ranges that more than one site carries, from the interface addresses \
+                       devices report: the same range at two sites (same_address when one address \
+                       is configured at both, which is almost certainly a reuse; same_range when \
+                       every address differs, which is a reuse or a line the sites share), or one \
+                       site's range inside another's (nested). A site is the nearest folder of type \
+                       Site above a device. Each overlap has a status: open, intentional (an \
+                       operator said it is deliberate), or excluded (a link between two sites, or \
+                       an exclusion rule such as a WAN port or the carrier CGNAT range), and may \
+                       carry a hint (wan, redundancy, shared_line, template), which is a suggestion \
+                       only. Also returns the exclusion rules. No overlaps means none only when \
+                       nodes_with_addresses equals nodes_total. A folder-scoped token is told how \
+                       many other sites an overlap reaches, never which. Requires live mode."
+    )]
+    async fn get_subnet_overlaps(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_subnet_overlaps";
+        match self.scope_for(identity_of(&ctx)).await {
+            Ok(scope) => self.subnet_overlaps_in(&scope).await,
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    pub(super) async fn subnet_overlaps_in(
+        &self,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_subnet_overlaps";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "subnet overlaps require live mode");
+        };
+        // The REST handler's own function, so the two surfaces disclose the same things.
+        match crate::api::subnet_overlaps::overlaps_view(admin, scope).await {
+            Ok(view) => ok_json(TOOL, &view),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
         description = "Trigger an immediate, out-of-schedule poll of one node. Requires manage-config \
                        permission. Returns how many poll jobs were dispatched. The poll also reads \
                        what is otherwise read only once an hour: the device's identity (sysDescr, \
