@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.38 — Geo map shades the night side of the world, the Neighbors tab picks a shared address's node by name
+
 ### New Features
 
 - **Geo map shades the night side of the world, as it is now.** Four stacked shades run from sunset to the end of astronomical twilight, so a site near the line shows which side it is on. The shading is drawn from your browser's clock and redrawn every minute; the legend says which UTC time it shows, and a pin's tooltip adds whether it is day, twilight or night there. It is on by default, and the new Day/night button beside Fit turns it off — the choice is saved on your account, so it follows you to another machine. Pins keep their state colours at night. The dashboard Geo map widget is unchanged.
@@ -18,7 +20,7 @@
 
 - **Geo map: zooming out stops at the whole world, and zooming in goes ten times further.** Zooming out used to shrink the world into the middle of an empty pane; it now stops where the whole world just fits, and the map can no longer be dragged off the pane. The zoom ceiling is 240× (was 24×), close enough to tell apart the sites in one city — the coastline looks angular at that zoom, the pins stay exact. The + and − buttons now zoom around the centre of the map, and the map pane is no wider than the world at its height, so a wide monitor no longer shows grey bands either side.
 - **Neighbors tab: an address several nodes have is matched by name, and the duplicate stays visible.** When a neighbor's management address is on more than one node, the node whose name matches the name the neighbor sent is now linked, if exactly one does. A node in a folder you cannot see is never picked this way — such an address still reads "Several nodes", so the row does not reveal which hidden node carries the name. Either way the duplicate stays marked beside the name ("+N with this address", or "N nodes with this address" when none was picked), and opening the row lists the other nodes with whether their port carrying the address has link. If the metrics store is slow, the tab answers within two seconds with the link state shown as unknown. Before, such a row said only "Several nodes". The network map is unchanged. API clients: `peers` entries of `GET /api/v1/nodes/{node_id}/neighbors` and MCP `get_neighbors` gain `matched_by_name`, `also_claimed_by` and `also_claimed_total`; a visible node on an ambiguous address is now named there.
-- **NetBox sync imports only sites whose Status is Active.** Planned, staging, decommissioning and retired sites no longer become folders, and their prefixes are no longer offered as Discovery targets. A folder already created for a site that is no longer Active is kept, together with the nodes in it, and counted under "folders not in NetBox". A site whose response carries no status is still imported.
+- **NetBox sync imports only sites whose Status is Active.** Planned, staging, decommissioning and retired sites no longer become folders, and their prefixes are no longer offered as Discovery targets. A folder already created for a site that is no longer Active is kept, together with the nodes in it, and counted under "folders no longer synced from NetBox". A site whose response carries no status is still imported.
 
 ## v0.3.37 — Rediscover a monitored node from its right-click menu, Subnet overlaps lists address ranges used at more than one site
 
