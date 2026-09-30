@@ -208,7 +208,7 @@ impl BodyMatch {
     ///
     /// The `None` arm is the whole point of the type. Silently reporting "not matched" for a
     /// truncated body turns a `NotContains` monitor into one that reports healthy for a page whose
-    /// error text sits past the budget — the "quietly normal" lie ADR-047 決定 3 forbids. The
+    /// error text sits past the budget — the "quietly normal" lie ADR-047 decision 3 forbids. The
     /// caller decides what to do with the indeterminate answer; what it must not do is call it OK.
     ///
     /// Finding the keyword is always definitive: the bytes past the cut cannot un-find it.
@@ -277,7 +277,7 @@ impl JsonExtract {
     ///
     /// `None` covers every failure — path missing, wrong type, unparseable string, non-finite —
     /// and the caller records **no sample** for it. Writing `0` instead would be indistinguishable
-    /// from the value genuinely being `0`, which is the ADR-047 決定 3 rule: a monitor may not
+    /// from the value genuinely being `0`, which is the ADR-047 decision 3 rule: a monitor may not
     /// invent a reading it did not take.
     #[must_use]
     pub fn extract(&self, doc: &serde_json::Value) -> Option<f64> {
@@ -643,7 +643,7 @@ mod tests {
 
         // …truncated ⇒ no answer, in BOTH modes. The `not_contains` half is the one that matters:
         // reporting `Some(true)` there is a monitor that says "healthy" about a page whose error
-        // text sits past the budget, which is the silent lie ADR-047 決定 3 forbids.
+        // text sits past the budget, which is the silent lie ADR-047 decision 3 forbids.
         assert_eq!(must.satisfied_by("nothing here", true), None);
         assert_eq!(must_not.satisfied_by("all good", true), None);
     }
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn a_path_that_does_not_lead_to_a_number_yields_nothing_rather_than_zero() {
-        // The whole rule of ADR-047 決定 3: `0` is a reading, and a monitor must not invent one.
+        // The whole rule of ADR-047 decision 3: `0` is a reading, and a monitor must not invent one.
         // Each of these would otherwise be recorded as a perfectly plausible zero.
         let at = |p: &str| resolve_json_path(&doc(), p).and_then(json_metric_value);
         assert_eq!(at("queue.missing"), None); // key absent

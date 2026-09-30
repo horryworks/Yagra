@@ -269,7 +269,7 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
               timestamps={d.timestamps}
               series={d.series}
               // The axis gets the compact form: `214 MB` does not fit the 50 px gutter and loses its
-              // leading digit, which reads as a number ten times smaller (ADR-137 決定 10).
+              // leading digit, which reads as a number ten times smaller (ADR-137 decision 10).
               yFormat={d.known ? formatUtil : formatBytesAxis}
               yRange={d.known ? PCT_RANGE : undefined}
               legendFormat={d.known ? formatUtil : formatBytes}
@@ -279,7 +279,7 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
           {/* One direction above zero and the other below (ADR-128), the same way up as the
               Interface traffic widget: `mirrorAxisLabels` and the series signs both read its
               `POSITIVE_HALF`. Every reading goes through Math.abs before it is printed, and the axis
-              takes the compact form so the gutter cannot clip a leading digit (ADR-137 決定 10). */}
+              takes the compact form so the gutter cannot clip a leading digit (ADR-137 decision 10). */}
           <HostMetricCard
             label={t('health.metric.network')}
             value={t('health.netHeadline', {

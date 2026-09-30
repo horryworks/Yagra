@@ -369,7 +369,7 @@ fn push_snmp_jobs<S: SnmpJobSource>(
         // device, and a silent agent never reaches the probe. It is still a GET of its own, one
         // more round trip per poll: sysDescr is a string and the check's GET returns numbers, and
         // folding it in would make `snmp_up` read 1 on a device whose scalars all fail (ADR-075
-        // 決定 3). The poller answers this ask with sysDescr and sysObjectID only between full
+        // decision 3). The poller answers this ask with sysDescr and sysObjectID only between full
         // reads; the version, patch and serial it reads on first sight, hourly, and on a poll now
         // (ADR-138 Increments 6 and 7).
         let (mut j, kind) = job(spec, interval_secs);

@@ -14,7 +14,7 @@
 }
 
 /* The map, its resize rail and its legend, no wider than the world is at the pane's height
-   (ADR-188 増分 2). The pane is border-box, so its inner height is the stored height less two
+   (ADR-188 Inc.2). The pane is border-box, so its inner height is the stored height less two
    borders; the outer width that puts exactly the world's width inside is that times the aspect,
    plus the two side borders. At that width the whole-world zoom floor touches all four edges; a
    window narrower than it keeps the frame full width. `--geo-aspect` is set by the component from

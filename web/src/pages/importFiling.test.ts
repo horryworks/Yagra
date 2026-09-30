@@ -255,7 +255,7 @@ describe('importMessage', () => {
   });
 
   // 🚨 A row the operator directed is not the rule succeeding. Folding it into `matched` would
-  // report the rule as having decided something a person decided (ADR-131 決定 11).
+  // report the rule as having decided something a person decided (ADR-131 decision 11).
   it('reports rows the operator directed as their own sentence', () => {
     const quiet = importMessage(filed(2, 0, 0), null);
     const directed = importMessage(filed(2, 0, 0, 3), null);

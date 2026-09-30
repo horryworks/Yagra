@@ -185,7 +185,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
   });
 
   it('says which levels accept more than one target', () => {
-    // ADR-078 決定 3. `interface` is single because a rule there covers one port and is created
+    // ADR-078 decision 3. `interface` is single because a rule there covers one port and is created
     // from that port's own screen; `group` is the legacy free-text scope. Driven from
     // `SCOPE_LEVELS` so a new level has to decide rather than inherit whatever came last.
     const many = SCOPE_LEVELS.filter((l) => scopeAcceptsMany(l));
@@ -263,7 +263,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
       expect(isThresholdReady({ ...base, level: 'interface', scopeIds: [bad] })).toBe(false);
     }
     // Two ports in one rule is refused here as well as at the edge, so the button never enables
-    // on a shape the server will 400 (ADR-078 決定 3).
+    // on a shape the server will 400 (ADR-078 decision 3).
     expect(
       isThresholdReady({
         ...base,

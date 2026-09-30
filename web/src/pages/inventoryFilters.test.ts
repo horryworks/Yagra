@@ -285,7 +285,7 @@ describe('the "Needs attention" preset (ADR-163)', () => {
   });
 
   it('counts as narrowing the tree, so "clear all filters" appears and undoes it', () => {
-    // No `extraActive` wiring exists for this button (ADR-163 決定 1): it writes the `state` column,
+    // No `extraActive` wiring exists for this button (ADR-163 decision 1): it writes the `state` column,
     // which `isInventoryFiltered` and `ClearFilters` already watch. That is only true while the
     // preset keeps writing that column, which is what this pins.
     const on = toggleAttention(f({}));

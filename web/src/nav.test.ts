@@ -64,7 +64,7 @@ describe('nav IA', () => {
   });
 
   it('gives passive monitoring one tab, and puts every one of its screens under it', () => {
-    // ADR-055 決定 2. The reason the URLs moved at all: `sectionForPath` matches on
+    // ADR-055 decision 2. The reason the URLs moved at all: `sectionForPath` matches on
     // `'/' + section.key`, so a screen left at `/alerts/events` could not light this tab.
     const events = NAV.find((s) => s.key === 'events')!;
     expect(sectionItems(events).map((i) => i.path)).toEqual([
@@ -143,7 +143,7 @@ describe('nav IA', () => {
   });
 
   it('files About under System, and leaves Settings with no Personal group at all', () => {
-    // ADR-055 決定 9 (Inc.7) partly reverses 決定 6. About still describes the deployment and stays
+    // ADR-055 decision 9 (Inc.7) partly reverses decision 6. About still describes the deployment and stays
     // at the end of System. Personal is gone: it held Preferences alone, and Preferences is now a
     // dialog on the account badge — a shelf that is only the signed-in person's by construction,
     // which is the line the group header was drawn to make.
@@ -244,8 +244,8 @@ describe('navItemForPath', () => {
   });
 
   it('asks a narrower question than sectionForPath, and the two disagree on a detail page', () => {
-    // This difference is the whole basis of what a tab is allowed to remember (ADR-134 増分 2
-    // 決定 8): the tab that lights up is a prefix match, the screen that can be returned to is not.
+    // This difference is the whole basis of what a tab is allowed to remember (ADR-134 Inc.2
+    // decision 8): the tab that lights up is a prefix match, the screen that can be returned to is not.
     expect(sectionForPath('/nodes/abc-123').key).toBe('nodes');
     expect(navItemForPath('/nodes/abc-123')).toBeNull();
   });
@@ -253,7 +253,7 @@ describe('navItemForPath', () => {
 
 describe('rememberableRoute (what a section may remember)', () => {
   it('remembers a menu screen, carrying its query string', () => {
-    // 決定 9 — the filter comes back with the screen. Safe because the screen says it is narrowed:
+    // decision 9 — the filter comes back with the screen. Safe because the screen says it is narrowed:
     // the filter row cannot be closed while it filters, and `Clear all filters (N)` sits beside it.
     expect(rememberableRoute('/events', '?message=router')).toEqual({
       sectionKey: 'events',
@@ -268,7 +268,7 @@ describe('rememberableRoute (what a section may remember)', () => {
   });
 
   it('refuses every route the menu does not declare', () => {
-    // 決定 8. Every one of these resolves to *a* section — `sectionForPath` never answers null —
+    // decision 8. Every one of these resolves to *a* section — `sectionForPath` never answers null —
     // which is exactly why "which tab lights up" cannot decide what a tab returns to.
     const routes = [
       '/nodes/00000000-0000-4000-8000-0000000000b2', // a node detail: deletable, so a 404 later
@@ -291,7 +291,7 @@ describe('sectionLandingPath (where a top-bar tab goes back to)', () => {
   });
 
   it('returns the remembered screen — the reported symptom, in one line', () => {
-    // "My dashboard の 2 枚目を開いて Node に行き Dashboard に戻ってくると Shared dashboard が見える".
+    // "open the second board of My dashboard, go to Node, come back to Dashboard, and it shows Shared dashboard".
     expect(sectionLandingPath(section('dashboard'), { dashboard: '/dashboard/my' })).toBe(
       '/dashboard/my',
     );
@@ -354,7 +354,7 @@ describe('itemLandingPath (where a sidebar item goes back to, ADR-134 増分 3)'
   });
 
   it('brings All nodes’ search term back after a visit to Discovery — the reported symptom', () => {
-    // "All nodes から Discovery に行って、戻ったら保持されていない". Both items are in the Nodes
+    // "go from All nodes to Discovery, come back, and it was not kept". Both items are in the Nodes
     // section, so the section memory now names Discovery; the item memory is what still holds `q`.
     const byItem = { '/nodes': '/nodes?q=sw&sel=node%3Aabc', '/nodes/discovery': '/nodes/discovery' };
     expect(itemLandingPath(item('/nodes'), byItem)).toBe('/nodes?q=sw&sel=node%3Aabc');

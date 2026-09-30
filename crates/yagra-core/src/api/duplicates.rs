@@ -3,9 +3,9 @@
 //! than once, with the evidence for each group.
 //!
 //! **One read and no write.** The cleanup is the existing bulk delete (`POST /api/v1/nodes/delete`,
-//! ADR-124 増分 6), so this domain owes no accepted-write test of its own. `ManageConfig`, like that
+//! ADR-124 Inc.6), so this domain owes no accepted-write test of its own. `ManageConfig`, like that
 //! delete, because the list exists to be acted on. **Group-filtered**: the candidates are the
-//! caller's own device nodes, so a group never names a node outside their folders (ADR-148 決定 8).
+//! caller's own device nodes, so a group never names a node outside their folders (ADR-148 decision 8).
 //!
 //! The judgement is [`crate::duplicates`], which is pure; this file reads the stores it weighs and
 //! puts names on the ids. [`duplicates_view`] is the seam the MCP `get_config(kind="duplicate_nodes")`

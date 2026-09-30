@@ -189,7 +189,7 @@ pub(crate) struct PoolSummary {
     /// described — which is every pool that predates the `pools` table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    /// The pool currently polling this one's members on its behalf (ADR-107 増分 4), if an operator
+    /// The pool currently polling this one's members on its behalf (ADR-107 Inc.4), if an operator
     /// asked for that. `null` is the ordinary case.
     ///
     /// ⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are
@@ -395,7 +395,7 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
         tracing::warn!(error = %e, "described pools list failed; showing counts only");
         Vec::new()
     });
-    // ADR-107 増分 4. Same degradation as the descriptions above and for the same reason: a page an
+    // ADR-107 Inc.4. Same degradation as the descriptions above and for the same reason: a page an
     // operator opens because something is already wrong must not fail on a cosmetic read.
     let covered = admin
         .repo
@@ -1172,7 +1172,7 @@ async fn set_poller_pool(
             // that shows no dialog from being surprised by a 409 it cannot explain.
             //
             // 🚨 **Nodes are counted by effective pool, folders by the column, and the asymmetry
-            // is the point** (ADR-107 増分 3). A folder either names a pool or does not; a node can
+            // is the point** (ADR-107 Inc.3). A folder either names a pool or does not; a node can
             // be in one three ways, and the two that no column records — inheriting from a folder,
             // or falling through to the default — are the majority in every deployment. Counting
             // nodes with `pool_references` made this check answer 0 for a pool the strip beside it
@@ -1565,7 +1565,7 @@ mod tests {
         );
     }
 
-    /// ADR-107 増分 4 決定 5, on the list that carries the button.
+    /// ADR-107 Inc.4 decision 5, on the list that carries the button.
     ///
     /// The state after a successful takeover of a pool that only ever existed because nodes named
     /// it: no `pools` row, no node left naming it, no live poller — that last one being why it was

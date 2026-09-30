@@ -87,7 +87,7 @@ pub struct AlertConfig {
     /// what stops one metric's bucket being scanned in full for every port.
     pub(super) by_metric: HashMap<String, MetricRules>,
     /// Whether this snapshot came from a **successful** read of the database, rather than being the
-    /// empty value the engine holds between start-up and the first load (ADR-160 決定 6).
+    /// empty value the engine holds between start-up and the first load (ADR-160 decision 6).
     ///
     /// 🚨 Not the same question as "are there any rules" or "are there any nodes", and the
     /// difference is what a restored alert turns on: with no rule for `__liveness__`,
@@ -116,7 +116,7 @@ pub struct AlertConfig {
     /// not — leaving them to be re-fired by the down-set resweep. So the pause is not a state to
     /// observe; it is an instruction to observe nothing.
     ///
-    /// 🚨 **The engine enforces the end itself** rather than waiting to be told. ADR-050 決定 12 says
+    /// 🚨 **The engine enforces the end itself** rather than waiting to be told. ADR-050 decision 12 says
     /// the window is always bounded, and until now the refresh loop was the only thing holding that
     /// up — which was survivable while a stuck window still *showed* as `maintenance` on every node.
     /// A pause shows nothing, so a refresh loop wedged by a database failure would silence the fleet
@@ -137,7 +137,7 @@ pub struct AlertConfig {
     /// cannot see them anyway, so a pool that only holds ungrouped nodes stays admin-only.
     pub(super) pool_groups: HashMap<String, BTreeSet<Uuid>>,
     /// Every Cisco Meraki organization: what it is called, the folder groups its nodes sit in, and
-    /// which nodes are its own (ADR-164 決定 18).
+    /// which nodes are its own (ADR-164 decision 18).
     ///
     /// Three questions about an organization's collect alert are answered from here, for the same
     /// reason `pool_groups` is precomputed: each is asked per SSE frame per subscriber, or per node
@@ -582,7 +582,7 @@ pub(crate) fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThr
 /// Free rather than a method, and `pub(crate)` rather than private, because two places have to
 /// answer this identically: the engine, resolving a sample, and `GET
 /// /nodes/{id}/interfaces/{ifindex}/thresholds`, showing an operator which rules reach a port
-/// (ADR-076 決定 11). A second copy of scope inheritance is exactly the mirror `extensibility.md`
+/// (ADR-076 decision 11). A second copy of scope inheritance is exactly the mirror `extensibility.md`
 /// forbids — the first one would drift the day a level is added.
 ///
 /// `meta` is the node's own metadata (profile, tag values, folder chain); `None` for a node the
@@ -666,7 +666,7 @@ pub(crate) fn nearest_folder_depth(
 ///
 /// "In force" is **the level that wins**, resolved exactly as [`AlertConfig::resolve`] does it:
 /// most specific level, and among folder-group rules only the nearest group in the chain
-/// (ADR-013 + ADR-075 決定 11). Per metric, because precedence is per metric.
+/// (ADR-013 + ADR-075 decision 11). Per metric, because precedence is per metric.
 ///
 /// Several rules can be in force for one metric at once — `resolve_effective` merges rules at the
 /// winning level by keeping the more restrictive bound of each severity. So this flag says "this
@@ -728,7 +728,7 @@ pub struct RuleCoverage {
     /// fire, so the evaluator runs no query at all.
     ///
     /// It was called `lowest_bound_pct` while percentages were the only derived metric; the
-    /// absolute ones (ADR-076 決定 9) made that name a lie about half the callers.
+    /// absolute ones (ADR-076 decision 9) made that name a lie about half the callers.
     pub lowest_bound: Option<f64>,
     /// Whether any of those rules is a `below` rule.
     ///

@@ -383,7 +383,7 @@ function CadenceModal({
 }) {
   const { t } = useTranslation('system');
   // The boxes hold what was typed, and a save is only offered when every one of them parses: an
-  // emptied box used to be sent as 0 and answered with the server's English error (増分 18).
+  // emptied box used to be sent as 0 and answered with the server's English error (Inc.18).
   const [availability, setAvailability] = useState(String(org.availability_secs));
   const [uplink, setUplink] = useState(String(org.uplink_secs));
   const [traffic, setTraffic] = useState(String(org.traffic_secs));
@@ -501,7 +501,7 @@ function CadenceModal({
           ))}
         </div>
         {/* Availability has no checkbox: it is the one tier that says whether a device is up, and
-            the server refuses a cadence without it (決定 17). The sentence is why it is missing. */}
+            the server refuses a cadence without it (decision 17). The sentence is why it is missing. */}
         <span className="modal-hint">{t('meraki.cadence.availabilityAlways')}</span>
       </div>
       {intervalField(
@@ -654,7 +654,7 @@ export function MerakiIntegrationPage() {
   const pollingOn = pollingGuess?.over === data ? pollingGuess.on : data.polling;
 
   // A read asked for by "Sync now", or an organization's first, runs for minutes: keep the rows
-  // moving while one does (ADR-164 決定 32). The list is small, so one read serves both halves —
+  // moving while one does (ADR-164 decision 32). The list is small, so one read serves both halves —
   // and the poll is `load` itself: a failed re-read keeps the rows where they were (useLoad), so a
   // dropped poll only leaves the progress where it was, as on the organization page. Only a
   // refusal (403/503) replaces the rows with the notice, and that is the truth of the page.
@@ -773,7 +773,7 @@ export function MerakiIntegrationPage() {
           org={scoping}
           onClose={() => setScoping(null)}
           // Reload, not only close: the row's "N not collected" is counted from which networks are
-          // watched, so un-watching one that holds nodes is exactly when it has to change (決定 15).
+          // watched, so un-watching one that holds nodes is exactly when it has to change (decision 15).
           onSaved={load}
         />
       )}

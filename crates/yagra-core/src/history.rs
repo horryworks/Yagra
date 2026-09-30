@@ -45,7 +45,7 @@ pub struct AlertHistoryRow {
     /// `None` for every non-node row — and the name, which was enough while the only such
     /// subject was *named* (a pool). A Meraki organization is identified by id and has no name
     /// of its own, so it came back as the nil organization: invisible to every scoped caller,
-    /// and un-acknowledgeable. Nothing in the compiler asks for this (ADR-164 決定 18).
+    /// and un-acknowledgeable. Nothing in the compiler asks for this (ADR-164 decision 18).
     #[serde(skip)]
     pub subject_id: Uuid,
     pub check: Uuid,
@@ -931,7 +931,7 @@ mod tests {
             yagra_alert::Subject::Node(NodeId::new()),
             yagra_alert::Subject::Pool("tokyo".to_owned()),
             // Identified by id and not a node: `node` is `None` and there is no name, so the
-            // stored id is the only thing that can bring it back (ADR-164 決定 18).
+            // stored id is the only thing that can bring it back (ADR-164 decision 18).
             yagra_alert::Subject::MerakiOrg(Uuid::from_u128(0xACE)),
         ] {
             let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Bringing the selection back into view when the operator stops narrowing the tree (ADR-073 増分 2).
+// Bringing the selection back into view when the operator stops narrowing the tree (ADR-073 Inc.2).
 //
 // The failure this answers: narrow the tree, pick a node, clear the filter — and the node is gone
 // from the tree while the right pane still shows it. `?sel=` never changed. The ROW did not exist:
@@ -9,7 +9,7 @@
 //
 // So the page asks for a reveal once, at the moment the last narrowing control goes, and the tree
 // opens the folders above the selection, waits for the row to exist, and scrolls to it ONE time.
-// It never follows the row afterwards — scrolling the tree for the operator is what ADR-124 増分 5
+// It never follows the row afterwards — scrolling the tree for the operator is what ADR-124 Inc.5
 // refused, and this is the exception only because the operator's own press is what hid the row.
 //
 // ⚠️ Every decision is here, in a `.ts`, because Vitest never loads a `.tsx` (testing.md).

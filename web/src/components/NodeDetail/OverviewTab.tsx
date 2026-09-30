@@ -197,7 +197,7 @@ export function OverviewTab({
         })}
       </div>
 
-      {/* The state above is the last one collected, not a current one (ADR-164 決定 18): the
+      {/* The state above is the last one collected, not a current one (ADR-164 decision 18): the
           Meraki API is not answering this node's organization. There is one alert for that, and
           it is about the organization — so this node has none of its own, and without this line
           an `ok` from an hour ago reads exactly like an `ok` from a minute ago. */}
@@ -222,7 +222,7 @@ export function OverviewTab({
         </p>
       )}
 
-      {/* No wireless controller has reported this access point lately (ADR-064 増分 G), so the
+      {/* No wireless controller has reported this access point lately (ADR-064 Inc.G), so the
           state above reads `unknown` — or stays down, if it was down when last heard of. Nothing is
           raised about the AP itself; this is what says why, and since when. No link: the "Wireless
           controller" row in the facts above already is one, narrowed to what this caller may see. */}
@@ -305,7 +305,7 @@ export function OverviewTab({
  *  It was a fixed last-30-minute sparkline fed from `NodeDetail`'s liveness fetch, which is what
  *  made the range selector look dead on an ICMP-only node: the only chart on its Overview ignored
  *  the buttons — and Device health and the generic sections both self-hide there, so that tab in
- *  fact carried no range control at all. It has its own fetch now (ADR-117 決定 6), and since
+ *  fact carried no range control at all. It has its own fetch now (ADR-117 decision 6), and since
  *  ADR-046 Inc.8 both charts are the same `MetricCard` every other section draws, so the loss
  *  share is drawn once, here, instead of under a "System (SNMP)" heading below — and the RTT is
  *  no longer drawn twice.
@@ -424,7 +424,7 @@ function UrlHealth({
   const [bodyMatch, setBodyMatch] = useState<number | null>(null);
   const [bodyTruncated, setBodyTruncated] = useState<number | null>(null);
   // Keyed by metric name — a rule whose path found nothing records no sample at all, so a missing
-  // entry here is the honest "no reading", not a zero (ADR-047 決定 3).
+  // entry here is the honest "no reading", not a zero (ADR-047 decision 3).
   const [extracted, setExtracted] = useState<Record<string, number>>({});
   const [win, setWin] = useState<[number, number] | null>(null);
 
@@ -610,13 +610,13 @@ function UrlHealth({
  *  site: `MetricChart` compares `yRange` by reference and redraws on a new one. */
 const PCT_Y_RANGE: [number, number] = [0, 100];
 
-/** Cisco Meraki device health (ADR-164 増分 13・14): availability (`meraki_device_up`), an MX's Auto
+/** Cisco Meraki device health (ADR-164 Inc.13 and 14): availability (`meraki_device_up`), an MX's Auto
  *  VPN reach and warm-spare pair as tiles, its WAN uplinks as one row each (state, average send and
  *  receive), and the WAN traffic those rows were stored as, charted over the range. Shown only for
  *  Meraki nodes (the caller guards on `node.meraki_device`). What each line says is decided in
  *  `merakiCard.ts`.
  *
- *  ⚠️ **Not the shared `.nd-health-metric` layout** (決定 27). That one puts the label and the value
+ *  ⚠️ **Not the shared `.nd-health-metric` layout** (decision 27). That one puts the label and the value
  *  side by side with a 24px value that never wraps — right for one number, and exactly what pushed
  *  "Standby · sent 14.1 kbps / received …" over the next tile. A tile here stacks the label over a
  *  value that may wrap, and the uplinks are a table whose numbers never wrap while the name shrinks.
@@ -763,7 +763,7 @@ function MerakiHealth({
   const pairLine = merakiPairLine(pair);
   // An access point the Dashboard reports offline has no live SSID count or radio utilization:
   // the collect stops writing them, and the latest-value read would otherwise draw the last ones
-  // beside "Offline" for half an hour (ADR-168 決定 4).
+  // beside "Offline" for half an hour (ADR-168 decision 4).
   const radioReadings = merakiApRadioReadingsShown(up);
   // Memoised on what they are built from: `MetricChart` keys its data effect on these arrays by
   // reference, so building them afresh on every render redrew up to three charts per render.
@@ -1102,7 +1102,7 @@ function useFacts(
     pool: { label: t('field.pool'), value: poolFactLabel(assignment, groupName, t), mono: true },
     // An imported AP is collected by its controller, and *which* controller is the half worth
     // printing: every number on this page comes from that one, and since the AP is filed in the
-    // controller's own folder nothing else here identifies it (ADR-064 増分 B2 の手直し). So the row
+    // controller's own folder nothing else here identifies it (ADR-064 Inc.B2 rework). So the row
     // is relabelled and names it. An em dash means no controller has reported this AP in service
     // yet — the only state in which "Its wireless controller" was ever the whole answer.
     polledBy:
@@ -1237,7 +1237,7 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
                 nodeId={nodeId}
                 label={t(spec.labelKey)}
                 scale={spec.scale}
-                // Which unit wins is `cardUnit`'s decision (ADR-046 Inc.7 決定 5), in a `.ts`
+                // Which unit wins is `cardUnit`'s decision (ADR-046 Inc.7 decision 5), in a `.ts`
                 // where a test reaches it.
                 unit={cardUnit(spec, resolved.metric)}
                 resolved={resolved}
@@ -1586,7 +1586,7 @@ function MemHealth({
  *  not say whether the temperature has been 60 all week or was 40 an hour ago. The window is the
  *  shared one (`useRangeStore`), so the range picker above drives these sections too and they
  *  carry no control of their own. The ICMP section has its own for the ICMP-only node, which hides
- *  everything else (ADR-117 決定 6); the two always agree, they read the same store.
+ *  everything else (ADR-117 decision 6); the two always agree, they read the same store.
  *
  *  Every effect on this tab reads the inventory through `fetchNodeMetrics`, which dedupes — this,
  *  `IcmpHealth` and `DeviceHealth` make one request between them. */

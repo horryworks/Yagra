@@ -121,7 +121,7 @@ impl PoolResolver {
     }
 }
 
-/// What a pool move has to know about the nodes currently resolving to `pool` (ADR-107 増分 3).
+/// What a pool move has to know about the nodes currently resolving to `pool` (ADR-107 Inc.3).
 ///
 /// 🚨 **The two fields are not the same question, and conflating them is the defect this type was
 /// added to end.** `total` is *who is affected* — what the confirmation dialog counts and what the
@@ -371,7 +371,7 @@ mod tests {
             );
         }
     }
-    /// The defect ADR-107 増分 3 fixes, stated as the thing that has to stay true.
+    /// The defect ADR-107 Inc.3 fixes, stated as the thing that has to stay true.
     ///
     /// 🚨 A pool whose members all *inherit* is the state a fresh deployment is in — nothing writes
     /// a pool on a node until somebody does. `SELECT count(*) FROM nodes WHERE pool = 'default'`

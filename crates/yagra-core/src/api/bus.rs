@@ -239,7 +239,7 @@ async fn set_bus_remote(
         ));
     }
 
-    // 🚨 Everything from the first write on runs in a task of its own (ADR-172 決定 4). A tab
+    // 🚨 Everything from the first write on runs in a task of its own (ADR-172 decision 4). A tab
     // closed mid-way used to drop the handler wherever it stood: a reissued certificate the running
     // bus does not serve, or — worse — a fleet-wide maintenance window with no request behind it,
     // pausing every judgement for fifteen minutes with nothing to close it. The task finishes the

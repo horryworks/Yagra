@@ -132,7 +132,7 @@ interface RowState {
   credential_id: string;
   vendor: string;
   model: string;
-  /** The folder the operator picked for this one device (ADR-131 決定 11).
+  /** The folder the operator picked for this one device (ADR-131 decision 11).
    *
    *  `undefined` means "follow the rule" — the IP-range match, or the sweep's folder. An empty
    *  string is a **choice**, not an absence: it means the tree root. Those two must stay
@@ -145,7 +145,7 @@ export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
   const [searchParams, setSearchParams] = useSearchParams();
-  // Two views, one page (ADR-179 決定 9). The sweep form is the default, so a bare URL — and every
+  // Two views, one page (ADR-179 decision 9). The sweep form is the default, so a bare URL — and every
   // link made before the tabs existed — opens where it always did.
   const [tab, setTab] = useEnumParam('tab', DISCOVERY_TABS, 'scan');
   // The unregistered list is read here, not inside its tab: the tab's label carries the count, so
@@ -157,7 +157,7 @@ export function DiscoveryPage() {
       .then(setEndpointPage)
       .catch(() => undefined);
   }, []);
-  // The next page after the rows already on screen (ADR-179 増分 6). Keyset, so a row that moves
+  // The next page after the rows already on screen (ADR-179 Inc.6). Keyset, so a row that moves
   // while the list is read is not skipped twice or shown twice (`appendEndpointPage`).
   const [endpointMoreBusy, setEndpointMoreBusy] = useState(false);
   const loadMoreEndpoints = useCallback(() => {
@@ -213,7 +213,7 @@ export function DiscoveryPage() {
   );
   /** File each device into the folder whose IP range contains its address (ADR-131).
    *
-   *  **On by default** (決定 11): where a folder carries a range, that range is the best answer
+   *  **On by default** (decision 11): where a folder carries a range, that range is the best answer
    *  anyone has to "where does this device belong", and the row picker beside it makes disagreeing
    *  a single click. ⚠️ The *API* still defaults this off — `file_by_prefix` is
    *  `#[serde(default)]`, so an N-1 client's body means exactly what it always did. The default
@@ -485,7 +485,7 @@ export function DiscoveryPage() {
       setError(t(siteId ? 'discovery.site.err.nothingTicked' : 'discovery.err.badTargets'));
       return;
     }
-    // Remember this sweep's settings for the next visit (ADR-134 決定 5). **After the validation
+    // Remember this sweep's settings for the next visit (ADR-134 decision 5). **After the validation
     // above and once per scan** — a spec that does not parse started nothing and must not become
     // the next person's starting point, and writing per keystroke would make a preference out of
     // every half-typed range. `targetSpec` rather than `effectiveSpec`: in site mode the ticked
@@ -628,7 +628,7 @@ export function DiscoveryPage() {
    * A failure is left silent and simply retried on the next arrival: the column falls back to the
    * pending marker, and a red banner over a *preview* would be louder than the thing it describes.
    *
-   * 🚨 **One request at a time** (ADR-131 増分 2). The addresses of the request that is out live in
+   * 🚨 **One request at a time** (ADR-131 Inc.2). The addresses of the request that is out live in
    * a ref, and `previewBatch` sends nothing while it holds any: before, every candidate that arrived
    * re-sent everything still waiting on its reply, and seven of these overlapped on the PoC box.
    * A success bumps `previewRound`, so what arrived meanwhile goes out as the next single request.
@@ -1194,7 +1194,7 @@ export function DiscoveryPage() {
               // A device node already stands at this address (ADR-139). The row stays — it is part
               // of what the sweep found — but it cannot be picked, and it says which node it is.
               const inTree = existing.get(c.address);
-              // Looks like a node monitored at another address (ADR-139 増分 3). Marked and
+              // Looks like a node monitored at another address (ADR-139 Inc.3). Marked and
               // muted like `inTree`, but still pickable: the evidence can be wrong where sites
               // reuse one private address plan, so the operator keeps the last word.
               const alike = inTree ? undefined : sameDevice.get(c.address);
@@ -1352,7 +1352,7 @@ export function DiscoveryPage() {
                 onClick={importSelected}
                 disabled={selectedCount === 0 || importing}
               >
-                {/* Say it is working, not only that it cannot be pressed (ADR-131 増分 2 決定 14):
+                {/* Say it is working, not only that it cannot be pressed (ADR-131 Inc.2 decision 14):
                     on the PoC box an import sat for fifteen minutes behind a merely greyed button,
                     and it was pressed again from another machine. */}
                 {importing
@@ -1402,7 +1402,7 @@ function SeenOnNetworkCard({
   snmpCreds: CredentialSummary[];
   probeCredIds: string[];
   onProbeCredsChange: (ids: string[]) => void;
-  /** The folders the caller can see — where "Monitor" may put a device (ADR-179 増分 8). */
+  /** The folders the caller can see — where "Monitor" may put a device (ADR-179 Inc.8). */
   groups: NodeGroup[];
   page: DiscoveredEndpointPage | null;
   loadMore: () => void;
@@ -1414,10 +1414,10 @@ function SeenOnNetworkCard({
   // name it is handed and resolves nothing, so passing it the id showed a raw UUID.
   const { nodeName } = useEntityNames();
   // Where Monitor puts a device: one choice for the whole list, as a range scan has one for its
-  // sweep (ADR-179 増分 8 決定 3). Not remembered — the scan's site picker is not either.
+  // sweep (ADR-179 Inc.8 decision 3). Not remembered — the scan's site picker is not either.
   const [destination, setDestination] = useState<SetupDestination>(DEFAULT_SETUP_DESTINATION);
   // Detect, the two dropdowns and Monitor for every row — the same state the Neighbors tab uses
-  // (ADR-179 増分 3), so the two surfaces cannot drift apart.
+  // (ADR-179 Inc.3), so the two surfaces cannot drift apart.
   const setup = useEndpointSetup({ profiles, creds, probeCredIds, destination, groups });
   const [note, setNote] = useState<string | null>(null);
   const epCols = useMemo(() => endpointColumns(t), [t]);
@@ -1507,7 +1507,7 @@ function SeenOnNetworkCard({
         />
       )}
       {/* While more pages remain, say how much of the list is on screen and that the filters only
-          search that much (ADR-179 増分 6 決定 2). */}
+          search that much (ADR-179 Inc.6 decision 2). */}
       {page?.next && (
         <p className="muted">
           {t('discovery.seen.more.loaded', {
@@ -1527,7 +1527,7 @@ function SeenOnNetworkCard({
             <div className="disco-h">{t('discovery.seen.cols.mac')}</div>
             <div className="disco-h">{t('discovery.seen.cols.seenBy')}</div>
             {/* One header over the last three tracks: the profile and credential inputs only
-                appear once a Detect has answered (ADR-179 増分 2 決定 7), so naming them over an
+                appear once a Detect has answered (ADR-179 Inc.2 decision 7), so naming them over an
                 empty column would label nothing. */}
             <div className="disco-h disco-seen-setup">{t('discovery.seen.cols.setup')}</div>
           </div>
@@ -1587,7 +1587,7 @@ function SeenOnNetworkCard({
                   <div className="disco-seen-setup">
                     {canConfig && isSenderOnly(e) ? (
                       // A forgeable address: listed as information, never probed or imported
-                      // (ADR-179 増分 5).
+                      // (ADR-179 Inc.5).
                       <span className="muted">{t('discovery.seen.senderOnly')}</span>
                     ) : canConfig && (
                       <EndpointSetupCell

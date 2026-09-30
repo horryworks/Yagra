@@ -65,10 +65,10 @@ pub struct DeriveOutput {
 ///
 /// An address claimed by more than one node — by inventory address or by an interface address —
 /// identifies neither: it is a VRRP/HSRP virtual IP or a duplicate-address misconfiguration, and
-/// picking one claimant would be a guess (ADR-043 決定 2). The map's links and the Neighbors tab's
+/// picking one claimant would be a guess (ADR-043 decision 2). The map's links and the Neighbors tab's
 /// "which node is this peer" (ADR-180) both ask this, so the two agree whenever one node claims an
 /// address. Where several do, the tab alone goes on to ask whether the name the neighbour sent
-/// picks out exactly one of them, and still lists the rest (ADR-180 増分 4); the map draws no line.
+/// picks out exactly one of them, and still lists the rest (ADR-180 Inc.4); the map draws no line.
 #[must_use]
 pub fn sole_claimant<T: Copy + Ord>(claimants: &BTreeSet<T>) -> Option<T> {
     match claimants.len() {
@@ -90,7 +90,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     // Both the inventory address and every observed interface address, because a CDP row may name
     // either. An address claimed by more than one node identifies neither: it is a VRRP/HSRP
     // virtual IP or a duplicate-address misconfiguration, and picking a claimant would be the guess
-    // 決定 2 forbids.
+    // decision 2 forbids.
     let mut claimants: BTreeMap<IpAddr, BTreeSet<NodeId>> = BTreeMap::new();
     // Addresses that could place a node on a segment if they were not contested. Used only to keep
     // the `duplicate_addresses` counter meaningful — see below.
@@ -211,7 +211,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
                 // A star to a single router would mean that when that router dies, each server's
                 // only modelled path is gone and all of them suppress — even though the second HSRP
                 // router is alive and they are perfectly reachable. That is a false suppression: the
-                // exact failure class ADR-038 named and 決定 2 accepted risk on. The cross product
+                // exact failure class ADR-038 named and decision 2 accepted risk on. The cross product
                 // gives every server *both* routers as parents, which is what makes
                 // `Topology::is_suppressed` ("all parents down") correct rather than merely
                 // reachable.
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn a_contested_peer_address_produces_no_link() {
         // Two nodes claim the address the peer advertised — a VIP, or a duplicate. Choosing one
-        // would be the guess 決定 2 forbids, exactly as for an L2 management address.
+        // would be the guess decision 2 forbids, exactly as for an L2 management address.
         let n = ids(3);
         let out = derive_links(DeriveInput {
             nodes: &[

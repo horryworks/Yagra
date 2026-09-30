@@ -33,7 +33,7 @@ export function normalizeLabel(raw: string): string {
  * Split pasted text into candidate labels.
  *
  * Commas and newlines, because those are what a list copied out of a spreadsheet or another tool
- * is separated by. A label may contain spaces (`Matsuyama 本社`), so a space is **not** a
+ * is separated by. A label may contain spaces (`Site A office`), so a space is **not** a
  * separator — splitting on it would silently turn one label into two.
  */
 export function splitPastedLabels(raw: string): string[] {
@@ -48,7 +48,7 @@ export function splitPastedLabels(raw: string): string[] {
  *
  * Mirrors `api/nodes.rs::validated_labels` so the operator is told before the save rather than by
  * a 400. The rules are deliberately loose on character: a label is a word a person reads off a
- * badge, so `JAPAN`, `松山本社` and `spare parts` are all legal. Only control characters are
+ * badge, so `JAPAN`, a site name in Japanese, and `spare parts` are all legal. Only control characters are
  * refused, because they are invisible and would make two labels that look identical differ.
  */
 export function labelProblem(raw: string, existing: readonly string[]): LabelProblem | null {

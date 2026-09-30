@@ -18,7 +18,7 @@ export function TopBar() {
   const navigate = useNavigate();
   const active = sectionForPath(pathname);
   const alertCount = useAlertStore((s) => Object.keys(s.alerts).length);
-  // Where each tab goes back to (ADR-134 増分 2). Not `s.path` any more — that constant always
+  // Where each tab goes back to (ADR-134 Inc.2). Not `s.path` any more — that constant always
   // landed on the section's first child, so Dashboard could not return to My dashboard.
   const bySection = useSectionRouteStore((s) => s.bySection);
   // The permission composing the public board takes — the same one its handler checks (ADR-056).
@@ -26,7 +26,7 @@ export function TopBar() {
 
   return (
     <header className="topbar">
-      {/* Home is fixed, and stays fixed while the tabs remember (ADR-134 増分 2 決定 10): when a
+      {/* Home is fixed, and stays fixed while the tabs remember (ADR-134 Inc.2 decision 10): when a
           memory takes the operator somewhere unexpected, this is the one control whose destination
           they can predict. The tabs remember; the logo is home. */}
       <button

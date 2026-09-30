@@ -97,7 +97,7 @@ fn retain_hours_from(raw: Option<&str>) -> usize {
 ///
 /// **Two processes must never share one.** `tracing-appender` names a file from the prefix and the
 /// hour, so two writers with the same prefix in the same directory append to the same file and
-/// interleave each other's lines — the hazard ADR-045 決定 2 named for HA cores, and the reason a
+/// interleave each other's lines — the hazard ADR-045 decision 2 named for HA cores, and the reason a
 /// poller pool needs its id here (ADR-045 Inc.3). The instance is sanitized because it becomes a
 /// path component and arrives from `YAGRA_POLLER_ID`, which an operator sets by hand.
 ///
@@ -159,7 +159,7 @@ fn file_writer(
 // ── Reading the files back ────────────────────────────────────────────────────────────────────
 // The collector lives here, beside the writer, because its correctness is entirely a property of
 // how the files are named: `file_prefix` above plus `tracing-appender`'s `YYYY-MM-DD-HH` suffix.
-// It has two consumers — core's support bundle (ADR-045 決定 2 / Inc.3) and a remote poller
+// It has two consumers — core's support bundle (ADR-045 decision 2 / Inc.3) and a remote poller
 // answering a request for its own log (Inc.4) — and they must select by the *same* rules, or a
 // remote site's contribution to a bundle would be chosen differently from a co-located one's.
 
@@ -364,7 +364,7 @@ pub fn init_instance(service_name: &str, instance: Option<&str>) -> TelemetryGua
 }
 
 /// Route every panic through `tracing` and count it, then run the hook that was there before
-/// (ADR-158 決定 2).
+/// (ADR-158 decision 2).
 ///
 /// 🚨 **Without this a panic's text reaches stderr only.** ADR-045's on-disk log exists so that a
 /// panic on a deployment nobody can open a shell on still leaves a trace the support bundle can
@@ -556,7 +556,7 @@ fn next_backoff(prev: std::time::Duration) -> std::time::Duration {
         .clamp(RESTART_BACKOFF_MIN, RESTART_BACKOFF_MAX)
 }
 
-/// [`spawn_cancellable`], **started again whenever it panics** (ADR-158 決定 2).
+/// [`spawn_cancellable`], **started again whenever it panics** (ADR-158 decision 2).
 ///
 /// `make` builds the task's future afresh for each start, so whatever the task owns — a socket, a
 /// shared state handle — has to be something `make` can hand out again (an `Arc` clone). A panic is

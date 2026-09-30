@@ -17,7 +17,7 @@
 //!   that — it is `yagra_transport::fetch_inventory`'s contract, which returns an error rather than
 //!   a short answer — so [`plan_sync`] takes the listing as given and says so here.
 //!
-//! Since ADR-164 Inc.8 the same plan also says what an **imported node follows** (決定 14): its
+//! Since ADR-164 Inc.8 the same plan also says what an **imported node follows** (decision 14): its
 //! address, its name while nobody has renamed it, and the network its binding names. That makes
 //! [`MerakiInventoryRepo::apply`] a writer of `nodes` and `meraki_devices` as well, and it is here
 //! rather than beside the importer for one reason — a rename is only visible at the moment the
@@ -44,7 +44,7 @@ pub struct SeenDevice {
     /// [`choose_lan_address`].
     pub lan_ip: Option<IpAddr>,
     /// The device's MAC as the Dashboard lists it, rendered `aa:bb:cc:dd:ee:ff` — what a
-    /// neighbour row with no management address is matched by (ADR-180 増分 3).
+    /// neighbour row with no management address is matched by (ADR-180 Inc.3).
     pub mac: Option<String>,
     /// Whether Meraki reports the device up *in this listing* (online or alerting).
     pub online: bool,
@@ -53,7 +53,7 @@ pub struct SeenDevice {
 impl SeenDevice {
     /// Read one device out of a transport inventory. `lans` is what [`lan_addresses`] chose for each
     /// network whose LAN side has been read; an MX takes its address from there, never from what the
-    /// listing says (決定 28), and one whose network has not been read has none yet.
+    /// listing says (decision 28), and one whose network has not been read has none yet.
     #[must_use]
     pub fn from_transport(d: &MerakiInventoryDevice, lans: &LanAddresses) -> Self {
         let lan_ip = if takes_lan_from_vlans(&d.info.product_type) {
@@ -88,7 +88,7 @@ pub fn seen_devices(inventory: &MerakiInventory, lans: &LanAddresses) -> Vec<See
         .collect()
 }
 
-// ── An MX's address comes from its network's LAN side (ADR-164 決定 28) ──────────────────────────
+// ── An MX's address comes from its network's LAN side (ADR-164 decision 28) ──────────────────────────
 //
 // An MX reports no `lanIp` (686 of 686 on a real organization); it reports `wan1Ip`, which is in
 // nobody's IP ranges, is often dynamic, and filed sites into another site's folder. So its address
@@ -98,7 +98,7 @@ pub fn seen_devices(inventory: &MerakiInventory, lans: &LanAddresses) -> Vec<See
 /// The product type whose address comes from its network's VLANs rather than from `lanIp`.
 const LAN_FROM_VLANS: &str = "appliance";
 
-/// Whether a device of this product type takes its address from its network's VLANs (決定 28).
+/// Whether a device of this product type takes its address from its network's VLANs (decision 28).
 #[must_use]
 pub fn takes_lan_from_vlans(product_type: &str) -> bool {
     product_type == LAN_FROM_VLANS
@@ -140,9 +140,9 @@ pub fn lan_order(addrs: &[MerakiLanAddress]) -> Vec<IpAddr> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LanReads {
     /// The periodic sync: every network never read, then at most `rereads` of the stale ones
-    /// (ADR-164 決定 29).
+    /// (ADR-164 decision 29).
     Due { rereads: usize },
-    /// "Sync now": every network, read or not, stale or not (決定 32).
+    /// "Sync now": every network, read or not, stale or not (decision 32).
     Every,
 }
 
@@ -152,13 +152,13 @@ pub enum LanReads {
 /// [`LanReads::Due`], only those read longer than [`LAN_REFRESH`] ago and at most `rereads` of
 /// them; with [`LanReads::Every`], all of them.
 ///
-/// 🚨 **The cap on re-reads is what keeps them spread out** (ADR-164 決定 29). Without it every
+/// 🚨 **The cap on re-reads is what keeps them spread out** (ADR-164 decision 29). Without it every
 /// stale network was due at once: the first round reads about sixty networks per sync, so a day
 /// later those sixty went stale together and each of about six syncs spent its whole minute
 /// re-reading them — holding the lane the switch-port collects run in, every day at the same time.
 /// Capped, a clump drains a few per sync, and each network's next read lands where it was read.
 /// The networks never read are not capped: they are all read in the one sync that finds them
-/// (決定 30), and their MX waits for that read to be imported.
+/// (decision 30), and their MX waits for that read to be imported.
 #[must_use]
 pub fn lan_reads_due(
     mx_networks: &BTreeSet<String>,
@@ -187,7 +187,7 @@ pub fn lan_reads_due(
     due
 }
 
-/// How many stale networks one sync re-reads (ADR-164 決定 29): the share of the organization's MX
+/// How many stale networks one sync re-reads (ADR-164 decision 29): the share of the organization's MX
 /// networks that falls to one sync if each is read once per [`LAN_REFRESH`], rounded up, plus one.
 ///
 /// Rounding up is what guarantees a whole round a day at any interval — `ceil(n × s / D)` reads per
@@ -257,8 +257,8 @@ pub fn shared_lan_addresses(lans: &HashMap<String, NetworkLan>) -> HashSet<IpAdd
 ///
 /// ⚠️ "Shared" is decided over the networks read so far: an address reused by two sites is found
 /// shared only once both have been read. That window is why a sync reads every never-read network
-/// in one go (ADR-164 決定 30) and imports no MX when its reads were cut short (決定 31) — an MX
-/// imported inside it is filed by the reused address for good (決定 6). It happened on a lab
+/// in one go (ADR-164 decision 30) and imports no MX when its reads were cut short (decision 31) — an MX
+/// imported inside it is filed by the reused address for good (decision 6). It happened on a lab
 /// deployment (2026-09-24) while the first round was still spread over six syncs. What is left of
 /// it: a network whose own read keeps failing is never "read", so an address it shares goes
 /// unnoticed.
@@ -323,7 +323,7 @@ pub struct DeviceWrite {
     /// Stamp `first_online_at` now. Only ever true for a row that has none.
     pub first_online: bool,
     /// Backfill `imported_at` with the moment the device's node was bound. Only ever set for a row
-    /// that has none — a device imported before this table existed (ADR-164 決定 6).
+    /// that has none — a device imported before this table existed (ADR-164 decision 6).
     pub imported_at: Option<DateTime<Utc>>,
 }
 
@@ -368,7 +368,7 @@ pub fn node_name_for(meraki_name: &str, serial: &str) -> String {
     }
 }
 
-/// A device's node, as the planner needs it (ADR-164 決定 14): when it was bound, and what the node
+/// A device's node, as the planner needs it (ADR-164 decision 14): when it was bound, and what the node
 /// and its binding say **now**.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundNode {
@@ -409,7 +409,7 @@ pub struct NodeFollow {
 ///   is touched.
 /// - **The binding's network** is a copy with no other writer, so it is simply kept current.
 ///
-/// The folder is never part of it (決定 6).
+/// The folder is never part of it (decision 6).
 #[must_use]
 pub fn plan_follow(
     row: Option<&StoredDevice>,
@@ -439,7 +439,7 @@ pub struct SyncPlan {
     pub writes: Vec<DeviceWrite>,
     /// Stored serials the listing no longer contains and that are not already marked.
     pub newly_missing: Vec<String>,
-    /// What imported nodes take from this listing (決定 14).
+    /// What imported nodes take from this listing (decision 14).
     pub follows: Vec<NodeFollow>,
 }
 
@@ -517,7 +517,7 @@ pub fn plan_sync(
 }
 
 /// What a device's row is shown as: read from the facts the inventory keeps about it (ADR-164
-/// 決定 3), never stored. Serialized as the snake_case token.
+/// decision 3), never stored. Serialized as the snake_case token.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
 )]
@@ -532,7 +532,7 @@ pub enum MerakiDeviceState {
     /// It was a node here and an operator deleted that node. Automatic import leaves it alone.
     Deleted,
     /// It has a node, and Meraki no longer lists it. The node and its alerts are left as they are:
-    /// a device missing from a listing is not evidence that it recovered (ADR-156 決定 3).
+    /// a device missing from a listing is not evidence that it recovered (ADR-156 decision 3).
     Missing,
 }
 
@@ -588,12 +588,12 @@ pub struct MerakiDeviceCounts {
     pub new: u32,
     /// Nodes whose device Meraki no longer lists.
     pub missing: u32,
-    /// Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection
+    /// Of `monitored`, the ones in a network this organization does not watch (decision 15). Collection
     /// asks the Dashboard about watched networks only, so **nothing is collected for these**: the
     /// node keeps the last state it was seen in and raises nothing. It happens when a device is
     /// moved into an unwatched network, and when a network holding nodes is un-watched. An
     /// organization that watches no network at all is sent no collect, so there it is every
-    /// monitored device (決定 16).
+    /// monitored device (decision 16).
     pub monitored_unwatched: u32,
 }
 
@@ -633,8 +633,8 @@ pub struct DeviceRecord {
     /// has not recorded.
     pub network_monitored: bool,
     pub lan_ip: Option<IpAddr>,
-    /// An MX whose network's LAN side has never been read (決定 28): its address is not known yet,
-    /// so the sync does not import it — an import files the node once and never moves it (決定 6).
+    /// An MX whose network's LAN side has never been read (decision 28): its address is not known yet,
+    /// so the sync does not import it — an import files the node once and never moves it (decision 6).
     pub lan_pending: bool,
     pub state: MerakiDeviceState,
     pub node_id: Option<Uuid>,
@@ -643,11 +643,11 @@ pub struct DeviceRecord {
     pub node_group_id: Option<Uuid>,
     pub first_seen_at: DateTime<Utc>,
     pub missing_since: Option<DateTime<Utc>>,
-    /// The MX's configured warm-spare role, when the sync has read one (ADR-164 決定 26).
+    /// The MX's configured warm-spare role, when the sync has read one (ADR-164 decision 26).
     pub ha_role: Option<MerakiHaRole>,
 }
 
-/// One MX's warm-spare pair as the inventory records it (ADR-164 決定 26).
+/// One MX's warm-spare pair as the inventory records it (ADR-164 decision 26).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HaPair {
     /// This MX's configured role.
@@ -682,7 +682,7 @@ pub struct DeviceWithMac {
     pub org_id: Uuid,
     pub org_name: String,
     /// The Dashboard's `productType` (`switch`, `wireless`, `appliance` …) — what the device is,
-    /// for a neighbour row whose own capabilities are blank (ADR-181 増分 4 決定 2).
+    /// for a neighbour row whose own capabilities are blank (ADR-181 Inc.4 decision 2).
     pub product_type: String,
     /// Its node, when it has been imported.
     pub node: Option<MacNode>,
@@ -708,7 +708,7 @@ impl MerakiInventoryRepo {
         Self { pool }
     }
 
-    /// The organization whose inventory lists a device at each of `addresses` (ADR-179 増分 3), with
+    /// The organization whose inventory lists a device at each of `addresses` (ADR-179 Inc.3), with
     /// its name, so the Neighbors tab can point a Meraki device at the organization page instead of
     /// registering it by hand. A device the last listing no longer contained (`missing_since`) is
     /// left out: the organization can no longer import it. The organization's name is what
@@ -742,7 +742,7 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
-    /// The device the organizations list under each of `macs` (ADR-180 増分 3), with its node when
+    /// The device the organizations list under each of `macs` (ADR-180 Inc.3), with its node when
     /// it has been imported — so a neighbour row with no management address (every MR and MX row
     /// the Dashboard answers) can say whether the device on that port is monitored. `macs` are in
     /// the form [`SeenDevice::mac`] is stored in. A device the last listing no longer contained is
@@ -791,7 +791,7 @@ impl MerakiInventoryRepo {
     }
 
     /// The organization's MX and MR that are nodes here — the devices whose neighbours the sync
-    /// reads one at a time (ADR-181 増分 3, 増分 5). A switch is not among them: its neighbours come
+    /// reads one at a time (ADR-181 Inc.3, Inc.5). A switch is not among them: its neighbours come
     /// from the organization-wide listing. One not imported has nowhere to record them.
     ///
     /// A device the organization's last complete listing no longer contained (`missing_since`) is
@@ -1063,7 +1063,7 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
-    /// Record each MX's warm-spare role (ADR-164 決定 26): the rows whose role changed. Only rows
+    /// Record each MX's warm-spare role (ADR-164 decision 26): the rows whose role changed. Only rows
     /// that exist are written — so this runs after [`Self::apply`], which creates new devices' rows —
     /// and a device the list does not name keeps what it has.
     ///
@@ -1096,7 +1096,7 @@ impl MerakiInventoryRepo {
         Ok(done.rows_affected())
     }
 
-    /// `serial`'s warm-spare pair (ADR-164 決定 26), or `None` when it holds no role — it is not an
+    /// `serial`'s warm-spare pair (ADR-164 decision 26), or `None` when it holds no role — it is not an
     /// MX, its warm spare is not enabled, or no role has been read yet.
     ///
     /// The partner is the other MX of the same network that Meraki still lists. Measured on a real
@@ -1298,7 +1298,7 @@ mod tests {
         HashMap::from([(d.serial.clone(), node)])
     }
 
-    /// ADR-180 増分 3: a row stored before migration 0140 has no MAC, so the first sync after the
+    /// ADR-180 Inc.3: a row stored before migration 0140 has no MAC, so the first sync after the
     /// upgrade writes it once — nothing else would ever fill the column.
     #[test]
     fn a_row_stored_without_its_mac_is_written_once_to_fill_it() {
@@ -1315,7 +1315,7 @@ mod tests {
         assert!(plan_sync(&[stored_as(&listed)], &[listed], &nobody()).is_empty());
     }
 
-    /// ADR-164 決定 4. The sync runs every five minutes; the ordinary sync finds what it found last
+    /// ADR-164 decision 4. The sync runs every five minutes; the ordinary sync finds what it found last
     /// time and must write nothing at all.
     #[test]
     fn a_sync_that_finds_nothing_changed_writes_nothing() {
@@ -1409,7 +1409,7 @@ mod tests {
         assert_eq!(plan.newly_missing, ["Q2-GONE"]);
     }
 
-    /// ADR-164 決定 6. A device imported before this table existed has a node and no row. Its first
+    /// ADR-164 decision 6. A device imported before this table existed has a node and no row. Its first
     /// sync must record that it was imported, or deleting the node later would read as "never
     /// imported" and automatic import would put it straight back.
     #[test]
@@ -1424,7 +1424,7 @@ mod tests {
         assert!(plan_sync(&[imported_as(&a)], &[a], &bound).is_empty());
     }
 
-    /// ADR-164 決定 14, the rename. Meraki's name changed and the node still carries the name the
+    /// ADR-164 decision 14, the rename. Meraki's name changed and the node still carries the name the
     /// old one gave it, so nobody has renamed it and it follows.
     #[test]
     fn a_rename_in_meraki_reaches_a_node_that_still_carries_the_old_name() {
@@ -1579,7 +1579,7 @@ mod tests {
     }
 
     /// The binding's network is kept current. Nothing in the plan names a folder: a device that
-    /// moves network stays where it was filed (決定 6).
+    /// moves network stays where it was filed (decision 6).
     #[test]
     fn a_device_that_moved_network_has_its_binding_corrected() {
         let was = seen("Q2-A", true);
@@ -1670,7 +1670,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 15. Only a **monitored** device in an unwatched network is the silent case: a
+    /// ADR-164 decision 15. Only a **monitored** device in an unwatched network is the silent case: a
     /// device with no node has nothing that could go quiet, and one Meraki no longer lists is
     /// already reported as missing.
     #[test]
@@ -1757,7 +1757,7 @@ mod tests {
         assert!(got.iter().all(|d| d.lan_ip.is_none()));
     }
 
-    // ── An MX's address from its network's LAN side (ADR-164 決定 28) ───────────────────────────
+    // ── An MX's address from its network's LAN side (ADR-164 decision 28) ───────────────────────────
 
     fn ip(s: &str) -> IpAddr {
         s.parse().expect("ip")
@@ -1872,7 +1872,7 @@ mod tests {
             lan_reads_due(&mx, &stored, now, LanReads::Due { rereads: 10 }),
             ["N_new_a", "N_new_b", "N_older", "N_old"]
         );
-        // "Sync now" (決定 32): every MX network, the fresh one too — still never the one that holds
+        // "Sync now" (decision 32): every MX network, the fresh one too — still never the one that holds
         // no MX any more — with the never-read first, then oldest first.
         assert_eq!(
             lan_reads_due(&mx, &stored, now, LanReads::Every),
@@ -1880,7 +1880,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 29: the never-read networks are all due whatever the cap, and only `rereads` of
+    /// ADR-164 decision 29: the never-read networks are all due whatever the cap, and only `rereads` of
     /// the stale ones — the oldest — follow them. A cap of zero still reads every new network.
     #[test]
     fn a_sync_re_reads_only_its_share_of_the_stale_networks() {
@@ -1979,7 +1979,7 @@ mod tests {
         );
     }
 
-    /// ADR-179 増分 3: a device's LAN address names its organization — until the listing stops
+    /// ADR-179 Inc.3: a device's LAN address names its organization — until the listing stops
     /// containing it.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2016,7 +2016,7 @@ mod tests {
         assert!(repo.devices_at(&[lan]).await.expect("devices").is_empty());
     }
 
-    /// ADR-180 増分 3: a listed device is found by the MAC the listing gave it, with its node once
+    /// ADR-180 Inc.3: a listed device is found by the MAC the listing gave it, with its node once
     /// it has one; a device the last listing no longer contained is not.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2065,7 +2065,7 @@ mod tests {
         assert_eq!(found.len(), 2);
         let imported = &found["0c:8d:db:00:00:01"];
         assert_eq!((imported.org_id, imported.org_name.as_str()), (org, "Acme"));
-        // ADR-181 増分 4 決定 2: the listed product, for a row whose capabilities are blank.
+        // ADR-181 Inc.4 decision 2: the listed product, for a row whose capabilities are blank.
         assert_eq!(imported.product_type, "appliance");
         assert_eq!(
             imported.node,
@@ -2141,7 +2141,7 @@ mod tests {
     }
 
     /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a
-    /// scan (ADR-180 増分 2, migration 0139).
+    /// scan (ADR-180 Inc.2, migration 0139).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_address_lookup_can_use_the_listed_lan_ip_index(pool: sqlx::PgPool) {
@@ -2159,7 +2159,7 @@ mod tests {
         );
     }
 
-    /// …and which listed device carries a neighbour's chassis MAC, the same way (ADR-180 増分 3,
+    /// …and which listed device carries a neighbour's chassis MAC, the same way (ADR-180 Inc.3,
     /// migration 0140).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]

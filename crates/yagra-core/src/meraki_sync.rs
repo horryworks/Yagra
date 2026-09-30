@@ -10,14 +10,14 @@
 //!
 //! **What it shares with the collector is one of the organization's two lanes**
 //! ([`MerakiInflight`], ADR-169): the slow one, for the periodic sync and for "Sync now" alike
-//! (ADR-164 決定 32). The Dashboard API's rate limit is per organization, so a sync never runs
+//! (ADR-164 decision 32). The Dashboard API's rate limit is per organization, so a sync never runs
 //! beside a collect in its own lane — whichever asks second waits a tick — and it paces at one
 //! lane's share of the budget (`MerakiOrg::lane_rps`), because the other lane can be busy; the one
 //! exception is an organization with no node yet, whose fast lane has nothing to do. The lane is
 //! released by a drop guard, because a sync that panicked or was cancelled while holding it would
 //! otherwise stop that lane's collects until the lease ran out.
 //!
-//! **"Sync now" is a request, not a call** (決定 32). It re-reads the whole organization, which takes
+//! **"Sync now" is a request, not a call** (decision 32). It re-reads the whole organization, which takes
 //! minutes, so the endpoint writes the request on the organization's row and [`run_sync_loop`] runs
 //! it when the slow lane is free; the row carries its progress while it runs.
 //!
@@ -27,16 +27,16 @@
 //! sync whose listing failed writes its reason and nothing else — not one row of
 //! `meraki_inventory`, and not `last_sync_at`.
 //!
-//! **Between the listing and the writes it reads MX networks' LAN sides** (ADR-164 決定 28,
+//! **Between the listing and the writes it reads MX networks' LAN sides** (ADR-164 decision 28,
 //! [`MerakiSync::lan_stage`]). An MX reports no `lanIp`, so its address is one of its own VLAN
 //! addresses — the lowest-numbered inside a folder's IP range, else the lowest-numbered, after
 //! the addresses other networks reuse have been set aside. Those can only be read one network at a
 //! time, and `meraki_org_networks` remembers them. A sync reads **every network never read, all at
-//! once** (決定 30) — an organization's first sync reads its whole LAN side before anything is
+//! once** (decision 30) — an organization's first sync reads its whole LAN side before anything is
 //! imported — plus a few that are a day old; "Sync now" reads them all. It is a read that can fail
 //! without failing the sync: a network it could not read keeps what it said last time, an MX in a
 //! network never read is not imported until it has been, and a sync whose reads were cut short
-//! imports no MX at all (決定 31), since an address is only known to be reused once every network
+//! imports no MX at all (decision 31), since an address is only known to be reused once every network
 //! holding it has been read.
 //!
 //! **Then it imports** (ADR-164 Inc.4), when the organization says so: a device in a watched
@@ -81,7 +81,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the three inventory listings may take. At a request a second they are a few seconds for
 /// any organization under a few thousand devices; this is the ceiling for one that is not.
 const INVENTORY_TIMEOUT: Duration = Duration::from_secs(120);
-/// How long the warm-spare role read may take (ADR-164 決定 26) — one paged listing.
+/// How long the warm-spare role read may take (ADR-164 decision 26) — one paged listing.
 const ROLES_TIMEOUT: Duration = Duration::from_secs(60);
 /// The flight's lease as a sync takes it — the backstop if the drop guard never runs (the process is
 /// killed). Longer than [`INVENTORY_TIMEOUT`], the one read before the LAN stage; each later stage
@@ -92,18 +92,18 @@ const LEASE: Duration = Duration::from_secs(150);
 /// reads' own deadline passed, and the writes after them.
 const LEASE_MARGIN: Duration = Duration::from_secs(60);
 /// The most a periodic sync spends **re-reading** networks' LAN sides it has read before (ADR-164
-/// 決定 29) — a few a sync, since `lan_rereads_per_sync` caps them. Networks never read are not held
-/// to it: they are all read in the sync that finds them ([`lan_budget`], 決定 30).
+/// decision 29) — a few a sync, since `lan_rereads_per_sync` caps them. Networks never read are not held
+/// to it: they are all read in the sync that finds them ([`lan_budget`], decision 30).
 const LAN_READ_BUDGET: Duration = Duration::from_secs(60);
-/// The longest a whole-organization read may take (決定 30・32): about 1,700 networks at a request a
-/// second. One that needs longer stops there — the MX wait (決定 31) and the next sync reads on from
+/// The longest a whole-organization read may take (decision 30 and 32): about 1,700 networks at a request a
+/// second. One that needs longer stops there — the MX wait (decision 31) and the next sync reads on from
 /// the networks it did not reach.
 const FULL_READ_CEILING: Duration = Duration::from_secs(30 * 60);
-/// How long one sync may spend reading MX and MR neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 3).
+/// How long one sync may spend reading MX and MR neighbours (ADR-181 Inc.3 decision 4, Inc.5 decision 3).
 /// The share a sync asks for ([`neighbor_reads_per_sync`]) is 201 for about 690 MX and 1,710 MR
 /// synced every 300 s against an hourly neighbour interval, but the reads are paced at the lane's
 /// rate, so at the default 1 a second this budget reaches about 90 of them and the rest wait for the
-/// next sync — a round of 2,329 devices takes about 2 h 10 min (増分 5 決定 6, accepted).
+/// next sync — a round of 2,329 devices takes about 2 h 10 min (Inc.5 decision 6, accepted).
 const NEIGHBOR_READ_BUDGET: Duration = Duration::from_secs(90);
 /// How many networks the LAN stage reads between two progress writes and two `record_network_lans`.
 const LAN_READ_CHUNK: usize = 25;
@@ -138,7 +138,7 @@ pub enum MerakiSyncFailure {
     Timeout,
     /// Yagra could not read or write its own database.
     Internal,
-    /// A **collect** was sent and nothing came back before its lease ran out (ADR-164 決定 18): a
+    /// A **collect** was sent and nothing came back before its lease ran out (ADR-164 decision 18): a
     /// poller from before the collect report existed failed silently, the Meraki pool has no live
     /// poller, or a poller died mid-collect. The inventory sync never produces this one — it runs
     /// in this process and always has an answer of its own.
@@ -203,7 +203,7 @@ pub trait MerakiDirectory: Send + Sync {
         api_key: &str,
     ) -> Result<MerakiInventory, MerakiFetchError>;
 
-    /// Read every MX's warm-spare role, to the end (ADR-164 決定 26): `(serial, role)`, `None` for
+    /// Read every MX's warm-spare role, to the end (ADR-164 decision 26): `(serial, role)`, `None` for
     /// an MX whose warm spare is not enabled. No default body on purpose — a fake that forgot this
     /// would answer "no pairs" and hide every role the sync should write.
     async fn ha_roles(
@@ -213,13 +213,13 @@ pub trait MerakiDirectory: Send + Sync {
     ) -> Result<Vec<(String, Option<MerakiHaRole>)>, MerakiFetchError>;
 
     /// Read the LAN addresses the MX holds in each of `network_ids`, one network at a time at `rps`,
-    /// until `budget` is spent (ADR-164 決定 28): the networks reached, in order, each with its
+    /// until `budget` is spent (ADR-164 decision 28): the networks reached, in order, each with its
     /// addresses or its own failure. `Err` only when nothing could be sent. No default body, for the
     /// reason [`ha_roles`](Self::ha_roles) has none — a fake that answered "nothing reached" would
     /// leave every MX waiting for an address, and so never imported.
     ///
     /// The rate is the caller's because it is not always the lane's: an organization with no node
-    /// yet reads at its whole `target_rps` (決定 30).
+    /// yet reads at its whole `target_rps` (decision 30).
     async fn network_lans(
         &self,
         org: &MerakiOrg,
@@ -230,7 +230,7 @@ pub trait MerakiDirectory: Send + Sync {
     ) -> Result<Vec<(String, MerakiNetworkLan)>, MerakiFetchError>;
 
     /// Read each MX or MR in `serials` for its LLDP/CDP neighbours, one device at a time at
-    /// `rps`, until `budget` is spent (ADR-181 増分 3, 増分 5): the devices reached, in order, each with its
+    /// `rps`, until `budget` is spent (ADR-181 Inc.3, Inc.5): the devices reached, in order, each with its
     /// neighbours or its own failure. `Err` only when nothing could be sent. No default body, for
     /// the reason [`ha_roles`](Self::ha_roles) has none.
     async fn device_neighbors(
@@ -359,7 +359,7 @@ pub struct MerakiSyncReport {
     /// Devices that qualified for import and were left out by the organization's `max_devices`.
     pub over_cap: u32,
     /// Nodes that took a new address, a new name or a new network from the Dashboard in this sync
-    /// (ADR-164 決定 14). A node is renamed only while it still carries the name Meraki gave it,
+    /// (ADR-164 decision 14). A node is renamed only while it still carries the name Meraki gave it,
     /// and is never moved to another folder. Zero is the ordinary answer.
     pub followed: u32,
 }
@@ -395,14 +395,14 @@ pub struct MerakiSync {
     directory: Arc<dyn MerakiDirectory>,
     inflight: Arc<MerakiInflight>,
     resolver: Arc<ImportResolver>,
-    /// The MX networks this process has asked for a LAN side, by organization (ADR-164 決定 38).
+    /// The MX networks this process has asked for a LAN side, by organization (ADR-164 decision 38).
     /// One whose read fails every time stays unread in the database, and "a network never read"
-    /// is what makes a sync a whole-organization read (決定 30) — so without this, every periodic
+    /// is what makes a sync a whole-organization read (decision 30) — so without this, every periodic
     /// sync of that organization became one: progress on the page every five minutes, "Sync now"
     /// hidden while it ran, and a read at the full rate for an organization with no node.
     tried: std::sync::Mutex<HashMap<Uuid, HashSet<String>>>,
     /// Where an MX's or MR's neighbours are recorded — the table an SNMP walk's go to (ADR-181
-    /// 増分 3, 増分 5).
+    /// Inc.3, Inc.5).
     neighbors: Arc<NeighborRepo>,
     /// The deployment's neighbour interval, `None` while neighbour discovery is off. Set by
     /// [`run_sync_loop`] every tick from the same settings an SNMP node's walk follows; `None`
@@ -441,7 +441,7 @@ impl MerakiSync {
         }
     }
 
-    /// How often an MX's or MR's neighbours are read, or `None` for never (ADR-181 増分 3). The loop sets
+    /// How often an MX's or MR's neighbours are read, or `None` for never (ADR-181 Inc.3). The loop sets
     /// it from the deployment's neighbour settings.
     pub fn set_neighbor_interval(&self, every: Option<Duration>) {
         *self
@@ -459,15 +459,15 @@ impl MerakiSync {
         self.directory.as_ref()
     }
 
-    /// The periodic sync (ADR-169 決定 1): the **slow lane only** — nothing waits on it, and in the
+    /// The periodic sync (ADR-169 decision 1): the **slow lane only** — nothing waits on it, and in the
     /// fast lane it delayed availability by one tick every time it ran; its 315 s cycle and the shift
     /// that delay gave availability stayed in step, measured on the lab deployment. It reads every
-    /// MX network never read, all in this one sync (ADR-164 決定 30), and its share of the stale ones.
+    /// MX network never read, all in this one sync (ADR-164 decision 30), and its share of the stale ones.
     pub async fn sync_org_scheduled(&self, org: &MerakiOrg) -> Result<MerakiSyncReport, SyncError> {
         self.sync_in(org, SyncKind::Scheduled).await
     }
 
-    /// The whole-organization read "Sync now" asked for (ADR-164 決定 32): every MX network's LAN
+    /// The whole-organization read "Sync now" asked for (ADR-164 decision 32): every MX network's LAN
     /// side, read or not, then the import — in the slow lane only, like the periodic sync. It takes
     /// minutes, so nobody waits on it: the endpoint only records the request
     /// ([`MerakiOrgRepo::request_full_sync`]) and [`run_sync_loop`] calls this. The request is
@@ -501,7 +501,7 @@ impl MerakiSync {
             self.end_full_read(org, kind, &reading, result.is_ok(), started.elapsed())
                 .await;
         } else if let Err(e) = self.orgs.finish_full_sync(org.id, false).await {
-            // Every sync clears a "reading" another left behind (ADR-164 決定 38): only a whole
+            // Every sync clears a "reading" another left behind (ADR-164 decision 38): only a whole
             // read did, so one whose clear failed — or that panicked — left the page polling and
             // "Sync now" hidden until the next whole read, which may never come. Writes nothing
             // when there is nothing to clear.
@@ -524,7 +524,7 @@ impl MerakiSync {
                     "meraki sync completed"
                 );
                 if report.imported > 0 {
-                    // No audit row (ADR-164 決定 11): nobody did this. Who switched automatic import
+                    // No audit row (ADR-164 decision 11): nobody did this. Who switched automatic import
                     // on is what the audit log holds, from `PUT …/import-settings`.
                     tracing::info!(
                         org = %org.org_id,
@@ -562,7 +562,7 @@ impl MerakiSync {
         }
     }
 
-    /// A whole-organization read ended (決定 30・32): clear its progress — and the request, when it
+    /// A whole-organization read ended (decision 30 and 32): clear its progress — and the request, when it
     /// was the read "Sync now" asked for — count it, and say in one line how it went.
     async fn end_full_read(
         &self,
@@ -658,14 +658,14 @@ impl MerakiSync {
             .await
             .map_err(internal("reading the inventory failed"))?;
         let plan = plan_sync(&stored, &seen, &bound);
-        // The inventory rows and what imported nodes follow, in one transaction (決定 14).
+        // The inventory rows and what imported nodes follow, in one transaction (decision 14).
         let applied = self
             .inventory
             .apply(org.id, &plan)
             .await
             .map_err(internal("writing the inventory failed"))?;
         // Bumped here, the moment node rows changed, and not at the end of the sync (ADR-164
-        // 決定 38): a later stage that fails would skip it, and the next sync finds the addresses
+        // decision 38): a later stage that fails would skip it, and the next sync finds the addresses
         // already followed — `followed == 0` — so it would never come. It is the address that needs
         // it: the connectivity graph is re-derived when the generation or an observation watermark
         // moves (`run_topology_derivation`), and a re-addressed node moves neither watermark.
@@ -676,7 +676,7 @@ impl MerakiSync {
         self.inflight
             .extend(job, ROLES_TIMEOUT + LEASE_MARGIN, Instant::now());
         let roles = self.ha_roles(org, &api_key, ROLES_TIMEOUT).await;
-        // 🚨 The row as it is NOW, not as it was when this sync began (ADR-164 決定 38). A sync that
+        // 🚨 The row as it is NOW, not as it was when this sync began (ADR-164 decision 38). A sync that
         // reads the organization whole runs for minutes — up to half an hour — and an operator who
         // switched automatic import off, lowered the cap or stopped filing by range in that time
         // was ignored: the sync imported under the settings it started with, and wrote back the
@@ -706,11 +706,11 @@ impl MerakiSync {
         })
     }
 
-    /// Read the LLDP/CDP neighbours of the imported MX and MR whose turn it is (ADR-181 増分 3
-    /// 決定 4/5, 増分 5 決定 1/2) — one queue for both, oldest first — and record each answer as
+    /// Read the LLDP/CDP neighbours of the imported MX and MR whose turn it is (ADR-181 Inc.3
+    /// decision 4/5, Inc.5 decision 1/2) — one queue for both, oldest first — and record each answer as
     /// that node's neighbours. Only a device that answered is written: its answer is whole on its
     /// own, so one that failed or was not reached keeps what it said last time — as a switch not
-    /// in a cut-short listing does (ADR-181 決定 3).
+    /// in a cut-short listing does (ADR-181 decision 3).
     async fn read_device_neighbors(&self, org: &MerakiOrg, api_key: &str, job: Uuid) {
         let Some(every) = *self
             .neighbor_every
@@ -815,11 +815,11 @@ impl MerakiSync {
         }
     }
 
-    /// The LAN side of every network holding an MX (ADR-164 決定 28): read what is due, then choose
+    /// The LAN side of every network holding an MX (ADR-164 decision 28): read what is due, then choose
     /// each read network's address from everything now known.
     ///
-    /// **Networks never read are all read here, in this one sync** (決定 30), and "Sync now" reads
-    /// every network (決定 32). A read of either kind is a *whole-organization read*: it is held to
+    /// **Networks never read are all read here, in this one sync** (decision 30), and "Sync now" reads
+    /// every network (decision 32). A read of either kind is a *whole-organization read*: it is held to
     /// what its networks need ([`lan_budget`]) rather than to a minute, its progress goes on the
     /// organization's row for the page, and it reads at the organization's whole `target_rps` while
     /// the organization has no node — nothing is collected for it then, so the fast lane is idle.
@@ -834,7 +834,7 @@ impl MerakiSync {
     /// reading either as empty would move hundreds of node addresses and move them back a sync later.
     ///
     /// Whether the reads ran to the end is [`LanStage::complete`], and it decides whether any MX may
-    /// be imported by this sync (決定 31). What was read comes back beside the result rather than in
+    /// be imported by this sync (decision 31). What was read comes back beside the result rather than in
     /// it, so a sync that fails after reading still says what it read.
     async fn lan_stage(
         &self,
@@ -891,9 +891,9 @@ impl MerakiSync {
             .get(&org.id)
             .cloned()
             .unwrap_or_default();
-        // A network never read makes this a whole read (決定 30) — once. One this process has
+        // A network never read makes this a whole read (decision 30) — once. One this process has
         // already asked, whose read failed, is asked again by every sync (it is first in `due`) but
-        // no longer turns each of them into a whole read (決定 38).
+        // no longer turns each of them into a whole read (decision 38).
         let whole = kind == SyncKind::Requested
             || mx
                 .iter()
@@ -1051,7 +1051,7 @@ impl MerakiSync {
         })
     }
 
-    /// Read and record every MX's warm-spare role (ADR-164 決定 26): the rows written.
+    /// Read and record every MX's warm-spare role (ADR-164 decision 26): the rows written.
     ///
     /// **Best effort, and never a reason to fail the sync.** The roles only label the pair on a
     /// node's card; the sync's job is the inventory, and a licence or a read that fails here must
@@ -1094,7 +1094,7 @@ impl MerakiSync {
     /// them where [`crate::meraki_inventory::classify`] reads them is what keeps "New" on the page
     /// and "imported by the sync" the same set.
     ///
-    /// `mx_ready` is whether this sync's LAN reads ran to the end (決定 31); without it no MX is
+    /// `mx_ready` is whether this sync's LAN reads ran to the end (decision 31); without it no MX is
     /// picked, and each keeps its place under the cap.
     async fn import(
         &self,
@@ -1133,7 +1133,7 @@ impl MerakiSync {
                 .await
                 .map_err(internal("importing devices failed"))?
                 .imported;
-            // At once, for the reason `attempt` bumps after `apply` (決定 38).
+            // At once, for the reason `attempt` bumps after `apply` (decision 38).
             if imported > 0 {
                 crate::config_gen::bump();
             }
@@ -1151,11 +1151,11 @@ impl MerakiSync {
 enum SyncKind {
     /// The periodic one: every network never read, and its share of the stale ones.
     Scheduled,
-    /// The one "Sync now" asked for: every network (ADR-164 決定 32).
+    /// The one "Sync now" asked for: every network (ADR-164 decision 32).
     Requested,
 }
 
-/// How long a sync may spend reading `due` networks' LAN sides at `rps` (ADR-164 決定 29・30).
+/// How long a sync may spend reading `due` networks' LAN sides at `rps` (ADR-164 decision 29 and 30).
 ///
 /// A whole-organization read gets what its networks need: two requests each at most (a network with
 /// VLANs off answers `vlans` with 400 and is read again at `singleLan`), each at the pace `rps` sets
@@ -1184,13 +1184,13 @@ fn count(n: usize) -> u32 {
 /// what it read.
 #[derive(Debug, Default)]
 struct LanReading {
-    /// A whole-organization read: "Sync now", or a network never read (決定 30・32).
+    /// A whole-organization read: "Sync now", or a network never read (decision 30 and 32).
     whole: bool,
     /// The networks it set out to read.
     due: usize,
     /// How many of them it asked — a network whose own read failed counts.
     tried: usize,
-    /// Whether it asked every one of them (決定 31).
+    /// Whether it asked every one of them (decision 31).
     complete: bool,
 }
 
@@ -1199,7 +1199,7 @@ struct LanReading {
 struct LanStage {
     /// The address each read network's MX takes — what [`seen_devices`] reads.
     chosen: LanAddresses,
-    /// Whether every network this sync meant to read was asked (ADR-164 決定 31). A network whose
+    /// Whether every network this sync meant to read was asked (ADR-164 decision 31). A network whose
     /// own read failed was asked; one the time limit, a refused key or 429s kept it from was not.
     /// Without it no MX is imported by this sync.
     complete: bool,
@@ -1255,7 +1255,7 @@ impl SyncSchedule {
 ///
 /// Honours the Meraki kill switch — that switch exists to give the Dashboard API budget back at
 /// once, and a sync spends it like a collect does. An organization with a request standing is
-/// synced at once, whatever its interval and however recently it failed (ADR-164 決定 32); the
+/// synced at once, whatever its interval and however recently it failed (ADR-164 decision 32); the
 /// others when they are due.
 ///
 /// **Organizations sync side by side, one sync each** ([`RunningSyncs`]). They used to go one after
@@ -1265,7 +1265,7 @@ impl SyncSchedule {
 /// anything.
 pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
     // Nothing is reading as this starts: a read runs inside the process that holds its lane, so a
-    // row still saying "reading" was left by a process that stopped mid-way (決定 32).
+    // row still saying "reading" was left by a process that stopped mid-way (decision 32).
     match sync.orgs.clear_full_sync_progress().await {
         Ok(0) => {}
         Ok(n) => {
@@ -1286,7 +1286,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
             // A sync that ended without an answer ran nothing past where it stopped: clear the
             // "reading" it may have left. The request it was asked to answer goes too when it
             // panicked — asked again, it would panic again every tick — and stays when it was
-            // stopped on purpose, because a pause keeps a request for the resume (決定 32).
+            // stopped on purpose, because a pause keeps a request for the resume (decision 32).
             if let Err(e) = sync
                 .orgs
                 .finish_full_sync(ended.org, ended.requested && !ended.stopped)
@@ -1296,7 +1296,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
             }
         }
         // An MX's neighbours follow the deployment's neighbour settings, as a switch's do (ADR-181
-        // 増分 3). A failed read answers the defaults (on, hourly), never "off".
+        // Inc.3). A failed read answers the defaults (on, hourly), never "off".
         let adjacency = settings.get_adjacency_settings().await;
         sync.set_neighbor_interval(
             adjacency
@@ -1304,7 +1304,7 @@ pub async fn run_sync_loop(sync: Arc<MerakiSync>, settings: Arc<NodeRepo>) {
                 .then(|| Duration::from_secs(u64::from(adjacency.neighbors_interval_secs))),
         );
         if !settings.get_meraki_polling_enabled().await {
-            // The switch gives the Dashboard API budget back at once (ADR-164 決定 38): a whole
+            // The switch gives the Dashboard API budget back at once (ADR-164 decision 38): a whole
             // read runs for up to half an hour, and a sync already running used to go on to its end.
             running.stop_unless(&HashSet::new());
             continue;
@@ -1387,7 +1387,7 @@ impl RunningSyncs {
     }
 
     /// Stop every sync whose organization is not in `keep` — paused, deleted, or every one while
-    /// Meraki polling is switched off (ADR-164 決定 38). A stopped sync's transaction rolls back and
+    /// Meraki polling is switched off (ADR-164 decision 38). A stopped sync's transaction rolls back and
     /// its drop guard gives the lane back; [`Self::reap`] reports it as stopped.
     pub fn stop_unless(&mut self, keep: &HashSet<Uuid>) {
         for r in self.orgs.values() {
@@ -1441,7 +1441,7 @@ impl RunningSyncs {
     }
 }
 
-/// How many MX and MR one sync reads for neighbours (ADR-181 増分 3 決定 4, 増分 5 決定 2): each
+/// How many MX and MR one sync reads for neighbours (ADR-181 Inc.3 decision 4, Inc.5 decision 2): each
 /// device's share if every one is read once per neighbour interval, rounded up, plus one — the
 /// shape of [`lan_rereads_per_sync`], for the same reason. Rounding up gives a whole round per
 /// interval at any sync cadence as long as [`NEIGHBOR_READ_BUDGET`] reaches the share — past that
@@ -1492,12 +1492,12 @@ fn neighbor_product_label(product_type: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    /// ADR-181 増分 3 決定 4: a whole round per interval, plus one to catch up.
+    /// ADR-181 Inc.3 decision 4: a whole round per interval, plus one to catch up.
     #[test]
     fn a_sync_reads_its_share_of_the_devices_plus_one() {
         let hour = Duration::from_secs(3600);
         assert_eq!(neighbor_reads_per_sync(690, 300, hour), 59);
-        // ADR-181 増分 5: the MR join the same queue.
+        // ADR-181 Inc.5: the MR join the same queue.
         assert_eq!(neighbor_reads_per_sync(690 + 1710, 300, hour), 201);
         assert_eq!(neighbor_reads_per_sync(0, 300, hour), 1);
         assert_eq!(neighbor_reads_per_sync(10, 300, hour), 2);
@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     /// A poller reports a failed collect as `MerakiFetchError::token()` and core reads it back with
-    /// `from_token` (ADR-164 決定 18). The transport crate cannot see this enum, so its spelling is a
+    /// `from_token` (ADR-164 decision 18). The transport crate cannot see this enum, so its spelling is a
     /// second copy — and a token core does not know reads as `internal`, which would put "Yagra
     /// could not read or write its own database" on screen for a revoked key. This is what holds
     /// the two together: for every fetch error, the token IS the token of the failure it maps to.
@@ -1648,9 +1648,9 @@ mod tests {
         answer: Mutex<Result<MerakiInventory, MerakiFetchError>>,
         asked: Mutex<u32>,
         roles: Mutex<RolesAnswer>,
-        /// What every network's LAN read answers (ADR-164 決定 28). By default one VLAN at
+        /// What every network's LAN read answers (ADR-164 decision 28). By default one VLAN at
         /// `10.0.0.1` — the address `listing` has always given its devices — so a test about
-        /// something else sees an MX addressed and imported exactly as before 決定 28.
+        /// something else sees an MX addressed and imported exactly as before decision 28.
         lan: Mutex<MerakiNetworkLan>,
         /// Per-network answers that take the place of `lan` for the networks they name.
         lan_for: Mutex<HashMap<String, MerakiNetworkLan>>,
@@ -1890,9 +1890,9 @@ mod tests {
     const UP: Option<MerakiAvailability> = Some(MerakiAvailability::Online);
     const DOWN: Option<MerakiAvailability> = Some(MerakiAvailability::Dormant);
 
-    /// ADR-181 増分 3: a sync reads an imported MX's neighbours when the neighbour interval is on
+    /// ADR-181 Inc.3: a sync reads an imported MX's neighbours when the neighbour interval is on
     /// and its turn has come, records them as that node's, and does not ask again within the
-    /// interval. With neighbour discovery off it asks nothing. 増分 5: an MR is read the same way,
+    /// interval. With neighbour discovery off it asks nothing. Inc.5: an MR is read the same way,
     /// in the same queue; a switch is not (its neighbours come from the organization's listing).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2092,7 +2092,7 @@ mod tests {
         assert_eq!(a.first_online_at, first_online, "first_online_at moved");
     }
 
-    /// ADR-164 決定 26: the sync records each MX's warm-spare role — once; the next sync writes no
+    /// ADR-164 decision 26: the sync records each MX's warm-spare role — once; the next sync writes no
     /// role — and a roles read that fails costs nothing: the roles stay, the sync is still a
     /// success, and no device is marked missing. A pair is the other MX of the same network.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -2217,7 +2217,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 3, the one that matters most: a sync that fails changes **nothing** it could be
+    /// ADR-164 decision 3, the one that matters most: a sync that fails changes **nothing** it could be
     /// wrong about. Not a row of the inventory, and not the stamp the next sync is timed from.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2269,7 +2269,7 @@ mod tests {
         assert_eq!((org.last_sync_ok, org.last_sync_error), (Some(true), None));
     }
 
-    /// ADR-169 決定 1, the periodic sync: the slow lane only. A slow collect in flight refuses it
+    /// ADR-169 decision 1, the periodic sync: the slow lane only. A slow collect in flight refuses it
     /// without touching the Dashboard or the row — and it never takes the fast lane instead, which
     /// is where it used to delay availability by a tick every time it ran. A finished sync, and a
     /// failed one, leave the lane free for the collector.
@@ -2329,7 +2329,7 @@ mod tests {
             .is_inflight(r.org, MerakiLane::Slow, Instant::now()));
     }
 
-    /// ADR-164 決定 32, "Sync now": the read it asks for runs in the **slow lane only** — it takes
+    /// ADR-164 decision 32, "Sync now": the read it asks for runs in the **slow lane only** — it takes
     /// minutes, and the fast lane is availability's. While a collect holds the slow lane it waits
     /// (busy, the request standing, nothing asked); once it runs it reads every network — the one
     /// read a sync ago too — and clears the request and its progress. It releases its own lane only.
@@ -2448,7 +2448,7 @@ mod tests {
         .expect("the node's folder")
     }
 
-    /// ADR-164 決定 5: a device becomes a node when it is in a watched network and Meraki has
+    /// ADR-164 decision 5: a device becomes a node when it is in a watched network and Meraki has
     /// reported it online — and a new organization watches a network from the sync that finds it.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2750,7 +2750,7 @@ mod tests {
         assert!(set(59).await.is_err(), "the CHECK let 59 seconds through");
     }
 
-    // ── what an imported node follows (ADR-164 Inc.8, 決定 14) ───────────────────────────────
+    // ── what an imported node follows (ADR-164 Inc.8, decision 14) ───────────────────────────────
 
     /// One device, described freely. Both networks are always listed, so a move between them is a
     /// move and not a disappearance.
@@ -3121,7 +3121,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 15. Collection asks about watched networks only, so a node whose network is not
+    /// ADR-164 decision 15. Collection asks about watched networks only, so a node whose network is not
     /// watched goes quiet. The count on the organization's row has to be the number of rows the
     /// device list marks — they are two queries, and one number on two screens.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3183,7 +3183,7 @@ mod tests {
         assert_eq!(counted(&r).await, (0, 0));
     }
 
-    // ── an MX's address from its network's LAN side (ADR-164 決定 28) ─────────────────────────
+    // ── an MX's address from its network's LAN side (ADR-164 decision 28) ─────────────────────────
 
     /// The case the decision was made on, end to end: VLAN 1 left at a default subnet, the site's own
     /// VLAN next, a folder holding the site's range. The MX is addressed and filed by the site's VLAN
@@ -3223,7 +3223,7 @@ mod tests {
     }
 
     /// An MX whose network could not be read has no address yet, and importing it would file it by
-    /// none — for good, since a node is never moved (決定 6). It waits, the sync still succeeds, and
+    /// none — for good, since a node is never moved (decision 6). It waits, the sync still succeeds, and
     /// the sync that reads its network imports it.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3256,7 +3256,7 @@ mod tests {
         assert_eq!(folder_of(&pool, "Q2-A").await, Some(site));
     }
 
-    /// A node that carries the address it was given before 決定 28 — its WAN — follows to its LAN
+    /// A node that carries the address it was given before decision 28 — its WAN — follows to its LAN
     /// address; and a later read that fails, once the network is due again, takes nothing away.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3438,7 +3438,7 @@ mod tests {
         }
     }
 
-    /// ADR-164 決定 30: an organization's first sync reads **every** network's LAN side — more than
+    /// ADR-164 decision 30: an organization's first sync reads **every** network's LAN side — more than
     /// one chunk of them — and imports every MX in that same sync, reading at the organization's
     /// whole rate while it has no node. The next sync reads nothing new; "Sync now" then reads them
     /// all again, at one lane's rate now that there are nodes to collect.
@@ -3505,7 +3505,7 @@ mod tests {
     /// them. Two sites reuse `192.168.0.1`, and the only folder range in the lab holds it. The first
     /// sync reaches only the first site: its MX must not go in — the reused address is not known to
     /// be reused yet, and it would be filed into that folder for good — while the access point,
-    /// addressed by its own `lanIp`, does (決定 31). The next sync reads the second site, and the MX
+    /// addressed by its own `lanIp`, does (decision 31). The next sync reads the second site, and the MX
     /// goes in by its own address, into its network's folder.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3562,7 +3562,7 @@ mod tests {
         assert_ne!(folder_of(&pool, "Q2-001").await, Some(home));
     }
 
-    /// 決定 31's other half, and the answer to why increment 15 would not wait: a network whose
+    /// decision 31's other half, and the answer to why increment 15 would not wait: a network whose
     /// **own** read fails was asked, so it holds up only its own MX — every other MX goes in.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3684,7 +3684,7 @@ mod tests {
         );
     }
 
-    /// 🚨 ADR-164 決定 38: pausing an organization (or switching Meraki polling off) stops the sync
+    /// 🚨 ADR-164 decision 38: pausing an organization (or switching Meraki polling off) stops the sync
     /// already running for it. A whole read runs for up to half an hour, and it used to go on
     /// spending the organization's Dashboard budget to the end. The stop is reported, so the loop
     /// clears the "reading" it left, and it does not back off like a failure.
@@ -3735,7 +3735,7 @@ mod tests {
         );
     }
 
-    /// 決定 30: a whole-organization read is given what its networks need — two requests each, at
+    /// decision 30: a whole-organization read is given what its networks need — two requests each, at
     /// its pace but never under half a second — up to the ceiling; re-reads alone get a minute.
     #[test]
     fn a_whole_read_is_given_what_its_networks_need_up_to_the_ceiling() {

@@ -14,7 +14,7 @@
 // ADR-053 Inc.7 moved the narrowing out of the toolbar and under the headers: the search box became
 // the Signature column's filter, the source select became a multi-select over the passive-event
 // vocabulary, and the two columns that had no control at all (Events, Scope) gained one. Sort stays
-// in the action row — this ADR moves filtering, not ordering (決定 L).
+// in the action row — this ADR moves filtering, not ordering (decision L).
 
 import { useMemo } from 'react';
 import { useEnumParam } from '../../../lib/useEnumParam';
@@ -159,7 +159,7 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
       )}
       {/* The action row: what acts on the list, never what narrows it. Sort stays because ADR-053
           moves filtering, not ordering — and a fourth track in `.dt-filters` would slide the filter
-          cells out from under their headers (決定 L). */}
+          cells out from under their headers (decision L). */}
       <ListToolbar
         list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, counts)}
         labels={{

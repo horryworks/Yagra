@@ -20,7 +20,7 @@
 //! offline therefore read as healthy, and would have even with the availability tier fixed alone:
 //! the next uplink result, minutes later, would have answered `Reachable` and cancelled the outage.
 //!
-//! # How a collect ended (ADR-164 決定 18)
+//! # How a collect ended (ADR-164 decision 18)
 //!
 //! Beside the per-device results, every collect publishes **one report** — a result of its own
 //! that carries [`PollResult::meraki_collect`] and nothing else. A collect that failed used to
@@ -97,7 +97,7 @@ pub async fn execute_meraki(
     // and leave every node of the organization at its last state. A partial answer is a success:
     // the Dashboard did answer.
     // `listing` names which of the tier's reads failed when one did while the others answered
-    // (ADR-164 決定 25): those readings still go out below, and the report says what is missing.
+    // (ADR-164 decision 25): those readings still go out below, and the report says what is missing.
     let (observations, failure, listing) = match transport.collect_meraki(&spec, timeout).await {
         Ok(collected) => {
             let failure = collected.failure();
@@ -116,7 +116,7 @@ pub async fn execute_meraki(
         .map(|d| (d.serial.as_str(), d.node_id))
         .collect();
 
-    // 🚨 The report goes FIRST (ADR-164 決定 36). Core releases the collect's flight on the first
+    // 🚨 The report goes FIRST (ADR-164 decision 36). Core releases the collect's flight on the first
     // result it reads for the job, and a device result arriving first read as "the Dashboard
     // answered" — resetting the tier's run of failures to nothing, before the report after it set
     // it to one. A read of the uplink tier that failed every time while the other two answered was
@@ -139,7 +139,7 @@ pub async fn execute_meraki(
             .collect();
         let (outcome, observational, judge_samples) = tier_verdict(check.tier, &samples);
         // A switch's neighbours (ADR-181), canonicalized and capped exactly as a walked set is.
-        // No `snmp_neighbor_count` beside them: that reading means "the last SNMP walk" (決定 6).
+        // No `snmp_neighbor_count` beside them: that reading means "the last SNMP walk" (decision 6).
         let neighbors = obs.neighbors.map(|rows| {
             let set = NeighborSet::new(rows, yagra_transport::MERAKI_NEIGHBOR_FORMAT);
             if set.truncated {
@@ -189,7 +189,7 @@ pub async fn execute_meraki(
 
 /// What the transport is asked for this job. The collect's interval travels on the job, not on
 /// the check, and the traffic tier needs it: its usage window is the interval, so consecutive
-/// collects tile time (ADR-164 決定 23).
+/// collects tile time (ADR-164 decision 23).
 fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiCollectSpec {
     MerakiCollectSpec {
         org_id: check.org_id.clone(),
@@ -210,7 +210,7 @@ fn spec_for(job: &PollJob, check: &yagra_bus::MerakiCollectCheck) -> MerakiColle
 /// One radio of a Meraki access point (ADR-168), in the form every radio path publishes from — so an
 /// MR's radio is the same slot, the same row and the same metric names as a controller-walked one.
 ///
-/// `up` stays `None`: nothing the Dashboard answers says whether a radio is on (決定 3), and a
+/// `up` stays `None`: nothing the Dashboard answers says whether a radio is on (decision 3), and a
 /// radio's `if_oper_status` drawn from a guess would page someone about a healthy access point.
 fn radio_readings(r: &yagra_transport::MerakiRadio) -> RadioReadings {
     RadioReadings {
@@ -226,14 +226,14 @@ fn radio_readings(r: &yagra_transport::MerakiRadio) -> RadioReadings {
 }
 
 /// A switch port's `interfaces` row (ADR-167), filled as an SNMP switch's ifTable walk fills one:
-/// "Port N" as its name (ADR-181 増分 4), the name an operator gave it as its alias, its line rate
+/// "Port N" as its name (ADR-181 Inc.4), the name an operator gave it as its alias, its line rate
 /// and duplex, and Ethernet as its type. A column the Dashboard said nothing about this time is `None`, which
 /// the multi-writer upsert reads as "keep what is stored" — the alias between two hourly reads of
 /// the names, and the speed while the port has no link.
 fn switch_port_interface(p: yagra_transport::MerakiPort) -> DiscoveredInterface {
     DiscoveredInterface {
         ifindex: IfIndex(p.ifindex),
-        // "Port 7", as the Dashboard shows it (ADR-181 増分 4 決定 3); the row key is the ifindex.
+        // "Port 7", as the Dashboard shows it (ADR-181 Inc.4 decision 3); the row key is the ifindex.
         if_name: Some(yagra_common::meraki_port_name(&p.port_id)),
         if_alias: p.alias,
         if_speed: p.speed_bps,
@@ -248,7 +248,7 @@ fn switch_port_interface(p: yagra_transport::MerakiPort) -> DiscoveredInterface 
     }
 }
 
-/// Names for the per-uplink rows of one device's samples (ADR-164 決定 24): every uplink metric gets
+/// Names for the per-uplink rows of one device's samples (ADR-164 decision 24): every uplink metric gets
 /// its uplink's name (WAN1 / WAN2 / cellular). An alert on one uplink then says which, and a rule can
 /// be narrowed to one uplink with a row pattern (ADR-143).
 ///
@@ -296,7 +296,7 @@ fn uplink_row_names(
 /// It is addressed to `job.node_id`, which for a collect job is the organization's own uuid
 /// ([`PollJob::meraki_collect`] set it as a sentinel long before this existed) — no node has that
 /// id, so nothing can mistake the report for a reading of a device. `observational` with no
-/// samples is what makes it inert to a core from before 決定 18: that core persists nothing for
+/// samples is what makes it inert to a core from before decision 18: that core persists nothing for
 /// it and returns before the alert engine, having released the collect lane the job held on the
 /// way, which is the one effect worth having there.
 fn collect_report(
@@ -419,7 +419,7 @@ mod tests {
         }]
     }
 
-    /// 🚨 ADR-164 決定 36: the report is the FIRST result of a collect. Core releases the flight on
+    /// 🚨 ADR-164 decision 36: the report is the FIRST result of a collect. Core releases the flight on
     /// the first result it reads, and a device result read first counted as "answered".
     #[tokio::test]
     async fn the_report_goes_out_before_the_devices_it_reports_on() {
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// The traffic tier's usage window is the collect's interval, which travels on the job and not
-    /// on the check (ADR-164 決定 23) — dropped here, every window would be the transport's floor.
+    /// on the check (ADR-164 decision 23) — dropped here, every window would be the transport's floor.
     #[test]
     fn the_transport_is_told_the_jobs_interval() {
         use yagra_bus::MerakiCollectCheck;
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(spec.network_ids, ["N_1"]);
         assert!(!spec.port_names);
 
-        // ADR-167 決定 1: core's hourly "read the names this time" reaches the transport.
+        // ADR-167 decision 1: core's hourly "read the names this time" reaches the transport.
         let names = yagra_bus::MerakiCollectCheck {
             tier: MerakiTier::SwitchPorts,
             port_names: true,
@@ -489,8 +489,8 @@ mod tests {
     }
 
     /// ADR-181. A switch the neighbour listing named gets its set, canonicalized as a walked one is
-    /// and with no `snmp_neighbor_count` beside it (決定 6); a switch it did not name gets `None`,
-    /// which leaves the stored set alone (決定 4).
+    /// and with no `snmp_neighbor_count` beside it (decision 6); a switch it did not name gets `None`,
+    /// which leaves the stored set alone (decision 4).
     #[tokio::test]
     async fn a_listed_switch_carries_its_neighbours_and_an_unlisted_one_carries_none() {
         use yagra_common::{Neighbor, NeighborProto};
@@ -633,7 +633,7 @@ mod tests {
 
     /// ADR-168. An access point's radios become `interfaces` rows and per-slot readings the way a
     /// controller-walked access point's do — the same slot, the same names, type 71 — its clients
-    /// stay a node-level reading, and nothing claims whether a radio is on (決定 3).
+    /// stay a node-level reading, and nothing claims whether a radio is on (decision 3).
     #[tokio::test]
     async fn an_access_points_radios_become_ports_and_claim_no_status() {
         use yagra_transport::{MerakiObservation, MerakiRadio, MerakiSample};
@@ -721,7 +721,7 @@ mod tests {
     }
 
     /// Per-uplink readings carry their uplink's name, once per (metric, row); device-level ones
-    /// carry none (ADR-164 決定 24).
+    /// carry none (ADR-164 decision 24).
     #[tokio::test]
     async fn per_uplink_samples_carry_their_uplinks_name() {
         use yagra_transport::{MerakiObservation, MerakiSample, MerakiUplink};
@@ -771,7 +771,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 25: one read of the uplink tier failed while the others answered — the readings
+    /// ADR-164 decision 25: one read of the uplink tier failed while the others answered — the readings
     /// that did arrive still go out, and the report says the tier failed and which read it was.
     #[tokio::test]
     async fn a_collect_with_one_failed_listing_keeps_its_readings_and_names_the_listing() {
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(report.listing.as_deref(), Some("appliance_vpn_statuses"));
     }
 
-    /// 🚨 The defect (ADR-164 決定 18): a refused key published **nothing**, so core heard nothing,
+    /// 🚨 The defect (ADR-164 decision 18): a refused key published **nothing**, so core heard nothing,
     /// every node of the organization kept its last state, and no alert was possible.
     #[tokio::test]
     async fn a_collect_the_dashboard_refused_says_so_instead_of_saying_nothing() {

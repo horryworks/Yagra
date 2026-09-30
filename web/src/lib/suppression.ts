@@ -67,7 +67,7 @@ export function muteTargetFromAlert(
  *
  *  ⚠️ **One reader left: the dashboard's metric-top widget.** This was shared because the
  *  alert-rule form and the mute form each carried an identical copy of it; both moved to
- *  `MetricPicker` in ADR-075 増分 4, which reads the deployment's real catalog over the API
+ *  `MetricPicker` in ADR-075 Inc.4, which reads the deployment's real catalog over the API
  *  instead. The widget still has a free-text field, so it still needs a starting suggestion —
  *  moving it to the picker is a separate change (it ranks metrics, so it must also exclude
  *  counters for a different reason: a ranked counter puts the longest-uptime node on top). */

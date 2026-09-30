@@ -26,7 +26,7 @@ import {
   type LinkSeries,
   type ResolvedLink,
 } from './interfaceTraffic';
-// The default window moved to `util.ts` with the range list itself (ADR-136 決定 6); the settings
+// The default window moved to `util.ts` with the range list itself (ADR-136 decision 6); the settings
 // reader still has to land on it, so the tests below still name it.
 import { DEFAULT_WIDGET_RANGE_SECS } from './util';
 
@@ -267,7 +267,7 @@ describe('buildTrafficSeries', () => {
   const ts = [100, 160, 220];
 
   it('draws two series per link: transmit positive, receive negative', () => {
-    // ADR-069 増分 2 swapped the halves. The fixture's two directions carry different magnitudes
+    // ADR-069 Inc.2 swapped the halves. The fixture's two directions carry different magnitudes
     // on purpose, so asserting the label beside the values catches a pair read the wrong way
     // round as well as a sign applied to the wrong one.
     const entries: LinkSeries[] = [
@@ -409,7 +409,7 @@ describe('everyLinkFailed', () => {
   const link = (nodeId: string, ifindex: number, label: string) => ({ nodeId, ifindex, label });
 
   it('says nothing answered when no link answered at all', () => {
-    // The anonymous case ADR-123 増分 2 was about: every request refused, every entry null.
+    // The anonymous case ADR-123 Inc.2 was about: every request refused, every entry null.
     expect(
       everyLinkFailed([
         { link: link('n1', 1, 'sw1 Gi0/1'), series: null },

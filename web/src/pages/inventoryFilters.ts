@@ -194,7 +194,7 @@ export function isAttentionOnly(f: FilterState): boolean {
  *  - It **replaces** the chosen states rather than adding to them. This is a preset, not a fourth
  *    filter; "everything that is not healthy" *plus* `ok` is a question nobody asked.
  *  - Turning it off **clears** the column rather than restoring what was selected before. There is
- *    nothing to restore from — the preset deliberately holds no state of its own (ADR-163 決定 5),
+ *    nothing to restore from — the preset deliberately holds no state of its own (ADR-163 decision 5),
  *    and inventing a stash here would be the one place on this page where a filter remembers. */
 export function toggleAttention(f: FilterState): FilterState {
   return {
@@ -284,7 +284,7 @@ export type InventoryChip =
  *  - The two switches held on the account (Pinned only, Hide empty folders) come from `opts`; the
  *    columns come from the URL-backed `filters`.
  *  - ⚠️ **Needs attention replaces the State chip rather than sitting beside it.** The preset *is*
- *    a State selection (ADR-163 決定 5), so showing both would say one thing twice — and removing
+ *    a State selection (ADR-163 decision 5), so showing both would say one thing twice — and removing
  *    either would silently remove the other. Any other State selection gets its own chip.
  *  - Hide empty folders is shown although it hides no node: it hides folders, and a folder that is
  *    missing for a reason nobody can see is the ADR-159 complaint all over again. */

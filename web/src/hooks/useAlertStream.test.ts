@@ -6,7 +6,7 @@ import type { Alert } from '../types/api';
 
 // Seed-then-stream (ADR-019). The failure modes worth pinning: a gated/transient seed fetch must
 // NOT prevent the SSE subscription (otherwise a viewer who can't list alerts gets no live updates
-// either), unmount must actually close the stream, and (増分 1) the seed REPLACES the store and runs
+// either), unmount must actually close the stream, and (Inc.1) the seed REPLACES the store and runs
 // again on every resync — an alert resolved while the stream was down must drop out — while a
 // failed re-seed leaves the store alone rather than zeroing the bell.
 

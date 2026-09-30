@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Detect-then-Monitor for unregistered endpoints (ADR-179 増分 2/3): the per-row state and the two
+// Detect-then-Monitor for unregistered endpoints (ADR-179 Inc.2/3): the per-row state and the two
 // requests behind the "Monitoring setup" cell, shared by Discovery ▸ Unregistered devices and the
 // Node ▸ Neighbors tab so the two cannot drift apart.
 //
@@ -55,7 +55,7 @@ export interface EndpointSetup {
   /** Import the row with what the dropdowns hold, into the surface's destination. Resolves `true`
    *  once the node exists. */
   monitor: (target: SetupTarget) => Promise<boolean>;
-  /** Ask the server, once per address, which folder's IP range holds it (ADR-179 増分 8). */
+  /** Ask the server, once per address, which folder's IP range holds it (ADR-179 Inc.8). */
   ensureDestination: (ip: string) => void;
   /** The sentence over Monitor saying where the node will land, or `null` until it is known. */
   destinationLine: (ip: string) => { text: string; warn: boolean } | null;
@@ -79,7 +79,7 @@ export function useEndpointSetup({
   creds: CredentialSummary[];
   /** The credentials Detect tries, in order. */
   probeCredIds: string[];
-  /** Where an import lands (ADR-179 増分 8). */
+  /** Where an import lands (ADR-179 Inc.8). */
   destination: SetupDestination;
   /** The folders the caller can see, to name a destination. */
   groups: NodeGroup[];

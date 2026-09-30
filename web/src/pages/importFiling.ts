@@ -52,7 +52,7 @@ export function pendingAddresses(
 
 /**
  * The addresses to send in the next preview request — **none while one is already out**
- * (ADR-131 増分 2 決定 13).
+ * (ADR-131 Inc.2 decision 13).
  *
  * 🚨 **The request this answers used to overlap itself.** The page previewed whenever the candidate
  * count moved, and an address stayed "pending" until its reply was merged — so every 2s poll that
@@ -211,7 +211,7 @@ function filingMessage(result: ImportResult, sitePath: string | null): ImportMes
   ];
   // Rows the operator directed are neither the rule's success nor its fallback, so they are their
   // own sentence. Crediting them to `matched` would report the rule as having decided something a
-  // person decided (ADR-131 決定 11).
+  // person decided (ADR-131 decision 11).
   if (filed.chosen > 0) {
     parts.push({ key: 'discovery.msg.chosen', args: { count: filed.chosen } });
   }

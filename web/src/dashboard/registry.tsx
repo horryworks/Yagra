@@ -415,7 +415,7 @@ export const REGISTRY: WidgetDefinition[] = [
     // 🚨 It reads ONE route. The row labels come back inside the heatmap response
     // (`data.links`), so the per-node interface roster this used to declare was never fetched —
     // and on a public board a declaration is not documentation, it is an API opened to strangers
-    // (ADR-123 増分 2 決定 3). The over-declaration was invisible only because the allow-list
+    // (ADR-123 Inc.2 decision 3). The over-declaration was invisible only because the allow-list
     // never matched a parameterized route at all.
     reads: ['GET /api/v1/metrics/interface-heatmap'],
     Component: InterfaceHeatmapWidget,
@@ -428,7 +428,7 @@ export const REGISTRY: WidgetDefinition[] = [
     blurb: 'registry.widgets.interface-traffic.blurb',
     backing: 'live',
     defaultSpan: 8,
-    // 4 is the narrowest the board has (ADR-069 増分 2). Adding a step is non-destructive —
+    // 4 is the narrowest the board has (ADR-069 Inc.2). Adding a step is non-destructive —
     // `clampSpan` only asks whether a stored span is in the set — but REMOVING one is not:
     // every board sitting at that width would snap to its neighbour on the next load.
     allowedSpans: [4, 6, 8, 12],

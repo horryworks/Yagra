@@ -20,7 +20,7 @@ export const FACT_ROWS = [
   'pool',
   // ⚠️ For an imported AP this row is relabelled and names the controller serving it, rather than
   // saying "Its wireless controller" — which is true of every AP and so identifies none of them
-  // (ADR-064 増分 B2 の手直し). One row, because "who collects this node's data" is one question.
+  // (ADR-064 Inc.B2 rework). One row, because "who collects this node's data" is one question.
   'polledBy',
   'address',
   'maker',
@@ -63,7 +63,7 @@ export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
   // An imported AP (ADR-064): its address, maker and model follow what its controller reports. No
   // credential — nothing polls it — and no serial row, because the node-level serial is read from
   // ENTITY-MIB, which nobody walks on an AP; the AP list carries the controller's serial instead.
-  // Its `polledBy` row carries the serving controller's name (see [`FACT_ROWS`]): since the 手直し
+  // Its `polledBy` row carries the serving controller's name (see [`FACT_ROWS`]): since the rework
   // the AP sits in the controller's own folder, so nothing else on the page says which one it is.
   wireless_ap: [...PLACEMENT, 'address', 'maker', 'model'],
   // The URL itself is the header's sub line, so it is not repeated here.

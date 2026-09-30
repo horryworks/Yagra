@@ -37,7 +37,7 @@ export const DEFAULT_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
   (l) => l !== 'interface',
 );
 
-/** The columns this module's functions read (ADR-053 Inc.10, 決定 AA).
+/** The columns this module's functions read (ADR-053 Inc.10, decision AA).
  *
  *  This module was the clearest case for that decision: most of its 148 lines existed to carry
  *  three columns between two names for the same thing — `scope_level` ⟷ `scopeLevel` — plus a

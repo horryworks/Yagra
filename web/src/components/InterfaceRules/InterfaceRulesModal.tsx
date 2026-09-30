@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The port's alert rules: what governs this interface, and the form to add or change one
-// (ADR-076 増分 5, 決定 8 and 決定 11).
+// (ADR-076 Inc.5, decision 8 and decision 11).
 //
 // Two views in one dialog. The list answers "what is watching this port", and it lists **every**
 // rule that reaches it — a port is governed from six scope levels and the interesting rule is

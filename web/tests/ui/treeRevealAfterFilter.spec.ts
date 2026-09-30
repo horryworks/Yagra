@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// A node picked from a narrowed tree is still on screen after the filter is cleared (ADR-073 増分 2).
+// A node picked from a narrowed tree is still on screen after the filter is cleared (ADR-073 Inc.2).
 //
 // Why Tier1: which folders a reveal opens and when it gives up is decided in `nodeTreeReveal.ts` and
 // unit-tested there. What only a browser proves is the wiring the report was about — the folder is

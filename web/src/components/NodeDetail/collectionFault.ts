@@ -3,12 +3,12 @@
 // are never polled themselves, and each keeps what it was last told when the thing that tells it
 // stops:
 //
-// - **A Cisco Meraki device** (ADR-164 決定 18): what the Dashboard API says about it is all Yagra
+// - **A Cisco Meraki device** (ADR-164 decision 18): what the Dashboard API says about it is all Yagra
 //   knows. When the API stops answering the whole organization, one alert is raised about the
 //   organization and its devices keep the last state they had — they did not fail. So a node can
 //   sit at `ok` with no alert of its own while nothing at all is being collected for it, and this is
 //   the one place on the node's own page that says so.
-// - **A wireless access point** (ADR-064 増分 G): its controller's AP walk is what reports it. When
+// - **A wireless access point** (ADR-064 Inc.G): its controller's AP walk is what reports it. When
 //   no controller has reported it lately it reads `unknown` (or stays `unreachable` if it was down
 //   when last heard of), nothing is raised about the AP itself, and this says since when. The
 //   controller is named by the "Wireless controller" row above it, so this line names none.

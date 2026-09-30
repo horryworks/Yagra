@@ -431,7 +431,7 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
   // ⚠️ No `error` branch, deliberately: the fetcher above is a `Promise.allSettled`, which never
   // rejects, so `usePolled` can only ever hand back `error: null` here. One used to sit on this
   // line and read as handled failure — which is how a `401` on every request looked like quiet
-  // ports for the whole of ADR-123 増分 1. What a failure is reported as now comes from
+  // ports for the whole of ADR-123 Inc.1. What a failure is reported as now comes from
   // `everyLinkFailed`, below.
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
 
@@ -453,7 +453,7 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
       </>
     );
 
-  // Receive is plotted below zero (増分 2 swapped the halves), so both axis ticks and the cursor
+  // Receive is plotted below zero (Inc.2 swapped the halves), so both axis ticks and the cursor
   // readout report magnitudes — the sign is the direction, not a negative rate.
   const fmt = sel.unit === 'pps' ? formatPps : formatBps;
   return (

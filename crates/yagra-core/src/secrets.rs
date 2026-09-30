@@ -186,7 +186,7 @@ impl NetboxTokenSecret {
     /// Parse and structurally validate a NetBox token secret document. `Err` carries a static
     /// description only — never any field content (the token must never be echoed).
     ///
-    /// 🚨 **The token comes back trimmed** (ADR-178 決定 6). Every reader goes through here, and
+    /// 🚨 **The token comes back trimmed** (ADR-178 decision 6). Every reader goes through here, and
     /// not every writer trims: `api/netbox.rs` does, but a token rotated through the Credentials
     /// REST route was sealed as sent, so a pasted trailing newline reached NetBox as part of the
     /// token and every sync failed with "NetBox refused the API token".
@@ -653,7 +653,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// ADR-178 決定 6: whatever wrote the document, the token that leaves this process is trimmed —
+    /// ADR-178 decision 6: whatever wrote the document, the token that leaves this process is trimmed —
     /// and a document holding only whitespace is still refused rather than trimmed to nothing.
     #[test]
     fn a_netbox_token_is_read_back_trimmed() {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // When the Cisco Meraki Dashboard API stops answering an organization, there is ONE alert — about
-// the organization — and its nodes keep the last state they had (ADR-164 決定 18). Three screens have
+// the organization — and its nodes keep the last state they had (ADR-164 decision 18). Three screens have
 // to say that the same way, and none of them can be reached from Vitest.
 //
 // WHY A BROWSER. `collectionFaultNotice`, `orgCollectFailures` and `alertSubject` are unit-tested.
@@ -54,7 +54,7 @@ const orgs = (() => {
     collect_failures: [
       // Sent in this order on purpose: the row must put availability first whatever arrives.
       { tier: 'traffic', reason: 'upstream', since: '2026-09-20T00:00:00Z', failures: 2 },
-      // One read of the uplink tier failed while the others answered (ADR-164 決定 25).
+      // One read of the uplink tier failed while the others answered (ADR-164 decision 25).
       {
         tier: 'uplink',
         reason: 'upstream',
@@ -137,7 +137,7 @@ test('the organization’s row says which collect is failing, the one that stale
   expect(readings).toBeGreaterThan(stale);
 });
 
-// ADR-064 増分 G: an access point no wireless controller has reported lately. The same field, a
+// ADR-064 Inc.G: an access point no wireless controller has reported lately. The same field, a
 // second cause — and a different sentence: the AP reads `unknown`, there is no organization to open,
 // and the controller is named by the facts row above the line, so the line itself links nowhere.
 test.describe('an access point its controller stopped reporting', () => {

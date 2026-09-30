@@ -3,7 +3,7 @@
 //!
 //! # What this is for, and what it is not
 //!
-//! A support bundle is assembled by core (ADR-045 決定 1). Increment 3 gave it a co-located
+//! A support bundle is assembled by core (ADR-045 decision 1). Increment 3 gave it a co-located
 //! poller's log for free — same host, one shared volume — but a poller at a monitored site has its
 //! own disk, and nothing core can read reaches it. This module is that crossing.
 //!
@@ -17,7 +17,7 @@
 //!
 //! A poller killed by the OOM killer cannot answer a request; its last hour is on the volume beside
 //! core, if it shares one. A poller three networks away is running fine and has nothing on any disk
-//! core can see. Same argument ADR-045 決定 2 made for core, one component over.
+//! core can see. Same argument ADR-045 decision 2 made for core, one component over.
 //!
 //! # The secret scan runs **here**, and that is the security decision of the increment
 //!

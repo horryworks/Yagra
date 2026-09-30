@@ -224,7 +224,7 @@ describe('subscribeAnalysis over fetch', () => {
   });
 });
 
-// ADR-019 増分 1: the server's `resync` hint (and a reconnect) reached only the node-state stream —
+// ADR-019 Inc.1: the server's `resync` hint (and a reconnect) reached only the node-state stream —
 // the other three dropped it, so a lagged alert list stayed stale until a reload. Each must hand it
 // to its caller's onResync, and must not dispatch it as data.
 describe('the resync hint reaches every stream that asks for it', () => {

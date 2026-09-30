@@ -1,4 +1,4 @@
-/* The "Monitoring setup" cell (ADR-179 増分 2 決定 7): Detect alone, then the form it fills. Shared
+/* The "Monitoring setup" cell (ADR-179 Inc.2 decision 7): Detect alone, then the form it fills. Shared
    by Discovery ▸ Unregistered devices and the Node ▸ Neighbors tab; each places the cell itself. */
 .ep-setup {
   display: flex;
@@ -59,7 +59,7 @@
   color: var(--status-warning);
 }
 
-/* Where Monitor will put the node (ADR-179 増分 8). Muted when a range took it or no range was
+/* Where Monitor will put the node (ADR-179 Inc.8). Muted when a range took it or no range was
    asked for; the warning colour, with its mark, when filing by range found no folder. */
 .ep-setup-dest {
   display: flex;

@@ -5,7 +5,7 @@
 // Visibility has THREE axes, and none of them is subsumed by the node's kind: a tab is offered
 // when the node's kind is in its `kinds` list AND — if the tab is fed only by an SNMP walk — the
 // node is actually polled over SNMP (ADR-119) AND — if the tab is fed by a wireless controller's
-// AP inventory — the node is one (ADR-064 増分 B3). A ping-only device is a `device` like any
+// AP inventory — the node is one (ADR-064 Inc.B3). A ping-only device is a `device` like any
 // other, so the kind axis alone cannot tell it apart, and Interfaces and Neighbors are structurally
 // empty on it for exactly the reason they are on a URL monitor. A wireless controller is a
 // `device` like any other too, and it is the same shape of mistake one axis further out: without
@@ -55,7 +55,7 @@ export const NODE_DETAIL_TABS = [
 /** A valid node-detail sub-tab key. */
 export type NodeDetailTab = (typeof NODE_DETAIL_TABS)[number];
 
-/** The URL-key prefix for a tab's filter row (ADR-153 決定 3).
+/** The URL-key prefix for a tab's filter row (ADR-153 decision 3).
  *
  *  A node's tabs share the query string with the page that hosts them — on `/nodes` that is the
  *  inventory tree, whose `kind` is the Events tab's `kind` too, and Neighbors and Flow both have a
@@ -108,7 +108,7 @@ const ALL_KINDS: readonly NodeKind[] = NODE_KINDS;
 const DEVICE_ONLY: readonly NodeKind[] = ['device'];
 
 /** Every kind whose `interfaces` rows something else writes: an ordinary device (its own ifTable
- *  walk), an access point whose controller answers for it (ADR-064 増分 C), and a Meraki node —
+ *  walk), an access point whose controller answers for it (ADR-064 Inc.C), and a Meraki node —
  *  whose switch-port collect writes one row per port (ADR-167).
  *
  *  An AP node is never polled itself, so it has no ifTable walk of its own — but its controller's
@@ -134,7 +134,7 @@ const NEIGHBOR_KINDS: readonly NodeKind[] = ['device', 'meraki'];
  * `!!node.credential_id`. The scheduler falls back to the deployment-wide `YAGRA_SNMP_COMMUNITY`
  * for nodes with no bound credential, so on such a deployment a null `credential_id` still means a
  * device that is walked and has interface rows — and hiding its tabs would hide real data with
- * nothing on screen to say why (ADR-119 決定 2).
+ * nothing on screen to say why (ADR-119 decision 2).
  */
 export interface NodeDetailSubject {
   kind: NodeKind;
@@ -144,12 +144,12 @@ export interface NodeDetailSubject {
    *  🚨 That row exists once the node has **reported an AP inventory** or been given import
    *  settings, not when its profile was attached. So a freshly profiled AC shows no AP tab until
    *  its first successful WLAN walk lands, and during that window there is no on-screen way to
-   *  turn importing on (ADR-064 増分 B3 — known, and measured in the lab rather than guessed at). */
+   *  turn importing on (ADR-064 Inc.B3 — known, and measured in the lab rather than guessed at). */
   isWlanController: boolean;
   /** A Meraki node's product type as the Dashboard names it (`switch`, `appliance`, `wireless`, …)
    *  — `NodeDetail.meraki_device.product_type` — and `null` on every other node. Only a switch has
-   *  ports and only an access point has radios for the Interfaces tab to list (ADR-167 決定 13,
-   *  ADR-168 決定 11). */
+   *  ports and only an access point has radios for the Interfaces tab to list (ADR-167 decision 13,
+   *  ADR-168 decision 11). */
   merakiProductType: string | null;
 }
 
@@ -189,14 +189,14 @@ export interface NodeDetailTabMeta {
    *
    *  ⚠️ Answer it about the tab's **data source**, not about which nodes usually have rows. Events
    *  and Flow are `false`: syslog, traps and NetFlow are attributed by the device's address, so a
-   *  ping-only node can legitimately have both (ADR-119 決定 1). */
+   *  ping-only node can legitimately have both (ADR-119 decision 1). */
   needsSnmp: boolean;
   /** True when every row this tab can show comes from a wireless controller's AP inventory, so a
    *  node that is not a controller would be offered a structurally empty tab.
    *
    *  **Required for the same reason the other two are.** A controller is a `device` and is polled
    *  over SNMP, so it passes both of the older axes — meaning the AP tab would appear on every
-   *  switch, router and firewall in the fleet if this question did not exist (ADR-064 増分 B3). */
+   *  switch, router and firewall in the fleet if this question did not exist (ADR-064 Inc.B3). */
   needsWlanController: boolean;
   /** Count pill after the label. Return null for "no pill" (unknown or zero). */
   badge?: (s: NodeDetailTabStats) => number | null;
@@ -230,7 +230,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // the tab goes rather than growing an empty state.
   //
   // ⚠️ **The ifTable walk is no longer the only writer of `interfaces`.** A wireless controller
-  // writes a row per radio onto each of its access points (ADR-064 増分 C), so an AP node's rows
+  // writes a row per radio onto each of its access points (ADR-064 Inc.C), so an AP node's rows
   // come from a walk of a *different* node; and a Meraki switch's ports come from the Dashboard
   // (ADR-167). That is why this tab takes `INTERFACE_KINDS` and why `interfacesFed` asks per kind.
   interfaces: {
@@ -244,7 +244,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
   // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
   // `needsSnmp` is answered by [`neighborsFed`] for this tab, not [`interfacesFed`]: the two
-  // sets of Meraki products differ — an MX has neighbours and no ports (ADR-181 決定 9).
+  // sets of Meraki products differ — an MX has neighbours and no ports (ADR-181 decision 9).
   neighbors: {
     labelKey: 'tabs.neighbors',
     kinds: NEIGHBOR_KINDS,
@@ -257,7 +257,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // Never hidden by the SNMP axis, and that is load-bearing rather than incidental: since ADR-046
   // this tab is the node's metric *inventory*, so a ping-only node's `icmp_rtt_ms` lives here — and
   // it is where the screen says `ICMP-only node`, which is the answer to "where did Interfaces go"
-  // (ADR-055 R6, ADR-119 決定 4). Hide it and the removal becomes unexplained.
+  // (ADR-055 R6, ADR-119 decision 4). Hide it and the removal becomes unexplained.
   collection: {
     labelKey: 'tabs.collection',
     kinds: ALL_KINDS,
@@ -283,7 +283,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // ⚠️ `needsSnmp: false` on both, deliberately. Neither is fed by a walk: syslog and traps are
   // attributed by the device's source address and NetFlow by the exporter's, so a ping-only node
   // can have rows in either. Hiding them with the SNMP axis was asked for and declined on that
-  // evidence (ADR-119 決定 1).
+  // evidence (ADR-119 decision 1).
   // An imported AP keeps it too: an AP that has a management address can send syslog of its own.
   events: {
     labelKey: 'tabs.events',
@@ -310,7 +310,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
  *  The three axes are ANDed and none subsumes the others — a URL monitor fails `kinds` for
  *  Interfaces, a ping-only device passes `kinds` and fails `needsSnmp`. */
 /** Whether something walks this node's ports — what the `needsSnmp` tabs are fed by. Asked per
- *  kind, exhaustively, so the next kind has to answer it (ADR-167 決定 13).
+ *  kind, exhaustively, so the next kind has to answer it (ADR-167 decision 13).
  *
  *  * A device: its own SNMP walk, when it has one.
  *  * An access point: its controller's walk. It has no SNMP credential and never will (ADR-064), so
@@ -342,9 +342,9 @@ export function interfacesFed(node: NodeDetailSubject): boolean {
 }
 
 /** Whether something reads this node's CDP/LLDP neighbours — what the Neighbors tab is fed by
- *  (ADR-181 決定 9). A device: its own SNMP walk, when it has one. A Meraki node: a switch, from its
+ *  (ADR-181 decision 9). A device: its own SNMP walk, when it has one. A Meraki node: a switch, from its
  *  organization's switch-port collect, and an MX or an MR, read one device at a time by the
- *  inventory sync (ADR-181 増分 3, 増分 5). Nothing else. Exhaustive, so the next kind has to answer
+ *  inventory sync (ADR-181 Inc.3, Inc.5). Nothing else. Exhaustive, so the next kind has to answer
  *  it. */
 export function neighborsFed(node: NodeDetailSubject): boolean {
   switch (node.kind) {

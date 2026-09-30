@@ -182,7 +182,7 @@ export function readFilters(
   columns: readonly FilterableColumn<FilterableAlert>[],
   params: URLSearchParams,
 ): FilterState {
-  // The set re-encoding this used to spell out inline is `normalizeSets` now (Inc.10, 決定 AA) —
+  // The set re-encoding this used to spell out inline is `normalizeSets` now (Inc.10, decision AA) —
   // it was the shape the four server-side screens needed, and they needed it for a sharper reason:
   // an unknown token here just fails to match a row, but there it reaches the API and 400s.
   return normalizeSets(columns, readFilterParams(columns, params));

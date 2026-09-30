@@ -102,7 +102,7 @@ export interface WidgetDefinition {
   /** Every API route this widget reads in order to render — method + OpenAPI path
    *  (`'GET /api/v1/fleet/summary'`, `'GET /api/v1/nodes/{node_id}/interfaces'`).
    *
-   *  🚨 **This is an access-control declaration, not documentation.** ADR-123 決定 5: the set of
+   *  🚨 **This is an access-control declaration, not documentation.** ADR-123 decision 5: the set of
    *  routes an anonymous visitor may reach is derived from the widgets on the public board, so a
    *  widget placed there opens exactly what it declares here. Getting it wrong fails in two
    *  directions and neither is loud — **too few** and the widget breaks only for anonymous

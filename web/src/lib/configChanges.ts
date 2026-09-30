@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The configuration change feed, followed once for the whole app (ADR-019 増分 2).
+// The configuration change feed, followed once for the whole app (ADR-019 Inc.2).
 //
 // The server sends a revision number on connect and again whenever inventory or configuration
 // changes. This turns it into one counter, `changes`, that a screen reads to decide when to re-read

@@ -3,9 +3,9 @@
 //!
 //! A rediscovery re-reads one **monitored** node's address with its own credential — as a
 //! one-address discovery sweep, because that sweep says when it has an answer and a poll does not
-//! (ADR-186 決定 2) — and puts what the node holds beside what the device now says it is.
+//! (ADR-186 decision 2) — and puts what the node holds beside what the device now says it is.
 //!
-//! **Nothing here writes.** A person reads the comparison and presses Apply (ADR-140 決定 8), and
+//! **Nothing here writes.** A person reads the comparison and presses Apply (ADR-140 decision 8), and
 //! [`check_apply`] re-judges the request at that moment against the same scan, because the dialog
 //! may be minutes old and the node may have been edited since.
 //!
@@ -137,7 +137,7 @@ fn outcome(status: &ScanStatus) -> (RediscoverState, Option<&Candidate>) {
 /// Compare what the node holds with what the scan found.
 ///
 /// The profile is judged by [`suggestion_for`] — the Reclassify rule, so a device with no
-/// `sysObjectID` gets no profile proposal (ADR-140 決定 7) — and **not** by the candidate's
+/// `sysObjectID` gets no profile proposal (ADR-140 decision 7) — and **not** by the candidate's
 /// `suggested_profile_id`, which the sweep chose from `sysDescr` alone when the OID was missing.
 /// Vendor and model come from [`identity_of`], the answer the poll path fills.
 #[must_use]

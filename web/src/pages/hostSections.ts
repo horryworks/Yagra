@@ -15,8 +15,8 @@
  *  > Core ⇄ poller takes the first, everything else the second — and **direction is not a colour at
  *  > all**: one direction is drawn above zero and the other below, on a `mirrored` chart (ADR-128).
  *  > **Which one is on top is not this module's decision** — it reads the Interface traffic
- *  > widget's `POSITIVE_HALF` (transmit, since ADR-069 決定 7), so the product's two traffic charts
- *  > cannot disagree about which way is up (ADR-137 決定 10). Four colours would have put the
+ *  > widget's `POSITIVE_HALF` (transmit, since ADR-069 decision 7), so the product's two traffic charts
+ *  > cannot disagree about which way is up (ADR-137 decision 10). Four colours would have put the
  *  > network cards at odds with `SERIES_IN` / `SERIES_OUT`, where the first two palette entries
  *  > mean in and out.
  *
@@ -218,7 +218,7 @@ function netSeries(
   const busRx = n?.bus_rx_bytes ?? [];
   const busTx = n?.bus_tx_bytes ?? [];
   // Which direction is on top is not decided here. It is the Interface traffic widget's answer
-  // (`POSITIVE_HALF`, transmit since ADR-069 決定 7), so the two traffic charts in the product
+  // (`POSITIVE_HALF`, transmit since ADR-069 decision 7), so the two traffic charts in the product
   // cannot disagree about which way is up — and the gutter words the page passes to `mirrored`
   // come from the same constant.
   const sent = (points: MetricPoint[]) => (POSITIVE_HALF === 'out' ? points : below(points));

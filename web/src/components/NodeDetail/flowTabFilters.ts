@@ -5,7 +5,7 @@
 // all six flow queries at once — the trend, the four Top-N cards, the Sankey and the conversations
 // table — so a row of controls sitting under the conversations headers would claim to filter that
 // table and would in fact be re-asking every question on the tab. They go in a `FilterBar` at the
-// top of the tab (決定 N), where what they govern is what is below them: everything.
+// top of the tab (decision N), where what they govern is what is below them: everything.
 //
 // 🚨 **And the conversations table cannot have a filter row of its own either.** It holds
 // `TOP_N = 10` rows that ClickHouse already ranked by bytes. A browser-side predicate over those
@@ -77,7 +77,7 @@ export function ipToken(token: string): string | null {
  * The four drill-downs.
  *
  * `proto` is the one with a closed vocabulary (`PROTO_NAMES`), so it is an `enum` and gains real
- * multi-select. The other three are typed sets (`values`, ADR-053 決定 P) — a port, an address or an
+ * multi-select. The other three are typed sets (`values`, ADR-053 decision P) — a port, an address or an
  * ASN has no list to pick from, and every other kind would describe a match the store does not run.
  */
 export function flowFilters(t: TFunction) {

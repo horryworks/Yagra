@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// What the route walk covers, and what "it rendered" means for each screen (ADR-052 決定 3).
+// What the route walk covers, and what "it rendered" means for each screen (ADR-052 decision 3).
 //
 // The LIST is derived from `src/nav.ts` — the IA's source of truth — so a screen added to the nav
 // is walked from that moment, with no list here to forget. What cannot be derived is the

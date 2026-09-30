@@ -573,7 +573,7 @@ mod tests {
             "the cursor must be the row value, not the timestamp alone: {FINDING_SEARCH_WHERE}"
         );
         // …and strictly. ⚠️ The needle above is a **prefix of `<=`**, so it went on matching when
-        // the comparison was widened — measured, ADR-116 増分 6. An inclusive cursor repeats the
+        // the comparison was widened — measured, ADR-116 Inc.6. An inclusive cursor repeats the
         // boundary row on every page, which the database test beside this one catches and this
         // one, on its own, did not.
         assert!(

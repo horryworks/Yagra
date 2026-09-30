@@ -1,4 +1,4 @@
-/* Folder picker: a field-styled trigger opening a searchable list (ADR-124 決定 9).
+/* Folder picker: a field-styled trigger opening a searchable list (ADR-124 decision 9).
 
    Mirrors the NodePicker / ScopePicker look; theme variables only, no hardcoded colours. The
    popover surface itself is `.apop` (AnchoredPopover), which owns position, elevation and border —

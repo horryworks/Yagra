@@ -68,9 +68,9 @@ export interface LazyGroupMembers {
   invalidate: () => void;
   /** Re-read every loaded group IN PLACE: its rows stay on screen and are swapped when its answer
    *  lands. For "the states on screen may be stale" (the live stream missed frames) — never after a
-   *  write, which can move a node between groups and so needs `invalidate` (ADR-133 増分 7 決定 4). */
+   *  write, which can move a node between groups and so needs `invalidate` (ADR-133 Inc.7 decision 4). */
   refresh: () => void;
-  /** Someone ELSE changed the inventory (ADR-019 増分 2): re-read every loaded folder and swap them
+  /** Someone ELSE changed the inventory (ADR-019 Inc.2): re-read every loaded folder and swap them
    *  ALL AT ONCE, when the last answer is in. Unlike `refresh` this is safe after a move — each
    *  folder swapped as its own answer landed would show a moved node in two folders, or in none, for
    *  a round trip. Unlike `invalidate` nothing leaves the screen: a failure keeps what is there. */
@@ -99,7 +99,7 @@ export function useLazyGroupMembers(opts: {
    *  independent of `browsing`, since a group stays selected while the operator types a filter. */
   selectedGroupId: string | null;
   /** The folder a selected NODE lives in, while the tree is bringing that node back into view
-   *  after a filter was cleared (ADR-073 増分 2). Loaded like the selected group: without it the
+   *  after a filter was cleared (ADR-073 Inc.2). Loaded like the selected group: without it the
    *  row would exist only once the operator scrolled the folder on screen themselves — which they
    *  cannot do, because they do not know where it is. `UNGROUPED` for a node with no folder. */
   revealGroupId?: string | null;
@@ -334,7 +334,7 @@ export function useLazyGroupMembers(opts: {
     loadMissing([selectedGroupId]);
   }, [ready, selectedGroupId, loadMissing]);
 
-  // The folder a reveal is waiting on (ADR-073 増分 2) — the same one-key load as the selected group.
+  // The folder a reveal is waiting on (ADR-073 Inc.2) — the same one-key load as the selected group.
   useEffect(() => {
     if (!ready || !revealGroupId) return;
     loadMissing([revealGroupId]);
@@ -375,7 +375,7 @@ export function useLazyGroupMembers(opts: {
     loaded.current = loadedGroups;
   }, [loadedGroups]);
 
-  // 🚨 **Not `invalidate`, and the difference is the whole point** (ADR-133 増分 7 決定 4). The page
+  // 🚨 **Not `invalidate`, and the difference is the whole point** (ADR-133 Inc.7 decision 4). The page
   // first answered a resync with the reload it uses after a write, which empties the cache: every
   // loaded row vanished for a round trip, the tree flashed "Loading…" on each reconnect, and an arrow
   // key pressed meanwhile was dropped (a cursor whose row is not on screen is cleared, not written).

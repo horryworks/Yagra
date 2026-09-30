@@ -35,7 +35,7 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
-/// May *this* request be served without a credential (ADR-123 決定 5)?
+/// May *this* request be served without a credential (ADR-123 decision 5)?
 ///
 /// Three conditions, all required, and each is a way the old `bool` was too broad:
 ///

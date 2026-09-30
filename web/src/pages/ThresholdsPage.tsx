@@ -90,7 +90,7 @@ function DeleteThresholdModal({
   );
 }
 
-/** How many targets the Scope cell draws before it falls back to counting (ADR-078 増分 5).
+/** How many targets the Scope cell draws before it falls back to counting (ADR-078 Inc.5).
  *
  *  The API accepts 32 (`MAX_SCOPE_IDS`), and a row that long would be a screenful on its own. The
  *  seeded maximum is 5 — `cisco_cpu_5min`, which every Cisco health template publishes — so this
@@ -126,7 +126,7 @@ export function ThresholdsPage() {
   const columns = useMemo<Column<StoredThreshold>[]>(() => {
     const cols: Column<StoredThreshold>[] = [
       {
-        // Two values, two columns (ADR-075 増分 2). They shared a cell until an operator asked
+        // Two values, two columns (ADR-075 Inc.2). They shared a cell until an operator asked
         // which of the two things in it was the scope id — every other column here is one value
         // under a heading that names it, and this one was not. The headings are the add dialog's
         // field names verbatim, so "where do I set this?" is answered by the words matching.
@@ -141,7 +141,7 @@ export function ThresholdsPage() {
         // see `thresholdQuery.ts`. The API has no `scope_id` parameter to push it into.
         key: 'scope_id',
         header: t('thresholds.cols.scopeId'),
-        // Wider since 増分 5, taken from the meaning column: stacking makes each line short, and
+        // Wider since Inc.5, taken from the meaning column: stacking makes each line short, and
         // the width is what decides whether a profile name ends in an ellipsis at 1280px.
         width: '1.6fr',
         render: (row) =>
@@ -152,7 +152,7 @@ export function ThresholdsPage() {
               —
             </span>
           ) : (
-            // Since ADR-078 a rule may name several, and 増分 5 draws them ALL, one per line, with
+            // Since ADR-078 a rule may name several, and Inc.5 draws them ALL, one per line, with
             // the row growing to suit (`autoRowHeight` below).
             //
             // 🚨 Two were drawn and the rest counted until an operator reported that the column
@@ -261,7 +261,7 @@ export function ThresholdsPage() {
         render: (row) => (
           <span className="thresholds-bounds">
             {/* Read in the metric's own unit. An absolute interface rate is stored in bits per
-                second (ADR-076 決定 9), so the raw value here was `800000000` — a number whose
+                second (ADR-076 decision 9), so the raw value here was `800000000` — a number whose
                 digits an operator has to count. */}
             {(
               [
@@ -393,7 +393,7 @@ export function ThresholdsPage() {
         </Card>
       )}
 
-      {/* The default view leaves port rules out (ADR-076 決定 12), and this line is the whole of
+      {/* The default view leaves port rules out (ADR-076 decision 12), and this line is the whole of
           what makes that honest: the count comes from the server, and the way back in is one
           click. Without it a hidden rule is indistinguishable from a rule that does not exist —
           which is the wrong belief to hold about alerting configuration. */}
@@ -449,7 +449,7 @@ export function ThresholdsPage() {
           rows={rows}
           columns={columns}
           // The Scope cell stacks one line per target, so a row is as tall as its rule is broad
-          // (ADR-078 増分 5). This is the only table that asks for it — see the prop's warning.
+          // (ADR-078 Inc.5). This is the only table that asks for it — see the prop's warning.
           autoRowHeight
           filters={filters}
           onFiltersChange={setFilters}

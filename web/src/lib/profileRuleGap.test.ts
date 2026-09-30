@@ -36,7 +36,7 @@ describe('ruleIsBaselineFor', () => {
     expect(ruleIsBaselineFor(rule('m', 'profile', []), P)).toBe(false);
   });
 
-  // ADR-106 決定 2. These reach *some* of a profile's nodes, so at the profile dimension there is no
+  // ADR-106 decision 2. These reach *some* of a profile's nodes, so at the profile dimension there is no
   // answer; and `resolve_effective` takes only the most specific level present, so they replace a
   // profile rule rather than adding to one. Counting them as a baseline is what would make the
   // panel say "covered" about a metric that fires on four nodes out of forty.

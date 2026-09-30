@@ -108,7 +108,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// Freshness window for the coarse fallback probe: a node with a liveness sample within this
 /// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
 ///
-/// ⚠️ **One number with the floor of an AP's report window** (ADR-064 増分 G): the engine shows an
+/// ⚠️ **One number with the floor of an AP's report window** (ADR-064 Inc.G): the engine shows an
 /// AP whose controller has not reported it within that window as `unknown`, and after a restart
 /// this fallback is what decides the same AP. Two numbers would make one outage read differently
 /// depending on whether core had restarted.
@@ -127,7 +127,7 @@ const FALLBACK_METRICS: [&str; NodeKind::ALL.len()] = NodeKind::LIVENESS_METRICS
 /// sample means `ok` and silence means `unknown`.
 ///
 /// "The engine's opinion" already accounts for a wireless AP its controller has stopped reporting:
-/// the engine hands back `unknown` for its stale `ok` (ADR-064 増分 G), so no caller here needs to
+/// the engine hands back `unknown` for its stale `ok` (ADR-064 Inc.G), so no caller here needs to
 /// know which nodes are APs.
 ///
 /// Pure — every caller brings its own already-batched inputs, and nothing here does I/O. It is a
@@ -272,7 +272,7 @@ pub(crate) struct NodeSummary {
     kind: NodeKind,
     /// A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),
     /// `switch`, `appliance`, … — and absent on every other node. What the list's "AP" badge is
-    /// read from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is
+    /// read from (ADR-168 decision 11): an MR stays `kind: meraki`, so the kind alone cannot say it is
     /// an access point. The detail page reads the same value from `meraki_device.product_type`.
     #[serde(skip_serializing_if = "Option::is_none")]
     meraki_product_type: Option<String>,
@@ -446,7 +446,7 @@ pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid
 pub(crate) struct NodeKinds {
     pub(crate) kinds: HashMap<Uuid, NodeKind>,
     /// A Meraki node's product type (`wireless`, `switch`, …), for the list's "AP" badge
-    /// (ADR-168 決定 11). Read in the same query that says the node is a Meraki one.
+    /// (ADR-168 decision 11). Read in the same query that says the node is a Meraki one.
     pub(crate) meraki_product_types: HashMap<Uuid, String>,
     /// The Meraki access points that are mesh repeaters (ADR-175), from the same read.
     pub(crate) meraki_repeaters: HashSet<Uuid>,
@@ -684,7 +684,7 @@ async fn list_nodes(
 }
 
 /// Parse the list's exact-address filter at the edge, for both the REST list and the MCP tool
-/// (ADR-139 増分 2).
+/// (ADR-139 Inc.2).
 ///
 /// Refused rather than dropped: a filter that silently fell away would answer with the whole fleet,
 /// and the caller that sends it — the add-node dialog's duplicate check — would read that as "a
@@ -944,7 +944,7 @@ async fn list_group_nodes(
                     })?;
                 // 🚨 Refused, never truncated. Silently dropping the tail would answer with a set the
                 // caller did not ask for while looking exactly like success — the same failure the
-                // `answered` echo exists to prevent, arriving by a different door (ADR-124 決定 7).
+                // `answered` echo exists to prevent, arriving by a different door (ADR-124 decision 7).
                 if ids.len() > BY_GROUP_BATCH_MAX {
                     return Err(ApiError::bad_request(
                         "too_many_groups",
@@ -1161,7 +1161,7 @@ pub(crate) struct NodeDetail {
     /// or an imported access point's entry in the AP list. `null` for a node that is neither.
     wireless: Option<super::wireless::NodeWireless>,
     /// A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on
-    /// its spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair.
+    /// its spare (ADR-164 decision 26). `null` for a node that is not an MX in a pair.
     meraki_pair: Option<super::meraki::MerakiPairView>,
     /// The Meraki organization and network this node sits in, by name (ADR-185). `null` for a node
     /// with no Meraki binding.
@@ -1349,16 +1349,16 @@ pub(crate) struct NodeStatus {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CollectionFaultCause {
     /// The Cisco Meraki Dashboard API is not answering the collects of this node's organization.
-    /// The node keeps the last state collected (ADR-164 決定 18).
+    /// The node keeps the last state collected (ADR-164 decision 18).
     MerakiApi,
     /// This node is a wireless access point, and no wireless controller has reported it within its
     /// window — ten minutes, or three of the controller's poll intervals when that is longer. An
     /// `ok` it last had reads `unknown`; any other state is kept — `unreachable` if it was down
-    /// when last reported, `maintenance`, or the colour of an alert still open on it (ADR-064 増分 G).
+    /// when last reported, `maintenance`, or the colour of an alert still open on it (ADR-064 Inc.G).
     WirelessController,
 }
 
-/// Why a node's `state` is not a current reading (ADR-164 決定 18, ADR-064 増分 G).
+/// Why a node's `state` is not a current reading (ADR-164 decision 18, ADR-064 Inc.G).
 ///
 /// Two kinds of node are never polled themselves, and this is what each says when the thing that
 /// tells it about them stops:
@@ -1527,7 +1527,7 @@ pub(crate) const LABELS_MAX: usize = 32;
 /// Validate and normalize one whole label set.
 ///
 /// **Deliberately unrestricted in character** beyond the length and a ban on control characters: a
-/// label is a word a person reads off a badge (`JAPAN`, `松山本社`, `spare parts`), and it is also
+/// label is a word a person reads off a badge (`JAPAN`, a site name in Japanese, `spare parts`), and it is also
 /// what a `ScopeLevel::Group` threshold and a `WindowScope::Group` window match on. The old
 /// key/value shape restricted the *key* to `[A-Za-z0-9_.:-]` and left the *value* free; with one
 /// string, the free rule is the one that survives — a badge is prose.
@@ -1858,10 +1858,10 @@ async fn set_node_group(
     Json(body): Json<NodeGroupAssignment>,
 ) -> ApiResult<StatusCode> {
     // The destination as well as the node: moving a node into a folder this caller may not act on
-    // puts it where they can no longer reach it (the bulk move's rule, ADR-124 決定 8).
+    // puts it where they can no longer reach it (the bulk move's rule, ADR-124 decision 8).
     require_visible_destination(&scope, body.group_id)?;
     // A folder that does not exist is a 400 that names it, rather than the foreign key turning
-    // into a 500 that names nothing. Shared with the import and the bulk move (ADR-124 決定 1).
+    // into a 500 that names nothing. Shared with the import and the bulk move (ADR-124 decision 1).
     super::groups::require_group_exists(&admin, body.group_id).await?;
     let found = admin
         .repo
@@ -1881,7 +1881,7 @@ async fn set_node_group(
 /// [`NODE_NAMES_BATCH_MAX`] beside it, which silently drops the tail because a name that does not
 /// come back falls back to the raw id and nothing is lost. Truncating a *write* would answer
 /// "moved" while leaving everything past the cut where it was, with no way for the operator to see
-/// which half (ADR-124 決定 7).
+/// which half (ADR-124 decision 7).
 const NODE_MOVE_BATCH_MAX: usize = 1000;
 
 /// Move many nodes into one folder (or `null` to ungroup them all), optionally placing them at a
@@ -1893,7 +1893,7 @@ pub(super) struct BulkNodeMove {
     group_id: Option<Uuid>,
     /// Place the nodes immediately **before** this sibling, keeping the order they were given in.
     /// At most one of `before`/`after`; both omitted appends to the end, which is what every
-    /// caller did before ADR-124 増分 8 and what an N-1 WebUI still sends.
+    /// caller did before ADR-124 Inc.8 and what an N-1 WebUI still sends.
     #[serde(default)]
     before: Option<Uuid>,
     /// Place the nodes immediately **after** this sibling. See `before`.
@@ -1934,14 +1934,14 @@ pub(super) struct PrefixAmbiguity {
 }
 
 /// What the IP-range match proposes. **A proposal, not an action** — nothing is written by the
-/// endpoint that returns this (ADR-124 決定 6).
+/// endpoint that returns this (ADR-124 decision 6).
 #[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct MovePreviewResult {
     matched: Vec<PrefixProposal>,
     ambiguous: Vec<PrefixAmbiguity>,
     /// Ids whose address falls inside no visible folder's range.
     unmatched: Vec<Uuid>,
-    /// Ids already in the folder their range names, or in a folder beneath it (ADR-176 決定 2).
+    /// Ids already in the folder their range names, or in a folder beneath it (ADR-176 decision 2).
     /// Not a move, so in none of the three lists above.
     in_place: Vec<Uuid>,
     /// Whether **any** folder this caller can see carries a range at all.
@@ -2145,7 +2145,7 @@ pub(super) struct PrefixMoveDestination {
 }
 
 /// Apply what `POST /api/v1/nodes/move-preview` proposed and the operator accepted: every
-/// destination at once, in one transaction (ADR-172 決定 2).
+/// destination at once, in one transaction (ADR-172 decision 2).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct PrefixMoveReq {
     moves: Vec<PrefixMoveDestination>,
@@ -2187,9 +2187,9 @@ async fn move_nodes_by_prefix(
     Json(body): Json<PrefixMoveReq>,
 ) -> ApiResult<Json<PrefixMoveResult>> {
     // The client sends back the pairs the preview showed rather than asking the server to match
-    // again: what is applied is exactly what the operator looked at and pressed (ADR-124 決定 6).
+    // again: what is applied is exactly what the operator looked at and pressed (ADR-124 decision 6).
     // One request, one transaction — it used to be one request per destination from the browser,
-    // and a tab closed mid-way left the move half done with no summary (ADR-172 決定 2).
+    // and a tab closed mid-way left the move half done with no summary (ADR-172 decision 2).
     let total: usize = body.moves.iter().map(|m| m.node_ids.len()).sum();
     if total > NODE_MOVE_BATCH_MAX {
         return Err(ApiError::bad_request(
@@ -2308,7 +2308,7 @@ async fn delete_nodes(
     admin: Admin,
     Json(body): Json<BulkNodeDelete>,
 ) -> ApiResult<Json<BulkDeleteResult>> {
-    // Refused, never truncated (ADR-124 決定 7): a truncated delete would report the whole batch
+    // Refused, never truncated (ADR-124 decision 7): a truncated delete would report the whole batch
     // handled while leaving everything past the cut in place.
     if body.node_ids.len() > NODE_MOVE_BATCH_MAX {
         return Err(ApiError::bad_request(
@@ -2388,7 +2388,7 @@ async fn preview_move_by_prefix(
     }))
 }
 
-/// Take the nodes already where their range puts them out of a match (ADR-176 決定 2). Returns
+/// Take the nodes already where their range puts them out of a match (ADR-176 decision 2). Returns
 /// those ids, and what is left to fold.
 async fn split_in_place(
     admin: &Admin,
@@ -2413,7 +2413,7 @@ async fn split_in_place(
 
 /// How many ambiguous or unmatched nodes a subtree proposal names. The totals are always exact;
 /// the lists are a sample, because a whole inventory with no ranges would otherwise name every
-/// node it has (ADR-176 決定 4).
+/// node it has (ADR-176 decision 4).
 const SUBTREE_PREVIEW_LIST_MAX: usize = 200;
 
 /// Which folder a subtree proposal covers.
@@ -2834,14 +2834,14 @@ pub(super) struct BulkPoolResult {
     applied: u64,
 }
 
-/// Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 増分 10).
+/// Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 Inc.10).
 ///
 /// Re-homing a site onto different pollers is the case the two existing writers cannot serve: the
 /// folder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the
 /// per-node `PUT /nodes/{node_id}/pool` meant one request each.
 ///
 /// ⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately
-/// (ADR-124 決定 8). The single-node writer is `NodeScoped` too since ADR-158 A8.
+/// (ADR-124 decision 8). The single-node writer is `NodeScoped` too since ADR-158 A8.
 /// `manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which
 /// poller reaches a device, so an unscoped bulk write would let one site's operator strand
 /// another's inventory on a poller that cannot see it.
@@ -2969,7 +2969,7 @@ pub(super) struct BulkPollResult {
     jobs: usize,
 }
 
-/// Poll many nodes now (ADR-124 増分 12) — the batch form of `POST /nodes/{node_id}/poll`.
+/// Poll many nodes now (ADR-124 Inc.12) — the batch form of `POST /nodes/{node_id}/poll`.
 ///
 /// Confirming a change across a set of devices is the case the single-node form serves badly: it
 /// is the action an operator reaches for immediately after every other bulk edit on this screen.
@@ -3344,7 +3344,7 @@ mod tests {
         );
     }
 
-    /// ADR-064 増分 G on the status both surfaces serve: an access point no controller has reported
+    /// ADR-064 Inc.G on the status both surfaces serve: an access point no controller has reported
     /// for twenty minutes reads `unknown` and says since when — with no organization on the wire,
     /// and no controller either (a scoped caller may not be allowed to see it). One reported a
     /// minute ago says nothing.
@@ -4027,7 +4027,7 @@ mod tests {
     /// and would silently strip every other label off every node an operator ever bulk-tags.
     ///
     /// 🚨 **The bodies below are untyped `json!` literals, and that is exactly what made this test
-    /// survive ADR-135 増分 2's type change unnoticed.** Every typed caller of the label fields
+    /// survive ADR-135 Inc.2's type change unnoticed.** Every typed caller of the label fields
     /// turned into a compile error when they became `Vec<String>`; these did not, so the test
     /// compiled, ran only under `--include-ignored`, and answered 422 against a machine with no
     /// PostgreSQL to run it on. A `json!` body is a hand-written copy of the request schema with
@@ -4135,7 +4135,7 @@ mod tests {
         }
     }
 
-    /// ADR-172 決定 2: an IP-range move is one request and one transaction — every destination or
+    /// ADR-172 decision 2: an IP-range move is one request and one transaction — every destination or
     /// none. It used to be one request per destination from the browser.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -4212,7 +4212,7 @@ mod tests {
         assert_eq!(group_of(c).await, Some(osaka));
     }
 
-    /// 🚨 **A batch dropped between two rows lands there, not at the end** (ADR-124 増分 8).
+    /// 🚨 **A batch dropped between two rows lands there, not at the end** (ADR-124 Inc.8).
     ///
     /// The gesture this endpoint could not express until it grew `before`/`after`: the drag had to
     /// append a multi-node batch, so the same drop answered differently at one node and at three.
@@ -4293,7 +4293,7 @@ mod tests {
         let ghost = uuid::Uuid::new_v4();
 
         // Both paths share one helper, so both are checked here — the single-node route was the
-        // one that used to 500 (ADR-124 決定 1).
+        // one that used to 500 (ADR-124 decision 1).
         for (method, path) in [
             ("POST", "/api/v1/nodes/move".to_string()),
             ("PUT", format!("/api/v1/nodes/{a}/group")),
@@ -4333,7 +4333,7 @@ mod tests {
         assert_eq!(body["error"]["code"], "too_many_nodes", "{body}");
     }
 
-    /// A bulk delete is **accepted** and the rows are gone (ADR-115's shape, ADR-124 増分 6).
+    /// A bulk delete is **accepted** and the rows are gone (ADR-115's shape, ADR-124 Inc.6).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_delete_is_accepted_and_the_nodes_are_gone(pool: sqlx::PgPool) {
@@ -4762,7 +4762,7 @@ mod tests {
     }
 
     /// The exact-address filter finds the device at that address and not its near neighbour
-    /// (ADR-139 増分 2) — through the whole router, with the kind filter the add-node dialog sends.
+    /// (ADR-139 Inc.2) — through the whole router, with the kind filter the add-node dialog sends.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_list_finds_the_device_at_an_exact_address(pool: sqlx::PgPool) {
@@ -4928,7 +4928,7 @@ mod tests {
     }
 
     /// A folder outside the caller's scope is a 404, and a scoped whole-inventory preview names
-    /// nothing outside it (ADR-176 決定 3).
+    /// nothing outside it (ADR-176 decision 3).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_subtree_preview_stays_inside_the_callers_scope(pool: sqlx::PgPool) {
@@ -4960,7 +4960,7 @@ mod tests {
     }
 
     /// Past 1,000 proposals the list stops at what one `move-by-prefix` may carry and the total
-    /// says how many are left (ADR-176 決定 4).
+    /// says how many are left (ADR-176 decision 4).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_subtree_preview_caps_its_proposals_at_one_request(pool: sqlx::PgPool) {

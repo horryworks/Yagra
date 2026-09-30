@@ -37,7 +37,7 @@ export interface FilterParams {
 
 /**
  * `prefix` names this table's keys when its route holds more than one filterable table
- * (ADR-153 決定 3): `useFilterParams(columns, 'events.')` reads and writes `?events.kind=`.
+ * (ADR-153 decision 3): `useFilterParams(columns, 'events.')` reads and writes `?events.kind=`.
  * Omit it for a table whose keys already shipped bare.
  *
  * ⚠️ A string rather than an options object on purpose: it is a dependency of `setFilters`, and an

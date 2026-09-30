@@ -29,7 +29,7 @@ import {
 } from './nodeTreeSelect';
 
 /**
- * How long the keys must rest before a moved cursor is written to `?sel=` (ADR-155 決定 3).
+ * How long the keys must rest before a moved cursor is written to `?sel=` (ADR-155 decision 3).
  *
  * 🚨 **Not a nicety — two things break without it.** `?sel=` is written with `history.replaceState`,
  * which Safari refuses past 100 calls in 30 seconds with a `SecurityError`, and a held arrow key
@@ -96,7 +96,7 @@ export function ariaLevel(row: FlatRow): number {
     case 'ungrouped-head':
       return 1;
     // The drop slot belongs here too: it announces the level it would land at, which is the level it
-    // is drawn at (ADR-162 増分 2). It is never a keyboard stop — `rowSelection` answers null for it
+    // is drawn at (ADR-162 Inc.2). It is never a keyboard stop — `rowSelection` answers null for it
     // — so this is what a screen reader hears while a drag is in flight, and nothing else.
     case 'group':
     case 'node':
@@ -171,7 +171,7 @@ export function firstChildIndex(flat: readonly FlatRow[], index: number): number
 }
 
 /** How a key that moves the cursor treats the working set — the click gesture it corresponds to
- *  (ADR-155 決定 5). `keep` is Ctrl / ⌘: move without touching the set. */
+ *  (ADR-155 decision 5). `keep` is Ctrl / ⌘: move without touching the set. */
 export type MoveGesture = 'plain' | 'range' | 'keep';
 
 /** The same modifier reading a click gets (`clickGesture`), with Ctrl read as "leave the set
@@ -216,7 +216,7 @@ function moveTo(index: number, ctx: KeyContext, gesture: MoveGesture): TreeKeyOu
 
 /**
  * What a key press in the tree does, or null for a key the tree does not answer (it is left to the
- * browser and to the page — Escape among them, see ADR-155 決定 8).
+ * browser and to the page — Escape among them, see ADR-155 decision 8).
  *
  * The tree keys are WAI-ARIA's: Up/Down move, Right opens a folder or steps into it, Left closes one
  * or steps out to its parent, Home/End go to the ends, Enter opens, and the context-menu key or
@@ -289,7 +289,7 @@ export interface CheckedChange {
 }
 
 /**
- * What moving the cursor onto a node does to the working set (ADR-155 決定 5).
+ * What moving the cursor onto a node does to the working set (ADR-155 decision 5).
  *
  * Read through `clickOutcome`, so the keyboard and the mouse have one rule between them — with two
  * differences, both about the cursor being the pane's selection:
@@ -333,7 +333,7 @@ export function moveCheckedChange(
  * What Space does: this node in or out of the working set, and the anchor moves to it.
  *
  * 🚨 **Not `clickOutcome`'s Ctrl branch.** That one seeds an empty set with the row the pane is
- * showing (`batchStart`, ADR-124 増分 3) — and from the keyboard the pane's row IS the row Space was
+ * showing (`batchStart`, ADR-124 Inc.3) — and from the keyboard the pane's row IS the row Space was
  * pressed on, so the seed would put it in and the toggle take it straight out: the first Space would
  * do nothing at all.
  */
@@ -352,7 +352,7 @@ export function anchorOnSettle(
 }
 
 /**
- * What to do once the cursor has stopped moving (ADR-155 決定 3).
+ * What to do once the cursor has stopped moving (ADR-155 decision 3).
  *
  * - `wait`: nothing yet — the debounced value is stale (a newer press is pending), or this exact
  *   press was already written and the URL has not caught up. **Identity, not equality**: a new press
@@ -387,7 +387,7 @@ export function cursorForMove(
 }
 
 /**
- * The cursor after `?sel=` changed (ADR-155 決定 3).
+ * The cursor after `?sel=` changed (ADR-155 decision 3).
  *
  * 🚨 **The cursor is dropped when the URL catches up, never when it is written.** react-router
  * renders a location change as a transition, so the URL lands a frame or more after the write; a
@@ -410,7 +410,7 @@ export function cursorAfterSelection(
   return null;
 }
 
-/** The index a menu key moves to among `length` items (ADR-155 決定 7), or null for a key the menu
+/** The index a menu key moves to among `length` items (ADR-155 decision 7), or null for a key the menu
  *  does not answer. Up and Down wrap — a menu is short, and `ActionMenu` wraps too. */
 export function menuStep(key: string, current: number, length: number): number | null {
   if (length <= 0) return null;
@@ -429,7 +429,7 @@ export function menuStep(key: string, current: number, length: number): number |
 }
 
 /**
- * Whether focus goes back to the tree once a menu the keyboard opened has closed (ADR-155 決定 7).
+ * Whether focus goes back to the tree once a menu the keyboard opened has closed (ADR-155 decision 7).
  *
  * The item that held focus is gone with the menu, which leaves focus on the document and the tree
  * one Tab away from where the operator was. But not over a dialog the item just opened (Edit node…):
@@ -448,7 +448,7 @@ export interface KeyTarget {
  * Whether a key press that reached the tree body's handler is the tree's to answer.
  *
  * - 🚨 **It must have come from inside the body in the DOM.** React bubbles events through portals,
- *   so a key pressed in a row's `＋` menu — portalled to `document.body` — reaches this handler too,
+ *   so a key pressed in a row's `+` menu — portalled to `document.body` — reaches this handler too,
  *   and answering Enter there would cancel the menu item it was meant for.
  * - A control that is itself in the Tab order (the retry button, a suppression marker, a hover
  *   action) keeps its own keys: Enter on Retry retries. The row's name buttons are out of the Tab

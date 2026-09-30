@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* The port's alert-rule dialog (ADR-076 増分 5). Lives inside the shared `Modal` chrome, so this
+/* The port's alert-rule dialog (ADR-076 Inc.5). Lives inside the shared `Modal` chrome, so this
    file styles only the list rows and the form's inline groups — never the overlay, radius, header
    or footer, which are the Modals consistency group's. */
 

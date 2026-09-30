@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Every column-filter spec in the app, in one place, so `reservedKeyCollisions` runs against all of
-// them (ADR-053 Inc.10 決定 Y).
+// them (ADR-053 Inc.10 decision Y).
 //
 // **Why this exists rather than one assert per screen.** `columnFilter.ts` says the column key IS
 // the URL key — no prefix — because the screens spell `severity`, `state` and `q` bare and a prefix
@@ -302,7 +302,7 @@ const REGISTRY: readonly Entry[] = [
 ];
 
 // ---------------------------------------------------------------------------------------------------
-// The route ledger (ADR-153 決定 3 / 決定 8).
+// The route ledger (ADR-153 decision 3 / decision 8).
 //
 // `reservedKeyCollisions` answers "does this ONE table collide with a page parameter". Since every
 // filter lives in the URL, the question that can actually go wrong is wider: **do the tables on one
@@ -612,7 +612,7 @@ describe('the route ledger (ADR-153)', () => {
   });
 
   it('puts every builder on a route', () => {
-    // There is no "not in the URL" list to escape to (ADR-153 決定 1): a filter row that is not on a
+    // There is no "not in the URL" list to escape to (ADR-153 decision 1): a filter row that is not on a
     // route here is a filter a reload throws away. ADR-153 carried a waiting list while the screens
     // moved over, and deleted it once it was empty.
     const onARoute = new Set(ROUTES.flatMap((r) => r.tables.flatMap((t) => t.entries)));

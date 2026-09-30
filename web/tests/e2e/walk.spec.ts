@@ -3,7 +3,7 @@
 // was configured to hand it?
 //
 // ⚠️ THIS IS DELIBERATELY THIN, and the reason is worth keeping. The instinct is to re-assert here
-// everything Tier1 asserts, on real data. That is the failure mode ADR-052 決定 9 names outright:
+// everything Tier1 asserts, on real data. That is the failure mode ADR-052 decision 9 names outright:
 // Tier2 becomes a slow duplicate, and a slow gate is a disabled gate. Tier1 already proves each
 // screen renders the data it was given, and it can prove it *better*, because it chose the data.
 // What Tier1 cannot see is that the bundle in the running image is the one that was built, that

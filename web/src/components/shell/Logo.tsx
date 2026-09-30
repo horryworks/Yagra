@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Brand mark (§1.1) — seal (朱印) style, unified everywhere: a brand-orange rounded tile with an
-// off-white 生成り mark. The mark is the topology fork that also reads as a "Y" (one root node
+// Brand mark (§1.1) — vermilion-seal style, unified everywhere: a brand-orange rounded tile with an
+// off-white unbleached mark. The mark is the topology fork that also reads as a "Y" (one root node
 // branching to two), shared with the Yagra-Website brand assets. No outline-only transparent
 // logo. Two renderings of the same seal:
 //   - 'seal' (default): the orange tile + mark — top bar / home / app icon.

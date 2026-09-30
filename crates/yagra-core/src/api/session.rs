@@ -76,7 +76,7 @@ pub(crate) struct AuthMe {
     scope: Scope,
     /// How this account signs in. The WebUI draws "Change my password" only for `local`, and for
     /// `oidc`/`ldap` says where the password actually lives — one fact on the wire, so the UI holds
-    /// no copy of the rule (ADR-122 決定 5).
+    /// no copy of the rule (ADR-122 decision 5).
     ///
     /// `null` means this core has no user store to ask (skeleton mode). **Read it as "not local"** —
     /// every consumer fails closed, because the alternative is drawing a control whose write path
@@ -369,7 +369,7 @@ pub(super) struct ChangeOwnPassword {
 
 /// Change the password of the account the bearer token belongs to.
 ///
-/// **This ends the caller's own session, on purpose** (ADR-122 決定 3). `revoke_user` is the same
+/// **This ends the caller's own session, on purpose** (ADR-122 decision 3). `revoke_user` is the same
 /// primitive an administrator's reset uses, so there is one answer to "a password changed — what
 /// happens to the tokens", and signing in again is what proves the new password actually works.
 ///
@@ -699,7 +699,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
 
-        // The caller's own token went with it. This is the design (ADR-122 決定 3), not a side
+        // The caller's own token went with it. This is the design (ADR-122 decision 3), not a side
         // effect — a client that kept using it would be reading a session the password no longer
         // authorizes.
         let (status, _) = send(&st, "GET", "/api/v1/nodes", &token, None).await;

@@ -28,7 +28,7 @@
 //! There is deliberately **no subnet field** on the per-interface rollup. The plan sketched one, but
 //! the poller cannot honestly produce it: an ARP row carries no prefix length, and the interface's
 //! own prefix comes from the L3 walk, which is a different job that may not have run. Inferring a
-//! `/24` because the addresses look contiguous is exactly the guessing ADR-043 決定 2 forbids.
+//! `/24` because the addresses look contiguous is exactly the guessing ADR-043 decision 2 forbids.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

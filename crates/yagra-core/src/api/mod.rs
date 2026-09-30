@@ -213,7 +213,7 @@ pub struct AdminState {
     /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
     /// truth, so a stale read is a stale map rather than lost data.
     pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
-    /// Operator decisions about links (ADR-043 決定 4). Unlike `topology_links` this is a source of
+    /// Operator decisions about links (ADR-043 decision 4). Unlike `topology_links` this is a source of
     /// truth — nothing here is recomputable — which is why it is a separate store rather than a
     /// column on the cache.
     pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
@@ -329,7 +329,7 @@ pub struct ApiState {
     /// the board composed for colleagues to strangers. It is now a handle because both halves
     /// change at runtime: the switch is a row an admin toggles (`app_settings`), and the allow-list
     /// changes whenever the public board is edited. A refresh loop keeps standby cores in step
-    /// (ADR-123 決定 5); reads go through `public_access::current`.
+    /// (ADR-123 decision 5); reads go through `public_access::current`.
     pub public_access: crate::public_access::PublicAccessHandle,
     /// HA leadership (ADR-016): `true` when this core holds the advisory lock and runs the
     /// coordinator + ingest + alert/notify singletons. Drives `/readyz` (so a load balancer routes
@@ -458,7 +458,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(public_dashboard::routes())
         // Per-account WebUI preferences (ADR-058), in `api/preferences.rs`.
         .merge(preferences::routes())
-        // The change feed browsers follow to re-read inventory (ADR-019 増分 2), in `api/changes.rs`.
+        // The change feed browsers follow to re-read inventory (ADR-019 Inc.2), in `api/changes.rs`.
         .merge(changes::routes())
         // Per-account pins on the inventory tree (ADR-146), in `api/pins.rs`.
         .merge(pins::routes())
@@ -568,7 +568,7 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
                 crate::config_gen::bump();
             } else if changes_what_the_tree_draws(&path) {
                 // Nothing a poller reads, so no config generation — but an open inventory tree
-                // draws it, so the browsers are told (ADR-019 増分 2).
+                // draws it, so the browsers are told (ADR-019 Inc.2).
                 crate::change_feed::publish();
             }
         }
@@ -670,7 +670,7 @@ fn changes_monitoring_config(path: &str) -> bool {
         // spurious rebuilds in the product. Measured on the test server 2026-08-15: fourteen page
         // reloads, no other write in the window, and the next scheduler sweep lost its cache.
         || path == "/api/v1/node-names"
-        // Proposing which folder's IP range each selected node falls into (ADR-124 決定 5). It is
+        // Proposing which folder's IP range each selected node falls into (ADR-124 decision 5). It is
         // a POST because the id list is too long for a query string, and it writes nothing — the
         // move that may follow is `POST /nodes/move`, which is **not** listed here and does bump
         // the signal.
@@ -683,7 +683,7 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/nodes/move-preview"
         // The same proposal over a subtree or the whole inventory (ADR-176). Same blind spot.
         || path == "/api/v1/nodes/move-preview/subtree"
-        // The same shape, one step earlier in the workflow (ADR-131 決定 7): which folder's range
+        // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
         // signal.
@@ -694,7 +694,7 @@ fn changes_monitoring_config(path: &str) -> bool {
         // grows on a 2s poll while a sweep runs, so a missing entry here rebuilds the whole fleet's
         // poll specs every few seconds for the length of the scan.
         || path == "/api/v1/discovery/import-preview"
-        // A manual poll (ADR-124 増分 12), in both its forms. It dispatches the node's **existing**
+        // A manual poll (ADR-124 Inc.12), in both its forms. It dispatches the node's **existing**
         // configured check set to the bus and writes nothing the rebuilds read — no binding, no
         // pool, no threshold, no folder. The criterion is what those rebuilds read, and a poll
         // changes none of it.
@@ -709,7 +709,7 @@ fn changes_monitoring_config(path: &str) -> bool {
         // this function is what keeps them honest.
         || path == "/api/v1/nodes/poll"
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/poll"))
-        // Arranging one folder's children in name order (ADR-130 決定 4). It writes real rows —
+        // Arranging one folder's children in name order (ADR-130 decision 4). It writes real rows —
         // `node_groups.sort_order` and `nodes.sort_order` — so the verb is not why it is here. The
         // criterion is what the rebuilds read, and **none of them reads `sort_order`**: measured
         // across `scheduler/`, `alerts/`, `poolres.rs` and `yagra-topology/`, zero hits. It is the
@@ -729,18 +729,18 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/llm/test"
         || path == "/api/v1/settings/ldap/test"
         || path == "/api/v1/meraki/orgs/discover"
-        // "Sync now" (ADR-164 決定 32) writes one column, `full_sync_requested_at`, which none of the
+        // "Sync now" (ADR-164 decision 32) writes one column, `full_sync_requested_at`, which none of the
         // rebuilds reads; the read it asks for runs in the leader's sync loop, and whatever that
-        // changes it bumps itself. Counted, every press re-resolved the whole fleet (増分 18).
+        // changes it bumps itself. Counted, every press re-resolved the whole fleet (Inc.18).
         || (path.starts_with("/api/v1/meraki/orgs/") && path.ends_with("/sync"))
         // NetBox's "Sync now" has the same shape since ADR-172: it writes `sync_requested_at` and
         // nothing else, and the sync loop bumps the generation itself when a folder actually
-        // changes (ADR-178 決定 7). Counted, every press re-resolved the whole fleet for nothing.
+        // changes (ADR-178 decision 7). Counted, every press re-resolved the whole fleet for nothing.
         || (path.starts_with("/api/v1/netbox/servers/") && path.ends_with("/sync"))
-        // Detect on one unregistered device (ADR-179 増分 2): a one-address scan held in memory,
+        // Detect on one unregistered device (ADR-179 Inc.2): a one-address scan held in memory,
         // like a range sweep's. It writes nothing a rebuild reads — the import that may follow is
         // `POST /discovered-endpoints/{id}/import`, which is **not** listed here and does bump.
-        // Counted, every press re-resolved the whole fleet (ADR-179 増分 5). Invisible to the
+        // Counted, every press re-resolved the whole fleet (ADR-179 Inc.5). Invisible to the
         // mechanical check for the same reason as the previews: the handler demands ManageConfig.
         || (path.starts_with("/api/v1/discovered-endpoints/") && path.ends_with("/probe"))
         // Rediscover on one monitored node (ADR-186): the same one-address scan held in memory. The
@@ -765,7 +765,7 @@ fn changes_monitoring_config(path: &str) -> bool {
 }
 
 /// Whether a write the config generation deliberately ignores still changes what the inventory
-/// tree draws, so open tabs must hear about it (ADR-019 増分 2).
+/// tree draws, so open tabs must hear about it (ADR-019 Inc.2).
 ///
 /// Only folder sorting today: it writes `sort_order`, which no rebuild reads (hence its exemption
 /// above) and which is exactly the order the tree lists a folder's children in. An allow-list, not
@@ -1801,7 +1801,7 @@ mod tests {
     /// routes whose handler demands a *read* permission, and `/nodes/move-preview` demands
     /// ManageConfig — the operator is deciding a move — so it is invisible there. Forgetting the
     /// exemption costs a full-fleet re-resolution on every press of the preview button, silently
-    /// and with nothing in the log (ADR-124 決定 8).
+    /// and with nothing in the log (ADR-124 decision 8).
     #[test]
     fn detecting_an_endpoint_does_not_dirty_the_config_generation_but_importing_it_does() {
         let id = "00000000-0000-0000-0000-000000000001";
@@ -1828,7 +1828,7 @@ mod tests {
         )));
     }
 
-    /// ADR-187 増分 2: the overlap screen's rules and acknowledgements are read only by that
+    /// ADR-187 Inc.2: the overlap screen's rules and acknowledgements are read only by that
     /// screen, so marking an overlap must not re-resolve the fleet. The trailing slash is pinned:
     /// a sibling route merely starting with the name argues for its own exemption.
     #[test]
@@ -1863,11 +1863,11 @@ mod tests {
         );
     }
 
-    /// 🚨 A manual poll dispatches existing checks and must not rebuild the fleet (ADR-124 増分 12).
+    /// 🚨 A manual poll dispatches existing checks and must not rebuild the fleet (ADR-124 Inc.12).
     ///
     /// Invisible to the mechanical check below, like the two previews: the handler demands
     /// `ManageConfig`. **Both spellings are asserted** — the single-node form was not exempt until
-    /// 増分 12, and it is the button an operator presses right after every other edit on the Nodes
+    /// Inc.12, and it is the button an operator presses right after every other edit on the Nodes
     /// screen, so every press re-resolved the poll specs for the whole fleet.
     #[test]
     fn polling_now_does_not_dirty_the_config_generation() {
@@ -1888,14 +1888,14 @@ mod tests {
         ));
     }
 
-    /// 🚨 Sorting a folder writes rows and still must not rebuild the fleet (ADR-130 決定 4).
+    /// 🚨 Sorting a folder writes rows and still must not rebuild the fleet (ADR-130 decision 4).
     ///
     /// Invisible to the mechanical check below for the same reason `/nodes/move-preview` is: the
     /// handler demands `ManageConfig`. The difference is that this one genuinely writes — so the
     /// only thing keeping it exempt is the fact that no rebuilder reads `sort_order`, and the only
     /// thing recording that fact is this test.
     /// Sorting skips the config generation but not the browsers: the tree's order is what it
-    /// changes (ADR-019 増分 2). Every other exempt path stays silent on the change feed.
+    /// changes (ADR-019 Inc.2). Every other exempt path stays silent on the change feed.
     #[test]
     fn sorting_a_folder_still_tells_the_open_trees() {
         assert!(changes_what_the_tree_draws("/api/v1/node-groups/abc/sort"));

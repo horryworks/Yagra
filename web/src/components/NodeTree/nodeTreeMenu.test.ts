@@ -18,7 +18,7 @@ import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression'
 import type { NodeGroup, NodeSummary } from '../../types/api';
 
 /** A working set, as the menu judgement reads it: ids to node-ish values it never looks inside.
- *  One copy — it was declared separately inside two `describe` blocks, and ADR-124 増分 9 would
+ *  One copy — it was declared separately inside two `describe` blocks, and ADR-124 Inc.9 would
  *  have made that three. */
 const set = (...ids: string[]) => new Map(ids.map((id) => [id, { id }]));
 
@@ -185,7 +185,7 @@ describe('canMoveByPrefix', () => {
 describe('nodeDeleteItems', () => {
 
   it('deletes the working set when the right-clicked row is in it', () => {
-    // 🚨 THE REGRESSION (ADR-124 増分 6). An operator removing duplicates selected a run of rows,
+    // 🚨 THE REGRESSION (ADR-124 Inc.6). An operator removing duplicates selected a run of rows,
     // right-clicked one and pressed Delete; only the right-clicked node went.
     expect(nodeDeleteItems(set('a', 'b', 'c'), 'b', true)).toEqual({
       scope: 'selection',
@@ -262,7 +262,7 @@ describe('nodeMoveItems', () => {
 });
 
 describe('nodeActionItems', () => {
-  // 🚨 ADR-124 増分 9. Move and Delete each carried their own copy of this rule, and the actions
+  // 🚨 ADR-124 Inc.9. Move and Delete each carried their own copy of this rule, and the actions
   // with no copy at all — pool, maintenance, mute, Poll now — kept acting on one row while sitting
   // in a menu headed "Move 20 selected…". One function now, so a new batch-aware action cannot
   // quietly answer differently.

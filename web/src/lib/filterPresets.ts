@@ -19,7 +19,7 @@ const DAY = 24 * 60 * 60;
 
 /**
  * Every relative window any list offers, and **the only place their lengths are written down**
- * (ADR-053 Inc.10, 決定 X).
+ * (ADR-053 Inc.10, decision X).
  *
  * ⚠️ There were four copies of this arithmetic before Inc.10 — here, `eventRange.ts`,
  * `auditQuery.ts` and `historyQuery.ts` — which is the exact failure this module's header opens by
@@ -65,8 +65,8 @@ export function rangeSeconds(token: RangeToken): number | null {
 /** The one label a window has, on every screen: `common:filter.range.<token>` (ADR-184).
  *
  *  Each server-side list used to pass its own key prefix, and five label groups had grown for six
- *  tokens — "Last 24h" on Events and History, "Last 24 hours" on All findings, "24 時間" and
- *  "過去 24 時間" and "過去 7 日" and "過去 7 日間" in Japanese. The prefix is no longer an argument,
+ *  tokens — "Last 24h" on Events and History, "Last 24 hours" on All findings, and four more
+ *  spellings of "24 hours" and "7 days" in Japanese. The prefix is no longer an argument,
  *  so a screen cannot start a sixth. */
 export function rangeLabel(token: RangeToken, t: TFunction): string {
   return t(`common:filter.range.${token}`);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Guards the testid map (ADR-052 決定 4). Two directions, and the first one is the load-bearing
+// Guards the testid map (ADR-052 decision 4). Two directions, and the first one is the load-bearing
 // half: it is a **ratchet**, not a description. It passes today because there is one testid and it
 // comes from the map — and it goes on passing only while that stays true. The moment somebody
 // writes `data-testid="node-row"` inline, the trap this map exists to prevent has started, and

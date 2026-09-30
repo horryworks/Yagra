@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// What the inventory pane's ＋ menu acts on.
+// What the inventory pane's + menu acts on.
 //
-// The ＋ used to be an "add group at top level" button; it is now a two-item menu (add node / add
+// The + used to be an "add group at top level" button; it is now a two-item menu (add node / add
 // group) whose target follows the tree selection, the same way the right-click menu does. The
 // derivation lives here rather than in NodesPage.tsx because Vitest only runs `.test.ts` — a
 // judgement made inside a `.tsx` is a judgement nothing can test.
@@ -9,7 +9,7 @@
 import type { TreeSelection } from '../components/NodeTree/NodeTree';
 import type { NodeGroup, NodeSummary } from '../types/api';
 
-/** The label keys the ＋ menu can use (`nodes` namespace). An `as const` array so the i18n
+/** The label keys the + menu can use (`nodes` namespace). An `as const` array so the i18n
  *  key-coverage test can iterate it — nothing types `t()` against a key union. */
 export const ADD_MENU_LABEL_KEYS = [
   'tree.addNodeEllipsis',
@@ -31,7 +31,7 @@ export interface AddMenuTarget {
 }
 
 /**
- * Resolve the tree selection to the folder the ＋ menu should file into, and pick the label keys.
+ * Resolve the tree selection to the folder the + menu should file into, and pick the label keys.
  *
  * A selected node contributes its own group, so "add another one next to this" works. The
  * load-bearing rule is the fallback: the target is kept ONLY if it resolves to a group this page

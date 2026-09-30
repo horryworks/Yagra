@@ -1185,7 +1185,7 @@ impl UpgradeRepo {
 
     /// Every check [`Self::request_with`] makes before writing, without writing.
     ///
-    /// Asked before the fleet-wide maintenance window is opened (ADR-172 決定 4): a request the
+    /// Asked before the fleet-wide maintenance window is opened (ADR-172 decision 4): a request the
     /// updater would refuse must refuse the click, not open a window no run will ever close.
     ///
     /// # Errors

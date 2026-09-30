@@ -37,7 +37,7 @@ import {
 export const REPORT_TABS = ['saved', 'templates', 'schedules'] as const;
 export type ReportTab = (typeof REPORT_TABS)[number];
 
-/** Each tab's URL-key prefix (ADR-153 決定 3), keyed by the tab so a fourth tab cannot be added
+/** Each tab's URL-key prefix (ADR-153 decision 3), keyed by the tab so a fourth tab cannot be added
  *  without one. The route ledger in `filterSpecRegistry.test.ts` checks the three are disjoint. */
 export const REPORT_TABLE_PREFIX: Record<ReportTab, string> = {
   saved: 'saved.',

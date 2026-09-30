@@ -106,7 +106,7 @@ export function MaintenancePage() {
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
   const [clearing, setClearing] = useState(false);
 
-  // All three re-read when someone else opens, edits or closes a window (ADR-019 増分 2).
+  // All three re-read when someone else opens, edits or closes a window (ADR-019 Inc.2).
   const windows = useLoad(() => api.listMaintenanceWindows(), [], {
     initial: [] as MaintenanceWindow[],
     onConfigChange: true,

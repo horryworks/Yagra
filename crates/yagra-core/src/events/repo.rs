@@ -688,7 +688,7 @@ impl EventRepo {
         Ok((matched, unmatched))
     }
 
-    /// Remember one persisted batch's senders that no node claimed (ADR-179 決定 3).
+    /// Remember one persisted batch's senders that no node claimed (ADR-179 decision 3).
     ///
     /// `senders` must hold each `(address, kind)` once — [`super::ingest::unattributed_senders`]
     /// builds it that way — because one `INSERT … ON CONFLICT` cannot touch the same row twice. A
@@ -696,7 +696,7 @@ impl EventRepo {
     /// messages and not others still has a name.
     ///
     /// A known sender's row is rewritten only when it has not been touched for a minute or it now
-    /// names a different host (ADR-179 増分 7 決定 4). Rewriting `last_seen` on every batch cost a
+    /// names a different host (ADR-179 Inc.7 decision 4). Rewriting `last_seen` on every batch cost a
     /// PostgreSQL write per batch from a chatty sender, for a column that only ages rows out by the
     /// day. The minute is a round number, not a measurement, and the sweep's watermark can move up
     /// to a minute late for it. Returns the rows actually written.
@@ -733,7 +733,7 @@ impl EventRepo {
     ///
     /// Bounded here and not only by [`Self::prune_senders`]: the sweep reads before it prunes,
     /// and between two sweeps a flood of forged source addresses can grow the table without limit
-    /// (ADR-179 増分 5). The sweep could never keep more than `limit` of them anyway.
+    /// (ADR-179 Inc.5). The sweep could never keep more than `limit` of them anyway.
     pub async fn unattributed_senders(
         &self,
         limit: usize,
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     /// The senders table keeps one row per (address, kind), keeps a hostname a later batch left
-    /// out, moves the watermark, and prunes by age then by the ceiling (ADR-179 決定 3).
+    /// out, moves the watermark, and prunes by age then by the ceiling (ADR-179 decision 3).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn unattributed_senders_are_remembered_merged_and_pruned(pool: sqlx::PgPool) {
@@ -1317,7 +1317,7 @@ mod tests {
             .unwrap()
         };
         let before = last_seen(pool.clone()).await;
-        // Heard again at once, with no new name: nothing is written (ADR-179 増分 7 決定 4).
+        // Heard again at once, with no new name: nothing is written (ADR-179 Inc.7 decision 4).
         assert_eq!(
             repo.record_unattributed_senders(&[sender("192.0.2.5", SenderKind::Syslog, None)])
                 .await

@@ -1148,7 +1148,7 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
 /// The built-in AP-table template for one wireless controller dialect (ADR-064).
 ///
 /// Its OID selects the dialect, and its first metric is the controller's walk-complete sample. A
-/// Cisco controller also counts its joined APs out of the same walk (ADR-064 増分 F, F8) — a Huawei
+/// Cisco controller also counts its joined APs out of the same walk (ADR-064 Inc.F, F8) — a Huawei
 /// AC answers that from a scalar of its own template instead. The per-AP inventory the walk
 /// produces is not a collection item — it is relational data for PostgreSQL (the AP list), never a
 /// series per row (ADR-011).
@@ -1182,7 +1182,7 @@ fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
                 item(METRIC_WLAN_CONTROLLER_APS_JOINED),
                 item(METRIC_WLAN_CONTROLLER_APS_MISSING),
                 // Read by one GET that asks AireOS's and the 9800's object together, whichever
-                // answers (ADR-064 増分 H, H5) — one template item cannot hold two OIDs.
+                // answers (ADR-064 Inc.H, H5) — one template item cannot hold two OIDs.
                 item(METRIC_WLAN_CONTROLLER_AP_CAPACITY),
             ],
         ),
@@ -1194,7 +1194,7 @@ fn wlan_ap_template(flavor: WlanFlavor) -> BuiltinTemplate {
     }
 }
 
-/// The built-in SSID-statistics template for one dialect (ADR-064 増分 D).
+/// The built-in SSID-statistics template for one dialect (ADR-064 Inc.D).
 ///
 /// Every item names the dialect's **SSID** entry OID, which is what selects the walk — the AP
 /// template names the AP table's, and a node may carry either or both.
@@ -1257,7 +1257,7 @@ fn wlan_ssid_template(flavor: WlanFlavor) -> BuiltinTemplate {
     }
 }
 
-/// The built-in radio template for one dialect (ADR-064 増分 C).
+/// The built-in radio template for one dialect (ADR-064 Inc.C).
 ///
 /// 🚨 **The items are declared on the controller, and the metrics land on the access points.**
 /// That is not a mistake in either direction: the controller is what is walked, and the radio is
@@ -1277,8 +1277,8 @@ fn wlan_radio_template(flavor: WlanFlavor) -> BuiltinTemplate {
             &WLAN_RADIO_METRICS,
         ),
         // The three the Cisco tables carry. `bsnAPIfPhyTxPowerLevel` is a step number, not dBm,
-        // and there is no noise, interference or signal column to read (ADR-064 増分 F, F5).
-        // Plus the controller's clients per band, summed over these same rows (増分 H, H4): a Cisco
+        // and there is no noise, interference or signal column to read (ADR-064 Inc.F, F5).
+        // Plus the controller's clients per band, summed over these same rows (Inc.H, H4): a Cisco
         // controller has no per-band total of its own, and a Huawei AC answers them from scalars.
         WlanFlavor::CiscoAirespace => (
             "Each radio of each access point a Cisco wireless controller manages \
@@ -1679,7 +1679,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
         ),
         // ── Wireless ──
-        // ADR-064 増分 F: AireOS and the 9800 are both classified here, and both answer the
+        // ADR-064 Inc.F: AireOS and the 9800 are both classified here, and both answer the
         // AIRESPACE tables, so the one dialect goes on the one profile. A deployment gets the new
         // links on its next start: the seeder inserts each (profile, template) pair it lacks.
         prof(
@@ -1853,7 +1853,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
         // profiles above. These devices are polled over the cloud Dashboard API (org-scoped
         // collector), not SNMP, so they carry NO collection templates; the per-org collector emits
         // the metrics and the profile only groups these nodes. The MX one also hosts the seeded
-        // Meraki thresholds (`SeedRange::MerakiThresholds`, ADR-164 増分 13); MS and MR have none —
+        // Meraki thresholds (`SeedRange::MerakiThresholds`, ADR-164 Inc.13); MS and MR have none —
         // a Meraki device's liveness comes from the global rule, fed by the availability tier.
         // Kept at the array end for seed-id stability. Roles mirror category_for_product_type():
         // MX→firewall, MS→switch, MR→AP.
@@ -2053,7 +2053,7 @@ mod tests {
 
     /// Among items at one level the first wins, so a profile that attaches two sets declaring the
     /// same name would make the winner — its OID and its Overview heading — depend on row order.
-    /// The repository orders the rows so that is deterministic (ADR-046 Inc.9 決定 9-D); this pins
+    /// The repository orders the rows so that is deterministic (ADR-046 Inc.9 decision 9-D); this pins
     /// that no built-in profile relies on it at all.
     #[test]
     fn no_builtin_profile_attaches_two_sets_that_declare_one_name() {
@@ -2309,7 +2309,7 @@ mod tests {
             WlanFlavor::Huawei.template_name(),
             WlanFlavor::Huawei.ssid_template_name(),
             WlanFlavor::Huawei.radio_template_name(),
-            // ── ADR-064 増分 F appended from here ──
+            // ── ADR-064 Inc.F appended from here ──
             WlanFlavor::CiscoAirespace.template_name(),
             WlanFlavor::CiscoAirespace.ssid_template_name(),
             WlanFlavor::CiscoAirespace.radio_template_name(),
@@ -2503,7 +2503,7 @@ mod tests {
     }
 
     /// Every WLAN dialect ships its three templates, each pointed at the dialect's own table — the
-    /// optical check's shape for a second family (ADR-064 増分 F). A dialect added to
+    /// optical check's shape for a second family (ADR-064 Inc.F). A dialect added to
     /// [`WlanFlavor::ALL`] without them has an AP table nothing ever walks; one whose items name
     /// another dialect's root would walk that dialect's table on this dialect's controllers.
     #[test]
@@ -2536,7 +2536,7 @@ mod tests {
 
     /// A WLAN item's dimension is decided by which of three lists names it — node-level, a row per
     /// SSID, or a slot per radio — and a name in none of them is silently reported as `entity`
-    /// (ADR-064 増分 H: the per-band totals and the AP capacity are the first controller-wide names
+    /// (ADR-064 Inc.H: the per-band totals and the AP capacity are the first controller-wide names
     /// on the radio and AP templates). Exactly one, so the answer cannot depend on which list a
     /// reader happens to consult first.
     #[test]
@@ -2614,7 +2614,7 @@ mod tests {
             "WAC walks its AP table (ADR-064 increment B1)"
         );
 
-        // ADR-064 増分 F: the Cisco profile walks the AIRESPACE tables, and only those — a
+        // ADR-064 Inc.F: the Cisco profile walks the AIRESPACE tables, and only those — a
         // Huawei template on it would be a per-poll walk of a table no Cisco has.
         let wlc = by_name("Cisco wireless controller").expect("Cisco WLC profile present");
         assert_eq!(wlc.category, ProfileCategory::WirelessController);

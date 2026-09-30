@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! How the derived dependency graph is allowed to affect alerting (ADR-043 決定 5, migration 0067).
+//! How the derived dependency graph is allowed to affect alerting (ADR-043 decision 5, migration 0067).
 //!
 //! The derivation can be wrong, and the way it is wrong matters asymmetrically: a **missing** edge
 //! only fails to suppress an alert that would have been suppressed — noise. A **wrong** edge
@@ -7,7 +7,7 @@
 //! derived graph is never allowed to reach the alert engine on the strength of the code having
 //! shipped. An operator turns it on, having seen what it would have done.
 //!
-//! Three states, deployment-wide because 決定 5 sets the unit of approval at the mode: approving
+//! Three states, deployment-wide because decision 5 sets the unit of approval at the mode: approving
 //! edges one at a time is the input cost this whole ADR exists to remove, and reintroducing it under
 //! another name would leave the feature exactly as unused as `nodes.parent_id` was.
 

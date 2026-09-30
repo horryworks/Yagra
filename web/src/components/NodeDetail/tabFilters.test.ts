@@ -169,7 +169,7 @@ describe('the neighbours filter row', () => {
   });
 
   // ADR-180: an address is filtered by what it IS to this deployment — on the Monitoring column
-  // since ADR-179 増分 3 — and the peer filter reads what the peer cell shows: the chassis maker and
+  // since ADR-179 Inc.3 — and the peer filter reads what the peer cell shows: the chassis maker and
   // the node the address belongs to.
   describe('with what the server said about addresses and MACs', () => {
     const lookups = neighborLookups({

@@ -37,7 +37,7 @@ interface AuthStore {
   /** How the signed-in account authenticates, or null while it is resolving, when signed out,
    *  or when this core has no user store to ask. **Read it through `hasLocalPassword` /
    *  `passwordHomeKey` (`lib/password.ts`), never by comparing it here** — a second copy of
-   *  "which kinds have a password Yagra holds" is a second answer (ADR-122 決定 5). */
+   *  "which kinds have a password Yagra holds" is a second answer (ADR-122 decision 5). */
   accountKind: UserKind | null;
   /** The server's role/privilege matrix (`GET /api/v1/roles`), or null while it is still
    *  resolving. Held whole rather than pre-reduced to this principal's permission list so that
@@ -139,7 +139,7 @@ export function usePermissionLabel(perm: Permission): string {
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces
 // dock, the Metric explorer) carries to the others across navigation — one source of truth for the
 // active window. Persisted to sessionStorage so a browser reload restores the same window instead
-// of snapping back to the default (design-guidelines.md "画面状態の永続化"); sessionStorage (not
+// of snapping back to the default (design-guidelines.md "persisting screen state" section); sessionStorage (not
 // localStorage) scopes it to the tab/session, matching "reload shows the same view".
 interface RangeStore {
   range: Range;
@@ -209,7 +209,7 @@ export const useTreeTouchedStore = create<TreeTouchedStore>()(
 // last screen I was dropped onto" rather than "the last one I chose".
 //
 // sessionStorage, like the chart range above: this is part of "what am I looking at", not a standing
-// preference, and it is deliberately not on the account (ADR-134 決定 4 — one PUT and one audit row
+// preference, and it is deliberately not on the account (ADR-134 decision 4 — one PUT and one audit row
 // per tab click, which is not a rate a debounce can fold).
 interface NodeTabStore {
   tab: NodeDetailTab;
@@ -269,7 +269,7 @@ export type MapViewKey = 'topo' | 'geo';
 // operator's pan every tick — and that care stopped at the component boundary: stepping to a node
 // and back re-fitted the whole diagram.
 //
-// ⚠️ **These are container pixels, not geography** (ADR-134 決定 7). Restored at a different window
+// ⚠️ **These are container pixels, not geography** (ADR-134 decision 7). Restored at a different window
 // width the view is off; it is worth carrying anyway because "Fit to view" puts it right in one
 // click, while re-zooming every visit has no such fix. `null` = never moved, so the first paint
 // still auto-fits.
@@ -296,7 +296,7 @@ export const useMapViewStore = create<MapViewStore>()(
   ),
 );
 
-// Where each nav section was last visited (ADR-134 増分 2). The top-bar tab used to navigate to
+// Where each nav section was last visited (ADR-134 Inc.2). The top-bar tab used to navigate to
 // `NavSection.path`, a constant — so Dashboard always opened Shared dashboard even for an operator
 // who had spent the morning on their own board, and Settings always opened System health out of
 // sixteen screens. Read it through `sectionLandingPath` (nav.ts), which is where a stored value is
@@ -304,9 +304,9 @@ export const useMapViewStore = create<MapViewStore>()(
 // lives, so a node detail never becomes the Nodes tab's destination.
 //
 // sessionStorage, like the three above: part of "what am I looking at", not a standing preference,
-// and deliberately not on the account (決定 11 — one PUT and one audit row per navigation).
+// and deliberately not on the account (decision 11 — one PUT and one audit row per navigation).
 //
-// Since 増分 3 it also keeps the last route per menu ITEM, which is what the sidebar and the mobile
+// Since Inc.3 it also keeps the last route per menu ITEM, which is what the sidebar and the mobile
 // drawer read (`itemLandingPath`). One section holds several items, so the section's memory alone
 // could not bring All nodes' search term back after a visit to Discovery.
 interface SectionRouteStore {
@@ -344,7 +344,7 @@ export const useSectionRouteStore = create<SectionRouteStore>()(
 
 // How tall the operator dragged the Geo map's pane. A layout preference, so it persists — snapping
 // back to the default on every navigation is exactly the annoyance `design-guidelines.md`'s
-// "画面状態の永続化" is about. localStorage rather than sessionStorage (unlike the chart range):
+// "persisting screen state" section is about. localStorage rather than sessionStorage (unlike the chart range):
 // this is a stable preference about how you like the page, not part of "reload shows the same
 // view". `null` = never resized, so the page picks a height from the current window instead of
 // pinning whatever the window happened to be on the day it was first opened.
@@ -371,7 +371,7 @@ interface AlertStore {
   alerts: Record<string, Alert>;
   upsertAlert: (alert: Alert) => void;
   resolveAlert: (key: Pick<Alert, 'node' | 'check' | 'severity'>) => void;
-  /** Replace the whole set with a fresh snapshot (ADR-019 増分 1). An alert absent from `list` is
+  /** Replace the whole set with a fresh snapshot (ADR-019 Inc.1). An alert absent from `list` is
    *  dropped — that is the point: a resolution missed while the stream was down would otherwise
    *  stay on screen until a reload. */
   setAlerts: (list: Alert[]) => void;

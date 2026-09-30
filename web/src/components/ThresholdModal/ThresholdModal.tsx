@@ -44,7 +44,7 @@ import { groupOptions } from '../../lib/nodeTree';
 
 /** The target control for the level the operator has chosen.
  *
- *  Before ADR-075 増分 3 this was one free-text box for every level, and the id it wanted — a
+ *  Before ADR-075 Inc.3 this was one free-text box for every level, and the id it wanted — a
  *  device profile's UUID — is printed nowhere in the WebUI, so creating a profile-scoped rule was
  *  not actually possible. A mistyped id is not an error either: the engine compares it and simply
  *  never matches, so the rule is created, listed, and silently evaluates for no node.
@@ -164,7 +164,7 @@ function ScopeIdField({
         </>
       ) : (
         // The legacy tag scope. Free text because a tag *is* free text, and because no list of the
-        // ones in use is reachable from here: since ADR-135 増分 2 a node's tags are partly its
+        // ones in use is reachable from here: since ADR-135 Inc.2 a node's tags are partly its
         // folder chain's, so "every tag in use" is a server-side question, not one this screen can
         // answer from the rule it is editing.
         <TextInput
@@ -215,7 +215,7 @@ export function ThresholdModal({
   const { t } = useTranslation('alertsConfig');
   // ⚠️ Held here, inside a conditionally-mounted component, so closing the dialog *is* the reset
   // (ui-conventions "Modals"). It briefly took a `prefill` for the Interfaces dock; that caller
-  // now opens its own port-shaped dialog (ADR-076 増分 5), and a prop with no caller is a prop
+  // now opens its own port-shaped dialog (ADR-076 Inc.5), and a prop with no caller is a prop
   // nothing keeps true.
   const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
   const save = useSubmit({
@@ -232,7 +232,7 @@ export function ThresholdModal({
 
   // The legacy tag-based `group` level is not offered for a *new* rule — a folder group says the
   // same thing with a type on it, recursively, and is the unit RBAC already scopes by (ADR-075
-  // 増分 3, the same move the maintenance-window form already made). ⚠️ The reason used to be
+  // Inc.3, the same move the maintenance-window form already made). ⚠️ The reason used to be
   // "nothing writes `nodes.tags`", which ADR-135 made false; the decision did not change with it.
   // ⚠️ It must still appear while editing a rule
   // that already sits at it: a `<select>` whose value is absent from its options renders blank,

@@ -53,7 +53,7 @@ export const SELECTABLE_MERAKI_TIERS = [
 export type SelectableMerakiTier = (typeof SELECTABLE_MERAKI_TIERS)[number];
 
 /**
- * The tier an organization cannot go without (ADR-164 決定 17).
+ * The tier an organization cannot go without (ADR-164 decision 17).
  *
  * Availability is the only tier that says whether a device is up — uplink and traffic record
  * readings and decide nothing. An organization saved without it gave its nodes no liveness at all:

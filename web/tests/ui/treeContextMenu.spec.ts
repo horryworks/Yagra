@@ -125,7 +125,7 @@ test('a hovered item is painted in a colour the menu itself is not', async ({ pa
 });
 
 test('a click on blank space closes the menu and leaves the selection alone', async ({ page }) => {
-  // ADR-073 決定 4, transient first. `AnchoredPopover` dismisses on mousedown, so by the time the
+  // ADR-073 decision 4, transient first. `AnchoredPopover` dismisses on mousedown, so by the time the
   // click reaches the tree body the menu is already gone — a body that read the menu's state at
   // click time would clear `?sel=` in the same press. It reads what it saw at mousedown instead.
   await page.goto('/nodes');

@@ -123,7 +123,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
   // where the row shows five, and a `.tsx` is a file no test runs (testing.md).
   const columns = useMemo(() => interfaceColumns(t), [t]);
-  // In the URL under `interfaces.` (ADR-153 決定 4): a reload keeps it, and so does walking the tree
+  // In the URL under `interfaces.` (ADR-153 decision 4): a reload keeps it, and so does walking the tree
   // to the next device — "which ports are down" is the question an operator carries from switch to
   // switch. ADR-134 had declined this, and its reason (`ifindex` names a different port on the next
   // device) is about the SELECTED row below, which stays local.
@@ -1129,7 +1129,7 @@ function InterfaceDock({
             )}
             {/* Every address, not the list's "first +N": the dock is the one place an operator
                 is looking at a single port, and on a phone it is the only route to them at all —
-                the column is dropped there like the other reference facts (ADR-157 決定 6).
+                the column is dropped there like the other reference facts (ADR-157 decision 6).
                 🚨 On the desktop the tile is ONE line, ellipsized, with the whole list in its
                 title: this head is a single non-wrapping row whose height is budgeted against
                 the charts' floor (`interfaceDock.spec.ts`), and a tile that wraps eats that floor

@@ -57,7 +57,7 @@ export interface MetricCardSpec {
 /**
  * The unit a Device-health card appends to its headline and hover value.
  *
- * The card's own `unit` wins, then the unit of the metric it resolved onto (ADR-046 Inc.7 決定 5).
+ * The card's own `unit` wins, then the unit of the metric it resolved onto (ADR-046 Inc.7 decision 5).
  * `setupRate` needs the first half: its `/s` is a property of how the card reads a counter, not of
  * `huawei_usg_session_total`, which is a session total. Everything else needs the second, and the
  * second is why the `vpnUsers` card reads "28 sessions" on a Cisco — it resolves onto
@@ -161,7 +161,7 @@ export type MetricCardId = (typeof METRIC_CARDS)[number]['id'];
  * `huawei_usg_session_total` — a **counter** — as a raw range and printing its since-boot total
  * (18,190,268) as a per-second rate. `dimension` decides whether the rows collapse; only
  * `metric_kind` decides whether the stored value is a measurement or an odometer reading, and
- * nothing here was asking (ADR-046 Inc.6 決定 L; the accident itself is ADR-012's).
+ * nothing here was asking (ADR-046 Inc.6 decision L; the accident itself is ADR-012's).
  */
 export interface ResolvedMetric {
   metric: string;
@@ -327,7 +327,7 @@ export interface OverviewSection {
  * With no `template` — a check, a node's own item, a series nothing collects any more, or a core
  * older than Inc.9 — it is filed from the generated catalog as before: a check under its probe, a
  * collected name under its set, and a name the catalog has never heard of under Other. Never from
- * the name's prefix (Inc.6 決定 J), and never from `GET /api/v1/mib-catalog`, which needs
+ * the name's prefix (Inc.6 decision J), and never from `GET /api/v1/mib-catalog`, which needs
  * ManageConfig and would make the sectioning vanish for a viewer — the hole Device health fell into
  * in Inc.1.
  */
@@ -372,7 +372,7 @@ function sectionRank(key: OverviewSectionKey): [number, string] {
  *
  * `overviewScalars` decides what belongs on the Overview at all (no counters — they have no
  * glanceable value; no per-interface metrics — eight octet counters above the fold on every switch
- * is what 決定 1's "don't degrade the common case" forbids). `claimed` is the second rule:
+ * is what decision 1's "don't degrade the common case" forbids). `claimed` is the second rule:
  * **anything a section above is already drawing is dropped** — what Device health resolved onto
  * (`claimedMetrics`) and what the kind's own card draws (`kindCardClaims`). Two charts of one
  * metric, stacked, read as a second measurement that happens to always agree; before Inc.8 only

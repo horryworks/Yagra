@@ -114,7 +114,7 @@ export interface NodeBadge {
  * node header and the move dialog all draw from, so none of them can forget one.
  *
  * Its kind's badge first (none for an ordinary device). Then, for a Meraki access point, the
- * access point's badge beside "Meraki" (ADR-168 決定 11, the user's decision): an MR stays
+ * access point's badge beside "Meraki" (ADR-168 decision 11, the user's decision): an MR stays
  * `kind: meraki` — its liveness and its screens are the Meraki ones — so the kind alone cannot say
  * it is an access point. It is the controller-walked AP's badge exactly — the Wi-Fi mark, black on
  * white — because it names what the device is rather than whose it is.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Keep an integration page current while a sync it asked for runs in the background.
 //
-// "Sync now" answers at once on both integrations — Meraki since ADR-164 決定 32, NetBox since
-// ADR-172 決定 1 — and the run it asks for happens in the leader's loop. A page that loaded once
+// "Sync now" answers at once on both integrations — Meraki since ADR-164 decision 32, NetBox since
+// ADR-172 decision 1 — and the run it asks for happens in the leader's loop. A page that loaded once
 // and after an action would show "requested" until a reload. Shared by the three pages that show
 // it (the Meraki list, one Meraki organization, NetBox), because three copies of "when does the
 // page stop re-reading" would drift. It was `useMerakiReadWatch` until NetBox needed it too.

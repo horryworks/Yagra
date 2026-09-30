@@ -401,7 +401,7 @@ export function timeColLabels(timestamps: number[]): string[] {
  *  a string (`extensibility.md` §4).
  *
  *  `3d` is left out so the card header keeps room for its controls at the narrowest allowed span —
- *  which ADR-069 増分 2 lowered from 6 columns to 4, so that margin is thinner than it was when this
+ *  which ADR-069 Inc.2 lowered from 6 columns to 4, so that margin is thinner than it was when this
  *  was written. ⚠️ This is a claim about a rendered card, so tsc and Vitest are both blind to it:
  *  what holds it is the Tier1 case `at its narrowest width`, which measures the two `<select>`s
  *  against the card at 4 columns (63px each, one row, nothing clipped). A window added here widens
@@ -411,7 +411,7 @@ export function timeColLabels(timestamps: number[]): string[] {
  *  shared list therefore forces the question here instead of silently diverging — the
  *  `monitorKinds.ts` shape, where the registry is a deliberate subset of a larger set.
  *
- *  ⚠️ **Shared rather than per widget** (ADR-136 決定 6). It was `interfaceTraffic.ts::TRAFFIC_RANGES`
+ *  ⚠️ **Shared rather than per widget** (ADR-136 decision 6). It was `interfaceTraffic.ts::TRAFFIC_RANGES`
  *  while one widget offered a window; the VPN-sessions widget offers the same four. Importing it
  *  from that module would have made the module's name lie about what it contains
  *  (`extensibility.md` §5), and re-declaring it would have been the third copy of a list. */

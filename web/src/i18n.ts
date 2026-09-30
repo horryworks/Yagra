@@ -40,7 +40,7 @@ import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import enRca from './locales/en/rca.json';
 import enMetrics from './locales/en/metrics.json';
 // Generated from `crates/yagra-core/src/metric_meaning.rs` — English is canonical there and
-// this file is a build output (ADR-079 決定 4). Do not edit it; regenerate with
+// this file is a build output (ADR-079 decision 4). Do not edit it; regenerate with
 // `UPDATE_METRIC_MEANINGS=1 cargo test -p yagra-core the_committed_en_metric_meanings_are_current`.
 import enMetricMeanings from './locales/en/metricMeanings.json';
 

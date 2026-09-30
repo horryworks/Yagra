@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A Meraki switch's LLDP/CDP neighbours, from `switch/ports/topology/discovery/byDevice`
 //! (ADR-181) — the organization-wide listing that tells, per switch port, what the port hears —
-//! and an MX's or an MR's, from `devices/{serial}/lldpCdp`, one device at a time (ADR-181 増分 3,
-//! 増分 5).
+//! and an MX's or an MR's, from `devices/{serial}/lldpCdp`, one device at a time (ADR-181 Inc.3,
+//! Inc.5).
 //!
 //! The two answer the same facts in two shapes: the listing as `{name, value}` pairs labelled
 //! the way the Dashboard displays them, the per-device read as camelCase fields. Both are read into
@@ -16,7 +16,7 @@
 //! Measured on a real organization (2026-09-26, 854 switches, 3,841 ports with neighbours): every
 //! port id was a plain decimal, no port listed two LLDP chassis, and the oldest `lastUpdatedAt` was
 //! just under 24 hours — so a neighbour unplugged stays listed for up to a day. That age is not
-//! filtered here (ADR-181 決定 5): the Dashboard shows the same rows.
+//! filtered here (ADR-181 decision 5): the Dashboard shows the same rows.
 //!
 //! 🚨 **The Dashboard's LLDP "System capabilities" do not name the IEEE roles a switch or router
 //! advertises.** On that organization they were "S-VLAN Component of a VLAN Bridge" and "Two-port
@@ -24,7 +24,7 @@
 //! TPMRs, and which look like the Dashboard reading the bitmap byte-swapped. Guessing the intended
 //! role from them would print "bridge" on rows nobody measured, so only the literal IEEE names are
 //! read and those two are dropped: an LLDP row from Meraki usually has no capabilities (ADR-181
-//! 決定 10). CDP's list is ordinary text ("Router, Switch") and is read as such.
+//! decision 10). CDP's list is ordinary text ("Router, Switch") and is read as such.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -41,7 +41,7 @@ use yagra_common::{
 /// next read as a change of spelling, not of adjacency. The fingerprint test at the bottom of this
 /// file fails until you do.
 ///
-/// `1`: ADR-181 増分 4 — local ports read "Port 7", a CDP peer's bare-hex id is a MAC, a lone
+/// `1`: ADR-181 Inc.4 — local ports read "Port 7", a CDP peer's bare-hex id is a MAC, a lone
 /// CDP version `1` is dropped, and a port's LLDP and CDP rows lend each other name and roles.
 pub const MERAKI_NEIGHBOR_FORMAT: u32 = 1;
 
@@ -102,7 +102,7 @@ const CAPABILITY_NAMES: &[(&str, NeighborCapability)] = &[
 ///
 /// A switch the listing names gets an entry even when none of its ports yields a neighbour: it was
 /// read, and it hears nothing. A switch the listing does not name gets none — the caller leaves its
-/// stored neighbours alone (ADR-181 決定 4).
+/// stored neighbours alone (ADR-181 decision 4).
 pub(crate) fn parse_switch_port_topology(items: &[Value]) -> BTreeMap<String, Vec<Neighbor>> {
     let mut out: BTreeMap<String, Vec<Neighbor>> = BTreeMap::new();
     for item in items {
@@ -157,11 +157,11 @@ const CDP_FIELDS: &[(&str, &str)] = &[
     ("capabilities", cdp::CAPABILITIES),
 ];
 
-/// `devices/{serial}/lldpCdp` for an MX → its LAN-side neighbours (ADR-181 増分 3), and for an MR →
-/// the peer on its wired port (増分 5; every recorded MR names that port `wired0`).
+/// `devices/{serial}/lldpCdp` for an MX → its LAN-side neighbours (ADR-181 Inc.3), and for an MR →
+/// the peer on its wired port (Inc.5; every recorded MR names that port `wired0`).
 ///
 /// The body is `{"sourceMac": …, "ports": {"port3": {"lldp": {…}, "cdp": {…}, …}, "wan1": …}}`
-/// (recorded 2026-09-26 on ten MX). A `wan` port's peer is dropped (決定 3): it is the upstream
+/// (recorded 2026-09-26 on ten MX). A `wan` port's peer is dropped (decision 3): it is the upstream
 /// line — measured, 11 of 14 were another Meraki device's internet port and the rest a carrier's
 /// equipment — and listing it would put a carrier's router on Discovery's Unregistered list. An
 /// empty or absent `ports` is an answer: the MX hears nothing.
@@ -243,9 +243,9 @@ struct Local<'a> {
     /// The Dashboard's name for it: a switch port's id (`7`), an MX port's key (`port3`), an MR's
     /// (`wired0`).
     port: &'a str,
-    /// The ifIndex the Interfaces tab keys the port by — a switch's (ADR-181 決定 8, ADR-167
-    /// 決定 4). An MX has no Interfaces rows, so none (増分 3 決定 6); an MR's are its radios, so
-    /// none either (増分 5 決定 4).
+    /// The ifIndex the Interfaces tab keys the port by — a switch's (ADR-181 decision 8, ADR-167
+    /// decision 4). An MX has no Interfaces rows, so none (Inc.3 decision 6); an MR's are its radios, so
+    /// none either (Inc.5 decision 4).
     ifindex: Option<u32>,
 }
 
@@ -258,9 +258,9 @@ impl<'a> Local<'a> {
     }
 }
 
-/// One port's LLDP and CDP rows, each filled from the other where it is blank (ADR-181 増分 4
-/// 決定 1). A Meraki peer is heard both ways: its LLDP row names it and its CDP row does not, and
-/// its CDP row says what it is while the Dashboard's LLDP capabilities are unreadable (決定 10). So
+/// One port's LLDP and CDP rows, each filled from the other where it is blank (ADR-181 Inc.4
+/// decision 1). A Meraki peer is heard both ways: its LLDP row names it and its CDP row does not, and
+/// its CDP row says what it is while the Dashboard's LLDP capabilities are unreadable (decision 10). So
 /// a CDP row with no name takes the LLDP row's, and an LLDP row with no capabilities takes the CDP
 /// row's — only when both rows name the same chassis, i.e. the same peer. Measured on a lab copy of
 /// a real organization, that filled 560 of 638 CDP names and 560 of 854 LLDP capability lists.
@@ -287,7 +287,7 @@ fn fill_from_sibling(lldp: &mut Neighbor, cdp: &mut Neighbor) {
 }
 
 /// The local side both protocols share. The port reads as the Dashboard shows it, `Port 7`
-/// (ADR-181 増分 4 決定 3); the ifindex stays the raw id's.
+/// (ADR-181 Inc.4 decision 3); the ifindex stays the raw id's.
 fn on_port(proto: NeighborProto, local: Local<'_>, chassis: String, port: String) -> Neighbor {
     let mut n = Neighbor::new(proto, meraki_port_name(local.port), chassis, port);
     n.local_ifindex = local.ifindex;
@@ -322,7 +322,7 @@ fn cdp_neighbor(local: Local<'_>, f: &Fields<'_>) -> Option<Neighbor> {
     // CDP names its peer's port by name — text, as the SNMP walk records it.
     n.remote_port_kind = (!n.remote_port.is_empty()).then_some(NeighborIdKind::Text);
     n.remote_platform = f.owned(cdp::PLATFORM);
-    // CDP's counterpart of an LLDP system description, as on the SNMP walk (ADR-180 決定 6).
+    // CDP's counterpart of an LLDP system description, as on the SNMP walk (ADR-180 decision 6).
     n.remote_sys_desc = f.get(cdp::VERSION).and_then(cdp_version);
     n.remote_sys_name = f.owned(cdp::SYSTEM_NAME);
     n.remote_mgmt_addr = f
@@ -338,7 +338,7 @@ fn cdp_neighbor(local: Local<'_>, f: &Fields<'_>) -> Option<Neighbor> {
 
 /// An id as the Dashboard rendered it, and what it is: a MAC — in either separator, either case —
 /// is rewritten the way the SNMP walk renders one, so the same peer seen both ways is one chassis
-/// and core can look its maker up (ADR-180 決定 4). Anything else is text.
+/// and core can look its maker up (ADR-180 decision 4). Anything else is text.
 fn id_with_kind(raw: &str) -> (String, NeighborIdKind) {
     match parse_mac(raw).and_then(|m| render_mac(&m)) {
         Some(mac) => (mac, NeighborIdKind::Mac),
@@ -348,7 +348,7 @@ fn id_with_kind(raw: &str) -> (String, NeighborIdKind) {
 
 /// A MAC in any spelling the Dashboard uses — six `:`/`-`-separated octets or twelve bare hex
 /// digits, either case — rendered the way a neighbour row carries one, so a device's `mac` and a
-/// neighbour's chassis id compare as text (ADR-180 増分 3).
+/// neighbour's chassis id compare as text (ADR-180 Inc.3).
 pub(crate) fn canonical_mac(raw: &str) -> Option<String> {
     let raw = raw.trim();
     parse_mac(raw)
@@ -356,7 +356,7 @@ pub(crate) fn canonical_mac(raw: &str) -> Option<String> {
         .and_then(|m| render_mac(&m))
 }
 
-/// A CDP device id as the Dashboard rendered it, and what it is (ADR-181 増分 2 決定 B). A Meraki
+/// A CDP device id as the Dashboard rendered it, and what it is (ADR-181 Inc.2 decision B). A Meraki
 /// peer names itself by its MAC as twelve bare hex digits (`0c8ddb000002`) — measured on a real
 /// organization, 2,571 of 2,873 CDP rows, every one a Meraki device or a Cisco CBS — so those are
 /// read as a MAC too, which gives the row the same chassis as the peer's LLDP row and a maker
@@ -370,7 +370,7 @@ fn cdp_device_id(raw: &str) -> (String, NeighborIdKind) {
 
 /// Twelve hex digits and nothing else. `None` for anything else — a name that happens to be
 /// twelve characters of `0-9a-f` is the one case read wrongly, and the cost is a maker name beside
-/// it (display only, ADR-180 決定 5).
+/// it (display only, ADR-180 decision 5).
 fn bare_hex_mac(raw: &str) -> Option<[u8; 6]> {
     if raw.len() != 12 || !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -382,7 +382,7 @@ fn bare_hex_mac(raw: &str) -> Option<[u8; 6]> {
     Some(out)
 }
 
-/// A CDP version string worth showing, or `None` (ADR-181 増分 2 決定 A). A Meraki peer answers
+/// A CDP version string worth showing, or `None` (ADR-181 Inc.2 decision A). A Meraki peer answers
 /// `"1"` — measured on a real organization, 2,569 of 2,873 CDP rows, every one a Meraki peer, and
 /// no other value of one or two characters — which put a lone "1" under the model on the
 /// Neighbors tab. A version that says something (an IOS banner, `SCCP 9.4.1.3.SR3`) is kept.
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(n.remote_mgmt_addr.as_deref(), Some("192.0.2.21"));
     }
 
-    /// 決定 10: the two names the Dashboard puts on nearly every LLDP row are not guessed into a role.
+    /// decision 10: the two names the Dashboard puts on nearly every LLDP row are not guessed into a role.
     /// A row with no CDP sibling (port 8) is left with none.
     #[test]
     fn the_dashboards_lldp_capability_names_are_not_guessed_into_roles() {
@@ -539,7 +539,7 @@ mod tests {
         );
     }
 
-    /// 増分 2 決定 B: a Meraki peer's bare-hex CDP device id is its MAC — the same chassis its LLDP
+    /// Inc.2 decision B: a Meraki peer's bare-hex CDP device id is its MAC — the same chassis its LLDP
     /// row on the same port carries.
     #[test]
     fn a_meraki_peers_bare_hex_device_id_is_read_as_the_mac_its_lldp_row_names() {
@@ -565,7 +565,7 @@ mod tests {
         }
     }
 
-    /// ADR-180 増分 3: a device's `mac` and a neighbour's chassis compare as text only if both are
+    /// ADR-180 Inc.3: a device's `mac` and a neighbour's chassis compare as text only if both are
     /// rendered one way, whatever spelling each arrived in.
     #[test]
     fn every_mac_spelling_the_dashboard_uses_renders_as_a_neighbour_row_carries_it() {
@@ -586,7 +586,7 @@ mod tests {
         }
     }
 
-    /// 増分 4 決定 1: one peer's two rows lend each other what each lacks — the CDP row its name,
+    /// Inc.4 decision 1: one peer's two rows lend each other what each lacks — the CDP row its name,
     /// the LLDP row its capabilities — and a port reads as the Dashboard shows it.
     #[test]
     fn one_peers_lldp_and_cdp_rows_fill_each_others_blanks() {
@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    /// 増分 2 決定 A: a Meraki peer's `"1"` is not shown; a version that says something is.
+    /// Inc.2 decision A: a Meraki peer's `"1"` is not shown; a version that says something is.
     #[test]
     fn a_cdp_version_of_one_or_two_digits_is_dropped_and_a_real_one_kept() {
         let got = parsed();
@@ -673,7 +673,7 @@ mod tests {
         assert!(lldp_neighbor(Local::switch_port("1"), &Fields::of(Some(&no_chassis))).is_none());
     }
 
-    /// 決定 4: a listed switch with no neighbours is an answer (empty); an unlisted one is absent.
+    /// decision 4: a listed switch with no neighbours is an answer (empty); an unlisted one is absent.
     #[test]
     fn a_listed_switch_that_hears_nothing_still_gets_an_entry() {
         let quiet = serde_json::json!({"serial": "Q2SW-0002", "ports": []});
@@ -778,8 +778,8 @@ mod tests {
         })
     }
 
-    /// 増分 3: the LAN ports' peers, read by the same builders as a switch's; the `wan` port's is
-    /// dropped (決定 3), and an MX port has no ifIndex (決定 6).
+    /// Inc.3: the LAN ports' peers, read by the same builders as a switch's; the `wan` port's is
+    /// dropped (decision 3), and an MX port has no ifIndex (decision 6).
     #[test]
     fn an_mx_answer_yields_its_lan_side_through_the_same_builders() {
         let rows = parse_device_lldp_cdp(&mx_body());
@@ -812,7 +812,7 @@ mod tests {
         );
         assert_eq!(cdp.remote_mgmt_addr.as_deref(), Some("192.0.2.31"));
 
-        // 増分 2 applies here too: a Meraki peer's bare-hex id is a MAC and its "1" is dropped.
+        // Inc.2 applies here too: a Meraki peer's bare-hex id is a MAC and its "1" is dropped.
         let meraki = rows
             .iter()
             .find(|n| n.local_port == "Port 5")
@@ -821,7 +821,7 @@ mod tests {
         assert_eq!(meraki.remote_sys_desc, None);
     }
 
-    /// 増分 5: an MR's answer is an MX's shape with one port, `wired0` (recorded on ten MR, every
+    /// Inc.5: an MR's answer is an MX's shape with one port, `wired0` (recorded on ten MR, every
     /// one named so). It keeps that name — "Port N" is for numbered ports only — has no ifIndex (an
     /// MR's Interfaces rows are its radios), and its two rows of one Meraki switch fill each other.
     #[test]
@@ -871,7 +871,7 @@ mod tests {
             .find(|n| n.proto == NeighborProto::Lldp)
             .expect("the LLDP row");
         assert_eq!(lldp.remote_sys_name.as_deref(), Some("sw-01"));
-        // The Dashboard's LLDP value is unreadable (決定 10); the CDP row's lends it a role.
+        // The Dashboard's LLDP value is unreadable (decision 10); the CDP row's lends it a role.
         assert_eq!(lldp.capabilities, [NeighborCapability::Switch]);
 
         let cdp = rows

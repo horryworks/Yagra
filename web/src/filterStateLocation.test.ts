@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// ADR-153 決定 8: a list's filter and sort live in the URL, and component state is not where they go.
+// ADR-153 decision 8: a list's filter and sort live in the URL, and component state is not where they go.
 //
 // Every screen that lost its filters on a reload had the same line in it — `useState<FilterState>`
 // (or the untyped `useState(() => defaultFilters(cols))`), or `useState<SortState>` for a sort. There

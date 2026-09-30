@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { anySyncInProgress, syncProgress } from './netboxStatus';
 
-// ADR-172 決定 1: "Sync now" answers 202 and the run happens in the leader's loop, so what the row
+// ADR-172 decision 1: "Sync now" answers 202 and the run happens in the leader's loop, so what the row
 // shows while it goes is read from `sync`, never from the answer to the button.
 
 describe('syncProgress', () => {

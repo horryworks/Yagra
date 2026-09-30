@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The Tier1 interception layer: every `/api/**` request is answered from the OpenAPI document,
-// so no backend runs (ADR-052 決定 1). One route handler, not several — Playwright matches
+// so no backend runs (ADR-052 decision 1). One route handler, not several — Playwright matches
 // handlers in reverse registration order, and a suite whose correctness depends on that ordering
 // is a suite that breaks when someone adds a route in the wrong place.
 

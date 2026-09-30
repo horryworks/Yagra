@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The port's alert-rule dialog and the rules screen's narrowed default (ADR-076 増分 5, Tier1).
+// The port's alert-rule dialog and the rules screen's narrowed default (ADR-076 Inc.5, Tier1).
 //
 // Three things here that no unit test in this repo can reach, because Vitest never executes a
 // `.tsx` and has no layout engine:
@@ -157,7 +157,7 @@ test('adding a rule asks what to watch, never for a metric name', async ({ page 
 });
 
 test('the rules screen says how many port rules it is not showing', async ({ page }) => {
-  // The default view narrows (ADR-076 決定 12). This line is the whole of what stops a hidden rule
+  // The default view narrows (ADR-076 decision 12). This line is the whole of what stops a hidden rule
   // reading as a rule that does not exist — and the count comes from the server, because the rows
   // on screen are both filtered and capped.
   await page.goto('/alerts/rules');

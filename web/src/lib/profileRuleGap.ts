@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Which metrics a device profile collects that no *baseline* alert rule names (ADR-106).
  *
- *  ADR-078 決定 1 moved the twenty vendor-specific default rules from `global` down to `profile`
+ *  ADR-078 decision 1 moved the twenty vendor-specific default rules from `global` down to `profile`
  *  scope, and each names the built-in profiles it was written for. An operator who builds their own
  *  profile and attaches the same metric sets collects those metrics and **no rule reaches them** —
  *  the device is polled, the series is stored, and nothing can ever fire. Nothing in the product
@@ -24,7 +24,7 @@
  *  rule" answered **53 of 59 profiles with a warning** against the real fleet, essentially all of
  *  them false — a check nobody would read twice. So a metric counts here only when some `global` or
  *  `profile` rule names it **somewhere**: that is exactly "Yagra has a bound for this, and your
- *  profile is not one of the ones it was written for", which is the hole ADR-078 決定 1 left.
+ *  profile is not one of the ones it was written for", which is the hole ADR-078 decision 1 left.
  *  The same fleet answers that question with 24 profiles covered and **0 gaps**, and a profile built
  *  from scratch with a vendor's metric set gets the vendor's metrics named.
  *  ⚠️ `kind` / `metric_kind` cannot stand in for this — `table/gauge` covers both `if_admin_status`

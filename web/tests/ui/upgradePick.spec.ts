@@ -21,7 +21,7 @@ import { defaultBodyFor, type Json } from '../support/openapi';
  *
  *  Patched onto the generated body rather than hand-written, so a change to
  *  `UpgradeStatusResponse` reaches this fixture through the contract instead of leaving it
- *  describing a shape the API no longer returns (ADR-052 決定 2). */
+ *  describing a shape the API no longer returns (ADR-052 decision 2). */
 function upgradeStatus(): Json {
   const body = defaultBodyFor('/api/v1/system/upgrade') as {
     enabled: boolean;

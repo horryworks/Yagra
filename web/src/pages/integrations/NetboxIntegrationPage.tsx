@@ -103,7 +103,7 @@ function ServerModal({
   }, [existing]);
 
   const canTest = baseUrl.trim() !== '' && token.trim() !== '';
-  // ADR-178 決定 3: the stored token never goes to a new address — the backend refuses the save,
+  // ADR-178 decision 3: the stored token never goes to a new address — the backend refuses the save,
   // so the form asks for the token before Save rather than after.
   const tokenNeeded =
     !existing || addressChangeNeedsToken(existing.base_url, baseUrl);
@@ -332,7 +332,7 @@ function ServerRow({
   const summary = syncSummary(server);
   const progress = syncProgress(server);
 
-  // Asks, then re-reads: the sync itself runs in the leader's loop (ADR-172 決定 1), so how it
+  // Asks, then re-reads: the sync itself runs in the leader's loop (ADR-172 decision 1), so how it
   // went arrives on the row — which is also what survives leaving this page. `busy` covers only
   // the request.
   const sync = () => {
@@ -449,7 +449,7 @@ export function NetboxIntegrationPage() {
   const list = useLoad(() => api.listNetboxServers(), [], { initial: [] as NetboxServer[] });
   const { data: servers, reload: load } = list;
 
-  // A "Sync now" runs in the leader's loop (ADR-172 決定 1), so the rows change by themselves
+  // A "Sync now" runs in the leader's loop (ADR-172 decision 1), so the rows change by themselves
   // while one is asked for or running. The list is a handful of rows, so the poll and the reload
   // after it are the same read.
   useSyncWatch(anySyncInProgress(servers), load, load);

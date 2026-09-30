@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Node detail tabs, generated from the declaration that owns them (ADR-052 決定 7, 出典 2).
+// Node detail tabs, generated from the declaration that owns them (ADR-052 decision 7, source 2).
 //
 // Nothing here is written down twice. `tabs.ts` says which nodes see which tab; this asks the
 // running app the same question and demands the same answer. Add a tab, or change one `kinds`
@@ -50,7 +50,7 @@ function nodeOf(subject: NodeDetailSubject): Json {
   // 🚨 Stated, never inherited. The generator fills every optional field, so the generated node
   // carries BOTH `wireless.ap` and `wireless.controller` — i.e. the mock claims every node is a
   // wireless controller, which would make the AP tab appear on all of them and this spec agree
-  // with itself about a screen no deployment can produce (ADR-064 増分 B3).
+  // with itself about a screen no deployment can produce (ADR-064 Inc.B3).
   body.wireless = subject.isWlanController
     ? {
         controller: {
@@ -91,7 +91,7 @@ const SNMP_STATES = [
 
 /** Every kind × SNMP, plus the one subject the third axis is about: a device that is also a
  *  wireless controller. Nothing else can produce it — a controller is a `device` polled over
- *  SNMP, so it is indistinguishable from a switch on the first two axes (ADR-064 増分 B3). */
+ *  SNMP, so it is indistinguishable from a switch on the first two axes (ADR-064 Inc.B3). */
 const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
   ...NODE_KINDS.flatMap((kind) =>
     SNMP_STATES.map(({ snmpConfigured, name }) => ({
@@ -228,7 +228,7 @@ test.describe('clicking a tab', () => {
 // for — and the original complaint was reported in exactly this gesture.
 test.describe('walking the inventory with a tab open', () => {
   /** Answer each of the tree's three nodes differently, so the middle one is a URL monitor with no
-   *  Interfaces tab. The whole point of 決定 2 is what happens when such a node is stepped through. */
+   *  Interfaces tab. The whole point of decision 2 is what happens when such a node is stepped through. */
   const perNode: Record<string, 'device' | 'url'> = {
     [TREE_SIBLING_IDS[0]]: 'device',
     [TREE_SIBLING_IDS[1]]: 'url',
@@ -288,7 +288,7 @@ test.describe('walking the inventory with a tab open', () => {
     page,
     errors,
   }) => {
-    // 🚨 ADR-134 決定 2. The correction effect rewrites a tab the loaded node cannot show — and if
+    // 🚨 ADR-134 decision 2. The correction effect rewrites a tab the loaded node cannot show — and if
     // it recorded that rewrite, this sequence would leave every later switch on Overview, so the
     // memory would mean "the last screen I was dropped onto" instead of "the last one I chose".
     await page.goto('/nodes');

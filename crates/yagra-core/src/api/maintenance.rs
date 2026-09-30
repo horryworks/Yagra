@@ -104,7 +104,7 @@ const WINDOW_SCOPE_LEVELS: [&str; 4] = ["profile", "group", "node", "group_id"];
 /// The scope kinds a mute may target.
 const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
 
-/// Ceiling on one bulk suppression request (ADR-124 増分 11).
+/// Ceiling on one bulk suppression request (ADR-124 Inc.11).
 ///
 /// 🚨 **Over the ceiling is a refusal, not a truncation**, for the reason `NODE_MOVE_BATCH_MAX`
 /// gives: a truncated write would answer "suppressed" while leaving everything past the cut paging
@@ -438,7 +438,7 @@ pub(super) struct BulkSuppressionResult {
     created: u64,
 }
 
-/// Open a maintenance window over each of many nodes at once (ADR-124 増分 11).
+/// Open a maintenance window over each of many nodes at once (ADR-124 Inc.11).
 ///
 /// "This dozen, tonight" rarely follows a folder boundary, so the folder-scoped window cannot
 /// express it and the single-node form meant one request each.
@@ -520,7 +520,7 @@ pub(super) struct BulkMute {
     reason: Option<String>,
 }
 
-/// Mute many nodes at once (ADR-124 増分 11) — the mute twin of the bulk window above, and a
+/// Mute many nodes at once (ADR-124 Inc.11) — the mute twin of the bulk window above, and a
 /// separate route because it asks for a different permission: muting is `AckAlerts`, opening a
 /// window is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them
 /// for both.

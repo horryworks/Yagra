@@ -94,7 +94,7 @@ export function DnsHealth({
       key: 'outcome',
       header: t('overview.resolution'),
       // Sized for the longest failure label in either locale ("No such name (NXDOMAIN)",
-      // 「名前が存在しない（NXDOMAIN）」) — a badge never shrinks, so at 140px it overflowed the
+      // and its longer Japanese counterpart) — a badge never shrinks, so at 140px it overflowed the
       // grid track and painted over the chain column. The headroom is deliberate: `--ui-font-family`
       // names Inter but nothing self-hosts it, so the real glyph widths are whatever the operator's
       // system-ui and CJK fallback happen to be. `.dns-history-outcome` truncates whatever still

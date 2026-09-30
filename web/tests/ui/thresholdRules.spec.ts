@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Alerts ▸ Metric alert rules — the two things ADR-075 増分 2 changed, checked against rows the
+// Alerts ▸ Metric alert rules — the two things ADR-075 Inc.2 changed, checked against rows the
 // test controls (ADR-052 Tier1).
 //
 // Both assertions are about a *rendering decision derived from the row*, which is the shape Tier1
@@ -173,7 +173,7 @@ test('the scope level and the scope id are two columns, each carrying its own va
   await expect(target).not.toHaveText('—');
   await expect(target.locator('.yt-entity-name')).toHaveCount(1);
 
-  // ADR-078 増分 5: a rule naming three profiles draws all three, one per line, and the row grows.
+  // ADR-078 Inc.5: a rule naming three profiles draws all three, one per line, and the row grows.
   // Two were drawn and the rest counted until an operator reported that the column tells you
   // nothing — the second name and the "and N more" behind it both sat past the ellipsis.
   const multiRow = page.locator('.dt-row').filter({ hasText: MULTI_RULE_METRIC }).first();
@@ -204,7 +204,7 @@ test('the scope level and the scope id are two columns, each carrying its own va
   // 🚨 The names are readable, not merely present. One fixture carries a real 34-character profile
   // name, and the Scope column is narrower than that at 1280px — so without wrapping the line ends
   // in an ellipsis and the operator is back to not knowing which Cisco profile this is, which is
-  // the complaint 増分 5 answers. `toContainText` cannot see this: the text is in the DOM either
+  // the complaint Inc.5 answers. `toContainText` cannot see this: the text is in the DOM either
   // way. Compare what the box holds against what it shows.
   const clipped = await multi.locator('.yt-entity-name').evaluateAll((els) =>
     els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
@@ -248,7 +248,7 @@ test('the row actions are actually on screen when the row is hovered', async ({ 
 });
 
 test('the scope id is a picker, and which picker follows the level', async ({ page }) => {
-  // ADR-075 増分 3. The field used to be one text box asking for a UUID that is printed nowhere in
+  // ADR-075 Inc.3. The field used to be one text box asking for a UUID that is printed nowhere in
   // the WebUI, so a profile-scoped rule could not really be created. What Tier1 can see and a unit
   // test cannot: which *control* each level renders, and whether it has anything in it — an empty
   // `<select>` is still a `<select>`, and would be exactly what a failed profile load looks like.

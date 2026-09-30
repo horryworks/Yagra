@@ -5,7 +5,7 @@
 // shelf that is only mine", and this is the only thing on it that writes to the server.
 //
 // 🚨 **A successful change signs the operator out.** The API revokes every session of the account,
-// this one included (ADR-122 決定 3), so there is no "saved" state to return to — the dialog's
+// this one included (ADR-122 decision 3), so there is no "saved" state to return to — the dialog's
 // success path is a navigation to /login, not a toast. The copy says so *before* the button is
 // pressed, because being ejected from the screen you were reading is not something to discover
 // afterwards.

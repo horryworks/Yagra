@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Operator decisions about links (ADR-043 決定 4, migration 0068).
+//! Operator decisions about links (ADR-043 decision 4, migration 0068).
 //!
 //! Unlike [`crate::topology_links`] — a cache that is rebuilt from observations and pruned by age —
 //! nothing here is recomputable. These rows are the operator's statements about what the derivation

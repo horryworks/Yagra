@@ -59,7 +59,7 @@ pub(crate) use yagra_common::clock::now_unix_ms;
 
 /// Run `f` — one datagram's worth of parsing — and turn a panic inside it into a counted drop.
 ///
-/// The second layer of ADR-158 決定 2. [`spawn_supervised`] brings a reader back after a panic, but
+/// The second layer of ADR-158 decision 2. [`spawn_supervised`] brings a reader back after a panic, but
 /// only after a wait, and a datagram that panics its parser would otherwise take the reader down
 /// every time it is re-sent. Contained, a hostile datagram costs itself and nothing else:
 /// `yagra_edge_datagram_panics_total{listener}` goes up by one, the panic hook has logged its

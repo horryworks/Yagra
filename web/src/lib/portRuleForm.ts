@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The port-shaped alert rule: what an operator picks, and the threshold rule it becomes
-// (ADR-076 増分 5, 決定 8).
+// (ADR-076 Inc.5, decision 8).
 //
 // The generic dialog asks for a metric name, a direction and two numbers. On a port that is the
 // wrong shape of question in three ways, all three reported from a real deployment:

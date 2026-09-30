@@ -479,7 +479,7 @@ describe('keyBelongsToTree', () => {
     expect(keyBelongsToTree({ tabIndex: 0 }, body, true)).toBe(false);
   });
 
-  // 🚨 React bubbles through portals: the row's ＋ menu is not inside the tree in the DOM, and its
+  // 🚨 React bubbles through portals: the row's + menu is not inside the tree in the DOM, and its
   // items are `tabIndex = -1`, so without this check Enter on one would be taken by the tree.
   it('refuses a key that came through a portal', () => {
     expect(keyBelongsToTree({ tabIndex: -1 }, body, false)).toBe(false);

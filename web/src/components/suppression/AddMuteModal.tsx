@@ -27,7 +27,7 @@ interface Props {
   /** Only consulted when the scope is chosen here — a locked scope names its own entity. */
   groups?: NodeGroup[];
   /** When set, the scope is fixed to this node, folder or working set (the All Nodes right-click
-   *  "Custom…" path, and the selection bar's More… menu since ADR-124 増分 11). */
+   *  "Custom…" path, and the selection bar's More… menu since ADR-124 Inc.11). */
   initialScope?: ActionTarget;
   /** Metric to pre-fill for a node scope (the per-alert Mute action seeds the metric that fired). */
   initialMetric?: string;

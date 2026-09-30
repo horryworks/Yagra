@@ -14,7 +14,7 @@
  * ⚠️ **This module does not know which direction belongs on top, and must not learn.** The
  * caller decides, by the sign it gave each series; these two words only have to agree with that
  * choice. Naming a direction here would be a second copy of a decision that lives at the call
- * site — and the Interface traffic widget has already swapped its halves once (ADR-069 増分 2),
+ * site — and the Interface traffic widget has already swapped its halves once (ADR-069 Inc.2),
  * which a copy here would have quietly contradicted.
  */
 export interface MirrorAxis {

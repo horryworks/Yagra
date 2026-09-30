@@ -39,7 +39,7 @@ import { isAnyFiltered } from '../lib/columnFilter';
 import { readIdParam, writeIdParam } from '../lib/filterParams';
 
 /**
- * Where the fleet is currently listening for syslog and traps (ADR-055 決定 3).
+ * Where the fleet is currently listening for syslog and traps (ADR-055 decision 3).
  *
  * `undefined` until the fetch settles, and the caller renders nothing until then — "no listener is
  * bound" is a claim, and making it before the answer arrives states the opposite of the truth for
@@ -121,7 +121,7 @@ export function EventsPage() {
       />
       {/* The answer to "where do I point my devices". It lives on this screen rather than beside
           the webhook list because this is where someone who sees no syslog comes looking — and
-          because `Webhook sources` no longer claims to cover it (ADR-055 決定 3 / R1). Rendered
+          because `Webhook sources` no longer claims to cover it (ADR-055 decision 3 / R1). Rendered
           only once the fetch settles: saying "nothing is bound" before the answer arrives would be
           false on a healthy deployment's first paint. */}
       {bindings !== undefined &&

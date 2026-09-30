@@ -154,7 +154,7 @@ html[data-viewport='mobile'] .disco-actions .btn {
    why the row cannot be picked, so they have to stay readable. The inputs are disabled and take
    that look on their own.
    A row that is only *probably* the same device as a monitored node (`same_device`, ADR-139
-   増分 3) takes the same muted look but stays selectable — its inputs are live. */
+   Inc.3) takes the same muted look but stays selectable — its inputs are live. */
 .disco-row.existing .disco-identity,
 .disco-row.existing .disco-identity .disco-makermodel,
 .disco-row.existing > .mono {
@@ -284,7 +284,7 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   font-size: var(--font-sm);
 }
 
-/* The last three tracks as one cell (ADR-179 増分 2 決定 7). What goes in it, and its look, is
+/* The last three tracks as one cell (ADR-179 Inc.2 decision 7). What goes in it, and its look, is
    the shared `EndpointSetupCell` — the Neighbors tab draws the same one. */
 .disco-seen-setup {
   grid-column: 4 / -1;
@@ -519,7 +519,7 @@ html[data-viewport='mobile'] .disco-scan {
   font-size: var(--font-xs);
 }
 
-/* "Monitored at another address as …" (ADR-139 増分 3). Wraps instead of truncating: the evidence
+/* "Monitored at another address as …" (ADR-139 Inc.3). Wraps instead of truncating: the evidence
    and the "tick it anyway" hint are what the mark is for, and must be readable on touch (R4). */
 .disco-same {
   overflow-wrap: anywhere;
@@ -529,7 +529,7 @@ html[data-viewport='mobile'] .disco-scan {
   display: block;
 }
 
-/* "Load more" under the unregistered list (ADR-179 増分 6). */
+/* "Load more" under the unregistered list (ADR-179 Inc.6). */
 .disco-seen-more {
   display: flex;
   justify-content: center;

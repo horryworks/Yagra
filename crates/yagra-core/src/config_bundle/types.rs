@@ -632,7 +632,7 @@ mod tests {
         }
     }
 
-    /// 🚨 **A bundle written before ADR-135 増分 2 still imports.**
+    /// 🚨 **A bundle written before ADR-135 Inc.2 still imports.**
     ///
     /// This is the one compatibility promise that change keeps, and it is worth exactly one test.
     /// Everything else about labels was free to change because no released version ever carried

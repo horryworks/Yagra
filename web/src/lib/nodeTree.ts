@@ -89,7 +89,7 @@ export function buildNodeTree(groups: NodeGroup[], nodes: NodeSummary[]): NodeTr
 }
 
 /**
- * The nodes whose name another node in the **same folder** also carries (ADR-139 増分 2 決定 11).
+ * The nodes whose name another node in the **same folder** also carries (ADR-139 Inc.2 decision 11).
  *
  * The tree shows a node by its name alone, so two nodes with one name in one folder are two
  * identical rows. That is what an operator removing duplicates saw on the PoC box: they deleted one
@@ -165,7 +165,7 @@ export type FlatRow =
   | { kind: 'ungrouped-head'; count: number }
   | { kind: 'ungrouped-node'; depth: number; node: NodeSummary }
   /**
-   * The insertion slot: where a drag in flight would land (ADR-162 増分 2). Carried in the row list
+   * The insertion slot: where a drag in flight would land (ADR-162 Inc.2). Carried in the row list
    * rather than drawn over it, so the virtualizer places it and the rows below move down by exactly
    * one row — an overlay would sit on top of a real row and hide it.
    *
@@ -964,7 +964,7 @@ export function groupPath(groups: NodeGroup[], groupId: string | null): string[]
 
 /** One folder as a picker offers it.
  *
- *  ⚠️ **`label` is the folder's own name, with no indent baked in** (ADR-124 決定 9). It used to
+ *  ⚠️ **`label` is the folder's own name, with no indent baked in** (ADR-124 decision 9). It used to
  *  carry two full-width spaces per level, which made the depth un-styleable, put invisible
  *  characters into every search term the operator's text was compared against, and — the half
  *  that actually misleads — kept drawing an indent after filtering had removed the parent the
@@ -1171,7 +1171,7 @@ export function groupDeletionReach(
 }
 
 /** Whether deleting a folder with this reach must make the operator type its name (ADR-174
- *  決定 4): anything beneath it, or a node count not known yet. An empty folder is one click. */
+ *  decision 4): anything beneath it, or a node count not known yet. An empty folder is one click. */
 export function groupDeletionNeedsTypedName(reach: GroupDeletionReach): boolean {
   return reach.nodes === null || reach.nodes > 0 || reach.subgroups > 0;
 }

@@ -1,4 +1,4 @@
-/* Metric picker: a field-styled trigger + a searchable, grouped listbox (ADR-075 増分 4).
+/* Metric picker: a field-styled trigger + a searchable, grouped listbox (ADR-075 Inc.4).
    Mirrors the NodePicker / CredentialPicker look; theme variables only, no hardcoded colours.
    The popover surface itself (border, radius, shadow, placement) comes from AnchoredPopover. */
 

@@ -90,7 +90,7 @@ export function GroupDetail({
     return {
       tally: byGroup.get(group.id) ?? tallyStates([]),
       // The tree's own `children`, so Members lists the subfolders in the order the tree beside it
-      // does (`sort_order`, then name) without a second sort that could disagree (ADR-142 決定 7).
+      // does (`sort_order`, then name) without a second sort that could disagree (ADR-142 decision 7).
       subgroups: findTreeGroup(roots, group.id)?.children ?? [],
       subtreeTally: byGroup,
     };
@@ -118,7 +118,7 @@ export function GroupDetail({
           <div className="nd-namewrap">
             <span className="nd-name">
               {trail.length ? (
-                // The last segment is this pane, so it is never a link (ADR-142 決定 3).
+                // The last segment is this pane, so it is never a link (ADR-142 decision 3).
                 <GroupCrumbs trail={trail} onOpenGroup={onOpenGroup} linkLast={false} />
               ) : (
                 group.name
@@ -244,7 +244,7 @@ export function GroupDetail({
           <div className="nd-section-t">{t('groupDetail.members')}</div>
           {memberRows > 0 && (
             <div className="nd-members">
-              {/* Subfolders first, then nodes (ADR-142 増分 2). The count is the subtree's, from
+              {/* Subfolders first, then nodes (ADR-142 Inc.2). The count is the subtree's, from
                   the same server rollup as the header — never the members that happen to be loaded. */}
               {subgroups.map((g) => {
                 const total = subtreeTally.get(g.id)?.total ?? 0;

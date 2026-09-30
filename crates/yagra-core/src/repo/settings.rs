@@ -247,7 +247,7 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Which dependency graph the alert engine uses (ADR-043 決定 5).
+    /// Which dependency graph the alert engine uses (ADR-043 decision 5).
     ///
     /// Degrades to [`TopologyMode::Manual`] on any read failure, and on any value it cannot parse.
     /// Both are the same decision: a database blip or a value written by a newer core must not be
@@ -325,7 +325,7 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Whether this deployment serves the public board to anonymous visitors (ADR-123 決定 1).
+    /// Whether this deployment serves the public board to anonymous visitors (ADR-123 decision 1).
     ///
     /// Reads **fail-closed**: a missing row, an unreadable value or any error reports `false`.
     /// That is the opposite direction from [`Self::get_meraki_polling_enabled`] and the same one

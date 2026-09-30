@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Test hooks, in one place (ADR-052 決定 4).
+// Test hooks, in one place (ADR-052 decision 4).
 //
 // WHY A MAP AND NOT JUST `data-testid="…"`. A testid is a fact repeated in two files that **the
 // compiler does not ask for** — nothing fails when a component is renamed, a screen is rewritten,

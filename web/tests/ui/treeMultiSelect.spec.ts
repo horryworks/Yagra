@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The inventory tree's working set — Ctrl / Shift multi-select (ADR-124, fixed in 増分 1).
+// The inventory tree's working set — Ctrl / Shift multi-select (ADR-124, fixed in Inc.1).
 //
 // Both defects this file pins were reported from the running box, and neither was reachable by the
 // suites that were green at the time:
@@ -31,7 +31,7 @@ async function unhover(page: import('@playwright/test').Page) {
 
 test('a plain click then a Shift click takes the whole run, ends included', async ({ page }) => {
   // 🚨 THE REGRESSION, in the gesture the report used: click one row, Shift-click a row further
-  // down, and expect everything between them. Before 増分 1 this checked exactly one row — the
+  // down, and expect everything between them. Before Inc.1 this checked exactly one row — the
   // second one — because the first click left no anchor and the Shift click fell through to
   // `rangeChecked`'s new-run branch.
   await page.goto('/nodes');
@@ -46,7 +46,7 @@ test('a plain click then a Shift click takes the whole run, ends included', asyn
   // says "the middle row again" rather than "expected 3, got 2".
   await expect(rows.nth(1)).toHaveClass(/checked/);
 
-  // ADR-124 決定 2: the pane's selection stays single, and `.sel` keeps meaning what
+  // ADR-124 decision 2: the pane's selection stays single, and `.sel` keeps meaning what
   // `treeDeselect.spec.ts` counts it for.
   await expect(page.locator('.ntree-row.sel')).toHaveCount(1);
 });
@@ -91,7 +91,7 @@ test('Ctrl click adds a row to the batch without moving the pane', async ({ page
 
   await rows.nth(2).click({ modifiers: ['ControlOrMeta'] });
   // Two: the row the pane is showing and the row just Ctrl-clicked. This assertion said ONE until
-  // 増分 3 — it was pinning the defect, which is what a test written from the implementation does.
+  // Inc.3 — it was pinning the defect, which is what a test written from the implementation does.
   await expect(page.locator('.ntree-row.checked')).toHaveCount(2);
   expect(new URL(page.url()).searchParams.get('sel'), 'Ctrl click moved the pane').toBe(selected);
 });
@@ -230,7 +230,7 @@ test('the hover ↗ on a checked row moves the batch', async ({ page }) => {
 });
 
 test('a row-only action names its node while a batch is on screen', async ({ page }) => {
-  // 🚨 ADR-124 増分 9. Edit and Pin act on the right-clicked row and have no batch form, but they
+  // 🚨 ADR-124 Inc.9. Edit and Pin act on the right-clicked row and have no batch form, but they
   // sat in a menu headed "Move 3 selected…" and said plainly "Edit node…" / "Pin" — so the menu
   // offered twenty-node verbs and one-node verbs in the same list with nothing to tell them apart.
   // This is the ADR-055 R1 rule the moves already follow, applied to the items that cannot switch.
@@ -268,7 +268,7 @@ test('a row-only action is unqualified when nothing else is selected', async ({ 
 });
 
 test('the selection bar offers tagging, the verb that was right-click only', async ({ page }) => {
-  // 🚨 ADR-124 増分 9. `POST /nodes/tags` and `BulkTagModal` both shipped in 増分 6's wake, reachable
+  // 🚨 ADR-124 Inc.9. `POST /nodes/tags` and `BulkTagModal` both shipped in Inc.6's wake, reachable
   // only by right-clicking a checked row — so an operator working from the bar could not learn that
   // bulk tagging exists. The bar and the menu must offer the same verbs.
   await page.goto('/nodes');
@@ -289,7 +289,7 @@ test('the selection bar offers tagging, the verb that was right-click only', asy
 });
 
 test('the pool chips act on the whole selection, not the row that was clicked', async ({ page }) => {
-  // 🚨 ADR-124 増分 10. The chips sat in a menu headed "Move 3 selected…" and wrote exactly one
+  // 🚨 ADR-124 Inc.10. The chips sat in a menu headed "Move 3 selected…" and wrote exactly one
   // node — the same defect Inc.2 fixed for the moves, left in the section that had no bulk form.
   const seen: { node_ids: string[]; pool?: string }[] = [];
   await page.route('**/api/v1/nodes/pool', async (route) => {
@@ -386,7 +386,7 @@ test('the selection bar can set the pool on every selected node', async ({ page 
 test('a maintenance preset covers the whole selection, not the row that was clicked', async ({
   page,
 }) => {
-  // 🚨 ADR-124 増分 11, and the worst instance of the Inc.2 defect: an operator silencing a dozen
+  // 🚨 ADR-124 Inc.11, and the worst instance of the Inc.2 defect: an operator silencing a dozen
   // devices for tonight's work covered exactly one, and found out by being paged during it.
   const seen: { node_ids: string[] }[] = [];
   await page.route('**/api/v1/maintenance-windows/bulk', async (route) => {
@@ -491,7 +491,7 @@ test('the selection bar can open a maintenance window over every selected node',
 });
 
 test('Poll now covers the whole selection and reports what it queued', async ({ page }) => {
-  // 🚨 ADR-124 増分 12. Poll now lived only on a node's detail header, which is the wrong place:
+  // 🚨 ADR-124 Inc.12. Poll now lived only on a node's detail header, which is the wrong place:
   // it is what an operator presses right after editing something in the tree, and after a bulk
   // edit it is the only way to see whether the change took.
   const seen: { node_ids: string[] }[] = [];

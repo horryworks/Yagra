@@ -505,7 +505,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--status-warning);
 }
 
-/* The node's state is the last one collected, not a current one (ADR-164 決定 18). Words and a
+/* The node's state is the last one collected, not a current one (ADR-164 decision 18). Words and a
    rule in the warning status colour — a status colour on purpose, unlike the integrations
    screens: this *is* a statement about the node's state, which is what that palette is for. */
 .nd-fault {
@@ -661,7 +661,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   white-space: nowrap;
 }
 
-/* The Cisco Meraki card (ADR-164 決定 27). NOT the `.nd-health-metric` layout: that one puts the
+/* The Cisco Meraki card (ADR-164 decision 27). NOT the `.nd-health-metric` layout: that one puts the
    label beside a 24px value that never wraps, which is right for one number and pushed a sentence
    ("Standby · sent 14.1 kbps / received …") over the next tile. Here a tile stacks its label over a
    value that may wrap, and the uplinks are a table whose numbers never wrap while the name shrinks. */
@@ -1892,7 +1892,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--text-tertiary);
 }
 
-/* A subfolder row's right-hand slot (ADR-142 増分 2): the subtree's node count where a node row puts
+/* A subfolder row's right-hand slot (ADR-142 Inc.2): the subtree's node count where a node row puts
    its address. Same place and size, but the UI font — a count is not an address. */
 .nd-member-count {
   margin-left: auto;
@@ -2103,7 +2103,7 @@ html[data-viewport='mobile'] .nd-if-dock-head {
 
 /* The phone's dock is content-sized and scrolls (above), so here the tiles may wrap — and the IP
    tile takes a line of its own and shows every address, because the list's column is not drawn
-   on a phone and this is the only place they are (ADR-157 決定 6). `break-word`, not `anywhere`:
+   on a phone and this is the only place they are (ADR-157 decision 6). `break-word`, not `anywhere`:
    the list breaks at its commas, and only a lone IPv6 address wider than the screen is cut. */
 html[data-viewport='mobile'] .nd-if-dock-ctl,
 html[data-viewport='mobile'] .nd-if-dock-stats {

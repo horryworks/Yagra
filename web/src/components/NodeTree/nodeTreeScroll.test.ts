@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // `nodeTreeScroll` — the judgement that keeps the inventory tree where the operator left it
-// (ADR-124 増分 5).
+// (ADR-124 Inc.5).
 //
 // Plain objects stand in for the scroller and the press target, which is the whole reason this
 // judgement is in a `.ts`: the handler that calls it lives in `NodeTree.tsx`, and Vitest never
-// loads a `.tsx` (`.claude/rules/testing.md`). 増分 1 is what a judgement left in one costs — the
+// loads a `.tsx` (`.claude/rules/testing.md`). Inc.1 is what a judgement left in one costs — the
 // branch that was wrong was the one branch no test could reach.
 //
 // Two of the tests below are the *accept* side, and they are the ones that make the rest mean

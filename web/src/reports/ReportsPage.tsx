@@ -84,7 +84,7 @@ export function ReportsPage() {
   }, [setRuns, setRunsFailed]);
   useEffect(() => {
     seedRuns();
-    // Re-seed on a resync — nothing is replayed after a reconnect (ADR-019 増分 1).
+    // Re-seed on a resync — nothing is replayed after a reconnect (ADR-019 Inc.1).
     return subscribeReportRuns((run) => upsertRun(run), undefined, seedRuns);
   }, [seedRuns, upsertRun]);
 

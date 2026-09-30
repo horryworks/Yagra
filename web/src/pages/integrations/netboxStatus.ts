@@ -79,7 +79,7 @@ export function syncSummary(row: {
   return { kind: 'ok', at: row.last_sync_at, missing: row.missing_folders ?? 0 };
 }
 
-/** Where a "Sync now" stands (ADR-172 決定 1). The endpoint answers 202 and the leader's loop runs
+/** Where a "Sync now" stands (ADR-172 decision 1). The endpoint answers 202 and the leader's loop runs
  *  the sync, so this — not the answer to the button — is what the row shows while it goes. */
 export type SyncProgress = { kind: 'none' } | { kind: 'queued' } | { kind: 'running' };
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The judgement behind the AP tab (ADR-064 増分 B3). Every case here is one an operator hits on a
+// The judgement behind the AP tab (ADR-064 Inc.B3). Every case here is one an operator hits on a
 // real controller: an AP nobody named, an HA pair reporting the same AP twice, a scoped operator
 // who can see the standby but not the active, and an inventory cut off at the cap.
 

@@ -214,7 +214,7 @@ impl NodeRepo {
         row.as_ref().map(node_from_row).transpose()
     }
 
-    /// MANY nodes by id, narrowed to the caller's scope (ADR-124 増分 11/12).
+    /// MANY nodes by id, narrowed to the caller's scope (ADR-124 Inc.11/12).
     ///
     /// The batch reader behind a bulk action that has to *do* something per node rather than write
     /// one statement — a manual poll builds each node's own job set. Ids that name nothing, and
@@ -407,7 +407,7 @@ impl NodeRepo {
     }
 
     /// "This `nodes n` row is a **device**": no URL monitor and no DNS monitor is bound to it
-    /// (ADR-139 決定 1). Interpolated after an `AND`; the row must be aliased `n`.
+    /// (ADR-139 decision 1). Interpolated after an `AND`; the row must be aliased `n`.
     ///
     /// 🚨 **Why an address match alone is wrong.** A URL monitor stores the address its host
     /// resolved to, and a DNS monitor the resolver it asks (`api/checks.rs::display_address`). A
@@ -430,7 +430,7 @@ impl NodeRepo {
     const IMPORT_LOCK_KEY: i64 = 0x5941_4752_494d_5054;
 
     /// The device nodes standing at any of `addresses`, each marked with whether `groups` can see it
-    /// (ADR-139 決定 2/3). Several rows for one address mean duplicates an earlier release created.
+    /// (ADR-139 decision 2/3). Several rows for one address mean duplicates an earlier release created.
     ///
     /// The scope is **projected, not filtered**: a node outside the caller's folders is still
     /// returned, because the import refuses its address either way. Withholding its name and id is
@@ -489,7 +489,7 @@ impl NodeRepo {
     /// The existing-address read and the inserts sit under [`Self::IMPORT_LOCK_KEY`], so two
     /// concurrent imports of one address leave one row. ⚠️ **Only imports are serialised**: a
     /// hand-added node, a URL/DNS monitor, a Meraki sync or a configuration bundle can still race
-    /// one, briefly (ADR-139 決定 8). `nodes.address` carries no `UNIQUE`, deliberately — a
+    /// one, briefly (ADR-139 decision 8). `nodes.address` carries no `UNIQUE`, deliberately — a
     /// deployment that already holds duplicates would fail that migration and not start.
     pub async fn import_nodes(&self, nodes: &[NewNode<'_>]) -> anyhow::Result<ImportOutcome> {
         let mut tx = self.pool.begin().await?;
@@ -681,7 +681,7 @@ impl NodeRepo {
     /// destination scope so it lands predictably at the bottom. Returns whether the node exists.
     /// Used by the "Move to…" picker and a drop directly onto a group; drag-reorder between
     /// siblings goes through [`Self::place_node_batch`] instead (the WebUI sends every move
-    /// through the bulk path since ADR-124 増分 4; [`Self::place_node`] is what the single-node
+    /// through the bulk path since ADR-124 Inc.4; [`Self::place_node`] is what the single-node
     /// `PUT /nodes/{id}/placement` still serves for an external client).
     ///
     /// ⚠️ **"The end" counts the destination's sub-folders too** (ADR-162) — they share this
@@ -716,7 +716,7 @@ impl NodeRepo {
     ///
     /// `moved < requested` is normal and not an error — an id can be stale (the node was deleted
     /// between the page load and the click). The caller reports **both** numbers rather than
-    /// claiming a count it did not achieve (ADR-124 決定 7).
+    /// claiming a count it did not achieve (ADR-124 decision 7).
     ///
     /// `scope` narrows which nodes may move: a caller restricted to some folders cannot pull a
     /// node out of one they cannot see. ⚠️ **The predicate is written out rather than reusing
@@ -735,7 +735,7 @@ impl NodeRepo {
 
     /// Several of [`Self::set_node_group_batch`], each into its own folder, **in one
     /// transaction** — the IP-range move, whose nodes go to as many folders as their addresses
-    /// match (ADR-172 決定 2). Returns `(requested, moved)` per entry, in the order given.
+    /// match (ADR-172 decision 2). Returns `(requested, moved)` per entry, in the order given.
     ///
     /// 🚨 Why one transaction: the browser used to send one request per destination, so a tab
     /// closed mid-way left some folders moved and the rest not, and no summary was ever shown.
@@ -791,7 +791,7 @@ impl NodeRepo {
     /// sibling (`before`/`after`, at most one), in the order given. Returns `(requested, moved)`
     /// the same way [`Self::set_node_group_batch`] does, and with the same meaning for a shortfall.
     ///
-    /// 🚨 **This is what a multi-node drag had no way to express** (ADR-124 増分 4 決定 C → 増分 8).
+    /// 🚨 **This is what a multi-node drag had no way to express** (ADR-124 Inc.4 decision C → Inc.8).
     /// `PUT /nodes/{id}/placement` takes one node, and calling it N times is a write that can fail
     /// halfway with no way to read how far it got. This is one statement: either the batch lands or
     /// nothing does.
@@ -867,7 +867,7 @@ impl NodeRepo {
     }
 
     /// Set (or clear with `None`) the own poll-pool of MANY nodes in one statement (ADR-124
-    /// 増分 10). Returns `(requested, applied)` — the de-duplicated id count, and how many rows
+    /// Inc.10). Returns `(requested, applied)` — the de-duplicated id count, and how many rows
     /// were written.
     ///
     /// Moving a site between pollers is a fleet-shaped edit that rarely follows folder boundaries,
@@ -994,7 +994,7 @@ impl NodeRepo {
     /// PostgreSQL cannot use a btree index for it — `IS NOT DISTINCT FROM` is not the equality
     /// operator `nodes_group_idx` is built on, so the planner reaches for a sequential scan even
     /// for an unscoped caller. That matters because the inventory tree asks for the ungrouped
-    /// bucket **on every render** (ADR-125 決定 1, unconditionally — the bucket's header counts
+    /// bucket **on every render** (ADR-125 decision 1, unconditionally — the bucket's header counts
     /// from what is loaded, not from the server rollup), so the cost is paid per tree, per viewer,
     /// and grows with the fleet rather than with the answer.
     ///
@@ -1405,10 +1405,10 @@ impl NodeRepo {
     }
 
     /// The device nodes the caller may see whose name, trimmed and lower-cased, is one of `keys`
-    /// (ADR-139 増分 3) — what a Discovery candidate's sysName is compared against.
+    /// (ADR-139 Inc.3) — what a Discovery candidate's sysName is compared against.
     ///
     /// At most `SHARED_VALUE_MAX + 1` rows come back per name: a name more nodes than that share
-    /// identifies none of them (ADR-148 決定 3), and one past the cap is all the caller needs to see
+    /// identifies none of them (ADR-148 decision 3), and one past the cap is all the caller needs to see
     /// that. Without the bound, a candidate named `switch` would read every node called that.
     ///
     /// ⚠️ `lower(btrim(n.name))` is the expression migration 0142 indexes, and the key
@@ -1762,12 +1762,12 @@ impl NodeRepo {
         Ok(rows.into_iter().collect())
     }
 
-    /// Delete many nodes in one statement (ADR-124 増分 6). Returns `(requested, deleted)`:
+    /// Delete many nodes in one statement (ADR-124 Inc.6). Returns `(requested, deleted)`:
     /// distinct ids asked for, and rows actually removed.
     ///
     /// `deleted < requested` is normal and not an error — an id can name a node already gone, or
     /// one outside `scope`. The caller reports **both** numbers, as the bulk move does
-    /// (ADR-124 決定 7).
+    /// (ADR-124 decision 7).
     ///
     /// ⚠️ **Scoped, unlike [`Self::delete_node`]'s route.** `manage_config` is held by Operator and
     /// an Operator can be group-scoped, so a bulk delete that ignored the scope would let one site's
@@ -2743,7 +2743,7 @@ mod tests {
     /// Importing the same sweep twice creates each address **once**, and says what it skipped.
     ///
     /// 🚨 This test used to assert the opposite — four rows — and said so in its doc: ADR-115
-    /// 決定 3 pinned the duplicate rather than deciding what to do about it. ADR-139 decided. The
+    /// decision 3 pinned the duplicate rather than deciding what to do about it. ADR-139 decided. The
     /// cost it names is still the reason: [`NodeRepo::address_map`] is keyed by address, so of two
     /// nodes at one address one is silently never attributed a syslog line or a flow.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -2767,7 +2767,7 @@ mod tests {
     }
 
     /// A URL or DNS monitor at an address does not stop the device there from being imported —
-    /// both store a resolved address — while a device node at an address does (ADR-139 決定 1).
+    /// both store a resolved address — while a device node at an address does (ADR-139 decision 1).
     ///
     /// Both directions, so a predicate that refused everything, or nothing, cannot pass.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -2870,7 +2870,7 @@ mod tests {
         }
     }
 
-    /// The scope is projected onto each match, never used to drop one (ADR-139 決定 3).
+    /// The scope is projected onto each match, never used to drop one (ADR-139 decision 3).
     ///
     /// A node in a folder the caller cannot see — including one at the tree root, which no scoped
     /// caller sees — still comes back, marked invisible, so the import can refuse its address. Both
@@ -3157,7 +3157,7 @@ mod tests {
         );
     }
 
-    /// 🚨 **The batch lands where it was dropped, in its own order** (ADR-124 増分 8).
+    /// 🚨 **The batch lands where it was dropped, in its own order** (ADR-124 Inc.8).
     ///
     /// The property the append-only writer beside this one cannot express: three nodes dropped
     /// before a sibling sit between that sibling and the one above it, keeping the order the

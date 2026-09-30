@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// A Cisco Meraki MX node's Overview card (ADR-164 増分 13・14): the tiles, one row per WAN uplink
+// A Cisco Meraki MX node's Overview card (ADR-164 Inc.13 and 14): the tiles, one row per WAN uplink
 // with its state and rates, and the WAN traffic chart.
 //
 // WHY A BROWSER. `merakiUplinkLines`, `merakiUplinkState` and `merakiTrafficSeries` are
@@ -20,7 +20,7 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 type Schemas = components['schemas'];
 
 const NODE_ID = '00000000-0000-4000-8000-0000000000ab';
-/** The other MX of its warm-spare pair (ADR-164 決定 26). */
+/** The other MX of its warm-spare pair (ADR-164 decision 26). */
 const PARTNER_ID = '00000000-0000-4000-8000-0000000000ac';
 
 const merakiNodeWith = (pair: Schemas['MerakiPairView']): Json => {
@@ -90,13 +90,13 @@ function metric(url: URL): Json {
     } as unknown as Json;
   }
   if (name === 'meraki_device_up') return { ...body, metric: name, node_id: NODE_ID, value: 1 } as unknown as Json;
-  // Auto VPN (ADR-164 決定 25): a spoke that reaches one of its two hubs.
+  // Auto VPN (ADR-164 decision 25): a spoke that reaches one of its two hubs.
   const vpn: Record<string, number> = { meraki_vpn_hubs_reachable: 1, meraki_vpn_hubs_unreachable: 1 };
   if (name in vpn) return { ...body, metric: name, node_id: NODE_ID, value: vpn[name] } as unknown as Json;
   return body as unknown as Json;
 }
 
-/** The stored history of each uplink's rates, by row (決定 27). WAN2 has none — it has no line —
+/** The stored history of each uplink's rates, by row (decision 27). WAN2 has none — it has no line —
  *  so the chart carries WAN1 and cellular only. */
 function range(url: URL): Json {
   const parts = url.pathname.split('/');
@@ -196,11 +196,11 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
     'Warm spare',
   ]);
   await expect(tile('Availability').locator('.nd-mk-tile-value')).toHaveText('Online');
-  // One of its two hubs lost: the redundancy is gone, so the line reads as a warning (ADR-164 決定 25).
+  // One of its two hubs lost: the redundancy is gone, so the line reads as a warning (ADR-164 decision 25).
   const vpnValue = tile('Auto VPN').locator('.nd-mk-tile-value');
   await expect(vpnValue).toHaveText('1 of 2 hubs reachable');
   await expect(vpnValue).toHaveAttribute('style', /var\(--status-warning\)/);
-  // The pair (ADR-164 決定 26): the state the server worked out, this MX's role, and its partner —
+  // The pair (ADR-164 decision 26): the state the server worked out, this MX's role, and its partner —
   // linked to the partner's own pane, because it is a node here.
   const pairValue = tile('Warm spare').locator('.nd-mk-tile-value');
   await expect(pairValue).toHaveText('Spare down');
@@ -212,7 +212,7 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
   await expect(pairSub.locator('a')).toHaveAttribute('href', new RegExp(PARTNER_ID));
 
   // One row per uplink: its name, state and both rates. A port with no line has no rates; a failed
-  // one is drawn as failed, not as "no line" (ADR-164 決定 24).
+  // one is drawn as failed, not as "no line" (ADR-164 decision 24).
   const rows = card.locator('.nd-mk-uplink:not(.nd-mk-uplink-head)');
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0).locator('span')).toHaveText(['WAN1', 'Active', '5.0 kbps', '10.0 kbps']);
@@ -268,7 +268,7 @@ for (const width of [1280, 1000, 800]) {
 
 test.describe('a primary that is down while its spare carries the site', () => {
   // The collector reads a pair's VPN row on the primary's serial, and only while that device is
-  // online (ADR-164 決定 25), so nothing current exists — the card has to say the VPN is not
+  // online (ADR-164 decision 25), so nothing current exists — the card has to say the VPN is not
   // readable rather than draw no line, which would read as "no VPN here".
   //
   // The VPN reading IS served here, and that is the point: the latest-value read looks back 30
@@ -446,7 +446,7 @@ test.describe('a Meraki access point', () => {
     const card = cardOf(page);
     await expect(card).toBeVisible({ timeout: 15_000 });
 
-    // ADR-168 決定 11 (the user's decision): Meraki, and the access point's badge beside it — the
+    // ADR-168 decision 11 (the user's decision): Meraki, and the access point's badge beside it — the
     // Wi-Fi mark, black on white (2026-09-23), named for a screen reader by its tooltip.
     const badges = page.locator('.nd-namewrap .nd-kind');
     await expect(badges).toHaveCount(2);
@@ -528,9 +528,9 @@ test.describe('a Meraki access point', () => {
 
 test.describe('a Meraki access point the Dashboard reports offline', () => {
   // 🚨 The values ARE served here, and that is the point: the collect stops writing an access
-  // point's SSID count and radio utilization once its radios are not measured (ADR-168 決定 4),
+  // point's SSID count and radio utilization once its radios are not measured (ADR-168 decision 4),
   // while the latest-value read looks back thirty minutes — so the card would draw "Offline"
-  // beside "Channel utilization 11%". Seen on the lab deployment, the same shape ADR-164 増分 13d
+  // beside "Channel utilization 11%". Seen on the lab deployment, the same shape ADR-164 Inc.13d
   // fixed for a warm spare's VPN line.
   const stale: Record<string, number> = {
     meraki_device_up: 0,

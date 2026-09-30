@@ -16,7 +16,7 @@ import type { RateUnit } from '../../prefs';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import type { WidgetSettings } from '../types';
 // The header's window list and its polling cadence are shared with the VPN-sessions widget
-// (ADR-136 決定 6). They lived here while one widget had a window.
+// (ADR-136 decision 6). They lived here while one widget had a window.
 import { DEFAULT_WIDGET_RANGE_SECS, WIDGET_RANGES } from './util';
 
 /**
@@ -235,7 +235,7 @@ export interface DirectionLabels {
 }
 
 /**
- * Which direction occupies the half ABOVE zero. Transmit since ADR-069 増分 2; receive before it.
+ * Which direction occupies the half ABOVE zero. Transmit since ADR-069 Inc.2; receive before it.
  *
  * 🚨 **One answer, because there are two readers and nothing compares what they produce.**
  * {@link buildTrafficSeries} decides the *sign*; the widget decides which word the axis gutter
@@ -261,7 +261,7 @@ export function mirrorAxisLabels(labels: DirectionLabels): { above: string; belo
  *
  *  1. **In is negated.** Transmit occupies the positive half and receive the negative half, so one
  *     link needs one colour and six links fit the palette (ADR-069 decisions 1 and 2). ⚠️ Which
- *     direction sits on top is the ONLY thing 増分 2 changed — the sign is still the second
+ *     direction sits on top is the ONLY thing Inc.2 changed — the sign is still the second
  *     channel, because the colour is spent on the link. `null` stays `null` — a gap is a hole, not
  *     a valley, and turning it into `0` draws traffic that never happened.
  *  2. **The unit picks the arrays through `throughputPair`,** not through a local branch. All four

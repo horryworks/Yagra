@@ -20,7 +20,7 @@
 /**
  * Smallest usable inventory pane.
  *
- * Derived, not chosen: the pane head carries the INVENTORY label, the « collapse button, the ＋
+ * Derived, not chosen: the pane head carries the INVENTORY label, the « collapse button, the +
  * menu and a 150px search box. Below ~220px the search box is the first thing to be squeezed out
  * of the row, and a tree you cannot search is not a narrower tree — it is a broken one.
  *

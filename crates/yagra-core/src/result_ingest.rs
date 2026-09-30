@@ -574,13 +574,13 @@ pub(crate) async fn consume_results<S>(
         // A wireless controller's AP inventory stands for one result per imported AP (ADR-064 B2).
         // Decided here, in arrival order, so the two members of an HA pair are judged one after
         // the other against the same record of who serves each AP. The controller's own result
-        // gains what that decision counted — `wlan_controller_aps_missing` (増分 F, F10) — before
+        // gains what that decision counted — `wlan_controller_aps_missing` (Inc.F, F10) — before
         // it is stored and judged, so a rule on it sees the same view the AP nodes were given.
         let fanned = ap_fanout.fan_out(&result, Replay::Live);
         result.samples.extend(fanned.controller);
         let aps = fanned.aps;
         // Each AP this inventory spoke about has just been reported, by this controller (ADR-064
-        // 増分 G). Noted before the AP's result is judged, so the engine reads it as current when it
+        // Inc.G). Noted before the AP's result is judged, so the engine reads it as current when it
         // decides the colour to broadcast. The backfill consumer never notes: an old inventory says
         // nothing about whether anyone is reporting the AP now.
         for ap in &aps {
@@ -825,7 +825,7 @@ static METRICS_WRITER_GONE_LOGGED: AtomicBool = AtomicBool::new(false);
 static META_WRITER_GONE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// A persistence writer's channel is closed, so the task that drained it has ended — during
-/// shutdown on purpose, at any other time because it panicked (ADR-158 決定 2).
+/// shutdown on purpose, at any other time because it panicked (ADR-158 decision 2).
 ///
 /// 🚨 **This arm used to be `{}`.** A writer that panicked left every later result dropped here,
 /// with no counter, no log and nothing on any screen: the store simply stopped getting data. Now it
@@ -845,15 +845,15 @@ fn writer_gone(counter: &'static str, logged: &AtomicBool, writer: &'static str)
 
 /// Clear the collect lane this job holds on the collect's first returning result (all fan-out
 /// results share the job id; a no-op for non-Meraki jobs) — and record how the collect ended
-/// (ADR-164 決定 18). Memory only — this is the hot path, and deciding belongs to
+/// (ADR-164 decision 18). Memory only — this is the hot path, and deciding belongs to
 /// `meraki_health`'s loop.
 ///
-/// A report says so outright, and since 決定 36 it is the **first** result a poller publishes, so
+/// A report says so outright, and since decision 36 it is the **first** result a poller publishes, so
 /// it is also what releases the flight; the device results after it release nothing and record
 /// nothing. A result with no report that released a flight is a poller from before the report
 /// existed, whose device results are the only sign the Dashboard answered.
 ///
-/// 🚨 Before 決定 36 the report came last, so a current poller's first *device* result took this
+/// 🚨 Before decision 36 the report came last, so a current poller's first *device* result took this
 /// second arm: it counted as "answered" and reset the tier's run of failures, and the report behind
 /// it set it back to one. A read that failed on every collect read as failing once, since the latest.
 fn record_collect_outcome(meraki_inflight: &meraki::MerakiInflight, result: &PollResult) {
@@ -930,7 +930,7 @@ async fn ingest_result(
     alerts.record_row_names(result.node_id, &result.row_names);
     // A row whose device answered its placeholder is evidence that the row has no reading — the one
     // thing that may close that row's alert. A row that merely stopped arriving closes nothing
-    // (ADR-156 決定 3).
+    // (ADR-156 decision 3).
     for action in alerts.observe_with_no_reading(result, admitted.no_reading()) {
         // Which row an action produces is one rule for the whole crate (ADR-092); what is this
         // path's own is the channel — a roll-up persists nothing, and the eventual real recovery
@@ -1441,7 +1441,7 @@ mod tests {
     use super::*;
     use crate::store::{self, MetricPoint};
 
-    /// 🚨 ADR-164 決定 36: a current poller sends its report first, so the report releases the flight
+    /// 🚨 ADR-164 decision 36: a current poller sends its report first, so the report releases the flight
     /// and the device results after it record nothing — and a read that fails on every collect
     /// counts one more failure each time. Before, the first device result counted as "answered"
     /// and reset the run, so the organization's page said "failing once, since the latest collect"
@@ -1478,7 +1478,7 @@ mod tests {
                 failure: Some("status".into()),
                 listing: Some("appliance_vpn_statuses".into()),
             };
-            // The order a poller publishes in since 決定 36: the report, then a device.
+            // The order a poller publishes in since decision 36: the report, then a device.
             record_collect_outcome(&inflight, &result(job, Some(report)));
             record_collect_outcome(&inflight, &result(job, None));
             let failing = inflight.health.failing(org);
@@ -2148,7 +2148,7 @@ mod tests {
         );
     }
 
-    /// ADR-064 増分 G through the real consumer loop: every AP result the fan-out makes is noted as
+    /// ADR-064 Inc.G through the real consumer loop: every AP result the fan-out makes is noted as
     /// a report by the controller that made it. An AP its controller served twenty minutes ago and
     /// has not reported since reads `unknown`; one served now reads `ok`; the controller is not a
     /// reported node, so its own old `ok` is left alone.

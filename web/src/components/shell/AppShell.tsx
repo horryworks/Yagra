@@ -10,11 +10,11 @@
 // pages, so a "notify me" run still reports its completion after the operator has navigated away —
 // which is the whole point of asking to be notified.
 //
-// The alert stream is mounted here for the same reason (ADR-019 増分 1): the top-bar bell reads the
+// The alert stream is mounted here for the same reason (ADR-019 Inc.1): the top-bar bell reads the
 // alert store on every screen, and while only four pages subscribed it read zero everywhere else,
 // or froze at whatever it was when the operator left a dashboard.
 //
-// And the configuration change feed (ADR-019 増分 2): one subscription, whose counter every screen
+// And the configuration change feed (ADR-019 Inc.2): one subscription, whose counter every screen
 // that shows inventory or configuration reads to re-read when someone else changes it.
 
 import { useEffect, useState } from 'react';
@@ -48,9 +48,9 @@ export function AppShell() {
   }, [pathname]);
 
   // Remember where each nav section and each menu item was last visited, so the top-bar tab and the
-  // sidebar item both return here (ADR-134 増分 2 and 3). Recorded from the *route*, not from a
+  // sidebar item both return here (ADR-134 Inc.2 and 3). Recorded from the *route*, not from a
   // nav click: a redirect, the bell's shortcut and a shared link all land the operator somewhere
-  // real, and that somewhere is their current position (決定 12). `rememberableRoute` returns null
+  // real, and that somewhere is their current position (decision 12). `rememberableRoute` returns null
   // for anything the menu does not declare, which is what keeps a node detail from becoming the
   // Nodes tab's destination.
   //

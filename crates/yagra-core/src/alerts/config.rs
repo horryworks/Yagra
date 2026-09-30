@@ -23,7 +23,7 @@
 //! threshold query would resolve the whole fleet's alerts and page a recovery for each. Every load
 //! in [`load_alert_config_base`] therefore propagates with `?` rather than carrying its own
 //! `unwrap_or`, and `guards.rs`-style structural tests at the bottom of this file pin both that
-//! and ADR-043 決定 5's single-topology rule.
+//! and ADR-043 decision 5's single-topology rule.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,12 +59,12 @@ pub(crate) struct AlertConfigBase {
     /// the same config-generation gate so it costs a steady-state refresh nothing.
     pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>>,
     /// Every Meraki organization: its name, the folder groups its nodes sit in, and its nodes —
-    /// see `AlertConfig::meraki_orgs` (ADR-164 決定 18). Built beside `pool_groups` for the same
+    /// see `AlertConfig::meraki_orgs` (ADR-164 decision 18). Built beside `pool_groups` for the same
     /// reason: this is the one place that already holds every node's folder.
     meraki_orgs: HashMap<Uuid, super::MerakiOrgScope>,
     /// The graph the alert engine suppresses with.
     ///
-    /// **This is the only topology in the struct, deliberately.** ADR-043 決定 5's shadow mode does
+    /// **This is the only topology in the struct, deliberately.** ADR-043 decision 5's shadow mode does
     /// not put a second graph here for the engine to maybe-use: in `shadow` this field holds the
     /// *manual* graph, exactly as in `manual`, and the derived alternative is computed on demand by
     /// the read-side endpoint that displays the difference. There is therefore no runtime state in
@@ -95,7 +95,7 @@ pub(crate) struct AlertConfigBase {
 /// the reason ADR-092 deferred this as expensive when it is not.
 ///
 /// ⚠️ **`topology_mode` and `derived_topology` are two methods on purpose.** One `topology_for`
-/// would read better and would move ADR-043 決定 5's choice — *the derived graph reaches the engine
+/// would read better and would move ADR-043 decision 5's choice — *the derived graph reaches the engine
 /// only in `derived`* — out of the loader and into every implementation, fakes included. A test
 /// would then exercise the fake's copy of the rule. The same mistake ADR-092 caught in its own
 /// first draft.
@@ -118,7 +118,7 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     /// Every collection item the deployment knows — what the per-interface names (ADR-076) and the
     /// no-reading placeholders (ADR-156) are both derived from.
     async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>>;
-    /// `(organization, name, nodes)` for every Cisco Meraki organization (ADR-164 決定 18): who may
+    /// `(organization, name, nodes)` for every Cisco Meraki organization (ADR-164 decision 18): who may
     /// see an organization's collect alert, what it is called, and which nodes it is about.
     async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>>;
     /// Which graph the deployment is configured to suppress with.
@@ -228,7 +228,7 @@ pub(crate) async fn load_alert_config_base(
             .await
             .map_err(|e| anyhow::anyhow!("load folder tags: {e}"))?,
     );
-    // Folder-group threshold scope (ADR-075 増分 3): a rule on a group covers every group inside
+    // Folder-group threshold scope (ADR-075 Inc.3): a rule on a group covers every group inside
     // it, so each node needs its group plus every group above it. Read the edges once — the walk
     // is per-node and `group_ancestors` is a linear scan of this slice.
     let group_edges = sources
@@ -280,7 +280,7 @@ pub(crate) async fn load_alert_config_base(
         );
     }
 
-    // ADR-043 決定 5. The engine gets the derived graph only in `derived`; `shadow` is byte-for-byte
+    // ADR-043 decision 5. The engine gets the derived graph only in `derived`; `shadow` is byte-for-byte
     // `manual` here, and the comparison an operator reviews is computed by the read-side endpoint.
     //
     // 🚨 The *choice* stays here rather than behind one `topology_for` method, and that is what
@@ -629,7 +629,7 @@ pub(crate) async fn run_alert_config_refresh(
         let generation = config_gen::current();
         let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
         if base_changed {
-            // 🚨 A failed rebuild installs nothing (ADR-080 決定 2). `cached_base` keeps its old
+            // 🚨 A failed rebuild installs nothing (ADR-080 decision 2). `cached_base` keeps its old
             // generation, so the next cycle sees the same mismatch and reads again — the retry is
             // the loop itself. Installing a partial base instead is what made a single database
             // blip resolve every open threshold alert in the fleet and page a recovery for each.
@@ -733,7 +733,7 @@ mod tests {
         mode: crate::topology_mode::TopologyMode,
         /// The graph `derived_topology` hands back…
         derived: Topology,
-        /// …and whether it was asked for at all, which is half of ADR-043 決定 5's property.
+        /// …and whether it was asked for at all, which is half of ADR-043 decision 5's property.
         derived_asked: Mutex<bool>,
         /// What `collection_items` answers.
         items: Vec<yagra_common::CollectionItem>,
@@ -907,7 +907,7 @@ mod tests {
     /// **In shadow mode the engine receives the manual graph, and the derived one is not even
     /// computed.**
     ///
-    /// ADR-043 決定 5's safety property, and the reason [`AlertConfigBase`] carries one topology
+    /// ADR-043 decision 5's safety property, and the reason [`AlertConfigBase`] carries one topology
     /// rather than two: there is no runtime state in which a preview graph could suppress a real
     /// alert. Before ADR-093 this was a needle in this file's own text; now the loader runs.
     #[tokio::test]

@@ -1045,7 +1045,7 @@ pub(super) struct Handoff {
 /// moments after the request file appears, so the window has to exist first or it never will.
 ///
 /// 🚨 In a task of its own because of what the request can no longer do once the window exists
-/// (ADR-172 決定 4). A tab closed while the window's `INSERT` was in flight used to drop the
+/// (ADR-172 decision 4). A tab closed while the window's `INSERT` was in flight used to drop the
 /// handler there: a fleet-wide window with no request behind it, pausing every judgement for the
 /// full fifteen minutes with nothing to close it. The task finishes the hand-off whoever is left
 /// waiting.
@@ -1540,7 +1540,7 @@ mod hand_off_tests {
         }
     }
 
-    /// ADR-172 決定 4: a request the updater never receives must not leave the fleet paused.
+    /// ADR-172 decision 4: a request the updater never receives must not leave the fleet paused.
     ///
     /// Before, a failed write answered 500 and the fleet-wide window it had just opened stayed open
     /// for its fifteen minutes — every judgement paused, with nothing that would ever close it.

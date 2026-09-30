@@ -7,7 +7,7 @@
 //! `yagra.jobs.{pool}` with nothing subscribed, plain NATS discards the jobs, and **no
 //! `PollResult` is produced at all**. The nodes decay to `unknown` rather than `down`, every
 //! dashboard reads calm, and an entire site stops being monitored silently. ADR-009's scale-to-zero
-//! discussion names this as 監視自身の盲点.
+//! discussion names this as monitoring's own blind spot.
 //!
 //! Before this module the condition was visible only to someone already looking: a `warning` string
 //! on `GET /api/v1/pollers` and a pill on Settings ▸ Pollers. Here it becomes an alert delivered
@@ -182,7 +182,7 @@ pub fn count_by_pool(nodes: &[Node], resolver: &PoolResolver) -> HashMap<String,
 /// pool would promise something the pool does not deliver.
 ///
 /// Two callers ask "which nodes are in pool P": the coverage strip above, and the pool-move
-/// refusal in `api/pollers.rs`. **ADR-107 増分 3 exists because those two once counted different
+/// refusal in `api/pollers.rs`. **ADR-107 Inc.3 exists because those two once counted different
 /// sets** — the strip resolved inheritance and the refusal read the column, so a pool of purely
 /// inheriting nodes was 32 on screen and 0 to the check that had to protect it. One
 /// implementation, so the dialog an operator answers and the `409` that enforces the answer
@@ -254,7 +254,7 @@ struct PoolWatch {
 ///
 /// 🚨 **That reasoning is about the notification, and it does not extend to the alert** — which is
 /// the mistake this doc used to make, and it cost a `critical` that stood open for fifteen days on
-/// a pool with a live poller (ADR-107 増分 5, found on hardware 2026-09-09). Raising writes
+/// a pool with a live poller (ADR-107 Inc.5, found on hardware 2026-09-09). Raising writes
 /// **durable** state: a row in `alert_history`, restored into the engine on every boot by
 /// `alerts/restore.rs`, which does not care what kind of subject it is. Clearing is reachable only
 /// from [`Self::observe`]'s `Clear` edge, and `observe` iterates the **watch map** — so a pool this
@@ -298,7 +298,7 @@ impl CoverageWatch {
         self.raise_after.is_zero()
     }
 
-    /// Start the watch from the coverage alerts that are **already open** (ADR-107 増分 5).
+    /// Start the watch from the coverage alerts that are **already open** (ADR-107 Inc.5).
     ///
     /// Called once, at the top of the watch loop, with [`raised_pools`] over the engine's restored
     /// active set. Each pool goes in as `raised: true`, which buys two things:
@@ -490,7 +490,7 @@ pub(crate) async fn run_pool_coverage_watch(
             "poller-pool coverage notifications are disabled; gauges still published"
         );
     }
-    // ADR-107 増分 5. The alerts survived the restart; the watch that can close them did not. Seed
+    // ADR-107 Inc.5. The alerts survived the restart; the watch that can close them did not. Seed
     // it from what `alerts::restore::restore` (awaited back in `run_live`) put back, or a pool that
     // recovered while this core was down stays `critical` for as long as the deployment lives.
     let reopened = pool_coverage::raised_pools(&alerts.active_alerts());
@@ -514,7 +514,7 @@ pub(crate) async fn run_pool_coverage_watch(
             continue;
         };
 
-        // 🚨 **The alarm path deliberately does not read the `pools` table** (ADR-107, やらないこと).
+        // 🚨 **The alarm path deliberately does not read the `pools` table** (ADR-107,, out of scope).
         // A pool that has been described but has neither nodes nor a poller is half-configured on
         // purpose, not broken — `is_uncovered` would already answer false for it, but feeding it in
         // would still put it in `publish_gauges`' output and make every freshly created pool show up
@@ -787,7 +787,7 @@ mod tests {
         }
     }
 
-    /// ADR-107 増分 5. Both halves of the filter, because either one alone is wrong in a way that
+    /// ADR-107 Inc.5. Both halves of the filter, because either one alone is wrong in a way that
     /// only shows up later: the subject alone would sweep in a future pool-subject alert this loop
     /// knows nothing about and clear it, and the metric alone would match a device metric that
     /// happened to share the name.
@@ -825,7 +825,7 @@ mod tests {
     }
 
     /// The other disappearance: the pool is gone from the sample entirely (renamed, or its last
-    /// node taken over — ADR-107 増分 4). Same `Clear`, and it is the case a seeded-but-unobserved
+    /// node taken over — ADR-107 Inc.4). Same `Clear`, and it is the case a seeded-but-unobserved
     /// pool would otherwise miss, because `observe` iterates the watch map rather than the sample.
     #[test]
     fn a_seeded_pool_that_is_gone_from_the_sample_is_also_cleared() {

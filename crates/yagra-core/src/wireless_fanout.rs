@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A controller's AP inventory, turned into one poll result per imported AP node (ADR-064 increment
-//! B2, 改訂 R13).
+//! B2, revision R13).
 //!
 //! The poller walks a controller's AP table and publishes **one** result for the controller, carrying
 //! every AP in `PollResult.wlan`. It knows nothing about AP nodes: which APs are imported, and as
@@ -23,12 +23,12 @@
 //!
 //! ## What an AP's result never says
 //!
-//! **Absence is not a statement** (ADR-156 決定 3). An AP missing from an inventory, and an inventory
+//! **Absence is not a statement** (ADR-156 decision 3). An AP missing from an inventory, and an inventory
 //! that did not arrive — the walk missed a column, the controller stopped answering — produce no
 //! result at all. The AP's liveness is then simply not refreshed; nothing concludes it went down.
 //! The controller's own `wlan_ap_walk_complete` is what says the walk failed.
 //!
-//! 🚨 **One exception, by the user's decision (ADR-064 増分 F, F9): a Cisco controller.** Its table
+//! 🚨 **One exception, by the user's decision (ADR-064 Inc.F, F9): a Cisco controller.** Its table
 //! has no "down" state — it drops an AP it has lost — so on that dialect an imported AP this
 //! controller last served, missing from a complete, uncut table read past the grace after a boot,
 //! is given the `NotAssociated` result the controller would have sent if it could
@@ -126,7 +126,7 @@ impl ApFanout {
     }
 
     /// Everything `result`'s AP inventory stands for: a result per imported AP, and the samples the
-    /// controller's own result gains (ADR-064 増分 F, F10).
+    /// controller's own result gains (ADR-064 Inc.F, F10).
     ///
     /// On a live inventory whose absences count ([`WlanInventory::absence_is_evidence`] — a Cisco
     /// controller's complete, uncut table, read past the grace after its boot), an imported AP that
@@ -217,7 +217,7 @@ pub(crate) struct FanOut {
 }
 
 /// The result of an AP its controller's table no longer lists, on a dialect that drops a lost AP
-/// from the table (ADR-064 増分 F, F9): what `NotAssociated` produces, and nothing more, since the
+/// from the table (ADR-064 Inc.F, F9): what `NotAssociated` produces, and nothing more, since the
 /// controller said nothing else about it.
 fn absent_result(controller: &PollResult, node: NodeId) -> PollResult {
     ap_poll_result(
@@ -296,10 +296,10 @@ fn ap_poll_result(
 }
 
 // A radio's samples and its `interfaces` row are built by `yagra_bus::RadioReadings`, the one place
-// both radio paths share (ADR-168 決定 6): this one, and the poller's Meraki wireless collect.
+// both radio paths share (ADR-168 decision 6): this one, and the poller's Meraki wireless collect.
 
 /// Leader-only upkeep of the fan-out: re-read the node bindings every [`BINDINGS_REFRESH`], and run
-/// the importer once a minute (ADR-064 決定 8).
+/// the importer once a minute (ADR-064 decision 8).
 ///
 /// Started by the ingest pipeline after it has installed the first bindings, so the two share one
 /// [`ApFanout`]. A failed read keeps the bindings already installed — an AP that stops getting
@@ -612,7 +612,7 @@ mod tests {
         r.wlan = None;
         assert!(fanout.results_for(&r, Replay::Live).is_empty());
     }
-    /// ADR-064 増分 C: a radio reaches the AP node as a **port** — a row in `interfaces` and a
+    /// ADR-064 Inc.C: a radio reaches the AP node as a **port** — a row in `interfaces` and a
     /// series keyed by its slot — so every screen that already draws a port draws a radio.
     #[tokio::test]
     async fn an_aps_radios_arrive_as_ports_on_its_node() {
@@ -682,7 +682,7 @@ mod tests {
         );
     }
 
-    // ─── A Cisco controller's absent APs (ADR-064 増分 F, F9–F11) ─────────────────────────
+    // ─── A Cisco controller's absent APs (ADR-064 Inc.F, F9–F11) ─────────────────────────
 
     const UP_LONG_ENOUGH: u64 = yagra_common::WLAN_ABSENCE_GRACE_AFTER_BOOT_SECS;
 

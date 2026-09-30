@@ -36,7 +36,7 @@ pub trait AlertFactsSource: Send + Sync {
     /// Facts for each requested node. Ids that cannot be resolved are simply absent.
     async fn facts(&self, ids: &[Uuid]) -> HashMap<Uuid, NodeFacts>;
 
-    /// What a Cisco Meraki organization is called, for a notification about one (ADR-164 決定 18).
+    /// What a Cisco Meraki organization is called, for a notification about one (ADR-164 decision 18).
     /// Defaulted to "unknown", which leaves the subject named by its flat form — the same
     /// degradation an unresolvable node has.
     async fn meraki_org_name(&self, _org: Uuid) -> Option<String> {

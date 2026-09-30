@@ -175,7 +175,7 @@ impl ConfigBundleRepo {
         }
         cap("node_groups", node_groups.len())?;
 
-        // 🚨 Not a node an integration owns (ADR-164 決定 40): a Meraki device or an access point
+        // 🚨 Not a node an integration owns (ADR-164 decision 40): a Meraki device or an access point
         // a controller reports. Neither is polled by a pool — the organization's collects and the
         // controller's walk speak for them — and the binding that says so (`meraki_devices`,
         // `wireless_aps`) does not travel. Carried, they arrived as ordinary devices and were

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Tier2a, ADR-052 決定 7 出典 2: expectations taken from declarations, asked of the running system.
+// Tier2a, ADR-052 decision 7 source 2: expectations taken from declarations, asked of the running system.
 //
 // Tier1 already asks the tab question — but it asks it of a node whose kind Tier1 chose. Here the
 // kind is whatever `NodeKind::resolve` decided on the server for a row an operator really created,
@@ -83,7 +83,7 @@ test('every node kind the deployment actually holds is one the tab rules know', 
       kind: detail.kind,
       snmpConfigured: detail.snmp_configured,
       // Read off the same document the app reads it from: on a real deployment this is the only
-      // way a wireless controller is told from any other SNMP device (ADR-064 増分 B3).
+      // way a wireless controller is told from any other SNMP device (ADR-064 Inc.B3).
       isWlanController: detail.wireless?.controller != null,
       // Likewise: only a Meraki switch or access point has rows to list (ADR-167, ADR-168).
       merakiProductType: detail.meraki_device?.product_type ?? null,

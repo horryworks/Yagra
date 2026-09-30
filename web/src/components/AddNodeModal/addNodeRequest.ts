@@ -136,7 +136,7 @@ export function sendCreate(req: CreateRequest): Promise<{ id: string }> {
 }
 
 /**
- * The node kinds that mean "a device is already monitored at this address" (ADR-139 決定 1).
+ * The node kinds that mean "a device is already monitored at this address" (ADR-139 decision 1).
  *
  * URL and DNS monitors store an address too — the host a URL resolved to, the resolver asked — and a
  * router that merely serves a monitored web page is not already monitored. A Meraki device is. A
@@ -179,7 +179,7 @@ export function needsAddressLookup(
 }
 
 /**
- * Whether adding a device must stop and warn first (ADR-139 増分 2 決定 12): the nodes to name, or
+ * Whether adding a device must stop and warn first (ADR-139 Inc.2 decision 12): the nodes to name, or
  * `null` to go ahead.
  *
  * The warning never refuses. An operator who has read it passes `confirmedAddress`, and that address

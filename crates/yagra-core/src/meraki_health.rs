@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Whether the Dashboard API is answering each Meraki organization's collects — and the **one alert
-//! per organization** that says so when it is not (ADR-164 決定 18).
+//! per organization** that says so when it is not (ADR-164 decision 18).
 //!
 //! # Why this exists
 //!
@@ -29,7 +29,7 @@
 //! | Source | Means |
 //! |---|---|
 //! | the poller's collect report (`PollResult.meraki_collect`) | answered, or failed with a reason |
-//! | an ordinary result of a collect job, with no report | answered — a poller from before 決定 18 |
+//! | an ordinary result of a collect job, with no report | answered — a poller from before decision 18 |
 //! | a collect flight whose lease ran out unanswered | `no_answer`: old poller + failed collect, no live poller in the pool, a crash |
 //! | the scheduler could not open the key | `credential` |
 //! | the scheduler could not read the organization's devices, or which networks it watches | `internal` |
@@ -38,12 +38,12 @@
 //! before publishing one, and the organization's devices go unasked-about exactly as they do when
 //! the Dashboard refuses. They are counted at the collect's own rate rather than the scheduler's —
 //! see [`count_once_per_cadence`], without which a 15-second tick would reach three failures in
-//! forty-five seconds. An organization that watches **nothing** is not among them: 決定 16 sends it
+//! forty-five seconds. An organization that watches **nothing** is not among them: decision 16 sends it
 //! no collect on purpose, so there is nothing failing to report.
 //!
 //! # Closing
 //!
-//! 🚨 **On evidence, never on absence** (ADR-156 決定 3). The alert resolves when an availability
+//! 🚨 **On evidence, never on absence** (ADR-156 decision 3). The alert resolves when an availability
 //! collect is *answered*, or when the configuration says there is nothing left to answer for — the
 //! organization is gone or paused, or Meraki polling is switched off. A core that has just started
 //! knows nothing about an organization until a report arrives, and knowing nothing resolves
@@ -81,7 +81,7 @@ pub struct TierFailure {
     pub since_unix_ms: i64,
     /// How many in a row.
     pub failures: u32,
-    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25).
+    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 decision 25).
     /// Read leniently: a listing a newer core stored costs the label, never the entry.
     #[serde(
         default,
@@ -134,7 +134,7 @@ struct TierState {
 pub struct MerakiCollectHealth {
     tiers: Mutex<HashMap<(Uuid, MerakiTier), TierState>>,
     /// The tiers the scheduler has stopped asking about — no device of their kind, no watched
-    /// network, switched off, or no poller in the pool that can run them (ADR-164 決定 35). Nothing
+    /// network, switched off, or no poller in the pool that can run them (ADR-164 decision 35). Nothing
     /// will ever answer such a tier again, so a failure it carried would be shown, and an alert it
     /// raised kept open, for good. Marked by the scheduler, cleared when it sends one again.
     idle: Mutex<HashSet<(Uuid, MerakiTier)>>,
@@ -172,7 +172,7 @@ impl MerakiCollectHealth {
     }
 
     /// [`Self::record_failed`], naming the read of the tier that failed when the poller said which
-    /// (ADR-164 決定 25). The most recent failure's listing is the one kept, like its reason.
+    /// (ADR-164 decision 25). The most recent failure's listing is the one kept, like its reason.
     pub fn record_failed_in(
         &self,
         org: Uuid,
@@ -182,7 +182,7 @@ impl MerakiCollectHealth {
         at_unix_ms: i64,
     ) {
         // A report from a collect sent before the scheduler stopped asking says nothing about
-        // what is asked now — nothing is (ADR-164 決定 35).
+        // what is asked now — nothing is (ADR-164 decision 35).
         if self.is_idle(org, tier) {
             return;
         }
@@ -251,7 +251,7 @@ impl MerakiCollectHealth {
     /// Drop everything known about organizations outside `keep`.
     ///
     /// [`CollectWatch::evaluate`] keeps the organizations that are being collected, so a paused
-    /// one, or every one while Meraki polling is off, starts again from nothing (ADR-164 決定 35):
+    /// one, or every one while Meraki polling is off, starts again from nothing (ADR-164 decision 35):
     /// failures counted before the pause are not evidence about the collects after it, and kept,
     /// they re-raised the alert on the first tick after a resume — before a single collect was sent.
     pub fn retain_orgs(&self, keep: &HashSet<Uuid>) {
@@ -265,7 +265,7 @@ impl MerakiCollectHealth {
             .retain(|(org, _)| keep.contains(org));
     }
 
-    /// The scheduler has stopped asking about `tier` for `org` (ADR-164 決定 35): forget how its
+    /// The scheduler has stopped asking about `tier` for `org` (ADR-164 decision 35): forget how its
     /// collects were ending, and say nothing about it until it is asked again.
     pub fn set_idle(&self, org: Uuid, tier: MerakiTier) {
         self.tiers
@@ -344,7 +344,7 @@ pub enum ResolveWhy {
     Answered,
     /// There is nothing left to answer for: the organization is gone or paused, Meraki polling is
     /// switched off, or the scheduler has stopped asking about its availability (it watches no
-    /// network, or has no device left — ADR-164 決定 35). Configuration is evidence too — nobody is
+    /// network, or has no device left — ADR-164 decision 35). Configuration is evidence too — nobody is
     /// being collected, by decision.
     NotCollected,
 }
@@ -380,7 +380,7 @@ impl CollectWatch {
     ///
     /// Without this a restart during an outage would raise the same alert a second time after
     /// three more failures — and, worse, an outage that ended while core was down would leave an
-    /// alert nothing owns and nothing can close (the 15-day-open pool alert, ADR-107 増分 5).
+    /// alert nothing owns and nothing can close (the 15-day-open pool alert, ADR-107 Inc.5).
     #[must_use]
     pub fn seed(raised: impl IntoIterator<Item = Uuid>) -> Self {
         Self {
@@ -409,7 +409,7 @@ impl CollectWatch {
             .map(|o| o.id)
             .collect();
         // What was counted about an organization that is not being collected is not evidence about
-        // the collects after it resumes (ADR-164 決定 35).
+        // the collects after it resumes (ADR-164 decision 35).
         health.retain_orgs(&collected);
 
         // Resolve first, so an organization cannot be raised and resolved in one pass.
@@ -477,7 +477,7 @@ pub fn raised_orgs(active: &[yagra_alert::Alert]) -> Vec<Uuid> {
 /// known about keeps what the row already says — after a restart that is every tier, and clearing
 /// them all would have the page say "collecting" about an outage still in progress. An
 /// organization nobody is collected for (`collected == false`) says nothing is failing: nothing is
-/// being asked — and neither does a tier the scheduler has stopped asking about (ADR-164 決定 35),
+/// being asked — and neither does a tier the scheduler has stopped asking about (ADR-164 decision 35),
 /// which nothing will ever answer again.
 #[must_use]
 pub fn row_failures(
@@ -527,7 +527,7 @@ pub(crate) async fn run_meraki_collect_watch(
 ) {
     // The alerts survived the restart (`alerts::restore`, awaited in `run_live`); the watch that can
     // close them did not. Without the seed an outage that ended while this core was down leaves an
-    // alert nothing owns — ADR-107 増分 5's fifteen-day pool alert, in another subject.
+    // alert nothing owns — ADR-107 Inc.5's fifteen-day pool alert, in another subject.
     let reopened = raised_orgs(&alerts.active_alerts());
     if !reopened.is_empty() {
         tracing::info!(orgs = ?reopened, "resuming the meraki collect watch for organizations whose alert was already open");
@@ -725,7 +725,7 @@ mod tests {
         assert_eq!(watch.evaluate(&[on(ORG)], true, &health), vec![]);
     }
 
-    /// 🚨 ADR-164 決定 35: a pause resolves the alert, and the failures counted before it must go
+    /// 🚨 ADR-164 decision 35: a pause resolves the alert, and the failures counted before it must go
     /// with it. Kept, they re-raised the alert on the first tick after the resume — three failures
     /// "in a row" with a pause between them, before one collect had been sent since.
     #[test]
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
     }
 
-    /// 🚨 ADR-164 決定 35: an organization that watches no network (決定 16) or has no device left is
+    /// 🚨 ADR-164 decision 35: an organization that watches no network (decision 16) or has no device left is
     /// sent no collect, so nothing will ever answer its availability again. Its open alert closes on
     /// that configuration, and a tier nobody asks about is not shown as failing.
     #[test]
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(watch.evaluate(&[on(ORG)], true, &health).len(), 1);
     }
 
-    /// 決定 18 (3): the uplink and traffic tiers decide nothing about liveness, so they page nobody
+    /// decision 18 (3): the uplink and traffic tiers decide nothing about liveness, so they page nobody
     /// — a licence without one endpoint answers 403 on that tier forever.
     #[test]
     fn a_tier_that_liveness_does_not_ride_on_never_raises() {
@@ -851,7 +851,7 @@ mod tests {
         assert!(!watch.is_raised(ORG));
     }
 
-    /// 🚨 ADR-156 決定 3. After a restart the record is empty — and so is the record of an
+    /// 🚨 ADR-156 decision 3. After a restart the record is empty — and so is the record of an
     /// organization whose poller has gone quiet. Neither is an answer.
     #[test]
     fn knowing_nothing_resolves_nothing() {
@@ -1070,7 +1070,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 25: a failure names the read of the tier that failed. The stored listing is read
+    /// ADR-164 decision 25: a failure names the read of the tier that failed. The stored listing is read
     /// leniently — one a newer core wrote costs the label, never the entry, and an entry from before
     /// the field existed reads as "the whole collect".
     #[test]
@@ -1108,7 +1108,7 @@ mod tests {
         assert_eq!(written[0]["listing"], "appliance_vpn_statuses");
         assert_eq!(TierFailure::from_stored(written), failing);
 
-        // The uplink tier failing still raises nothing — only availability does (決定 18).
+        // The uplink tier failing still raises nothing — only availability does (decision 18).
         assert_eq!(health.answered(ORG, MerakiTier::Availability), None);
     }
 }

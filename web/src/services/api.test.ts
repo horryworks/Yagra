@@ -1196,7 +1196,7 @@ describe('api client', () => {
   });
 
   it('drag-reorders nodes before a sibling through the bulk move (placement)', async () => {
-    // 🚨 ADR-124 増分 8: one request whether the drag carried one node or several. The single-node
+    // 🚨 ADR-124 Inc.8: one request whether the drag carried one node or several. The single-node
     // `PUT /nodes/{id}/placement` had no batch form, so a multi-node drop had to append instead.
     const spy = vi
       .fn()

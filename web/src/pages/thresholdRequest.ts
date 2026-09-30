@@ -158,7 +158,7 @@ export function hasAnyBound(f: ThresholdForm): boolean {
  *  A `global` rule needs no target — it applies to every node — so demanding one would make the
  *  level unusable. Every other level needs at least one, because a rule with no target matches
  *  nothing and would be stored, listed, and silently inert (the server refuses one since ADR-075
- *  増分 3; this is the half that keeps the operator from getting a 400 for a field they can see is
+ *  Inc.3; this is the half that keeps the operator from getting a 400 for a field they can see is
  *  empty). Since ADR-081 the same is true of the bounds — see [`hasAnyBound`].
  *
  *  ⚠️ The server's cap of 32 targets is deliberately **not** mirrored here. A number repeated in

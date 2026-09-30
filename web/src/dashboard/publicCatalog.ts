@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Which widgets may go on the **public** board (ADR-123 決定 8).
+// Which widgets may go on the **public** board (ADR-123 decision 8).
 //
 // The public board's widgets decide what an anonymous visitor can read, and a widget whose data
 // needs more than `view` cannot work for one. An admin composing the board would never see that:

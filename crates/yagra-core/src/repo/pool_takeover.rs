@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! **Covering a pool that lost its poller, reversibly** (ADR-107 増分 4).
+//! **Covering a pool that lost its poller, reversibly** (ADR-107 Inc.4).
 //!
 //! When a poller pool has nodes and no live poller, those nodes stop being polled and
 //! [`crate::pool_coverage`] raises a `Subject::Pool` alert saying so. One of the two things an
@@ -8,7 +8,7 @@
 //!
 //! ## Why this is a table and not a column on `nodes`
 //!
-//! A node is in a pool three ways (ADR-107 増分 3): its own `pool` column, a folder it inherits
+//! A node is in a pool three ways (ADR-107 Inc.3): its own `pool` column, a folder it inherits
 //! from, or falling through to the default. Taking a fall-through node over writes an explicit pool
 //! where there was NULL, so putting it back means writing NULL again — and a single
 //! `pool_before_takeover` column cannot tell "it was inheriting" from "it was never taken over",
@@ -28,7 +28,7 @@
 //! reach those devices, and covering them from a host that cannot see them replaces one accurate
 //! pool alert with N false `unreachable` ones — the notification flood
 //! `monitoring-conventions.md` forbids. That judgement belongs to the operator, who can see the
-//! alert and test reachability from the new host; ADR-107 増分 4 決定 4 is that nothing here ever
+//! alert and test reachability from the new host; ADR-107 Inc.4 decision 4 is that nothing here ever
 //! runs by itself.
 
 use serde::Serialize;

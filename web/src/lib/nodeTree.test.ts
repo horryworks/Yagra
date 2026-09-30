@@ -1270,7 +1270,7 @@ describe('buildNodeTree', () => {
     // folder stays above every node "whatever the sort_order values are", and it was true
     // structurally: `walkGroup` walked the children and then the members, so the two could not
     // interleave. That is exactly what stopped a folder being dropped between two nodes, and
-    // ADR-162 withdrew it (ADR-130 決定 6).
+    // ADR-162 withdrew it (ADR-130 decision 6).
     //
     // The fixture is the old one, unchanged, because it is the case that tells the two rules
     // apart: the folder sorts last by name *and* last by sort_order, the node first on both. The
@@ -1452,7 +1452,7 @@ describe('groupOptions', () => {
   });
 
   it('carries the depth as data rather than as spaces in the label', () => {
-    // 🚨 It used to indent by prepending two full-width spaces per level (ADR-124 決定 9). That
+    // 🚨 It used to indent by prepending two full-width spaces per level (ADR-124 decision 9). That
     // made the depth un-styleable and, worse, put invisible characters into the text a search
     // term is matched against — so a picker filtering on the label would compare against padding.
     for (const o of groupOptions(tree)) {

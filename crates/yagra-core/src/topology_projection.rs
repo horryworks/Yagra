@@ -7,7 +7,7 @@
 //! * the shadow endpoint, which uses it to show an operator what *would* be suppressed.
 //!
 //! If those two built the graph differently, the review an operator does in shadow would not be a
-//! review of what happens when they flip the switch — which is the entire mechanism ADR-043 決定 5
+//! review of what happens when they flip the switch — which is the entire mechanism ADR-043 decision 5
 //! introduced to stop a wrong edge silencing a real outage. So there is one builder, here, and both
 //! call it.
 //!

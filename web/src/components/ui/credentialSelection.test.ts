@@ -25,7 +25,7 @@ describe('toggleSelection', () => {
   });
 
   it('ignores an id that is not among the options rather than inventing one', () => {
-    // A stale remembered id (ADR-134 決定 5 replays the last scan's credentials) must not be
+    // A stale remembered id (ADR-134 decision 5 replays the last scan's credentials) must not be
     // resurrected into the request: `resolve_scan_credentials` answers 400 for an id that no
     // longer exists, which would fail the whole scan rather than one credential.
     expect(toggleSelection(OPTIONS, ['a'], 'gone')).toEqual(['a']);

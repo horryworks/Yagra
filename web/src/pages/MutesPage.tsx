@@ -86,7 +86,7 @@ export function MutesPage() {
   const [adding, setAdding] = useState(false);
   const [lifting, setLifting] = useState<Mute | null>(null);
 
-  // Both re-read when someone else adds or lifts a mute, or moves a folder (ADR-019 増分 2).
+  // Both re-read when someone else adds or lifts a mute, or moves a folder (ADR-019 Inc.2).
   const mutes = useLoad(() => api.listMutes(), [], { initial: [] as Mute[], onConfigChange: true });
   const { data: rows, loading, reload: load } = mutes;
   const { data: groups } = useLoad(() => api.listNodeGroups(), [], {

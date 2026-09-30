@@ -43,7 +43,7 @@ pub enum SeedRange {
     /// Unlike the two above these are not tied to a profile, so they reach a node with no
     /// profile at all — which is the reason the global scope exists.
     DefaultThresholds,
-    /// `thresholds` seeded for the built-in "Cisco Meraki MX (API)" profile (ADR-164 増分 13): a
+    /// `thresholds` seeded for the built-in "Cisco Meraki MX (API)" profile (ADR-164 Inc.13): a
     /// failed WAN uplink, and — from 13c — an Auto VPN site that cannot reach its hubs. Profile-scoped
     /// like the URL and DNS sets, because only an MX reports either.
     MerakiThresholds,

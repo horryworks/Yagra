@@ -52,7 +52,7 @@ const MAX_PAGES: usize = 50;
 /// The slowest a Meraki session paces, whatever it is asked for: one request every ten seconds.
 ///
 /// Public because core halves an organization's `target_rps` between its two collect lanes
-/// (ADR-169 決定 4) and has to know where the halving stops — below twice this, the two lanes
+/// (ADR-169 decision 4) and has to know where the halving stops — below twice this, the two lanes
 /// together send more than the organization's setting.
 pub const MERAKI_MIN_RPS: f64 = 0.1;
 /// Hard cap on consecutive 429/Retry-After waits before giving up on an endpoint.
@@ -197,16 +197,16 @@ pub struct MerakiDeviceInfo {
     /// networkId the device belongs to.
     pub network_id: String,
     /// `lanIp`, when the device reports one. Never pinged, and not only shown: core matches it
-    /// against the folders' IP ranges, and an imported node takes it as its address (ADR-164 決定
+    /// against the folders' IP ranges, and an imported node takes it as its address (ADR-164 decision
     /// 14).
     ///
     /// ⚠️ **An MX reports none** — measured on 686 of 686: it carries `wan1Ip`/`wan2Ip` instead.
     /// Those are not read: a WAN address is in nobody's IP ranges and is often dynamic, and it filed
     /// sites into another site's folder. Core takes an MX's address from its VLANs instead
-    /// ([`fetch_network_lans`], ADR-164 決定 28).
+    /// ([`fetch_network_lans`], ADR-164 decision 28).
     pub lan_ip: Option<String>,
     /// `mac`, rendered `aa:bb:cc:dd:ee:ff` — what a neighbour's LLDP chassis id names this device
-    /// by, so core can match a neighbour row with no management address to it (ADR-180 増分 3).
+    /// by, so core can match a neighbour row with no management address to it (ADR-180 Inc.3).
     /// Measured on a real organization: all 3,252 devices carried one. `None` when absent or not
     /// shaped like a MAC.
     pub mac: Option<String>,
@@ -315,7 +315,7 @@ impl Session {
         }
     }
 
-    /// [`Self::get_paged`], handing back **why it stopped** beside what it gathered (ADR-164 決定
+    /// [`Self::get_paged`], handing back **why it stopped** beside what it gathered (ADR-164 decision
     /// 18). The three stops that fail a collect are still an `Err`; the five it survives used to be
     /// dropped on the floor here, which is how a Dashboard outage came to read as "no devices".
     async fn get_paged_reported(
@@ -333,7 +333,7 @@ impl Session {
     }
 
     /// [`Self::get_paged`], except that anything short of "the server said there is no next page"
-    /// is an error (ADR-164 決定 2).
+    /// is an error (ADR-164 decision 2).
     ///
     /// The inventory sync marks a device `missing` when a listing does not contain it. Through the
     /// lenient reader a dropped connection on page 2 of 3 would do that to a third of an
@@ -436,7 +436,7 @@ impl Session {
                     return Err(Stop::RateLimited);
                 }
                 let wait = retry_after(&resp).unwrap_or_else(|| Duration::from_secs(1));
-                // A wait that would outlast the budget is not waited (決定 37): the session would
+                // A wait that would outlast the budget is not waited (decision 37): the session would
                 // only wake past it, and a collect held past core's lease is a second collect sent
                 // beside it.
                 if self.deadline.is_some_and(|d| Instant::now() + wait >= d) {
@@ -485,7 +485,7 @@ impl Session {
 ///
 /// A page size used to be appended to every listing, which is only right for listings that document
 /// one. `appliance/uplinks/usage/byNetwork` documents none and was recorded without one — one page
-/// for a whole 434-network organization (ADR-164 決定 23) — and a listing's documented maximum
+/// for a whole 434-network organization (ADR-164 decision 23) — and a listing's documented maximum
 /// differs (`appliance/vpn/statuses` stops at 300), so each call site says which it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Paging {
@@ -495,10 +495,10 @@ enum Paging {
     Unpaged,
 }
 
-/// What a page of a listing looks like (ADR-167 決定 2).
+/// What a page of a listing looks like (ADR-167 decision 2).
 ///
 /// Every listing this module read before the switch ports answers a bare JSON array, and ADR-164
-/// 決定 19 made anything else `Malformed`. Two of the three switch-port listings answer an envelope
+/// decision 19 made anything else `Malformed`. Two of the three switch-port listings answer an envelope
 /// instead — `{"items": [...], "meta": {...}}`, measured on a real organization — while the third
 /// (`switch/ports/bySwitch`) is a bare array again. So each call site says which it reads, and the
 /// rule stays exactly as strict for both: the wrong shape is `Malformed`, never an empty page.
@@ -508,7 +508,7 @@ enum Shape {
     Array,
     /// An object whose `items` is a JSON array; whatever else it carries (`meta`) is not read.
     Items,
-    /// One bare JSON object, which is the one item (ADR-164 決定 28: a network's
+    /// One bare JSON object, which is the one item (ADR-164 decision 28: a network's
     /// `appliance/singleLan` is a settings document, not a listing).
     Object,
 }
@@ -539,7 +539,7 @@ enum Stop {
     /// server still offered another.
     PageCap,
     /// The collect's time budget ran out before the next request (ADR-167), or a 429's wait would
-    /// have outlasted it. Every collect sets one since ADR-164 決定 37 ([`COLLECT_BUDGET`]), and the
+    /// have outlasted it. Every collect sets one since ADR-164 decision 37 ([`COLLECT_BUDGET`]), and the
     /// LAN reads their own.
     Budget,
 }
@@ -613,7 +613,7 @@ pub enum MerakiFetchError {
 
 impl MerakiFetchError {
     /// The closed token this failure travels as — on the bus, in a collect report, and on the
-    /// organization's row (ADR-164 決定 18).
+    /// organization's row (ADR-164 decision 18).
     ///
     /// 🚨 **Spelled exactly as core's `MerakiSyncFailure` spells the same failure**, because core
     /// reads it back with that type's `from_token`, and a token it does not know becomes
@@ -664,14 +664,14 @@ impl From<Stop> for MerakiFetchError {
 
 /// The items of one page. Pure, so the rule is tested without a server.
 ///
-/// 🚨 **A 200 whose body is not the listing's shape is not a page** (ADR-164 決定 19). Every parser
+/// 🚨 **A 200 whose body is not the listing's shape is not a page** (ADR-164 decision 19). Every parser
 /// below reads array elements only. A body of the wrong shape used to be taken as one item, which no
 /// parser can read a `serial` out of — so it read as a listing that was **complete and empty**: the
 /// inventory sync marked every stored device missing, and a collect counted as answered by the
-/// Dashboard, which is what closes an organization's collection alert (決定 18). An empty array is
+/// Dashboard, which is what closes an organization's collection alert (decision 18). An empty array is
 /// still an answer; an organization may hold nothing.
 ///
-/// Which shape is right is the listing's to say ([`Shape`], ADR-167 決定 2): an envelope where a
+/// Which shape is right is the listing's to say ([`Shape`], ADR-167 decision 2): an envelope where a
 /// bare array is expected is `Malformed`, and so is a bare array where an envelope is.
 fn page_items(body: &str, shape: Shape) -> Result<Vec<Value>, Stop> {
     let parsed = match serde_json::from_str::<Value>(body) {
@@ -811,16 +811,16 @@ pub(crate) async fn collect(
         tracing::debug!(error = %e, "meraki collect session refused");
         MerakiFetchError::Config
     })?;
-    // Every collect stops asking at a budget under core's 300-second lease (ADR-164 決定 37). The
+    // Every collect stops asking at a budget under core's 300-second lease (ADR-164 decision 37). The
     // switch-port and wireless tiers had one; availability, uplink and traffic did not, and a slow
     // or rate-limiting Dashboard could hold them past the lease — core then read the collect as
     // unanswered and sent a second into the same lane, doubling the requests at the moment the
     // Dashboard was asking for fewer. Those two tiers set the same budget again below.
     session.deadline = Some(Instant::now() + COLLECT_BUDGET);
-    // How each listing of this collect ended (ADR-164 決定 18 and 25).
+    // How each listing of this collect ended (ADR-164 decision 18 and 25).
     let mut listings = Listings::default();
     // Every listing asks the WHOLE organization and keeps the watched networks' rows here
-    // (ADR-164 決定 22). Sending the networks as `networkIds[]` is what the Dashboard documents and
+    // (ADR-164 decision 22). Sending the networks as `networkIds[]` is what the Dashboard documents and
     // what it refuses: its nginx answers 414 past a request target of 8,177 characters (measured
     // 2026-09-22), which about two hundred network ids reach — and a new organization watches every
     // network it has. Two of the four listings ignored the filter anyway: `uplinksLossAndLatency`
@@ -829,7 +829,7 @@ pub(crate) async fn collect(
     let no_query: [(&str, String); 0] = [];
     // A listing after a tier's first one is contained: a refusal there costs that listing's readings
     // and is named in the report, rather than throwing away what the listings before it brought back
-    // (決定 25). The FIRST listing's refusal still fails the collect — a revoked key or an unreadable
+    // (decision 25). The FIRST listing's refusal still fails the collect — a revoked key or an unreadable
     // answer is not a partial answer.
     let contained = |r: Result<(Vec<Value>, Option<MerakiFetchError>), MerakiFetchError>| {
         r.unwrap_or_else(|why| (Vec::new(), Some(why)))
@@ -838,7 +838,7 @@ pub(crate) async fn collect(
     let mut data: Vec<DeviceDatum> = Vec::new();
     // A switch's ports, by serial — the switch-port tier's interface inventory (ADR-167).
     let mut ports: BTreeMap<String, BTreeMap<u32, MerakiPort>> = BTreeMap::new();
-    // A switch's LLDP/CDP neighbours, by serial — only from a complete read (ADR-181 決定 3).
+    // A switch's LLDP/CDP neighbours, by serial — only from a complete read (ADR-181 decision 3).
     let mut neighbors: Option<BTreeMap<String, Vec<yagra_common::Neighbor>>> = None;
     // An access point's radios, by serial then slot — the wireless tier's (ADR-168).
     let mut radios: BTreeMap<String, BTreeMap<u32, MerakiRadio>> = BTreeMap::new();
@@ -886,7 +886,7 @@ pub(crate) async fn collect(
             listings.note(MerakiListing::ApplianceUplinkStatuses, stop, kept.len());
             data.extend(parse_uplink_statuses(&kept));
 
-            // Auto VPN, last (決定 25): the slowest of the three (4–5 s for 347 rows measured), and a
+            // Auto VPN, last (decision 25): the slowest of the three (4–5 s for 347 rows measured), and a
             // listing whose failure must not cost the uplinks' readings. Its documented page size
             // tops out at 300 — `perPage=1000` is a 400 (measured).
             let vpn_path = format!(
@@ -908,7 +908,7 @@ pub(crate) async fn collect(
             // Every row goes in, watched or not: a peer is judged by its OWN row.
             data.extend(parse_vpn_statuses(&items, &watched));
         }
-        // Every MX's WAN uplinks, over the tier's own interval (ADR-164 決定 23). What this read
+        // Every MX's WAN uplinks, over the tier's own interval (ADR-164 decision 23). What this read
         // replaced, `summary/top/devices/byUsage`, refuses a timespan under 28,800 seconds, answers
         // an organization's top ten devices only, and carries a total rather than sent/received —
         // it failed on every real organization and never stored a sample.
@@ -954,7 +954,7 @@ pub(crate) async fn collect(
             data.extend(statuses);
             ports = spine;
 
-            // One five-minute bucket the Dashboard has had time to fill (決定 6).
+            // One five-minute bucket the Dashboard has had time to fill (decision 6).
             let (t0, t1) = switch_usage_bucket(unix_now_secs());
             let usage_path = format!(
                 "{API_PREFIX}/organizations/{}/switch/ports/usage/history/byDevice/byInterval",
@@ -980,7 +980,7 @@ pub(crate) async fn collect(
             data.extend(parse_switch_port_usage(&items, &ports));
 
             // Each port's LLDP/CDP neighbours, when core asks (ADR-181). Read BEFORE the names:
-            // a neighbour read cut short is thrown away whole (決定 3), while names read part of
+            // a neighbour read cut short is thrown away whole (decision 3), while names read part of
             // the way still name the ports they reached — so this is the read that must not be the
             // one the budget cuts. Measured: 854 switches, 43 pages, 25 s.
             if spec.neighbors {
@@ -1075,7 +1075,7 @@ pub(crate) async fn collect(
                 )
                 .await;
             // On its own the SSID read has this listing first, and a first listing's refusal fails
-            // the collect (決定 25).
+            // the collect (decision 25).
             let (items, stop) = if spec.ssid_only {
                 util?
             } else {
@@ -1155,7 +1155,7 @@ const SWITCH_PORT_MAX_PAGES: usize = 2_500;
 /// organization's slow lane, ADR-169) for 300 s ("LEASE" in its Meraki scheduler) and counts a
 /// flight that outlives it as unanswered, so this stops well inside it.
 const SWITCH_PORTS_BUDGET: Duration = Duration::from_secs(240);
-/// How long any collect may keep asking (ADR-164 決定 37): the same as the two slow tiers', under
+/// How long any collect may keep asking (ADR-164 decision 37): the same as the two slow tiers', under
 /// core's 300-second collect lease with room for the one request still in flight.
 const COLLECT_BUDGET: Duration = Duration::from_secs(240);
 /// The Dashboard's switch-port usage buckets are five minutes long.
@@ -1165,7 +1165,7 @@ const SWITCH_USAGE_BUCKET_SECS: u64 = 300;
 /// once, and before that it lists `ports: []`. Twelve minutes clears the slowest measured.
 const SWITCH_USAGE_SETTLE_SECS: u64 = 720;
 
-/// The one usage bucket a switch-port collect at `now` reads (ADR-167 決定 6): the newest
+/// The one usage bucket a switch-port collect at `now` reads (ADR-167 decision 6): the newest
 /// five-minute bucket that ended at least [`SWITCH_USAGE_SETTLE_SECS`] ago, as `(t0, t1)` in Unix
 /// seconds. Aligned to the bucket grid — the Dashboard rounds an unaligned `t0` down, which would
 /// make the answer two buckets.
@@ -1192,7 +1192,7 @@ fn on_spine(row: &Value, spine: &BTreeMap<String, BTreeMap<u32, MerakiPort>>) ->
 /// * `if_admin_status`: `enabled` true 1, false 2.
 /// * `if_high_speed`: Mbps, only while the port has a speed.
 ///
-/// 🚨 **A switch with no port `Connected` is left out altogether** (決定 14). Measured on a real
+/// 🚨 **A switch with no port `Connected` is left out altogether** (decision 14). Measured on a real
 /// organization: every offline or dormant switch was still listed, with every port `Disconnected`.
 /// Reported as such, each switch that went down would raise a port-down alert per port beside its
 /// own node-down one. An online switch with nothing plugged in is left out too, which costs nothing:
@@ -1272,7 +1272,7 @@ fn parse_switch_port_statuses(
 }
 
 /// `switch/ports/usage/history/byDevice/byInterval` → each port's average receive and send rate
-/// over the bucket, bits per second (決定 6), for the switches on the spine.
+/// over the bucket, bits per second (decision 6), for the switches on the spine.
 ///
 /// * `bandwidth.usage.downstream` is what the port **received** (`meraki_port_in_bps`) and
 ///   `upstream` what it **sent** — measured: uplink ports' downstream about twice their upstream,
@@ -1388,7 +1388,7 @@ fn attach_ports(
 }
 
 /// Hand each switch the listing named its neighbours, creating the observation for a switch that
-/// has no other reading this time (ADR-181 決定 4). A switch the listing did not name keeps
+/// has no other reading this time (ADR-181 decision 4). A switch the listing did not name keeps
 /// `None`, so its stored neighbours stay.
 fn attach_neighbors(
     observations: &mut Vec<MerakiObservation>,
@@ -1468,7 +1468,7 @@ const WIRELESS_UTIL_WINDOW_SECS: u32 = 300;
 /// (`counts.byStatus.online`) as `wlan_ap_client_count`, the name a controller-walked AP uses.
 ///
 /// Every access point of the organization has a row — a stopped one answers 0, which is the truth
-/// about it (ADR-168 決定 4), so it is published like any other.
+/// about it (ADR-168 decision 4), so it is published like any other.
 fn parse_wireless_clients(items: &[Value]) -> Vec<DeviceDatum> {
     items
         .iter()
@@ -1497,7 +1497,7 @@ fn parse_wireless_clients(items: &[Value]) -> Vec<DeviceDatum> {
 ///
 /// * The radio is the band's **first** slot ([`WlanBand::slot_base`]). The Dashboard reports per
 ///   band, so on an access point with two radios in one band both are in this number, and it lands
-///   on the first (ADR-168 決定 5 — measured: no such access point among 1,710).
+///   on the first (ADR-168 decision 5 — measured: no such access point among 1,710).
 /// * A stopped access point lists no band at all (measured: every offline and dormant one), so it
 ///   gets no radio — and, by [`apply_ssid_statuses`], nothing from the SSID read either.
 /// * A band word this build does not know is skipped, never guessed.
@@ -1547,7 +1547,7 @@ fn parse_channel_utilization(items: &[Value]) -> BTreeMap<String, BTreeMap<u32, 
 /// how many SSIDs it broadcasts (`wlan_ap_ssid_count`), and each radio's channel and transmit power.
 ///
 /// 🚨 **Only access points already in `radios` — the ones the utilization read measured** (ADR-168
-/// 決定 4). Measured on a real organization: every offline and dormant access point was still
+/// decision 4). Measured on a real organization: every offline and dormant access point was still
 /// answered here with its last configuration, broadcasting. Published as such, a stopped access point
 /// would read as broadcasting its SSIDs on its channels.
 ///
@@ -1555,7 +1555,7 @@ fn parse_channel_utilization(items: &[Value]) -> BTreeMap<String, BTreeMap<u32, 
 ///   same on every BSS of it (measured: no disagreement among 11,566). Radios are numbered into slots
 ///   by [`assign_radio_slots`], in index order within a band, as a controller-walked AP's are.
 /// * A radio gets its channel and power only in a band the utilization read measured: a band that is
-///   not on air has no row to put them on (決定 2).
+///   not on air has no row to put them on (decision 2).
 /// * An SSID counts once when it is enabled and broadcasting on at least one radio. A measured access
 ///   point broadcasting nothing is a real 0.
 /// * A channel or power the Dashboard left `null` is left out, never published as 0.
@@ -1682,7 +1682,7 @@ fn attach_radios(
     }
 }
 
-/// How the listings of one collect ended (ADR-164 決定 18 and 25).
+/// How the listings of one collect ended (ADR-164 decision 18 and 25).
 #[derive(Debug, Default)]
 struct Listings {
     /// The FIRST reason a listing stopped early. One is enough: what core asks of it is "did the
@@ -1712,7 +1712,7 @@ impl Listings {
 /// 300" (measured 2026-09-22 with `perPage=1000`).
 const VPN_STATUSES_MAX_PER_PAGE: u32 = 300;
 
-/// `appliance/vpn/statuses` → each watched MX's Auto VPN reachability (ADR-164 決定 25).
+/// `appliance/vpn/statuses` → each watched MX's Auto VPN reachability (ADR-164 decision 25).
 ///
 /// A row is a network with its VPN-participating MX (`deviceSerial` — measured: always the pair's
 /// configured primary, even while the primary is down and its spare carries the tunnels), the MX's
@@ -1820,8 +1820,8 @@ fn parse_vpn_statuses(items: &[Value], watched: &Watched<'_>) -> Vec<DeviceDatum
     out
 }
 
-/// The networks a collect reports on (ADR-164 決定 22). **Empty means every network** — the bus's
-/// reading of an empty list, which core no longer sends (決定 16) but which a message omitting the
+/// The networks a collect reports on (ADR-164 decision 22). **Empty means every network** — the bus's
+/// reading of an empty list, which core no longer sends (decision 16) but which a message omitting the
 /// field still decodes to.
 struct Watched<'a>(HashSet<&'a str>);
 
@@ -1886,7 +1886,7 @@ fn parse_availability(items: &[Value]) -> Vec<DeviceDatum> {
         .filter_map(|it| {
             let serial = it.get("serial")?.as_str()?.to_owned();
             // A row with no status word says nothing about the device, so it gives no sample
-            // (ADR-164 増分 18). An unknown WORD is read as down — that is policy — but a missing
+            // (ADR-164 Inc.18). An unknown WORD is read as down — that is policy — but a missing
             // one used to be read as the empty word, and so as down, and so paged.
             let status = it.get("status")?.as_str()?;
             let up = MerakiAvailability::from_status(status).is_up();
@@ -1907,7 +1907,7 @@ fn parse_availability(items: &[Value]) -> Vec<DeviceDatum> {
 ///
 /// 🚨 The Dashboard answers one row per **(serial, uplink, probe destination)** — the `ip` the MX
 /// measures against. With two destinations configured, the same uplink came out twice, and one
-/// result carried two samples of one series at one instant (ADR-164 増分 18). The rows are folded
+/// result carried two samples of one series at one instant (ADR-164 Inc.18). The rows are folded
 /// per (serial, uplink) and each figure keeps its worst: an uplink losing packets to one destination
 /// is losing packets.
 fn parse_uplink_loss_latency(items: &[Value]) -> Vec<DeviceDatum> {
@@ -2047,7 +2047,7 @@ fn parse_uplink_statuses(items: &[Value]) -> Vec<DeviceDatum> {
                 name: uplink_name(ifindex).unwrap_or(iface).to_owned(),
             };
             // The status for the chart, and the failed flag the seeded rule reads — the second on
-            // every row, healthy ones too, so an open alert has a reading to close on (決定 24).
+            // every row, healthy ones too, so an open alert has a reading to close on (decision 24).
             for (metric, value) in [
                 (METRIC_MERAKI_UPLINK_STATUS, status.gauge()),
                 (
@@ -2072,7 +2072,7 @@ fn parse_uplink_statuses(items: &[Value]) -> Vec<DeviceDatum> {
 
 /// The window a traffic collect asks usage over: the tier's interval, so consecutive collects tile
 /// time without a gap or an overlap — within what the Dashboard was measured to accept (300 s to one
-/// day; ADR-164 決定 23). The traffic tier's cadence bounds are the same range, so the clamp only
+/// day; ADR-164 decision 23). The traffic tier's cadence bounds are the same range, so the clamp only
 /// matters to a job that does not say its interval.
 #[must_use]
 pub fn usage_window(interval_secs: u32) -> u32 {
@@ -2237,7 +2237,7 @@ pub struct MerakiInventoryDevice {
     pub availability: Option<MerakiAvailability>,
 }
 
-/// An organization's networks and devices, read **to the end** (ADR-164 決定 2).
+/// An organization's networks and devices, read **to the end** (ADR-164 decision 2).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MerakiInventory {
     /// Every network in the organization.
@@ -2298,7 +2298,7 @@ pub async fn fetch_inventory(
     Ok(assemble_inventory(&networks, &devices, &availabilities))
 }
 
-/// Read every MX's warm-spare role (ADR-164 決定 26): `(serial, role)` for every appliance the
+/// Read every MX's warm-spare role (ADR-164 decision 26): `(serial, role)` for every appliance the
 /// organization lists, `None` for one whose warm spare is not enabled. One paged GET of
 /// `appliance/uplink/statuses` — the listing the uplink collect also reads. Read-only.
 ///
@@ -2349,7 +2349,7 @@ fn parse_ha_roles(rows: &[Value]) -> Vec<(String, Option<MerakiHaRole>)> {
         .collect()
 }
 
-/// One address an MX holds on its network's LAN side (ADR-164 決定 28): its IP on one VLAN, or — in
+/// One address an MX holds on its network's LAN side (ADR-164 decision 28): its IP on one VLAN, or — in
 /// a network with VLANs turned off — on the single LAN, which has no VLAN number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MerakiLanAddress {
@@ -2362,7 +2362,7 @@ pub struct MerakiLanAddress {
 /// One network's LAN addresses, or why this read could not say.
 pub type MerakiNetworkLan = Result<Vec<MerakiLanAddress>, MerakiFetchError>;
 
-/// Read the LAN addresses the MX holds in each of `network_ids`, one network at a time (ADR-164 決定
+/// Read the LAN addresses the MX holds in each of `network_ids`, one network at a time (ADR-164 decision
 /// 28): `GET /networks/{id}/appliance/vlans`, and where that answers 400 — VLANs are off —
 /// `GET /networks/{id}/appliance/singleLan`. Where both answer 400 the network has no LAN side at
 /// all and its list is **empty, which is an answer**: the caller stops waiting for one. Read-only.
@@ -2420,7 +2420,7 @@ enum Step {
     /// request rather than hundreds.
     KeepAndStop,
     /// Read no more and drop the answer: the budget stopped it. A request the deadline refused was
-    /// never sent, and a 429 whose wait would outlast the budget was not waited (ADR-164 決定 37).
+    /// never sent, and a 429 whose wait would outlast the budget was not waited (ADR-164 decision 37).
     /// Nothing was learned about this one, and the ones after it would be stopped the same way.
     Stop,
 }
@@ -2439,7 +2439,7 @@ fn one_at_a_time<T>(answer: &Result<T, MerakiFetchError>) -> Step {
 pub type MerakiDeviceNeighbors = Result<Vec<yagra_common::Neighbor>, MerakiFetchError>;
 
 /// Read each MX's LAN-side and each MR's LLDP/CDP neighbours, one device at a time (ADR-181
-/// 増分 3, 増分 5): `GET /devices/{serial}/lldpCdp`. Read-only.
+/// Inc.3, Inc.5): `GET /devices/{serial}/lldpCdp`. Read-only.
 ///
 /// Per device because nothing wider answers it: the organization-wide listing the switches are read
 /// from covers switches only, and `topology/linkLayer` does not keep a link's ports straight when
@@ -2531,8 +2531,8 @@ async fn network_lan(s: &mut Session, network: &str) -> MerakiNetworkLan {
             )
             .await
         {
-            // A settings document with no `applianceIp` is not the answer this read asks for (決定 19,
-            // ADR-164 増分 18). Read as "no LAN side", it was remembered for a day and the MX was
+            // A settings document with no `applianceIp` is not the answer this read asks for (decision 19,
+            // ADR-164 Inc.18). Read as "no LAN side", it was remembered for a day and the MX was
             // imported with no address.
             Ok(documents) => documents
                 .iter()
@@ -2867,7 +2867,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 2, the distinction the inventory sync rests on. "The server offered no next
+    /// ADR-164 decision 2, the distinction the inventory sync rests on. "The server offered no next
     /// page" is the **only** complete ending. A cycle and the page cap used to be spelled the same
     /// way (`None`), so nothing downstream could tell a finished listing from an abandoned one —
     /// and the sync marks every device the listing does not contain as missing.
@@ -2890,7 +2890,7 @@ mod tests {
         }
     }
 
-    /// ADR-164 決定 19. A 200 that is not an array used to become one item no parser can read, so
+    /// ADR-164 decision 19. A 200 that is not an array used to become one item no parser can read, so
     /// it read as a listing that was complete and empty — every stored device marked missing by the
     /// sync, and a collect counted as answered. It is the stop both readers already refuse.
     #[test]
@@ -2924,8 +2924,8 @@ mod tests {
         assert_eq!(page_items("[]", Shape::Array), Ok(Vec::new()));
     }
 
-    /// ADR-167 決定 2. Two of the switch-port listings answer `{items, meta}`: that is their page,
-    /// and the rule stays as strict as 決定 19's — a bare array where the envelope belongs, or an
+    /// ADR-167 decision 2. Two of the switch-port listings answer `{items, meta}`: that is their page,
+    /// and the rule stays as strict as decision 19's — a bare array where the envelope belongs, or an
     /// envelope with no `items` array, is `Malformed`, never an empty listing.
     #[test]
     fn an_envelope_is_a_page_only_where_the_listing_answers_one() {
@@ -2957,7 +2957,7 @@ mod tests {
         );
     }
 
-    /// 決定 3's page cap is the session's, not a constant's: a switch-port listing runs past 50.
+    /// decision 3's page cap is the session's, not a constant's: a switch-port listing runs past 50.
     #[test]
     fn the_page_cap_is_the_one_the_session_was_given() {
         let fresh = page("Q2-NEW");
@@ -2977,7 +2977,7 @@ mod tests {
         assert!(!Stop::Budget.fails_a_collect());
     }
 
-    /// 決定 6. The bucket read ended at least twelve minutes ago, lies on the five-minute grid, and
+    /// decision 6. The bucket read ended at least twelve minutes ago, lies on the five-minute grid, and
     /// is exactly one bucket long.
     #[test]
     fn the_usage_bucket_is_the_newest_one_the_dashboard_has_had_time_to_fill() {
@@ -3063,7 +3063,7 @@ mod tests {
         );
     }
 
-    /// 決定 14. A switch that is down is still listed, every port `Disconnected`; reporting that
+    /// decision 14. A switch that is down is still listed, every port `Disconnected`; reporting that
     /// would raise a port-down alert per port beside the switch's own node-down one.
     #[test]
     fn a_switch_with_no_port_connected_reports_no_ports() {
@@ -3395,7 +3395,7 @@ mod tests {
         assert_eq!(lat.value, 22.0);
     }
 
-    /// ADR-164 増分 18: the Dashboard answers a row per probe destination. Two destinations are one
+    /// ADR-164 Inc.18: the Dashboard answers a row per probe destination. Two destinations are one
     /// uplink, and the uplink reports its worst.
     #[test]
     fn two_probe_destinations_of_one_uplink_are_one_reading_at_their_worst() {
@@ -3419,7 +3419,7 @@ mod tests {
         assert_eq!(of(METRIC_MERAKI_UPLINK_LATENCY_MS), vec![30.0]);
     }
 
-    /// ADR-164 増分 18: a row with no status word gives no reading. It used to be read as the empty
+    /// ADR-164 Inc.18: a row with no status word gives no reading. It used to be read as the empty
     /// word — down — and page someone.
     #[test]
     fn an_availability_row_with_no_status_gives_no_reading() {
@@ -3445,7 +3445,7 @@ mod tests {
         assert!(parse_uplink_loss_latency(&items).is_empty());
     }
 
-    /// ADR-164 決定 24: `failed` and `not connected` are different numbers, and the failed flag is
+    /// ADR-164 decision 24: `failed` and `not connected` are different numbers, and the failed flag is
     /// on every uplink row — 0 on the healthy ones — so an alert on it always has something to
     /// close on.
     #[test]
@@ -3476,7 +3476,7 @@ mod tests {
         assert_eq!(obs[0].samples.len(), 6);
     }
 
-    /// ADR-164 決定 26: a role only while the warm spare is enabled.
+    /// ADR-164 decision 26: a role only while the warm spare is enabled.
     #[test]
     fn ha_roles_are_read_only_from_an_enabled_pair() {
         let rows = vec![
@@ -3499,7 +3499,7 @@ mod tests {
         );
     }
 
-    /// ADR-164 決定 25, as a table: who counts on whose Auto VPN line.
+    /// ADR-164 decision 25, as a table: who counts on whose Auto VPN line.
     #[test]
     fn vpn_statuses_count_each_mxs_hubs_and_leave_out_a_peer_that_is_itself_down() {
         let row = |net: &str, serial: &str, status: &str, mode: &str, peers: &[(&str, &str)]| {
@@ -3796,7 +3796,7 @@ mod tests {
     fn a_settings_document_is_one_item_and_only_where_one_is_expected() {
         let one = page_items(r#"{"applianceIp":"10.0.0.1"}"#, Shape::Object).unwrap();
         assert_eq!(one.len(), 1);
-        // The other way round stays as strict as ADR-164 決定 19 made it.
+        // The other way round stays as strict as ADR-164 decision 19 made it.
         assert_eq!(page_items("[]", Shape::Object), Err(Stop::Malformed));
         assert_eq!(
             page_items(r#"{"applianceIp":"10.0.0.1"}"#, Shape::Array),
@@ -3804,7 +3804,7 @@ mod tests {
         );
     }
 
-    // ── What a collect reports (ADR-164 決定 18) ─────────────────────────────────────────────
+    // ── What a collect reports (ADR-164 decision 18) ─────────────────────────────────────────────
 
     fn one_observation() -> MerakiObservation {
         MerakiObservation {
@@ -3847,7 +3847,7 @@ mod tests {
         let empty_organization = MerakiCollected::default();
         assert_eq!(empty_organization.failure(), None);
 
-        // ADR-164 決定 25: one listing of a tier failed while another answered — that is a
+        // ADR-164 decision 25: one listing of a tier failed while another answered — that is a
         // failure now, and it says which listing.
         let one_listing = MerakiCollected {
             observations: vec![one_observation()],
@@ -3906,7 +3906,7 @@ mod tests {
         assert_eq!(MerakiFetchError::ALL.len(), 8);
     }
 
-    /// ADR-168 決定 5, the case the recorded organization did not have: two radios in one band. The
+    /// ADR-168 decision 5, the case the recorded organization did not have: two radios in one band. The
     /// utilization is per band and lands on the band's first slot; the SSID read numbers the radios
     /// the way a controller-walked access point's are (second 5 GHz radio = 12), so the second gets
     /// its channel and power with no utilization of its own. A band word nobody knows is dropped.

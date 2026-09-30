@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! `GET /api/v1/stream/config` — the change feed an open WebUI follows (ADR-019 増分 2).
+//! `GET /api/v1/stream/config` — the change feed an open WebUI follows (ADR-019 Inc.2).
 //!
 //! Each event is `{"revision": N}` and nothing else. The first is sent the moment the stream opens;
 //! after that one is sent whenever the revision moved, at most once per [`COALESCE`]. The browser

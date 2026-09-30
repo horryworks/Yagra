@@ -106,7 +106,7 @@ interface Props {
    *  4. the gutter carries the two names, rotated, with a direction mark added here (`mirror.ts`
    *     picks the glyph for how it looks AFTER the rotation — see the note on `ABOVE_MARK`).
    *
-   *  Pass the already-translated words (`IN` / `OUT`, `受信` / `送信`) — the marks are not theirs
+   *  Pass the already-translated words (`IN` / `OUT`, or their Japanese words) — the marks are not theirs
    *  to carry. */
   mirrored?: MirrorAxis;
   /** Share the cursor with every other chart given the same key: hovering one moves the crosshair

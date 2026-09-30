@@ -58,7 +58,7 @@ export function BulkTagModal({
         )
         // `applied < requested` is normal, not an error — a node can have been deleted, or lie
         // outside this caller's folder scope. Reporting both numbers rather than claiming the
-        // count asked for is the same choice the bulk move makes (ADR-124 決定 7).
+        // count asked for is the same choice the bulk move makes (ADR-124 decision 7).
         .then((r) =>
           partialOutcome(r.applied, r.requested, (n) => t('bulkTag.partial', n), false),
         ),

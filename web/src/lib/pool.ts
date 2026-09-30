@@ -130,7 +130,7 @@ export function inheritedGroupPool(
 /** The pool every one of these nodes is set to, or `null` when they disagree or none is set.
  *
  * 🚨 **A chip may only render as "current" when the answer is the same for every node in the
- * batch** (ADR-124 増分 10). Reading the first node's pool — or the right-clicked row's — would
+ * batch** (ADR-124 Inc.10). Reading the first node's pool — or the right-clicked row's — would
  * mark a chip selected while most of the selection sits elsewhere, which is the shape of claim
  * this feature exists to stop making.
  *

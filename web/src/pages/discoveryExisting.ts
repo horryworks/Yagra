@@ -57,7 +57,7 @@ export function selectedForImport<C extends { address: string }>(
   return candidates.filter((c) => rows[c.address]?.selected && isImportable(c.address, existing));
 }
 
-/** Candidates that look like a device node monitored at **another** address (ADR-139 増分 3), keyed
+/** Candidates that look like a device node monitored at **another** address (ADR-139 Inc.3), keyed
  *  by the candidate's own address string.
  *
  *  A mark only: such a row stays importable, because a site that reuses one private address plan

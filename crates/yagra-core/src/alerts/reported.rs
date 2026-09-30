@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Is anyone still reporting this node? — for a node Yagra never polls itself (ADR-064 増分 G).
+//! Is anyone still reporting this node? — for a node Yagra never polls itself (ADR-064 Inc.G).
 //!
 //! A wireless access point is answered for by its controller: core turns each inventory the
 //! controller's AP walk publishes into one result per imported AP (`wireless_fanout.rs`). When the
 //! controller stops answering, those results stop — and, deliberately, nothing replaces them
-//! (決定 9b: one controller must not raise an alert per AP, and ADR-156 決定 3: absence closes
+//! (decision 9b: one controller must not raise an alert per AP, and ADR-156 decision 3: absence closes
 //! nothing). So the AP's committed liveness simply stayed where it was. On the PoC an AC pair went
 //! dark for five hours and its five APs read `ok` the whole time, then `unknown` after a core
 //! restart for no reason anyone could see.
@@ -43,7 +43,7 @@ use super::AlertManager;
 pub(crate) const FRESH_FLOOR_SECS: u64 = 600;
 
 /// How many of the reporter's polls a report may miss before it is stale. Three, so one slow or
-/// incomplete walk (決定 9b drops an incomplete inventory whole) does not grey a controller's APs.
+/// incomplete walk (decision 9b drops an incomplete inventory whole) does not grey a controller's APs.
 const FRESH_POLLS: u64 = 3;
 
 /// How often [`run_report_watch`] looks for reports that went stale, or came back.

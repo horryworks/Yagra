@@ -29,7 +29,7 @@ const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const EMPTY_BOARD = { version: 3, boards: [{ id: 'b1', name: 'Board', widgets: [] }] };
 
 /**
- * The same board at the widget's NARROWEST allowed width — 4 of 12 columns, which ADR-069 増分 2
+ * The same board at the widget's NARROWEST allowed width — 4 of 12 columns, which ADR-069 Inc.2
  * lowered it to from 6. Seeded rather than dragged: the gesture belongs to `useResizeHandle` and
  * is tested in `resize.test.ts`; what no unit test can reach is whether the card is usable there.
  *
@@ -202,7 +202,7 @@ async function probeMirror(cell: import('@playwright/test').Locator) {
     // the whole column instead would find the line in the UPPER half, which the 0.035 ground
     // barely touches — a difference too small for any threshold to sit inside, which is what the
     // first version of this check measured.
-    // ⚠️ Which DIRECTION is down here changed with ADR-069 増分 2 (receive now), and this check
+    // ⚠️ Which DIRECTION is down here changed with ADR-069 Inc.2 (receive now), and this check
     // does not care: the argument is about the weight of the two grounds, not about direction.
     let seriesBelow = Infinity;
     for (let r = mid + 2; r < height - 2; r++) seriesBelow = Math.min(seriesBelow, near(r, series));
@@ -421,7 +421,7 @@ test.describe('with a link already plotted', () => {
     const legend = cell.locator('.u-legend .u-series');
     await expect(legend).toHaveCount(3);
 
-    // 🚨 The assertion this file exists for. Receive is plotted BELOW zero since ADR-069 増分 2,
+    // 🚨 The assertion this file exists for. Receive is plotted BELOW zero since ADR-069 Inc.2,
     // so its stored value is negative — and if `legendFormat` did not take the magnitude, the
     // readout would say `-8.0 Mbps`, a rate that cannot exist. Read the value cell alone: the
     // label beside it contains `router-a`, whose hyphen would make a "no minus sign" check on
@@ -457,14 +457,14 @@ test.describe('with a link already plotted', () => {
     // 🚨 The headline. Receive is 8 Mbps and transmit 2 Mbps in this fixture, so before ADR-128 the
     // window auto-fitted to one direction's extent and zero sat about three quarters of the way
     // along it. The rule being at the middle is the symmetric window, measured end to end.
-    // (Which half holds the 8 Mbps swapped with ADR-069 増分 2; the symmetry does not care.)
+    // (Which half holds the 8 Mbps swapped with ADR-069 Inc.2; the symmetry does not care.)
     expect(Math.abs(probe.ruleRow - probe.mid), 'the zero rule is not at the axis midpoint').
       toBeLessThanOrEqual(3);
     // …and it really is the rule, not the nearest thing to it: a plot with no rule at all would
     // still hand back *some* closest row, which is how this check could pass over an empty canvas.
     expect(probe.ruleDistance, 'nothing at the midpoint is the rule colour').toBeLessThan(40);
 
-    // Each half has a ground, and the two are told apart — which is the whole of 案 C.
+    // Each half has a ground, and the two are told apart — which is the whole of option C.
     expect(probe.above[3], 'the upper half has no ground').toBeGreaterThan(0);
     expect(probe.below[3], 'the lower half has no ground').toBeGreaterThan(0);
     expect(probe.above, 'both halves painted the same ground').not.toEqual(probe.below);
@@ -550,7 +550,7 @@ test.describe('with a link already plotted', () => {
   });
 });
 
-// ADR-069 増分 2 let this card be dragged down to 4 of 12 columns, where it had stopped at 6.
+// ADR-069 Inc.2 let this card be dragged down to 4 of 12 columns, where it had stopped at 6.
 // The doubt that came with it was not whether the grid would do it — `.mydash-span-4` has existed
 // since the board did and 29 other widgets use it — but whether THIS card is still usable there:
 // its header carries a title plus two `<select>`s, and `WIDGET_RANGES` says in its own comment
@@ -802,7 +802,7 @@ test('the rename box is wide enough for a long name', async ({ page }) => {
 // Two seams, and the second is the one nothing else in this repo can reach.
 //
 // The first is the standard one this file exists for: the card renders from the registry and the
-// placed widget mounts. The second is ADR-136 決定 3 — three vendor metrics that do NOT mean the
+// placed widget mounts. The second is ADR-136 decision 3 — three vendor metrics that do NOT mean the
 // same thing are plotted on one chart, and the only thing making that honest is that each number
 // carries its own unit noun. `vpnSessions.test.ts` can prove every candidate *has* a unit; it
 // cannot prove the noun reaches the screen, because that crosses `metricUnitSuffix`, i18n and the
@@ -911,7 +911,7 @@ test.describe('VPN sessions, on devices that report one', () => {
     const chips = cell.locator('.vpnsess-chip');
     await expect(chips).toHaveCount(2, { timeout: 15_000 });
 
-    // 🚨 The assertion ADR-136 決定 3 turns on. Both halves matter: the number proves the right
+    // 🚨 The assertion ADR-136 decision 3 turns on. Both halves matter: the number proves the right
     // node's series was read, and the noun proves the unit survived `metricUnitSuffix` → i18n →
     // render. Two bare numbers here would be a plausible, wrong card — "148 and 74 of the same
     // thing" — and nothing else in the repo looks at this.

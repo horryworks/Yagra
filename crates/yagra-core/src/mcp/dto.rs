@@ -434,10 +434,10 @@ pub struct NodeStatusDto {
     /// Set when `node.state` is **not a current reading** — what feeds this node has stopped
     /// answering. Two cases, by `cause`. `meraki_api`: the Cisco Meraki Dashboard API is not
     /// answering the node's organization, and the state is the last one collected (ADR-164
-    /// 決定 18). `wireless_controller`: the node is a wireless access point no controller has
+    /// decision 18). `wireless_controller`: the node is a wireless access point no controller has
     /// reported lately, so an `ok` it last had reads `unknown`, while any other state is kept —
     /// `unreachable` if it was down when last reported, `maintenance`, or the colour of an alert
-    /// still open on it (ADR-064 増分 G); `since_unix_ms` is the last report. `null` otherwise.
+    /// still open on it (ADR-064 Inc.G); `since_unix_ms` is the last report. `null` otherwise.
     ///
     /// Mirrors `NodeStatus.collection_fault` on `GET /api/v1/nodes/{node_id}/status`, from the same
     /// function. ⚠️ Read it before concluding such a node is healthy or broken: neither kind raises
@@ -487,7 +487,7 @@ pub struct NodeStatusDto {
     /// import settings, or an imported AP's entry in the AP list. Mirrors `NodeDetail.wireless`,
     /// from the same function, so a scoped caller's controllers are narrowed the same way.
     pub wireless: Option<crate::api::wireless::NodeWireless>,
-    /// A Meraki MX's warm-spare pair (ADR-164 決定 26). Mirrors `NodeDetail.meraki_pair`, from the
+    /// A Meraki MX's warm-spare pair (ADR-164 decision 26). Mirrors `NodeDetail.meraki_pair`, from the
     /// same function and narrowed to the same scope.
     pub meraki_pair: Option<crate::api::meraki::MerakiPairView>,
     /// The Meraki organization and network this node sits in, by name (ADR-185). Mirrors

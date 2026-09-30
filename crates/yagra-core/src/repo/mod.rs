@@ -241,7 +241,7 @@ pub struct ImportOutcome {
 ///
 /// `visible` is the caller's scope applied to the node's folder. A node the caller cannot see is
 /// still returned — importing its address is refused either way, so that the address is taken is
-/// disclosed regardless — and it is the API layer that withholds the name and id (ADR-139 決定 3).
+/// disclosed regardless — and it is the API layer that withholds the name and id (ADR-139 decision 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressMatch {
     pub address: IpAddr,
@@ -269,7 +269,7 @@ pub struct AddressClaim {
 }
 
 /// A device node the caller may see, with what a Discovery candidate is compared against to say it
-/// may be the same device at another address (ADR-139 増分 3).
+/// may be the same device at another address (ADR-139 Inc.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceIdentity {
     pub id: Uuid,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // What a modified click does to the tree's **working set** — the nodes checked for a bulk action
-// (ADR-124 決定 2). Separate from the primary selection in every way that matters:
+// (ADR-124 decision 2). Separate from the primary selection in every way that matters:
 //
 //   - the primary selection drives the right-hand pane, lives in `?sel=` and is single;
 //   - the working set drives the move controls, lives only in the page's state, and is a set.
@@ -8,15 +8,15 @@
 // A plain click still drives the pane exactly as it did before this file existed, including
 // ADR-073's "click the selected row again to clear it". Ctrl / Shift never touch `?sel=`, so the
 // two cannot fight — which is the whole reason they are two things rather than one widened
-// selection type. What a plain click *also* does, since 増分 1, is set the Shift anchor: it
+// selection type. What a plain click *also* does, since Inc.1, is set the Shift anchor: it
 // changes nothing the operator can see on its own, and without it a range can never start from
 // an ordinary click (see `clickOutcome`).
 //
 // 🚨 **Two states, one selection — the operator reads the marked rows as one set, and they are
 // right.** The pane's row carries an accent bar and the batch's rows carry a tint, so a plain
 // click followed by Ctrl clicks paints every row involved. Both modified gestures therefore have
-// to count that first click: Shift does it through the anchor (増分 1) and Ctrl through
-// `batchStart` (増分 3). Before 増分 3 only Shift did, so the same screen showed three marked rows
+// to count that first click: Shift does it through the anchor (Inc.1) and Ctrl through
+// `batchStart` (Inc.3). Before Inc.3 only Shift did, so the same screen showed three marked rows
 // and moved two.
 //
 // ⚠️ **The working set holds whole nodes, not ids.** Filtering the tree changes which nodes are
@@ -137,7 +137,7 @@ export function clickGesture(e: {
 /**
  * Everything a click on a node row is decided from.
  *
- * One object rather than five positional arguments (増分 3): `anchorId` and the pane selection's
+ * One object rather than five positional arguments (Inc.3): `anchorId` and the pane selection's
  * id are both nullable strings, and two adjacent positional parameters of the same type are a
  * swap that compiles, runs, and picks the wrong row to start a batch at.
  */
@@ -165,14 +165,14 @@ function nodeOnScreen(flat: readonly FlatRow[], id: string): NodeSummary | null 
 }
 
 /**
- * The set a Ctrl click adds to (ADR-124 増分 3).
+ * The set a Ctrl click adds to (ADR-124 Inc.3).
  *
  * 🚨 **An empty working set starts at the row the pane is showing.** Without this, a plain click
  * followed by Ctrl clicks loses the first node: the plain click empties the batch, so the Ctrl
  * clicks start from nothing and only they are collected. Reported from the running box with a
  * screenshot of three marked rows, two of which would move.
  *
- * The rule is what Shift has done since 増分 1 — a plain click sets the anchor and `rangeChecked`
+ * The rule is what Shift has done since Inc.1 — a plain click sets the anchor and `rangeChecked`
  * includes both ends — so this is the same first click being counted by the other modifier, not a
  * new idea. It is also what every file manager does.
  *
@@ -202,7 +202,7 @@ export interface ClickOutcome {
 }
 
 /**
- * What a click on a node row does, once the modifier keys are read (ADR-124 決定 2/4 + 増分 1).
+ * What a click on a node row does, once the modifier keys are read (ADR-124 decision 2/4 + Inc.1).
  *
  * 🚨 **A plain click sets the anchor.** ADR-124 shipped with "a plain click changes not one byte",
  * which left `anchorId` null until a Ctrl or Shift click had already happened — so the ordinary
@@ -216,8 +216,8 @@ export interface ClickOutcome {
  * Every file manager anchors on a plain click. Nothing else in the tree reads `anchorId`, so
  * setting it costs one number and buys the gesture people already know.
  *
- * 🚨 **And the Ctrl click counts that same first click** (増分 3, `batchStart`). Shift had counted
- * it since 増分 1 and Ctrl had not, so one gesture kept the row the operator started from and the
+ * 🚨 **And the Ctrl click counts that same first click** (Inc.3, `batchStart`). Shift had counted
+ * it since Inc.1 and Ctrl had not, so one gesture kept the row the operator started from and the
  * other silently dropped it — while the tree painted both rows as marked.
  */
 export function clickOutcome(
@@ -235,7 +235,7 @@ export function clickOutcome(
     case 'range': {
       // Deliberately `ctx.checked`, never `batchStart`: the anchor already carries the first
       // click, and seeding the new-run branch (the anchor's row has gone) would quietly add a row
-      // the range does not cover — the failure 決定 4 exists to refuse.
+      // the range does not cover — the failure decision 4 exists to refuse.
       const next = rangeChecked(ctx.flat, ctx.anchorId, target, ctx.checked);
       // Null ⇒ the clicked node is not among the visible rows at all. Leave the set alone rather
       // than guessing; the click still selects nothing, because Shift never drives the pane.

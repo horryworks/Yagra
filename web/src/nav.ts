@@ -131,7 +131,7 @@ export const NAV: NavSection[] = [
         items: [
           // The keys for reaching monitored devices. They lived under Settings ▸ Access next to
           // Users, Roles and Authentication — which is how a person signs in to Yagra, a different
-          // subject with a different blast radius (ADR-055 決定 4 / R8). A device profile is
+          // subject with a different blast radius (ADR-055 decision 4 / R8). A device profile is
           // defined as "which sets, how often, WITH WHICH CREDENTIAL", so this is a part of
           // collection, and it comes first because nothing below it can be tried without it.
           {
@@ -238,7 +238,7 @@ export const NAV: NavSection[] = [
           },
           // Event alert rules stays under Alerts, not Events. It is a thing that PRODUCES alerts,
           // and splitting the two rule screens across two tabs would be the same mistake this
-          // increment is fixing, one level up (ADR-055「採らなかった案」).
+          // increment is fixing, one level up (ADR-055, "options not taken").
           //
           // ⚠️ It sits directly under Metric alert rules, and the pairing is the point: the two
           // ways an alert can come into existence, side by side, named the same way. Routing used
@@ -273,7 +273,7 @@ export const NAV: NavSection[] = [
     ],
   },
   {
-    // Passive monitoring gets its own tab (ADR-055 決定 2). Its pipeline used to be split across
+    // Passive monitoring gets its own tab (ADR-055 decision 2). Its pipeline used to be split across
     // two: receiving and reading were under Alerts, relaying was under Settings ▸ Forwarding, and
     // nothing named the whole. The URLs had to move with it — `sectionForPath` matches on
     // `'/' + section.key`, so a screen at `/alerts/events` cannot light an `Events` tab. Old
@@ -421,7 +421,7 @@ export const NAV: NavSection[] = [
           },
           // About sits at the end of System, not in Personal. It describes the deployment (build,
           // licence, links), which is the same subject as everything above it; `Personal` means
-          // "settings that affect only me", and a version number is not one (ADR-055 決定 6).
+          // "settings that affect only me", and a version number is not one (ADR-055 decision 6).
           {
             labelKey: 'settings.about',
             descKey: 'descriptions.settingsAbout',
@@ -432,7 +432,7 @@ export const NAV: NavSection[] = [
       },
       {
         // Who may sign in to Yagra and what they may do. Device credentials are NOT this — they
-        // moved to Nodes ▸ Monitoring setup (ADR-055 決定 4).
+        // moved to Nodes ▸ Monitoring setup (ADR-055 decision 4).
         labelKey: 'groups.access',
         items: [
           {
@@ -469,7 +469,7 @@ export const NAV: NavSection[] = [
       },
       // There is no `Personal` group. It held Preferences alone, and ADR-055 Inc.7 moved that into
       // the account badge — a shelf that is only the signed-in person's by construction, which is
-      // the line 決定 6 wanted the group header to draw. The header was the weaker way to draw it.
+      // the line decision 6 wanted the group header to draw. The header was the weaker way to draw it.
     ],
   },
 ];
@@ -546,33 +546,33 @@ export function labelKeysForPath(pathname: string): {
   return { sectionKey: hit.section.labelKey, labelKey: hit.item.labelKey };
 }
 
-// ── Where a top-bar tab or a menu item goes back to (ADR-134 増分 2, 3) ───────────────────────
+// ── Where a top-bar tab or a menu item goes back to (ADR-134 Inc.2, 3) ───────────────────────
 //
 // `NavSection.path` above is a constant, and its own doc says so: the tab lands on the section's
 // first child, whatever the operator was last looking at. So Dashboard always opened Shared
 // dashboard, never the My-dashboard board the operator had left — which is conspicuous now that
-// the board itself is remembered (増分 1), and has been true since the shell's first commit.
+// the board itself is remembered (Inc.1), and has been true since the shell's first commit.
 //
 // The same was true one level down: a sidebar item linked to its bare path, so searching All nodes,
-// opening Discovery and clicking All nodes again dropped the term (増分 3). So there are two
+// opening Discovery and clicking All nodes again dropped the term (Inc.3). So there are two
 // memories — per section for the tab, per item for the sidebar — written from one route.
 //
 // Both are read here and nowhere else. All pure: one function decides what may be written, one
 // decides what a stored value is worth, and a reader for each memory calls it.
 
-/** How long a remembered route may be before its query is dropped (決定 9). */
+/** How long a remembered route may be before its query is dropped (decision 9). */
 export const MAX_REMEMBERED_ROUTE = 512;
 
 /**
  * What to remember for the route the operator has arrived on, or `null` when that route is not one
  * of the menu's own screens — a node detail, `/login`, a vacated address mid-redirect.
  *
- * One answer for both memories: the section's (the top-bar tab, ADR-134 増分 2) and the item's (the
- * sidebar and the mobile drawer, 増分 3). `itemPath` is the menu item the route is on, which is the
+ * One answer for both memories: the section's (the top-bar tab, ADR-134 Inc.2) and the item's (the
+ * sidebar and the mobile drawer, Inc.3). `itemPath` is the menu item the route is on, which is the
  * key the item memory is kept under.
  *
- * 🚨 **決定 8 lives here.** Remembering "wherever I am" would land the Nodes tab on one device's
- * detail page, and on a 404 once that node is deleted. The query string *is* carried (決定 9), and
+ * 🚨 **decision 8 lives here.** Remembering "wherever I am" would land the Nodes tab on one device's
+ * detail page, and on a 404 once that node is deleted. The query string *is* carried (decision 9), and
  * what makes that safe is not this function: a filter row cannot be closed while it narrows and
  * `Clear all filters (N)` is drawn beside it (ADR-053 Inc.9), so a resurrected filter says so on
  * screen. Remove either of those and this decision needs revisiting.
@@ -624,7 +624,7 @@ export function sectionLandingPath(
 /**
  * Where a menu item navigates (the sidebar and the mobile drawer): the last route visited on that
  * item's screen — its search term, filters and selection — else the item's bare path (ADR-134
- * 増分 3, 決定 13).
+ * Inc.3, decision 13).
  *
  * Kept per item rather than read from the section's memory, because two items share one section:
  * searching All nodes and then opening Discovery overwrites the Nodes section's memory, and the

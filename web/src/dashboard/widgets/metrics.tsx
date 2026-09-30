@@ -335,7 +335,7 @@ function useNodeInventories(nodeIds: readonly string[]): Record<string, VpnInven
  *  Which devices are plotted is not decided here (ADR-072): adding one changes what the card is
  *  about, so it lives in {@link VpnSessionsSettings} behind the ⚙ the frame draws while the board is
  *  being customized. There is no unit toggle — a session count has one unit, and it is the metric's
- *  own (ADR-136 決定 3), not a lens the operator picks. */
+ *  own (ADR-136 decision 3), not a lens the operator picks. */
 export function VpnSessionsActions({ instance, setSettings }: ViewActionProps) {
   const { t } = useTranslation('dashboard');
   const sel = readVpnSettings(instance.settings);
@@ -501,7 +501,7 @@ export function VpnSessionsWidget({ instance }: WidgetProps) {
   // ⚠️ No `error` branch, deliberately: the fetcher above is a `Promise.allSettled`, which never
   // rejects, so `usePolled` can only ever hand back `error: null` here. One on this line would read
   // as handled failure — which is how a `401` on every request looked like quiet ports on the
-  // sibling widget for the whole of ADR-123 増分 1. What a failure is reported as comes from
+  // sibling widget for the whole of ADR-123 Inc.1. What a failure is reported as comes from
   // `everyNodeFailed`, below.
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
 
@@ -513,7 +513,7 @@ export function VpnSessionsWidget({ instance }: WidgetProps) {
     <>
       {notes}
       {/* The numbers. Each carries its own unit noun, which is what makes plotting a Cisco session
-          count beside a FortiGate user count honest rather than merely compact (ADR-136 決定 3). */}
+          count beside a FortiGate user count honest rather than merely compact (ADR-136 decision 3). */}
       <ul className="vpnsess-chips">
         {readings.map((r) => (
           <li key={r.nodeId} className="vpnsess-chip">

@@ -33,7 +33,7 @@ pub enum Filing {
     /// Exactly one folder's range claims the address. `prefix` is the range that did it.
     Matched { folder: Uuid, prefix: String },
     /// Two or more folders claim it at the same prefix length. Never resolved automatically
-    /// (ADR-124 決定 5).
+    /// (ADR-124 decision 5).
     Ambiguous { folders: usize },
     /// No folder's range contains the address.
     Unmatched,
@@ -81,8 +81,8 @@ pub enum FilingReason {
     NoAddress,
     /// The organization does not file by IP range: it goes under the network's folder.
     NotAsked,
-    /// An MX whose network's LAN side has not been read yet (ADR-164 決定 28): its address is not
-    /// known, so no import — automatic or by hand — takes it until a sync has read it (決定 39).
+    /// An MX whose network's LAN side has not been read yet (ADR-164 decision 28): its address is not
+    /// known, so no import — automatic or by hand — takes it until a sync has read it (decision 39).
     /// Only the device list says this; an import never files a device under it.
     LanPending,
 }
@@ -326,7 +326,7 @@ mod tests {
 
     /// The WebUI keys a sentence on each token (`meraki.devices.filing.<token>`), so the spelling
     /// is a contract. Only a match carries a folder; the others all mean the network's folder, or
-    /// (`lan_pending`, ADR-164 決定 39) no import yet.
+    /// (`lan_pending`, ADR-164 decision 39) no import yet.
     #[test]
     fn every_reason_has_the_token_the_webui_keys_on_and_only_a_match_names_a_folder() {
         let tokens: Vec<String> = FilingReason::ALL

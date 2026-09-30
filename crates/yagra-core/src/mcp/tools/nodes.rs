@@ -496,7 +496,7 @@ impl YagraMcp {
         let serial_number = crate::api::nodes::serial_number_of(serial_number, meraki.as_ref());
         let wireless =
             crate::api::wireless::node_wireless(&self.state, admin, scope, p.node_id).await;
-        // The same pair, from the same function, narrowed to the same scope (ADR-164 決定 26).
+        // The same pair, from the same function, narrowed to the same scope (ADR-164 decision 26).
         let meraki_pair = crate::api::meraki::node_meraki_pair(
             &self.state,
             admin,
@@ -510,7 +510,7 @@ impl YagraMcp {
             Some(_) => crate::api::meraki::node_meraki_site(admin, p.node_id).await,
             None => None,
         };
-        // The product type and the repeater mark the list carries (ADR-168 決定 11, ADR-175), read
+        // The product type and the repeater mark the list carries (ADR-168 decision 11, ADR-175), read
         // only for a Meraki node.
         let product = match meraki {
             Some(_) => admin

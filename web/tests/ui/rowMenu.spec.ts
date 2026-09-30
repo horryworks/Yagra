@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The inventory tree's row menu — the regression jsdom cannot reach (ADR-052 決定 7, 出典 3).
+// The inventory tree's row menu — the regression jsdom cannot reach (ADR-052 decision 7, source 3).
 //
 // TWO SHIPPED BUGS LIVE HERE, and both are invisible without a layout engine:
 //
@@ -43,7 +43,7 @@ test.use({
 
 test('a row menu opens inside the viewport, however far down the row is', async ({ page }) => {
   await page.goto('/nodes');
-  // Group rows only () — a node row has no ＋, and the last row in the tree is one.
+  // Group rows only () — a node row has no +, and the last row in the tree is one.
   const rows = page.locator('.ntree-grow');
   await expect(rows.first()).toBeVisible();
 
@@ -76,7 +76,7 @@ test('a row menu opens inside the viewport, however far down the row is', async 
     1000,
   );
 
-  // The ＋ is hover-revealed, so hovering is part of the interaction, not test scaffolding.
+  // The + is hover-revealed, so hovering is part of the interaction, not test scaffolding.
   await anchor.hover();
   const trigger = anchor.getByRole('button', { name: 'Add' });
   await trigger.click();
@@ -142,12 +142,12 @@ test('Escape closes the menu and returns focus to the trigger', async ({ page })
 
 
 test('Escape does not scroll the tree while returning focus to the trigger', async ({ page }) => {
-  // The tree's scroll position changes when a human scrolls it and not otherwise (ADR-124 増分 5),
+  // The tree's scroll position changes when a human scrolls it and not otherwise (ADR-124 Inc.5),
   // and closing a popover over a clipped trigger is the gesture most likely to break that: the
   // trigger lives inside a virtualized scroller and `focusPopoverTrigger` focuses it on the way
   // out.
   //
-  // ⚠️ **This pins the property, NOT the one-line fix in `AnchoredPopover` (増分 5 決定 D), and it
+  // ⚠️ **This pins the property, NOT the one-line fix in `AnchoredPopover` (Inc.5 decision D), and it
   // cannot** — reverting that line leaves this test green, which was measured. The reason is
   // `ui-conventions.md`'s own rule: a panel of *choices* leaves focus on the trigger, so while the
   // menu is open the trigger is already `document.activeElement` (probed) and re-focusing it moves
@@ -172,13 +172,13 @@ test('Escape does not scroll the tree while returning focus to the trigger', asy
   expect(room, 'the tree does not scroll — nothing here could move').toBeGreaterThan(300);
 
   // 137 is deliberately not a multiple of `--row-h` (30px), so the top row is cut by 17px — and a
-  // row's ＋ is vertically centred, which puts its top edge above the pane's.
+  // row's + is vertically centred, which puts its top edge above the pane's.
   await scroller.evaluate((el) => {
     el.scrollTop = 137;
   });
   await page.waitForTimeout(60);
 
-  // Reveal the top row's actions by hovering it for real, then take the ＋'s live rect.
+  // Reveal the top row's actions by hovering it for real, then take the +'s live rect.
   const rowPoint = await scroller.evaluate((el) => {
     const box = el.getBoundingClientRect();
     const top = [...el.querySelectorAll<HTMLElement>('.ntree-grow')].find((r) => {
@@ -197,7 +197,7 @@ test('Escape does not scroll the tree while returning focus to the trigger', asy
     const t = el.querySelector<HTMLElement>('.ntree-row:hover [aria-haspopup="menu"]');
     if (!t) return null;
     const b = t.getBoundingClientRect();
-    // Inside the ＋ AND inside the pane, so the click lands on something the operator can see.
+    // Inside the + AND inside the pane, so the click lands on something the operator can see.
     return { x: b.left + b.width / 2, y: (Math.max(b.top, box.top) + b.bottom) / 2, cut: b.top < box.top };
   });
   expect(trigger, 'the hovered row revealed no ＋ trigger').not.toBeNull();

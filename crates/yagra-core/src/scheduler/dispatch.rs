@@ -7,7 +7,7 @@
 //!
 //! 🚨 **This file decides what gets polled, so getting it wrong stops a node being monitored with
 //! nothing raised** (the shape v0.2.13 shipped). It held eight concrete repositories until
-//! ADR-111 and therefore had **no tests** — ADR-096 決定 3 and ADR-098 決定 4 each measured that
+//! ADR-111 and therefore had **no tests** — ADR-096 decision 3 and ADR-098 decision 4 each measured that
 //! and stopped. The tests below are what the seams bought, and roughly half of them assert a
 //! store was **not** queried: the per-node round trips [`MonitorHints`] exists to remove were
 //! previously guarded by nothing but a comment.
@@ -951,7 +951,7 @@ mod tests {
     /// ⚠️ **It cannot pin the whole rule, and the gap is named rather than hidden.** A bound
     /// credential that fails to open is the one input where the two are meant to disagree —
     /// `resolve_snmp_auth` gives up and this still says `true`. That case is asserted here as the
-    /// intended difference (ADR-119 決定 3): showing an empty tab is recoverable, hiding a tab that
+    /// intended difference (ADR-119 decision 3): showing an empty tab is recoverable, hiding a tab that
     /// holds rows is not. A **third** entrance into `resolve_snmp_auth` would drift past both.
     #[tokio::test]
     async fn snmp_configured_for_agrees_with_resolve_snmp_auth() {
@@ -1002,7 +1002,7 @@ mod tests {
             "and `snmp_configured_for` deliberately still says yes — see its doc"
         );
     }
-    /// 🚨 **Current behaviour, recorded rather than endorsed** (ADR-111 決定 6): a bound `snmp_v3`
+    /// 🚨 **Current behaviour, recorded rather than endorsed** (ADR-111 decision 6): a bound `snmp_v3`
     /// credential that does not parse falls through to the environment's **v2c** community, so a
     /// device that was configured for USM is then polled with a community string.
     ///
@@ -1243,7 +1243,7 @@ mod tests {
     ///
     /// ⚠️ **The other half of that invariant is out of reach and is not claimed here.** "A failure
     /// keeps the *previously built* plan" needs a success, then an expiry, then a failure — and
-    /// the expiry needs a clock this cache does not take as an argument (ADR-111 決定 6). What is
+    /// the expiry needs a clock this cache does not take as an argument (ADR-111 decision 6). What is
     /// proved below is that the retry happens; what is not proved is what the retry would find.
     #[tokio::test]
     async fn a_failed_plan_refresh_does_not_advance_the_cache_clock() {
@@ -1378,7 +1378,7 @@ mod tests {
     /// warn, then fall back to the environment community.
     ///
     /// 🚨 Recorded, not endorsed — see `a_malformed_v3_credential_falls_through_to_the_env_community`
-    /// and ADR-111 決定 6. This is the second door into that behaviour, and it is the one a KEK
+    /// and ADR-111 decision 6. This is the second door into that behaviour, and it is the one a KEK
     /// problem opens: every bound credential in the deployment fails at once, and the whole fleet
     /// silently starts speaking v2c with whatever `YAGRA_SNMP_COMMUNITY` happens to hold.
     #[tokio::test]

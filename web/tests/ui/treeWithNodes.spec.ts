@@ -120,7 +120,7 @@ test('its chip says it is on, and removing the chip switches it off', async ({ p
   await pressInventorySwitch(page, HIDE_EMPTY);
   await page.keyboard.press('Escape');
   // The switch is folded away once the popover closes, so the chip is the only thing on screen
-  // that says why a folder is missing (ADR-177 決定 3).
+  // that says why a folder is missing (ADR-177 decision 3).
   const chip = filterChips(page).getByRole('button', { name: 'Remove Empty folders hidden' });
   await expect(chip).toHaveCount(1);
   await chip.click();

@@ -232,7 +232,7 @@ export function getToken(): string | null {
   return authToken;
 }
 
-// ── Anonymous preview (ADR-123 決定 8) ────────────────────────────────────────────────────────
+// ── Anonymous preview (ADR-123 decision 8) ────────────────────────────────────────────────────────
 //
 // While this is on, every request goes out **without** the bearer token, so a signed-in admin sees
 // exactly what an anonymous visitor sees. It is the only way to find a widget whose `reads`
@@ -781,7 +781,7 @@ export const api = {
     state?: string;
     kind?: string;
     pool?: string;
-    /** One exact IP address, compared as an address by the server (ADR-139 増分 2). */
+    /** One exact IP address, compared as an address by the server (ADR-139 Inc.2). */
     address?: string;
   }): Promise<NodePage> =>
     apiGet('/api/v1/nodes', {
@@ -1016,10 +1016,10 @@ export const api = {
       name?: string;
       profile_id?: string | null;
       credential_id?: string | null;
-      /** Maker and model a Detect classified (ADR-179 増分 2); omitted when nothing was probed. */
+      /** Maker and model a Detect classified (ADR-179 Inc.2); omitted when nothing was probed. */
       vendor?: string;
       model?: string;
-      /** The folder, or the fallback when filing by range finds none (ADR-179 増分 8). Omitted:
+      /** The folder, or the fallback when filing by range finds none (ADR-179 Inc.8). Omitted:
        *  the tree root. */
       group_id?: string;
       /** File into the folder whose IP range holds the address, as the range-scan import does. */
@@ -1028,7 +1028,7 @@ export const api = {
   ): Promise<ImportResult> =>
     apiPost('/api/v1/discovered-endpoints/{id}/import', { path: { id }, body }),
 
-  /** Detect one endpoint's profile and credential (ADR-179 増分 2): a one-address range scan, sent
+  /** Detect one endpoint's profile and credential (ADR-179 Inc.2): a one-address range scan, sent
    *  through the observing node's pool. Read the answer with `getDiscoveryScan(scan_id)`. */
   probeDiscoveredEndpoint: (id: string, credentialIds: string[]) =>
     apiPost('/api/v1/discovered-endpoints/{id}/probe', { path: { id }, body: { credential_ids: credentialIds } }),
@@ -1106,7 +1106,7 @@ export const api = {
   ): Promise<void> =>
     apiPut('/api/v1/meraki/orgs/{id}/import-settings', { path: { id }, body }),
 
-  /** Ask for the whole org to be read again now (ADR-164 決定 32). Answers 202 at once: the read
+  /** Ask for the whole org to be read again now (ADR-164 decision 32). Answers 202 at once: the read
    *  runs in the background for minutes and the org shows it as `full_sync`; how it ended is the
    *  org's `last_sync_*`. Rejects with 409 while the org or Meraki polling is paused. */
   syncMerakiOrg: (id: string): Promise<MerakiFullSync> =>
@@ -1125,7 +1125,7 @@ export const api = {
   importMerakiDevices: (body: {
     org_uuid: string;
     monitored_network_ids?: string[];
-    /** Serials only: the server reads every other fact from its inventory (ADR-164 決定 39). */
+    /** Serials only: the server reads every other fact from its inventory (ADR-164 decision 39). */
     devices: { serial: string }[];
     file_by_prefix?: boolean;
   }): Promise<MerakiImported> => apiPost('/api/v1/meraki/import', { body }),
@@ -1184,7 +1184,7 @@ export const api = {
   }): Promise<NetboxTestResult> => apiPost('/api/v1/netbox/test', { body }),
 
   /** Ask for one server to be synced now, rather than waiting for its cadence. Answers 202 at
-   *  once; the leader's loop runs it (ADR-172 決定 1), and the server row says how it went. */
+   *  once; the leader's loop runs it (ADR-172 decision 1), and the server row says how it went. */
   syncNetboxServer: (id: string): Promise<NetboxSyncView> =>
     apiPost('/api/v1/netbox/servers/{id}/sync', { path: { id } }),
 
@@ -1220,7 +1220,7 @@ export const api = {
     }),
 
   /** Every threshold rule that reaches one port, from any scope level, each flagged with
-   *  whether it is in force (ADR-076 決定 11).
+   *  whether it is in force (ADR-076 decision 11).
    *
    *  Not a filter over `listThresholds`: which rules reach a port depends on the node's profile,
    *  tag values and folder chain resolved against the ruleset, which only the server can do — and
@@ -1324,7 +1324,7 @@ export const api = {
     apiDelete('/api/v1/pools/{name}', { path: { name } }),
 
   /** Point a pool's members at one that still has a poller, until its own site is back
-   *  (ADR-107 増分 4). Reversible — `restorePool` puts each member back where this found it.
+   *  (ADR-107 Inc.4). Reversible — `restorePool` puts each member back where this found it.
    *
    *  🚨 Only worth doing when THIS deployment can reach those devices. A site poller usually exists
    *  because it cannot, and covering them from here turns one accurate pool alert into a false
@@ -1344,7 +1344,7 @@ export const api = {
   setNodePool: (id: string, pool: string): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/pool', { path: { node_id: id }, body: { pool } }),
 
-  /** Poll MANY nodes now, in one request (ADR-124 増分 12) — the batch form of `pollNode`.
+  /** Poll MANY nodes now, in one request (ADR-124 Inc.12) — the batch form of `pollNode`.
    *
    *  ⚠️ `dispatched` can be lower than `requested`: an id may name a node deleted since the page
    *  loaded, or one outside this token's scope. `jobs` counts the poll jobs published, which is
@@ -1354,7 +1354,7 @@ export const api = {
   ): Promise<{ requested: number; dispatched: number; jobs: number }> =>
     apiPost('/api/v1/nodes/poll', { body: { node_ids: nodeIds } }),
 
-  /** Move MANY nodes to one poll-pool (`''` ⇒ back to inherited) in one request (ADR-124 増分 10).
+  /** Move MANY nodes to one poll-pool (`''` ⇒ back to inherited) in one request (ADR-124 Inc.10).
    *
    *  Re-homing a site onto different pollers rarely follows folder boundaries, so neither
    *  `setNodeGroupPool` (a whole folder) nor `setNodePool` (one node, one request) serves it.
@@ -1375,14 +1375,14 @@ export const api = {
   // `setNodeGroup` (`PUT /nodes/{node_id}/group`) was here until ADR-124 Inc.4 and is gone: the
   // drop was its last caller, and it now sends `moveNodes` like every other move on the screen.
   // **The endpoint stays** — it is published in the OpenAPI document and an external client may
-  // hold it — but nothing in the WebUI reaches it, which is also what takes 決定 8's unscoped
+  // hold it — but nothing in the WebUI reaches it, which is also what takes decision 8's unscoped
   // write out of the operator's hands. Do not add a second client for it.
 
   /** Move MANY nodes into one folder (or `null` to ungroup them all) in one request.
    *
    *  `placement` names the sibling node to land next to (`before` or `after`, not both); omitted
    *  appends to the end of the folder, which is what the dialogs and the selection bar send.
-   *  🚨 **This is the whole of ADR-124 増分 8** — a drag between two rows used to call the
+   *  🚨 **This is the whole of ADR-124 Inc.8** — a drag between two rows used to call the
    *  single-node `placeNode` for one node and silently append for several, so the same gesture
    *  answered differently at one node and at three.
    *
@@ -1398,14 +1398,14 @@ export const api = {
       body: { node_ids: nodeIds, group_id: groupId, ...placement },
     }),
 
-  /** Delete MANY nodes in one request (ADR-124 増分 6).
+  /** Delete MANY nodes in one request (ADR-124 Inc.6).
    *
    *  ⚠️ `deleted` can be lower than `requested`: an id may name a node already gone, or one in a
    *  folder this token cannot see. Show both numbers rather than the count that was asked for. */
   deleteNodes: (nodeIds: string[]): Promise<{ requested: number; deleted: number }> =>
     apiPost('/api/v1/nodes/delete', { body: { node_ids: nodeIds } }),
 
-  /** Which folder's IP range contains each of these nodes' addresses (ADR-124 決定 5/6).
+  /** Which folder's IP range contains each of these nodes' addresses (ADR-124 decision 5/6).
    *
    *  **Writes nothing.** It proposes; the move that may follow is `moveNodes`. The containment
    *  test runs in PostgreSQL because a scoped caller is served breadcrumb folders with their
@@ -1419,7 +1419,7 @@ export const api = {
     apiPost('/api/v1/nodes/move-preview/subtree', { body: { group_id: groupId } }),
 
   /** Apply what the IP-range preview proposed: every destination in one request and one
-   *  transaction, so a failure moves nothing (ADR-172 決定 2). */
+   *  transaction, so a failure moves nothing (ADR-172 decision 2). */
   moveNodesByPrefix: (
     destinations: readonly { groupId: string; nodeIds: string[] }[],
   ): Promise<{ results: { group_id: string; requested: number; moved: number }[] }> =>
@@ -1445,7 +1445,7 @@ export const api = {
       body: { opt_out: optOut },
     }),
 
-  // `placeNode` (`PUT /nodes/{node_id}/placement`) was here until ADR-124 増分 8 and is gone, for
+  // `placeNode` (`PUT /nodes/{node_id}/placement`) was here until ADR-124 Inc.8 and is gone, for
   // the same reason `setNodeGroup` above went in Inc.4: the drag was its only caller, and a drop
   // beside a sibling now sends `moveNodes` with `before`/`after` whether it carries one node or
   // thirty. **The endpoint stays** — published in the OpenAPI document, and an external client may
@@ -2459,7 +2459,7 @@ export const api = {
   /** Maintenance windows (nodes covered by an active one are in `maintenance` state). */
   listMaintenanceWindows: (): Promise<MaintenanceWindow[]> => apiGet('/api/v1/maintenance-windows'),
 
-  /** Open one maintenance window over **each** of these nodes, in one request (ADR-124 増分 11).
+  /** Open one maintenance window over **each** of these nodes, in one request (ADR-124 Inc.11).
    *
    *  "This dozen, tonight" rarely follows a folder boundary, which is the case neither the
    *  folder-scoped window nor the single-node one serves.
@@ -2474,7 +2474,7 @@ export const api = {
   }): Promise<{ requested: number; created: number }> =>
     apiPost('/api/v1/maintenance-windows/bulk', { body }),
 
-  /** Mute **each** of these nodes until one moment, in one request (ADR-124 増分 11). The mute
+  /** Mute **each** of these nodes until one moment, in one request (ADR-124 Inc.11). The mute
    *  twin of `createMaintenanceWindows`, and a separate call because muting asks for `AckAlerts`
    *  where a window asks for `ManageMaintenance`. */
   createMutes: (body: {

@@ -195,7 +195,7 @@ export function checkedRowIndices(
 
 /**
  * How many nodes of the working set sit anywhere under each folder — the "N selected" mark on the
- * folder row (ADR-171 決定 4). A closed folder hides its rows, so the branch lines cannot say that
+ * folder row (ADR-171 decision 4). A closed folder hides its rows, so the branch lines cannot say that
  * something inside is picked; this can. Computed from the folders, not from the drawn rows, for
  * exactly that reason.
  *
@@ -221,11 +221,11 @@ export function checkedPerGroup(
   return out;
 }
 
-/** The most folders the pinned band holds (ADR-171 決定 5). Deeper ones win. */
+/** The most folders the pinned band holds (ADR-171 decision 5). Deeper ones win. */
 export const STICKY_MAX = 3;
 
 /**
- * The folders to pin at the top of the tree for a given scroll position (ADR-171 決定 5): the
+ * The folders to pin at the top of the tree for a given scroll position (ADR-171 decision 5): the
  * parent rows of the row that sits just below the band, which have themselves scrolled under it.
  *
  * The band covers rows, so which row is "below the band" depends on how tall the band is — and the

@@ -4,7 +4,7 @@
 //
 // Two of those exist. The alert-rule table's "measures" column, where the row
 // `Reachability | below | (no bounds) | 3 breaches` says how the rule behaves and nothing about
-// what it is watching. And the metric picker (ADR-075 増分 4), where the sentence has to be read
+// what it is watching. And the metric picker (ADR-075 Inc.4), where the sentence has to be read
 // *before* choosing — a threshold on `bgp_peer_state` is `above 3` or `below 3` depending on which
 // of 1–6 means established, and no OID tells anyone that.
 //
@@ -24,7 +24,7 @@
 // A `.ts` file on purpose: Vitest runs `environment: 'node'` and never executes `.tsx`, so a lookup
 // written inside the page component is a lookup nothing tests (`testing.md`).
 //
-// **The sentences themselves moved to Rust (ADR-079 決定 4).** They used to live only in
+// **The sentences themselves moved to Rust (ADR-079 decision 4).** They used to live only in
 // `locales/{en,ja}/metrics.json`, which made them something the WebUI knew and `/mcp` did not —
 // the alert-rule table has a "What it measures" column and an MCP client reading the same
 // ruleset got a bare metric name. English is now canonical in

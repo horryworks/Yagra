@@ -253,7 +253,7 @@ fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
     // alone used to be the whole answer. Two templates carry `CollectionKind::Wlan` now: the AP
     // walk, whose one sample is a node-level flag (its per-AP values are an inventory, not rows of
     // a series — reported as `entity` it told an MCP client to read it as a node-wide max), and the
-    // SSID walk, which publishes exactly the rows `entity` means (ADR-064 増分 D). Answering `none`
+    // SSID walk, which publishes exactly the rows `entity` means (ADR-064 Inc.D). Answering `none`
     // for the second would leave the SSID rows unreadable from both the screen and `/mcp`, which
     // share this function.
     if item.kind == yagra_common::CollectionKind::Wlan
@@ -279,7 +279,7 @@ fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> Metr
         return MetricDimension::None;
     }
     // A Meraki switch port's traffic and an access point's non-Wi-Fi utilization have no collection
-    // item behind them and never will (ADR-167 決定 8, ADR-168 決定 2) — but they are declared, so
+    // item behind them and never will (ADR-167 decision 8, ADR-168 decision 2) — but they are declared, so
     // they are not guessed at, even before the port's or the radio's row exists.
     if yagra_common::meraki_interface_metrics().any(|m| m == s.metric) {
         return MetricDimension::Interface;

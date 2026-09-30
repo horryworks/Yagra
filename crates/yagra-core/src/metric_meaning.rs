@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! What a metric measures, in one sentence — **the English source of truth** (ADR-079 決定 4).
+//! What a metric measures, in one sentence — **the English source of truth** (ADR-079 decision 4).
 //!
 //! These sentences lived only in `web/src/locales/{en,ja}/metrics.json`, which made them something
 //! the WebUI knew and `/mcp` did not: the alert-rule table has a "What it measures" column, and an
@@ -16,7 +16,7 @@
 //! ⚠️ **Why the sentences are not in `mib_catalog.description`**, which exists and is null on every
 //! row: filling it would need a corrective migration for the seeded rows (a stable seed id's
 //! `ON CONFLICT` shadows the stale one), and would leave the meaning owned by *both* this table and
-//! the database. One source, and it is this file (ADR-079 決定 5).
+//! the database. One source, and it is this file (ADR-079 decision 5).
 //!
 //! Gauges only, by construction. A counter can carry no threshold rule — a fixed bound cannot be
 //! evaluated against a monotonic value (ADR-012) — so the picker never offers one and the rule
@@ -102,14 +102,14 @@ pub const CHECK_FAMILIES: [(&str, Option<CheckFamily>); 40] = [
     ("dns_answer_count", Some(CheckFamily::Dns)),
     ("dns_chain_length", Some(CheckFamily::Dns)),
     ("meraki_device_up", Some(CheckFamily::Meraki)),
-    // An MX's WAN uplinks, one row each (ADR-164 決定 23 and 24).
+    // An MX's WAN uplinks, one row each (ADR-164 decision 23 and 24).
     ("meraki_uplink_sent_bps", Some(CheckFamily::Meraki)),
     ("meraki_uplink_recv_bps", Some(CheckFamily::Meraki)),
     ("meraki_uplink_status", Some(CheckFamily::Meraki)),
     ("meraki_uplink_failed", Some(CheckFamily::Meraki)),
     ("meraki_uplink_loss_pct", Some(CheckFamily::Meraki)),
     ("meraki_uplink_latency_ms", Some(CheckFamily::Meraki)),
-    // An MX's Auto VPN, node level (ADR-164 決定 25).
+    // An MX's Auto VPN, node level (ADR-164 decision 25).
     ("meraki_vpn_hubs_reachable", Some(CheckFamily::Meraki)),
     ("meraki_vpn_hubs_unreachable", Some(CheckFamily::Meraki)),
     ("meraki_vpn_hubs_unreachable_pct", Some(CheckFamily::Meraki)),

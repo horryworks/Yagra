@@ -59,7 +59,7 @@ export function SideBar() {
             {group.items.map((item) => (
               <NavLink
                 key={item.path}
-                // The item's own last route, search term and filters included (ADR-134 増分 3).
+                // The item's own last route, search term and filters included (ADR-134 Inc.3).
                 // `NavLink` lights by pathname alone, so the query does not change which is active.
                 to={itemLandingPath(item, byItem)}
                 // `end` so the section-root item (e.g. /nodes) isn't kept active on children.

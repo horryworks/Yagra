@@ -150,7 +150,7 @@ pub async fn prefix(pool: &PgPool, group: Uuid, cidr: &str) {
     .expect("seed prefix");
 }
 
-/// A NetBox server row, for the tests about **who owns a prefix** (ADR-131 決定 6).
+/// A NetBox server row, for the tests about **who owns a prefix** (ADR-131 decision 6).
 ///
 /// `node_group_prefixes.netbox_server_id` is the only thing separating a range an operator typed
 /// from one a sync maintains, and the two questions worth testing — that a hand-made row survives

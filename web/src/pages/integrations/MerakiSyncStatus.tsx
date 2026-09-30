@@ -80,14 +80,14 @@ export function MerakiSyncStatus({
               {t('meraki.sync.new', { count: org.devices.new })}
             </span>
           )}
-          {/* Marked, never acted on: the node and its alerts stay as they are (ADR-156 決定 3). */}
+          {/* Marked, never acted on: the node and its alerts stay as they are (ADR-156 decision 3). */}
           {org.devices.missing > 0 && (
             <span className="meraki-org-sync-failed">
               {t('meraki.sync.missing', { count: org.devices.missing })}
             </span>
           )}
           {/* Nodes in a network the organization does not watch receive nothing, and nothing else
-              on any screen says so — they keep their last state (ADR-164 決定 15). Short here; the
+              on any screen says so — they keep their last state (ADR-164 decision 15). Short here; the
               organization's page has the sentence and the button. */}
           {org.devices.monitored_unwatched > 0 && (
             <span className="meraki-org-sync-failed">
@@ -98,7 +98,7 @@ export function MerakiSyncStatus({
       )}
       {/* A collect is not the sync above: it is a poller asking how the devices are, and it is what
           a device's state depends on. While availability fails the nodes keep their last state
-          (ADR-164 決定 18) — said here because no node says it on the tree. */}
+          (ADR-164 decision 18) — said here because no node says it on the tree. */}
       {orgCollectFailures(org).map((f) => (
         <span className="meraki-org-sync-failed" key={f.tier}>
           {t(f.stalesNodes ? 'meraki.sync.collectFailing' : 'meraki.sync.tierFailing', {
@@ -120,7 +120,7 @@ export function MerakiSyncStatus({
 /** "Sync now". The caller decides whether it is drawn at all — `useCan('manage_config')` and
  *  `canSyncNow` — because a button that can only be refused is not drawn (ADR-056).
  *
- *  Held down while a read is asked for or running (ADR-164 決定 32): pressing again would ask for
+ *  Held down while a read is asked for or running (ADR-164 decision 32): pressing again would ask for
  *  the read already on its way, and the server would answer that it is the same request. */
 export function MerakiSyncButton({ sync, read }: { sync: MerakiSync; read: OrgFullRead }) {
   const { t } = useTranslation('system');

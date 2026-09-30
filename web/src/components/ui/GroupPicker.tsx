@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Pick one folder, by typing part of its name (ADR-124 決定 9).
+// Pick one folder, by typing part of its name (ADR-124 decision 9).
 //
 // It replaces the plain `<select>` that six dialogs each built from `groupOptions()`. A `<select>`
 // cannot be narrowed, so choosing a folder in a deployment with more than a screenful — which a

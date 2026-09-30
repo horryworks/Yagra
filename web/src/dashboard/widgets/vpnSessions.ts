@@ -38,7 +38,7 @@ export const MAX_VPN_NODES = 6;
  * GlobalProtect *tunnels*. They are each the nearest thing that vendor's MIB exposes, and mixing
  * them in one chart is only honest because ADR-046 Inc.7's unit table gives every one of them a
  * noun — so a reading renders as `148 sessions` beside `74 users` and the operator can see the
- * difference rather than being told about it in prose they will never read (ADR-136 決定 3).
+ * difference rather than being told about it in prose they will never read (ADR-136 decision 3).
  * `everyLadderMetricHasAUnit` pins that: a fourth entry added here with no row in the unit table
  * would silently render a bare number, which is the state this ladder is not allowed to be in.
  *
@@ -111,7 +111,7 @@ export function nodesKey(nodes: readonly VpnNodeRef[]): string {
  *
  * Walks {@link VPN_SESSION_METRICS} in order and takes the first the inventory carries **and**
  * `metricView` is willing to chart. The second half is not belt-and-braces: the query shape is not
- * free choice here (ADR-046 Inc.6 決定 L), and a candidate the table refuses is one this widget has
+ * free choice here (ADR-046 Inc.6 decision L), and a candidate the table refuses is one this widget has
  * no honest way to draw — offering it would produce a card with an empty chart under it and no
  * explanation.
  *
@@ -323,7 +323,7 @@ export interface VpnReading {
  *
  * The value is the **last sample of the series already fetched**, not a separate "current value"
  * request. That costs one fewer route in the widget's `reads` declaration (which is an access
- * control surface, ADR-123 決定 5) and guarantees the number and the right-hand end of the line
+ * control surface, ADR-123 decision 5) and guarantees the number and the right-hand end of the line
  * agree — two requests could disagree by a step and there would be nothing on screen to explain it.
  * The cost is that the number is up to one step old, which at this widget's windows is 60s at worst.
  *

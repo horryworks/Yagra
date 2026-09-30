@@ -3,7 +3,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The change feed's client half (ADR-019 増分 2). What must hold: the first revision is not a
+// The change feed's client half (ADR-019 Inc.2). What must hold: the first revision is not a
 // change (every open screen has just read everything), a reconnect that finds the same revision is
 // not a change (Tier1's mock stream ends every 3 s, and a reload per reconnect would thrash every
 // screen), and a screen reacts only to changes heard after it mounted.

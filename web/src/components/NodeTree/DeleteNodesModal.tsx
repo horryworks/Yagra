@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Delete many nodes at once, from the inventory tree's working set (ADR-124 増分 6).
+// Delete many nodes at once, from the inventory tree's working set (ADR-124 Inc.6).
 //
 // Built on `ConfirmDeleteModal` like every other destructive consent. What is specific here is the
 // sentence naming the targets and what happens when not all of them went — both decided in

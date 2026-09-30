@@ -207,7 +207,7 @@ describe('nav route memory (ADR-134 増分 2 and 3)', () => {
     expect(useSectionRouteStore.getState().bySection).toEqual({ nodes: '/nodes/credentials' });
   });
 
-  // 増分 3 — the reported symptom: search All nodes, open Discovery. The section now points at
+  // Inc.3 — the reported symptom: search All nodes, open Discovery. The section now points at
   // Discovery, and the item memory still holds All nodes' term for the sidebar link back.
   it('keeps one route per item, which a move to a sibling item does not overwrite', () => {
     remember('nodes', '/nodes', '/nodes?q=sw');

@@ -64,7 +64,7 @@ export const MERAKI_CADENCE_BOUNDS: Record<MerakiCadenceField, CadenceBounds> = 
 export const CADENCE_TARGET_RPS_MAX = 10;
 
 /** What an interval's box holds, as the whole seconds the server would take, or `null` when it is
- *  not one (ADR-164 増分 18). Digits only: an emptied box was sent as 0, and the server's English
+ *  not one (ADR-164 Inc.18). Digits only: an emptied box was sent as 0, and the server's English
  *  `invalid_cadence` came back instead of the range the operator needed. */
 export function parseCadence(field: MerakiCadenceField, raw: string): number | null {
   const text = raw.trim();

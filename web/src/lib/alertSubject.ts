@@ -35,7 +35,7 @@ export type AlertSubject =
   | { kind: 'node'; nodeId: string }
   /** `name` is the pool's name — already human-readable, so nothing needs resolving. */
   | { kind: 'pool'; name: string }
-  /** A Cisco Meraki organization the Dashboard API is not answering (ADR-164 決定 18). `orgId` is
+  /** A Cisco Meraki organization the Dashboard API is not answering (ADR-164 decision 18). `orgId` is
    *  the organization's row id — what its settings page is addressed by. `name` is `null` for an
    *  organization the server could not name yet (added since its last config generation). */
   | { kind: 'meraki_org'; orgId: string; name: string | null };

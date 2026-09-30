@@ -120,7 +120,7 @@
   cursor: pointer;
 }
 
-/* A row whose height follows its content (`autoRowHeight`, ADR-078 増分 5). The 44px above becomes
+/* A row whose height follows its content (`autoRowHeight`, ADR-078 Inc.5). The 44px above becomes
    a floor rather than a promise, so a row whose cells are all one line is pixel-identical to a
    fixed one and only a stacked cell grows.
 

@@ -4,7 +4,7 @@
 // store (App bootstrap / login); in public-dashboard mode there may be no session, in which case it
 // shows a sign-in affordance.
 //
-// Preferences lives here rather than in Settings (ADR-055 決定 9 / Inc.7): the account badge is by
+// Preferences lives here rather than in Settings (ADR-055 decision 9 / Inc.7): the account badge is by
 // definition "the shelf that is only mine", which is the line the old `Personal` group header was
 // drawn to make. It opens a dialog over whatever is on screen, because theme and language are
 // changed *during* other work.

@@ -283,23 +283,23 @@ pub struct MerakiCollectSpec {
     /// The watched networks: a collect keeps only these networks' rows (empty ⇒ all). It asks the
     /// whole organization and filters here, never sending them as `networkIds[]` — the Dashboard
     /// refuses a request target past 8,177 characters, which a couple of hundred network ids reach
-    /// (ADR-164 決定 22).
+    /// (ADR-164 decision 22).
     pub network_ids: Vec<String>,
     /// Page-size cap for paginated endpoints.
     pub per_page: u32,
     /// Conservative request-rate budget (requests/sec) the collector paces itself to.
     pub target_rps: f64,
     /// This tier's collect interval (the job's `interval_secs`). The traffic tier asks for usage
-    /// over this window, so consecutive collects tile time (ADR-164 決定 23); other tiers ignore it.
+    /// over this window, so consecutive collects tile time (ADR-164 decision 23); other tiers ignore it.
     pub interval_secs: u32,
-    /// The switch-port tier only: also read the ports' configured names this time (ADR-167 決定 1,
+    /// The switch-port tier only: also read the ports' configured names this time (ADR-167 decision 1,
     /// `yagra_bus::MerakiCollectCheck::port_names`).
     pub port_names: bool,
     /// The wireless tier only: also read every access point's SSIDs and radio settings this time
-    /// (ADR-168 決定 1, `yagra_bus::MerakiCollectCheck::ssid_statuses`).
+    /// (ADR-168 decision 1, `yagra_bus::MerakiCollectCheck::ssid_statuses`).
     pub ssid_statuses: bool,
     /// The wireless tier only: the SSID read and nothing else — no client counts, no utilization
-    /// on the radios (ADR-169 決定 2, `yagra_bus::MerakiCollectCheck::ssid_only`). Implies
+    /// on the radios (ADR-169 decision 2, `yagra_bus::MerakiCollectCheck::ssid_only`). Implies
     /// `ssid_statuses`.
     pub ssid_only: bool,
     /// The switch-port tier only: also read each port's LLDP/CDP neighbours this time (ADR-181,
@@ -328,11 +328,11 @@ pub struct MerakiObservation {
     /// A switch's LLDP/CDP neighbours (ADR-181) → its `node_neighbors` row, replacing the stored
     /// set. `None` unless this collect read them **completely** and the listing named this switch:
     /// a read cut short says nothing about the switches it did not reach, and an empty set would
-    /// erase theirs (決定 3, 4). `Some(vec![])` is a switch that was read and hears nothing.
+    /// erase theirs (decision 3, 4). `Some(vec![])` is a switch that was read and hears nothing.
     pub neighbors: Option<Vec<yagra_common::Neighbor>>,
 }
 
-/// One radio of a Meraki access point seen on a wireless collect (ADR-168 決定 2): its slot on the
+/// One radio of a Meraki access point seen on a wireless collect (ADR-168 decision 2): its slot on the
 /// AP node and whatever the collect read about it this time. Every reading is `None` when this
 /// collect did not read it — the channel and power come from the twenty-minute SSID read only.
 #[derive(Debug, Clone, PartialEq)]
@@ -371,7 +371,7 @@ pub struct MerakiPort {
     pub duplex: Option<yagra_common::Duplex>,
 }
 
-/// What one Meraki collect brought back, and why it ended early if it did (ADR-164 決定 18).
+/// What one Meraki collect brought back, and why it ended early if it did (ADR-164 decision 18).
 ///
 /// A collect is best-effort: a listing that stops on page 3 still hands over pages 1 and 2, because
 /// a device missing from one round is a gap in a chart. What that contract used to hide is the
@@ -386,7 +386,7 @@ pub struct MerakiCollected {
     /// Why a listing ended before the server said it was finished. `None` is a complete answer.
     pub stopped: Option<MerakiFetchError>,
     /// The first listing that stopped early **with none of the rows the collect keeps**, and why
-    /// (ADR-164 決定 25). A tier that reads several listings — the uplink tier reads three — used to
+    /// (ADR-164 decision 25). A tier that reads several listings — the uplink tier reads three — used to
     /// hide a listing that failed whenever another one answered.
     pub failed_listing: Option<(yagra_common::MerakiListing, MerakiFetchError)>,
 }
@@ -398,7 +398,7 @@ impl MerakiCollected {
     /// A partial answer is not a failure — the Dashboard did answer, which is the question an
     /// "API is not answering" alert asks. A complete answer that lists no device is not one
     /// either. A tier with several listings fails when one of them does, even while the others
-    /// answered; which one is [`Self::failed_listing`] (ADR-164 決定 25). Only the availability
+    /// answered; which one is [`Self::failed_listing`] (ADR-164 decision 25). Only the availability
     /// tier raises an alert on it — the others are shown on the organization's page.
     #[must_use]
     pub fn failure(&self) -> Option<MerakiFetchError> {
@@ -629,7 +629,7 @@ pub trait Transport: Send + Sync {
     /// URL), an auth failure (401/403) and an unreadable answer.
     ///
     /// The error is [`MerakiFetchError`] rather than [`TransportError`] because the caller reports
-    /// it to core as a closed reason (ADR-164 決定 18), and a string would have to be hidden.
+    /// it to core as a closed reason (ADR-164 decision 18), and a string would have to be hidden.
     async fn collect_meraki(
         &self,
         spec: &MerakiCollectSpec,
@@ -670,7 +670,7 @@ pub struct FakeTransport {
     pub meraki_stopped: Option<MerakiFetchError>,
     /// When set, every Meraki collect is refused outright with this error.
     pub meraki_refused: Option<MerakiFetchError>,
-    /// A listing of every Meraki collect that failed while the others answered (ADR-164 決定 25).
+    /// A listing of every Meraki collect that failed while the others answered (ADR-164 decision 25).
     pub meraki_failed_listing: Option<(yagra_common::MerakiListing, MerakiFetchError)>,
     /// The chain every DNS resolution returns.
     pub dns: DnsChain,
@@ -722,7 +722,7 @@ pub struct FakeTransport {
     /// 🚨 [`Self::snmp_instances_unanswered`] is device-wide, which makes it useless for a caller
     /// that fires **more than one** walk and depends on only some of them — every walk fails
     /// together, so a test cannot tell "the list survived the column that failed" from "nothing
-    /// failed". That is not hypothetical: it is why the first version of ADR-064 増分 E's
+    /// failed". That is not hypothetical: it is why the first version of ADR-064 Inc.E's
     /// regression test stayed green with the optional columns moved back into the required walk
     /// (`failure-injection-must-break-only-the-read-under-test`).
     pub unanswered_instance_columns: Vec<String>,
@@ -1157,7 +1157,7 @@ impl FakeTransport {
         self
     }
 
-    /// Make one listing of every Meraki collect fail while the others answer (ADR-164 決定 25).
+    /// Make one listing of every Meraki collect fail while the others answer (ADR-164 decision 25).
     #[must_use]
     pub fn with_meraki_listing_failed(
         mut self,

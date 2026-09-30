@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // What one row of a wireless controller's AP list *means* — the judgement behind the AP tab
-// (ADR-064 増分 B3).
+// (ADR-064 Inc.B3).
 //
 // Here rather than in `ApTab.tsx` because Vitest only runs `src/**/*.test.ts`: a pure helper
 // written in the `.tsx` is a helper no test can execute (testing.md, `tsxJudgement.test.ts`).
@@ -44,7 +44,7 @@ export function isImported(row: WirelessApRow): boolean {
 }
 
 /** What to call an AP. Vendors leave the name unset on an AP nobody has named, and the MAC is the
- *  one field that is always there — it is what the id is derived from (決定 8b). */
+ *  one field that is always there — it is what the id is derived from (decision 8b). */
 export function apLabel(row: WirelessApRow): string {
   return row.name?.trim() || row.mac;
 }
@@ -54,7 +54,7 @@ export function apLabel(row: WirelessApRow): string {
  *  🚨 An HA pair reports the same AP twice, and that is the fact this column exists for: the
  *  standby answers the AP's inventory with the same names and a `0` for every live number
  *  (measured — ADR-064), so an operator looking at an AP's numbers needs to know which member they
- *  came from. The Overview deliberately shows only the serving one (決定 4); the full picture is
+ *  came from. The Overview deliberately shows only the serving one (decision 4); the full picture is
  *  here.
  *
  *  ⚠️ `serving` can be null while `others` is not. `controller_node_id` is blanked when the serving

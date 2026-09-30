@@ -14,7 +14,7 @@
 // disagree with the column the operator just read.
 //
 // What it does say is which networks to start watching: the ones the chosen devices are in, unless
-// the organization imports on its own (`networksToWatchOnImport`, 決定 16). A node in a network that
+// the organization imports on its own (`networksToWatchOnImport`, decision 16). A node in a network that
 // is not watched is collected nothing for.
 //
 // All judgement is in `merakiDevices.ts` and `merakiOrgRow.ts`; Vitest never runs a `.tsx`
@@ -289,7 +289,7 @@ export function MerakiOrgPage() {
 
   const sync = useMerakiSync(orgId, t('meraki.err.sync'), load);
 
-  // While the organization is being read (ADR-164 決定 32) only the organization is re-read, every
+  // While the organization is being read (ADR-164 decision 32) only the organization is re-read, every
   // few seconds, so the progress moves; its devices — thousands of rows — are read once, when the
   // read ends and has imported what it found.
   const pollOrg = useCallback(() => {
@@ -453,7 +453,7 @@ export function MerakiOrgPage() {
     setActionError(null);
     setNote(null);
     // The chosen devices' networks start being watched with them — a node in an unwatched network
-    // is collected nothing for. Not while the organization imports on its own (決定 16).
+    // is collected nothing for. Not while the organization imports on its own (decision 16).
     const watch = networksToWatchOnImport(chosen, devices, org.import_devices);
     api
       // No `file_by_prefix`: absent means the organization's own setting (see the file header).
@@ -487,7 +487,7 @@ export function MerakiOrgPage() {
       .finally(() => setBusy(false));
   };
 
-  // Nodes nothing is collected for (ADR-164 決定 15). Read from the device list rather than from
+  // Nodes nothing is collected for (ADR-164 decision 15). Read from the device list rather than from
   // `org.devices.monitored_unwatched`: the button has to name the networks, and only the list has
   // them. The two are pinned to each other on the server (`meraki_sync.rs`).
   const uncollected = useMemo(() => uncollectedDevices(devices), [devices]);

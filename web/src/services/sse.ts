@@ -94,7 +94,7 @@ export function parseReportRun(data: string): ReportRun | null {
   }
 }
 
-/** Parse one change-feed payload (`/api/v1/stream/config`, ADR-019 増分 2) into its revision, or
+/** Parse one change-feed payload (`/api/v1/stream/config`, ADR-019 Inc.2) into its revision, or
  *  null if malformed. The revision is a counter, so anything but a non-negative integer is refused
  *  rather than compared. */
 export function parseConfigRevision(data: string): number | null {
@@ -178,7 +178,7 @@ function subscribeSSE(
   const run = async (): Promise<void> => {
     while (!closed) {
       try {
-        // ⚠️ Not `getToken()`: during an anonymous preview (ADR-123 決定 8) the stream must go out
+        // ⚠️ Not `getToken()`: during an anonymous preview (ADR-123 decision 8) the stream must go out
         // uncredentialed too, or the live widgets would keep updating for an admin looking at what
         // a stranger sees — which is the one thing the preview exists to show honestly.
         const token = isAnonymousPreview() ? null : getToken();
@@ -196,7 +196,7 @@ function subscribeSSE(
           }
           // A refusal is an answer, not an outage: a role without the permission, or a folder-scoped
           // account on a fleet-wide stream (report runs, the change feed). Retrying every
-          // RECONNECT_MS asked the same question forever and got the same 403 (ADR-019 増分 2).
+          // RECONNECT_MS asked the same question forever and got the same 403 (ADR-019 Inc.2).
           if (res.status === 403) {
             onError?.(new Error(`stream ${path} refused with status 403`));
             return;
@@ -289,7 +289,7 @@ export function subscribeNodeStates(
 }
 
 /**
- * Subscribe to the change feed (ADR-019 増分 2): each event is the configuration's current revision,
+ * Subscribe to the change feed (ADR-019 Inc.2): each event is the configuration's current revision,
  * sent once on connect and again whenever it moves. Compare it with the last one seen — the stream
  * replays nothing and needs no resync, because the number itself says whether anything was missed.
  * A group-scoped account is refused (403) and the subscription stops. Returns an unsubscribe

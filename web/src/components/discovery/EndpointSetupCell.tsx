@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The "Monitoring setup" cell of one unregistered endpoint (ADR-179 増分 2 決定 7, 増分 3 決定 3):
+// The "Monitoring setup" cell of one unregistered endpoint (ADR-179 Inc.2 decision 7, Inc.3 decision 3):
 // Detect alone until it has answered, then the two dropdowns — filled when it found something,
 // empty to pick by hand when it did not. Drawn by Discovery ▸ Unregistered devices and by the
 // Node ▸ Neighbors tab, over the same `useEndpointSetup` state.
@@ -24,7 +24,7 @@ interface Props {
   probeCredCount: number;
   onMonitor: () => void;
   /** When Detect gets no answer, this replaces the hand-pick form: a device that must not be
-   *  registered by hand without SNMP (an access point, ADR-179 増分 3 決定 2 ③) is told where it
+   *  registered by hand without SNMP (an access point, ADR-179 Inc.3 decision 2 ③) is told where it
    *  is added instead. Omitted, the form is offered as on Discovery. */
   noAnswer?: ReactNode;
   className?: string;
@@ -109,7 +109,7 @@ export function EndpointSetupCell({
           {line}
         </span>
       )}
-      {/* Where Monitor will put it, before it is pressed (ADR-179 増分 8 決定 2) — with the mark
+      {/* Where Monitor will put it, before it is pressed (ADR-179 Inc.8 decision 2) — with the mark
           when no range took it although filing by range was asked for. */}
       {dest != null && (
         <span className={dest.warn ? 'ep-setup-dest warn' : 'ep-setup-dest'}>

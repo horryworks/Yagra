@@ -25,14 +25,14 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  /* Scroll anchoring off (ADR-124 増分 5). The rows are absolutely positioned inside a spacer whose
+  /* Scroll anchoring off (ADR-124 Inc.5). The rows are absolutely positioned inside a spacer whose
      height is `count × 30px`, so nothing here is an anchor candidate and nothing above the viewport
      ever changes size — anchoring has nothing to buy and can only move a pane the operator placed.
      The tree's rule is that its scroll position changes when a human scrolls it, and not otherwise. */
   overflow-anchor: none;
 }
 
-/* The tree is one focus stop, and the row it is on is the selected row (ADR-155 決定 1/9). Focus is
+/* The tree is one focus stop, and the row it is on is the selected row (ADR-155 decision 1/9). Focus is
    a colour change, never an outline: the selected row keeps its bar and gains an inset accent
    hairline while the tree has keyboard focus. `:focus-visible` is what keeps a pointer press from
    drawing it — a click lands focus here too (on blank space) or on a row's name button. */
@@ -64,7 +64,7 @@
 .ntree-row {
   cursor: pointer;
   position: relative;
-  /* No text selection across rows (ADR-124 増分 5 決定 C) — and 🚨 **read the measurement before
+  /* No text selection across rows (ADR-124 Inc.5 decision C) — and 🚨 **read the measurement before
      assuming this fixes anything.** The increment was opened believing a Shift click extended the
      document selection across rows and that the browser then scrolled to keep its end in view.
      Measured in Chromium: it does not, because the row carries `draggable`, and the UA stylesheet
@@ -122,7 +122,7 @@
 
 /* Drop feedback. `inside` highlights the whole row (nest/assign); `bad` marks a refused move (e.g. a
    group into itself). Reordering has no mark on the target row at all any more — it is shown by the
-   slot row below (ADR-162 増分 2).
+   slot row below (ADR-162 Inc.2).
 
    🚨 **`drop-before` / `drop-after` were a 2px inset edge, and they were removed because they were
    AMBIGUOUS, not because they were plain.** A line on the bottom edge of a folder's last node and a
@@ -143,7 +143,7 @@
 }
 
 /* The insertion slot: the row a drop in flight would create, at the depth it would land (ADR-162
-   増分 2). Dashed, because solid is already spoken for — `.drop-inside` and `.drop-bad` outline the
+   Inc.2). Dashed, because solid is already spoken for — `.drop-inside` and `.drop-bad` outline the
    row the pointer is ON, and this is the row the drop would MAKE.
 
    ⚠️ **`outline`, never `border`.** Every tree row is exactly `--row-h` tall and the virtualizer
@@ -180,7 +180,7 @@
   border-radius: 50%;
 }
 
-/* The folder a permitted drop would write into (ADR-162 増分 2) — the explicit half of the answer
+/* The folder a permitted drop would write into (ADR-162 Inc.2) — the explicit half of the answer
    the slot's indentation gives implicitly.
 
    ⚠️ **A channel of its own.** `.sel` owns the inset accent bar and `.checked` owns the accent tint,
@@ -284,7 +284,7 @@
 }
 
 .ntree-row:hover .ntree-actions,
-/* Its own ＋ menu is open — the pointer has to leave the row to reach it. */
+/* Its own + menu is open — the pointer has to leave the row to reach it. */
 .ntree-actions.menu-open {
   display: inline-flex;
 }
@@ -336,7 +336,7 @@
 }
 
 /* The address, drawn only beside a node whose name another node in the same folder also carries
-   (ADR-139 増分 2). It never shrinks: the name beside it is what gives way, because two rows reading
+   (ADR-139 Inc.2). It never shrinks: the name beside it is what gives way, because two rows reading
    "as001  10.216.50…" would be as indistinguishable as the two it replaced. */
 .ntree-node-addr {
   flex: none;
@@ -807,7 +807,7 @@ button.ntree-supp-icon:hover {
   --sh: 2px;
 }
 
-/* "N selected" on a folder the working set reaches into (ADR-171 決定 4). The accent, because it
+/* "N selected" on a folder the working set reaches into (ADR-171 decision 4). The accent, because it
    is about the operator's selection and not about any device's state. */
 .ntree-pick {
   flex: none;
@@ -822,7 +822,7 @@ button.ntree-supp-icon:hover {
   white-space: nowrap;
 }
 
-/* ---- Pinned folders (ADR-171 決定 5) --------------------------------------------------------
+/* ---- Pinned folders (ADR-171 decision 5) --------------------------------------------------------
    A zero-height sticky element inside the scroller: it takes no room in the scroll height, so the
    virtualized rows keep their `index × 30px` positions, and its band hangs down over them. */
 .ntree-sticky {

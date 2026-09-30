@@ -80,7 +80,7 @@ export type Target =
  *   keyboard alternative.
  * - Over a **node**, the row splits in half: there is no `inside` a node.
  *
- * 🚨 **The number of nodes being dragged does not change the answer** (ADR-124 増分 8). It used to:
+ * 🚨 **The number of nodes being dragged does not change the answer** (ADR-124 Inc.8). It used to:
  * a batch over a node row read `inside`, meaning "into that row's folder, appended", because
  * placing N nodes between two rows needed a bulk placement endpoint and there was none — so the
  * same gesture answered differently at one node and at three. `POST /nodes/move` now carries
@@ -168,7 +168,7 @@ export type DropAction =
    *  what moving something does.
    *
    *  `before`/`after` name the sibling node to land next to, at most one; neither means append.
-   *  🚨 **Since 増分 8 a batch carries them too** — there used to be a separate `reorder-node`
+   *  🚨 **Since Inc.8 a batch carries them too** — there used to be a separate `reorder-node`
    *  shape that could only hold one id, so a multi-node drop had to fall back to appending. */
   | {
       kind: 'move-nodes';
@@ -238,7 +238,7 @@ export function rootDropAction(drag: DragItem): DropAction {
  * What the tree is currently showing about a drag in flight: the row under the cursor, where in that
  * row, and whether the drop is permitted.
  *
- * ⚠️ **It carries the whole [`Target`], not the row's id** (ADR-162 増分 2). The slot row below
+ * ⚠️ **It carries the whole [`Target`], not the row's id** (ADR-162 Inc.2). The slot row below
  * swallows the pointer where it sits, so the drop that lands there has no row of its own to read a
  * target off — it replays the one recorded here. An id alone could not: `dropAction` needs the
  * target's **scope** to name the folder the drop writes into.
@@ -255,7 +255,7 @@ export type DropFeedback = {
  * Where a drop on a ROW should write: what the last `dragover` showed, not what the row under the
  * pointer would say now.
  *
- * 🚨 **The two differ, and the difference is a wrong write** (ADR-162 増分 3). The insertion slot is a
+ * 🚨 **The two differ, and the difference is a wrong write** (ADR-162 Inc.3). The insertion slot is a
  * real row, so adding or removing it moves every row below it by one row height — while the
  * pointer stays where it is. Coming down from a node onto the folder under it: `after node` puts
  * the slot directly above the folder; reaching the folder reads `inside`, which draws no slot, so
@@ -264,7 +264,7 @@ export type DropFeedback = {
  * outlined as the destination. Reproduced in a browser before this was written
  * (`tests/ui/treeDragIntoFolder.spec.ts`).
  *
- * The slot has always done it this way (増分 2 決定 3: "replayed from the recorded target"). This
+ * The slot has always done it this way (Inc.2 decision 3: "replayed from the recorded target"). This
  * extends the same rule to rows, so the write is what the screen said — one rule for both.
  *
  * `judged` is the fallback for a drop nothing preceded: no `dragover` was seen, or it was on the
@@ -284,7 +284,7 @@ export function dropToPerform(
  * where the drop would write.
  *
  * 🚨 **This replaced a 2px insertion line, and the line was not merely ugly — it was ambiguous**
- * (ADR-162 増分 2). A line under a folder's last node and a line over the next folder's row are one
+ * (ADR-162 Inc.2). A line under a folder's last node and a line over the next folder's row are one
  * pixel row apart and mean different parents: the first lands *inside* the folder above, the second
  * lands beside it. The line could not say which, because it drew the same mark at the same place.
  * A row can: it is drawn at the destination's **depth**, and the 16px of indentation is the answer.

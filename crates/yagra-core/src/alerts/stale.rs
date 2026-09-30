@@ -89,7 +89,7 @@ const LIVE_WINDOW_SECS: u64 = 7_200;
 /// not, and the difference matters: a Meraki node whose network the organization does not watch
 /// receives **nothing at all**, and being out of this sweep's scope, it goes quiet rather than
 /// stale. Nothing here will notice. What says so is the organization's row
-/// (`MerakiDeviceCounts::monitored_unwatched`, ADR-164 決定 15).
+/// (`MerakiDeviceCounts::monitored_unwatched`, ADR-164 decision 15).
 ///
 /// Excluded **structurally, never by a `meraki_` name prefix** — a string rule silently misses rows
 /// where a set membership cannot.

@@ -33,9 +33,9 @@ pub struct PoolRow {
     pub description: Option<String>,
 }
 
-/// What is still pointing at a pool, so a refused delete can name it (ADR-107 決定 6).
+/// What is still pointing at a pool, so a refused delete can name it (ADR-107 decision 6).
 ///
-/// Pollers are named rather than counted: "1 台" tells an operator nothing actionable, and the
+/// Pollers are named rather than counted: "1 unit" tells an operator nothing actionable, and the
 /// whole point of the refusal is to say which box to go and change.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PoolReferences {
@@ -54,7 +54,7 @@ impl PoolReferences {
 }
 
 /// What a pool move carries with it, when the operator answered that the inventory travels
-/// (ADR-107 増分 3).
+/// (ADR-107 Inc.3).
 ///
 /// The two fields are not redundant. `from` re-points every row that *names* the pool — nodes and
 /// folders alike — in one statement each. `fall_through` carries the ids that name nothing and
@@ -228,7 +228,7 @@ impl NodeRepo {
     /// has changed, and it is changed here.
     ///
     /// 🚨 **Three writes, because a node can be in a pool three ways and only two of them are a
-    /// column this can rewrite** (ADR-107 増分 3). A node names the pool itself; or an ancestor
+    /// column this can rewrite** (ADR-107 Inc.3). A node names the pool itself; or an ancestor
     /// folder does; or **nothing anywhere does and it falls through to the implicit default**. The
     /// first two are the `WHERE pool = $1` pair below. The third has no row to match, so it was
     /// silently left behind — and since a fresh deployment writes a pool on nothing, that third

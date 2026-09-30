@@ -137,7 +137,7 @@ const GUIDE_X = 8;
 /** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
-/** How far in from a row's left edge a menu opened from the keyboard appears (ADR-155 決定 7) — past
+/** How far in from a row's left edge a menu opened from the keyboard appears (ADR-155 decision 7) — past
  *  the twisty and the icon, where a right-click on the name would have put it. */
 const MENU_KEY_INSET_PX = 40;
 
@@ -158,7 +158,7 @@ const NO_KEPT_GROUPS: ReadonlySet<string> = new Set();
 
 /** What the tree is telling the operator about a drag in flight. The shape lives in
  *  `nodeTreeDnd.ts`, beside the judgements that read it and the tests that can run them — and since
- *  ADR-162 増分 2 it carries the whole `Target`, because the slot row replays it (see `DropFeedback`). */
+ *  ADR-162 Inc.2 it carries the whole `Target`, because the slot row replays it (see `DropFeedback`). */
 type DropTarget = DropFeedback | null;
 type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
@@ -250,11 +250,11 @@ interface Props {
   /** Right-click → delete a node (opens a destructive-consent modal). Omit to hide the item. */
   onDeleteNode?: (node: NodeSummary) => void;
   /** Delete every checked node — the menu's item when the right-clicked row is in the working set
-   *  (ADR-124 増分 6). Omit to fall back to deleting the row. */
+   *  (ADR-124 Inc.6). Omit to fall back to deleting the row. */
   onDeleteChecked?: () => void;
   /** Open the "move node" picker (context-menu / button path, keyboard-accessible). */
   onRequestMoveNode: (node: NodeSummary) => void;
-  /** The working set — nodes checked with Ctrl / Shift for a bulk action (ADR-124 決定 2).
+  /** The working set — nodes checked with Ctrl / Shift for a bulk action (ADR-124 decision 2).
    *  Held by the page, never in the URL. */
   checked?: CheckedNodes;
   /** Row a Shift click measures its range from. An **id**: the flat row list is rebuilt on every
@@ -279,7 +279,7 @@ interface Props {
    *  node.
    *
    *  `placement` names the sibling node to land next to; omitted appends to the end of the folder.
-   *  🚨 **A batch carries it too since 増分 8** — there used to be a separate `onReorderNode` that
+   *  🚨 **A batch carries it too since Inc.8** — there used to be a separate `onReorderNode` that
    *  took one id, so dropping several nodes between two rows silently appended them instead. */
   onMoveNodes: (
     nodeIds: readonly string[],
@@ -312,7 +312,7 @@ interface Props {
   /** Right-click → put a node, folder or the working set into maintenance. `durationMs` = preset
    *  length from now; `null` = open the full create form prefilled with the scope ("Custom…").
    *
-   *  🚨 **The target is an `ActionTarget` since ADR-124 増分 11**: it was a single row, so a preset
+   *  🚨 **The target is an `ActionTarget` since ADR-124 Inc.11**: it was a single row, so a preset
    *  pressed with a dozen nodes selected covered exactly one of them. */
   onSetMaintenance?: (target: ActionTarget, durationMs: number | null) => void;
   /** Right-click → mute a node/group. `durationMs`/`null` as for `onSetMaintenance`. */
@@ -323,7 +323,7 @@ interface Props {
    *  sets it, `''` clears it back to inherited, and `null` opens the Custom… dialog — the same
    *  convention as the suppression chips above.
    *
-   *  🚨 **The target is an `ActionTarget` since ADR-124 増分 10**: it was a single row, so the
+   *  🚨 **The target is an `ActionTarget` since ADR-124 Inc.10**: it was a single row, so the
    *  chips wrote one node while sitting in a menu headed "Move 20 selected…". */
   onSetPool?: (target: ActionTarget, pool: string | null) => void;
   /** Right-click → aim a discovery sweep at this folder's IP prefixes (ADR-100 decision 10).
@@ -340,13 +340,13 @@ interface Props {
    *  since it was opened, which are empty by definition (ADR-159). Ignored while the switch is
    *  off; the tree never adds to it. */
   keepGroups?: ReadonlySet<string>;
-  /** Right-click → poll this node, or the whole working set, immediately (ADR-124 増分 12).
+  /** Right-click → poll this node, or the whole working set, immediately (ADR-124 Inc.12).
    *  Omit to hide the item — it is `ManageConfig`, the permission its handler checks. */
   onPollNodes?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
   /** Bring the selection into view once: open the folders above it, wait for its row, scroll to it
-   *  (ADR-073 増分 2). The page makes one when the last narrowing control goes. */
+   *  (ADR-073 Inc.2). The page makes one when the last narrowing control goes. */
   reveal?: RevealRequest | null;
   /** The reveal is finished — scrolled, or the row is not coming. */
   onRevealDone?: () => void;
@@ -414,7 +414,7 @@ export function NodeTree({
 }: Props) {
   const { t } = useTranslation('nodes');
   const tree = useMemo(() => buildNodeTree(groups, nodes), [groups, nodes]);
-  // Rows that would read identically by name alone get their address beside it (ADR-139 増分 2).
+  // Rows that would read identically by name alone get their address beside it (ADR-139 Inc.2).
   const sameName = useMemo(() => sameNameNodeIds(nodes), [nodes]);
   // Expansion defaults to fully-expanded and persists across reloads and machines: the prefs store
   // keeps the set of groups the user explicitly collapsed (empty ⇒ everything open), `serverPrefs.ts`
@@ -424,9 +424,9 @@ export function NodeTree({
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
-  /** Group row whose ＋ menu is open — keeps that row's hover-revealed actions on screen. */
+  /** Group row whose + menu is open — keeps that row's hover-revealed actions on screen. */
   const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
-  /** Where the keyboard has put the selection before `?sel=` has been written (ADR-155 決定 3).
+  /** Where the keyboard has put the selection before `?sel=` has been written (ADR-155 decision 3).
    *  Null outside that window. The rows draw `shown`, so a held arrow key moves `.sel` at once
    *  while the URL — and the detail pane keyed on it — waits for the keys to rest. */
   const [cursor, setCursor] = useState<TreeSelection>(null);
@@ -514,7 +514,7 @@ export function NodeTree({
   );
   /**
    * The rows actually drawn: `flat`, plus the one insertion slot a drag in flight would land in
-   * (ADR-162 増分 2).
+   * (ADR-162 Inc.2).
    *
    * 🚨 **Everything that turns a row index into something is measured against THIS list, never
    * `flat`.** The two differ by one row while a drag is over a droppable row, and an index taken
@@ -543,7 +543,7 @@ export function NodeTree({
   // its pane does not have, and Escape needs a keyboard.
   const isSelected = (kind: 'node' | 'group', id: string) =>
     selected?.kind === kind && selected.id === id;
-  // A click overtakes a key press still waiting to be written (ADR-155 決定 3). While one is pending
+  // A click overtakes a key press still waiting to be written (ADR-155 decision 3). While one is pending
   // the rows show the cursor, not `?sel=`, so a click on the row `?sel=` holds is "go back there" —
   // it drops the cursor rather than clearing a selection the operator could not see was current.
   //
@@ -589,9 +589,9 @@ export function NodeTree({
     [drawn, parents, shownIndex, checkedNodes],
   );
   /** "N selected" on each folder the working set reaches into — the one mark a closed folder can
-   *  carry, since its rows (and so their branches) are not drawn (ADR-171 決定 4). */
+   *  carry, since its rows (and so their branches) are not drawn (ADR-171 decision 4). */
   const pickCounts = useMemo(() => checkedPerGroup(checkedNodes, groups), [checkedNodes, groups]);
-  /** The folders pinned at the top (ADR-171 決定 5). None while dragging: a band over the rows would
+  /** The folders pinned at the top (ADR-171 decision 5). None while dragging: a band over the rows would
    *  hide the row a drop is aimed at. The virtualizer re-renders as the scroll crosses rows, which
    *  is the only granularity the band changes at. */
   const band = drag ? [] : stickyParents(drawn, parents, rowVirtualizer.scrollOffset ?? 0, ROW_H);
@@ -602,7 +602,7 @@ export function NodeTree({
   // every render, so this never outlives the render that computed it.
   rowVirtualizer.options.scrollPaddingStart = band.length * ROW_H;
 
-  /** Apply what a click on a node row decided (ADR-124 決定 2/4 + 増分 1).
+  /** Apply what a click on a node row decided (ADR-124 decision 2/4 + Inc.1).
    *
    *  🚨 **The decision itself is in `nodeTreeSelect.ts` and must stay there.** This function held
    *  it once, and that is exactly how the two-click Shift range shipped broken: Vitest never loads
@@ -746,7 +746,7 @@ export function NodeTree({
   // and so a mis-aimed click lands on a panel that names what it would release rather than on an
   // action. The chips create suppression, which is safe to get wrong; releasing is what makes a
   // fleet page during planned work.
-  // 🚨 **Since ADR-124 増分 11 the presets act on the working set when the row carries it.** Until
+  // 🚨 **Since ADR-124 Inc.11 the presets act on the working set when the row carries it.** Until
   // then they wrote one node while sitting in a menu headed "Move 20 selected…" — so an operator
   // silencing a dozen devices for tonight's work covered exactly one, and found out by being paged.
   // The scope is `nodeActionItems`, the same answer the moves, Delete and the pool chips read.
@@ -825,7 +825,7 @@ export function NodeTree({
   // `currentPool` is the target's OWN pool (`null` ⇒ inherited), which is exactly what these chips
   // write — so it is what marks the active one.
   //
-  // 🚨 **Since ADR-124 増分 10 these chips act on the working set when the row carries it.** Until
+  // 🚨 **Since ADR-124 Inc.10 these chips act on the working set when the row carries it.** Until
   // then they sat in a menu headed "Move 20 selected…" and silently wrote one node. The scope is
   // `nodeActionItems`, the same answer the moves and Delete read; the label says which it got, and
   // `sharedOwnPool` decides whether any chip may render as already-selected — the first node's
@@ -887,12 +887,12 @@ export function NodeTree({
    *
    *  🚨 The popover dismisses on **mousedown**, so by the time the body's `click` fires `menu` is
    *  already null — and a body that read it then would close the menu AND clear `?sel=` in one
-   *  press, which is the layering ADR-073 決定 4 forbids (transient first). The old menu closed on
+   *  press, which is the layering ADR-073 decision 4 forbids (transient first). The old menu closed on
    *  `click`, after the body had already seen it open; this ref is that ordering, kept. */
   const menuAtDown = useRef(false);
 
   /** Where the tree was parked when the pointer last went down on **a control**, or null when
-   *  there is nothing to put back (ADR-124 増分 5).
+   *  there is nothing to put back (ADR-124 Inc.5).
    *
    *  🚨 **Only a press on a control pins, and any scroll clears it.** A pin taken from every press
    *  goes stale — pressing the scrollbar fires no `click` on the body, so nothing resets it, and
@@ -936,7 +936,7 @@ export function NodeTree({
     [drag],
   );
 
-  /** What the drag is carrying, for the insertion slot to name (ADR-162 増分 2). Resolved from what
+  /** What the drag is carrying, for the insertion slot to name (ADR-162 Inc.2). Resolved from what
    *  is already in hand rather than captured at `dragstart` — see `dragPreview`. */
   const dragged = useMemo(() => dragPreview(flat, groups, drag), [flat, groups, drag]);
 
@@ -955,7 +955,7 @@ export function NodeTree({
     const ok = dropAllowed(groups, drag, target, position);
     // 🚨 **Only write when the answer changed.** `dragover` fires continuously while the pointer is
     // held still, and a fresh object every time re-rendered the whole tree sixty times a second for
-    // nothing. It was merely wasteful before; since ADR-162 増分 2 each of those renders also
+    // nothing. It was merely wasteful before; since ADR-162 Inc.2 each of those renders also
     // rebuilds the drawn row list, which is the length of the inventory.
     setDropTarget((prev) =>
       prev &&
@@ -974,7 +974,7 @@ export function NodeTree({
    *
    * 🚨 **A slot placed *before* a row sits exactly where the pointer is**, so it is not decoration —
    * it is where the operator actually lets go. That makes it owe two things, and getting either
-   * wrong fails quietly (ADR-162 増分 2):
+   * wrong fails quietly (ADR-162 Inc.2):
    *
    * 1. **It must accept the drag.** An element is only a drop target while its `dragover` is
    *    cancelled, so without this handler the browser refuses the drop and the gesture dies at the
@@ -1052,7 +1052,7 @@ export function NodeTree({
     reset();
   };
 
-  /** Open or close a folder — the ▶'s press, and Right / Left / Enter's (ADR-155 決定 6). One path,
+  /** Open or close a folder — the ▶'s press, and Right / Left / Enter's (ADR-155 decision 6). One path,
    *  so a folder closed from the keyboard is saved to the account exactly as the ▶ saves it.
    *
    *  One rule in every mode (ADR-154): the saved layout gets the opposite of what this row shows, and
@@ -1074,7 +1074,7 @@ export function NodeTree({
   /**
    * Drop-feedback class for a row that is the current target.
    *
-   * ⚠️ **Only `inside` and a refusal mark the target row now** (ADR-162 増分 2). `before`/`after`
+   * ⚠️ **Only `inside` and a refusal mark the target row now** (ADR-162 Inc.2). `before`/`after`
    * used to draw a 2px line on the matching edge and no longer draw anything: the placement is shown
    * by the slot row `withDropSlot` inserts, which can say at what depth — and therefore into which
    * folder — the drop lands, where an edge on a row could not.
@@ -1085,7 +1085,7 @@ export function NodeTree({
     return dropTarget.position === 'inside' ? ' drop-inside' : '';
   };
 
-  /** The folder a permitted drop would write into, so its row can say so as well (ADR-162 増分 2).
+  /** The folder a permitted drop would write into, so its row can say so as well (ADR-162 Inc.2).
    *  Null at the top level and among the Ungrouped nodes, which have no folder row. */
   const parentMarkId = dropParentId(dropTarget);
 
@@ -1146,7 +1146,7 @@ export function NodeTree({
         }}
       >
         {guideCells(index)}
-        {/* Out of the Tab order, like the name beside it (ADR-155 決定 1): the tree is one Tab stop,
+        {/* Out of the Tab order, like the name beside it (ADR-155 decision 1): the tree is one Tab stop,
             and Right / Left / Enter open and close from the keyboard. */}
         <button
           type="button"
@@ -1175,7 +1175,7 @@ export function NodeTree({
         >
           {group.name}
         </button>
-        {/* How many of the working set are inside, closed or not (ADR-171 決定 4). Its own text is
+        {/* How many of the working set are inside, closed or not (ADR-171 decision 4). Its own text is
             the fact; the title only spells it out (ADR-055 R4). */}
         {picked > 0 && (
           <span className="ntree-pick" title={t('tree.pickCountTitle', { count: picked })}>
@@ -1209,7 +1209,7 @@ export function NodeTree({
         {/* `tally === null` is "the rollup has not answered yet" (ADR-133), and the two elements
             still occupy their width. Dropping them instead would let the name column stretch and
             then snap back as each answer lands — the tree moving for a reason that is not the
-            operator, which ADR-124 増分 5 exists to stop. An empty pill reads as a skeleton; a `0`
+            operator, which ADR-124 Inc.5 exists to stop. An empty pill reads as a skeleton; a `0`
             would read as an empty folder. */}
         {tally ? (
           <HealthBar tally={tally} className="ntree-health" />
@@ -1221,7 +1221,7 @@ export function NodeTree({
             the stylesheet. Revealing them shifts everything to their left, and a marker that moves
             under the pointer is a mis-click onto Delete group. */}
         {canEdit && (
-          // `menu-open` keeps the hover-revealed actions rendered while this row's ＋ menu is up:
+          // `menu-open` keeps the hover-revealed actions rendered while this row's + menu is up:
           // the menu opens BELOW the row, so reaching it takes the pointer off the row, and the
           // hover rule would otherwise unmount the menu on the way there.
           <span
@@ -1437,7 +1437,7 @@ export function NodeTree({
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
           // Only when the answer changed — `dragover` repeats while the pointer is held still, and
-          // each write rebuilds the drawn row list. The rows learnt this in ADR-162 増分 2; this
+          // each write rebuilds the drawn row list. The rows learnt this in ADR-162 Inc.2; this
           // handler was the one that did not.
           setDropTarget((prev) =>
             prev && prev.target === 'root' ? prev : { target: 'root', position: 'inside', ok: true },
@@ -1532,7 +1532,7 @@ export function NodeTree({
   );
 
   /**
-   * The insertion slot: the row the drop would create, drawn where it would land (ADR-162 増分 2).
+   * The insertion slot: the row the drop would create, drawn where it would land (ADR-162 Inc.2).
    *
    * 🚨 **The indentation is the message.** A folder dropped at the bottom edge of a folder's last
    * node lands *inside* that folder; five pixels lower it lands beside it, one level up. The 2px
@@ -1576,7 +1576,7 @@ export function NodeTree({
   );
 
   /**
-   * One pinned folder in the band (ADR-171 決定 5). A lookalike, not a tree row:
+   * One pinned folder in the band (ADR-171 decision 5). A lookalike, not a tree row:
    *
    * 🚨 **Never `.ntree-row`, never an id, never `role="treeitem"`.** `treeDeselect.spec.ts` counts
    * `.ntree-row.sel` to prove the selection is single, `aria-activedescendant` names a row by its
@@ -1741,7 +1741,7 @@ export function NodeTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the selection's identity; `selected` itself is a new object every render
   }, [selectedKey]);
 
-  // ---- Bringing the selection back after a filter is cleared (ADR-073 増分 2). ----
+  // ---- Bringing the selection back after a filter is cleared (ADR-073 Inc.2). ----
   // Every decision is `nodeTreeReveal.ts`'s. Two effects: the folders open once per request (a
   // store write that reaches `drawn` a render later), and the scroll waits for the row.
   const revealFolders = useMemo(
@@ -1773,7 +1773,7 @@ export function NodeTree({
   }, [reveal, drawn, filtering, collapsed, revealFolders, loadedGroups, rowVirtualizer, onRevealDone]);
 
   /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
-   *  cursor, then the scroll — the one scroll this tree writes (ADR-155 決定 4). */
+   *  cursor, then the scroll — the one scroll this tree writes (ADR-155 decision 4). */
   const moveCursor = (index: number, gesture: MoveGesture) => {
     const row = drawn[index];
     const sel = rowSelection(row);
@@ -1927,7 +1927,7 @@ export function NodeTree({
   const moveItems =
     menu?.kind === 'node' ? nodeMoveItems(checkedNodes, menu.node.id, canEdit) : null;
 
-  /** What the open node menu's Delete acts on (ADR-124 増分 6), decided in `nodeTreeMenu.ts`. The
+  /** What the open node menu's Delete acts on (ADR-124 Inc.6), decided in `nodeTreeMenu.ts`. The
    *  permission is the page's: the item exists only when it wired a delete. */
   const deleteItems =
     menu?.kind === 'node' ? nodeDeleteItems(checkedNodes, menu.node.id, !!onDeleteNode) : null;
@@ -1935,7 +1935,7 @@ export function NodeTree({
   /** Whether the open node menu is one where a *batch* is in play — either because this row
    *  carries the set, or because the set exists on other rows. The row-scoped items name their
    *  node in both cases: the danger is a menu that offers "Move 20 selected…" and "Edit node…"
-   *  together, where the second silently means one (ADR-124 増分 9).
+   *  together, where the second silently means one (ADR-124 Inc.9).
    *
    *  ⚠️ Asked through `nodeActionItems` with `true`, not by reading `checkedNodes.size` here — the
    *  question "does this row's gesture involve the batch" has one answer in this codebase, and a
@@ -1950,7 +1950,7 @@ export function NodeTree({
 
   /** The working set as an action target, when the open node menu's row carries it — otherwise
    *  `null` and the item acts on the row. Every batch-aware section reads this one value rather
-   *  than re-deciding, which is the rule Inc.4 had to restore in the drag path (ADR-124 増分 10). */
+   *  than re-deciding, which is the rule Inc.4 had to restore in the drag path (ADR-124 Inc.10). */
   /** What the open node menu's Poll now acts on, and whether to name the row — the same answer
    *  the moves and Delete read. */
   const pollItems =
@@ -2028,15 +2028,15 @@ export function NodeTree({
         className="ntree-body"
         ref={scrollRef}
         // One Tab stop for the whole tree, and the rows named through `aria-activedescendant`
-        // (ADR-155 決定 1) — a virtualized row that held focus would take it away when scrolled out.
+        // (ADR-155 decision 1) — a virtualized row that held focus would take it away when scrolled out.
         tabIndex={0}
         role="tree"
         aria-label={t('inventory.treeLabel')}
         aria-activedescendant={activeDescendant}
         onKeyDown={onTreeKeyDown}
-        // ADR-124 増分 5 決定 B, both halves, from one place. Capture phase, so a descendant that
+        // ADR-124 Inc.5 decision B, both halves, from one place. Capture phase, so a descendant that
         // ever stops mousedown propagation cannot disarm either of them — and `menuAtDown` is the
-        // ADR-073 決定 4 ordering, which must not become optional. Same element, same event.
+        // ADR-073 decision 4 ordering, which must not become optional. Same element, same event.
         onMouseDownCapture={(e) => {
           menuAtDown.current = menu !== null;
           pinFocusScroll(scrollRef.current, e.target as Element, (at) => {
@@ -2091,7 +2091,7 @@ export function NodeTree({
         ) : (
           // Virtualized body: only the on-screen window of `drawn` is turned into DOM (S13).
           <>
-            {/* The pinned folders (ADR-171 決定 5). A zero-height sticky element, so it takes no
+            {/* The pinned folders (ADR-171 decision 5). A zero-height sticky element, so it takes no
                 room in the scroll height and the rows below keep their `index × 30px` positions. */}
             {band.length > 0 && (
               <div className="ntree-sticky" aria-hidden="true">
@@ -2261,7 +2261,7 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
-              {/* Poll now was reachable only from a node's detail header until ADR-124 増分 12,
+              {/* Poll now was reachable only from a node's detail header until ADR-124 Inc.12,
                   which is the wrong place for it: it is what an operator presses right after
                   editing something in the tree. Batch-aware from the start, through the same
                   `nodeActionItems` answer as the moves. */}
@@ -2284,7 +2284,7 @@ export function NodeTree({
               )}
               {/* 🚨 These two act on the row even while the menu also carries
                   "Move N selected…" above them, so while a batch is in play they name the node
-                  (ADR-124 増分 9 / ADR-055 R1). Neither has a batch form: a pin is this account's
+                  (ADR-124 Inc.9 / ADR-055 R1). Neither has a batch form: a pin is this account's
                   own navigation and the edit dialog shows one node's whole binding. */}
               {onTogglePin && (
                 <button
@@ -2386,14 +2386,14 @@ export function NodeTree({
                   {t('tree.addNodeEllipsis')}
                 </button>
               )}
-              {/* The chips act on the batch when this row carries it (増分 10). `sharedOwnPool`
+              {/* The chips act on the batch when this row carries it (Inc.10). `sharedOwnPool`
                   is what may mark a chip selected: reading this one row's pool would claim the
                   batch is set to it when most of the selection sits elsewhere. */}
               {poolMenu(
                 batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
                 batchTarget ? sharedOwnPool([...checkedNodes.values()]) : menu.node.pool,
               )}
-              {/* The presets act on the batch when this row carries it (増分 11); the release
+              {/* The presets act on the batch when this row carries it (Inc.11); the release
                   panel below them stays about the row, so it is passed the row's own node. */}
               {suppressionMenu(
                 batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
@@ -2401,7 +2401,7 @@ export function NodeTree({
                 menu.node,
                 menu,
               )}
-              {/* What Delete acts on is `nodeTreeMenu.ts`'s call (ADR-124 増分 6): the working set
+              {/* What Delete acts on is `nodeTreeMenu.ts`'s call (ADR-124 Inc.6): the working set
                   when this row is in it, otherwise this row — named while a set exists elsewhere. */}
               {deleteItems && (
                 <>

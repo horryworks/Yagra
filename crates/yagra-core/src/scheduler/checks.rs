@@ -245,9 +245,9 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
 pub struct WlanWalk {
     /// The dialect, from the collection item that named it.
     pub flavor: WlanFlavor,
-    /// Walk the SSID statistics table (ADR-064 増分 D).
+    /// Walk the SSID statistics table (ADR-064 Inc.D).
     pub ssids: bool,
-    /// Walk the radio table (ADR-064 増分 C).
+    /// Walk the radio table (ADR-064 Inc.C).
     pub radios: bool,
 }
 

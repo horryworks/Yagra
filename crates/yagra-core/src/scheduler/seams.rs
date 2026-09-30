@@ -7,10 +7,10 @@
 //! because no test could construct the value they are methods on. (ADR-114 has since given the
 //! suite a database, so the *other* repair was available too. It would have been the worse one:
 //! a seam says what the dispatcher is allowed to read, and a real store says only what one
-//! fixture happened to contain.) ADR-096 決定 3 and ADR-098 決定 4 each measured that and deliberately stopped; this
+//! fixture happened to contain.) ADR-096 decision 3 and ADR-098 decision 4 each measured that and deliberately stopped; this
 //! is the rest of it, and the same shape [`crate::analysis::seams`] took.
 //!
-//! The traits are cut by **what the caller needs**, never per repository (ADR-092 決定 1) — nine
+//! The traits are cut by **what the caller needs**, never per repository (ADR-092 decision 1) — nine
 //! methods against seven concrete types with well over a hundred between them. The doc this
 //! replaces said the seam count here was "roughly double" the analysis case; that was counting
 //! *repositories* (8 against 5). Counted by what the callers need it is **smaller** — four traits,

@@ -42,7 +42,7 @@ export function AlertSubjectName({
         <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
       );
     case 'meraki_org':
-      // One alert for the whole organization (ADR-164 決定 18): its devices did not fail, the API
+      // One alert for the whole organization (ADR-164 decision 18): its devices did not fail, the API
       // that reports on them did. The link goes to the page that says which collect is failing
       // and why — the organization is identified by id, and an id is not what anyone reads.
       return (

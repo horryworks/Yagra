@@ -7,7 +7,7 @@
 // the literal text with the number silently gone, and one that drops `<lnk>` makes a `<Trans>`
 // link vanish. Neither is a key-set difference, a type error, or a runtime throw. It was a CLI
 // (`scripts/i18n-parity.mjs`) whose header said the Vitest suite ran the same logic; the key-set
-// half did, this half did not, and CI runs `npm run test`. ADR-150 決定 4(b) made the test the one
+// half did, this half did not, and CI runs `npm run test`. ADR-150 decision 4(b) made the test the one
 // implementation and `npm run i18n:check` an invocation of it.
 
 export type Json = Record<string, unknown>;

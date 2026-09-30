@@ -16,12 +16,12 @@
 // `profiles` names the built-in profiles the rule targets. **An empty slice means
 // `global`** — every node, whatever it is.
 //
-// 🚨 ADR-078 決定 1: a vendor metric belongs on that vendor’s profiles, not on every
+// 🚨 ADR-078 decision 1: a vendor metric belongs on that vendor’s profiles, not on every
 // node. ADR-077 put all 21 of them at `global` and argued that it changed nothing about
 // *who fires* — which is true, since a node that does not collect `cisco_cpu_5min` never
 // evaluates the rule. What it missed is that the screen then tells the operator a
 // Cisco-only rule applies to the whole fleet, which is false and makes a 30-row list
-// unreadable. ADR-075 決定 1 (a profile rule cannot reach a node with no profile) is
+// unreadable. ADR-075 decision 1 (a profile rule cannot reach a node with no profile) is
 // still true; it is the argument for the four `global` rows below, not for these.
 //
 // ⚠️ The profile names are literals, and `builtin_profiles()` is where they really live.
@@ -63,12 +63,12 @@ const HUAWEI: &[&str] = &[
     "Huawei wireless controller",
 ];
 
-// The profiles that walk a wireless controller's AP table (ADR-064). The Cisco one since 増分 F;
+// The profiles that walk a wireless controller's AP table (ADR-064). The Cisco one since Inc.F;
 // migration 0128 adds it to the row an existing deployment already holds.
 const WLAN_CONTROLLERS: &[&str] = &["Huawei wireless controller", "Cisco wireless controller"];
 
 // The profiles whose AP table lists only joined APs, and so publish how many are missing (ADR-064
-// 増分 F, F10).
+// Inc.F, F10).
 const CISCO_WLAN_CONTROLLERS: &[&str] = &["Cisco wireless controller"];
 
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
@@ -142,12 +142,12 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
     // rule’s job, and two criticals for one outage is a notification storm, which this
     // project treats as a bug rather than a feature. ⚠️ At 100% loss BOTH fire today
     // (this warning and that critical); removing the overlap needs a range bound
-    // ("20% to 99%"), which the model cannot express yet — ADR-078 決定 5.
+    // ("20% to 99%"), which the model cannot express yet — ADR-078 decision 5.
     (2, FLEET, "icmp_loss_pct", "above", Some(20.0), None, 3),
     // Slow, not gone. Warning only, same argument.
     (3, FLEET, "icmp_rtt_ms", "above", Some(500.0), None, 3),
     // ── Per-profile (ADR-077 bounds, ADR-078 scoping) ──────────────────────────
-    // ⚠️ Bounds were chosen against measured fleet values (ADR-077 決定 5), not from
+    // ⚠️ Bounds were chosen against measured fleet values (ADR-077 decision 5), not from
     // the MIB alone. Where a metric could not be measured the ADR says so.
     //
     // Linux CPU. ⚠️ This is the IDLE percentage, so it reads `below` — the one metric
@@ -446,7 +446,7 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
         None,
         3,
     ),
-    // ── Per memory pool (ADR-143 決定 8) ───────────────────────────────────────
+    // ── Per memory pool (ADR-143 decision 8) ───────────────────────────────────────
     // The one default written from a named row. A Catalyst 2960S's `I/O` pool sat at 83.8–83.9% for
     // a week (measured on the PoC fleet, 2026-09-15) because it holds the packet buffers the switch
     // pre-allocates, so offset 24's 80/90 paged about it without end while the pool that runs out
@@ -467,14 +467,14 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
     ),
     // ── Wireless controllers (ADR-064) ─────────────────────────────────────────
     // The AP walk did not get every column, so no AP inventory was published this poll and the AP
-    // list stopped refreshing (決定 9b). The only signal that the AP data has stopped arriving —
+    // list stopped refreshing (decision 9b). The only signal that the AP data has stopped arriving —
     // nothing else changes on screen, because nothing is concluded from absence.
     //
     // Warning, and 0.5 with dwell 3, for offset 31's reasons: the controller itself is answering,
     // `below` is inclusive so 1.0 would fire on every healthy controller, and one incomplete walk can
     // be a moment of load. ⚠️ Profile-scoped rather than fleet-wide, unlike offset 31, because this
     // metric does have a catalogue row — the AP-table template — and a vendor metric belongs on the
-    // profiles that collect it (ADR-078 決定 1).
+    // profiles that collect it (ADR-078 decision 1).
     (
         33,
         WLAN_CONTROLLERS,
@@ -484,7 +484,7 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
         None,
         3,
     ),
-    // ADR-064 増分 F, F10 (the user's decision of 2026-09-21): a Cisco controller missing one of
+    // ADR-064 Inc.F, F10 (the user's decision of 2026-09-21): a Cisco controller missing one of
     // the APs it serves. 1 or more is a warning — the comparison is inclusive — after three polls
     // in a row. Only the Cisco profile publishes the count; a Huawei AC keeps its down APs in its
     // table, where each one's own liveness says so (and R11 keeps AC-wide defaults off Huawei).
@@ -588,7 +588,7 @@ mod tests {
 
     /// Exactly four seeded defaults are fleet-wide, and they are the four that really are.
     ///
-    /// ADR-078 決定 1. The ADR-075 argument for `global` — a profile-scoped rule cannot reach a
+    /// ADR-078 decision 1. The ADR-075 argument for `global` — a profile-scoped rule cannot reach a
     /// node with no profile — applies to a rule about whether the node answered at all, and not to
     /// one about a vendor’s CPU register. This pins which side each row is on, because the cheap
     /// mistake when adding the next default is to copy the row above it.

@@ -99,7 +99,7 @@ export interface GeoView {
  *  (`minGeoScale`), because the only meaningful floor is "the whole world, and no more".
  *
  *  240 is the user's request (ADR-188): ten times the old 24, so the sites inside one city stop
- *  overlapping. ⚠️ The coastline is simplified at ≈3.3 km (ADR-127 決定 2), which is about 14 px
+ *  overlapping. ⚠️ The coastline is simplified at ≈3.3 km (ADR-127 decision 2), which is about 14 px
  *  here — the outline turns visibly angular near the ceiling. The pins stay exact; the outline is
  *  context, and the resolution was accepted as the price of zooming in on a site. */
 export const MAX_GEO_SCALE = 240;

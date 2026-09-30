@@ -10,7 +10,7 @@
 //! mechanisms because they fail differently:
 //!
 //! * **The cache** removes the call entirely. The same incident within the TTL ⇒ the stored report
-//!   (ADR-172 決定 3 — it was the same *evidence* until then, which during an outage changes most
+//!   (ADR-172 decision 3 — it was the same *evidence* until then, which during an outage changes most
 //!   minutes).
 //!   Beyond saving money this is a *correctness* property: model output is non-deterministic, and
 //!   an explanation that rewords itself every time you reopen it is one nobody comes to trust.
@@ -170,7 +170,7 @@ fn generation_panicked() -> Outcome {
 }
 
 /// The work running right now, keyed so a second request for the same thing waits for the first
-/// instead of starting another (ADR-172 決定 3).
+/// instead of starting another (ADR-172 decision 3).
 ///
 /// Only this process's runs: a request that reaches another core does not join, and finds the
 /// report in the store once the first one lands.
@@ -327,7 +327,7 @@ impl RcaOrchestrator {
 
     /// Explain the incident containing `req.node`/`req.check`.
     ///
-    /// Three stages (ADR-172 決定 3). **Admission** runs in the caller: the config, the context, the
+    /// Three stages (ADR-172 decision 3). **Admission** runs in the caller: the config, the context, the
     /// cache, the concurrency permit and the rate window — everything that can refuse. **The
     /// generation** — the provider round trips and the stored report — runs in a task of its own,
     /// holding the permit. **The caller** then only waits for that task.
@@ -388,7 +388,7 @@ impl RcaOrchestrator {
         // The cache check comes before admission on purpose: a served-from-store report costs
         // nothing external, so charging it against the rate limit would punish the cheap path.
         //
-        // ⚠️ Keyed by the incident, no longer by the digest (ADR-172 決定 3): the digest moves with
+        // ⚠️ Keyed by the incident, no longer by the digest (ADR-172 decision 3): the digest moves with
         // the evidence, which during an outage is most minutes, so a report generated after the
         // dialog was closed would be billed again on reopening instead of shown.
         if !req.force {
@@ -666,7 +666,7 @@ impl RcaOrchestrator {
 /// A record of what was asked: the evidence, plus everything else that changes the answer. Stored
 /// on the report as `context_digest`.
 ///
-/// ⚠️ **No longer the cache key.** Since ADR-172 決定 3 a report is reused for any request about the
+/// ⚠️ **No longer the cache key.** Since ADR-172 decision 3 a report is reused for any request about the
 /// same incident (root node, check, language) within the TTL, so switching provider, model or tool
 /// mode serves the earlier report for up to fifteen minutes. That is the cost the decision accepted;
 /// "regenerate" (`force`) is the way past it. The stored `provider` column stays true either way —
@@ -737,7 +737,7 @@ mod in_flight_tests {
         0
     }
 
-    /// ADR-172 決定 3: a second request for the same incident waits for the first run rather than
+    /// ADR-172 decision 3: a second request for the same incident waits for the first run rather than
     /// paying for another, and the run finishes even when nobody is left waiting.
     #[tokio::test]
     async fn a_second_caller_joins_the_run_and_the_run_outlives_its_callers() {

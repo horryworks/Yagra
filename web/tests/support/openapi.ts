@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Default API responses, generated from the committed OpenAPI document (ADR-052 決定 2 / Inc.1).
+// Default API responses, generated from the committed OpenAPI document (ADR-052 decision 2 / Inc.1).
 //
 // WHY GENERATED. The API is 196 paths / 256 operations, 122 of them GET. Hand-writing a fixture per
 // screen does not scale, and a hand-written fixture is exactly the artefact that drifts from the

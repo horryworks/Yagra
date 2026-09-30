@@ -88,7 +88,7 @@ pub trait NodeListing: Send + Sync {
     /// it never loads the whole inventory into the browser (ui-conventions: search is server-side
     /// at fleet scale, A-2).
     ///
-    /// `address`, when given, keeps only nodes **at exactly that address** (ADR-139 増分 2) —
+    /// `address`, when given, keeps only nodes **at exactly that address** (ADR-139 Inc.2) —
     /// compared as an address, not as text, so `2001:DB8::1` finds `2001:db8::1`. It is a second
     /// narrowing beside the substring rather than a spelling of it: a substring of `10.0.0.1` also
     /// matches `10.0.0.10`, and a name-ordered page capped at `limit` can hold every one of those
@@ -498,7 +498,7 @@ mod tests {
         );
     }
 
-    /// **The address narrowing is an address comparison, in both stores** (ADR-139 増分 2).
+    /// **The address narrowing is an address comparison, in both stores** (ADR-139 Inc.2).
     ///
     /// The substring search cannot answer "who is at 10.0.0.1": it also matches `10.0.0.10`, and a
     /// name-ordered page capped at its limit can be full of those and miss the node actually there.

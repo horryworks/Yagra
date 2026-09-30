@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Where an unregistered endpoint goes when it is monitored (ADR-179 増分 8): a folder, and whether
+// Where an unregistered endpoint goes when it is monitored (ADR-179 Inc.8): a folder, and whether
 // a folder whose IP range holds the address takes it instead — the range-scan import's two
 // controls, for Discovery ▸ Unregistered devices and the Node ▸ Neighbors setup panel alike.
 //

@@ -212,7 +212,7 @@ test.describe('node Overview metric cards', () => {
   // ADR-046 Inc.9, the other direction: this inventory carries no `template` (as an older core's
   // does), and the headings above still come from the catalog. The Cisco suite below carries one.
 
-  // ADR-117 決定 6. The RTT chart was a fixed 30-minute sparkline that ignored the buttons, and on
+  // ADR-117 decision 6. The RTT chart was a fixed 30-minute sparkline that ignored the buttons, and on
   // an ICMP-only node it is the *only* chart — Device health and the SNMP strip both self-hide —
   // so that node's Overview carried no range control at all.
   test('the ICMP section carries a range control of its own', async ({ page }) => {

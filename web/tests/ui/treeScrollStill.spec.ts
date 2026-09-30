@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The inventory tree does not move unless the operator scrolls it (ADR-124 増分 5).
+// The inventory tree does not move unless the operator scrolls it (ADR-124 Inc.5).
 //
 // TWO CAUSES SHIPPED, and neither was a scroll call — no pointer path in `NodeTree.tsx` or
 // `NodesPage.tsx` writes `scrollTo` / `scrollIntoView` / `scrollTop` (the keyboard does, since
@@ -178,7 +178,7 @@ test('a Shift range does not move the tree', async ({ page }) => {
 });
 
 test('the working-set bar sits below the tree', async ({ page }) => {
-  // The structural pin behind 増分 5 決定 A. Without it a later refactor can put the bar back above
+  // The structural pin behind Inc.5 decision A. Without it a later refactor can put the bar back above
   // the tree and only the first test fails, with a message about a row's `y` rather than about
   // where the bar is.
   await page.goto('/nodes');

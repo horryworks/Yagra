@@ -141,7 +141,7 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
   };
 }
 
-/** The columns this module's functions read (ADR-053 Inc.10, 決定 AA). */
+/** The columns this module's functions read (ADR-053 Inc.10, decision AA). */
 export type HistoryColumns = readonly FilterableColumn<AlertHistoryRow>[];
 
 /** Both phases ticked (or neither) is the unfiltered view; exactly one is a filter.

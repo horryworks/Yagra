@@ -89,7 +89,7 @@ describe('dropPosition', () => {
   });
 
   it('splits a node row the same way however many nodes are being dragged', () => {
-    // 🚨 THE 増分 8 REGRESSION. This used to answer `inside` for every Y once the batch held more
+    // 🚨 THE Inc.8 REGRESSION. This used to answer `inside` for every Y once the batch held more
     // than one node — an append — because there was no bulk placement endpoint to carry an
     // insertion point. `POST /nodes/move` takes `before`/`after` now, so the count is not part of
     // the question: the same gesture must answer the same way at one node and at three.
@@ -154,7 +154,7 @@ describe('dropAllowed', () => {
     // `drag.id` alone — the grabbed row — permits exactly that.
     //
     // ⚠️ The positions here are the ones a node row can actually produce. They were `inside` until
-    // 増分 8, which was the only answer a batch over a node row used to get — a refusal asserted
+    // Inc.8, which was the only answer a batch over a node row used to get — a refusal asserted
     // against a position the cursor can no longer report proves nothing.
     const batch = nodeDrag('n1', 'n2', 'n3');
     expect(dropAllowed(GROUPS, batch, nodeTarget('n2', 'site'), 'before')).toBe(false);
@@ -239,7 +239,7 @@ describe('dropAction', () => {
   });
 
   it('orders a WHOLE BATCH against a sibling, in the TARGET’s group', () => {
-    // 🚨 THE 増分 8 FIX. This branch used to be `reorder-node`, which held a single `nodeId`, so a
+    // 🚨 THE Inc.8 FIX. This branch used to be `reorder-node`, which held a single `nodeId`, so a
     // multi-node drop could not reach it at all — `dropPosition` sent batches to an append
     // instead. Every id must arrive, in the working set's order, with the anchor.
     //
@@ -261,7 +261,7 @@ describe('dropAction', () => {
   });
 
   it('orders ONE node against a sibling through the same shape', () => {
-    // One node is a list of one (Inc.4 決定 D), so the drag has one answer to give whatever it is
+    // One node is a list of one (Inc.4 decision D), so the drag has one answer to give whatever it is
     // carrying — there is no longer a separate single-node action for the server to serve.
     expect(dropAction(nodeDrag('n1'), nodeTarget('n2', 'rack'), 'before')).toEqual({
       kind: 'move-nodes',
@@ -346,7 +346,7 @@ describe('rootDropAction', () => {
 });
 
 // ------------------------------------------------------------------------------------------------
-// The insertion slot (ADR-162 増分 2)
+// The insertion slot (ADR-162 Inc.2)
 //
 // 🚨 **The first two cases below are the whole increment, and they land at the same index.** A folder
 // dropped at the bottom edge of `DNS`'s last node and one dropped at the top edge of the next

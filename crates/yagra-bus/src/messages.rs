@@ -190,7 +190,7 @@ pub const CAP_DISCOVERY_CANCEL: &str = "discovery-cancel";
 pub const CAP_POOL_FOLLOW: &str = "pool-follow";
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can run the Meraki
-/// **switch-port** collect tier (`MerakiTier::SwitchPorts`, ADR-167 決定 9).
+/// **switch-port** collect tier (`MerakiTier::SwitchPorts`, ADR-167 decision 9).
 ///
 /// 🚨 **Core withholds the tier from a pool unless every live poller in it claims this**, and the
 /// reason is worse than a missed reading. A Meraki collect is queue-delivered, and a poller from
@@ -206,7 +206,7 @@ pub const CAP_POOL_FOLLOW: &str = "pool-follow";
 pub const CAP_MERAKI_SWITCH_PORTS: &str = "meraki-switch-ports";
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can run the Meraki
-/// **wireless** collect tier (`MerakiTier::Wireless`, ADR-168 決定 7).
+/// **wireless** collect tier (`MerakiTier::Wireless`, ADR-168 decision 7).
 ///
 /// 🚨 Asked of the whole pool for the reason [`CAP_MERAKI_SWITCH_PORTS`] gives: a poller from before
 /// the tier drops the job, and the collect lane it took then waits out the whole lease behind a job
@@ -1192,7 +1192,7 @@ pub struct PollerLogChunk {
     /// Names the **rule**, never the value — the same contract as
     /// [`crate::messages`]'s peers and as core's own redaction refusal, because this string is
     /// logged and then written into the bundle a human reviews. The poller refuses rather than
-    /// redacts for the reason ADR-045 決定 4 gives: redacting assumes the pattern set is complete.
+    /// redacts for the reason ADR-045 decision 4 gives: redacting assumes the pattern set is complete.
     #[serde(default)]
     pub refused: Option<String>,
 }
@@ -1912,7 +1912,7 @@ pub struct SnmpWlanApCheck {
     /// the controller had more ([`yagra_common::WlanInventory::truncated_at`]).
     #[serde(default = "default_wlan_max_aps")]
     pub max_aps: u32,
-    /// Also walk the controller's SSID statistics table (ADR-064 増分 D).
+    /// Also walk the controller's SSID statistics table (ADR-064 Inc.D).
     ///
     /// Set by core when the node's collection set holds an item naming the dialect's SSID table, so
     /// an operator turns the walk on and off by attaching the template. Defaulted, which is what
@@ -1920,7 +1920,7 @@ pub struct SnmpWlanApCheck {
     /// only the AP table, and an N-1 core never sets it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_ssids: bool,
-    /// Also walk the controller's radio table (ADR-064 増分 C). Same shape as
+    /// Also walk the controller's radio table (ADR-064 Inc.C). Same shape as
     /// [`SnmpWlanApCheck::walk_ssids`]: set from the collection set, defaulted for N-1.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_radios: bool,
@@ -1946,7 +1946,7 @@ pub struct SnmpV3WlanApCheck {
     /// See [`SnmpWlanApCheck::walk_ssids`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_ssids: bool,
-    /// Also walk the controller's radio table (ADR-064 増分 C). Same shape as
+    /// Also walk the controller's radio table (ADR-064 Inc.C). Same shape as
     /// [`SnmpWlanApCheck::walk_ssids`]: set from the collection set, defaulted for N-1.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub walk_radios: bool,
@@ -2121,11 +2121,11 @@ pub struct MerakiCollectCheck {
     #[serde(default)]
     pub devices: Vec<MerakiDeviceRef>,
     /// The Meraki networks this collect reports on (empty ⇒ all). A poller keeps only their rows;
-    /// since ADR-164 決定 22 it asks the whole organization and filters itself, because the
+    /// since ADR-164 decision 22 it asks the whole organization and filters itself, because the
     /// Dashboard refuses a URL carrying a couple of hundred `networkIds[]` (414). A poller from
     /// before that sends them in the URL and still fails that way until it is upgraded.
     ///
-    /// ⚠️ Core no longer sends an empty list (ADR-164 決定 16): an organization that watches no
+    /// ⚠️ Core no longer sends an empty list (ADR-164 decision 16): an organization that watches no
     /// network gets no collect at all. The "empty ⇒ all" reading stays, because a poller from
     /// before that change still has it and a message that omits the field still decodes to it.
     #[serde(default)]
@@ -2140,7 +2140,7 @@ pub struct MerakiCollectCheck {
     /// Overall per-request timeout, in milliseconds.
     #[serde(default = "default_meraki_timeout_ms")]
     pub timeout_ms: u32,
-    /// The switch-port tier only (ADR-167 決定 1): also read the ports' configured names
+    /// The switch-port tier only (ADR-167 decision 1): also read the ports' configured names
     /// (`switch/ports/bySwitch`) this time. That listing took 84 s for 854 switches on a real
     /// organization — longer than the rest of the collect — so core asks for it once an hour per
     /// organization, and on its first collect after starting. Every other tier ignores it, and so
@@ -2148,7 +2148,7 @@ pub struct MerakiCollectCheck {
     /// ([`crate::CAP_MERAKI_SWITCH_PORTS`]).
     #[serde(default)]
     pub port_names: bool,
-    /// The wireless tier only (ADR-168 決定 1): also read every access point's SSIDs and radio
+    /// The wireless tier only (ADR-168 decision 1): also read every access point's SSIDs and radio
     /// settings (`wireless/ssids/statuses/byDevice`) this time. That listing took 78 s for 1,710
     /// access points on a real organization, and what it answers barely changes (8 of 1,710 in five
     /// minutes), so core asks for it every twenty minutes per organization — inside the thirty
@@ -2157,7 +2157,7 @@ pub struct MerakiCollectCheck {
     /// at all ([`crate::CAP_MERAKI_WIRELESS`]).
     #[serde(default)]
     pub ssid_statuses: bool,
-    /// The wireless tier only (ADR-169 決定 2): this collect is **the SSID read and nothing else**
+    /// The wireless tier only (ADR-169 decision 2): this collect is **the SSID read and nothing else**
     /// — no client counts, no utilization samples. Core sends it in the organization's slow lane,
     /// apart from the wireless rounds, so a read that holds the lane for a minute and a half moves
     /// neither the rounds' timing nor their samples. The utilization listing is still read,
@@ -2177,7 +2177,7 @@ pub struct MerakiCollectCheck {
     ///
     /// A poller from before it ignores the flag and reads no neighbours: its results carry
     /// `neighbors: None`, which leaves every stored set as it was — the switches' neighbours are
-    /// an interval late until that poller is upgraded, and nothing is erased (決定 7).
+    /// an interval late until that poller is upgraded, and nothing is erased (decision 7).
     #[serde(default)]
     pub neighbors: bool,
 }
@@ -2347,7 +2347,7 @@ pub struct PollResult {
     ///
     /// `None` and `Some(empty)` mean different things, as for `neighbors`: `None` = "no complete
     /// inventory this poll" and nothing is written; `Some(empty)` = "this controller manages no APs".
-    /// A walk that did not get every column publishes `None` (ADR-064 決定 9b), so a half-read table
+    /// A walk that did not get every column publishes `None` (ADR-064 decision 9b), so a half-read table
     /// can never read as APs disappearing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wlan: Option<yagra_common::WlanInventory>,
@@ -2407,7 +2407,7 @@ pub struct PollResult {
     #[serde(default, skip_serializing_if = "TraceContext::is_empty")]
     pub trace_context: TraceContext,
     /// How one Meraki collect ended — sent once per collect job, on a result of its own (ADR-164
-    /// 決定 18). `None` on every other result, including the per-device ones of the same job.
+    /// decision 18). `None` on every other result, including the per-device ones of the same job.
     ///
     /// A collect that failed used to publish nothing at all, so core could not tell "the Dashboard
     /// is not answering" from "nothing is due": every node of the organization kept its last state
@@ -2480,8 +2480,8 @@ pub struct MerakiCollectReport {
     #[serde(default)]
     pub failure: Option<String>,
     /// Which of the tier's reads failed, when one did while the others answered
-    /// (`yagra_common::MerakiListing::as_str`, ADR-164 決定 25) — the uplink tier reads three. `None`
-    /// for a success, and for a failure a poller from before 決定 25 reported.
+    /// (`yagra_common::MerakiListing::as_str`, ADR-164 decision 25) — the uplink tier reads three. `None`
+    /// for a success, and for a failure a poller from before decision 25 reported.
     ///
     /// A `String` for the reason `failure` is one: a listing this core does not know costs the
     /// label, never the report. Left off the wire when absent, so a report an older core reads is
@@ -3486,7 +3486,7 @@ mod tests {
         assert!(!c.ssid_only, "nor for an SSID read on its own");
     }
 
-    /// ADR-169 決定 2. The SSID read on its own travels as the wireless tier with both flags; a
+    /// ADR-169 decision 2. The SSID read on its own travels as the wireless tier with both flags; a
     /// consumer from before `ssid_only` decodes it as a wireless round that reads the SSIDs too,
     /// which is still a correct collect.
     #[test]
@@ -4217,7 +4217,7 @@ mod tests {
         assert!(back.observational && back.judge_samples);
     }
 
-    /// ADR-164 決定 18's field. An N-1 poller never sends it; an ordinary result's wire form does
+    /// ADR-164 decision 18's field. An N-1 poller never sends it; an ordinary result's wire form does
     /// not change; a report keeps what it says; and a report written by a **newer** poller — a
     /// failure token this build has never heard of, a field inside the report it does not know —
     /// still decodes, because losing the reason is acceptable and losing "the collect failed" is
@@ -4270,7 +4270,7 @@ mod tests {
         assert_eq!(ok.failure, None);
         assert_eq!(ok.listing, None);
 
-        // ADR-164 決定 25: the failed listing travels, and an unknown one is still read.
+        // ADR-164 decision 25: the failed listing travels, and an unknown one is still read.
         let named: MerakiCollectReport = serde_json::from_str(
             r#"{"org":"00000000-0000-0000-0000-000000000007","tier":"uplink",
                 "failure":"upstream","listing":"a_listing_from_the_future"}"#,
@@ -4645,7 +4645,7 @@ mod tests {
     /// The inventory's bounds are payload bounds, so measure them: a controller result built through
     /// [`yagra_common::WlanInventory::bounded`] fits NATS's 1 MiB `max_payload` even when every
     /// string is at the sanitizer's cap, and at realistic lengths the whole hard cap fits
-    /// (ADR-064 改訂 R12).
+    /// (ADR-064 revision R12).
     ///
     /// 🚨 The first version of this test built the list by hand and measured 1.6 MB at the hard cap —
     /// which is how the byte budget came to exist. A count cap alone does not bound the message.
@@ -4761,7 +4761,7 @@ mod tests {
         // budget.
         //
         // 🚨 The hard cap is not, and that is the fact to know rather than a number to raise
-        // (ADR-064 増分 C). Radios roughly double an observation, so a controller asked for both
+        // (ADR-064 Inc.C). Radios roughly double an observation, so a controller asked for both
         // 2,048 APs and their radios does not fit one NATS message however the budget is set —
         // 2,048 of these is about 1.4 MB against a 1 MiB `max_payload`. The list is cut and says
         // where, which is the designed answer; what must never happen is a publish that is

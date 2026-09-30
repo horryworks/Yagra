@@ -109,7 +109,7 @@ pub fn derived_metric_name(metric: &str) -> Option<&'static str> {
 /// implementation asked `AlertManager::node_state`, which is the worse of liveness *and every active
 /// alert on the node* — so a port alert made its own node read as `Warning`, the evaluator stopped
 /// looking at that node, and nothing could resolve the alert afterwards at any traffic level or any
-/// threshold (ADR-076 増分 7). This takes a bare state rather than an `AlertManager` precisely so the
+/// threshold (ADR-076 Inc.7). This takes a bare state rather than an `AlertManager` precisely so the
 /// mistake can only live at the call site.
 ///
 /// `Maintenance` is let **through**, not frozen — decision 3's other half. Inside a window the
@@ -249,7 +249,7 @@ pub type CheckKey = (NodeId, IfIndex, &'static str);
 ///
 /// Bounded by what is above the floor or still recovering, not by the fleet size: a port that has
 /// never been busy has never been tracked, and a check whose recovery has committed is forgotten
-/// (ADR-076 増分 8 決定 16) until it crosses the floor again.
+/// (ADR-076 Inc.8 decision 16) until it crosses the floor again.
 #[derive(Debug, Default)]
 pub struct TrackedChecks {
     seen: BTreeSet<CheckKey>,
@@ -270,7 +270,7 @@ impl TrackedChecks {
     ///
     /// 🚨 This is the **only** way the set shrinks. Without it `seen` is a high-water mark rather
     /// than a live set: every key ever marked stays forever, and the recovery sweep walks all of
-    /// them on every tick for the life of the process — and since ADR-076 増分 8 that walk is a
+    /// them on every tick for the life of the process — and since ADR-076 Inc.8 that walk is a
     /// store read, not a loop over memory.
     pub fn forget(&mut self, key: &CheckKey) {
         self.seen.remove(key);
@@ -321,7 +321,7 @@ pub struct PortReading {
 }
 
 /// What the recovery sweep may feed a tracked check that has left the candidate set
-/// (ADR-076 増分 8 決定 15).
+/// (ADR-076 Inc.8 decision 15).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Recovery {
     /// The port has a reading: observe it. It is below the floor — that is why it left the set —
@@ -450,10 +450,10 @@ pub(crate) async fn run_interface_utilization_watch(
         // Close the port alerts whose rule was deleted. The poll path's `!alerting` branch does
         // this for every check it visits, but it never visits a derived per-interface check —
         // nothing polls `if_in_util_pct` — so before this, deleting a port rule stranded its alert
-        // for the life of the process (ADR-076 増分 7 決定 14).
+        // for the life of the process (ADR-076 Inc.7 decision 14).
         for action in alerts.resolve_orphaned_interface_alerts() {
             // Stop asking about a port nobody has a rule for. `TrackedChecks` has no other way to
-            // shrink (増分 6d), and the recovery sweep below is skipped entirely when a metric has
+            // shrink (Inc.6d), and the recovery sweep below is skipped entirely when a metric has
             // no rule left — so without this the key would outlive the rule forever.
             if let crate::alerts::NotifyAction::Resolve(a) = &action {
                 if let (Some(node), Some(idx), Some(m)) =
@@ -578,7 +578,7 @@ pub(crate) async fn run_interface_utilization_watch(
                 //
                 // 🚨 Liveness, never the display roll-up: the roll-up folds in this port's own
                 // alert, so gating on it froze the evaluator on its own output and the alert could
-                // never clear (ADR-076 増分 7 決定 13). A maintenance window is let through, so an
+                // never clear (ADR-076 Inc.7 decision 13). A maintenance window is let through, so an
                 // open port alert resolves inside one the way a node-level alert does.
                 if !util::may_observe_ports(alerts.node_liveness(r.node)) {
                     continue;
@@ -609,7 +609,7 @@ pub(crate) async fn run_interface_utilization_watch(
             // Anything tracked that has left the candidate set is read again, without the floor, and
             // observed at what it actually carries: below the floor is below every rule's bound, so
             // that walks the check back to `Ok` through its dwell. 🚨 **A port with no reading at
-            // all is held** — nothing observed, its alert left open (ADR-076 増分 8 決定 15).
+            // all is held** — nothing observed, its alert left open (ADR-076 Inc.8 decision 15).
             // Leaving the set means "below the floor" *or* "no value came", and this sweep used to
             // observe 0 for both, so a dead SNMP agent, a truncated walk or a Meraki window the
             // Dashboard did not fill closed the alert as a recovery and paged one. Frozen nodes are
@@ -643,7 +643,7 @@ pub(crate) async fn run_interface_utilization_watch(
             if !absent.is_empty() {
                 // Only the nodes whose tracked ports left the set — a subset of what the candidate
                 // query already read, so this costs at most as much again, and usually far less:
-                // a check stops being tracked once its recovery has committed (決定 16).
+                // a check stops being tracked once its recovery has committed (decision 16).
                 let nodes: Vec<Uuid> = absent
                     .iter()
                     .map(|(node, _, _)| node.as_uuid())
@@ -781,7 +781,7 @@ mod tests {
 
     /// **The orphan sweep runs inside the watch loop.**
     ///
-    /// ADR-076 増分 7 moved the drain out of the per-dimension loop so the sweep could share it,
+    /// ADR-076 Inc.7 moved the drain out of the per-dimension loop so the sweep could share it,
     /// and a drain that ended up outside this function would still compile. That is a question
     /// about *where a call sits*, which no type can answer, so it stays structural — the loop body
     /// is a 60-second tick around VictoriaMetrics and PostgreSQL.
@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none), vec![sibling]);
     }
 
-    /// ADR-076 増分 8 決定 15: a tracked check that left the candidate set is observed only at a
+    /// ADR-076 Inc.8 decision 15: a tracked check that left the candidate set is observed only at a
     /// value the port actually has. No reading holds it; a reading with no usable speed holds the
     /// percentage and still observes the bits per second.
     #[test]
@@ -1099,7 +1099,7 @@ mod tests {
         assert_eq!(recovery_for(pair.bps, pair, None), Recovery::Hold);
     }
 
-    /// The loop half of 決定 15, which no unit test can run: the recovery sweep observes what
+    /// The loop half of decision 15, which no unit test can run: the recovery sweep observes what
     /// [`recovery_for`] decided, and nowhere spells an observation of a literal zero — the form the
     /// sweep had before, when every port that left the set was announced as recovered.
     #[test]

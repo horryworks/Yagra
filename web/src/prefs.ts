@@ -119,7 +119,7 @@ interface PrefsStore {
    *  window the answer is no; for "which subnet do I sweep" it is yes — the same site is swept again
    *  next week, and re-typing the range and re-ticking the credentials is the whole complaint.
    *
-   *  ⚠️ **Local-only, and not on the account** (ADR-134 決定 4). A sweep is published to a pool
+   *  ⚠️ **Local-only, and not on the account** (ADR-134 decision 4). A sweep is published to a pool
    *  reachable from wherever you are, so this is closer to "where I work" than to "who I am".
    *
    *  ⚠️ Read it through `discoveryScans.ts`'s three `initial*` helpers, never field-by-field: each

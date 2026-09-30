@@ -231,7 +231,7 @@ export function HistoryPage() {
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
         note={t('history.note')}
       />
-      {/* Fixed toolbar order (design-system §4.1): 検索 → フィルタ → spacer → 件数 → 主アクション.
+      {/* Fixed toolbar order (design-system §4.1): search → filters → spacer → count → primary action.
           There is no search box: the only free-text column is `metric`, unindexed on a table that
           reaches millions of rows, so an ILIKE there would turn the keyset seek into a seq scan.
           "Which node" is what ScopePicker answers instead. */}

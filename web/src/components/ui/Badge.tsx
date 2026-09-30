@@ -11,7 +11,7 @@ import './Badge.css';
  *  without asserting anything about it. The four status tones are the canonical status palette
  *  and mean there exactly what they mean everywhere else in the product.
  *
- *  `tag` is the one **filled, non-status** tone (ADR-135 増分 2). It exists because an operator
+ *  `tag` is the one **filled, non-status** tone (ADR-135 Inc.2). It exists because an operator
  *  scanning a node's detail is hunting for *which* labels it carries, and a grey outline chip has
  *  to be read rather than seen. It draws from the categorical family (`--series-*`), so it borrows
  *  neither the orange accent (§1.1 reserves that for active/selected/focus) nor a status colour —

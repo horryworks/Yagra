@@ -219,7 +219,7 @@ impl MaintenanceRepo {
         Ok(id)
     }
 
-    /// Open one node-scoped window over each of MANY nodes, in a single statement (ADR-124 増分 11).
+    /// Open one node-scoped window over each of MANY nodes, in a single statement (ADR-124 Inc.11).
     /// Returns `(requested, created)` — the de-duplicated id count, and how many windows exist now.
     ///
     /// "This dozen, tonight" rarely follows a folder boundary, and the alternative was one request
@@ -465,7 +465,7 @@ scope_predicate(6, "n.group_id"),
         Ok(id)
     }
 
-    /// Mute MANY nodes until one moment, in a single statement (ADR-124 増分 11). Returns
+    /// Mute MANY nodes until one moment, in a single statement (ADR-124 Inc.11). Returns
     /// `(requested, created)` with the same meaning as [`Self::create_windows_for_nodes`], and the
     /// same `JOIN nodes` carrying the caller's scope into the write.
     ///

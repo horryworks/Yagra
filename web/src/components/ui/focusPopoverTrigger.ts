@@ -10,7 +10,7 @@ import type { PopoverRole } from './AnchoredPopover';
  *  this was the one call site that did not, for its whole life, while six others got it right. A
  *  trigger can be half-clipped inside a scroller (a virtualized tree row is the case that found
  *  this), and the browser then scrolls its ancestor to show it: closing a menu moved the pane
- *  underneath it. Focus is still moved; only the scroll is refused (ADR-124 増分 5 決定 D). */
+ *  underneath it. Focus is still moved; only the scroll is refused (ADR-124 Inc.5 decision D). */
 export function focusPopoverTrigger(
   anchor: HTMLElement | null | undefined,
   role: PopoverRole,

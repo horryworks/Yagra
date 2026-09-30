@@ -129,7 +129,7 @@ pub(super) async fn execute_http(
                 // `None` = we could not decide: the body outgrew the budget (or a read
                 // failed) and the keyword was not in the prefix. Reported as 0 — the same
                 // value as a genuine violation, because the one thing it must never do is
-                // read as healthy (ADR-047 決定 3). `http_body_truncated` is what tells the
+                // read as healthy (ADR-047 decision 3). `http_body_truncated` is what tells the
                 // two apart afterwards.
                 let verdict = probe
                     .body
@@ -162,7 +162,7 @@ pub(super) async fn execute_http(
             // A truncated body is almost always invalid JSON and so yields nothing, which
             // is the correct answer rather than a special case: half a document cannot be
             // read reliably, and every failure here records **no sample**. Writing 0 would
-            // be indistinguishable from the value genuinely being 0 (ADR-047 決定 3).
+            // be indistinguishable from the value genuinely being 0 (ADR-047 decision 3).
             if !http.json_extract.is_empty() && probe.reachable {
                 match probe
                     .body
@@ -623,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn an_undecidable_rule_reports_zero_and_says_the_body_was_truncated() {
         // The budget ran out before the keyword appeared. Reporting 1 here would be the silent lie
-        // ADR-047 決定 3 forbids; reporting 0 alerts, and the truncation gauge is what tells the
+        // ADR-047 decision 3 forbids; reporting 0 alerts, and the truncation gauge is what tells the
         // operator it was the budget rather than the keyword.
         let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body("<html>…", true));
         let rule = yagra_common::BodyMatch::contains("healthy");
@@ -704,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rule_that_finds_nothing_records_nothing_rather_than_zero() {
-        // The ADR-047 決定 3 rule, and the reason `extract` returns an Option: a `0` here would be
+        // The ADR-047 decision 3 rule, and the reason `extract` returns an Option: a `0` here would be
         // indistinguishable from the queue genuinely being empty, so a "queue is fine" dashboard
         // would be showing the absence of a reading.
         let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body(HEALTH_JSON, false));

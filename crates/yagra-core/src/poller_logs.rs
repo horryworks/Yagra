@@ -3,7 +3,7 @@
 //!
 //! # The half the disk cannot reach
 //!
-//! ADR-045 決定 2 put core's own log on a named volume so a bundle taken *after* a crash still
+//! ADR-045 decision 2 put core's own log on a named volume so a bundle taken *after* a crash still
 //! carries the run that died. Increment 3 extended that to a poller sharing the volume. A poller at
 //! a monitored site shares nothing — its disk is three networks away — so its log reaches a bundle
 //! only by being asked for.
@@ -91,7 +91,7 @@ pub struct RemoteLogs {
     pub files: Vec<RemoteLogFile>,
     /// One entry per poller that was asked and produced nothing usable. **Never left empty by
     /// accident**: a site that says nothing has to be named, because "no file from Tokyo" and "no
-    /// poller in Tokyo" look identical in an archive (ADR-045 決定 3).
+    /// poller in Tokyo" look identical in an archive (ADR-045 decision 3).
     pub gaps: Vec<RemoteLogGap>,
     /// How many pollers were asked at all.
     ///
@@ -99,7 +99,7 @@ pub struct RemoteLogs {
     /// reveals. Found by taking a real bundle from a single-node deployment: every poller there is
     /// co-located, so every reply is deduplicated against its disk copy and the archive comes out
     /// byte-identical whether the bus path worked perfectly or was dead. That is precisely the
-    /// ambiguity ADR-045 名指しした — **an aggregate of zero means "safe" and "the check never ran"
+    /// ambiguity ADR-045 names — **an aggregate of zero means "safe" and "the check never ran"
     /// at the same time** — and the fix is the same one: publish the reason, not just the number.
     pub asked: usize,
     /// How many of them sent at least one chunk back.

@@ -158,7 +158,7 @@ pub fn parse_trap(bytes: &[u8]) -> Result<TrapEvent, TrapError> {
 /// callers only invoke this after [`parse_trap`] said `is_inform`, so `None` is a
 /// should-not-happen guard, not a flow.
 ///
-/// **The received bytes are copied, never re-encoded** (ADR-158 決定 1). Three places change: the
+/// **The received bytes are copied, never re-encoded** (ADR-158 decision 1). Three places change: the
 /// PDU tag becomes Response, and the contents of error-status and error-index become zero. The
 /// ack is therefore exactly as long as the message it answers, so it fits wherever that did.
 /// Re-encoding through `snmp2` did not have that property: a sender can spell a value more

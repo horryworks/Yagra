@@ -89,6 +89,6 @@ export function readSetParam<T extends string>(
 
 // There was a `writeSetParam` here, and it is worth saying why there is no longer a write half to
 // match `readSetParam`. It was the last hand-written multi-value writer, and its callers were the
-// four per-screen `writeFilters` functions ADR-053 Inc.10 (決定 AA) deleted: every screen now writes
+// four per-screen `writeFilters` functions ADR-053 Inc.10 (decision AA) deleted: every screen now writes
 // through `columnFilter.ts::writeFilterParams`, which already deletes a key at its default. A second
 // writer would be a second place the "empty selection deletes the key" rule has to stay true.

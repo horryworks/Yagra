@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// All nodes when the live stream reconnects (ADR-133 増分 7 決定 4, ADR-052 Tier1).
+// All nodes when the live stream reconnects (ADR-133 Inc.7 decision 4, ADR-052 Tier1).
 //
 // A reconnect means state frames were missed, so the page re-reads what it shows. It first did that
 // with the reload it uses after a write, which EMPTIES the member cache: for a round trip every

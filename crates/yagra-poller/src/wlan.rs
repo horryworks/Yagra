@@ -13,10 +13,10 @@
 //!   an AP whose serving controller nobody could decide;
 //! - **the vendor's "no reading" values**, which are numbers that look like readings: Huawei answers
 //!   `255` for the temperature of an AP with no sensor (36 of 38 on the PoC) and `255.255.255.255`
-//!   for the address of an AP that is down (ADR-064 改訂 R10).
+//!   for the address of an AP that is down (ADR-064 revision R10).
 //!
 //! Two dialects: Huawei's HUAWEI-WLAN MIBs, and Cisco's AIRESPACE-WIRELESS-MIB, which AireOS and
-//! the Catalyst 9800 both answer (ADR-064 増分 F). They share the MAC-indexed shape and the helpers;
+//! the Catalyst 9800 both answer (ADR-064 Inc.F). They share the MAC-indexed shape and the helpers;
 //! what differs is decoded per dialect — the run-state words, which way round a radio's up/down
 //! numbers run, where an SSID's name is (Huawei's index, Cisco's column — or, on a 9800, a second
 //! table's), where an AP's clients come from (Huawei's AP table, Cisco's radios), and where the
@@ -44,7 +44,7 @@ use yagra_transport::{SnmpInstanceRow, SnmpValue};
 /// measured on the PoC's AC6508 and matching HUAWEI-WLAN-AP-MIB.
 ///
 /// This list, and only this list, decides `wlan_ap_walk_complete` and therefore whether an
-/// inventory is published at all (ADR-064 決定 9b). Anything whose absence should cost one reading
+/// inventory is published at all (ADR-064 decision 9b). Anything whose absence should cost one reading
 /// rather than the whole AP list belongs in [`HUAWEI_OPTIONAL_COLUMNS`].
 const HUAWEI_COLUMNS: [(u32, Field); 11] = [
     (6, Field::RunState),
@@ -61,18 +61,18 @@ const HUAWEI_COLUMNS: [(u32, Field); 11] = [
 ];
 
 /// Huawei `hwWlanApEntry` columns read in a **second walk**, whose absence costs only the readings
-/// they carry (ADR-064 増分 E).
+/// they carry (ADR-064 Inc.E).
 ///
 /// 🚨 **They are kept out of [`HUAWEI_COLUMNS`] deliberately, and this is not tidiness.**
 /// [`yagra_transport::InstanceWalk::every_column_answered`] is one bool for the whole walk, and
-/// 決定 9b throws the entire inventory away when it is false. Put an optional column in the
+/// decision 9b throws the entire inventory away when it is false. Put an optional column in the
 /// required walk and any Huawei model that does not implement it stops having an AP list at all —
 /// not "loses a reading". That failure is measured, not imagined: on the PoC's AC6508 the columns
 /// `.19`, `.42` and `.50`–`.53` were asked for and never answered, so a model that skips `.83` is
 /// an ordinary expectation rather than a worry.
 const HUAWEI_OPTIONAL_COLUMNS: [(u32, Field); 2] = [(83, Field::CpuTemp), (80, Field::PowerState)];
 
-/// Cisco `bsnAPEntry` columns that **must all answer** (ADR-064 増分 F, F3) — the ones the PoC's
+/// Cisco `bsnAPEntry` columns that **must all answer** (ADR-064 Inc.F, F3) — the ones the PoC's
 /// AIR-CT3504 (AireOS 8.5.140.0) and the lab's Catalyst 9800 recording (IOS-XE 17.9.4) both
 /// answered for every AP, and nothing else, for the reason [`HUAWEI_COLUMNS`] gives.
 ///
@@ -199,7 +199,7 @@ fn run_state(flavor: WlanFlavor, value: i64) -> (String, yagra_common::WlanApSta
 }
 
 /// Whether this dialect's controller counts its own AP and client totals out of the walk, rather
-/// than from scalars a template of its own reads (ADR-064 増分 F, F8). A Huawei AC has those scalars
+/// than from scalars a template of its own reads (ADR-064 Inc.F, F8). A Huawei AC has those scalars
 /// (`T_HUAWEI_WLAN_CTL`); a Cisco controller has none that both AireOS and the 9800 answer — and
 /// publishing the same metric from two sources on one node would draw both.
 #[must_use]
@@ -210,7 +210,7 @@ pub fn counts_controller_totals(flavor: WlanFlavor) -> bool {
     }
 }
 
-/// The scalars that say how many APs the controller's **platform** supports (ADR-064 増分 H, H5),
+/// The scalars that say how many APs the controller's **platform** supports (ADR-064 Inc.H, H5),
 /// in the order they are preferred. Empty for a dialect that says it elsewhere.
 ///
 /// Cisco keeps it in two places and each platform answers only one: AireOS the AIRESPACE-SWITCHING
@@ -404,7 +404,7 @@ fn address(value: &SnmpValue) -> Option<IpAddr> {
 /// A temperature column, with the vendor's "no sensor"/"no reading" placeholder taken out.
 ///
 /// One function for both temperature columns so they can never come to disagree about what `255`
-/// means — it is the same placeholder in both (ADR-064 改訂 R10).
+/// means — it is the same placeholder in both (ADR-064 revision R10).
 fn temperature(value: &SnmpValue) -> Option<i32> {
     match value {
         SnmpValue::Int(HUAWEI_NO_TEMPERATURE) => None,
@@ -420,7 +420,7 @@ fn non_negative(value: &SnmpValue) -> Option<u32> {
     }
 }
 
-// ─── Radios (ADR-064 増分 C) ───────────────────────────────────────────────────
+// ─── Radios (ADR-064 Inc.C) ───────────────────────────────────────────────────
 
 /// Huawei `hwWlanRadioInfoEntry` columns read, as `(column number, field)`.
 ///
@@ -466,7 +466,7 @@ const RADIOS_PER_AP_MAX: usize = 6;
 /// (`Unsigned32 (1..127 | 255)`).
 const HUAWEI_NO_TX_POWER: i64 = 255;
 
-/// Cisco radio columns read, as `(full column OID, field)` (ADR-064 増分 F, F5). The first four are
+/// Cisco radio columns read, as `(full column OID, field)` (ADR-064 Inc.F, F5). The first four are
 /// `bsnAPIfEntry`; channel utilization is `bsnAPIfLoadParametersEntry`, a separate table indexed by
 /// the same (base radio MAC, slot), so its rows join the same radio.
 ///
@@ -533,7 +533,7 @@ pub fn radios(
 }
 
 /// The controller's clients on each band, summed over every radio the radio walk returned
-/// (ADR-064 増分 H, H4) — all of them, before the inventory is cut to its cap, as [`joined_count`]
+/// (ADR-064 Inc.H, H4) — all of them, before the inventory is cut to its cap, as [`joined_count`]
 /// counts.
 ///
 /// Every band is present, 0 where no radio of that band carried a client, so a controller with no
@@ -722,7 +722,7 @@ fn signed_nonzero(value: &SnmpValue) -> Option<i32> {
     }
 }
 
-// ─── SSID statistics (ADR-064 増分 D) ──────────────────────────────────────────
+// ─── SSID statistics (ADR-064 Inc.D) ──────────────────────────────────────────
 
 /// Huawei `hwWlanSsidStatisticEntry` columns read, as `(column number, field)`.
 ///
@@ -769,7 +769,7 @@ pub struct WlanSsidReading {
     pub row: u32,
     pub ap_count: Option<u32>,
     /// Clients the controller counts with no band split — a Cisco controller's
-    /// `bsnDot11EssNumberOfMobileStations` (ADR-064 増分 F, F7). `None` on a dialect that splits.
+    /// `bsnDot11EssNumberOfMobileStations` (ADR-064 Inc.F, F7). `None` on a dialect that splits.
     pub clients_unsplit: Option<u32>,
     pub clients_2g4: Option<u32>,
     pub clients_5g: Option<u32>,
@@ -797,14 +797,14 @@ impl WlanSsidReading {
     }
 }
 
-/// Cisco SSID columns read, as `(full column OID, field)` (ADR-064 増分 F, F7, and 増分 H, H1): the
+/// Cisco SSID columns read, as `(full column OID, field)` (ADR-064 Inc.F, F7, and Inc.H, H1): the
 /// SSID's name and the clients on it from `bsnDot11EssEntry` — its index is a WLAN number — and a
 /// second name from CISCO-LWAPP-WLAN-MIB's `cLWlanSsid`, indexed by the same WLAN number. The
 /// table has no band split, AP count or bytes.
 ///
 /// 🚨 **The second name is what the 9800 has.** The lab's 9800 recording answers `.38` for all eight
 /// of its WLANs and `.2` for none, so with `.2` alone it had no SSIDs, an SSID count of 0 and no
-/// controller client count — and the check that shipped 増分 F looked only at the AP list. AireOS
+/// controller client count — and the check that shipped Inc.F looked only at the AP list. AireOS
 /// answers both, identically (the PoC's `office24` / `office5`). A column a controller does not
 /// implement is still an answered column, so asking for both never costs a complete walk.
 const CISCO_SSID_COLUMNS: [(&str, CiscoSsidField); 3] = [
@@ -852,7 +852,7 @@ pub struct SsidTable {
     pub readings: Vec<WlanSsidReading>,
     /// The clients the table carries altogether, or `None` when no row answered a count.
     ///
-    /// Cisco: the sum over **every WLAN row**, named or not (ADR-064 増分 H, H2) — a client on a
+    /// Cisco: the sum over **every WLAN row**, named or not (ADR-064 Inc.H, H2) — a client on a
     /// WLAN whose name could not be read is still a client of this controller. Huawei: the sum over
     /// the SSIDs, whose names are their index and so never missing.
     pub clients_total: Option<u32>,
@@ -1279,7 +1279,7 @@ mod tests {
     /// Three APs shaped like the PoC's active controller: a working one, one down, and one with a
     /// temperature sensor. Names, serials and addresses are made up.
     /// The second walk fills the readings it carries, and the vendor placeholder is taken out of
-    /// the CPU temperature exactly as it is out of the operating one (ADR-064 増分 E).
+    /// the CPU temperature exactly as it is out of the operating one (ADR-064 Inc.E).
     ///
     /// Measured shape: on the PoC the 30 serving APs answered `.83` with 55-69 degrees and the 8
     /// that were down answered 255, which is why the placeholder has to be dropped on this column
@@ -1605,7 +1605,7 @@ mod tests {
         assert_eq!(inv.truncated_at, Some(6));
     }
 
-    // ─── Cisco, AIRESPACE-WIRELESS-MIB (ADR-064 増分 F) ────────────────────────────────
+    // ─── Cisco, AIRESPACE-WIRELESS-MIB (ADR-064 Inc.F) ────────────────────────────────
 
     const CISCO_AP: &str = "1.3.6.1.4.1.14179.2.2.1.1";
     const CISCO_RADIO: &str = "1.3.6.1.4.1.14179.2.2.2.1";
@@ -1845,7 +1845,7 @@ mod tests {
         }
     }
 
-    /// 🚨 The 9800 bug (ADR-064 増分 H, H1): the lab's recording answers `.38` for its eight WLANs
+    /// 🚨 The 9800 bug (ADR-064 Inc.H, H1): the lab's recording answers `.38` for its eight WLANs
     /// and `.2` for none. Named from `cLWlanSsid`, it has its SSIDs; with `.2` alone it had none, an
     /// SSID count of 0 and no controller client count. Values are the recording's own.
     #[test]

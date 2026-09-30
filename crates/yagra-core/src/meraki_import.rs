@@ -13,7 +13,7 @@
 //! - [`ImportResolver::resolve`] — the profile, the name a nameless device goes by, the filing.
 //!
 //! [`pick_automatic`] is the sync's half of the pick, and it is pure: the three conditions of
-//! ADR-164 決定 5 are read off [`MerakiDeviceState::New`], which already means "listed, seen online,
+//! ADR-164 decision 5 are read off [`MerakiDeviceState::New`], which already means "listed, seen online,
 //! never a node here", plus the network's watch flag and the organization's cap.
 
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ pub struct AutoPick {
     pub over_cap: u32,
 }
 
-/// The devices the sync imports on its own (ADR-164 決定 5). Pure.
+/// The devices the sync imports on its own (ADR-164 decision 5). Pure.
 ///
 /// A device qualifies when all three hold: Meraki lists it and has reported it online at least once
 /// and it has never been a node here — which is exactly [`MerakiDeviceState::New`] — and its network
@@ -83,14 +83,14 @@ pub struct AutoPick {
 ///
 /// An MX whose network's LAN side has not been read yet ([`DeviceRecord::lan_pending`]) **waits** —
 /// its address, and so its folder, is not known, and an import files a node once and never moves
-/// it (決定 6, 決定 28) — **and keeps its place**: it holds its slot under the cap, in name order,
+/// it (decision 6, decision 28) — **and keeps its place**: it holds its slot under the cap, in name order,
 /// until the sync that reads its network imports it. 🚨 It used to step out of the order instead,
 /// which is the rule above broken: on an organization's first sync no MX network has been read, so
 /// the switches and access points behind them in the order filled the whole cap, and when the MX
 /// were ready there was no room left. On a lab organization of 3,170 importable devices under a cap
 /// of 1,000 that works out to no MX at all (from the counts; it was caught before anyone ran it).
 ///
-/// `mx_ready` is false when this sync's LAN reads were cut short (ADR-164 決定 31): a time limit,
+/// `mx_ready` is false when this sync's LAN reads were cut short (ADR-164 decision 31): a time limit,
 /// 429s that outlasted the retries or a refused key stopped them before every network they meant to
 /// read had been asked. Then **no** MX is picked — not only the ones whose network is still unread —
 /// because an address reused by a network the reads never reached is not known to be reused yet,
@@ -170,7 +170,7 @@ impl ImportResolver {
     }
 
     /// Which of `addresses` lie inside some folder's IP range — what picks an MX's address out of
-    /// its VLANs (決定 28). One statement for all of them, the one [`Self::filings`] asks.
+    /// its VLANs (decision 28). One statement for all of them, the one [`Self::filings`] asks.
     ///
     /// 🚨 **A failed read is an error, never "none of them".** An empty answer makes every MX take
     /// its lowest VLAN, and the next sync that reads the ranges moves them back: a database hiccup
@@ -215,7 +215,7 @@ impl ImportResolver {
             };
             // A device with no name is identified by its serial, which is always present. The rule is
             // `node_name_for`'s and not written here: the sync recognises a later rename by
-            // comparing a node's name with what this produced (ADR-164 決定 14).
+            // comparing a node's name with what this produced (ADR-164 decision 14).
             let name = crate::meraki_inventory::node_name_for(&c.name, &c.serial);
             let network_name = c
                 .network_name
@@ -294,7 +294,7 @@ mod tests {
         pick.chosen.iter().map(|c| c.serial.as_str()).collect()
     }
 
-    /// ADR-164 決定 5, every condition in both directions: each device below differs from the one
+    /// ADR-164 decision 5, every condition in both directions: each device below differs from the one
     /// that qualifies in exactly one fact.
     #[test]
     fn only_a_new_device_in_a_watched_network_is_picked() {
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!((serials(&capped), capped.over_cap), (vec!["Q3-1"], 1));
     }
 
-    /// ADR-164 決定 28: an MX whose network's LAN side has not been read yet has no address, and an
+    /// ADR-164 decision 28: an MX whose network's LAN side has not been read yet has no address, and an
     /// import would file it by none and never move it. It waits — **in its place**: the devices
     /// behind it in the order do not take its slot under the cap, or on an organization's first
     /// sync they would fill the cap before any MX could go in.
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(after.over_cap, 1);
     }
 
-    /// ADR-164 決定 31: a sync whose LAN reads were cut short picks no MX at all — even one whose
+    /// ADR-164 decision 31: a sync whose LAN reads were cut short picks no MX at all — even one whose
     /// own network was read, since a network the reads never reached may reuse its address — while
     /// switches and access points, whose address is their own `lanIp`, go in as usual. Every MX
     /// keeps its place under the cap.

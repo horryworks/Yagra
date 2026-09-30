@@ -6,7 +6,7 @@
 //! *becomes* (listed, imported as a node, which controller owns it in an HA pair) is core's to
 //! decide, because those decisions need state no poller holds.
 //!
-//! 🚨 **A walk that did not get every column publishes no inventory** (ADR-064 決定 9b). The columns
+//! 🚨 **A walk that did not get every column publishes no inventory** (ADR-064 decision 9b). The columns
 //! arrive separately, so a column that timed out between two that answered would read as APs with
 //! no state, or no address, or no clients — and a controller whose table stopped half way would read
 //! as APs disappearing. The sample says the walk was incomplete; the stored list stays as it was.
@@ -53,11 +53,11 @@ pub(super) async fn execute_wlan(
     } = plan;
     let columns = crate::wlan::columns(flavor);
     let counts_totals = crate::wlan::counts_controller_totals(flavor);
-    // A Cisco controller's joined count comes out of this walk (ADR-064 増分 F, F8), counted before
+    // A Cisco controller's joined count comes out of this walk (ADR-064 Inc.F, F8), counted before
     // the inventory is cut to its cap. `None` for a dialect whose own scalars say it, and for a walk
     // that did not finish — the same rule as the inventory.
     let mut joined: Option<usize> = None;
-    // And its clients per band out of the radio walk (増分 H, H4), by the same rule: only a
+    // And its clients per band out of the radio walk (Inc.H, H4), by the same rule: only a
     // complete radio walk may say, because a partial one would publish smaller numbers.
     let mut per_band: Option<BTreeMap<WlanBand, u32>> = None;
     let (outcome, inventory) = match walker
@@ -135,8 +135,8 @@ pub(super) async fn execute_wlan(
     };
     // A dialect whose table lists only the APs joined to it also says how long the controller has
     // been up, because an AP missing from the table is taken as down only past the grace after a
-    // boot (ADR-064 増分 F, F11) — asked only when there is an inventory to go on. And how many APs
-    // its platform supports (増分 H, H5), asked of any controller that answered at all. One GET for
+    // boot (ADR-064 Inc.F, F11) — asked only when there is an inventory to go on. And how many APs
+    // its platform supports (Inc.H, H5), asked of any controller that answered at all. One GET for
     // both, so an SNMPv3 controller sets up one session rather than two.
     let mut inventory = inventory;
     let wants_uptime = inventory.is_some() && flavor.lists_only_joined_aps();
@@ -229,7 +229,7 @@ pub(super) async fn execute_wlan(
 /// What the one scalar GET after the walks answered.
 struct ControllerScalars {
     /// `sysUpTime.0` in whole seconds, or `None` when it was not asked or not answered — which core
-    /// reads as "not up long enough", never as "up for ever" (ADR-064 増分 F, F11).
+    /// reads as "not up long enough", never as "up for ever" (ADR-064 Inc.F, F11).
     uptime_secs: Option<u64>,
     /// Every sample the GET returned, for the readers that pick their own OIDs out of it.
     answered: Vec<yagra_transport::SnmpSample>,
@@ -294,7 +294,7 @@ async fn controller_scalars(
 enum Extra {
     /// The AP table columns whose absence must cost a reading and nothing more.
     Optional(WlanFlavor),
-    /// The radio table (ADR-064 増分 C).
+    /// The radio table (ADR-064 Inc.C).
     Radio(WlanFlavor),
 }
 
@@ -322,8 +322,8 @@ impl Extra {
 }
 
 /// A secondary walk's rows and whether it heard every column out, or an empty list if it did not
-/// work out (ADR-064 増分 C/E). The flag matters only to a reader that **counts** the rows — the
-/// per-band client totals (増分 H) — never to the readings attached per AP.
+/// work out (ADR-064 Inc.C/E). The flag matters only to a reader that **counts** the rows — the
+/// per-band client totals (Inc.H) — never to the readings attached per AP.
 ///
 /// 🚨 **Every failure here returns empty rather than propagating.** That asymmetry is the whole
 /// point of walking these apart from the AP table: they carry readings, and a controller that
@@ -372,7 +372,7 @@ async fn extra_rows(
     }
 }
 /// What only a **complete** SSID walk may say: how many SSIDs there are — unless a WLAN answered
-/// with no name, when that is not known (ADR-064 増分 H, H3) — and, when any row answered a client
+/// with no name, when that is not known (ADR-064 Inc.H, H3) — and, when any row answered a client
 /// count, how many clients the table carries together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SsidTotals {
@@ -382,7 +382,7 @@ struct SsidTotals {
 
 /// The SSID table's samples and row names, and the totals a **complete** walk found.
 ///
-/// Unlike the AP table there is no all-or-nothing rule here (決定 9b): each SSID is an independent
+/// Unlike the AP table there is no all-or-nothing rule here (decision 9b): each SSID is an independent
 /// series rather than a member of a list that replaces a stored one, so a column that did not
 /// answer costs that column and the rest are published. What a partial walk may not do is *count*
 /// — hence the `Option`.
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(r.wlan.map(|i| i.aps.len()), Some(0));
     }
 
-    /// 🚨 The regression this file's second walk exists for (ADR-064 増分 E).
+    /// 🚨 The regression this file's second walk exists for (ADR-064 Inc.E).
     ///
     /// A controller whose CPU-temperature column fails still gets its AP list — the reading is
     /// simply absent. Move `.83` back into [`crate::wlan::columns`] and this goes red, because the
@@ -670,7 +670,7 @@ mod tests {
         assert!(optional.iter().any(|o| o.ends_with(".80")), "{optional:?}");
     }
 
-    /// 決定 9b, the side that matters: a walk that missed a column publishes nothing, so the stored
+    /// decision 9b, the side that matters: a walk that missed a column publishes nothing, so the stored
     /// list is not replaced by a half-read one.
     #[tokio::test]
     async fn an_incomplete_walk_publishes_no_inventory() {
@@ -707,7 +707,7 @@ mod tests {
         assert!(asked.contains(&format!("{ROOT}.44")), "{asked:?}");
     }
 
-    // ─── Cisco (ADR-064 増分 F) ─────────────────────────────────────────────────────────
+    // ─── Cisco (ADR-064 Inc.F) ─────────────────────────────────────────────────────────
 
     const CISCO_AP: &str = "1.3.6.1.4.1.14179.2.2.1.1";
     const CISCO_RADIO: &str = "1.3.6.1.4.1.14179.2.2.2.1";
@@ -759,7 +759,7 @@ mod tests {
     /// optional walk — no `.30`, no cLApTable. One AP serving with two radios, one downloading, and
     /// two SSIDs. Names and addresses are made up.
     ///
-    /// 🚨 **No SSID column `.2`, and that is the recording's shape** (ADR-064 増分 H). The SSID names
+    /// 🚨 **No SSID column `.2`, and that is the recording's shape** (ADR-064 Inc.H). The SSID names
     /// come from `cLWlanSsid` only. This fixture used to answer `.2`, which is why a 9800 publishing
     /// no SSIDs and no client count passed every test here.
     fn cisco_controller() -> FakeTransport {
@@ -967,7 +967,7 @@ mod tests {
     }
 
     /// 🚨 A walk that did not finish counts nothing: no inventory, and no joined count — a smaller
-    /// number would read as APs having left (決定 9b's rule, applied to the total). And a Huawei
+    /// number would read as APs having left (decision 9b's rule, applied to the total). And a Huawei
     /// never publishes the two totals from its walk: its scalars do, and two sources would draw two
     /// lines under one name.
     #[tokio::test]

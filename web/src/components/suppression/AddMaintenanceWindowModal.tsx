@@ -31,7 +31,7 @@ interface Props {
   /** Offered as the "profile" scope when present; omit (or empty) to hide that choice. */
   profiles?: ProfileSummary[];
   /** When set, the scope is fixed to this node, folder or working set (the All Nodes right-click
-   *  "Custom…" path, and the selection bar's More… menu since ADR-124 増分 11). */
+   *  "Custom…" path, and the selection bar's More… menu since ADR-124 Inc.11). */
   initialScope?: ActionTarget;
   onClose: () => void;
   onSaved: () => void;

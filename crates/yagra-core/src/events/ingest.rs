@@ -93,7 +93,7 @@ async fn flush_persist(
         }
     }
     // Here and not in either store's branch: which store holds the rows depends on configuration,
-    // and "who sent something no node claimed" must not (ADR-179 決定 3).
+    // and "who sent something no node claimed" must not (ADR-179 decision 3).
     let senders = unattributed_senders(buf);
     if let Err(e) = repo.record_unattributed_senders(&senders).await {
         tracing::warn!(error = %e, "recording unattributed event senders failed");
@@ -240,7 +240,7 @@ mod tests {
     use yagra_common::{NodeId, NodeState};
 
     /// Only syslog and traps no node claimed, once per (address, kind), keeping a hostname that a
-    /// later message in the batch left out (ADR-179 決定 3).
+    /// later message in the batch left out (ADR-179 decision 3).
     #[test]
     fn a_batch_yields_each_unclaimed_sender_once() {
         use crate::arp::{SenderKind, SenderObservation};

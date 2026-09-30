@@ -5,7 +5,7 @@
 // It cannot prove that a real password is accepted by a real core through a real nginx, or that a
 // deep link is closed to someone who has not signed in.
 //
-// This is also the one spec allowed to send a non-GET (ADR-052 決定 9): `allowLogin` widens the
+// This is also the one spec allowed to send a non-GET (ADR-052 decision 9): `allowLogin` widens the
 // read-only guard by exactly one path, and only here.
 
 import { expect, liveEnv, test } from './support/live';
@@ -40,7 +40,7 @@ test('a deep link is closed to a browser with no session', async ({ page }) => {
   await page.goto('/settings/users');
 
   // ⚠️ An earlier version asserted a redirect to `/login` and failed — an expectation taken from
-  // habit rather than from anything this repo declares, which is the failure 決定 7 names. The
+  // habit rather than from anything this repo declares, which is the failure decision 7 names. The
   // declaration is `App.tsx`: the requested screen is *replaced*, with the URL untouched. So the
   // property to assert is the replacement, not that the address bar moved.
   //

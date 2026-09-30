@@ -31,7 +31,7 @@ export function coverageOf(summary: DiscoveredEndpointPage['summary']): Endpoint
   return 'complete';
 }
 
-/** The two views of Nodes ▸ Discovery (ADR-179 決定 9), held in the URL as `?tab=`. `scan` is the
+/** The two views of Nodes ▸ Discovery (ADR-179 decision 9), held in the URL as `?tab=`. `scan` is the
  *  default and is written as no key at all, so every link made before the tabs existed still opens
  *  the sweep form. */
 export const DISCOVERY_TABS = ['scan', 'unregistered'] as const;
@@ -96,14 +96,14 @@ const SELF_REPORTED: Record<EndpointSource, boolean> = {
   trap: true,
 };
 
-/** Whether only a syslog or trap sender vouches for this row (ADR-179 増分 5). The server refuses to
+/** Whether only a syslog or trap sender vouches for this row (ADR-179 Inc.5). The server refuses to
  *  probe or import such a row (409 `sender_only`) — probing it would send the chosen credentials to
  *  whoever forged the address — so the screen offers neither button and says why. */
 export function isSenderOnly(e: DiscoveredEndpoint): boolean {
   return e.evidence.length > 0 && e.evidence.every((ev) => SELF_REPORTED[ev.source]);
 }
 
-/** What pressing Detect on one row found (ADR-179 増分 2). The probe is a one-address range scan, so
+/** What pressing Detect on one row found (ADR-179 Inc.2). The probe is a one-address range scan, so
  *  this reads the same `ScanView` the Scan tab polls.
  *
  *  - `found` — a stored credential answered SNMP. The profile is the classifier's suggestion (empty
@@ -177,7 +177,7 @@ export function detectedSelection(
   };
 }
 
-/** Which face an unmonitored row shows (ADR-179 増分 2, 決定 7). The two dropdowns are not drawn
+/** Which face an unmonitored row shows (ADR-179 Inc.2, decision 7). The two dropdowns are not drawn
  *  until a Detect has answered: before that they only invite a guess the probe is about to make.
  *
  *  - `idle` — never detected: Detect alone.
@@ -251,10 +251,10 @@ export function detectLineOf(
     : { key: 'discovery.seen.detect.foundBare', values: { credential } };
 }
 
-/** How many unregistered devices one read asks for (ADR-179 増分 6). */
+/** How many unregistered devices one read asks for (ADR-179 Inc.6). */
 export const ENDPOINT_PAGE_SIZE = 100;
 
-/** The list after one more page has arrived (ADR-179 増分 6 決定 1): the new rows after the old,
+/** The list after one more page has arrived (ADR-179 Inc.6 decision 1): the new rows after the old,
  *  a row already on screen not repeated (the list moves while it is read — a row seen again jumps
  *  to the front), and the newer page's cursor and summary. */
 export function appendEndpointPage(
@@ -266,7 +266,7 @@ export function appendEndpointPage(
   return { ...next, endpoints: [...prev.endpoints, ...next.endpoints.filter((e) => !seen.has(e.id))] };
 }
 
-/** The list after one of its rows was imported (ADR-179 増分 6 決定 3): the row gone and the count
+/** The list after one of its rows was imported (ADR-179 Inc.6 decision 3): the row gone and the count
  *  one lower, without reading the list again — which would drop every page read past the first. */
 export function withoutImported(page: DiscoveredEndpointPage, id: string): DiscoveredEndpointPage {
   if (!page.endpoints.some((e) => e.id === id)) return page;
@@ -277,11 +277,11 @@ export function withoutImported(page: DiscoveredEndpointPage, id: string): Disco
   };
 }
 
-// ─────────────────────────────────────────── where an import lands (ADR-179 増分 8)
+// ─────────────────────────────────────────── where an import lands (ADR-179 Inc.8)
 
 /** Where an unregistered endpoint goes when it is monitored: a folder (`''` is the tree root), and
  *  whether a folder whose IP range holds the address takes it instead — the range-scan import's
- *  two controls. Filing by range starts on, as there (ADR-131 決定 11). */
+ *  two controls. Filing by range starts on, as there (ADR-131 decision 11). */
 export interface SetupDestination {
   groupId: string;
   fileByPrefix: boolean;
@@ -309,8 +309,8 @@ export interface EndpointDestinationLine {
   line: EndpointDestLine;
   values: Record<string, string | number>;
   /** The node is about to land somewhere other than a range's folder while the operator asked for
-   *  one — said with the warning mark, so it is noticed before Monitor is pressed (ADR-179 増分 8
-   *  決定 2). */
+   *  one — said with the warning mark, so it is noticed before Monitor is pressed (ADR-179 Inc.8
+   *  decision 2). */
   warn: boolean;
 }
 

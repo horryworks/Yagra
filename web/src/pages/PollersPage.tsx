@@ -83,7 +83,7 @@ const REFRESH_MS = 10_000;
 /** One pool card in the summary strip: name + description + node/poller counts + mode, with a
  *  warning chip when the pool has nodes but no live poller (icon + text, never color alone — a11y).
  *
- *  **The card is a button, and pressing it narrows the table to that pool** (ADR-107 決定 8). It does
+ *  **The card is a button, and pressing it narrows the table to that pool** (ADR-107 decision 8). It does
  *  that by writing the page's existing `pool` column filter rather than holding a selection of its
  *  own: two controls editing one state is how a filter forks, and this screen already had the
  *  column one. Pressing again clears it, which is the gesture that always works — the chip's ✕ and
@@ -145,7 +145,7 @@ function PoolCard({
           </span>
         )}
         {idle && !pool.covered_by && <span className="pool-idle">{t('pollers.pool.idle')}</span>}
-        {/* ADR-107 増分 4. This has to be said on the card, because a covered pool otherwise looks
+        {/* ADR-107 Inc.4. This has to be said on the card, because a covered pool otherwise looks
             like a brand-new one: its members are all somewhere else, so it reads 0 nodes, 0 live
             pollers and no warning. "Just created" and "being stood in for" are the same picture
             without this — which is why `idle` gives way to it above rather than sitting beside it. */}
@@ -169,7 +169,7 @@ function PoolCard({
   );
 }
 
-/** Describe a pool deliberately (ADR-107 決定 1). */
+/** Describe a pool deliberately (ADR-107 decision 1). */
 function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation('system');
   const [name, setName] = useState('');
@@ -288,7 +288,7 @@ function EditPoolModal({
 }
 
 
-/** Point a pool's members at one that still has a poller, or put them back (ADR-107 増分 4).
+/** Point a pool's members at one that still has a poller, or put them back (ADR-107 Inc.4).
  *
  *  🚨 **The confirmation is the feature, not politeness.** A site poller usually exists because this
  *  deployment cannot reach those devices; covering them from here replaces one accurate "pool has no
@@ -412,7 +412,7 @@ function RestorePoolModal({
     </Modal>
   );
 }
-/** Rename a pool — refused while any poller reports the old name (ADR-107 決定 6).
+/** Rename a pool — refused while any poller reports the old name (ADR-107 decision 6).
  *
  *  🚨 **This used to refuse while any poller reported the name, and no longer does.** A rename moves
  *  node and folder assignments in one transaction, and since ADR-107 Inc.2 it moves the pollers with
@@ -506,7 +506,7 @@ function RenamePoolModal({
   );
 }
 
-/** Stop describing a pool — refused while anything still names it (ADR-107 決定 6). */
+/** Stop describing a pool — refused while anything still names it (ADR-107 decision 6). */
 function DeletePoolModal({
   pool,
   pollers,
@@ -651,7 +651,7 @@ function MovePollerModal({
 }
 
 /** The one question a move can raise: this was the last poller of its pool, and that pool still has
- *  something to monitor (ADR-107 Inc.2 決定 6).
+ *  something to monitor (ADR-107 Inc.2 decision 6).
  *
  *  🚨 **The failure being prevented is the quietest one in the product.** A pool with no live poller
  *  falls back to legacy per-job publish on `yagra.jobs.{pool}`, nothing is subscribed, and plain
@@ -1666,7 +1666,7 @@ export function PollersPage() {
         <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <div className="pool-strip">
           {pools.map((p) => {
-            // ADR-107 増分 4. Both entries come from ONE helper, so this page cannot spell the
+            // ADR-107 Inc.4. Both entries come from ONE helper, so this page cannot spell the
             // question differently from the pill on the card beside it — which is exactly what
             // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
             const takeover = poolTakeoverActions(p);
@@ -1682,7 +1682,7 @@ export function PollersPage() {
                   ? [
                       { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
                       { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
-                      // ADR-107 増分 4. Offered only in the state each one answers: cover a pool
+                      // ADR-107 Inc.4. Offered only in the state each one answers: cover a pool
                       // that has members and nothing to poll them, restore one already covered.
                       // Showing both always would put "stop covering" on 20 pools nobody is
                       // covering, which reads as a feature that does nothing.

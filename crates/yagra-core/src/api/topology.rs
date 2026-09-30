@@ -332,7 +332,7 @@ async fn get_topology_links(
     ))
 }
 
-// ── Operator decisions about links (ADR-043 決定 4) ───────────────────────────
+// ── Operator decisions about links (ADR-043 decision 4) ───────────────────────────
 
 /// One operator decision about one link.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -544,7 +544,7 @@ async fn delete_link_override(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-// ── Shadow mode: what the derived graph would do (ADR-043 決定 5) ─────────────
+// ── Shadow mode: what the derived graph would do (ADR-043 decision 5) ─────────────
 
 /// One node whose suppression would change if the deployment moved to the derived graph.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

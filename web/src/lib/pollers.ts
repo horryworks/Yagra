@@ -79,7 +79,7 @@ export function buildPollerEnv({ id, pool, busUrl, caFile }: PollerEnvInput): st
 /** The command that brings the remote poller up once its `.env` is in place. */
 export const POLLER_UP_COMMAND = 'docker compose -f docker-compose.poller.yml up -d';
 
-/** Which of the two ADR-107 増分 4 pool actions a pool's own state calls for.
+/** Which of the two ADR-107 Inc.4 pool actions a pool's own state calls for.
  *
  * 🚨 `cover` asks `poolHasWarning`, never a bare truthiness check on `warning` — it is the SAME
  * question the card's pill asks, so it has to be the same spelling of it. The helper tests for one

@@ -21,7 +21,7 @@ import {
   type Severity,
 } from '../types/api';
 
-/** URL-key prefixes for this route's two tables (ADR-153 決定 3). Both have a `name` and a
+/** URL-key prefixes for this route's two tables (ADR-153 decision 3). Both have a `name` and a
  *  `status` column, so unprefixed they would filter each other; the ledger in
  *  `filterSpecRegistry.test.ts` checks the pair is disjoint. */
 export const CHANNEL_FILTER_PREFIX = 'channels.';

@@ -333,9 +333,9 @@ impl NodeRepo {
                 .await?;
             }
         }
-        // 6b. Defaults for the built-in "Cisco Meraki MX (API)" profile (ADR-164 増分 13).
+        // 6b. Defaults for the built-in "Cisco Meraki MX (API)" profile (ADR-164 Inc.13).
         //
-        //    Offset 0 (決定 24): a WAN uplink the Dashboard reports `failed` ⇒ warning, after two
+        //    Offset 0 (decision 24): a WAN uplink the Dashboard reports `failed` ⇒ warning, after two
         //    uplink collects in a row (ten minutes at the default 300 s). `meraki_uplink_failed` is a
         //    0/1 gauge per uplink and `above` is inclusive, so the bound sits between the two states
         //    at 0.5, as on every other seeded 0/1 gauge. Warning and not critical: an MX that lost a
@@ -345,7 +345,7 @@ impl NodeRepo {
         //    It alerts per uplink, on the row path (ADR-143): the uplink is the samples' row key, and
         //    its name (WAN1 / WAN2 / cellular) rides the result.
         //
-        //    Offset 1 (決定 25): an Auto VPN MX that cannot reach its hubs. One rule on the
+        //    Offset 1 (decision 25): an Auto VPN MX that cannot reach its hubs. One rule on the
         //    unreachable share, both bounds `above` — any unreachable hub is a warning (the site lost
         //    its redundancy), all of them critical — so a site that loses one hub and then the other
         //    has ONE alert that escalates, not a warning and a critical side by side. Three uplink
@@ -558,7 +558,7 @@ mod tests {
     }
 
     /// **The Meraki MX profile gets its seeded rules — a failed uplink, Auto VPN — and the failed-uplink
-    /// one goes nowhere else** (ADR-164 決定 24 and 25).
+    /// one goes nowhere else** (ADR-164 decision 24 and 25).
     ///
     /// The bound is the thing to pin: `meraki_uplink_failed` is a 0/1 gauge, and a seed row is
     /// `ON CONFLICT DO NOTHING`, so a wrong bound shipped once needs a corrective migration.
@@ -618,7 +618,7 @@ mod tests {
         .expect("count");
         assert_eq!(elsewhere, 0, "only the MX profile reports an uplink");
 
-        // ADR-164 決定 25: ONE rule for Auto VPN, warning and critical on the same side, so a site
+        // ADR-164 decision 25: ONE rule for Auto VPN, warning and critical on the same side, so a site
         // that loses its second hub escalates the alert it already has.
         let vpn: Seeded = sqlx::query_as(
             "SELECT scope_level, scope_id, scope_ids, metric, direction, warning, critical, \

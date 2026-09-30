@@ -17,7 +17,7 @@ use yagra_common::{CheckId, Direction, IfIndex, NodeId, NodeState, Severity};
 /// cannot collide in either direction.
 const POOL_PREFIX: &str = "pool:";
 
-/// Prefix that marks a Meraki-organization subject in its flat string form (ADR-164 決定 18).
+/// Prefix that marks a Meraki-organization subject in its flat string form (ADR-164 decision 18).
 ///
 /// Whether it is checked before or after the pool prefix is irrelevant — neither is a prefix of the
 /// other — but a pool may be *named* anything, including `meraki_org:…`; that name is still read as
@@ -48,7 +48,7 @@ pub enum SubjectKind {
     Node,
     /// A poller pool.
     Pool,
-    /// A Cisco Meraki organization (ADR-164 決定 18).
+    /// A Cisco Meraki organization (ADR-164 decision 18).
     MerakiOrg,
 }
 
@@ -95,7 +95,7 @@ pub enum Subject {
     Node(NodeId),
     /// A poller pool, named. Used by coverage alerts about Yagra's own polling.
     Pool(String),
-    /// A Cisco Meraki organization, by the id of its `meraki_orgs` row (ADR-164 決定 18). One alert
+    /// A Cisco Meraki organization, by the id of its `meraki_orgs` row (ADR-164 decision 18). One alert
     /// stands for the whole organization when the Dashboard API stops answering its collects:
     /// the devices did not fail, so no node is what the alert is about.
     ///

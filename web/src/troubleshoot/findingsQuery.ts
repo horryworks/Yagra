@@ -39,7 +39,7 @@ export const PAGE_SIZE = 100;
  *  `satisfies` is what makes a token added here without one there a compile error. */
 export const FINDING_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies readonly RangeToken[];
 
-/** The columns this module's functions read (ADR-053 Inc.10, 決定 AA — the API-named `XFilters`
+/** The columns this module's functions read (ADR-053 Inc.10, decision AA — the API-named `XFilters`
  *  copy of the state is gone; `queryFor` reads the filter row's own state). */
 export type FindingColumns = readonly FilterableColumn<SavedFinding>[];
 

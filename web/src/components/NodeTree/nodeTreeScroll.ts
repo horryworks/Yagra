@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Why the inventory tree does not move unless the operator scrolls it (ADR-124 増分 5).
+// Why the inventory tree does not move unless the operator scrolls it (ADR-124 Inc.5).
 //
 // The tree never scrolled itself on a press: `scrollTo` / `scrollIntoView` / `scrollTop` are written
 // nowhere in `NodeTree.tsx` or `NodesPage.tsx`, and the virtualizer's own scroll-writing paths are
@@ -15,7 +15,7 @@
 //
 // 🚨 **The fix cannot be `preventDefault()` on mousedown.** That suppresses the mouse-focus, and it
 // also stops Chrome starting the row's native drag — which carries the whole working set since
-// 増分 4. The name button covers the row, so it is also where a drag naturally begins. So the
+// Inc.4. The name button covers the row, so it is also where a drag naturally begins. So the
 // browser keeps its focus; what it does not get is the scroll.
 //
 // 🚨 **One pre-empt at the container, not one per control.** A row holds `.ntree-twisty`,

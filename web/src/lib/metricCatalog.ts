@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Turning the deployment's MIB catalog into the list a metric picker shows (ADR-075 増分 4).
+// Turning the deployment's MIB catalog into the list a metric picker shows (ADR-075 Inc.4).
 //
 // A `.ts` on purpose: Vitest runs `environment: 'node'` and never executes `.tsx`, so judgement
 // left inside the component is judgement nothing tests (`testing.md`). Everything here is a pure
@@ -108,7 +108,7 @@ export function metricOptions(
     oid: '',
     // 🚨 Read from the catalogue, not assumed node-level. Almost every check metric is one number
     // per node — and three are not: the two gauges a Meraki switch-port collect stores per port
-    // and the one a wireless collect stores per radio (ADR-167 決定 8, ADR-168 決定 2). Left
+    // and the one a wireless collect stores per radio (ADR-167 decision 8, ADR-168 decision 2). Left
     // undefined, the port-rule filter below dropped exactly the metrics that have the rows for
     // such a rule, while the alert engine judged them per interface.
     perInterface: builtinMetric(name)?.per_interface,

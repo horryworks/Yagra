@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The **change feed** browsers follow: a revision number that moves whenever something an open
-//! screen shows may have changed (ADR-019 増分 2).
+//! screen shows may have changed (ADR-019 Inc.2).
 //!
 //! `GET /api/v1/stream/config` sends it, and the WebUI re-reads the inventory tree and the other
 //! configuration screens when it differs from the last one it saw. Only the number travels — not

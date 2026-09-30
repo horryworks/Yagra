@@ -12,7 +12,7 @@
 //! ⚠️ One half is **not** here: a `FolderGroup` rule matches the node's own folder *and every
 //! folder above it*, so several can arrive at that one level. Which of them survives is decided by
 //! depth — nearest wins — and depth is a fact about the node, not about the rule, so
-//! `alerts/rules.rs::resolve` filters before calling [`resolve_effective`] (ADR-075 増分 3).
+//! `alerts/rules.rs::resolve` filters before calling [`resolve_effective`] (ADR-075 Inc.3).
 
 use crate::state::NodeState;
 use serde::{Deserialize, Serialize};
@@ -398,7 +398,7 @@ pub fn interface_scope_id(node: uuid::Uuid, ifindex: u32) -> String {
 ///
 /// Strict on purpose: a scope id that does not parse is a rule that matches no port, and the API
 /// refuses it at write time rather than storing something that looks configured and does nothing
-/// (the failure ADR-075 決定 12 closed for the other levels). `rsplit_once` rather than
+/// (the failure ADR-075 decision 12 closed for the other levels). `rsplit_once` rather than
 /// `split_once` would accept a UUID with a stray colon; there are none, but the whole point of a
 /// single codec is that the reader and the writer agree without either having to be careful.
 #[must_use]
@@ -698,7 +698,7 @@ mod tests {
     /// The interface scope id round-trips, and everything that is not exactly its shape is refused.
     ///
     /// The rejection half is the load-bearing one: a scope id that parses to nothing is a rule that
-    /// is stored, listed, and matches no port — the exact failure ADR-075 決定 12 closed for the
+    /// is stored, listed, and matches no port — the exact failure ADR-075 decision 12 closed for the
     /// other levels. Note it includes an accepting case, so "reject everything" cannot pass.
     #[test]
     fn an_interface_scope_id_round_trips_and_rejects_everything_else() {

@@ -136,7 +136,7 @@ pub(crate) struct StartedScan {
     scan_id: Uuid,
 }
 
-/// How the batch was filed, when the request asked for filing by IP range (ADR-131 決定 2).
+/// How the batch was filed, when the request asked for filing by IP range (ADR-131 decision 2).
 ///
 /// 🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers
 /// both end up in the request's fallback folder — but they are different facts, and folding them
@@ -153,7 +153,7 @@ pub(crate) struct PrefixFiling {
     /// No folder's range contained it; filed into the fallback.
     unmatched: u32,
     /// The operator named this row's folder themselves, so no rule was applied to it
-    /// (ADR-131 決定 11). Counted apart from the three above because it is not an outcome of the
+    /// (ADR-131 decision 11). Counted apart from the three above because it is not an outcome of the
     /// match — reporting it as `matched` would credit the rule with a choice a person made.
     chosen: u32,
 }
@@ -175,7 +175,7 @@ pub(crate) struct ImportResult {
     ///
     /// ⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by
     /// range would read as one that filed zero rows, and with the field absent the wire shape is
-    /// what every existing client already parses. The endpoint import (ADR-179 増分 8) fills it
+    /// what every existing client already parses. The endpoint import (ADR-179 Inc.8) fills it
     /// only when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.
     /// With `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it
     /// off, only `chosen` is counted and the rest went to `group_id`.
@@ -338,7 +338,7 @@ pub(crate) struct ScanView {
     /// the sweep is reflected.
     existing: Vec<InventoryMatch>,
     /// Candidates that look like a device node already monitored at **another** address — its
-    /// interface list carries the candidate's address, or its name and model match (ADR-139 増分 3).
+    /// interface list carries the candidate's address, or its name and model match (ADR-139 Inc.3).
     /// A mark, not a refusal: importing such a candidate is still accepted, because a site that
     /// reuses one private address plan can make either piece of evidence wrong. Only nodes the caller
     /// can see are named. A candidate in `existing` is never here.
@@ -452,7 +452,7 @@ pub(crate) struct InventoryNode {
     name: String,
 }
 
-/// Fold what the inventory holds into one entry per candidate address (ADR-139 決定 2/3).
+/// Fold what the inventory holds into one entry per candidate address (ADR-139 decision 2/3).
 ///
 /// Pure, so the part a test can get wrong without a database — the join on the parsed address, the
 /// withheld name, one entry for a candidate listed twice — is tested without one.
@@ -691,7 +691,7 @@ pub(super) struct ImportNode {
     #[serde(default)]
     model: Option<String>,
     /// The folder this one device goes into, overriding both the IP-range rule and the request's
-    /// `group_id` (ADR-131 決定 11).
+    /// `group_id` (ADR-131 decision 11).
     ///
     /// 🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means "follow the
     /// rule"; an id means that folder; **`null` means the operator chose the tree root**, which is
@@ -699,7 +699,7 @@ pub(super) struct ImportNode {
     /// the same `None`, so a device deliberately sent to the root would silently be filed by range
     /// instead — a control that lies about what it does. `deserialize_some` keeps them apart.
     ///
-    /// ⚠️ **This is the per-row field ADR-100 決定 10 refused, and it is admitted under a
+    /// ⚠️ **This is the per-row field ADR-100 decision 10 refused, and it is admitted under a
     /// condition.** That decision's objection was a UI in which fifty rows each carry an
     /// independent choice and the screen has to explain the result. Here a row's destination still
     /// comes from one rule by default, and this is an *override* of it — so the screen explains
@@ -788,7 +788,7 @@ async fn import_discovered(
     };
     // The destination is checked before the rows: filing nodes *into* a folder this caller may not
     // act on would put them where that caller can no longer reach them — the same order and the
-    // same reason as `nodes::move_nodes` (ADR-131 決定 8).
+    // same reason as `nodes::move_nodes` (ADR-131 decision 8).
     if let Some(group) = body.group_id {
         super::scope::require_visible_group(&scope, group)?;
     }
@@ -843,7 +843,7 @@ async fn import_discovered(
             credential,
             vendor: n.vendor.as_deref().map(str::trim).filter(|s| !s.is_empty()),
             model: n.model.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-            // Precedence, narrowest first (ADR-131 決定 11): the operator's own choice for this
+            // Precedence, narrowest first (ADR-131 decision 11): the operator's own choice for this
             // row, else the IP-range rule applied below, else the request's folder.
             group: match n.group_id {
                 Some(choice) => choice,
@@ -872,7 +872,7 @@ async fn import_discovered(
 
     // Decided after every rule has run — the row's own folder, then the IP range, then the
     // request's — so this sees where each row would really land. A folder-scoped caller cannot see
-    // the root, so a row bound there is refused before anything is written (ADR-179 増分 5 決定 1).
+    // the root, so a row bound there is refused before anything is written (ADR-179 Inc.5 decision 1).
     if !scope.allows_group(None) && prepared.iter().any(|row| row.group.is_none()) {
         return Err(ApiError::forbidden_code(
             "out_of_scope",
@@ -920,7 +920,7 @@ enum Bucket {
 }
 
 /// Filing by IP range (ADR-131), for both imports — the range-scan's and the endpoint's (ADR-179
-/// 増分 8 決定 1), so a device lands in the same folder whichever way it was added.
+/// Inc.8 decision 1), so a device lands in the same folder whichever way it was added.
 ///
 /// Every row not `Chosen` is asked about: one folder's range claims it and it moves there, or it
 /// keeps the folder it came with (the request's) and its bucket says why. A `Chosen` row keeps
@@ -1022,7 +1022,7 @@ pub(super) struct AddressAmbiguity {
 }
 
 /// Where each candidate would be filed. **A proposal, not an action** — nothing is written by the
-/// endpoint that returns this (ADR-131 決定 7, the same posture as ADR-124 決定 6).
+/// endpoint that returns this (ADR-131 decision 7, the same posture as ADR-124 decision 6).
 #[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct ImportPreviewResult {
     matched: Vec<AddressProposal>,
@@ -1341,7 +1341,7 @@ pub(crate) async fn discovered_endpoint_page(
             )
         })?;
     // The row is visible through its lowest observer; the evidence names every observer, and a
-    // scoped caller must not read the ones outside its folders (ADR-179 増分 4, ADR-014).
+    // scoped caller must not read the ones outside its folders (ADR-179 Inc.4, ADR-014).
     if let Some(groups) = scope.group_filter() {
         let observers: Vec<Uuid> = rows
             .iter()
@@ -1417,7 +1417,7 @@ pub(super) struct ImportEndpoint {
     name: Option<String>,
     profile_id: Option<String>,
     credential_id: Option<String>,
-    /// Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 増分 2). Omitted
+    /// Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 Inc.2). Omitted
     /// when nothing was probed; the node's first identity read fills it then, as before.
     #[serde(default)]
     vendor: Option<String>,
@@ -1425,7 +1425,7 @@ pub(super) struct ImportEndpoint {
     #[serde(default)]
     model: Option<String>,
     /// The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's
-    /// IP range claims its address (ADR-179 増分 8). Omitted: the tree root, as before.
+    /// IP range claims its address (ADR-179 Inc.8). Omitted: the tree root, as before.
     #[serde(default)]
     group_id: Option<Uuid>,
     /// File the node into the folder whose IP range holds its address, as the range-scan import
@@ -1480,7 +1480,7 @@ async fn visible_unmonitored_endpoint(
         ));
     }
     // A syslog or trap source address can be forged, so a row only a sender vouches for is never
-    // probed (that would send the chosen credentials to the forger) nor imported (ADR-179 増分 5).
+    // probed (that would send the chosen credentials to the forger) nor imported (ADR-179 Inc.5).
     if crate::arp::only_senders_vouch(&endpoint.evidence) {
         return Err(ApiError::conflict(
             "sender_only",
@@ -1494,7 +1494,7 @@ async fn visible_unmonitored_endpoint(
     Ok(endpoint)
 }
 
-/// Probe one discovered endpoint with the range scan's own machinery (ADR-179 増分 2).
+/// Probe one discovered endpoint with the range scan's own machinery (ADR-179 Inc.2).
 ///
 /// A one-address scan: the credentials are tried in order on the poller, the first that answers is
 /// reported as `matched_credential_id`, and core classifies the device into `suggested_profile_id`
@@ -1648,7 +1648,7 @@ async fn import_discovered_endpoint(
         address: endpoint.ip,
         profile,
         credential,
-        // Only what a probe classified from `sysDescr` (ADR-179 増分 2), never a MAC's OUI: the
+        // Only what a probe classified from `sysDescr` (ADR-179 Inc.2), never a MAC's OUI: the
         // OUI names the *chassis* vendor, which for a monitored device is routinely not the
         // vendor whose MIBs it answers — a whitebox switch, a VM's virtual NIC. Absent a probe
         // both stay blank and the first identity read fills them, as for any other node.
@@ -1663,7 +1663,7 @@ async fn import_discovered_endpoint(
             .map(str::trim)
             .filter(|s| !s.is_empty()),
         // The folder the operator chose, else the root, then the IP-range rule below — the scan
-        // import's order (ADR-179 増分 8 決定 1). Until 増分 8 this was always the root.
+        // import's order (ADR-179 Inc.8 decision 1). Until Inc.8 this was always the root.
         group: body.group_id,
     }];
     let mut buckets = [Bucket::Undecided];
@@ -1671,8 +1671,8 @@ async fn import_discovered_endpoint(
         file_by_range(&admin, &scope, &mut rows, &mut buckets).await?;
     }
     // Decided after the rule has run, so it sees where the node would really land: a folder-scoped
-    // caller cannot see the root, and would create a node it can never see again (ADR-179 増分 5
-    // 決定 1, narrowed by 増分 8 決定 4 to the case that actually lands there).
+    // caller cannot see the root, and would create a node it can never see again (ADR-179 Inc.5
+    // decision 1, narrowed by Inc.8 decision 4 to the case that actually lands there).
     if !scope.allows_group(None) && rows[0].group.is_none() {
         return Err(ApiError::forbidden_code(
             "out_of_scope",
@@ -1695,7 +1695,7 @@ async fn import_discovered_endpoint(
     if let Err(e) = admin.discovered.reconcile_promotions().await {
         tracing::warn!(error = %e, "reconciling the promoted endpoint failed");
     }
-    // The repository is the authority, not the column checked above (ADR-139 決定 5): the column
+    // The repository is the authority, not the column checked above (ADR-139 decision 5): the column
     // is only as fresh as the last sweep, and the insert is where the existing-address read runs
     // under the import lock.
     if !outcome.skipped.is_empty() {
@@ -1740,7 +1740,7 @@ mod tests {
             ("POST", format!("/api/v1/discovery/scan/{ID}/cancel")),
             ("POST", "/api/v1/discovery/import".to_owned()),
             // The preview writes nothing, but it discloses which folder claims an address, so it
-            // is gated exactly as the import it precedes (ADR-131 決定 7).
+            // is gated exactly as the import it precedes (ADR-131 decision 7).
             ("POST", "/api/v1/discovery/import-preview".to_owned()),
         ]
     }
@@ -1839,7 +1839,7 @@ mod tests {
     #[tokio::test]
     async fn promoting_an_endpoint_is_closed_to_a_viewer() {
         // The import creates a node, so it is `ManageConfig` — the same gate the scan import has,
-        // reached from the other of the two discovery paths. Probing one (ADR-179 増分 2) sends
+        // reached from the other of the two discovery paths. Probing one (ADR-179 Inc.2) sends
         // credentials at the address and is gated exactly as the import it precedes.
         for action in ["import", "probe"] {
             closed_to_a_viewer(&format!("/api/v1/discovered-endpoints/{ID}/{action}")).await;
@@ -2155,7 +2155,7 @@ mod tests {
     ///
     /// One inside folder A's range, one inside B's, one inside nothing, and one that A and B claim
     /// at the same length. The last two both land in the fallback — and the counts report them
-    /// **separately**, which is the whole of ADR-131 決定 2: folding them would tell the operator
+    /// **separately**, which is the whole of ADR-131 decision 2: folding them would tell the operator
     /// that two addresses are outside every range, which is untrue of the ambiguous one.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2560,7 +2560,7 @@ mod tests {
     }
 
     /// The join names what the caller may see, withholds the rest, and answers each address once
-    /// (ADR-139 決定 2/3). The not-matched candidate is asserted absent, so a join that listed every
+    /// (ADR-139 decision 2/3). The not-matched candidate is asserted absent, so a join that listed every
     /// candidate could not pass.
     #[test]
     fn inventory_matches_names_what_the_caller_may_see_and_withholds_the_rest() {
@@ -2617,7 +2617,7 @@ mod tests {
         );
     }
 
-    /// ADR-139 増分 3: one entry per candidate address, in the candidate's own spelling, naming the
+    /// ADR-139 Inc.3: one entry per candidate address, in the candidate's own spelling, naming the
     /// node and its monitored address; a candidate already standing at a node's address — even one
     /// the caller cannot see — is `existing`'s and never appears here.
     #[test]
@@ -2710,7 +2710,7 @@ mod tests {
     }
 
     /// An import skips an address a device node already stands at, lands the rest, and says how
-    /// many it skipped — and a request whose every row is skipped is still 201 (ADR-139 決定 4).
+    /// many it skipped — and a request whose every row is skipped is still 201 (ADR-139 decision 4).
     ///
     /// The rows are read back, not only the counts: an import that reported a skip and inserted
     /// the duplicate anyway would pass a status-and-body check.
@@ -2810,7 +2810,7 @@ mod tests {
     }
 
     /// Promoting an endpoint whose address a node was added at by hand since the last sweep is
-    /// refused with 409, and the row is reconciled on the way out (ADR-139 決定 5). The column
+    /// refused with 409, and the row is reconciled on the way out (ADR-139 decision 5). The column
     /// still said "unmonitored"; the repository is what knew better.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2857,7 +2857,7 @@ mod tests {
         assert_eq!(promoted, Some(node), "the stale row was not reconciled");
     }
 
-    /// Probing an endpoint (ADR-179 増分 2) is accepted as a one-address scan the Scan tab's own
+    /// Probing an endpoint (ADR-179 Inc.2) is accepted as a one-address scan the Scan tab's own
     /// status read can follow; a row the caller's scope hides is 404 and an imported one is 409.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2939,9 +2939,9 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
     }
 
-    /// ADR-179 増分 5: a row only a syslog or trap sender vouches for is neither probed nor imported,
+    /// ADR-179 Inc.5: a row only a syslog or trap sender vouches for is neither probed nor imported,
     /// and a folder-scoped caller cannot create a node at the tree root through either import — but
-    /// since 増分 8 it can import an endpoint into a folder it sees.
+    /// since Inc.8 it can import an endpoint into a folder it sees.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn forged_or_invisible_destinations_are_refused_before_anything_is_written(
@@ -3014,7 +3014,7 @@ mod tests {
             before,
             "no node was created where its creator cannot see it"
         );
-        // 増分 8: a folder outside its scope is not there, as far as it is concerned …
+        // Inc.8: a folder outside its scope is not there, as far as it is concerned …
         let theirs = crate::pgtest::group(&pool, "theirs").await;
         let (status, body) = send(
             &st,
@@ -3068,7 +3068,7 @@ mod tests {
         assert_eq!(nodes_now().await, before + 1);
     }
 
-    /// ADR-179 増分 8: the endpoint import files a node as the range-scan import does — the folder
+    /// ADR-179 Inc.8: the endpoint import files a node as the range-scan import does — the folder
     /// whose IP range holds its address, else the folder the request names, else the root — and a
     /// body that names neither (an N-1 client) means what it always meant.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3150,7 +3150,7 @@ mod tests {
         assert!(body.get("filed").is_none(), "{body}");
         assert_eq!(folder_of("198.51.100.8").await, Some(fallback));
 
-        // An N-1 body: the root, as before 増分 8.
+        // An N-1 body: the root, as before Inc.8.
         let old = row("198.51.100.9").await;
         let (status, body) = import(old, serde_json::json!({ "name": "host-c" })).await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -3167,7 +3167,7 @@ mod tests {
     }
 
     /// A folder-scoped caller sees a row through its lowest observer, and must not read the other
-    /// observers' evidence when they sit outside its folders (ADR-179 増分 4, ADR-014).
+    /// observers' evidence when they sit outside its folders (ADR-179 Inc.4, ADR-014).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_reads_no_evidence_from_a_node_it_cannot_see(pool: sqlx::PgPool) {
@@ -3237,7 +3237,7 @@ mod tests {
         );
     }
 
-    /// What a probe classified travels with the import (ADR-179 増分 2), so the node carries its
+    /// What a probe classified travels with the import (ADR-179 Inc.2), so the node carries its
     /// maker from the start instead of waiting for its first identity read.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]

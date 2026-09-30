@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A monitored Meraki device in a network the organization does not watch is said to be quiet, on
-// both screens that show the organization (ADR-164 決定 15).
+// both screens that show the organization (ADR-164 decision 15).
 //
 // WHY A BROWSER. `uncollectedDevices` is unit-tested, but which sentence it becomes, whether the
 // button is there, and **which networks the button sends** are wiring in `MerakiOrgPage.tsx` and
@@ -116,7 +116,7 @@ test('the page says why, and the button watches only the network the quiet node 
   expect(errors.uncaught).toEqual([]);
 });
 
-// 決定 16. `networksToWatchOnImport` is unit-tested; that the press *sends* what it returns is
+// decision 16. `networksToWatchOnImport` is unit-tested; that the press *sends* what it returns is
 // wiring in the `.tsx`. The import wizard sent this list and the page that replaced it did not, so
 // a device imported by hand became a node nothing was collected for — with every test green,
 // because no test looked at this request. Automatic import is off in this fixture, which is the

@@ -168,7 +168,7 @@ fn spec(tier: MerakiTier, networks: &[&str]) -> MerakiCollectSpec {
 }
 
 /// The logical URL of the availability collect's first page. It names no network, whichever are
-/// watched: a collect asks the whole organization and keeps the watched rows (ADR-164 決定 22).
+/// watched: a collect asks the whole organization and keeps the watched rows (ADR-164 decision 22).
 const AVAILABILITY: &str =
     "https://api.meraki.com/api/v1/organizations/1/devices/availabilities?perPage=1000";
 const AVAILABILITY_LINE: &str =
@@ -511,7 +511,7 @@ async fn a_collect_asks_the_whole_organization_and_keeps_only_the_watched_networ
     );
 }
 
-/// On the bus an empty list means every network (ADR-164 決定 16). Core no longer sends one, but a
+/// On the bus an empty list means every network (ADR-164 decision 16). Core no longer sends one, but a
 /// message omitting the field still decodes to it, so it must keep meaning what it always meant.
 #[tokio::test]
 async fn an_empty_network_list_keeps_every_row() {
@@ -588,13 +588,13 @@ async fn the_uplink_tier_asks_the_whole_organization_and_keeps_the_watched_netwo
         vec![
             "GET /api/v1/organizations/1/devices/uplinksLossAndLatency?timespan=300&perPage=1000 HTTP/1.1",
             "GET /api/v1/organizations/1/appliance/uplink/statuses?perPage=1000 HTTP/1.1",
-            // Auto VPN, last, at the largest page it accepts (ADR-164 決定 25).
+            // Auto VPN, last, at the largest page it accepts (ADR-164 decision 25).
             "GET /api/v1/organizations/1/appliance/vpn/statuses?perPage=300 HTTP/1.1",
         ]
     );
 }
 
-/// ADR-164 決定 25: the uplink tier's third read is Auto VPN, at `perPage=300` — the real Dashboard
+/// ADR-164 decision 25: the uplink tier's third read is Auto VPN, at `perPage=300` — the real Dashboard
 /// answers `perPage=1000` with 400 — and it follows the listing's pages like any other.
 #[tokio::test]
 async fn the_uplink_tier_reads_auto_vpn_last_at_the_page_size_it_accepts_and_pages_through_it() {
@@ -649,7 +649,7 @@ async fn the_uplink_tier_reads_auto_vpn_last_at_the_page_size_it_accepts_and_pag
     );
 }
 
-/// ADR-164 決定 25: an Auto VPN read that fails costs only its own readings. The uplinks' loss and
+/// ADR-164 decision 25: an Auto VPN read that fails costs only its own readings. The uplinks' loss and
 /// status still arrive, and the collect says which read failed — it used to be hidden whenever
 /// another listing of the tier answered.
 #[tokio::test]
@@ -709,7 +709,7 @@ async fn a_refused_key_on_the_first_uplink_read_still_refuses_the_whole_collect(
 }
 
 /// The traffic tier asks every MX's uplink usage over the tier's interval, with no page size —
-/// the listing documents none — and keeps the watched networks' rows (ADR-164 決定 23). What it
+/// the listing documents none — and keeps the watched networks' rows (ADR-164 decision 23). What it
 /// replaced asked `summary/top/devices/byUsage` for an hour, which the real Dashboard refuses.
 #[tokio::test]
 async fn the_traffic_tier_asks_uplink_usage_over_its_interval_and_keeps_the_watched_rows() {
@@ -743,7 +743,7 @@ async fn the_traffic_tier_asks_uplink_usage_over_its_interval_and_keeps_the_watc
     );
 }
 
-/// 🚨 A 200 that is not a list is not an answer (決定 19) — on the traffic listing too.
+/// 🚨 A 200 that is not a list is not an answer (decision 19) — on the traffic listing too.
 #[tokio::test]
 async fn a_traffic_answer_that_is_not_a_list_fails_the_collect() {
     let (origin, _, _) = serve(vec![Reply::ok(r#"{"networkId":"N_1"}"#)]).await;
@@ -801,7 +801,7 @@ fn bucket_of(line: &str) -> (u64, u64) {
 
 /// The whole tier, through HTTP: the status listing paged at the size it accepts and read out of
 /// its envelope, the watched networks kept, one settled usage bucket asked for, the configured
-/// names not asked for, and every read organization-wide — no `networkIds[]` (ADR-164 決定 22).
+/// names not asked for, and every read organization-wide — no `networkIds[]` (ADR-164 decision 22).
 #[tokio::test]
 async fn the_switch_port_tier_reads_statuses_then_one_settled_usage_bucket() {
     let page_two = format!(
@@ -883,7 +883,7 @@ async fn the_switch_port_tier_reads_statuses_then_one_settled_usage_bucket() {
     assert!(sent.iter().all(|l| !l.contains("networkIds")), "{sent:?}");
 }
 
-/// 決定 1: the names are read only when core asks, from the listing that is a bare array, and a
+/// decision 1: the names are read only when core asks, from the listing that is a bare array, and a
 /// port with none gets an empty alias rather than keeping an old one.
 #[tokio::test]
 async fn the_configured_port_names_are_read_only_when_asked_for() {
@@ -918,7 +918,7 @@ async fn the_configured_port_names_are_read_only_when_asked_for() {
     );
 }
 
-/// 決定 2, through HTTP. A usage answer in the wrong shape costs the traffic and names itself; the
+/// decision 2, through HTTP. A usage answer in the wrong shape costs the traffic and names itself; the
 /// statuses read before it still arrive. The same answer on the statuses read fails the collect —
 /// the first read is not contained.
 #[tokio::test]
@@ -948,7 +948,7 @@ async fn a_switch_port_listing_in_the_wrong_shape_is_malformed() {
 }
 
 /// A 500 on the second status page keeps the first page's switches, says why it stopped, and does
-/// not count as a failed collect — the Dashboard did answer (ADR-164 決定 18).
+/// not count as a failed collect — the Dashboard did answer (ADR-164 decision 18).
 #[tokio::test]
 async fn a_500_on_the_second_status_page_keeps_the_first() {
     let page_two = format!(
@@ -988,7 +988,7 @@ fn neighbour_spec(port_names: bool) -> MerakiCollectSpec {
     }
 }
 
-/// 決定 2–4 and 8, through HTTP: asked for, the neighbours are read after the traffic and BEFORE the
+/// decision 2–4 and 8, through HTTP: asked for, the neighbours are read after the traffic and BEFORE the
 /// names, at the page size the listing accepts; a listed switch with no other reading still gets an
 /// observation, and an unlisted one keeps \`None\`.
 #[tokio::test]
@@ -1041,7 +1041,7 @@ async fn the_neighbours_are_read_before_the_names_and_handed_to_the_listed_switc
     assert!(sent[3].contains("/switch/ports/bySwitch"), "{}", sent[3]);
 }
 
-/// 決定 3: a neighbour read cut short hands no switch a set — not even the ones on the pages that
+/// decision 3: a neighbour read cut short hands no switch a set — not even the ones on the pages that
 /// did arrive — and names itself; the port readings of the same collect still arrive.
 #[tokio::test]
 async fn a_neighbour_read_cut_short_hands_out_nothing() {
@@ -1202,7 +1202,7 @@ async fn the_wireless_tier_reads_clients_and_utilization_and_leaves_the_ssids_fo
     );
 }
 
-/// ADR-169 決定 2: the SSID read on its own. No clients are asked for and none reported, and the
+/// ADR-169 decision 2: the SSID read on its own. No clients are asked for and none reported, and the
 /// radios carry the SSID read's channel and power but **no utilization** — the utilization listing
 /// is read only to know which radios answered. The wireless rounds publish those; a second sample
 /// between two rounds is what draws the ordinary interval as a gap.
@@ -1271,7 +1271,7 @@ async fn an_ssid_read_on_its_own_asks_no_clients_and_reports_no_utilization() {
     );
 }
 
-/// 決定 1 and 4: the SSID read is made when core asks, at 250 a page, paged through — and a
+/// decision 1 and 4: the SSID read is made when core asks, at 250 a page, paged through — and a
 /// stopped access point, which the Dashboard still answers as broadcasting, gets nothing from it.
 #[tokio::test]
 async fn the_ssid_read_counts_what_a_measured_access_point_broadcasts_and_skips_a_stopped_one() {
@@ -1360,7 +1360,7 @@ async fn the_ssid_read_counts_what_a_measured_access_point_broadcasts_and_skips_
 
 /// The shape each listing answers is its own: a bare array where the clients' envelope belongs fails
 /// the collect (it is the tier's first read), and an envelope where the utilization's bare array
-/// belongs costs that listing only — named, with the clients kept (ADR-164 決定 25).
+/// belongs costs that listing only — named, with the clients kept (ADR-164 decision 25).
 #[tokio::test]
 async fn a_wireless_listing_in_the_wrong_shape_is_malformed() {
     let (origin, _, seen) = serve(vec![Reply::ok(&format!(
@@ -1393,7 +1393,7 @@ async fn a_wireless_listing_in_the_wrong_shape_is_malformed() {
 }
 
 /// A failed SSID read costs its own readings and names itself; the clients and the utilization it
-/// came after still go out (ADR-164 決定 25).
+/// came after still go out (ADR-164 decision 25).
 #[tokio::test]
 async fn a_failed_ssid_read_keeps_the_utilization_and_names_itself() {
     let clients = envelope(&clients_row("Q2AP-0001", "N_1", 3));
@@ -1421,7 +1421,7 @@ async fn a_failed_ssid_read_keeps_the_utilization_and_names_itself() {
     assert_eq!(reading(one, "wlan_ap_ssid_count"), None);
 }
 
-// ── An MX's LAN addresses, one network at a time (ADR-164 決定 28) ─────────────────────────────
+// ── An MX's LAN addresses, one network at a time (ADR-164 decision 28) ─────────────────────────────
 
 fn nets(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|n| (*n).to_owned()).collect()
@@ -1489,7 +1489,7 @@ async fn each_network_answers_with_its_vlans_its_single_lan_or_nothing() {
     );
 }
 
-/// ADR-164 増分 18 (決定 19): a single-LAN answer with no `applianceIp` is not the answer this
+/// ADR-164 Inc.18 (decision 19): a single-LAN answer with no `applianceIp` is not the answer this
 /// read asks for. It used to read as "no LAN side", which was remembered for a day.
 #[tokio::test]
 async fn a_single_lan_with_no_appliance_ip_is_malformed() {
@@ -1515,7 +1515,7 @@ async fn a_single_lan_with_no_appliance_ip_is_malformed() {
     );
 }
 
-/// 🚨 ADR-164 決定 37: a 429 whose wait would outlast the budget is not waited. A collect held past
+/// 🚨 ADR-164 decision 37: a 429 whose wait would outlast the budget is not waited. A collect held past
 /// core's lease was read as unanswered, and a second was sent into the same lane beside it.
 #[tokio::test]
 async fn a_429_that_would_outlast_the_budget_is_not_waited() {
@@ -1609,7 +1609,7 @@ async fn a_network_id_that_is_not_one_is_never_put_in_a_path() {
     );
 }
 
-// ── An MX's LLDP/CDP neighbours, one device at a time (ADR-181 増分 3) ─────────────────────────
+// ── An MX's LLDP/CDP neighbours, one device at a time (ADR-181 Inc.3) ─────────────────────────
 
 #[tokio::test]
 async fn each_mx_answers_with_its_lan_side_neighbours_or_its_own_failure() {

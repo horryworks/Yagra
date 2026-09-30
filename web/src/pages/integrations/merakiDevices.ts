@@ -42,7 +42,7 @@ const STATE_SPECS: Record<MerakiDeviceState, { isNode: boolean; importable: bool
 };
 
 /** Whether a row gets a checkbox: it is listed by Meraki, is not a node here, and is not an MX
- *  still waiting for its LAN read — the server imports none of those (ADR-164 決定 39), and a box
+ *  still waiting for its LAN read — the server imports none of those (ADR-164 decision 39), and a box
  *  that can only be refused is not drawn (ADR-056). */
 export function isImportable(device: Pick<MerakiDevice, 'state' | 'filing'>): boolean {
   return STATE_SPECS[device.state].importable && device.filing?.reason !== 'lan_pending';
@@ -98,7 +98,7 @@ export function deviceDestination(device: DestinationFields): DeviceDestinationV
 }
 
 /** The line under a device's model: its product type and, for an MX in a warm-spare pair, its
- *  configured role (ADR-164 決定 26). Configured, so it never says which of the two is carrying the
+ *  configured role (ADR-164 decision 26). Configured, so it never says which of the two is carrying the
  *  traffic — the node's own card does, from both devices' liveness. */
 export function modelSubLine(
   device: Pick<MerakiDevice, 'product_type' | 'ha_role'>,
@@ -153,7 +153,7 @@ export function unwatchedNotice(
 }
 
 /** The monitored devices nothing is collected for, and the networks that would have to be watched
- *  to fix that (ADR-164 決定 15).
+ *  to fix that (ADR-164 decision 15).
  *
  *  Collection asks the Dashboard about watched networks only, so a node whose network is not
  *  watched receives nothing: it keeps the last state it was seen in and raises no alert. That
@@ -178,7 +178,7 @@ export function uncollectedDevices(
 // ───────────────────────────────────────────────────────────────────── import
 
 /** One device as `POST /meraki/import` wants it: **its serial and nothing else**. The server takes
- *  every other fact from its own inventory (ADR-164 決定 39) — a name read when this page opened
+ *  every other fact from its own inventory (ADR-164 decision 39) — a name read when this page opened
  *  could be one Meraki has since changed, and a node created under it never followed a rename. */
 export interface MerakiImportDevice {
   serial: string;
@@ -201,12 +201,12 @@ export function importRequestDevices(chosen: readonly MerakiDevice[]): MerakiImp
 }
 
 /** The networks an import press asks the server to start watching: the ones the chosen devices are
- *  in — and none at all while the organization imports on its own (ADR-164 決定 16).
+ *  in — and none at all while the organization imports on its own (ADR-164 decision 16).
  *
  *  A node in a network that is not watched receives nothing, so importing a device without watching
  *  its network creates a node that is quiet from its first minute. The import wizard sent exactly
  *  this list; the page that replaced it (Inc.5) did not, and nothing else noticed because the
- *  collector read "no watched network" as "every network" until 決定 16.
+ *  collector read "no watched network" as "every network" until decision 16.
  *
  *  🚨 **Automatic import turns the same act into a different one.** There, watching a network makes
  *  the next sync import every other device in it — picking two devices by hand would end in two

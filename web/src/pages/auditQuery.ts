@@ -40,7 +40,7 @@ export const AUDIT_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies reado
 
 /** The columns this module's functions read. Every one of them takes the screen's
  *  [`FilterState`] plus the columns it was drawn from — there is no second, API-named copy of the
- *  state to keep in step (ADR-053 Inc.10, 決定 AA). */
+ *  state to keep in step (ADR-053 Inc.10, decision AA). */
 export type AuditColumns = readonly FilterableColumn<AuditRow>[];
 
 /**

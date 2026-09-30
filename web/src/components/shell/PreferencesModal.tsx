@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Preferences dialog, opened from the account badge (ADR-055 決定 9 / Inc.7). Real, client-only:
+// Preferences dialog, opened from the account badge (ADR-055 decision 9 / Inc.7). Real, client-only:
 // theme (light/dark, required by §1.2), interface language and layout mode, all persisted via the
 // prefs store. Theme reflects onto <html data-theme>; language drives i18next (see App.tsx).
 // No backend needed.
@@ -14,7 +14,7 @@ import { Modal } from '../ui/Modal';
 import './PreferencesModal.css';
 
 // Theme options carry an i18n key (resolved at render); language options show endonyms (native
-// names, e.g. "日本語") which are intentionally NOT translated — you pick your language in its own.
+// names, e.g. "Japanese" written in Japanese) which are intentionally NOT translated — you pick your language in its own.
 const THEMES: { key: Theme; labelKey: 'prefs.themes.light' | 'prefs.themes.dark' }[] = [
   { key: 'light', labelKey: 'prefs.themes.light' },
   { key: 'dark', labelKey: 'prefs.themes.dark' },

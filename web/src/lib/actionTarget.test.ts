@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The one argument every batch-aware tree action takes (ADR-124 増分 10).
+// The one argument every batch-aware tree action takes (ADR-124 Inc.10).
 import { describe, expect, it } from 'vitest';
 import { targetNodeCount, targetNodeIds, targetNodeNames } from './actionTarget';
 import type { NodeSummary } from '../types/api';

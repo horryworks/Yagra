@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// A page's tab bar: one underlined row of buttons, each with an optional count chip (ADR-179 決定 9).
+// A page's tab bar: one underlined row of buttons, each with an optional count chip (ADR-179 decision 9).
 //
 // Lifted out of Reports, which had it as page CSS, when Discovery needed the same bar — one look for
 // "this page has several views", not two that drift. The selection itself is the caller's, and on a

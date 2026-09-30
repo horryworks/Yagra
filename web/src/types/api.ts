@@ -103,7 +103,7 @@ const schemaEnumPins: {
   MerakiDeviceState: AssertEqual<MerakiDeviceState, components['schemas']['MerakiDeviceState']>;
   MerakiFilingReason: AssertEqual<MerakiFilingReason, components['schemas']['FilingReason']>;
   // An MX's warm-spare role and what its pair is doing, each drawn from a token the server sent
-  // (`meraki.devices.haRole.*`, `overview.pairState.*`) — ADR-164 決定 26.
+  // (`meraki.devices.haRole.*`, `overview.pairState.*`) — ADR-164 decision 26.
   MerakiHaRole: AssertEqual<MerakiHaRole, components['schemas']['MerakiHaRole']>;
   MerakiPairState: AssertEqual<MerakiPairState, components['schemas']['MerakiPairState']>;
   // The tree draws a folder's badge and builds `tree.origin.<token>` from it. `groups.rs` compares
@@ -271,7 +271,7 @@ export type NodeSummary = components['schemas']['NodeSummary'];
 export type Pins = components['schemas']['Pins'];
 
 /** What the IP-range match proposes for a set of nodes (`POST /api/v1/nodes/move-preview`).
- *  A proposal — nothing has moved when this arrives (ADR-124 決定 6). */
+ *  A proposal — nothing has moved when this arrives (ADR-124 decision 6). */
 export type MovePreview = components['schemas']['MovePreviewResult'];
 /** The same proposal over a folder's subtree or the whole inventory (ADR-176). */
 export type SubtreeMovePreview = components['schemas']['SubtreeMovePreviewResult'];
@@ -342,7 +342,7 @@ export type PrefixGap = components['schemas']['PrefixGap'];
 
 /** Which folder's IP range would claim each candidate address
  *  (`POST /api/v1/discovery/import-preview`). A proposal — nothing is imported when this
- *  arrives (ADR-131 決定 7). */
+ *  arrives (ADR-131 decision 7). */
 export type ImportPreview = components['schemas']['ImportPreviewResult'];
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
@@ -535,9 +535,9 @@ export type ProfileInput = components['schemas']['ProfileBody'];
 /** Every threshold scope level, broadest → most specific. `global` is every node and carries no
  *  scope id (ADR-075); the server pins its `scope_id` to the empty string. `group_id` is a folder
  *  group in the inventory tree and covers every group inside it; the older `group` matches a node
- *  **tag** and is legacy (ADR-075 増分 3).
+ *  **tag** and is legacy (ADR-075 Inc.3).
  *
- *  ⚠️ Since ADR-135 増分 2 a `group` rule matches a node's **effective** tags — the ones it
+ *  ⚠️ Since ADR-135 Inc.2 a `group` rule matches a node's **effective** tags — the ones it
  *  carries plus every one its folder chain supplies. */
 export const SCOPE_LEVELS = [
   'global',
@@ -553,13 +553,13 @@ export const SCOPE_LEVELS = [
  *  Two are excluded, for different reasons.
  *
  *  `group` (a node **tag**) is legacy because a folder group is the better-typed axis: it is
- *  recursive, it is the unit RBAC scopes by, and since ADR-135 増分 2 it is also what carries tags.
+ *  recursive, it is the unit RBAC scopes by, and since ADR-135 Inc.2 it is also what carries tags.
  *  Two ways to say "the Tokyo site" is one more than the screen should offer.
  *
  *  ⚠️ **The reason used to be "nothing writes `nodes.tags`", and that stopped being true in
  *  ADR-135.** It was written as a justification for a decision that survives its own argument —
  *  exactly the shape that rots, since a comment giving a reason does not update itself when the
- *  reason does. The decision (ADR-075 増分 3 決定 10) is unchanged; only this text is.
+ *  reason does. The decision (ADR-075 Inc.3 decision 10) is unchanged; only this text is.
  *
  *  `interface` (one port of one node, ADR-076) is excluded because this screen has nowhere to pick
  *  a port from — a fleet-wide interface picker does not exist, and building one is its own piece of
@@ -592,13 +592,13 @@ export type Direction = (typeof DIRECTIONS)[number];
 export type StoredThreshold = components['schemas']['StoredThreshold'];
 
 /** A threshold rule as the caller states it — the body of **both** `POST /api/v1/thresholds` and
- *  `PUT /api/v1/thresholds/{id}` (ADR-075 増分 2). One type because the server validates both
+ *  `PUT /api/v1/thresholds/{id}` (ADR-075 Inc.2). One type because the server validates both
  *  through one function; hand-writing it here would put a second, unchecked copy of the shape in
  *  a language nothing compares to the first. */
 export type ThresholdInput = components['schemas']['ThresholdBody'];
 
 /** One rule that reaches a port, and whether it is in force there
- *  (`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds`, ADR-076 決定 11).
+ *  (`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds`, ADR-076 decision 11).
  *
  *  `in_force` is "sits at the winning scope level for its metric", not "is the effective bound":
  *  several rules at one level are merged by keeping the more restrictive of each severity, so more
@@ -965,17 +965,17 @@ export const NEIGHBOR_PEER_STATES = ['node', 'outside_scope', 'ambiguous', 'unre
 export type NeighborPeerState = (typeof NEIGHBOR_PEER_STATES)[number];
 
 /** Whether another node claiming a neighbour's address has link on the ports carrying it (ADR-180
- *  増分 4). Iterated by the i18n coverage test. */
+ *  Inc.4). Iterated by the i18n coverage test. */
 export const CLAIM_PORT_STATES = ['up', 'link_down', 'unknown'] as const;
 export type ClaimPortState = (typeof CLAIM_PORT_STATES)[number];
 
 /** One advertised management address and the node it belongs to (ADR-180). */
 export type NeighborPeer = components['schemas']['NeighborPeer'];
 export type NeighborManagedBy = components['schemas']['NeighborManagedBy'];
-/** Another node that claims a neighbour's management address (ADR-180 増分 4). */
+/** Another node that claims a neighbour's management address (ADR-180 Inc.4). */
 export type AlsoClaimedBy = components['schemas']['AlsoClaimedBy'];
 /** A MAC-address chassis on a row with no management address, and the Meraki device listed under
- *  it (ADR-180 増分 3). */
+ *  it (ADR-180 Inc.3). */
 export type NeighborChassisPeer = components['schemas']['NeighborChassisPeer'];
 
 /** The IEEE-registered maker of a MAC-address chassis or port id (ADR-180). */
@@ -1020,14 +1020,14 @@ export const MERAKI_SYNC_FAILURES = [
   'truncated',
   'timeout',
   'internal',
-  // Only a collect produces this one (ADR-164 決定 18): it was sent and nothing came back.
+  // Only a collect produces this one (ADR-164 decision 18): it was sent and nothing came back.
   'no_answer',
 ] as const;
 
-/** One reason an inventory sync — or, since ADR-164 決定 18, a collect — can fail. */
+/** One reason an inventory sync — or, since ADR-164 decision 18, a collect — can fail. */
 export type MerakiSyncFailure = (typeof MERAKI_SYNC_FAILURES)[number];
 
-/** Which read of a collect tier failed (`MerakiCollectFailureView.listing`, ADR-164 決定 25) — the
+/** Which read of a collect tier failed (`MerakiCollectFailureView.listing`, ADR-164 decision 25) — the
  *  uplink tier reads three, the switch-port and wireless tiers up to three each (ADR-167, ADR-168). The API sends the token as a
  *  plain string, so a listing this bundle does not know is shown without a label rather than
  *  breaking the row. `i18nEnumKeys.test.ts` iterates this, and a Rust test
@@ -1052,7 +1052,7 @@ export const MERAKI_LISTINGS = [
 export type MerakiListing = (typeof MERAKI_LISTINGS)[number];
 
 /** A whole-organization read, asked for by `POST /api/v1/meraki/orgs/:id/sync` or running (ADR-164
- *  決定 32) — also `MerakiOrg.full_sync`. */
+ *  decision 32) — also `MerakiOrg.full_sync`. */
 export type MerakiFullSync = components['schemas']['MerakiFullSyncView'];
 
 /** What an import created and how it was filed (`POST /api/v1/meraki/import`). */
@@ -1062,7 +1062,7 @@ export type MerakiImported = components['schemas']['MerakiImported'];
  *  (`GET /api/v1/meraki/orgs/:id/devices`). */
 export type MerakiDevice = components['schemas']['MerakiDeviceView'];
 
-/** What a device's row is shown as (`MerakiDevice.state`, ADR-164 決定 9).
+/** What a device's row is shown as (`MerakiDevice.state`, ADR-164 decision 9).
  *
  *  An `as const` array for the reason `MERAKI_SYNC_FAILURES` is one: the organization's page
  *  builds the label key from the token (`` t(`meraki.devices.state.${state}`) ``) and offers the
@@ -1098,7 +1098,7 @@ export const MERAKI_FILING_REASONS = [
 /** One reason a device is filed where it is. */
 export type MerakiFilingReason = (typeof MERAKI_FILING_REASONS)[number];
 
-/** An MX's configured warm-spare role (`MerakiDevice.ha_role`, `MerakiPair.role`), ADR-164 決定 26.
+/** An MX's configured warm-spare role (`MerakiDevice.ha_role`, `MerakiPair.role`), ADR-164 decision 26.
  *
  *  The **configured** one: Meraki keeps calling the primary `primary` while its spare carries the
  *  traffic, so a role never says which MX is running — `MerakiPair.state` does. `as const`
@@ -1149,7 +1149,7 @@ export type NetboxServer = components['schemas']['NetboxServerView'];
 export type NetboxTestResult = components['schemas']['TestNetboxResult'];
 
 /** "Sync now" and the run it starts (`POST /api/v1/netbox/servers/{id}/sync` answers this with
- *  202, and every server row carries it as `sync`). ADR-172 決定 1: the sync runs in the leader's
+ *  202, and every server row carries it as `sync`). ADR-172 decision 1: the sync runs in the leader's
  *  loop, so the page reads how it ended from the row, not from this answer. */
 export type NetboxSyncView = components['schemas']['NetboxSyncView'];
 
@@ -1242,7 +1242,7 @@ export type PollerInfo = components['schemas']['PollerInfo'];
  *  go unmonitored. */
 export type PoolSummary = components['schemas']['PoolSummary'];
 
-/** How many nodes and folders one takeover or restore re-pointed (ADR-107 増分 4). */
+/** How many nodes and folders one takeover or restore re-pointed (ADR-107 Inc.4). */
 export type PoolTakeoverResult = components['schemas']['PoolTakeoverResult'];
 
 /** The `GET /api/v1/pollers` body: the registered poller fleet + the per-pool summary. */

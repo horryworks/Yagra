@@ -114,7 +114,7 @@ export function hasSuppression(
 
 /**
  * Whether a node's menu can offer "move to the folder whose IP range contains this address"
- * (ADR-124 決定 6).
+ * (ADR-124 decision 6).
  *
  * ⚠️ **Unlike `canRunDiscovery`, this asks about every folder, not the row's own.** The question
  * is "is there anywhere for this node to go", and the answer is spread across the tree: the folder
@@ -141,7 +141,7 @@ export function canMoveByPrefix(groups: readonly NodeGroup[], canEdit: boolean):
 /**
  * What an action on a node row acts on: that row, or the whole working set.
  *
- * 🚨 **One shape for every batch-aware action** (ADR-124 増分 9). Move and Delete each had their
+ * 🚨 **One shape for every batch-aware action** (ADR-124 Inc.9). Move and Delete each had their
  * own near-identical answer to this, and the actions that had *neither* — pool, maintenance, mute,
  * Poll now — were the ones that silently kept acting on one row while sitting in a menu headed
  * "Move 20 selected…". A new batch-aware action reads this rather than growing a third copy.
@@ -216,7 +216,7 @@ export function nodeMoveItems(
   return { ...items, alsoSelection: items.nameTheRow };
 }
 
-/** What the delete item on a node row acts on (ADR-124 増分 6). Unlike the moves it adds nothing
+/** What the delete item on a node row acts on (ADR-124 Inc.6). Unlike the moves it adds nothing
  *  to {@link ActionItems} — see {@link nodeDeleteItems} for why it has no `alsoSelection`. */
 export type DeleteItems = ActionItems;
 

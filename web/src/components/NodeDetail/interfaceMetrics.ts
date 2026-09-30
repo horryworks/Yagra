@@ -87,7 +87,7 @@ export function faultValues(series: InterfaceSeries, spec: FaultSeriesSpec): (nu
   return series[spec.key] ?? [];
 }
 
-/** Whether the errors/discards chart is drawn for this port (ADR-167 決定 13).
+/** Whether the errors/discards chart is drawn for this port (ADR-167 decision 13).
  *
  *  A Meraki switch port has no error or discard counters — the organization-wide Dashboard
  *  listings Yagra reads carry none — so its four arrays come back empty and the chart could only
@@ -384,7 +384,7 @@ export function trafficCell(row: TrafficRow, dir: TrafficDir): TrafficCell | nul
  * 🚨 The two must not be printed the same way. The cell used to say "down" whenever there was no
  * rate, which is true of a port the device reports down and false of one nobody has an answer for
  * — a Meraki access point's radio, which never gets an `if_oper_status` because nothing the
- * Dashboard answers says whether a radio is on (ADR-168 決定 3), read "down" on every radio of
+ * Dashboard answers says whether a radio is on (ADR-168 decision 3), read "down" on every radio of
  * every MR. A port whose walk has not reported a status yet is in the same position.
  */
 export function noTrafficReason(row: Pick<TrafficRow, 'oper_status'>): 'down' | 'unknown' {

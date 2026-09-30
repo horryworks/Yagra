@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The sign-in form (ADR-052 決定 5). The one flow the token-injection shortcut cannot cover, so it
+// The sign-in form (ADR-052 decision 5). The one flow the token-injection shortcut cannot cover, so it
 // gets the only test that actually posts credentials.
 //
 // The interesting half is not the happy path — it is that the server's *own* message reaches the

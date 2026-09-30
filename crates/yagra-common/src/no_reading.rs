@@ -54,7 +54,7 @@ pub fn no_reading_marker(item: &CollectionItem) -> Option<f64> {
                 .map(|(_, marker)| *marker)
         }
         // A wireless controller's AP walk drops its vendor's placeholders in the poller's dialect,
-        // like the optical probe (ADR-064 改訂 R10).
+        // like the optical probe (ADR-064 revision R10).
         CollectionKind::Scalar | CollectionKind::Optical | CollectionKind::Wlan => None,
     }
 }

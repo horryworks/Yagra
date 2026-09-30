@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! What an **anonymous** request may reach (ADR-123 決定 5).
+//! What an **anonymous** request may reach (ADR-123 decision 5).
 //!
 //! Before this module, "public dashboard" meant every `RequireView` handler answered without a
 //! credential — 76 read endpoints, so the node list, the event log and the shared board composed
@@ -154,7 +154,7 @@ impl PublicAccess {
     }
 
     /// How many routes this board opens. For the confirmation dialog, which names the cost before
-    /// the click (ADR-123 決定 1), and for the switch's audit trail.
+    /// the click (ADR-123 decision 1), and for the switch's audit trail.
     #[must_use]
     pub fn route_count(&self) -> usize {
         self.routes.len()
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn the_heatmap_opens_only_the_route_it_reads() {
-        // ADR-123 増分 2 決定 3. `InterfaceHeatmapWidget` calls `getInterfaceHeatmap` and nothing
+        // ADR-123 Inc.2 decision 3. `InterfaceHeatmapWidget` calls `getInterfaceHeatmap` and nothing
         // else — the row labels come back inside that response. The per-node roster it used to
         // declare opened an API to strangers for a request the widget never makes, and the
         // spelling defect is what hid that: an over-declaration costs nothing while the

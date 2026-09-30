@@ -217,7 +217,7 @@ describe('groupMetricOptions', () => {
 });
 
 describe('a check metric the catalogue marks per-interface', () => {
-  // ADR-167 決定 8 / ADR-168 決定 2: a Meraki collect stores these one series per port or per
+  // ADR-167 decision 8 / ADR-168 decision 2: a Meraki collect stores these one series per port or per
   // radio, so a port-scoped threshold rule must be able to name them. They come from the check
   // list, which used to carry no dimension at all and was dropped by the filter wholesale.
   it('is offered for a port rule, and the node-level checks still are not', () => {

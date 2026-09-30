@@ -90,7 +90,7 @@ pub(crate) struct MetricMeaning {
         (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
     ),
 )]
-/// What each metric measures — the dictionary behind a bare metric name (ADR-079 決定 4).
+/// What each metric measures — the dictionary behind a bare metric name (ADR-079 decision 4).
 ///
 /// **No `Admin` extractor and no 503.** The table is compiled in, so this answers identically in
 /// skeleton mode and on a public dashboard; requiring the write side would refuse a question that

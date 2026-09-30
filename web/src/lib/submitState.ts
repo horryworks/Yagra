@@ -81,7 +81,7 @@ export function done<T>(value?: T): SubmitOutcome<T | undefined> {
 /**
  * The answer to a batch that reports how many of its rows it applied. All of them ⇒ done; fewer ⇒
  * keep the dialog open with `message`. `applied < requested` is normal, not an error — a row can
- * have been deleted, or be outside the caller's folders (ADR-124 決定 7) — so the dialog says both
+ * have been deleted, or be outside the caller's folders (ADR-124 decision 7) — so the dialog says both
  * numbers rather than claiming the count it asked for.
  */
 export function partialOutcome(

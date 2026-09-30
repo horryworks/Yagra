@@ -7,7 +7,7 @@
 //! place nobody looks.
 //!
 //! ✅ **Its statements run against a real PostgreSQL** (ADR-116). They were blocked twice over —
-//! faking a `ReportsRepo` needed seams (ADR-102 決定 5, done in ADR-112) and running one needed a
+//! faking a `ReportsRepo` needed seams (ADR-102 decision 5, done in ADR-112) and running one needed a
 //! database (ADR-114, done) — and then stayed unwritten once both obstacles were gone, which is
 //! how twenty-two statements reached eight releases with none of them ever executed by a test.
 //! Four `#[sqlx::test]`s now cover definitions, the schedule clock, a run from insert to finish,

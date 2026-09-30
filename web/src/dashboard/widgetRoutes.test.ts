@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The `reads` declarations are an access-control table (ADR-123 決定 5/6), and almost nothing can
+// The `reads` declarations are an access-control table (ADR-123 decision 5/6), and almost nothing can
 // check them: what a `.tsx` fetches is not statically reachable, so "does this widget really read
 // that route" has no mechanical answer — the public board's "view as anonymous" preview is the
 // only way to find an omission. What CAN be checked is everything around that gap, and this file
@@ -57,7 +57,7 @@ describe('widget route declarations', () => {
   });
 
   it('no widget declares a route that writes', () => {
-    // ADR-123 決定 7: `public_dashboard` opens reads only, and the allow-list must not become a
+    // ADR-123 decision 7: `public_dashboard` opens reads only, and the allow-list must not become a
     // way around that. `POST /api/v1/node-names` is the one POST allowed through — it is an
     // id→name lookup guarded by `RequireView`, the read-shaped write `api-conventions.md`
     // describes — so it is named here rather than pattern-matched.

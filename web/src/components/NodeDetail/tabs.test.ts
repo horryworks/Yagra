@@ -86,7 +86,7 @@ const label = (n: NodeDetailSubject) =>
   (n.merakiProductType ? `/${n.merakiProductType}` : '');
 
 describe('node-detail tab visibility', () => {
-  // ADR-064 増分 C. An access point is never polled itself, so `snmpConfigured` is false on every
+  // ADR-064 Inc.C. An access point is never polled itself, so `snmpConfigured` is false on every
   // one of them — and asking only that question hid the radios its controller had already
   // collected. The two halves are separate and both are needed: `kinds` lets the tab through for
   // this node kind, and `interfacesFed` lets it through despite the node having no credential.
@@ -101,7 +101,7 @@ describe('node-detail tab visibility', () => {
 
   // The other side of the same rule: widening it for access points must not widen it for a
   // device nobody gave an SNMP credential, which is the case ADR-119 exists for.
-  // ADR-167 決定 13. A Meraki switch's ports come from its organization's switch-port collect, so it
+  // ADR-167 decision 13. A Meraki switch's ports come from its organization's switch-port collect, so it
   // gets the tab — whatever the SNMP flag says, because it is never walked. ADR-168: an access
   // point's radios come from the wireless collect, as rows, so it gets the tab too.
   it('shows Interfaces on a Meraki switch or access point and on no other Meraki node', () => {
@@ -122,7 +122,7 @@ describe('node-detail tab visibility', () => {
       for (const other of ['appliance', 'camera', 'cellularGateway', null]) {
         expect(visibleNodeDetailTabs(node(other)), `${other}`).not.toContain('interfaces');
       }
-      // ADR-181: a switch's, (増分 3) an MX's and (増分 5) an MR's neighbours are read from the
+      // ADR-181: a switch's, (Inc.3) an MX's and (Inc.5) an MR's neighbours are read from the
       // Dashboard — no other product's are.
       expect(visibleNodeDetailTabs(node('switch'))).toContain('neighbors');
       expect(visibleNodeDetailTabs(node(' Switch '))).toContain('neighbors');

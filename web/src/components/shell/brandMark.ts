@@ -16,7 +16,7 @@
 // imports to an empty string even with `?raw` (measured three ways). Change one, change both, and
 // run `npm run build && npm run test:ui`.
 export const BRAND = '#e95d08'; // fixed brand orange (--brand-fixed)
-export const MARK = '#faf7f3'; // off-white 生成り mark (--brand-mark)
+export const MARK = '#faf7f3'; // off-white unbleached mark (--brand-mark)
 
 /** Every coordinate below is in this viewBox. */
 export const MARK_VIEWBOX = '0 0 64 64';

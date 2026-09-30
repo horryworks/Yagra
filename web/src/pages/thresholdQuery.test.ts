@@ -24,7 +24,7 @@ const read = (qs: string) => readFilterParams(COLUMNS, new URLSearchParams(qs));
 
 describe('queryFor', () => {
   it('asks for every scope level except interface when nothing is filtered', () => {
-    // The screen's default narrows (ADR-076 決定 12): port rules are per (node × port × metric),
+    // The screen's default narrows (ADR-076 decision 12): port rules are per (node × port × metric),
     // so one 48-port switch would contribute 96 rows to a list capped at 500 and bury the rules
     // an operator came to read. The narrowing is a *request*, not a browser-side filter, or the
     // cap would still be spent on the rows being hidden.

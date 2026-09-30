@@ -927,7 +927,7 @@ impl Notifier {
         let mut facts = context_for(alert, event, &resolved);
         // A Meraki organization is identified by id and carries no name, so `context_for` — which
         // is pure — can only call it by its flat form. The page that wakes someone should say
-        // which organization (ADR-164 決定 18).
+        // which organization (ADR-164 decision 18).
         if let (Some(org), Some(src)) = (alert.subject.meraki_org(), &source) {
             if let Some(name) = src.meraki_org_name(org).await {
                 facts.subject_name.clone_from(&name);

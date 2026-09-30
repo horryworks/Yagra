@@ -34,7 +34,7 @@ pub const MAX_LINKS_PER_NODE: usize = 512;
 // ⚠️ The `///` above and on each variant is published verbatim to API clients through the generated
 // OpenAPI document — keep it outward-facing and put the reasoning in `//` like this.
 //
-// The ordering is a total order by strength and it is load-bearing: ADR-043 決定 4 says a manually
+// The ordering is a total order by strength and it is load-bearing: ADR-043 decision 4 says a manually
 // pinned link always wins a recomputation, and expressing that as a rank on this enum makes it one
 // function's property instead of a rule repeated wherever links are merged. The routing variants
 // (`Ospf`, `Route`, `Bgp`, Increment 4) slotted in by rank rather than by declaration order, and the
@@ -151,7 +151,7 @@ impl PartialOrd for LinkSource {
 //
 // ⚠️ Published verbatim to API clients (see `LinkSource`). Reasoning goes in `//`.
 //
-// ADR-043 決定 4 — a manual decision always wins a recomputation. Making that a property of one
+// ADR-043 decision 4 — a manual decision always wins a recomputation. Making that a property of one
 // function (`yagra_topology::derive::apply_overrides`) rather than a rule repeated at every call
 // site is the whole reason this type exists separately from `LinkSource`: evidence accumulates,
 // decisions replace.

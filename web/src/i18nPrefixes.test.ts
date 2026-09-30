@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// ADR-150 決定 4(a): a runtime-built `t()` key whose PREFIX names nothing renders raw, in both
+// ADR-150 decision 4(a): a runtime-built `t()` key whose PREFIX names nothing renders raw, in both
 // locales, and nothing else can see it.
 //
 // `i18nEnumKeys.test.ts` next door walks each enum and demands a string per member — it proves the

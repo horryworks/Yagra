@@ -628,7 +628,7 @@ impl Coordinator {
     /// caller uses this to *tell the operator* what to expect, and the authoritative answer still
     /// comes later from whatever the poller reports.
     ///
-    /// ➕ **The Meraki scheduler uses it as a send gate** (ADR-167 決定 9), and for the same reason
+    /// ➕ **The Meraki scheduler uses it as a send gate** (ADR-167 decision 9), and for the same reason
     /// read the other way round: a Meraki collect is queue-delivered too, so the switch-port tier
     /// goes to a pool only when *every* live member could take it. A member that cannot decodes
     /// nothing and drops the job, and the lane that job took then waits out its lease (ADR-169).
@@ -1702,7 +1702,7 @@ mod tests {
         assert_eq!(coord.caps_of("nobody", now), None);
     }
 
-    /// ADR-167 決定 9, the gate the Meraki scheduler reads: the switch-port tier goes to a pool only
+    /// ADR-167 decision 9, the gate the Meraki scheduler reads: the switch-port tier goes to a pool only
     /// when **every** live poller there claims it. One old poller is enough to refuse — it would
     /// take its share of the queue-delivered jobs and drop each one — and a pool with nobody alive
     /// supports nothing. Another pool's pollers do not answer for this one.

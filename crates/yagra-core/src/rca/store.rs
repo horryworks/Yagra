@@ -329,7 +329,7 @@ impl RcaRepo {
     /// not the node clicked), the check, and the language it was written in. The TTL comparison is
     /// the caller's.
     ///
-    /// ⚠️ This replaced a lookup by context digest (ADR-172 決定 3). The digest changes whenever
+    /// ⚠️ This replaced a lookup by context digest (ADR-172 decision 3). The digest changes whenever
     /// the evidence does, and during an outage it does most minutes — so an explanation generated
     /// after the operator closed the dialog was, on reopening, billed again rather than shown. The
     /// cost is that fresh evidence inside the TTL is not re-explained unless someone presses

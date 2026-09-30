@@ -46,7 +46,7 @@ import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
 import { useLoad } from '../lib/useLoad';
 // The floor is shared with the account badge's own change-password dialog — one literal, not
-// three (ADR-122 決定 8).
+// three (ADR-122 decision 8).
 import { MIN_PW } from '../lib/password';
 import { LoadGate } from '../components/ui/LoadGate';
 import './UsersPage.css';

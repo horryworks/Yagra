@@ -149,7 +149,7 @@ export type TteUnit = (typeof TTE_UNITS)[number];
 
 /**
  * A day count as a localizable magnitude + unit key. Returning the unit rather than a formatted
- * string is what lets JA say「4ヶ月」— the Rust `human_days` equivalent builds English inline and
+ * string is what lets JA say "4 months" in its own words — the Rust `human_days` equivalent builds English inline and
  * cannot go through `t()`.
  */
 export function humanDays(days: number): { count: number; unit: TteUnit } {

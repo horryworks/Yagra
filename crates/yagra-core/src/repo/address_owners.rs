@@ -6,7 +6,7 @@
 //! Neighbors tab and the map agree about who stands at a peer's management address whenever one
 //! node does. The rule applied to what comes back — one claimant is a match — is
 //! `yagra_topology::sole_claimant`, shared with the map for the same reason. Where several nodes
-//! claim it, the tab alone may narrow them by the name the neighbour sent (ADR-180 増分 4); the map
+//! claim it, the tab alone may narrow them by the name the neighbour sent (ADR-180 Inc.4); the map
 //! draws no line.
 //!
 //! ⚠️ Read on every Neighbors-tab refresh (15 s per open tab), so the `node_l3` half must not scan
@@ -19,16 +19,16 @@ use std::net::IpAddr;
 
 impl NodeRepo {
     /// The device nodes the caller may see whose **own interface-address list** carries one of
-    /// `addresses`, paired with the address it carries (ADR-139 増分 3).
+    /// `addresses`, paired with the address it carries (ADR-139 Inc.3).
     ///
     /// Unlike [`Self::address_claims`] this is a filter, not a projection: a Discovery candidate is
     /// only marked, never refused, so a node outside the caller's folders has nothing to say to them
-    /// (ADR-148 決定 8). Only rows whose type identifies a node count — an `anycast` or `broadcast`
+    /// (ADR-148 decision 8). Only rows whose type identifies a node count — an `anycast` or `broadcast`
     /// address is carried by more than the one device. The monitored address itself is not asked:
     /// a node standing at the candidate's address is [`Self::device_nodes_at`]'s answer.
     ///
     /// At most `SHARED_VALUE_MAX + 1` nodes come back per address, as [`Self::device_nodes_named`]
-    /// does per name: an address more nodes than that carry identifies none of them (ADR-148 決定
+    /// does per name: an address more nodes than that carry identifies none of them (ADR-148 decision
     /// 3), and a private address plan reused at every site would otherwise return one row per site
     /// on every refresh. The type filter runs in the statement, before the cap, so the rows the cap
     /// keeps are ones that count.
@@ -108,9 +108,9 @@ impl NodeRepo {
     /// both are counted. Withholding a hidden claimant's name and id is the API layer's decision.
     ///
     /// Unlike it, URL and DNS monitors are **not** excluded — the map counts them as claimants too,
-    /// and matching its rule is the point (ADR-180 決定 2).
+    /// and matching its rule is the point (ADR-180 decision 2).
     ///
-    /// Each claim carries the port it is on (ADR-180 増分 4), so a node appears once for the port
+    /// Each claim carries the port it is on (ADR-180 Inc.4), so a node appears once for the port
     /// carrying the address and once more if it is also its inventory address.
     pub async fn address_claims(
         &self,
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(ids, want);
     }
 
-    /// ADR-180 増分 4: an interface claim names the port carrying the address and an inventory claim
+    /// ADR-180 Inc.4: an interface claim names the port carrying the address and an inventory claim
     /// names none — the tab reads each claimant's link state from exactly these. The stored list
     /// keeps one record per address, so the second port offered for the same address is not
     /// stored and does not come back.
@@ -344,7 +344,7 @@ mod tests {
         );
     }
 
-    /// ADR-139 増分 3: a device node whose interface list carries a scanned address comes back with
+    /// ADR-139 Inc.3: a device node whose interface list carries a scanned address comes back with
     /// its own monitored address and model; one outside the caller's folders does not come back.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The account badge menu and the Preferences dialog (ADR-055 決定 9 / Inc.7).
+// The account badge menu and the Preferences dialog (ADR-055 decision 9 / Inc.7).
 //
 // Why Tier1 and not a unit test: there is no other kind available. `UserMenu` and
 // `PreferencesModal` are `.tsx`, and Vitest runs `src/**/*.test.ts` in the node environment — a

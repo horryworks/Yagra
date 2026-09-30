@@ -119,7 +119,7 @@
   border-color: var(--severity-info);
 }
 
-/* The same address on other nodes (ADR-180 増分 4): a duplicate is worth a look, so the warning
+/* The same address on other nodes (ADR-180 Inc.4): a duplicate is worth a look, so the warning
    colour — paired with its words, never alone. */
 .nd-nb-dup {
   flex-shrink: 0;
@@ -364,7 +364,7 @@ html[data-viewport='mobile'] .nd-nb-table {
   padding: 0 var(--space-2);
 }
 
-/* ADR-179 増分 3: adding an unmonitored neighbour. The shortcut sits under the address state; the
+/* ADR-179 Inc.3: adding an unmonitored neighbour. The shortcut sits under the address state; the
    panel opens above the row's record. */
 /* The name and its monitored badge on one line: the name gives way, the badge never does. */
 .nd-nb-peerline {
@@ -453,7 +453,7 @@ html[data-viewport='mobile'] .nd-nb-table {
   align-items: center;
 }
 
-/* Why a "Not monitored" row has no setup button (ADR-179 増分 9), where the button would be. It
+/* Why a "Not monitored" row has no setup button (ADR-179 Inc.9), where the button would be. It
    wraps rather than ellipsizing: the column is narrow and the sentence is the whole point. */
 .nd-nb-setup-why {
   font-size: var(--font-xs);

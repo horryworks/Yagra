@@ -63,7 +63,7 @@ export function AddNodeModal({
   /** The parent picker's display label — UI only, so it is not part of the request payload. */
   const [parentName, setParentName] = useState('');
   /** Folder the node will be filed into. Seeded from the launch context, then editable: the dialog
-   *  is reached from the page header, the tree, the ＋ menu and a group's detail pane, and only the
+   *  is reached from the page header, the tree, the + menu and a group's detail pane, and only the
    *  operator knows where the node belongs. Deliberately NOT part of `AddNodeForm` — that type maps
    *  1:1 onto the create bodies and no create endpoint takes a group; placement is a second call. */
   const [group, setGroup] = useState<string>(groupId ?? '');
@@ -97,7 +97,7 @@ export function AddNodeModal({
     isValidPoolName(form.pool);
 
   /** Nodes already monitored at the address being added, once the lookup found some (ADR-139
-   *  増分 2). While set, the dialog names them and the primary button becomes "Add anyway". */
+   *  Inc.2). While set, the dialog names them and the primary button becomes "Add anyway". */
   const [sameAddress, setSameAddress] = useState<SameAddressNode[] | null>(null);
   /** The address the operator chose to add anyway. A different address is a new question. */
   const [confirmedAddress, setConfirmedAddress] = useState<string | null>(null);

@@ -62,7 +62,7 @@ pub const DISCOVERED_RETENTION_SECS: i64 = 7 * 86_400;
 /// How often the endpoint sweep runs when there is anything to sweep.
 pub const ENDPOINT_SWEEP_INTERVAL_SECS: u64 = 300;
 
-/// How many pieces of evidence one endpoint keeps (ADR-179 決定 5).
+/// How many pieces of evidence one endpoint keeps (ADR-179 decision 5).
 ///
 /// Enough to show every source and a couple of observers for each; a host every router on a campus
 /// has in its ARP cache would otherwise carry dozens of identical "ARP on …" lines.
@@ -90,10 +90,10 @@ const MAX_DEVICE_TEXT: usize = 255;
     utoipa::ToSchema,
 )]
 // No `#[serde(other)] Unknown` on purpose: the only stored copy is `l3_discovered.evidence`, which
-// `evidence_from_document` reads one entry at a time, so a core that has that reader (ADR-179 増分 7
+// `evidence_from_document` reads one entry at a time, so a core that has that reader (ADR-179 Inc.7
 // on) drops a later source's entry alone rather than failing the row. Cores before it read the
 // array whole, so a new source is still unsafe to add while one of those can be running. A catch-all variant would reach the OpenAPI document, the
-// WebUI's source list and both locales for no reader that needs it (ADR-179 増分 7 決定 2).
+// WebUI's source list and both locales for no reader that needs it (ADR-179 Inc.7 decision 2).
 #[serde(rename_all = "snake_case")]
 pub enum EndpointSource {
     /// A monitored router's ARP or IPv6 neighbour cache.
@@ -128,7 +128,7 @@ impl EndpointSource {
     }
 }
 
-/// Whether nothing but a syslog or trap sender vouches for this address (ADR-179 増分 5 決定 2).
+/// Whether nothing but a syslog or trap sender vouches for this address (ADR-179 Inc.5 decision 2).
 ///
 /// Such a row is listed but never probed or imported: its address may be forged, and probing it
 /// would send every chosen credential to whoever forged it.
@@ -167,7 +167,7 @@ impl EndpointSource {
     }
 }
 
-/// Drop every piece of evidence whose observing node is not in `visible` (ADR-179 増分 4).
+/// Drop every piece of evidence whose observing node is not in `visible` (ADR-179 Inc.4).
 ///
 /// A row is listed when its *lowest* observer is in the caller's scope, but its evidence names
 /// every observer — so without this a folder-scoped caller read another folder's node id, port and
@@ -199,7 +199,7 @@ pub struct EndpointEvidence {
     pub detail: Option<String>,
 }
 
-/// The two passive-event kinds that carry a sender address worth discovering (ADR-179 決定 3).
+/// The two passive-event kinds that carry a sender address worth discovering (ADR-179 decision 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SenderKind {
     Syslog,
@@ -263,7 +263,7 @@ pub struct EndpointObservation {
     pub evidence: Vec<EndpointEvidence>,
 }
 
-/// Everything the sweep reads, fleet-wide (ADR-179 決定 2).
+/// Everything the sweep reads, fleet-wide (ADR-179 decision 2).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Signals<'a> {
     pub arp: &'a [(NodeId, ArpSummary)],
@@ -292,7 +292,7 @@ pub fn unmonitored(
 /// Whether an address can name a device of its own. `0.0.0.0` is what an agent reports for a
 /// neighbour it has not resolved, and every device's loopback would match every other's.
 ///
-/// The Neighbors tab says so when it is why an address is not on the list (ADR-179 増分 9 決定 2),
+/// The Neighbors tab says so when it is why an address is not on the list (ADR-179 Inc.9 decision 2),
 /// so the rule and its explanation are this one function.
 pub(crate) fn identifies_a_device(ip: IpAddr) -> bool {
     match ip {
@@ -495,7 +495,7 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
 
     // Truncated after the map is built, so which endpoints survive does not depend on the order the
     // inputs were read in. Rows a monitored device saw are kept before rows only a sender vouches
-    // for (ADR-179 増分 5 決定 3): a sender's address can be forged, and ten thousand forged low
+    // for (ADR-179 Inc.5 decision 3): a sender's address can be forged, and ten thousand forged low
     // addresses must not push a real device off the list. Listed by address, which is also the
     // order an operator scans.
     let (observed, senders): (Vec<_>, Vec<_>) = by_ip
@@ -531,7 +531,7 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
             // The lowest observer across every source, and the port it saw the endpoint on. Chosen
             // before the cap: evidence is ordered by source first, so eight ARP lines from higher
             // node ids would otherwise cut the lowest observer's BGP line and move `via_node` —
-            // which decides who may see the row — to another node (ADR-179 増分 7 決定 1).
+            // which decides who may see the row — to another node (ADR-179 Inc.7 decision 1).
             let via = g
                 .evidence
                 .iter()
@@ -790,7 +790,7 @@ impl DiscoveredRepo {
     /// a node either way, and a rule expressed once cannot disagree with itself. Without it an
     /// operator who added the host by hand would keep reading it in the unmonitored list for a week.
     ///
-    /// ⚠️ **A URL or DNS monitor at the same address does not count** (ADR-139 決定 1). Both store a
+    /// ⚠️ **A URL or DNS monitor at the same address does not count** (ADR-139 decision 1). Both store a
     /// resolved address in `nodes.address`, and matching on the address alone marked a router
     /// "monitored" because its web page was — while the scan table beside this one, which asks
     /// the same question through [`crate::repo::NodeRepo::DEVICE_NODE_PREDICATE`], said it was not.
@@ -882,7 +882,7 @@ impl DiscoveredRepo {
         rows.iter().map(endpoint_from_row).collect()
     }
 
-    /// Which of `observers` a caller scoped to `groups` may see (ADR-179 増分 4) — one read for a
+    /// Which of `observers` a caller scoped to `groups` may see (ADR-179 Inc.4) — one read for a
     /// whole page's evidence. Only a scoped caller asks: an unrestricted one sees every observer.
     pub async fn visible_observers(
         &self,
@@ -902,7 +902,7 @@ impl DiscoveredRepo {
     }
 
     /// How many endpoints the caller can see that are still unmonitored — the Discovery tab's count
-    /// (ADR-179 決定 8). The same scope predicate as [`Self::list_page`], so the number and the list
+    /// (ADR-179 decision 8). The same scope predicate as [`Self::list_page`], so the number and the list
     /// cannot disagree about what the caller may see.
     pub async fn unmonitored_total(&self, groups: Option<&[Uuid]>) -> anyhow::Result<i64> {
         let row = sqlx::query(
@@ -921,7 +921,7 @@ impl DiscoveredRepo {
     /// Which of `addresses` the caller would find on the Discovery ▸ Unregistered list (ADR-180) —
     /// the same scope predicate and the same "not yet imported" rule as [`Self::list_page`], so the
     /// Neighbors tab never links to a row the list will not show. Each address comes back with its
-    /// row's id — `ip` is unique on the table — so the tab can act on the row too (ADR-179 増分 3).
+    /// row's id — `ip` is unique on the table — so the tab can act on the row too (ADR-179 Inc.3).
     pub async fn listed_among(
         &self,
         addresses: &[IpAddr],
@@ -955,7 +955,7 @@ impl DiscoveredRepo {
     }
 
     /// One endpoint by id, if the caller can see it — what the import and probe handlers read
-    /// before acting on a row (ADR-179 増分 2). The same scope predicate as [`Self::list_page`], so
+    /// before acting on a row (ADR-179 Inc.2). The same scope predicate as [`Self::list_page`], so
     /// an id is actionable exactly when its row is listable: a row outside the scope reads as
     /// absent, never as "exists, but not yours".
     pub async fn get(
@@ -978,7 +978,7 @@ impl DiscoveredRepo {
     }
 }
 
-/// Read a row's stored evidence document (ADR-179 増分 7 決定 2).
+/// Read a row's stored evidence document (ADR-179 Inc.7 decision 2).
 ///
 /// Entries are read one at a time and an entry this core cannot read is dropped on its own: only
 /// the sweep writes the column, so such an entry came from a newer core naming a source this one
@@ -1212,7 +1212,7 @@ mod tests {
 
     /// The promotion statement spells out the device predicate instead of interpolating it (this
     /// module refuses `format!`), so the two copies are compared here — a URL monitor excluded on
-    /// the scan table but not on this one is the disagreement ADR-139 決定 1 exists to prevent.
+    /// the scan table but not on this one is the disagreement ADR-139 decision 1 exists to prevent.
     #[test]
     fn the_promotion_statement_ends_in_the_device_predicate() {
         let tail = format!("AND {}", crate::repo::NodeRepo::DEVICE_NODE_PREDICATE);
@@ -1562,7 +1562,7 @@ mod tests {
     fn forged_senders_cannot_push_an_observed_endpoint_off_the_list() {
         // More low-address senders than the list holds, and one real device a router saw at a
         // higher address. Ordered by address alone, the senders filled the list and the device
-        // was cut (ADR-179 増分 5 決定 3).
+        // was cut (ADR-179 Inc.5 decision 3).
         let senders: Vec<SenderObservation> = (0..=MAX_DISCOVERED_ENDPOINTS as u32)
             .map(|i| SenderObservation {
                 ip: IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000 + i)),
@@ -1999,7 +1999,7 @@ mod tests {
     }
 
     /// A URL monitor at the endpoint's address does not make the endpoint "monitored"; a device
-    /// node at it does (ADR-139 決定 1). The scan table on the same screen asks through the same
+    /// node at it does (ADR-139 decision 1). The scan table on the same screen asks through the same
     /// predicate, so the two cannot disagree about one address.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2215,7 +2215,7 @@ mod tests {
 
     /// Evidence and a name go in through the sweep's writer and come back through both readers; a
     /// row written before ADR-179 reads as the ARP observation it was; and the tab's count uses the
-    /// list's scope (ADR-179 決定 1, 8).
+    /// list's scope (ADR-179 decision 1, 8).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn evidence_and_a_name_round_trip_and_the_count_follows_the_scope(pool: sqlx::PgPool) {
@@ -2307,7 +2307,7 @@ mod tests {
 
         assert_eq!(repo.unmonitored_total(None).await.expect("count"), 4);
         // Scoped to `mine`: the LLDP row and the legacy row. The sender has no observer, so a
-        // scoped caller cannot see it (決定 7); the alien row is outside the scope.
+        // scoped caller cannot see it (decision 7); the alien row is outside the scope.
         assert_eq!(
             repo.unmonitored_total(Some(&[mine])).await.expect("count"),
             2
@@ -2322,7 +2322,7 @@ mod tests {
             "the count and the list disagree about the scope"
         );
         assert_eq!(repo.unmonitored_total(Some(&[])).await.expect("count"), 0);
-        // `get` answers exactly what the list shows (ADR-179 増分 2): a row the scope hides reads
+        // `get` answers exactly what the list shows (ADR-179 Inc.2): a row the scope hides reads
         // as absent, so an id copied from somebody else's list cannot be acted on.
         let alien_row = by_ip("192.168.60.10");
         assert!(repo

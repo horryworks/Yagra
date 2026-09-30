@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The Overview's Cisco Meraki card (ADR-164 増分 13): what it draws per WAN uplink.
+// The Overview's Cisco Meraki card (ADR-164 Inc.13): what it draws per WAN uplink.
 
 import { describe, expect, it } from 'vitest';
 import { MERAKI_PAIR_STATES, type MerakiPair } from '../../types/api';
@@ -103,7 +103,7 @@ describe('merakiVpnLine', () => {
   });
 
   it('no reading draws no line, rather than a guessed "fine"', () => {
-    // A down MX, or one whose only hub is down, is not reported at all (ADR-164 決定 25).
+    // A down MX, or one whose only hub is down, is not reported at all (ADR-164 decision 25).
     expect(merakiVpnLine(null, null, null)).toBeNull();
     expect(merakiVpnLine(1, null, null)).toBeNull();
   });
@@ -248,7 +248,7 @@ describe('merakiRadioLines', () => {
 });
 
 describe('merakiApRadioReadingsShown', () => {
-  // ADR-168 決定 4: the collect stops writing these for a stopped access point, and the latest
+  // ADR-168 decision 4: the collect stops writing these for a stopped access point, and the latest
   // value is looked back for thirty minutes — so the card must not keep drawing the last ones.
   it('hides an access point’s radio readings only while it is reported offline', () => {
     expect(merakiApRadioReadingsShown(0)).toBe(false);

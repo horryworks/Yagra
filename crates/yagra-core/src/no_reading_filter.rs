@@ -15,7 +15,7 @@
 //!   `PollResult`. A third entrance cannot store a placeholder without the compiler asking.
 //! - **The stripped samples are not thrown away.** The live path hands them to the alert engine as
 //!   evidence that a row has no reading, which is the only thing allowed to close that row's alert
-//!   (ADR-156 決定 3–5). A row that simply stops arriving is not evidence and closes nothing.
+//!   (ADR-156 decision 3–5). A row that simply stops arriving is not evidence and closes nothing.
 //! - **An empty table is today's behaviour.** Before the first successful config load nothing is
 //!   stripped: a placeholder is stored as a value, exactly as it was before this module existed, and
 //!   nothing can be closed because closing needs an entry. A failed reload keeps the previous table

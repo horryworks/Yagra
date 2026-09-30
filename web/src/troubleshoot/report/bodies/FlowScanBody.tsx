@@ -16,7 +16,7 @@
 //
 // ADR-053 Inc.7 moved the narrowing under the headers. Every one of the seven columns has a filter
 // now, which is the shape this table wanted: five of them are numbers, and "sources that touched
-// more than 500 destinations" was unsayable from a toolbar. Sort stays in the action row (決定 L).
+// more than 500 destinations" was unsayable from a toolbar. Sort stays in the action row (decision L).
 
 import { useMemo } from 'react';
 import { useFilterParams } from '../../../lib/useFilterParams';

@@ -334,7 +334,7 @@ describe('format', () => {
 
   it('shortens a byte count for a chart axis without changing its base', () => {
     // Same 1024 base as the legend: 14,000,000 bytes is 13.4 MB there and must be 13.4M here, not
-    // formatSi's 14M (ADR-137 決定 10).
+    // formatSi's 14M (ADR-137 decision 10).
     expect(formatBytesAxis(14_000_000)).toBe('13.4M');
     expect(formatBytesAxis(214 * 1024 ** 2)).toBe('214M');
     expect(formatBytesAxis(1024)).toBe('1K');
@@ -640,7 +640,7 @@ describe('metric units', () => {
   });
 
   it('recognises a percentage wherever it is drawn, including the ones with no _pct suffix', () => {
-    // The counter-example ADR-046 Inc.6 決定 J named: these two are percentages and neither says so
+    // The counter-example ADR-046 Inc.6 decision J named: these two are percentages and neither says so
     // in its name. A suffix rule would miss exactly the vendor the lab runs.
     expect(isPercentMetric('huawei_cpu_usage')).toBe(true);
     expect(isPercentMetric('huawei_mem_usage')).toBe(true);

@@ -133,7 +133,7 @@ pub(crate) async fn visible_groups(
 ///
 /// `nodes.group_id` is a foreign key, so an unknown id otherwise aborts the statement and reaches
 /// the client as a 500 that names nothing. Every write path that accepts a destination folder owes
-/// this check, and it lives here because there are three of them (ADR-124 決定 1) — the import,
+/// this check, and it lives here because there are three of them (ADR-124 decision 1) — the import,
 /// the single move and the bulk move. `None` is always fine: it means "ungrouped".
 pub(super) async fn require_group_exists(
     admin: &super::AdminState,
@@ -365,7 +365,7 @@ pub(super) struct SortChildren {
 /// nodes. Folders deeper down are untouched: the operator right-clicked one folder.
 ///
 /// 🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is
-/// the decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking
+/// the decision (ADR-130 decision 5) rather than an oversight — the command is reached by right-clicking
 /// the folder it acts on, which is the same consent a file manager asks for.
 ///
 /// ⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per
@@ -568,12 +568,12 @@ async fn delete_node_group(
 ///
 /// 1. **Scoping.** This is `GroupFiltered` + `require_visible_group`, because a folder's labels
 ///    reach every node under it and `manage_config` is held by Operator, who can be group-scoped
-///    (ADR-131 決定 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting
+///    (ADR-131 decision 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting
 ///    labels on its body would mean either widening that route's claim — changing rename, move and
 ///    re-pool for everyone — or shipping a scope-blind label write.
 /// 2. **Three-state cost.** `GroupBody.pool` is already an `Option<String>` whose doc has to
 ///    explain that absent means unchanged, and `GroupModal` always sends it for exactly that
-///    reason. A second such field doubles the trap ADR-135 決定 4 exists for.
+///    reason. A second such field doubles the trap ADR-135 decision 4 exists for.
 /// 3. **The dialog.** A per-label `DELETE` would act the moment ✕ is clicked — before Save, and
 ///    with no way back. Clearing every label is `{"tags": []}`.
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -738,7 +738,7 @@ async fn set_node_group_prefixes(
     }
 
     // A range a sync owns is refused by name rather than silently dropped: the operator typed it,
-    // and nothing on screen would otherwise say it did not land (ADR-131 決定 5).
+    // and nothing on screen would otherwise say it did not land (ADR-131 decision 5).
     let sync_owned = admin.groups.sync_owned_prefixes(id).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "read sync prefixes", "failed to read prefixes")
     })?;
@@ -1236,7 +1236,7 @@ mod tests {
     }
 
     /// **A→Z sorts the folder's sub-folders and its nodes as one list** (ADR-162 decision 5,
-    /// amending ADR-130 決定 4).
+    /// amending ADR-130 decision 4).
     ///
     /// 🚨 `sorting_a_folder_renumbers_its_subfolders_and_its_nodes` cannot see this: it reads the
     /// two kinds through separate projections, and merging them leaves each projection's own order
@@ -1449,7 +1449,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
     }
 
-    /// Sorting one folder leaves every **other** scope alone (ADR-130 決定 2).
+    /// Sorting one folder leaves every **other** scope alone (ADR-130 decision 2).
     ///
     /// The two `UPDATE`s carry the whole of the scoping in their `WHERE`. Drop either predicate and
     /// the entire table is renumbered — while the folder the operator clicked still looks perfectly
@@ -2236,7 +2236,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
     }
 
-    /// ADR-174 決定 3: a group-scoped caller may delete a folder it can see, and gets a 404 — with
+    /// ADR-174 decision 3: a group-scoped caller may delete a folder it can see, and gets a 404 — with
     /// nothing deleted — for one it cannot. Before ADR-174 this route checked no scope at all.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]

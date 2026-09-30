@@ -10,7 +10,7 @@
 // dropped as sub-pixel specks; water rings below 0.2 units² likewise. Both lists are
 // sorted largest-first so continents paint before islands.
 //
-// The first attempt at this file was traced by hand and was, accurately, described as 適当すぎる —
+// The first attempt at this file was traced by hand and was, accurately, described as "far too sloppy" —
 // the continents were blobs. Hand-drawing a coastline is the kind of task that looks approximately
 // right to the person doing it and obviously wrong to everyone else, which is the definition of a
 // job for real data. The second was generated from the 1:110m set at a 0.35-unit tolerance, which

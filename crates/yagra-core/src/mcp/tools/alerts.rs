@@ -416,7 +416,7 @@ impl YagraMcp {
             note: p.note.clone(),
         });
         // Node subjects only. The MCP **write** surface is frozen at these three tools (ADR-042
-        // 決定 6), so widening the parameter to accept a pool would be a write-surface change, not
+        // decision 6), so widening the parameter to accept a pool would be a write-surface change, not
         // the read parity this rule is about — a pool alert is readable here and acknowledged from
         // the WebUI or `POST /api/v1/alerts/ack`.
         let subject = yagra_alert::Subject::Node(NodeId::from(p.node_id));

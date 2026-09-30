@@ -37,7 +37,7 @@
 //! | [`rules`] | *which* threshold applies to this (node, port, metric), and what a check is called |
 //! | [`engine`] | *has anything changed*: dwell, flapping, suppression, maintenance, SSE |
 //! | [`notify`] | *who gets told*: mutes, routing, the four channels, the vendor wire formats |
-//! | [`reported`] | *is anyone still reporting* a node Yagra never polls itself — a wireless AP — and when an `ok` nobody confirms stops being shown as one (ADR-064 増分 G) |
+//! | [`reported`] | *is anyone still reporting* a node Yagra never polls itself — a wireless AP — and when an `ok` nobody confirms stops being shown as one (ADR-064 Inc.G) |
 //!
 //! Everything the rest of the crate names is re-exported here, so `crate::alerts::X` still
 //! resolves for all 26 callers — moving an item between the three files is not a change to them.
@@ -172,7 +172,7 @@ pub struct NodeMeta {
     /// a scoped principal may **not** see.
     pub folder_group: Option<Uuid>,
     /// The node's folder group and every group above it, **nearest first** — the chain a
-    /// `ScopeLevel::FolderGroup` threshold is matched against (ADR-075 増分 3).
+    /// `ScopeLevel::FolderGroup` threshold is matched against (ADR-075 Inc.3).
     ///
     /// Ordered, not a set, because the position *is* the specificity: a rule on the node's own
     /// group must beat one on its grandparent. `folder_group` stays separate and stays first here;

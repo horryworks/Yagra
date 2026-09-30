@@ -23,7 +23,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../support/app';
 import { TREE_SIBLING_IDS } from '../support/bootstrap';
 
-/** What a `POST /api/v1/nodes/move` carried. `before`/`after` arrived with ADR-124 増分 8, which
+/** What a `POST /api/v1/nodes/move` carried. `before`/`after` arrived with ADR-124 Inc.8, which
  *  is what lets a drop between two rows carry more than one node. */
 interface MoveRequest {
   node_ids: string[];
@@ -205,7 +205,7 @@ test('dragging a row outside the working set moves only that row', async ({ page
 });
 
 test('one node with nothing checked still goes through the same request', async ({ page }) => {
-  // Inc.4 決定 D: one node is a list of one. Before it, this gesture took the single-node PUT and
+  // Inc.4 decision D: one node is a list of one. Before it, this gesture took the single-node PUT and
   // the dialogs took the bulk POST, so "what happens when you move something" had two answers.
   const moves = await captureMoves(page);
   await page.goto('/nodes');
@@ -252,7 +252,7 @@ test('a drop that moved fewer nodes than it asked for says so, and the message s
 });
 
 test('a batch dropped between two rows names the sibling it landed before', async ({ page }) => {
-  // 🚨 ADR-124 増分 8, and the gesture that had no answer before it: Ctrl-select two rows, drop
+  // 🚨 ADR-124 Inc.8, and the gesture that had no answer before it: Ctrl-select two rows, drop
   // them on the upper half of a third, and the whole batch lands *there* rather than at the end of
   // the folder. `dropPosition` used to force `inside` for any batch — an append — because
   // `PUT /nodes/{id}/placement` took one node and there was no bulk form to carry an insertion
@@ -392,7 +392,7 @@ async function dragOverOn(page: Page, selector: string, band: DropBand = 'middle
 test('the insertion slot shows where the drop will write, and does not take itself away', async ({
   page,
 }) => {
-  // ADR-162 増分 2. The 2px line this replaced drew the same mark for two placements with different
+  // ADR-162 Inc.2. The 2px line this replaced drew the same mark for two placements with different
   // parents, which is what the operator reported. Two things are assertable here and both matter:
   // the slot lands **between** the right two rows, and it is drawn at the **indentation** of the
   // level it would land at — the indentation being the half a line could not express.

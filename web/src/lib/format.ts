@@ -347,7 +347,7 @@ export function formatBytes(bytes: number | null): string {
  *  1000-based, so an axis tick reading `14M` over a legend reading `13.4 MB` for the same value
  *  looks like two different measurements. And the full form does not fit: uPlot's value axis is
  *  50 px wide, `214 MB` is clipped at its leading digit, and a clipped leading digit reads as a
- *  number ten times smaller (ADR-137 決定 10). */
+ *  number ten times smaller (ADR-137 decision 10). */
 export function formatBytesAxis(bytes: number | null): string {
   const full = formatBytes(bytes);
   return full === '—' ? full : full.replace(' ', '').replace(/B$/, '');
@@ -471,7 +471,7 @@ export function scalarLabel(metric: string): { label: string; known: boolean } {
  *
  *  Read straight off `api/metricUnits.json`, which is **generated** from
  *  `crates/yagra-core/src/metric_meaning.rs` (ADR-046 Inc.7). Nothing here is hand-kept in step
- *  with Rust, and there is deliberately no rule from the metric's *name*: Inc.6 決定 J refused a
+ *  with Rust, and there is deliberately no rule from the metric's *name*: Inc.6 decision J refused a
  *  `_pct` / `_ms` suffix rule because `huawei_cpu_usage` and `huawei_mem_usage` are percentages
  *  with no suffix at all. All 108 rows were written by hand, in Rust.
  *
@@ -505,7 +505,7 @@ export function metricUnitSuffix(metric: string): string | null {
 
 /** Is this metric a 0–100 percentage, so a chart of it should be pinned to that range?
  *
- *  ADR-046 Inc.6 決定 J deliberately left every generic card auto-fitting, on the grounds that
+ *  ADR-046 Inc.6 decision J deliberately left every generic card auto-fitting, on the grounds that
  *  "nothing in the API says a metric is a percentage". Inc.7 makes something say so, and the
  *  reason to act on it is **consistency rather than accuracy**: `huawei_cpu_usage` is pinned to
  *  0–100 when Device health resolves onto it and auto-fitted when it falls through to the generic
@@ -642,7 +642,7 @@ export function alertWhat(row: {
   // The direction is a token off the wire (`above`/`below`), not English prose, and it was being
   // printed verbatim. It has had localized labels since thresholds got a UI; the reason it needs a
   // template rather than `${dir} ${value}` is word order — English puts the direction first
-  // ("above 80"), Japanese puts it last ("80 を上回る"), so the two locales cannot share one
+  // ("above 80"), Japanese puts it last ("80", then "above"), so the two locales cannot share one
   // concatenation.
   const condition =
     row.direction && row.threshold_value != null

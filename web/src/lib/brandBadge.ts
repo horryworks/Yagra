@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// A badge that names a third party wears that party's colours (2026-09-23, ADR-164 増分 14).
+// A badge that names a third party wears that party's colours (2026-09-23, ADR-164 Inc.14).
 //
 // Two registries point here — `NODE_KIND_SPEC[kind].badgeBrand` and `GROUP_ORIGIN_BADGE_BRANDS`
 // — and two stylesheets carry the look, one per badge (`.nd-kind` in NodeDetail.css,

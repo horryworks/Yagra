@@ -88,7 +88,7 @@ pub struct PrefixGap {
     pub kind: GapKind,
     /// The range that contains it (`parent_only`, `other_folder`) or lies inside it (`partial`).
     /// `null` for `unregistered`, **and** when that range belongs to a folder this caller may not
-    /// see — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 決定 10).
+    /// see — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 decision 10).
     pub range: Option<String>,
     /// The folder `range` belongs to, under the same rule.
     pub range_group: Option<Uuid>,
@@ -177,7 +177,7 @@ fn judge<'r>(subnet: &SubnetKey, ranges: &'r [Range]) -> Option<(GapKind, Option
         return None;
     }
     // The longest containing range outside the subtree decides, as the longest match decides
-    // folder filing (ADR-124 決定 5). On a tie another folder outranks an ancestor — a sibling
+    // folder filing (ADR-124 decision 5). On a tie another folder outranks an ancestor — a sibling
     // site claiming the same length is the more specific thing to fix — and then the lower
     // prefix/group, so the answer does not depend on the order the rows were read in.
     let containing = ranges

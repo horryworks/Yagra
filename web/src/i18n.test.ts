@@ -5,7 +5,7 @@
 //   3. Every namespace's JA mirrors EN's keys, so CI — which runs `npm run test` — gates on
 //      translation completeness.
 //   4. Every JA value keeps its English original's `{{placeholders}}` and `<tags>` (ADR-150
-//      決定 4(b)). This used to live only in a CLI whose header claimed the suite ran the same
+//      decision 4(b)). This used to live only in a CLI whose header claimed the suite ran the same
 //      logic; it did not, so a dropped `{{count}}` passed CI. `npm run i18n:check` now runs THIS
 //      file — one implementation, and the CLI cannot say something the gate does not.
 

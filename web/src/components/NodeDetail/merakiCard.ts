@@ -3,7 +3,7 @@
  * What the Overview's Cisco Meraki card decides, kept out of `OverviewTab.tsx` so a test can reach
  * it (`tsxJudgement.test.ts`). The card itself only lays these lines out.
  *
- * ADR-164 増分 13: an MX's WAN uplinks are one row each — the synthetic row key is WAN1 = 1,
+ * ADR-164 Inc.13: an MX's WAN uplinks are one row each — the synthetic row key is WAN1 = 1,
  * WAN2 = 2, cellular = 3, and the name arrives with the readings (`row_names`), so the WebUI never
  * spells that mapping a second time.
  */
@@ -16,7 +16,7 @@ import type { ChartSeries } from '../MetricChart/MetricChart';
 type RowReading = components['schemas']['MetricRowReading'];
 
 /**
- * The four things `meraki_uplink_status` can say (ADR-164 決定 24). `notConnected` also covers
+ * The four things `meraki_uplink_status` can say (ADR-164 decision 24). `notConnected` also covers
  * `connecting` and a word the collector did not know — the collector stores all three as 0.
  */
 export const MERAKI_UPLINK_STATES = ['active', 'ready', 'notConnected', 'failed'] as const;
@@ -87,7 +87,7 @@ export function merakiUplinkLines(
   return [...byRow.values()].sort((a, b) => a.row - b.row);
 }
 
-/** The card's Auto VPN line (ADR-164 決定 25), or `null` when there is nothing to say. */
+/** The card's Auto VPN line (ADR-164 decision 25), or `null` when there is nothing to say. */
 export interface MerakiVpnLine {
   /** Hubs this MX reaches, and how many were counted. */
   reached: number;
@@ -119,7 +119,7 @@ export function merakiVpnLine(
   return { reached: hubsReachable, total, spokesDown: spokesUnreachable, tone };
 }
 
-/** The card's warm-spare line (ADR-164 決定 26). */
+/** The card's warm-spare line (ADR-164 decision 26). */
 export interface MerakiPairLine {
   role: MerakiHaRole;
   state: MerakiPairState;
@@ -164,7 +164,7 @@ export function merakiPairLine(pair: MerakiPair | null | undefined): MerakiPairL
   };
 }
 
-/** One uplink's stored history, as the card read it back (ADR-164 決定 27). */
+/** One uplink's stored history, as the card read it back (ADR-164 decision 27). */
 export interface MerakiUplinkHistory {
   row: number;
   name: string;
@@ -259,13 +259,13 @@ export function merakiRadioLines(
 }
 
 /**
- * Whether an access point's SSID count and radio readings may be drawn (ADR-168 決定 4).
+ * Whether an access point's SSID count and radio readings may be drawn (ADR-168 decision 4).
  *
  * 🚨 **Not while the Dashboard reports it offline.** Those two are the readings the collect stops
  * writing for a stopped access point — its radios are not measured, and the Dashboard keeps
  * answering its last SSID configuration as broadcasting — while the latest-value read looks back
  * thirty minutes (`store.rs::latest_query`). Drawn anyway, the card says "Offline" and
- * "Channel utilization 11%" side by side, which is the defect ADR-164 増分 13d fixed for a warm
+ * "Channel utilization 11%" side by side, which is the defect ADR-164 Inc.13d fixed for a warm
  * spare's VPN line and this is the same shape. Its client count is not affected: the Dashboard
  * answers 0 for a stopped access point, and that 0 is stored like any reading.
  *

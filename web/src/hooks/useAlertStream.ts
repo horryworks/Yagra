@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Seed active alerts, then keep them live via SSE (ADR-019). Mounted once by `AppShell`, so the
 // top-bar bell and every screen that reads `useAlertStore` are live wherever the operator is
-// (ADR-019 増分 1); the public board, which sits outside the shell, mounts its own.
+// (ADR-019 Inc.1); the public board, which sits outside the shell, mounts its own.
 
 import { useEffect } from 'react';
 import { api } from '../services/api';

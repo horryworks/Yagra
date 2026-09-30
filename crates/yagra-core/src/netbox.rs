@@ -105,7 +105,7 @@ const DEFAULT_SYNC_INTERVAL_SECS: u64 = 3600;
 /// How often the loop looks at the schedule to see whether any server is due.
 const TICK: Duration = Duration::from_secs(30);
 
-/// How often the loop looks for a "Sync now" request (ADR-172 決定 1). It reads the server list,
+/// How often the loop looks for a "Sync now" request (ADR-172 decision 1). It reads the server list,
 /// a handful of rows, so waking this often costs nothing; it is what "Sync now" feels like.
 const REQUEST_TICK: Duration = Duration::from_secs(5);
 
@@ -384,7 +384,7 @@ pub fn validate_base_url(raw: &str) -> Result<String, BaseUrlError> {
     if let Some(port) = url.port() {
         base.push_str(&format!(":{port}"));
     }
-    // 🚨 **Only NetBox's own part of the path is dropped** (ADR-178 決定 4). This used to drop the
+    // 🚨 **Only NetBox's own part of the path is dropped** (ADR-178 decision 4). This used to drop the
     // whole path, which made a NetBox served under `BASE_PATH` (`https://h/netbox/`) answer 404 to
     // every request. What the drop was for — someone pasting the browser's address bar,
     // `/dcim/sites/?q=x` — still works: the path is cut at the first segment NetBox itself owns,
@@ -441,7 +441,7 @@ fn base_path_of(base: &str) -> &str {
 }
 
 /// The origin — scheme, host and port — of a URL [`validate_base_url`] produced. Compared by the
-/// API edge to decide whether an edit is sending the stored token somewhere new (ADR-178 決定 3).
+/// API edge to decide whether an edit is sending the stored token somewhere new (ADR-178 decision 3).
 #[must_use]
 pub fn origin_of(base: &str) -> &str {
     let path = base_path_of(base);
@@ -747,7 +747,7 @@ enum Refusal {
 /// verbatim would send the next request — carrying `Authorization: Token …` — to a host
 /// [`validate_base_url`] never saw. So only the path and query survive the trip.
 ///
-/// 🚨 **And the base's own path comes off the front** (ADR-178 決定 4), because the result is
+/// 🚨 **And the base's own path comes off the front** (ADR-178 decision 4), because the result is
 /// joined back onto the base. A NetBox under `BASE_PATH=netbox/` writes `next` as
 /// `/netbox/api/…`; joined verbatim to `https://h/netbox` that is `/netbox/netbox/api/…`, a 404 on
 /// page two. A proxy that strips the prefix instead makes NetBox write `/api/…`, which has no prefix
@@ -984,7 +984,7 @@ pub struct NetboxServer {
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_sync_ok: Option<bool>,
     pub last_sync_error: Option<String>,
-    /// When "Sync now" asked for a run that has not finished yet (ADR-172 決定 1). `None` when
+    /// When "Sync now" asked for a run that has not finished yet (ADR-172 decision 1). `None` when
     /// nothing is asked for.
     pub sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
     /// When the run in flight began. `None` when no run is going.
@@ -1138,7 +1138,7 @@ pub struct SyncReport {
     /// `sites_inactive`.
     pub prefixes_inactive_site: usize,
     /// Folders this run created or changed. Zero on a sync of an unchanged NetBox, which is what
-    /// lets the config generation stay put when nothing moved (ADR-178 決定 7).
+    /// lets the config generation stay put when nothing moved (ADR-178 decision 7).
     pub folders_changed: usize,
     /// The database's clock **at the moment the run began**, before a single row was written.
     ///
@@ -1219,7 +1219,7 @@ impl NetboxRepo {
     /// `bool` next to each other are four chances to swap a pair with no compile error, and the
     /// `Option<Option<&str>>` in the middle is the one a caller is most likely to get backwards.
     ///
-    /// 🚨 **Pausing drops a pending "Sync now"** (ADR-178 決定 5). The loop never runs a paused
+    /// 🚨 **Pausing drops a pending "Sync now"** (ADR-178 decision 5). The loop never runs a paused
     /// server, so a request left on one was never answered and never cleared: the row read
     /// "requested" and the page re-read itself every five seconds for as long as it stayed open.
     /// The in-flight mark is left alone — the run it belongs to clears it when it ends.
@@ -1283,7 +1283,7 @@ impl NetboxRepo {
     /// advances only on a full success — is therefore held up by the type signature rather than by
     /// a `CASE WHEN` and a comment, which is what the first version had.
     ///
-    /// The run's Site ID counts go on the row with it (ADR-172 決定 1): once "Sync now" answers 202
+    /// The run's Site ID counts go on the row with it (ADR-172 decision 1): once "Sync now" answers 202
     /// the row is the only place the page can read them from.
     pub async fn record_success(
         &self,
@@ -1307,7 +1307,7 @@ impl NetboxRepo {
         Ok(())
     }
 
-    /// Ask for a run now (ADR-172 決定 1). Returns `false` when there is no such server.
+    /// Ask for a run now (ADR-172 decision 1). Returns `false` when there is no such server.
     ///
     /// `COALESCE`: a second press while the first is still waiting or running keeps the first
     /// time, so it is the same request rather than a second run queued behind it.
@@ -1401,13 +1401,13 @@ impl NetboxRepo {
     ///
     /// Returns whether the folder was **created or changed** — the `WHERE … IS DISTINCT FROM` makes
     /// an identical row a no-op, so an hourly sync of an unchanged NetBox writes nothing to
-    /// `node_groups`. A change bumps the config generation at once (ADR-178 決定 7): the scope
+    /// `node_groups`. A change bumps the config generation at once (ADR-178 decision 7): the scope
     /// resolver's folder-tree cache (`GroupRepo::cached_edges`) and the alert-config rebuild both
     /// key on it, and before this a site NetBox added stayed invisible to a scoped caller until
     /// some unrelated API write happened to bump it. Bumped here rather than at the end of the
     /// sync, because a run that fails after this folder would never reach the end — and the next
     /// run finds the row already as NetBox has it, changes nothing, and would never bump either
-    /// (the trap ADR-164 決定 38 records for the Meraki sync).
+    /// (the trap ADR-164 decision 38 records for the Meraki sync).
     #[allow(clippy::too_many_arguments)] // A parameter struct here would be one shape used once.
     async fn upsert_group(
         &self,
@@ -1489,7 +1489,7 @@ impl NetboxRepo {
     /// unparseable prefix must cost that prefix and nothing else; wrapped in the sync's own
     /// transaction it would abort every write after it.
     ///
-    /// 🚨 **A hand-made row with the same CIDR is left exactly as it is** (ADR-178 決定 1) — the
+    /// 🚨 **A hand-made row with the same CIDR is left exactly as it is** (ADR-178 decision 1) — the
     /// `WHERE` on the `DO UPDATE`. Without it the sync took the row over: `netbox_server_id` set,
     /// the operator's description replaced, and the row swept away the day NetBox stopped listing
     /// it. `GroupRepo::set_manual_prefixes` already refused the opposite direction (`DO NOTHING`);
@@ -1843,7 +1843,7 @@ pub async fn sync_server(
 ) -> anyhow::Result<SyncReport> {
     // The in-flight mark goes up before anything is read, and comes down however the run ends —
     // the page reads it as "Syncing…", and `finish_sync` needs its time to know which request this
-    // run answered (ADR-172 決定 1).
+    // run answered (ADR-172 decision 1).
     let started = repo.start_sync(server.id).await?;
     let result = sync_server_marked(repo, creds, server).await;
     if let Err(e) = repo.finish_sync(server.id, started).await {
@@ -1918,10 +1918,10 @@ async fn sync_server_marked(
 /// Returned as a future rather than self-spawning, so `yagra_telemetry::spawn_cancellable` owns the
 /// shutdown path the way it does for every other background loop in this binary.
 ///
-/// ➕ It also runs "Sync now" (ADR-172 決定 1): the endpoint only writes the request, and this loop
+/// ➕ It also runs "Sync now" (ADR-172 decision 1): the endpoint only writes the request, and this loop
 /// looks for one every [`REQUEST_TICK`]. The schedule is still looked at every [`TICK`].
 ///
-/// 🚨 **A failed run is retried after a backoff, not on the next schedule tick** (ADR-178 決定 2).
+/// 🚨 **A failed run is retried after a backoff, not on the next schedule tick** (ADR-178 decision 2).
 /// A failure does not move `last_sync_at`, so a failing server stays "overdue" — and before this it
 /// was retried every [`TICK`], 2,880 times a day against a revoked token whatever the interval
 /// said, while every other server (the loop runs them one at a time) waited behind each timeout.
@@ -1988,7 +1988,7 @@ struct Failures {
 /// The first wait after a failure; each further failure doubles it, up to the server's interval.
 const RETRY_BASE: Duration = Duration::from_secs(60);
 
-/// How long to wait after `failures` runs in a row have failed (ADR-178 決定 2):
+/// How long to wait after `failures` runs in a row have failed (ADR-178 decision 2):
 /// `min(interval, RETRY_BASE × 2^(failures − 1))` — 60 s, 120 s, 240 s …, never longer than the
 /// server would wait after a success. Zero failures is no wait.
 fn retry_backoff(failures: u32, interval: Duration) -> Duration {
@@ -2126,7 +2126,7 @@ mod tests {
         );
     }
 
-    /// ADR-178 決定 4: a NetBox under `BASE_PATH` keeps its prefix, and a pasted page or API URL
+    /// ADR-178 decision 4: a NetBox under `BASE_PATH` keeps its prefix, and a pasted page or API URL
     /// below it is still cut back to that prefix.
     #[test]
     fn a_netbox_under_a_base_path_keeps_it_and_loses_only_netboxs_own_part() {
@@ -2168,7 +2168,7 @@ mod tests {
         assert_eq!(base_path_of("http://[fd00::1]:8000/nb"), "/nb");
     }
 
-    /// ADR-178 決定 4: page two of a listing under `BASE_PATH` must not double the prefix, and a
+    /// ADR-178 decision 4: page two of a listing under `BASE_PATH` must not double the prefix, and a
     /// `next` on another host still comes back to ours.
     #[test]
     fn a_next_page_is_joined_back_onto_the_base_without_doubling_its_path() {
@@ -2340,7 +2340,7 @@ mod tests {
             "a re-sync must not duplicate folders"
         );
         assert_eq!(crate::pgtest::rows(&pool, "netbox_groups").await, 5);
-        // ADR-178 決定 7: nothing moved, so nothing was written — and the config generation, which
+        // ADR-178 decision 7: nothing moved, so nothing was written — and the config generation, which
         // the scope cache and the alert-config rebuild key on, is left where it was.
         assert_eq!(
             second.folders_changed, 0,
@@ -2530,7 +2530,7 @@ mod tests {
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_request_is_kept_until_a_run_that_started_after_it_ends(pool: sqlx::PgPool) {
-        // ADR-172 決定 1: the request lives on the row, and only a run that could have answered
+        // ADR-172 decision 1: the request lives on the row, and only a run that could have answered
         // it takes it off.
         let (repo, server) = lab_server(&pool).await;
         async fn row_of(repo: &NetboxRepo, id: Uuid) -> NetboxServer {
@@ -2590,7 +2590,7 @@ mod tests {
         );
     }
 
-    /// ADR-178 決定 5: pausing a server takes a waiting "Sync now" off it, since nothing will ever
+    /// ADR-178 decision 5: pausing a server takes a waiting "Sync now" off it, since nothing will ever
     /// run it — and an edit that leaves the server on keeps the request.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3057,7 +3057,7 @@ mod tests {
         assert!(should_sync(&bare_server(), now, true, None), "never synced");
     }
 
-    /// ADR-178 決定 2. The wait doubles from a minute and stops at the interval, so a server on a
+    /// ADR-178 decision 2. The wait doubles from a minute and stops at the interval, so a server on a
     /// one-hour cadence that keeps failing is retried hourly — never every 30-second tick.
     #[test]
     fn a_failing_server_waits_longer_after_each_failure_up_to_its_interval() {
@@ -3714,7 +3714,7 @@ mod tests {
         );
     }
 
-    /// 🚨 ADR-178 決定 1: a range the operator typed onto a NetBox folder is **theirs**, even when
+    /// 🚨 ADR-178 decision 1: a range the operator typed onto a NetBox folder is **theirs**, even when
     /// NetBox later lists the same CIDR — the sync neither takes it over nor sweeps it away.
     ///
     /// Before the fix the second `apply` set `netbox_server_id` and replaced the description, and

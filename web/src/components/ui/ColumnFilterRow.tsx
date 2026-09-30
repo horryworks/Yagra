@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The column filter row as one component (ADR-053 Inc.10 決定 Z).
+// The column filter row as one component (ADR-053 Inc.10 decision Z).
 //
 // Seven surfaces lay `ColumnFilterCell`s out in a grid under a header. Two were shared —
 // `DataTable`'s `.dt-filters` and `FilterBar` (which is a flex row, not a grid, and stays separate

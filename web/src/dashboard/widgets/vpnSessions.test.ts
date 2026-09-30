@@ -70,7 +70,7 @@ const resolved = (
 });
 
 describe('VPN_SESSION_METRICS', () => {
-  // ADR-136 決定 3. The three values do not mean the same thing — sessions, users, tunnels — and the
+  // ADR-136 decision 3. The three values do not mean the same thing — sessions, users, tunnels — and the
   // only reason mixing them in one chart is honest is that each number is rendered with its own
   // noun. A fourth entry added with no row in the generated unit table would render as a bare
   // number, which is the state this ladder is not allowed to be in.
@@ -322,7 +322,7 @@ describe('vpnSessionsPlan', () => {
     if (plan.kind !== 'chart') throw new Error('expected a chart');
     expect(plan.nodes[0].query).toEqual({});
     // A per-entity gauge collapses to one node series; picking this here rather than in the
-    // component is what stops the widget inventing a reading (ADR-046 Inc.6 決定 L).
+    // component is what stops the widget inventing a reading (ADR-046 Inc.6 decision L).
     expect(plan.nodes[1].query).toEqual({ agg: 'max' });
   });
 

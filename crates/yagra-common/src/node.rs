@@ -39,7 +39,7 @@ pub struct Node {
     /// (shown at the tree root). A node belongs to at most one group.
     pub group: Option<GroupId>,
     /// Labels an operator hung on this node — free-form single words or phrases
-    /// (`JAPAN`, `core`, `松山本社`), not key=value pairs (ADR-135 inc. 2). Sorted and
+    /// (`JAPAN`, `core`, a site name written in Japanese), not key=value pairs (ADR-135 inc. 2). Sorted and
     /// de-duplicated, for deterministic output.
     ///
     /// ⚠️ **This is the node's OWN set, not what it effectively carries.** Since ADR-135

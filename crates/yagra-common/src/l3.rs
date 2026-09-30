@@ -541,7 +541,7 @@ impl L3Snapshot {
     /// Every distinct subnet this node has a foot in.
     ///
     /// This is what makes a node a transit candidate: a box with an address in two or more networks
-    /// forwards between them, and one with a single network is an endpoint. ADR-043 決定 2 turns
+    /// forwards between them, and one with a single network is an endpoint. ADR-043 decision 2 turns
     /// that count into the containment rule, so it is read off the observation rather than guessed.
     #[must_use]
     pub fn subnets(&self) -> std::collections::BTreeSet<SubnetKey> {

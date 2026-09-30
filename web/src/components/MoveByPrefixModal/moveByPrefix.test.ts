@@ -58,7 +58,7 @@ describe('emptyReason', () => {
   });
 
   it('says "already in place" only when nothing else is left over', () => {
-    // ADR-176 決定 2: the good kind of zero. With an unmatched node beside it, the operator still
+    // ADR-176 decision 2: the good kind of zero. With an unmatched node beside it, the operator still
     // has something to look at, so it is not the whole story.
     expect(emptyReason(preview({ in_place: ['a', 'b'] }))).toBe('allInPlace');
     expect(emptyReason(preview({ in_place: ['a'], unmatched: ['b'] }))).toBe('noMatch');
@@ -103,7 +103,7 @@ describe('a subtree proposal', () => {
   });
 
   it('leaves the rest of a capped proposal for the next round', () => {
-    // ADR-176 決定 4: 1,000 go now, 234 wait for "continue".
+    // ADR-176 decision 4: 1,000 go now, 234 wait for "continue".
     const matched = Array.from({ length: 1000 }, (_, i) => hit(`n${i}`, 'g1'));
     expect(remainingAfterApply(fromSubtree(subtree({ matched, matched_total: 1234 })))).toBe(234);
     expect(remainingAfterApply(fromSubtree(subtree({ matched, matched_total: 1000 })))).toBe(0);

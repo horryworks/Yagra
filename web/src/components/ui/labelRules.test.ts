@@ -79,7 +79,7 @@ describe('a list of labels', () => {
   });
 
   it('splits a paste on commas and newlines, and not on spaces', () => {
-    // 🚨 Splitting on a space would silently turn `Matsuyama 本社` into two labels.
+    // 🚨 Splitting on a space would silently turn a two-word label into two labels.
     expect(splitPastedLabels('JAPAN, core\nedge')).toEqual(['JAPAN', 'core', 'edge']);
     expect(splitPastedLabels('Matsuyama 本社')).toEqual(['Matsuyama 本社']);
     expect(splitPastedLabels(' , ,')).toEqual([]);

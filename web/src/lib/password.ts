@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Everything the two password forms decide, in one place a test can run (ADR-122 決定 8).
+// Everything the two password forms decide, in one place a test can run (ADR-122 decision 8).
 //
 // It lives in a `.ts` rather than beside either dialog because Vitest runs `src/**/*.test.ts` in
 // the node environment and never loads a `.tsx` — judgement written in a component is judgement

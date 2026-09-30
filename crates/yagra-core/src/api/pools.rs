@@ -10,7 +10,7 @@
 //! 2. a node assigned to it (`nodes.pool`);
 //! 3. a folder assigning it (`node_groups.pool`);
 //! 4. a live poller reporting it;
-//! 5. an outstanding takeover naming it as the pool being covered for (ADR-107 増分 4, the newest).
+//! 5. an outstanding takeover naming it as the pool being covered for (ADR-107 Inc.4, the newest).
 //!
 //! ⚠️ **(5) is not decoration and it was added because the round-trip test failed without it.**
 //! Covering a pool moves every row that named it, so at that instant (2)–(4) all fall silent and
@@ -63,7 +63,7 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/pools/:name",
             put(update_pool).delete(delete_pool_route),
         )
-        // ADR-107 増分 4. Two verbs on one pool rather than a `PUT :name` field, because these are
+        // ADR-107 Inc.4. Two verbs on one pool rather than a `PUT :name` field, because these are
         // events rather than state: "cover for this" and "stop covering" each move rows and record
         // or forget why, and expressing them as a property of the pool would make an idempotent
         // re-`PUT` re-take-over a pool a person had already restored.
@@ -88,7 +88,7 @@ pub(crate) struct PoolOption {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     /// The pool currently polling this one's members on its behalf, if an operator asked for that
-    /// (ADR-107 増分 4). `None` is the ordinary case.
+    /// (ADR-107 Inc.4). `None` is the ordinary case.
     ///
     /// ⚠️ Its members are **already** in that pool — this says the move is recorded and can be
     /// undone, not that it is pending. A UI that reads it as "will be" would offer a takeover that
@@ -199,7 +199,7 @@ pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
         Vec::new()
     });
     let live = admin.coordinator.live_pools(Instant::now());
-    // ADR-107 増分 4. Normally empty, and a small `GROUP BY` when it is not — this stays within the
+    // ADR-107 Inc.4. Normally empty, and a small `GROUP BY` when it is not — this stays within the
     // "one small table plus two indexed DISTINCTs" the doc above promises. It degrades to "no pool
     // is marked covered" on a read error, the same way the other three do: a picker that refuses to
     // render is worse than one that omits a badge.
@@ -328,7 +328,7 @@ pub(crate) struct PoolInUse {
 /// **plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces
 /// it until `pool_coverage`'s 300s debounce.
 ///
-/// 🚨 **The default pool is refused outright** (ADR-107 増分 3). Its name is a constant in the
+/// 🚨 **The default pool is refused outright** (ADR-107 Inc.3). Its name is a constant in the
 /// code, not a row here, so renaming the row renames the description and nothing else: every
 /// node that is in the pool only by inheritance keeps resolving to the constant and is left
 /// behind by the pollers that follow the new name — the same hole, through a different door.
@@ -374,7 +374,7 @@ async fn update_pool(
             // included, but a node that names nothing resolves to the constant and stays behind:
             // the pollers would follow the new name while the inventory that is in the pool only
             // by inheritance keeps waiting on the old one, unpolled and unreported. That is the
-            // same failure ADR-107 増分 3 fixes in the move path, reached by another door, and the
+            // same failure ADR-107 Inc.3 fixes in the move path, reached by another door, and the
             // delete path already refuses this name for the mirror-image reason.
             if name == yagra_bus::DEFAULT_POOL {
                 return Err(ApiError::conflict(
@@ -505,7 +505,7 @@ async fn delete_pool_route(
     delete_pool(perm, admin, path).await
 }
 
-// ── Covering a pool that lost its poller (ADR-107 増分 4) ────────────────────
+// ── Covering a pool that lost its poller (ADR-107 Inc.4) ────────────────────
 
 /// Where a covered pool's members should be pointed.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -535,7 +535,7 @@ pub(crate) struct PoolTakeoverResult {
 /// usually exists because core cannot reach those devices; covering them from a host that cannot
 /// see them turns one accurate pool alert into N false `unreachable` ones — worse than the silence
 /// it replaces, and indistinguishable from a real outage. It is offered to a person looking at the
-/// alert, who can test reachability from this host first (ADR-107 増分 4 決定 4). Nothing calls it
+/// alert, who can test reachability from this host first (ADR-107 Inc.4 decision 4). Nothing calls it
 /// automatically and nothing defaults to it.
 #[utoipa::path(
     post, path = "/api/v1/pools/{name}/takeover", tag = "system",
@@ -566,7 +566,7 @@ async fn take_over_pool(
         ));
     }
 
-    // Who is in `from` — by *effective* pool, not by the column. ADR-107 増分 3: a node is in a
+    // Who is in `from` — by *effective* pool, not by the column. ADR-107 Inc.3: a node is in a
     // pool three ways and the two no column records are the majority, so counting rows here would
     // move a fraction of what the operator was shown and report success. Neither read degrades
     // (ADR-158 B4): with the folder tree unread, every inheriting node resolves to `default`, so
@@ -626,7 +626,7 @@ async fn take_over_pool(
 /// marked as covered forever.
 ///
 /// Restoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on
-/// their own the moment a link comes back is its own surprise (ADR-107 増分 4 やらないこと).
+/// their own the moment a link comes back is its own surprise (ADR-107 Inc.4, out of scope).
 #[utoipa::path(
     post, path = "/api/v1/pools/{name}/restore", tag = "system",
     params(("name" = String, Path, description = "the pool that was being covered for")),
@@ -835,7 +835,7 @@ mod tests {
     }
 
     /// A blank description is not a description — otherwise the card renders an empty line where
-    /// "説明なし" belongs.
+    /// the "No description" placeholder belongs.
     #[test]
     fn a_blank_description_is_treated_as_none() {
         let opts = build_pool_options(
@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(stored, "kanto", "the durable half moved as before");
     }
 
-    /// Covering a pool moves its members and putting them back is exact (ADR-107 増分 4).
+    /// Covering a pool moves its members and putting them back is exact (ADR-107 Inc.4).
     ///
     /// 🚨 The assertion that carries the increment is the **second** node's. A node that named the
     /// pool goes back to naming it, which a `pool_before_takeover` column could also have managed.

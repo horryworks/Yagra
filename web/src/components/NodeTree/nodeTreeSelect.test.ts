@@ -128,8 +128,8 @@ describe('rowNode', () => {
 describe('clickOutcome', () => {
   // 🚨 The block that did not exist when the feature shipped, and the reason two bugs did.
   // `rangeChecked` above is exercised with an anchor the test supplies; nothing asked who supplies
-  // it in the running tree, and the answer — until 増分 1 — was "nobody, until a Ctrl or Shift
-  // click has already happened". 増分 3 is the other half of the same omission: the batch a Ctrl
+  // it in the running tree, and the answer — until Inc.1 — was "nobody, until a Ctrl or Shift
+  // click has already happened". Inc.3 is the other half of the same omission: the batch a Ctrl
   // click adds to.
   const flat = [groupRow('g1'), nodeRow('a'), nodeRow('b'), nodeRow('c'), nodeRow('d')];
   const plain = { ctrlKey: false, metaKey: false, shiftKey: false };
@@ -154,7 +154,7 @@ describe('clickOutcome', () => {
   });
 
   it('takes the whole run when a plain click is followed by a Shift click', () => {
-    // 🚨 THE 増分 1 REGRESSION. Reported from the running box: select `sw-a`, Shift-click
+    // 🚨 THE Inc.1 REGRESSION. Reported from the running box: select `sw-a`, Shift-click
     // `sw-c`, and the row between them stayed unselected — because the range had
     // never started. Both clicks, in order, through the same function the tree calls.
     const first = clickOutcome(plain, node('a'), ctx());
@@ -169,7 +169,7 @@ describe('clickOutcome', () => {
   });
 
   it('keeps the first row when a plain click is followed by Ctrl clicks', () => {
-    // 🚨 THE 増分 3 REGRESSION, reported with a screenshot: `sw-a` clicked, then
+    // 🚨 THE Inc.3 REGRESSION, reported with a screenshot: `sw-a` clicked, then
     // `sw-b` and `sw-c` Ctrl-clicked. Three rows painted as marked — one
     // accent bar, two tints — and two of them would move.
     const first = clickOutcome(plain, node('a'), ctx());
@@ -190,7 +190,7 @@ describe('clickOutcome', () => {
 
   it('counts the same first click for Ctrl as for Shift', () => {
     // The property, stated once: whichever modifier the operator reaches for second, the row they
-    // clicked first is in the batch. Shift had it from 増分 1 and Ctrl did not, so one screen
+    // clicked first is in the batch. Shift had it from Inc.1 and Ctrl did not, so one screen
     // marked three rows and moved two.
     const start = ctx(afterPlainClick('a'));
     expect(clickOutcome(ctrl, node('c'), start).checked!.has('a')).toBe(true);
@@ -204,7 +204,7 @@ describe('clickOutcome', () => {
 
   it('starts no batch from a row that is no longer on screen', () => {
     // Its folder was collapsed, a filter hid it, or the lazily-loaded page it came from was
-    // replaced. Seeding a row the operator cannot see is the failure 決定 4 refuses for the anchor.
+    // replaced. Seeding a row the operator cannot see is the failure decision 4 refuses for the anchor.
     const r = clickOutcome(ctrl, node('c'), ctx({ selection: { kind: 'node', id: 'gone' } }));
     expect([...r.checked!.keys()]).toEqual(['c']);
   });

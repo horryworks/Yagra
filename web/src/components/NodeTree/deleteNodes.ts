@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// What the bulk-delete dialog says before and after it acts (ADR-124 増分 6). The judgement sits in
+// What the bulk-delete dialog says before and after it acts (ADR-124 Inc.6). The judgement sits in
 // a `.ts` because Vitest does not run `.tsx`; the dialog beside it only renders.
 
 /** How many names the confirmation spells out before summarising the rest. */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! One radio of one access point, as the AP node reads it: the samples keyed by the radio's slot,
-//! and the `interfaces` row that slot stands for (ADR-064 R6/R9/増分 C, ADR-168 決定 6).
+//! and the `interfaces` row that slot stands for (ADR-064 R6/R9/Inc.C, ADR-168 decision 6).
 //!
 //! Two paths build radios, on two sides of the bus. Core fans a wireless controller's AP walk out
 //! to its AP nodes (`yagra-core`'s `wireless_fanout.rs`), and the poller turns a Meraki wireless
@@ -37,7 +37,7 @@ pub const IF_TYPE_IEEE80211: i32 = 71;
 /// sends — a float cannot be read into a `u32` — so the bus type stays and this one takes fractions.
 ///
 /// A reading the source did not have is `None`, never zero: a 0 dBm noise floor reads as a radio
-/// being drowned, and 0% utilization as an idle channel (ADR-064 改訂 R10).
+/// being drowned, and 0% utilization as an idle channel (ADR-064 revision R10).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RadioReadings {
     /// The slot this radio occupies on its AP node — its `ifindex` in every series and the row key
@@ -47,7 +47,7 @@ pub struct RadioReadings {
     /// [`RadioReadings::interface`] then leaves unnamed rather than guessing.
     pub band: Option<WlanBand>,
     /// Up (`true`), down (`false`), or unknown (`None`). A Meraki radio is always `None`: nothing
-    /// the Dashboard answers says whether a radio is on (ADR-168 決定 3).
+    /// the Dashboard answers says whether a radio is on (ADR-168 decision 3).
     pub up: Option<bool>,
     /// Clients online through this radio.
     pub clients: Option<f64>,

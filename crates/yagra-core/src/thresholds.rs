@@ -759,7 +759,7 @@ mod tests {
     fn the_column_list_is_named_once_and_used_by_every_read() {
         // Every read builds its SELECT from `COLUMNS`, so the positional `row_to_threshold`
         // cannot drift from what was selected. Three of them: the engine's uncapped snapshot, the
-        // API's capped page, and the per-interface candidate set (ADR-076 決定 11).
+        // API's capped page, and the per-interface candidate set (ADR-076 decision 11).
         let src = production_source();
         assert_eq!(src.matches("Self::COLUMNS").count(), 3);
         // 13 since ADR-081 added the four bounds, 14 since ADR-143 added `row_match`. Deliberately

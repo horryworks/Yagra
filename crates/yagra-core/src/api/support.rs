@@ -586,7 +586,7 @@ const POLLER_LOG_MAX_BYTES: usize = 8 * 1024 * 1024;
 ///
 /// What it *does* reach, and the bus never will, is a poller that is **no longer running**. That
 /// is the whole reason this exists alongside the bus path: a poller killed by the OOM killer
-/// cannot answer a request, but its last hour is on disk. Same argument ADR-045 決定 2 made for
+/// cannot answer a request, but its last hour is on disk. Same argument ADR-045 decision 2 made for
 /// core, one component over.
 ///
 /// The returned id set is what stops the two paths carrying the same file twice for a co-located

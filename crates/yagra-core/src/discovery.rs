@@ -107,7 +107,7 @@ const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 /// [`RUNNING_MAX_AGE`] retires them.
 const MAX_SCANS: usize = 20;
 
-/// The same cap for [`ScanOrigin::Rediscover`] scans, counted apart from sweeps (ADR-186 増分 2).
+/// The same cap for [`ScanOrigin::Rediscover`] scans, counted apart from sweeps (ADR-186 Inc.2).
 /// Sharing one cap let a colleague's rediscoveries evict a finished sweep someone was still
 /// importing from, and sweeps evict the scan an open Rediscover dialog would apply.
 const MAX_REDISCOVERIES: usize = 20;
@@ -1289,7 +1289,7 @@ mod tests {
         assert!(scans.contains_key(&Uuid::from_u128(100)));
     }
 
-    /// ADR-186 増分 2: rediscoveries and sweeps are capped apart. A run of finished rediscoveries
+    /// ADR-186 Inc.2: rediscoveries and sweeps are capped apart. A run of finished rediscoveries
     /// newer than a finished sweep must not push the sweep off the Discovery list.
     #[test]
     fn rediscoveries_do_not_evict_a_finished_sweep() {

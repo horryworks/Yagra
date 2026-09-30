@@ -57,7 +57,7 @@ export function NodeDetailPage() {
         onTabChange={setTab}
         groups={groups}
         // This route has no pane to open a folder in, so a folder hands the operator to All nodes
-        // with that folder open (ADR-142 決定 4).
+        // with that folder open (ADR-142 decision 4).
         onOpenGroup={(id) => navigate(nodesPageHref({ kind: 'group', id }))}
         onDeleted={() => navigate('/nodes')}
       />

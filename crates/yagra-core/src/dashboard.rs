@@ -108,7 +108,7 @@ impl SharedDashboardRepo {
 ///
 /// 🚨 **This is not another presentation store.** It round-trips an opaque JSON document like its
 /// two siblings, but core also reads the widget *types* out of it to derive which API routes an
-/// anonymous request may reach (ADR-123 決定 5, [`crate::public_access`]). Saving a board with one
+/// anonymous request may reach (ADR-123 decision 5, [`crate::public_access`]). Saving a board with one
 /// more widget on it opens the routes that widget reads; removing one closes them. That is why the
 /// write is `manage_system` at the API edge while [`SharedDashboardRepo`]'s is `manage_config` —
 /// composing this board is an access-control act, not a layout preference.
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn the_public_dashboard_is_a_single_row_keyed_true() {
         // Same singleton shape as the shared board. Separate table, deliberately: this one also
-        // decides what an anonymous caller can read (ADR-123 決定 5), so it must not be possible
+        // decides what an anonymous caller can read (ADR-123 decision 5), so it must not be possible
         // to widen the public surface by editing the board colleagues look at.
         let src = production_source();
         assert!(src.contains("FROM public_dashboard WHERE id = TRUE"));

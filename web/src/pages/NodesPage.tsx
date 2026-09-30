@@ -240,7 +240,7 @@ export function NodesPage() {
 
   // The right-pane selection and the inline detail tab live in the URL (`?sel=node:<id>&tab=…`)
   // so a browser reload restores the same pane instead of snapping back to the empty state
-  // (design-guidelines.md "画面状態の永続化"). So does the left pane's search term, since ADR-153.
+  // (design-guidelines.md "persisting screen state" section). So does the left pane's search term, since ADR-153.
   const [searchParams, setSearchParams] = useSearchParams();
   const selected: TreeSelection = parseSelection(searchParams.get('sel'));
   const tabParam = searchParams.get('tab') ?? '';
@@ -273,7 +273,7 @@ export function NodesPage() {
     [searchParams, setSearchParams],
   );
 
-  /** The working set: nodes checked with Ctrl / Shift, for a bulk action (ADR-124 決定 2).
+  /** The working set: nodes checked with Ctrl / Shift, for a bulk action (ADR-124 decision 2).
    *
    *  ⚠️ **Whole nodes, not ids, and deliberately not in the URL.** Ids resolved against the
    *  current rows would shrink the batch the moment a filter changed; and a set restored from a
@@ -332,12 +332,12 @@ export function NodesPage() {
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [deletingNode, setDeletingNode] = useState<NodeSummary | null>(null);
   /** The working set the bulk delete is about — from the tree's menu or the selection bar
-   *  (ADR-124 増分 6). `null` ⇒ closed. */
+   *  (ADR-124 Inc.6). `null` ⇒ closed. */
   const [deletingNodes, setDeletingNodes] = useState<NodeSummary[] | null>(null);
   /** Nodes the move dialog is about: one from the tree's own "Move…", or the whole working set
    *  from the selection bar. `null` ⇒ closed. */
   const [moving, setMoving] = useState<MoveTarget[] | null>(null);
-  /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 決定 6). */
+  /** Nodes the IP-range proposal is about. Same two entry points, same shape (ADR-124 decision 6). */
   const [movingByPrefix, setMovingByPrefix] = useState<MoveByPrefixSource | null>(null);
   const [taggingNodes, setTaggingNodes] = useState<NodeSummary[] | null>(null);
   /** Node whose edit dialog is open, from the tree's right-click. The row is all this page has, so
@@ -365,7 +365,7 @@ export function NodesPage() {
   // `poolTarget` holds the target whose "Custom…" dialog is open.
   const [pools, setPools] = useState<PoolOption[]>([]);
   const [poolTarget, setPoolTarget] = useState<ActionTarget | null>(null);
-  /** The transient result of a manual poll (ADR-124 増分 12). Its own line rather than the page's
+  /** The transient result of a manual poll (ADR-124 Inc.12). Its own line rather than the page's
    *  error band, because a dispatch that worked is the only feedback there is. */
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
@@ -394,7 +394,7 @@ export function NodesPage() {
   // It selects warning + critical + unreachable in the `state` filter above, which is why nothing
   // else on this page had to learn about it: `isInventoryFiltered`, `ClearFilters` and
   // `clearAllFilters` already watch that column. Compare with Pinned only and With nodes, which
-  // hold switches of their own and therefore had to be taught to all three (ADR-159 決定 8).
+  // hold switches of their own and therefore had to be taught to all three (ADR-159 decision 8).
   const attentionOnly = isAttentionOnly(inventoryFilters);
   const pressAttention = useCallback(
     (fromHeader: boolean) => {
@@ -490,7 +490,7 @@ export function NodesPage() {
   const commitTerm = term.commit;
   const settledTerm = search.settledTerm;
   useEffect(() => commitTerm(settledTerm), [commitTerm, settledTerm]);
-  /** Bring the selection back into view when the last narrowing control goes (ADR-073 増分 2).
+  /** Bring the selection back into view when the last narrowing control goes (ADR-073 Inc.2).
    *  Made below, once the node rows are known; read here because its folder has to load. */
   const [reveal, setReveal] = useState<RevealRequest | null>(null);
   const members = useLazyGroupMembers({
@@ -611,7 +611,7 @@ export function NodesPage() {
   // …and at once when the stream says it missed frames. `useNodeStates` has already dropped its
   // overlay by then, so what is on screen is the base data — which has to be current.
   //
-  // 🚨 **In place, never `reload`** (ADR-133 増分 7 決定 4). `reload` is for after a write: it
+  // 🚨 **In place, never `reload`** (ADR-133 Inc.7 decision 4). `reload` is for after a write: it
   // empties the member cache, so for a round trip every loaded row was gone — the tree flashed
   // "Loading…" on each reconnect and an arrow key pressed meanwhile was dropped. What was missed is
   // states, not moves and not folders, so the folder list is not re-read either.
@@ -662,7 +662,7 @@ export function NodesPage() {
   // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.
   const scopeError = (e: unknown, fallback: string) => setError(errMsg(e, fallback));
 
-  /** Right-click / More… → poll now (ADR-124 増分 12).
+  /** Right-click / More… → poll now (ADR-124 Inc.12).
    *
    *  ⚠️ **Not the page's error band.** A dispatch that worked is news too — "3 of 3 queued" is the
    *  only feedback there is, since the results arrive minutes later through the ordinary ingest —
@@ -806,13 +806,13 @@ export function NodesPage() {
       .catch(() => undefined);
   }, []);
 
-  // Someone ELSE changed the inventory (ADR-019 増分 2) — or this operator did, and `reload` has
+  // Someone ELSE changed the inventory (ADR-019 Inc.2) — or this operator did, and `reload` has
   // run already; a second quiet read costs one round trip and is harmless. Everything the tree
   // draws from the server is read again, and nothing is emptied first:
   //
   // 🚨 **Not `reload`.** `reload` is for after this tab's own write: it drops the member cache,
-  // so every loaded row vanished for a round trip and the tree flashed "Loading…" (ADR-133 増分 7
-  // 決定 4) — on every change anyone made, that would be all the time. And **not `refresh`**: a
+  // so every loaded row vanished for a round trip and the tree flashed "Loading…" (ADR-133 Inc.7
+  // decision 4) — on every change anyone made, that would be all the time. And **not `refresh`**: a
   // remote change can be a move, and folders swapped one answer at a time would draw the moved
   // node twice or not at all. `reconcile` swaps every loaded folder together.
   //
@@ -846,7 +846,7 @@ export function NodesPage() {
     // 🚨 A chip has no dialog to hold a partial result in, so the page says it — and **after** the
     // refresh, never before: `reload` opens with `setError(null)`, so a shortfall reported first is
     // wiped in the same tick and a batch that moved half reads as a clean success. That is the
-    // failure the endpoint returns two numbers to prevent (ADR-124 増分 4's lesson, 増分 10).
+    // failure the endpoint returns two numbers to prevent (ADR-124 Inc.4's lesson, Inc.10).
     if (target.kind === 'nodes') {
       api
         .setNodesPool(targetNodeIds(target), pool)
@@ -984,7 +984,7 @@ export function NodesPage() {
   // ⚠️ Since ADR-162 the neighbour may be a NODE — folders and nodes under one parent are one
   // ordered list — so `dest.before`/`after` carry whichever row the cursor was on.
   // ⚠️ There is no node twin of this any more — a node drop, at an edge or not, goes through
-  // `moveNodes` above (ADR-124 増分 8), so "what happens when you move a node" has one answer.
+  // `moveNodes` above (ADR-124 Inc.8), so "what happens when you move a node" has one answer.
   const reorderGroup = (
     groupId: string,
     dest: { parentId: string | null; before?: string; after?: string },
@@ -1044,7 +1044,7 @@ export function NodesPage() {
   const nodeById = useMemo(() => new Map(treeNodes.map((n) => [n.id, n])), [treeNodes]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
 
-  // Keep the selected node in view when the filter is cleared (ADR-073 増分 2). Clearing a filter
+  // Keep the selected node in view when the filter is cleared (ADR-073 Inc.2). Clearing a filter
   // never touched `?sel=`, but the ROW went: browsing loads a folder only once it is on screen, the
   // saved layout closes what the search had opened, and nothing scrolled — so the pane still showed
   // the node while the tree no longer had it, which reads as a lost selection.
@@ -1087,7 +1087,7 @@ export function NodesPage() {
   const endReveal = useCallback(() => setReveal(null), []);
 
   const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
-  // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
+  // What the pane-head + acts on: the selected group, a selected node's folder, else top level.
   const addTarget = addMenuTarget(selected, groupById, nodeById);
   // What deleting the folder in the confirm dialog takes with it — its whole subtree (ADR-174).
   // Only computed while the dialog is open: it walks the folder list.
@@ -1235,7 +1235,7 @@ export function NodesPage() {
               )}
               {canMoveByPrefix(groups, canConfig) && (
                 // Actions over the whole inventory (ADR-176). A menu of its own rather than a third
-                // item under ＋, which means "add": sorting is not adding, and the operator
+                // item under +, which means "add": sorting is not adding, and the operator
                 // looking for it would not open the add menu to find it.
                 <ActionMenu
                   label={t('moreMenu.trigger')}
@@ -1331,7 +1331,7 @@ export function NodesPage() {
             checked={checked}
             anchorId={anchorId}
             // ⚠️ Ctrl / Shift marking is offered for any of the three permissions, not just
-            // `canConfig` — since 増分 11 an operator who may only suppress still has batch verbs
+            // `canConfig` — since Inc.11 an operator who may only suppress still has batch verbs
             // to reach, and gating the *selection* on the strictest of them would hide them all.
             onPollNodes={canConfig ? pollNodes : undefined}
             onCheckedChange={
@@ -1377,7 +1377,7 @@ export function NodesPage() {
             reveal={reveal}
             onRevealDone={endReveal}
           />
-          {/* The working set's own row (ADR-124 決定 3, moved below the tree by 増分 5). It appears
+          {/* The working set's own row (ADR-124 decision 3, moved below the tree by Inc.5). It appears
               only once something is checked, so it costs nothing until it is needed — and it
               carries the gesture in **visible text**, because Ctrl / Shift is written nowhere else
               on the screen and a `title=` is unreadable on touch (ADR-055 R4).
@@ -1387,13 +1387,13 @@ export function NodesPage() {
               `.ntree-body` is `flex: 1`, so a `flex: none` sibling appearing above it dropped the
               scroller's top edge ~60px and every visible row translated down two rows on the first
               Ctrl click. Below it, neither the scroller's top edge nor its `scrollTop` moves, so no
-              row moves at all — the bottom two rows are covered instead (増分 5 決定 A).
+              row moves at all — the bottom two rows are covered instead (Inc.5 decision A).
               🚨 **Do not "fix" that by writing `scrollTop`** the way
               `NodeDetail/InterfacesTab.tsx`'s `keepSelectedInView` does. Scrolling the tree for the
-              operator is precisely what 増分 5 exists to stop. */}
+              operator is precisely what Inc.5 exists to stop. */}
           {/* ⚠️ The bar itself opens for **any** of the three permissions, and each control
               inside it is gated on its own (ADR-056). It was `canConfig` alone, so an operator
-              who may silence a fleet but not reshape it had no bar at all — and since 増分 11 the
+              who may silence a fleet but not reshape it had no bar at all — and since Inc.11 the
               bar is where the batch suppression lives. */}
           {(canConfig || canMaintenance || canAck) && checked.size > 0 && (
             <div className="nodes-selbar">
@@ -1410,7 +1410,7 @@ export function NodesPage() {
                   {t('select.moveByPrefix')}
                 </Button>
               )}
-              {/* 🚨 The bar and the context menu must offer the same verbs (ADR-124 増分 9). Tag
+              {/* 🚨 The bar and the context menu must offer the same verbs (ADR-124 Inc.9). Tag
                   was reachable only by right-clicking a checked row, so an operator working from
                   the bar had no way to know bulk tagging exists at all — the shape ADR-055 R6
                   is about, with the feature present rather than absent. */}
@@ -1421,7 +1421,7 @@ export function NodesPage() {
               )}
               {/* The verbs that are not the common two. They go in a menu rather than as buttons
                   because `.nodes-selbar` is one wrapping flex line above the tree, and every line
-                  it wraps to covers another row of the inventory (増分 5 決定 A). */}
+                  it wraps to covers another row of the inventory (Inc.5 decision A). */}
               {selectionMenuItems.length > 0 && (
                 <ActionMenu
                   label={t('select.more')}
@@ -1445,7 +1445,7 @@ export function NodesPage() {
             </div>
           )}
           {/* A manual poll's only feedback, below the tree like the selection bar so it cannot
-              move a row (増分 5 決定 A). Outside the bar's own gate: a poll started from a row's
+              move a row (Inc.5 decision A). Outside the bar's own gate: a poll started from a row's
               context menu has to report itself with nothing selected. */}
           {pollMsg && (
             <p className={`nodes-pollmsg${pollMsg.tone === 'error' ? ' err' : ''}`}>

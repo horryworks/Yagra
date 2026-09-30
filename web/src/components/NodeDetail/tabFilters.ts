@@ -121,7 +121,7 @@ export function interfaceFilters(
     },
     // Every address of the port is searched, in the `ip/prefix` spelling the cell shows, so a
     // secondary the cell folds behind `+N` still answers — `10.221.` finds the SVI that carries
-    // that range, `/30` every point-to-point link (ADR-157 決定 7).
+    // that range, `/30` every point-to-point link (ADR-157 decision 7).
     addresses: {
       kind: 'text',
       modes: ['contains', 'regex'],
@@ -233,7 +233,7 @@ export function neighborFilters(
       placeholder: t('neighbors.colAddress'),
     },
     // By what the address IS to this deployment: "which of these are not monitored yet" is the
-    // question. On the column that acts on the answer (ADR-179 増分 3); the badge beside the name
+    // question. On the column that acts on the answer (ADR-179 Inc.3); the badge beside the name
     // shows it row by row.
     monitoring: {
       kind: 'enum',
@@ -339,7 +339,7 @@ export function apImportState(row: WirelessApRow): ApImportState {
 }
 
 /**
- * The AP list's filter row (ADR-064 増分 B3).
+ * The AP list's filter row (ADR-064 Inc.B3).
  *
  * Client-side like its three neighbours here, and for a harder reason than theirs: the tab holds
  * the controller's whole inventory in one fetch (the cap *is* the page size), so filtering on the

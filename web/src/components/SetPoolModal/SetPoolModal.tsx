@@ -6,7 +6,7 @@
 //
 // Sibling of MoveNodeModal: same focused-edit shape, immediate write, caller refreshes on success —
 // including the part that matters most for a batch, which is that a **partial** result keeps the
-// dialog open rather than closing on a write it did not fully make (ADR-124 増分 10).
+// dialog open rather than closing on a write it did not fully make (ADR-124 Inc.10).
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

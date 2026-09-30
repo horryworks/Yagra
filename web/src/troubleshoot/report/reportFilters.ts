@@ -3,7 +3,7 @@
 // toolbar (ADR-053 Inc.7): `rule_gap`, `flow_scan` and `auth_probe`.
 //
 // **Only three of the fifteen bodies are here, and that is a decision rather than a stopping
-// point (Inc.7 決定 J).** The other twelve narrow with `Chips`, and their chips are *tool-specific
+// point (Inc.7 decision J).** The other twelve narrow with `Chips`, and their chips are *tool-specific
 // lenses* — `soon` / `mid` / `far` for time-to-exhaustion, `chronic` / `intermittent` for a flap's
 // shape, `inverse` for a correlation's direction. Those choose what the report is showing, not a
 // row attribute, and folding them into a generic column filter would make the control say something
@@ -154,7 +154,7 @@ export function flowScanColumns(t: TFunction): FilterableColumn<AnalysisFinding>
 }
 
 // ---------------------------------------------------------------------------
-// auth_probe — a card list with no header row, so its controls go in a `FilterBar` (決定 K).
+// auth_probe — a card list with no header row, so its controls go in a `FilterBar` (decision K).
 
 export function authProbeFilters(t: TFunction) {
   return {

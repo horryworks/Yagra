@@ -25,7 +25,7 @@ export function MobileNavDrawer({ open, onClose }: Props) {
   const { pathname } = useLocation();
   const active = sectionForPath(pathname);
   const setUiMode = usePrefsStore((s) => s.setUiMode);
-  // Each item returns to its own last route, as the sidebar's do (ADR-134 増分 3).
+  // Each item returns to its own last route, as the sidebar's do (ADR-134 Inc.3).
   const byItem = useSectionRouteStore((s) => s.byItem);
   // Which section accordion is expanded (single-open). Defaults to the active route's section.
   const [expanded, setExpanded] = useState(active.key);

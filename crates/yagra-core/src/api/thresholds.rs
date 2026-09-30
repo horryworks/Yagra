@@ -190,7 +190,7 @@ pub(crate) struct MatchingThreshold {
     rule: crate::thresholds::StoredThreshold,
     /// Whether this rule sits at the **winning** scope level for its metric — the most specific
     /// level that reaches this port, and among folder-group rules only the nearest group in the
-    /// chain (ADR-013 + ADR-075 決定 11).
+    /// chain (ADR-013 + ADR-075 decision 11).
     ///
     /// Several rules can carry `true` for one metric at once: the engine merges rules at the
     /// winning level by keeping the more restrictive bound of each severity. So this means "this
@@ -211,7 +211,7 @@ pub(crate) struct MatchingThreshold {
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
-/// The threshold rules that reach one port (ADR-076 決定 11).
+/// The threshold rules that reach one port (ADR-076 decision 11).
 ///
 /// A port is governed by rules at six scope levels, and the narrow ones are usually not where the
 /// interesting rule lives — a fleet-wide "any link over 90%" is a global rule, and a page that
@@ -422,7 +422,7 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
             ));
         }
         // One port of one node. A fleet-wide port picker does not exist, so a rule at this level
-        // is created from the port being looked at (ADR-076 増分 5) and there is nothing that
+        // is created from the port being looked at (ADR-076 Inc.5) and there is nothing that
         // could have supplied a second one — accepting a set here would be a shape only a
         // hand-written call can produce, with no screen able to show or edit it.
         if level == ScopeLevel::Interface && scope_ids.len() != 1 {
@@ -435,7 +435,7 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
     // The id's *shape* is checked here, and was not before. An unparseable id is not a rule that
     // does something slightly wrong — `AlertConfig::applies` compares it against a uuid or a tag
     // and simply never matches, so the rule is created, listed, and silently evaluates for no
-    // node at all (the `StoredThreshold` docs say so). Since ADR-075 増分 3 the WebUI picks these
+    // node at all (the `StoredThreshold` docs say so). Since ADR-075 Inc.3 the WebUI picks these
     // from a list, so a malformed one now only arrives from a hand-written call.
     for scope_id in &scope_ids {
         let scope_id = scope_id.as_str();
@@ -1038,7 +1038,7 @@ mod tests {
         };
 
         // Nothing named at a level that needs a target: the rule would be stored, listed, and
-        // match no node — the failure ADR-075 決定 12 closed for the single-id case.
+        // match no node — the failure ADR-075 decision 12 closed for the single-id case.
         assert!(refused(&body_multi("profile", &[])));
 
         // The same target twice would list as covering two things while covering one.

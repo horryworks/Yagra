@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// AP tab of the node detail (ADR-064 増分 B3): the access points a wireless controller reports, and
+// AP tab of the node detail (ADR-064 Inc.B3): the access points a wireless controller reports, and
 // the two writes that turn them into monitored nodes.
 //
 // **Why this tab exists at all.** Increments B1/B2 shipped the whole machine — the inventory walk,
@@ -146,7 +146,7 @@ export function ApTab({ node, groups, onChanged }: Props) {
             <span>{t(`ap.state.${apStateKey(r)}`)}</span>
             {/* The vendor's own word, verbatim: `normal` / `fault` / `standby` on Huawei, and the
                 list grows per flavour. Translating it would mean inventing a vocabulary the device
-                does not have (決定 14). */}
+                does not have (decision 14). */}
             <span className="mono nd-muted">{r.run_state}</span>
           </span>
         ),

@@ -377,12 +377,12 @@ pub(crate) struct MerakiOrgView {
     /// organization (`subject_kind: meraki_org`) — never one per device. `uplink`, `wireless`,
     /// `switch_ports` or `traffic` listed alone raises nothing: readings are missing, liveness is not.
     collect_failures: Vec<MerakiCollectFailureView>,
-    /// A whole-organization read asked for or running (ADR-164 決定 30〜32); `null` when there is
+    /// A whole-organization read asked for or running (ADR-164 decision 30–32); `null` when there is
     /// none. "Sync now" asks for one; an organization's first sync is one nobody asked for.
     full_sync: Option<MerakiFullSyncView>,
 }
 
-/// A whole-organization read: every MX network's LAN side, then the import (ADR-164 決定 30〜32).
+/// A whole-organization read: every MX network's LAN side, then the import (ADR-164 decision 30–32).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiFullSyncView {
     /// When "Sync now" asked for it; `null` for a read nobody asked for — an organization's first,
@@ -424,7 +424,7 @@ pub(crate) struct MerakiCollectFailureView {
     since: chrono::DateTime<chrono::Utc>,
     /// How many collects in a row have failed.
     failures: u32,
-    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):
+    /// Which of the tier's reads failed, when one did while the others answered (ADR-164 decision 25):
     /// `uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the
     /// uplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,
     /// `switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three
@@ -639,7 +639,7 @@ async fn create_meraki_orgs(
         ));
     }
 
-    // Only organizations this key can see (ADR-164 増分 18). One it cannot see used to be stored
+    // Only organizations this key can see (ADR-164 Inc.18). One it cannot see used to be stored
     // under its own id as a name, and then every sync of it failed.
     if let Some(unseen) = fresh
         .iter()
@@ -864,7 +864,7 @@ fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
     // The availability tier is the only one that speaks for whether a device is up (ADR-164
     // Inc.3): uplink and traffic are observational. Without it every node of the organization
     // sits in `unknown` and node-down can never fire, with nothing on any screen saying why — so
-    // leaving it out is refused rather than stored (決定 17).
+    // leaving it out is refused rather than stored (decision 17).
     let availability = yagra_common::MerakiTier::Availability;
     if !body
         .enabled_tiers
@@ -1124,7 +1124,7 @@ async fn set_meraki_import_settings(
     }
 }
 
-/// Refuse a folder-scoped caller the device list (ADR-164 決定 9).
+/// Refuse a folder-scoped caller the device list (ADR-164 decision 9).
 ///
 /// A read, and refused all the same. The list names every device in the organization with its
 /// address, and most of those are not in anybody's folders yet — an unimported device has no folder
@@ -1139,7 +1139,7 @@ fn meraki_devices_are_deployment_wide(scope: &super::scope::NodeScope) -> Result
 }
 
 /// Ask for the whole organization to be read again now, rather than waiting for the periodic sync
-/// (ADR-164 決定 32).
+/// (ADR-164 decision 32).
 ///
 /// **Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which
 /// takes minutes (about six for 350 networks at the default rate), so this records the request and
@@ -1264,7 +1264,7 @@ pub(crate) struct MerakiDeviceView {
     /// Where an import would file the device, and why. `null` for a device that is already a
     /// node: it is where it is, and no import moves it.
     filing: Option<MerakiFilingView>,
-    /// An MX's configured warm-spare role (ADR-164 決定 26). Absent from the object — not `null` —
+    /// An MX's configured warm-spare role (ADR-164 decision 26). Absent from the object — not `null` —
     /// for a single MX, a device that is not an MX, and one whose role the sync has not read yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     ha_role: Option<yagra_common::MerakiHaRole>,
@@ -1299,7 +1299,7 @@ impl From<&Filing> for MerakiFilingView {
 }
 
 impl MerakiFilingView {
-    /// An MX no import takes yet: its network's LAN side has not been read (ADR-164 決定 39).
+    /// An MX no import takes yet: its network's LAN side has not been read (ADR-164 decision 39).
     fn lan_pending() -> Self {
         Self {
             reason: FilingReason::LanPending,
@@ -1311,7 +1311,7 @@ impl MerakiFilingView {
 
 impl MerakiDeviceView {
     /// `filing` is what an import would do with the device; `None` for one that is already a node.
-    /// An MX still waiting for its network's LAN side says so instead (決定 39), whatever the match
+    /// An MX still waiting for its network's LAN side says so instead (decision 39), whatever the match
     /// made of the address it does not have yet.
     fn new(d: DeviceRecord, filing: Option<&Filing>) -> Self {
         let waiting = filing.is_some() && d.lan_pending;
@@ -1343,7 +1343,7 @@ impl MerakiDeviceView {
     }
 }
 
-/// What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).
+/// What a warm-spare pair is doing, seen from one of its MX (ADR-164 decision 26).
 ///
 /// Worked out from the two devices' **liveness**, never from their roles: the role Meraki reports
 /// is the configured one, and on a real organization a primary that was down still said `primary`
@@ -1377,7 +1377,7 @@ pub(crate) struct MerakiPartnerView {
     pub(crate) node_state: Option<yagra_common::NodeState>,
 }
 
-/// One MX's warm-spare pair (ADR-164 決定 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.
+/// One MX's warm-spare pair (ADR-164 decision 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct MerakiPairView {
     /// This MX's configured role.
@@ -1426,7 +1426,7 @@ pub(crate) fn pair_state(
     }
 }
 
-/// `node`'s warm-spare pair, for the node detail and the MCP tool that folds it (ADR-164 決定 26).
+/// `node`'s warm-spare pair, for the node detail and the MCP tool that folds it (ADR-164 decision 26).
 /// `None` for a node that is not an MX in a pair. Best effort: a failed read reads as "no pair".
 ///
 /// 🚨 The partner is narrowed to the caller's scope, as `wireless::node_wireless` narrows an AP's
@@ -1605,7 +1605,7 @@ pub(super) struct MerakiImportReq {
     file_by_prefix: Option<bool>,
 }
 
-/// One device to import. **Only `serial` is read** (ADR-164 決定 39): everything else about the
+/// One device to import. **Only `serial` is read** (ADR-164 decision 39): everything else about the
 /// device — its name, model, network and address — is taken from what this organization's last
 /// sync recorded, never from the request. A page opened before Meraki renamed a device used to
 /// create the node under the old name, and the node then never followed a rename again. The other
@@ -1652,7 +1652,7 @@ pub(crate) struct MerakiImported {
     /// about the devices: there was nothing for an address to match.
     ranges_configured: bool,
     /// MX that were asked for and not imported, because their network's LAN side has not been read
-    /// yet (ADR-164 決定 39) — their address, and so their folder, is not known. The next sync reads
+    /// yet (ADR-164 decision 39) — their address, and so their folder, is not known. The next sync reads
     /// it; import them after that.
     waiting_lan: u32,
     /// Devices asked for that are already a node of **another** organization (the device was moved
@@ -1698,7 +1698,7 @@ async fn import_meraki_devices(
         })?
         .ok_or_else(|| no_org(body.org_uuid))?;
     // What each device IS comes from the inventory this organization's sync keeps, by serial —
-    // never from the request (ADR-164 決定 39). A serial it does not hold is refused: it is not a
+    // never from the request (ADR-164 decision 39). A serial it does not hold is refused: it is not a
     // device of this organization, or not one the sync has seen.
     let inventory: std::collections::HashMap<String, DeviceRecord> = admin
         .meraki_inventory
@@ -1723,7 +1723,7 @@ async fn import_meraki_devices(
                 "a serial is not a device of this organization's inventory",
             ));
         };
-        // Automatic import waits for an MX's LAN side (決定 28); by hand it waits too (決定 39). An
+        // Automatic import waits for an MX's LAN side (decision 28); by hand it waits too (decision 39). An
         // import files a node once and never moves it, and without its LAN address an MX would be
         // filed under its network's folder for good.
         if record.node_id.is_none() && record.lan_pending {
@@ -1757,14 +1757,14 @@ async fn import_meraki_devices(
                 "failed to import meraki devices",
             )
         })?;
-    // After the import, not before it (決定 39): with automatic import on, a watched network has its
+    // After the import, not before it (decision 39): with automatic import on, a watched network has its
     // every device imported by the next sync, and an import that then failed left the networks
     // watched with nothing the operator asked for done.
     if !body.monitored_network_ids.is_empty() {
         // 🚨 Not fatal, and not silent either. Collection asks the Dashboard about watched networks
         // only, so a network that fails to be watched here is a node that is collected nothing for
         // — the state `MerakiDeviceCounts.monitored_unwatched` and the page's own "N monitored
-        // devices are in networks that are not watched" notice both exist to name (決定 15). That
+        // devices are in networks that are not watched" notice both exist to name (decision 15). That
         // notice is the recovery, which is why this does not fail the import: the devices really
         // were imported, and unwinding them would be worse than a request the operator repeats.
         // What it must not do is say nothing — `let _ =` left a whole organization uncollected
@@ -1872,7 +1872,7 @@ mod tests {
 
     /// One device as this organization's sync would have recorded it, in a network whose LAN side
     /// has been read (so an MX is not waiting for it). An import takes every fact about a device
-    /// from here, never from the request (ADR-164 決定 39).
+    /// from here, never from the request (ADR-164 decision 39).
     async fn listed(
         pool: &sqlx::PgPool,
         org: Uuid,
@@ -2025,7 +2025,7 @@ mod tests {
         fast.availability_secs = 1;
         assert_eq!(check_cadence(&fast).unwrap_err().code(), "invalid_cadence");
 
-        // ADR-168 決定 9: the wireless band, likewise.
+        // ADR-168 decision 9: the wireless band, likewise.
         for (secs, accepted) in [
             (crate::config::MERAKI_WIRELESS_MIN_SECS - 1, false),
             (crate::config::MERAKI_WIRELESS_MIN_SECS, true),
@@ -2038,7 +2038,7 @@ mod tests {
             assert_eq!(check_cadence(&wireless).is_ok(), accepted, "{secs}");
         }
 
-        // ADR-167 決定 11: the switch-port band, when the field is sent at all.
+        // ADR-167 decision 11: the switch-port band, when the field is sent at all.
         for (secs, accepted) in [
             (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS - 1, false),
             (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS, true),
@@ -2068,7 +2068,7 @@ mod tests {
         assert_eq!(check_cadence(&tier).unwrap_err().code(), "invalid_tier");
     }
 
-    /// 決定 17. Availability is the only tier that decides whether a device is up, so a request
+    /// decision 17. Availability is the only tier that decides whether a device is up, so a request
     /// that leaves it out would store an organization whose nodes can never be reported down.
     #[test]
     fn a_cadence_that_leaves_out_the_availability_tier_is_refused() {
@@ -2279,7 +2279,7 @@ mod tests {
         assert_eq!(S::Other.gauge(), S::NotConnected.gauge());
     }
 
-    /// ADR-164 決定 26, as a table: what a warm-spare pair is doing, from either MX. The roles say
+    /// ADR-164 decision 26, as a table: what a warm-spare pair is doing, from either MX. The roles say
     /// which is which; only the two devices' liveness says what is happening — a down primary
     /// still reports `primary` (measured), so reading the role for this would say "normal".
     #[test]
@@ -2338,7 +2338,7 @@ mod tests {
 
     /// `MerakiCollectFailureView.listing` is a plain string on the wire, so the WebUI's list of the
     /// tokens it labels (`MERAKI_LISTINGS` in `web/src/types/api.ts`) is a hand-kept copy of
-    /// `yagra_common::MerakiListing` that no generated type checks (ADR-164 決定 25). A token missing
+    /// `yagra_common::MerakiListing` that no generated type checks (ADR-164 decision 25). A token missing
     /// there is a failure line with no label; read from the file so the two cannot drift silently.
     #[test]
     fn every_listing_token_is_one_the_webui_lists() {
@@ -2416,7 +2416,7 @@ mod tests {
                 "{name} in {path} is not what `check_cadence` accepts"
             );
         }
-        // The rate box's ceiling too (ADR-164 増分 18): the dialog refuses a save past it.
+        // The rate box's ceiling too (ADR-164 Inc.18): the dialog refuses a save past it.
         assert_eq!(
             f64::from(declared_number(&text, path, "CADENCE_TARGET_RPS_MAX")),
             crate::config::MERAKI_TARGET_RPS_MAX,
@@ -2599,7 +2599,7 @@ mod tests {
     }
 
     /// "Sync now" is accepted — 202, the request on the organization's row, the same request however
-    /// often it is pressed (ADR-164 決定 32) — and refused by each switch that means "send nothing to
+    /// often it is pressed (ADR-164 decision 32) — and refused by each switch that means "send nothing to
     /// Meraki". The read the loop then runs answers the request and stamps the row. The device list
     /// answers from the database.
     ///
@@ -2731,7 +2731,7 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
     }
 
-    /// A warm-spare pair on the node detail and on the device list (ADR-164 決定 26): the partner is
+    /// A warm-spare pair on the node detail and on the device list (ADR-164 decision 26): the partner is
     /// named to a caller who can see it, and withheld — with the state `unknown` — from one whose
     /// folders hold only this MX. Reading a node proves only that **this** node is visible.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -2975,7 +2975,7 @@ mod tests {
         ] {
             listed(&pool, org, (serial, serial, "MR46", "wireless", "N_1", ip)).await;
         }
-        // The request's own fields are ignored (決定 39): it sends a wrong address on purpose, and
+        // The request's own fields are ignored (decision 39): it sends a wrong address on purpose, and
         // each device is still filed by the address the inventory holds.
         let device = |serial: &str, _ip: Option<&str>| {
             serde_json::json!({
@@ -3077,11 +3077,11 @@ mod tests {
         assert_eq!(folder_of(pool.clone(), "Q3-4").await, Some(network));
     }
 
-    /// 🚨 ADR-164 決定 39: a manual import takes everything about a device from the inventory, by
+    /// 🚨 ADR-164 decision 39: a manual import takes everything about a device from the inventory, by
     /// serial. A page opened before Meraki renamed a device used to create the node under the old
-    /// name — which then never followed a rename again (決定 14 follows only while the node still
+    /// name — which then never followed a rename again (decision 14 follows only while the node still
     /// carries Meraki's name). A serial the organization does not hold is refused, and an MX whose
-    /// network's LAN side has not been read waits, as automatic import does (決定 28).
+    /// network's LAN side has not been read waits, as automatic import does (decision 28).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_manual_import_reads_the_inventory_and_waits_for_an_unread_mx(pool: sqlx::PgPool) {
@@ -3196,7 +3196,7 @@ mod tests {
         assert_eq!(answer["error"]["code"], "unknown_serial", "{answer}");
     }
 
-    /// 🚨 ADR-164 決定 40: a configuration bundle does not carry a node a Meraki organization owns.
+    /// 🚨 ADR-164 decision 40: a configuration bundle does not carry a node a Meraki organization owns.
     /// Its binding does not travel, so on the target it was an ordinary device, pinged and polled at
     /// its LAN address. The ordinary node beside it still travels.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3320,7 +3320,7 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
     }
 
-    /// 決定 18, through the router. While the Dashboard API is not answering an organization there is
+    /// decision 18, through the router. While the Dashboard API is not answering an organization there is
     /// **one** alert, about the organization — and its nodes, whose state is now the last one
     /// collected, say so. Every surface a person reads has to agree: the alert list names the
     /// organization rather than an id, the node's status carries the fault and its reason, and the
@@ -3479,7 +3479,7 @@ mod tests {
         assert!(again.get("collection_fault").is_none(), "{again}");
     }
 
-    /// 決定 17, through the router: a cadence that keeps availability is stored, one that drops it
+    /// decision 17, through the router: a cadence that keeps availability is stored, one that drops it
     /// is answered `400 availability_required` — and the refusal leaves the row as it was, so the
     /// organization does not end up with nothing that says whether its devices are up.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3961,7 +3961,7 @@ mod tests {
         assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
 
         // An organization the key cannot see is refused, not stored under its own id to fail every
-        // sync after (ADR-164 増分 18).
+        // sync after (ADR-164 Inc.18).
         let (status, body) = send(
             &st,
             "POST",

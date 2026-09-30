@@ -115,7 +115,7 @@ interface Props<T> {
    *  reserving its expanded height until the cache is dropped. This value changing is what triggers
    *  that. One key rather than a set because both callers open exactly one row at a time. */
   expandedKey?: string | null;
-  /** Let each row be as tall as its content instead of the standard 44px (ADR-078 増分 5).
+  /** Let each row be as tall as its content instead of the standard 44px (ADR-078 Inc.5).
    *
    *  For a table where one cell names a *variable number* of things — the alert-rule Scope column
    *  lists every profile a rule targets, one per line — a fixed row is a truncation rule in
@@ -204,7 +204,7 @@ export function DataTable<T>({
   // 🚨 Dropping is only half of it: `measure()` forgets every size, and a row that stays mounted is
   // never handed to `measureElement` again — its ref callback does not re-run — so it falls back to
   // the 44px estimate. That was invisible while every row was 44px; on an `autoRowHeight` table a
-  // taller row then overlapped the one below it after any open and close (Neighbors, ADR-179 増分 3).
+  // taller row then overlapped the one below it after any open and close (Neighbors, ADR-179 Inc.3).
   // So the rows on screen are measured again as soon as they have rendered — through `resizeItem`,
   // not `measureElement`: opening a row scrolls the table, and `measureElement` skips its
   // measurement while the virtualizer thinks a scroll is under way, which left every row below an

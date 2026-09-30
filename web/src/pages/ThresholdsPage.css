@@ -15,7 +15,7 @@
   line-height: 1.6;
 }
 
-/* The default view leaves port rules out (ADR-076 決定 12). One line above the toolbar says how
+/* The default view leaves port rules out (ADR-076 decision 12). One line above the toolbar says how
    many and offers the way in — not a Card, because it is a statement about the current view rather
    than a standing note about the screen, and a third bordered panel above the table would push the
    rules themselves below the fold. */
@@ -114,7 +114,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
   font-size: var(--font-sm);
 }
 
-/* The Scope cell names every target a rule has, one per line (ADR-078 増分 5). The row grows to
+/* The Scope cell names every target a rule has, one per line (ADR-078 Inc.5). The row grows to
    suit — the table opts into `autoRowHeight`, so five profiles make a five-line row.
 
    A flex column rather than block children, because the children are `EntityName`s and that

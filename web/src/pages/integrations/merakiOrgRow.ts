@@ -51,7 +51,7 @@ export function orgSyncSummary(org: SyncColumns): OrgSyncSummary {
   return { kind: 'ok', at: org.last_sync_at };
 }
 
-/** What an organization's whole-organization read is doing (ADR-164 決定 30〜32): every MX
+/** What an organization's whole-organization read is doing (ADR-164 decision 30–32): every MX
  *  network's LAN side read, then the import. It takes minutes, so it is shown while it runs. */
 export type OrgFullRead =
   | { kind: 'none' }
@@ -101,12 +101,12 @@ export interface CollectFailureLine {
    *  organization's nodes keep the last state they had, and after three failures in a row one
    *  alert is raised about the organization. The other tiers failing costs readings only. */
   stalesNodes: boolean;
-  /** Which of the tier's reads failed while the others answered (ADR-164 決定 25), when the server
+  /** Which of the tier's reads failed while the others answered (ADR-164 decision 25), when the server
    *  said and this bundle knows the token. `null` reads as "the tier's collect". */
   listing: MerakiListing | null;
 }
 
-/** Which of an organization's collects are failing, the one that matters first (ADR-164 決定 18).
+/** Which of an organization's collects are failing, the one that matters first (ADR-164 decision 18).
  *
  *  Separate from {@link orgSyncSummary} on purpose: that is the inventory *sync* — this server
  *  asking what the organization holds. A *collect* is a poller asking how the devices are, by

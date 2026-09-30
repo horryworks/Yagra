@@ -46,7 +46,7 @@
   color: var(--text-primary);
 }
 
-/* Active tab = 朱 underline (§2.1). */
+/* Active tab = vermilion underline (§2.1). */
 .topbar-tab.active {
   color: var(--text-primary);
   border-bottom-color: var(--accent-color);

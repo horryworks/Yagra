@@ -7,7 +7,7 @@
 // adjacency is recorded append-on-change, so a rack nobody is repatching writes nothing. That is
 // the feature, not a gap, and the empty state says so.
 //
-// An unmonitored neighbour can be added from its opened row (ADR-179 増分 3): the same Detect →
+// An unmonitored neighbour can be added from its opened row (ADR-179 Inc.3): the same Detect →
 // Monitor cell as Discovery ▸ Unregistered devices, or — for a device a wireless controller or a
 // Meraki organization already lists — the way that manager adds it. `setupMode` decides which.
 //
@@ -145,15 +145,15 @@ export function NeighborsTab({ node }: Props) {
   // un-selected").
   const [openKey, setOpenKey] = useState<string | null>(null);
 
-  // ── Adding an unmonitored neighbour (ADR-179 増分 3) ──
+  // ── Adding an unmonitored neighbour (ADR-179 Inc.3) ──
   // Every control is a write, so none is drawn without the permission (ADR-056).
   const canConfig = useCan('manage_config');
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [probeCredIds, setProbeCredIds] = useState<string[]>([]);
   const [catalogAsked, setCatalogAsked] = useState(false);
-  // Where Monitor puts a device, and the folders to choose from (ADR-179 増分 8). The root by
-  // default, as on Discovery — and the line over Monitor says so when no range took it (決定 2).
+  // Where Monitor puts a device, and the folders to choose from (ADR-179 Inc.8). The root by
+  // default, as on Discovery — and the line over Monitor says so when no range took it (decision 2).
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [destination, setDestination] = useState<SetupDestination>(DEFAULT_SETUP_DESTINATION);
   // A setup panel has been drawn. On a phone it opens inside a card — from its button or from
@@ -187,7 +187,7 @@ export function NeighborsTab({ node }: Props) {
       .then((list) => {
         setCreds(list);
         // Discovery's own starting point: the credentials the last range scan tried, else every
-        // SNMP credential. A change made here is not remembered (ADR-179 増分 3 決定 5).
+        // SNMP credential. A change made here is not remembered (ADR-179 Inc.3 decision 5).
         setProbeCredIds(initialCredentialIds(usePrefsStore.getState().discoveryScan, list));
       })
       .catch(() => undefined);
@@ -247,7 +247,7 @@ export function NeighborsTab({ node }: Props) {
   // The address cell's shortcut into the panel: shown only where the panel has something to offer.
   const canSetUp = (n: Neighbor) =>
     canConfig && setupMode(n, lookups) != null && !(neighborKey(n) in added);
-  // Where the button would be, why it is not (ADR-179 増分 9). Only to someone who could press it:
+  // Where the button would be, why it is not (ADR-179 Inc.9). Only to someone who could press it:
   // to anyone else the answer is the permission, which no button is drawn to say (ADR-056).
   const blockedWhy = (n: Neighbor) =>
     canConfig && !(neighborKey(n) in added) ? setupBlockedReason(n, lookups) : null;
@@ -321,7 +321,7 @@ export function NeighborsTab({ node }: Props) {
     },
     {
       // Where a row is acted on, as on every other list: the button on the rows there is something
-      // to set up, and the "is it monitored" filter over all of them (ADR-179 増分 3). The state
+      // to set up, and the "is it monitored" filter over all of them (ADR-179 Inc.3). The state
       // itself is the badge beside the neighbour's name.
       key: 'monitoring',
       header: t('neighbors.colMonitoring'),
@@ -382,8 +382,8 @@ export function NeighborsTab({ node }: Props) {
             <DataTable
               tableId="node.neighbors"
               // An unmonitored address carries a third line, its "Set up monitoring" button
-              // (ADR-179 増分 3); at the fixed 44px it spilled over the next row, which then took
-              // its clicks. Rows without one stay the height they were (ADR-078 増分 5).
+              // (ADR-179 Inc.3); at the fixed 44px it spilled over the next row, which then took
+              // its clicks. Rows without one stay the height they were (ADR-078 Inc.5).
               autoRowHeight
               rows={shownNeighbors}
               columns={columns}
@@ -430,9 +430,9 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   const path = peerNodePath(peer);
   const label = peerLabel(n);
   const secondary = peerSecondary(n, lookups);
-  // Whether this device is monitored, beside its name (ADR-179 増分 3) — matched on the management
+  // Whether this device is monitored, beside its name (ADR-179 Inc.3) — matched on the management
   // address, or for a Meraki device that sends none, on the MAC its organization lists (ADR-180
-  // 増分 3); the badge's explanation says which. No badge where neither matched.
+  // Inc.3); the badge's explanation says which. No badge where neither matched.
   const state = neighborAddressState(n, lookups);
   const byMac = peerMatchedBy(n, lookups) === 'mac';
   const explain = byMac
@@ -446,7 +446,7 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
         {t(`neighbors.peer.badge.${state}`)}
       </span>
     ) : null;
-  // The same address on other nodes (ADR-180 増分 4): kept beside the name even when the name
+  // The same address on other nodes (ADR-180 Inc.4): kept beside the name even when the name
   // picked the peer, because that is what says the address is duplicated. The list is in the
   // opened row as well — a title is hover-only.
   const also = alsoClaimed(peer);
@@ -572,7 +572,7 @@ function Details({
   );
 }
 
-/** The other nodes with the peer's address, each linked and with its link state (ADR-180 増分 4). */
+/** The other nodes with the peer's address, each linked and with its link state (ADR-180 Inc.4). */
 function AlsoClaimedList({ also }: { also: AlsoClaimed }) {
   const { t } = useTranslation('nodes');
   return (
@@ -656,7 +656,7 @@ function NeighborCard({
   );
 }
 
-/** "Monitoring setup" for one unmonitored neighbour (ADR-179 増分 3 決定 2): the way its manager
+/** "Monitoring setup" for one unmonitored neighbour (ADR-179 Inc.3 decision 2): the way its manager
  *  adds it, or Discovery's Detect → Monitor cell over the same `useEndpointSetup` state. */
 function SetupPanel({
   neighbor: n,
@@ -693,7 +693,7 @@ function SetupPanel({
   destination: SetupDestination;
   onDestinationChange: (next: SetupDestination) => void;
   /** Called once drawn, so the tab reads the profiles and credentials this panel picks from —
-   *  whichever row, card button or disclosure drew it (ADR-179 増分 7 決定 3). */
+   *  whichever row, card button or disclosure drew it (ADR-179 Inc.7 decision 3). */
   onShown: () => void;
   setup: ReturnType<typeof useEndpointSetup>;
   apBusy: boolean;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The Neighbors tab when several nodes claim a neighbour's address (ADR-180 増分 4), in a real
+// The Neighbors tab when several nodes claim a neighbour's address (ADR-180 Inc.4), in a real
 // layout engine.
 //
 // Vitest covers the judgement (`alsoClaimed`, `pickedByName` in `neighbors.ts`). What it cannot

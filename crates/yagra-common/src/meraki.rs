@@ -36,14 +36,14 @@ pub const METRIC_MERAKI_UPLINK_LOSS_PCT: &str = "meraki_uplink_loss_pct";
 pub const METRIC_MERAKI_UPLINK_LATENCY_MS: &str = "meraki_uplink_latency_ms";
 /// Stable TSDB metric: per-uplink status — `active` 2, `ready` 1, `not connected` / `connecting` /
 /// a word this build does not know 0, **`failed` −1** ([`MerakiUplinkStatus::gauge`]). Before ADR-164
-/// 決定 24 a failed uplink was stored as 0 as well, so older history cannot tell the two apart.
+/// decision 24 a failed uplink was stored as 0 as well, so older history cannot tell the two apart.
 pub const METRIC_MERAKI_UPLINK_STATUS: &str = "meraki_uplink_status";
 /// Stable TSDB metric: per-uplink `1` when the Dashboard reports the uplink `failed`, else `0` — what
-/// the seeded Meraki rule alerts on (ADR-164 決定 24). Emitted for every uplink status row, healthy
+/// the seeded Meraki rule alerts on (ADR-164 decision 24). Emitted for every uplink status row, healthy
 /// ones included, so an open alert always has a reading to close on.
 pub const METRIC_MERAKI_UPLINK_FAILED: &str = "meraki_uplink_failed";
 /// Stable TSDB metric: per-uplink average send rate over the traffic collect's window, bits per
-/// second — an MX appliance's WAN uplinks only (`appliance/uplinks/usage/byNetwork`, ADR-164 決定
+/// second — an MX appliance's WAN uplinks only (`appliance/uplinks/usage/byNetwork`, ADR-164 decision
 /// 23).
 ///
 /// **ADR-012 exception:** Meraki returns *pre-aggregated windowed usage* (bytes over the window),
@@ -53,7 +53,7 @@ pub const METRIC_MERAKI_UPLINK_FAILED: &str = "meraki_uplink_failed";
 pub const METRIC_MERAKI_UPLINK_SENT_BPS: &str = "meraki_uplink_sent_bps";
 /// Stable TSDB metric: per-uplink average receive rate over the window, bits per second (see above).
 pub const METRIC_MERAKI_UPLINK_RECV_BPS: &str = "meraki_uplink_recv_bps";
-/// Stable TSDB metric (ADR-164 決定 25): how many of an MX's Auto VPN **hub** peers it reaches. Node
+/// Stable TSDB metric (ADR-164 decision 25): how many of an MX's Auto VPN **hub** peers it reaches. Node
 /// level, on the MX the VPN row names, and only while that MX is up — a down device's row is stale.
 /// A peer hub that is itself down is not counted either way: it raises its own alert, and counting it
 /// would put every spoke of a dead hub into warning at once.
@@ -69,7 +69,7 @@ pub const METRIC_MERAKI_VPN_HUBS_UNREACHABLE_PCT: &str = "meraki_vpn_hubs_unreac
 pub const METRIC_MERAKI_VPN_SPOKES_UNREACHABLE: &str = "meraki_vpn_spokes_unreachable";
 
 /// The per-uplink metrics — the ones whose row key is a synthetic uplink index (WAN1 = 1, WAN2 = 2,
-/// cellular = 3) and whose rows are named after the uplink (ADR-164 決定 24).
+/// cellular = 3) and whose rows are named after the uplink (ADR-164 decision 24).
 ///
 /// 🚨 **Not every Meraki sample with a row key is an uplink's.** A switch port's samples carry the
 /// port's own number (ADR-167), so naming "every sample with a row key" after the uplinks called
@@ -83,7 +83,7 @@ pub const MERAKI_UPLINK_ROW_METRICS: [&str; 6] = [
     METRIC_MERAKI_UPLINK_RECV_BPS,
 ];
 
-/// Stable TSDB metric (ADR-167 決定 6): a Meraki switch port's average **receive** rate over one
+/// Stable TSDB metric (ADR-167 decision 6): a Meraki switch port's average **receive** rate over one
 /// five-minute bucket of `switch/ports/usage/history/byDevice/byInterval`, bits per second — the
 /// Dashboard's `downstream`. Measured on a real organization: an uplink port's downstream was about
 /// twice its upstream, and every access port's the other way round.
@@ -102,12 +102,12 @@ pub const METRIC_MERAKI_PORT_OUT_BPS: &str = "meraki_port_out_bps";
 /// The Meraki metrics that publish **one series per switch port**, keyed by the port's ifindex
 /// ([`switch_port_ifindex`]). No collection item carries them — the Dashboard is not walked — so the
 /// set of per-interface metric names (`yagra-core`'s `per_interface_metric_names`) adds this list
-/// rather than learning it from a template (ADR-167 決定 8). A port's status and speed use the SNMP
+/// rather than learning it from a template (ADR-167 decision 8). A port's status and speed use the SNMP
 /// names (`if_oper_status`, `if_admin_status`, `if_high_speed`), which the built-in catalog already
 /// declares.
 pub const MERAKI_PORT_METRICS: [&str; 2] = [METRIC_MERAKI_PORT_IN_BPS, METRIC_MERAKI_PORT_OUT_BPS];
 
-/// The radio metrics only a Meraki MR publishes, one series per radio slot (ADR-168 決定 2). The
+/// The radio metrics only a Meraki MR publishes, one series per radio slot (ADR-168 decision 2). The
 /// other radio readings an MR sends — utilization, channel, transmit power — share their names with
 /// the controller-walked access points, and the built-in radio template already declares those; this
 /// one no template can declare, for the reason [`MERAKI_PORT_METRICS`] gives.
@@ -122,7 +122,7 @@ pub fn meraki_interface_metrics() -> impl Iterator<Item = &'static str> {
     MERAKI_PORT_METRICS.into_iter().chain(MERAKI_RADIO_METRICS)
 }
 
-/// One Dashboard read a collect makes (ADR-164 決定 25). A tier may make several — the uplink tier
+/// One Dashboard read a collect makes (ADR-164 decision 25). A tier may make several — the uplink tier
 /// reads loss and latency, the uplinks' statuses and the Auto VPN statuses — and when one of them fails
 /// while the others answer, this names which, on the organization's row and in the API.
 ///
@@ -137,15 +137,15 @@ pub enum MerakiListing {
     UplinksLossAndLatency,
     /// `appliance/uplink/statuses` — the uplink tier's second read.
     ApplianceUplinkStatuses,
-    /// `appliance/vpn/statuses` — the uplink tier's third read (決定 25).
+    /// `appliance/vpn/statuses` — the uplink tier's third read (decision 25).
     ApplianceVpnStatuses,
-    /// `appliance/uplinks/usage/byNetwork` — the traffic tier (決定 23).
+    /// `appliance/uplinks/usage/byNetwork` — the traffic tier (decision 23).
     ApplianceUplinksUsage,
     /// `switch/ports/statuses/bySwitch` — the switch-port tier's first read (ADR-167).
     SwitchPortStatuses,
     /// `switch/ports/usage/history/byDevice/byInterval` — the switch-port tier's second read.
     SwitchPortUsage,
-    /// `switch/ports/bySwitch` — the ports' configured names, read once an hour (ADR-167 決定 1).
+    /// `switch/ports/bySwitch` — the ports' configured names, read once an hour (ADR-167 decision 1).
     SwitchPortConfig,
     /// `switch/ports/topology/discovery/byDevice` — each port's LLDP/CDP neighbours, read at the
     /// deployment's neighbour interval (ADR-181).
@@ -157,7 +157,7 @@ pub enum MerakiListing {
     /// channel utilization over the last five minutes.
     WirelessChannelUtilization,
     /// `wireless/ssids/statuses/byDevice` — the SSIDs and radio settings, read every twenty minutes
-    /// (ADR-168 決定 1).
+    /// (ADR-168 decision 1).
     WirelessSsidStatuses,
 }
 
@@ -204,7 +204,7 @@ impl MerakiListing {
     }
 }
 
-/// The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from
+/// The role an MX is **configured** to hold in its warm-spare pair (ADR-164 decision 26), from
 /// `appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.
 ///
 /// ⚠️ Configured, not current: measured on a real organization, a primary that was down still said
@@ -263,7 +263,7 @@ pub enum MerakiTier {
     /// whether its switch is up.
     SwitchPorts,
     /// MX WAN uplink usage — sent and received per uplink over the tier's interval (heavier, low
-    /// cadence). The switches and access points have no reading here (ADR-164 決定 23).
+    /// cadence). The switches and access points have no reading here (ADR-164 decision 23).
     Traffic,
     /// Inventory reconciliation: networks + devices (very low cadence).
     Inventory,
@@ -327,7 +327,7 @@ pub fn uplink_name(ifindex: u32) -> Option<&'static str> {
     }
 }
 
-/// A WAN uplink's status word from `appliance/uplink/statuses` (ADR-164 決定 24).
+/// A WAN uplink's status word from `appliance/uplink/statuses` (ADR-164 decision 24).
 ///
 /// `failed` and `not connected` used to be one number. Measured on a real organization (2026-09-22):
 /// on the online appliances every `not connected` uplink (284) had no address at all — a port with no
@@ -389,7 +389,7 @@ impl MerakiUplinkStatus {
     }
 }
 
-/// The ifindex a Meraki switch port is stored under (ADR-167 決定 4) — the row key of its series,
+/// The ifindex a Meraki switch port is stored under (ADR-167 decision 4) — the row key of its series,
 /// its `interfaces` row, its threshold overrides and its alert history, so **a value handed out here
 /// can never be changed**.
 ///
@@ -424,7 +424,7 @@ pub fn switch_port_ifindex(port_id: &str) -> u32 {
     FOLD_BASE + hash % (FOLD_BASE - 1)
 }
 
-/// A Meraki port's name as the Dashboard shows it (ADR-181 増分 4 決定 3): a switch port's plain
+/// A Meraki port's name as the Dashboard shows it (ADR-181 Inc.4 decision 3): a switch port's plain
 /// decimal id (`"7"`) and an MX's port key (`"port3"`) both read `Port 7` / `Port 3`, the way an
 /// SNMP switch's interface carries its own name. Anything else — a module port such as
 /// `1_MA-MOD-8X10G_1`, a stack member's `2_10` — is returned as it came.
@@ -444,7 +444,7 @@ pub fn meraki_port_name(port_id: &str) -> String {
     }
 }
 
-/// A switch port's link-state word from `switch/ports/statuses/bySwitch` (ADR-167 決定 5), as the
+/// A switch port's link-state word from `switch/ports/statuses/bySwitch` (ADR-167 decision 5), as the
 /// value `if_oper_status` takes on an SNMP switch: `Connected` is up (1), `Disconnected` down (2).
 /// `None` for a word this build does not know — it says nothing rather than something invented.
 #[must_use]
@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(MerakiTier::from_token("nonsense"), None);
     }
 
-    /// ADR-167 決定 4. These values are row keys in the TSDB, the `interfaces` table and the alert
+    /// ADR-167 decision 4. These values are row keys in the TSDB, the `interfaces` table and the alert
     /// history, so they are pinned: a change here moves every folded port to a new row.
     #[test]
     fn a_switch_port_id_is_its_own_number_or_a_pinned_folded_one() {
@@ -697,7 +697,7 @@ mod tests {
             assert_eq!(s.gauge(), gauge, "{word:?}");
             assert_eq!(s.failed(), failed, "{word:?}");
         }
-        // The one distinction this exists for (ADR-164 決定 24).
+        // The one distinction this exists for (ADR-164 decision 24).
         assert_ne!(
             MerakiUplinkStatus::from_word("failed").gauge(),
             MerakiUplinkStatus::from_word("not connected").gauge()

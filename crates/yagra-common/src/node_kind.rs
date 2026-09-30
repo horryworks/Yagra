@@ -30,7 +30,7 @@ pub enum NodeKind {
     /// A wireless access point, answered for by the controller that manages it (ADR-064): it emits
     /// **no** per-node job — the controller's AP walk is what reports it.
     ///
-    /// First in precedence by user decision (ADR-064 改訂 R1): an AP is an AP whichever source
+    /// First in precedence by user decision (ADR-064 revision R1): an AP is an AP whichever source
     /// reports it, so when a Meraki MR later also carries a `wireless_aps` row it resolves here.
     /// Today no Meraki node has one, so this order changes nothing any existing node resolves to.
     WirelessAp,
@@ -206,7 +206,7 @@ mod tests {
             dns: true,
         };
         assert_eq!(NodeKind::resolve(all), NodeKind::WirelessAp);
-        // A Meraki MR that later gains an AP row is an AP (ADR-064 改訂 R1).
+        // A Meraki MR that later gains an AP row is an AP (ADR-064 revision R1).
         let all = NodeRows {
             wireless_ap: false,
             ..all

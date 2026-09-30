@@ -140,7 +140,7 @@ pub struct AlertManager {
     /// per observation to size the flap window and, for a check read once a tick, the dwell.
     intervals: PollIntervals,
     /// When each node some controller reports — a wireless AP — was last reported, and by whom
-    /// (ADR-064 増分 G, [`super::reported`]). What turns a committed `ok` nobody is confirming any
+    /// (ADR-064 Inc.G, [`super::reported`]). What turns a committed `ok` nobody is confirming any
     /// more into `unknown` on every display surface. Never read by the state machine.
     reports: Mutex<ReportLedger>,
 }
@@ -458,7 +458,7 @@ impl AlertManager {
     /// node's display state.
     ///
     /// ⚠️ A node some controller reports whose last report is stale reads `unknown` rather than a
-    /// committed `ok` (ADR-064 増分 G) — see [`Self::unconfirmed_ok_is_unknown`]. That holds for all
+    /// committed `ok` (ADR-064 Inc.G) — see [`Self::unconfirmed_ok_is_unknown`]. That holds for all
     /// three accessors, which is what keeps the list, the tree, the tallies and MCP in agreement.
     #[must_use]
     pub fn node_states(&self) -> HashMap<NodeId, NodeState> {
@@ -532,7 +532,7 @@ impl AlertManager {
     }
 
     /// [`Self::node_state`] as of `now_ms` — the clock the report watch ticks on, so the frame it
-    /// broadcasts says what the report is at that tick (ADR-064 増分 G).
+    /// broadcasts says what the report is at that tick (ADR-064 Inc.G).
     fn node_state_at(&self, node: NodeId, now_ms: i64) -> Option<NodeState> {
         let mut base = self
             .live
@@ -567,7 +567,7 @@ impl AlertManager {
         counts
     }
 
-    /// ADR-064 増分 G (G3): a committed `ok` that nobody is confirming any more reads `unknown`.
+    /// ADR-064 Inc.G (G3): a committed `ok` that nobody is confirming any more reads `unknown`.
     ///
     /// Only for a node some controller reports ([`super::reported`]) whose last report is past its
     /// window. `unreachable` and `maintenance` are left as committed — the first is the last thing
@@ -624,7 +624,7 @@ impl AlertManager {
         })
     }
 
-    /// `by` — a wireless controller — just reported `node`, one of its APs (ADR-064 増分 G).
+    /// `by` — a wireless controller — just reported `node`, one of its APs (ADR-064 Inc.G).
     ///
     /// Called by the live consumer for every result the AP fan-out produced, and by nothing else:
     /// a replayed result is hours old and says nothing about now. Touches no check state.
@@ -649,7 +649,7 @@ impl AlertManager {
     }
 
     /// When `node` was last reported, if it is a reported node whose report is no longer current —
-    /// what `NodeStatus.collection_fault` says for an AP (ADR-064 増分 G, G8). `None` for every
+    /// what `NodeStatus.collection_fault` says for an AP (ADR-064 Inc.G, G8). `None` for every
     /// node nobody reports, and for one whose report is current.
     #[must_use]
     pub fn unreported_since(&self, node: NodeId) -> Option<i64> {
@@ -735,7 +735,7 @@ impl AlertManager {
     /// `no_reading` is what [`crate::no_reading_filter::NoReadingHandle::admit`] removed. Each one is
     /// resolved exactly like a sample, and then observed only where it is evidence: on a table row
     /// that already holds a state, as `Ok` through the rule's dwell. 🚨 **A row that is merely absent
-    /// from the result is not evidence and closes nothing** (ADR-156 決定 3) — a poller defect, a
+    /// from the result is not evidence and closes nothing** (ADR-156 decision 3) — a poller defect, a
     /// truncated walk or a changed SNMP view all make a row absent, and closing on absence would take
     /// that fault off the screen.
     pub fn observe_with_no_reading(
@@ -822,7 +822,7 @@ impl AlertManager {
                 .resolve(node, None, None, LIVENESS)
                 .map(|eff| eff.dwell_samples);
             // The placeholders resolve too, in the same memo: a row that holds a state needs its
-            // rule's dwell to recover through (ADR-156 決定 4).
+            // rule's dwell to recover through (ADR-156 decision 4).
             for sample in result.samples.iter().chain(no_reading) {
                 if config.is_per_interface(&sample.metric)
                     && !per_if_metrics.contains(&sample.metric.as_str())
@@ -926,7 +926,7 @@ impl AlertManager {
                 continue;
             };
             match (key.1, sample.ifindex) {
-                // A placeholder is evidence only about a table row (ADR-156 決定 5). A port's check
+                // A placeholder is evidence only about a table row (ADR-156 decision 5). A port's check
                 // and a node-wide fold are left exactly as a missing sample would leave them.
                 (Some(_), _) | (None, None) if reading == Reading::NoReading => {}
                 // One port, one check, one observation (ADR-076).
@@ -1027,7 +1027,7 @@ impl AlertManager {
         let raw = if moment.in_maintenance {
             NodeState::Maintenance
         } else if reading == Reading::NoReading {
-            // The device says this row has nothing to measure (ADR-156 決定 4). Observed as `Ok`
+            // The device says this row has nothing to measure (ADR-156 decision 4). Observed as `Ok`
             // rather than resolved on the spot, the same shape as the counter arm below: a sensor
             // that answers 85 and its placeholder on alternate polls must still reach its dwell,
             // and an open alert recovers through the ordinary path with its notification.
@@ -1286,7 +1286,7 @@ impl AlertManager {
                         down.remove(&node);
                     }
                 }
-                // 🚨 ADR-160 決定 5: **entering maintenance must not re-attribute anything.** A down
+                // 🚨 ADR-160 decision 5: **entering maintenance must not re-attribute anything.** A down
                 // node leaves the down-set when its window opens, and the re-sweep below would then
                 // take the roll-up marker off its `snmp_up` / `icmp_loss_pct` and emit a `Fire` for
                 // each — pages sent *during* a window whose whole purpose is silence, and then
@@ -1314,7 +1314,7 @@ impl AlertManager {
         // external tool its dedup key reached. Resolving here rather than at config-reload time
         // keeps it to one code path: the poll loop is already visiting every node.
         if !alerting {
-            // 🚨 ADR-160 決定 6: **"no rule" and "no config yet" are not the same thing.** Before the
+            // 🚨 ADR-160 decision 6: **"no rule" and "no config yet" are not the same thing.** Before the
             // first snapshot loads, `AlertConfig::default` resolves nothing, so every restored
             // `__liveness__` alert looked like one whose rule had been deleted and was closed on the
             // first poll after a restart. Nothing re-opened it either: by then the check had already
@@ -1567,7 +1567,7 @@ impl AlertManager {
 
     /// Whether any node of Meraki organization `org` sits in one of `visible` — the group-scope
     /// question for that organization's collect alert (`api/scope.rs::allows_subject`, ADR-164
-    /// 決定 18).
+    /// decision 18).
     ///
     /// Fail-closed the way [`Self::pool_is_in_any_group`] is: an organization the snapshot has
     /// never seen, or one whose nodes are all ungrouped, answers `false`.
@@ -1608,7 +1608,7 @@ impl AlertManager {
 
     /// The open collect alert of the Meraki organization `node` belongs to, if it has one: the
     /// organization and the alert. What `node_status` reads to say that a node's state is the
-    /// last one collected rather than a current one (決定 18).
+    /// last one collected rather than a current one (decision 18).
     #[must_use]
     pub fn meraki_collect_fault_of(&self, node: NodeId) -> Option<(Uuid, Alert)> {
         let org = *self
@@ -1754,7 +1754,7 @@ impl AlertManager {
     /// [`Self::node_liveness`] is the question, read through
     /// [`crate::interface_util::may_observe_ports`] — **never [`Self::node_state`]**, which folds in
     /// the very alert this call is about to raise and therefore freezes the evaluator on its own
-    /// output (ADR-076 増分 7). A maintenance window is let through rather than frozen, because the
+    /// output (ADR-076 Inc.7). A maintenance window is let through rather than frozen, because the
     /// substitution below is exactly what a window is supposed to do to an open port alert.
     ///
     /// Maintenance is handled here rather than by the caller, because `observe` handles it here too
@@ -1998,7 +1998,7 @@ impl AlertManager {
     }
 
     /// The rules that reach `(node, ifindex)`, each flagged with whether it is in force
-    /// (ADR-076 決定 11).
+    /// (ADR-076 decision 11).
     ///
     /// The **rules** come from the caller — `GET /nodes/{id}/interfaces/{ifindex}/thresholds`
     /// reads them straight from PostgreSQL — while the **node metadata** comes from the snapshot
@@ -2024,7 +2024,7 @@ impl AlertManager {
     /// rolled into it. `None` when the engine has never observed the node, which every caller must
     /// treat as "we have no opinion", not as "fine".
     ///
-    /// 🚨 **This is not [`Self::node_state`], and confusing the two is the bug ADR-076 増分 7 had to
+    /// 🚨 **This is not [`Self::node_state`], and confusing the two is the bug ADR-076 Inc.7 had to
     /// fix.** `node_state` is the *display* roll-up: the worse of liveness and every active alert on
     /// the node. The interface evaluator gated on it, so the instant a port alert fired the node
     /// stopped reading as `Ok` — and the evaluator, which is also the only thing that can ever
@@ -2047,7 +2047,7 @@ impl AlertManager {
     /// is quiet too.
     ///
     /// What the utilisation evaluator asks before it stops tracking a port that left its candidate
-    /// set (ADR-076 増分 8 決定 16). Tracking exists so a busy port's recovery gets observed; once
+    /// set (ADR-076 Inc.8 decision 16). Tracking exists so a busy port's recovery gets observed; once
     /// the recovery has committed, reading the port again on every tick only buys cost, and the
     /// next time it crosses the floor the evaluator tracks it afresh.
     #[must_use]
@@ -2178,7 +2178,7 @@ impl AlertManager {
     /// | **this** | rule gone | **collected, both dimensions** |
     /// | the freshness sweep (`alerts::stale`) | **data gone** | collected + derived node-wide |
     /// | the poll path, as `Ok` through dwell | **the device answered its no-reading placeholder** (ADR-156) | collected table rows |
-    /// | nobody, **deliberately** | a table row stopped arriving while its metric did not | collected table rows (ADR-156 決定 3: absence is also what a monitoring fault looks like; ADR-143's remnant) |
+    /// | nobody, **deliberately** | a table row stopped arriving while its metric did not | collected table rows (ADR-156 decision 3: absence is also what a monitoring fault looks like; ADR-143's remnant) |
     /// | [`Self::forget_deleted_nodes`] | node gone | any node subject |
     /// | `events::engine` | the event rule's own lifecycle | `event:*` |
     /// | `pool_coverage` | the pool recovered | [`Subject::Pool`] |
@@ -2414,7 +2414,7 @@ impl AlertManager {
                     .copied()
                     .collect()
             };
-            // A deleted AP's last report (ADR-064 増分 G). Not derived from `gone`: an AP only seeded
+            // A deleted AP's last report (ADR-064 Inc.G). Not derived from `gone`: an AP only seeded
             // at startup was never observed, so it is in the ledger without being in `live`.
             self.reports
                 .lock()
@@ -2496,7 +2496,7 @@ impl AlertManager {
     }
 
     /// Raise the collect alert for a Meraki organization the Dashboard API is not answering
-    /// (ADR-164 決定 18): one alert for the organization, never one per node.
+    /// (ADR-164 decision 18): one alert for the organization, never one per node.
     ///
     /// `failures` is the run of failed availability collects that raised it, which is what the
     /// breach carries — there is no measured value, and "3 in a row, threshold 3" is the honest
@@ -4535,7 +4535,7 @@ mod tests {
         );
     }
 
-    /// 🚨 The bound the engine keeps itself (ADR-050 決定 12). The refresh loop is what normally
+    /// 🚨 The bound the engine keeps itself (ADR-050 decision 12). The refresh loop is what normally
     /// lifts a pause, and a pause — unlike a window — leaves nothing on screen to notice, so a
     /// wedged refresh must not be able to silence the fleet past the window's own end.
     #[test]
@@ -4618,7 +4618,7 @@ mod tests {
         );
     }
 
-    // ── ADR-160 決定 5: entering a window must not page the alerts it rolls up ───────────────────
+    // ── ADR-160 decision 5: entering a window must not page the alerts it rolls up ───────────────────
 
     #[test]
     fn a_down_node_entering_maintenance_does_not_page_its_rolled_up_alerts() {
@@ -4692,7 +4692,7 @@ mod tests {
         );
     }
 
-    /// The other half of 決定 5, and the reason the fix is two clauses rather than one:
+    /// The other half of decision 5, and the reason the fix is two clauses rather than one:
     /// `Maintenance → Ok` moves nothing in the down-set, so leaving a window has to re-sweep on its
     /// own account. Without it a device that pings again while its SNMP agent stays dead keeps the
     /// marker of an outage that is over and never pages at all.
@@ -4731,7 +4731,7 @@ mod tests {
         );
     }
 
-    // ── ADR-160 決定 6: "no rule" is not "no config yet" ─────────────────────────────────────────
+    // ── ADR-160 decision 6: "no rule" is not "no config yet" ─────────────────────────────────────────
 
     #[test]
     fn a_restored_outage_is_not_closed_before_the_config_loads() {
@@ -5366,7 +5366,7 @@ mod tests {
         assert!(!mgr.pool_is_in_any_group("tokyo", &[]));
     }
 
-    // ── A Meraki organization's collect alert (ADR-164 決定 18) ────────────────────────────────
+    // ── A Meraki organization's collect alert (ADR-164 decision 18) ────────────────────────────────
 
     fn meraki_cfg(org: Uuid, name: &str, group: Option<Uuid>, nodes: &[NodeId]) -> AlertConfig {
         cfg(Vec::new(), HashMap::new()).with_meraki_orgs(HashMap::from([(
@@ -5416,7 +5416,7 @@ mod tests {
         assert!(mgr.resolve_meraki_collect_alert(org).is_none());
     }
 
-    /// What labels a stale node (決定 18): a node whose organization's alert is open has a fault, a
+    /// What labels a stale node (decision 18): a node whose organization's alert is open has a fault, a
     /// node of another organization does not, and neither does anything once the alert is closed.
     #[test]
     fn a_node_is_said_to_be_stale_only_while_its_own_organizations_alert_is_open() {
@@ -5548,7 +5548,7 @@ mod tests {
         );
     }
 
-    /// ADR-076 増分 8 決定 16: a port check is quiet only when it has nothing left to recover — not
+    /// ADR-076 Inc.8 decision 16: a port check is quiet only when it has nothing left to recover — not
     /// while its dwell is counting toward a breach, not while its alert is open, not while it is
     /// counting its way back — and quiet again once the recovery commits.
     #[test]
@@ -5890,7 +5890,7 @@ mod tests {
         }
     }
 
-    /// 🚨 The bug ADR-076 増分 7 fixes, in the smallest form that shows it.
+    /// 🚨 The bug ADR-076 Inc.7 fixes, in the smallest form that shows it.
     ///
     /// Before the fix the last assertion failed. The gate read `node_state` — the display roll-up,
     /// which folds in every active alert on the node — so the instant a port alert fired, the
@@ -6018,7 +6018,7 @@ mod tests {
     /// Written from the deployment. The verification rule was deleted and its warning was still
     /// open three minutes later, because `observe`'s `!alerting` branch only visits checks a poll
     /// result carries and a derived metric is in no poll result. The port dimension had this sweep
-    /// since ADR-076 増分 7; the node dimension shipped without it.
+    /// since ADR-076 Inc.7; the node dimension shipped without it.
     #[test]
     fn the_orphan_sweep_closes_a_node_derived_alert_whose_rule_was_deleted() {
         use yagra_common::{ThresholdBounds, ThresholdRule};
@@ -6831,7 +6831,7 @@ mod row_tests {
         );
     }
 
-    /// ADR-164 決定 24: a Meraki MX's failed WAN uplink alerts on its own row, under its uplink's
+    /// ADR-164 decision 24: a Meraki MX's failed WAN uplink alerts on its own row, under its uplink's
     /// name, through the seeded rule's shape (above 0.5, warning only, dwell 2) — from an
     /// observational result that still has its samples judged, which is how the uplink tier
     /// arrives. The healthy uplink's 0 beside it neither fires nor holds any state, and the alert
@@ -7218,7 +7218,7 @@ mod no_reading_tests {
         assert!(mgr.active_alerts().is_empty());
     }
 
-    /// 🚨 **ADR-156 決定 3, the user's decision.** A row that stops arriving is what a poller defect, a
+    /// 🚨 **ADR-156 decision 3, the user's decision.** A row that stops arriving is what a poller defect, a
     /// truncated walk and a changed SNMP view all look like, so it must keep its alert open however
     /// long it is gone. Only the device answering the placeholder closes it.
     #[test]
@@ -7320,7 +7320,7 @@ mod no_reading_tests {
         assert_eq!(mgr.active_alerts().len(), 1);
     }
 
-    /// ADR-143 決定 6 counts a placeholder row as a per-row observation: the node-wide alert a
+    /// ADR-143 decision 6 counts a placeholder row as a per-row observation: the node-wide alert a
     /// pre-ADR-143 core raised on the 2147483647 maximum is retired by it, as by any row.
     #[test]
     fn the_first_placeholder_row_retires_a_restored_node_wide_alert() {

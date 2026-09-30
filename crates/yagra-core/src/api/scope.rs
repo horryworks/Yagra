@@ -188,7 +188,7 @@ impl NodeScope {
                 yagra_alert::Subject::Pool(p) => alerts.pool_is_in_any_group(p, &s.visible),
                 // An organization's collect alert is shown to whoever can see at least one of its
                 // nodes: those are the nodes whose state has gone stale, and the operator of that
-                // folder is the one reading a stale `ok` (ADR-164 決定 18).
+                // folder is the one reading a stale `ok` (ADR-164 decision 18).
                 yagra_alert::Subject::MerakiOrg(org) => {
                     alerts.meraki_org_is_in_any_group(*org, &s.visible)
                 }
@@ -372,7 +372,7 @@ pub fn ranking_fetch_limit(scope: &NodeScope, limit: usize) -> usize {
 /// The group edges, re-read only when the config generation has advanced (ADR-026).
 ///
 /// The cache lives on the group store (`GroupRepo::cached_edges`), beside the database it was read
-/// from — it used to be a `static` here, shared by every store in the process (ADR-178 決定 7).
+/// from — it used to be a `static` here, shared by every store in the process (ADR-178 decision 7).
 async fn edges(st: &ApiState) -> Result<GroupEdges, ApiError> {
     // Skeleton mode has no group store. A scoped principal therefore resolves to an empty scope
     // and sees nothing, which is the fail-closed direction; an unrestricted one never gets here.

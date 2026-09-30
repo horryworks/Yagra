@@ -128,7 +128,7 @@ test('it writes the state filter the operator can already see, rather than a hid
   await page.goto('/nodes');
   await pressToggle(page);
 
-  // The URL is the whole of the preset's state (ADR-163 決定 5) — there is no preference behind it.
+  // The URL is the whole of the preset's state (ADR-163 decision 5) — there is no preference behind it.
   await expect(page).toHaveURL(/[?&]state=warning%2Ccritical%2Cunreachable/);
   // And the State boxes in the same popover say so too. This is what makes the press explainable:
   // the operator can see WHICH states were chosen, and can take one back out by hand.
@@ -137,7 +137,7 @@ test('it writes the state filter the operator can already see, rather than a hid
     await expect(pop.getByRole('checkbox', { name: s, exact: true }), s).toBeChecked();
   }
   await expect(pop.getByRole('checkbox', { name: 'Ok', exact: true })).not.toBeChecked();
-  // …while the chip row says it once, not twice (ADR-177 決定 3).
+  // …while the chip row says it once, not twice (ADR-177 decision 3).
   await page.keyboard.press('Escape');
   await expect(filterChips(page).locator('.invf-chip')).toHaveCount(1);
   await expect(filterChips(page).getByText('Needs attention', { exact: true })).toHaveCount(1);
@@ -168,7 +168,7 @@ test('"clear all filters" appears with it and switches it off', async ({ page })
   await pressToggle(page);
   await page.keyboard.press('Escape');
   const clear = page.getByRole('button', { name: /clear all filters/i });
-  // No `extraActive` wiring exists for this button (ADR-163 決定 1) — it is counted because it
+  // No `extraActive` wiring exists for this button (ADR-163 decision 1) — it is counted because it
   // writes the `state` column. That is only true while it keeps writing it.
   await expect(clear, 'the tree is narrowed, so the reset has to be on screen').toHaveCount(1);
   await clear.click();
@@ -212,7 +212,7 @@ test('the pane head keeps the filter button inside the pane at the narrowest tre
 });
 
 test('the chip row still leaves the tree room to draw at 1280×360', async ({ page }) => {
-  // ADR-159 決定 11's cap still binds the row under the head, now that it holds chips (ADR-177):
+  // ADR-159 decision 11's cap still binds the row under the head, now that it holds chips (ADR-177):
   // it wraps, is `flex: none` above a `flex: 1` tree, and once left `.ntree-body` at 0px.
   await page.setViewportSize({ width: 1280, height: 360 });
   await page.goto('/nodes');

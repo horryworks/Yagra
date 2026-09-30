@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// "Move these nodes to the folder whose IP range contains their address" (ADR-124 決定 6).
+// "Move these nodes to the folder whose IP range contains their address" (ADR-124 decision 6).
 //
-// **It proposes; a person applies.** ADR-100 決定 2 refused to let a sync write `nodes.group_id`
+// **It proposes; a person applies.** ADR-100 decision 2 refused to let a sync write `nodes.group_id`
 // because an automatic rule and an operator's own moves fight each other last-writer-wins. The
 // writer here is the operator, so the decision does not forbid this — but the hazard has the same
 // shape, so nothing moves until the button is pressed and the operator has seen what would move.
@@ -107,7 +107,7 @@ export function MoveByPrefixModal({
   const apply = async () => {
     setBusy(true);
     setError(null);
-    // One request for every destination, written in one transaction (ADR-172 決定 2). It used to
+    // One request for every destination, written in one transaction (ADR-172 decision 2). It used to
     // be one request per destination, so a tab closed mid-way left some folders moved and the
     // rest not, with no summary shown. Now a failure means nothing moved.
     try {

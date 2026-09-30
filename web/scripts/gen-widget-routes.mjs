@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Generate `src/dashboard/widgetRoutes.json` from the `reads` declarations in `registry.tsx`.
 //
-// WHY THIS EXISTS (ADR-123 決定 6). Core derives the anonymous route allow-list from the widgets on
+// WHY THIS EXISTS (ADR-123 decision 6). Core derives the anonymous route allow-list from the widgets on
 // the public board, so it needs the widget-type → routes table. Writing that table a second time in
 // Rust would be a mirror with no guard, and this repo's own rule is that a fact written in two
 // places ends up written correctly in one (`extensibility.md`). So the TypeScript registry stays

@@ -109,7 +109,7 @@ test.describe('a node-detail tab', () => {
   test('keeps its filter on the next node and after a reload', async ({ page }) => {
     await page.goto(`/nodes?sel=node:${TREE_SIBLING_IDS[0]}`);
     // Pressed rather than arrived at by URL: the tab carries to the next node only once it has been
-    // clicked (ADR-134 決定 2), and the next node is where this test looks.
+    // clicked (ADR-134 decision 2), and the next node is where this test looks.
     await page.getByRole('tab', { name: /^Interfaces/ }).click();
     await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Interfaces/);
 

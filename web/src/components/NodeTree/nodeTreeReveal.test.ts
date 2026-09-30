@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Bringing the selection back into view when narrowing ends (ADR-073 増分 2). Every "scroll" case
+// Bringing the selection back into view when narrowing ends (ADR-073 Inc.2). Every "scroll" case
 // asserts the row it lands on, not only that it scrolls — a reveal one row off passes "it scrolled".
 import { describe, expect, it } from 'vitest';
 import {

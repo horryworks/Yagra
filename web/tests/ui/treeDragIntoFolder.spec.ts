@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Dragging a node INTO a folder that sits below a node (ADR-162 増分 3, ADR-052 Tier1).
+// Dragging a node INTO a folder that sits below a node (ADR-162 Inc.3, ADR-052 Tier1).
 //
-// The layout ADR-162 made possible: inside one folder, `node · folder · node`. ADR-162 増分 2 draws
+// The layout ADR-162 made possible: inside one folder, `node · folder · node`. ADR-162 Inc.2 draws
 // the destination as a real row — the insertion slot — which pushes everything below it down by
-// one row height. "Into this folder" draws no slot (決定 4). So coming down from the node above:
+// one row height. "Into this folder" draws no slot (decision 4). So coming down from the node above:
 //
 //   over the node's lower half  → `after node`  → slot inserted directly ABOVE the folder
 //   pointer reaches the folder  → `inside F`    → slot removed → the folder jumps UP by one row

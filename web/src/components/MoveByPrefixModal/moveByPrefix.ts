@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Reading an IP-range proposal (ADR-124 決定 6): what it means, and how it becomes moves.
+// Reading an IP-range proposal (ADR-124 decision 6): what it means, and how it becomes moves.
 //
 // The server decides *which* folder claims each address — it has to, because a scoped caller is
 // served breadcrumb folders with their prefixes cleared, so the same test done here would miss
@@ -20,7 +20,7 @@ export const EMPTY_REASONS = [
   'noMatch',
   /** Every node that matched was claimed by two or more folders at the same prefix length. */
   'allAmbiguous',
-  /** Every node that matched is already in its folder or beneath it (ADR-176 決定 2). */
+  /** Every node that matched is already in its folder or beneath it (ADR-176 decision 2). */
   'allInPlace',
 ] as const;
 export type EmptyReason = (typeof EMPTY_REASONS)[number];
@@ -92,7 +92,7 @@ export function emptyReason(view: ProposalView): EmptyReason | null {
 
 /**
  * How many proposals this round left for the next one — the ones past what one request may carry
- * (ADR-176 決定 4). The moved nodes are in place afterwards, so asking again returns exactly these.
+ * (ADR-176 decision 4). The moved nodes are in place afterwards, so asking again returns exactly these.
  */
 export function remainingAfterApply(view: ProposalView): number {
   return Math.max(0, view.matchedTotal - view.matched.length);
@@ -108,7 +108,7 @@ export interface Destination {
  * Group the proposals by the folder they would go to, in the order the folders first appear.
  *
  * This is also the request body: `POST /api/v1/nodes/move-by-prefix` takes every destination at
- * once and writes them in one transaction (ADR-172 決定 2). It used to be one `moveNodes` call per
+ * once and writes them in one transaction (ADR-172 decision 2). It used to be one `moveNodes` call per
  * destination, which a closed tab could stop halfway.
  */
 export function byDestination(view: Pick<ProposalView, 'matched'>): Destination[] {

@@ -409,7 +409,7 @@ mod tests {
         // The cut lands on a byte boundary, so the capture must survive a split character —
         // discarding the whole body over its last byte would make a rule undecidable at random.
         let mut buf = Vec::new();
-        assert!(fill_capped(&mut buf, "ok日".as_bytes(), 3)); // "ok" + the first byte of 日
+        assert!(fill_capped(&mut buf, "ok日".as_bytes(), 3)); // "ok" + the first byte of a three-byte character
         let text = String::from_utf8_lossy(&buf);
         assert!(
             text.starts_with("ok"),

@@ -13,6 +13,8 @@ pub mod arp;
 pub mod classification;
 pub mod clock;
 pub mod collection;
+#[cfg(test)]
+mod comment_language;
 pub mod dns_check;
 pub mod env;
 pub mod host;

@@ -88,7 +88,7 @@ pub struct MerakiOrg {
     pub target_rps: f64,
     pub group_id: Option<Uuid>,
     pub enabled: bool,
-    /// When the last **successful** inventory sync ran. A failure never moves it (ADR-164 決定 3).
+    /// When the last **successful** inventory sync ran. A failure never moves it (ADR-164 decision 3).
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     /// `None` until a sync has run: "has not synced yet" is not "failed".
     pub last_sync_ok: Option<bool>,
@@ -106,17 +106,17 @@ pub struct MerakiOrg {
     /// How many devices that cap left out on the last sync.
     pub devices_over_cap: u32,
     /// The collect tiers that are failing right now, as the health loop last wrote them
-    /// (migration 0127, ADR-164 決定 18). Empty means none is *known* to be failing.
+    /// (migration 0127, ADR-164 decision 18). Empty means none is *known* to be failing.
     pub collect_failures: Vec<crate::meraki_health::TierFailure>,
-    /// When "Sync now" asked for a whole-organization read that has not ended yet (ADR-164 決定 32,
+    /// When "Sync now" asked for a whole-organization read that has not ended yet (ADR-164 decision 32,
     /// migration 0133). The leader's sync loop runs it once the slow lane is free.
     pub full_sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// The whole-organization read in flight, if one is (決定 30・32): when it began, how many
+    /// The whole-organization read in flight, if one is (decision 30 and 32): when it began, how many
     /// networks' LAN sides it reads, and how many it has tried so far.
     pub full_sync: Option<FullSyncProgress>,
 }
 
-/// How far a whole-organization read has got (ADR-164 決定 32) — what the page shows while it runs.
+/// How far a whole-organization read has got (ADR-164 decision 32) — what the page shows while it runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FullSyncProgress {
     pub started_at: chrono::DateTime<chrono::Utc>,
@@ -192,7 +192,7 @@ impl MerakiOrg {
     /// ADR-169). So availability goes whenever it is due, and while something stops every collect
     /// before a job is sent — a key that cannot be opened, a read of this core's own database that
     /// failed — the failure is counted against availability on every cadence, and availability is
-    /// the only tier that raises (ADR-164 決定 18).
+    /// the only tier that raises (ADR-164 decision 18).
     /// `PUT …/cadence` stores `enabled_tiers` in the caller's order verbatim and validates only
     /// membership, so an external client sending `["uplink", "availability"]` used to silence the
     /// one alert that says the organization is not being collected at all. Sorting here is what
@@ -206,7 +206,7 @@ impl MerakiOrg {
             .collect()
     }
 
-    /// The request rate one of this organization's two collect lanes paces at (ADR-169 決定 4):
+    /// The request rate one of this organization's two collect lanes paces at (ADR-169 decision 4):
     /// half of `target_rps`, which stays **the organization's total** — the Dashboard's limit is
     /// per organization, and the two lanes can be asking at the same moment.
     ///
@@ -215,7 +215,7 @@ impl MerakiOrg {
     /// setting — up to twice the floor more than a setting near zero. The inventory sync paces at
     /// this too, in the slow lane — except the LAN reads of an organization that has no node yet,
     /// which take the whole of `target_rps`: nothing is collected for it, so the fast lane is idle
-    /// (ADR-164 決定 30, `meraki_sync.rs`).
+    /// (ADR-164 decision 30, `meraki_sync.rs`).
     #[must_use]
     pub fn lane_rps(&self) -> f64 {
         (self.target_rps / 2.0).max(yagra_transport::MERAKI_MIN_RPS)
@@ -243,9 +243,9 @@ pub struct MerakiCadence {
     pub uplink_secs: i32,
     pub traffic_secs: i32,
     pub inventory_secs: i32,
-    /// `None` keeps the stored value (ADR-167 決定 12).
+    /// `None` keeps the stored value (ADR-167 decision 12).
     pub switch_ports_secs: Option<i32>,
-    /// `None` keeps the stored value (ADR-168 決定 10).
+    /// `None` keeps the stored value (ADR-168 decision 10).
     pub wireless_secs: Option<i32>,
     pub enabled_tiers: Vec<String>,
     pub target_rps: f64,
@@ -256,10 +256,10 @@ pub struct MerakiCadence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SlowReads {
     /// A switch-port collect also reads the ports' configured names ([`port_names_due`], ADR-167
-    /// 決定 1).
+    /// decision 1).
     pub port_names: bool,
     /// A wireless collect that reads every access point's SSIDs and radio settings
-    /// ([`ssid_statuses_due`], ADR-168 決定 1) — since ADR-169 決定 2 **instead of** a round's
+    /// ([`ssid_statuses_due`], ADR-168 decision 1) — since ADR-169 decision 2 **instead of** a round's
     /// clients and utilization: the SSID read is a job of its own, in the slow lane.
     pub ssid_statuses: bool,
     /// A switch-port collect also reads each port's LLDP/CDP neighbours ([`neighbors_due`],
@@ -292,7 +292,7 @@ pub fn build_collect_check(
         timeout_ms: DEFAULT_COLLECT_TIMEOUT_MS,
         port_names: slow.port_names,
         ssid_statuses: slow.ssid_statuses,
-        // Every SSID read is a job of its own since ADR-169 決定 2: no client counts and no
+        // Every SSID read is a job of its own since ADR-169 decision 2: no client counts and no
         // utilization between two wireless rounds.
         ssid_only: tier == MerakiTier::Wireless && slow.ssid_statuses,
         neighbors: tier == MerakiTier::SwitchPorts && slow.neighbors,
@@ -304,13 +304,13 @@ pub fn build_collect_check(
 /// tick, since every organization's collect goes to the same pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PoolCaps {
-    /// `CAP_MERAKI_SWITCH_PORTS` (ADR-167 決定 9).
+    /// `CAP_MERAKI_SWITCH_PORTS` (ADR-167 decision 9).
     pub switch_ports: bool,
-    /// `CAP_MERAKI_WIRELESS` (ADR-168 決定 7).
+    /// `CAP_MERAKI_WIRELESS` (ADR-168 decision 7).
     pub wireless: bool,
 }
 
-/// Whether the pool a collect would go to can run `tier` at all (ADR-167 決定 9, ADR-168 決定 7).
+/// Whether the pool a collect would go to can run `tier` at all (ADR-167 decision 9, ADR-168 decision 7).
 ///
 /// A poller from before a tier cannot decode its job, drops it, and the lane that job took then
 /// stays taken for the whole lease (ADR-169) — so a tier the pool cannot run is not offered, and not
@@ -373,7 +373,7 @@ impl MerakiLane {
     }
 }
 
-/// How often a switch-port collect also reads the ports' configured names (ADR-167 決定 1). The
+/// How often a switch-port collect also reads the ports' configured names (ADR-167 decision 1). The
 /// listing took 84 s for 854 switches on a real organization — longer than the rest of the collect —
 /// and a port's name is not a reading.
 pub const PORT_NAMES_EVERY: Duration = Duration::from_secs(3600);
@@ -386,7 +386,7 @@ pub fn port_names_due(last: Option<Instant>, now: Instant) -> bool {
 }
 
 /// How often a wireless collect also reads every access point's SSIDs and radio settings (ADR-168
-/// 決定 1). The listing took 78 s for 1,710 access points on a real organization and barely changes,
+/// decision 1). The listing took 78 s for 1,710 access points on a real organization and barely changes,
 /// so not on every collect. But what it answers is **drawn**: the SSID count and a radio's channel
 /// and power are read back as a latest value, which looks back thirty minutes
 /// (`store.rs::latest_query`). An hourly read would leave them blank for half of every hour; twenty
@@ -400,7 +400,7 @@ pub fn ssid_statuses_due(last: Option<Instant>, now: Instant) -> bool {
     due_every(last, now, SSID_STATUSES_EVERY)
 }
 
-/// Whether this switch-port collect should read the ports' LLDP/CDP neighbours too (ADR-181 決定 2):
+/// Whether this switch-port collect should read the ports' LLDP/CDP neighbours too (ADR-181 decision 2):
 /// never while neighbour discovery is off (`every` is `None`), otherwise the deployment's
 /// neighbour interval — the one an SNMP node's neighbour walk runs at — has passed, or they were
 /// never read in this process.
@@ -423,8 +423,8 @@ pub enum NoCollect {
     Unreadable,
 }
 
-/// The networks a collect for one organization reports on — or why none is sent (ADR-164 決定 16).
-/// The poller asks the whole organization and keeps these networks' rows (決定 22).
+/// The networks a collect for one organization reports on — or why none is sent (ADR-164 decision 16).
+/// The poller asks the whole organization and keeps these networks' rows (decision 22).
 ///
 /// 🚨 **An empty list must never reach the poller.** On the bus an empty `network_ids` means
 /// "every network" (`yagra_bus::MerakiCollectCheck`), and a poller from before this change still
@@ -498,7 +498,7 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// share the job's id); a lease deadline is the backstop if a result never arrives (poller crash),
 /// so a lane can't wedge forever. The inventory sync takes a lane too (`meraki_sync.rs`).
 ///
-/// Since ADR-164 決定 18 it also knows **which job, and which tier, holds the flight**, for two
+/// Since ADR-164 decision 18 it also knows **which job, and which tier, holds the flight**, for two
 /// reasons:
 ///
 /// - 🚨 **A result may only release the flight its own job took.** The earlier version kept a
@@ -519,7 +519,7 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 pub struct MerakiInflight {
     flights: Mutex<HashMap<(Uuid, MerakiLane), Flight>>, // (org, lane) → who holds it
     unanswered: Mutex<Vec<(Uuid, MerakiTier)>>,
-    /// How each organization's collects have been ending (決定 18).
+    /// How each organization's collects have been ending (decision 18).
     pub health: crate::meraki_health::MerakiCollectHealth,
 }
 
@@ -539,7 +539,7 @@ impl MerakiInflight {
 
     /// Try to mark `org`'s `lane` in flight for the inventory sync's `job_id`. Returns `false` if
     /// that lane is already held (and its lease hasn't expired) — the caller then tries another or
-    /// skips this org. Which lanes a sync may take is `meraki_sync`'s to say (ADR-169 決定 1: the
+    /// skips this org. Which lanes a sync may take is `meraki_sync`'s to say (ADR-169 decision 1: the
     /// periodic one the slow lane only, "Sync now" either).
     pub fn acquire_sync(
         &self,
@@ -600,7 +600,7 @@ impl MerakiInflight {
     }
 
     /// Move the deadline of the lane `job_id` holds to `now + lease`. A sync takes its lane before it
-    /// knows how much it has to read, and a whole-organization read (ADR-164 決定 30) runs for
+    /// knows how much it has to read, and a whole-organization read (ADR-164 decision 30) runs for
     /// minutes: without this its lease runs out mid-read and a collect starts beside it. Returns
     /// whether `job_id` still held a lane — `false` once its lease ran out and another took it.
     pub fn extend(&self, job_id: Uuid, lease: Duration, now: Instant) -> bool {
@@ -678,7 +678,7 @@ pub struct MerakiImportOutcome {
     pub imported: u32,
     pub filed: MerakiFiled,
     /// Serials skipped because a node is already bound to them **under another organization** —
-    /// a device Meraki moved between organizations (ADR-164 増分 18). A serial is one node
+    /// a device Meraki moved between organizations (ADR-164 Inc.18). A serial is one node
     /// deployment-wide, so this organization cannot import it; counted and logged rather than
     /// skipped in silence, which left it "New" here, holding a seat under the cap, for good.
     pub bound_elsewhere: u32,
@@ -788,8 +788,8 @@ impl MerakiOrgRepo {
     /// Update per-tier cadence, enabled tiers, and the rate budget. Returns whether it exists.
     ///
     /// A `switch_ports_secs` or `wireless_secs` of `None` leaves the stored one as it is: a client
-    /// written before that tier existed does not send it, and must not reset it (ADR-167 決定 12,
-    /// ADR-168 決定 10).
+    /// written before that tier existed does not send it, and must not reset it (ADR-167 decision 12,
+    /// ADR-168 decision 10).
     pub async fn update_cadence(&self, id: Uuid, c: &MerakiCadence) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE meraki_orgs SET availability_secs = $2, uplink_secs = $3, traffic_secs = $4, \
@@ -846,7 +846,7 @@ impl MerakiOrgRepo {
         Ok(())
     }
 
-    // ── A whole-organization read (ADR-164 決定 30〜32, migration 0133) ─────────────────────────
+    // ── A whole-organization read (ADR-164 decision 30–32, migration 0133) ─────────────────────────
 
     /// "Sync now": ask for a whole-organization read, which the leader's sync loop runs once the
     /// organization's slow lane is free. Returns whether the organization exists.
@@ -955,7 +955,7 @@ impl MerakiOrgRepo {
     }
 
     /// Write back how many devices the cap left out on this sync. Returns how many rows changed —
-    /// zero on the ordinary sync, where the number is what it already was (ADR-164 決定 4: a sync
+    /// zero on the ordinary sync, where the number is what it already was (ADR-164 decision 4: a sync
     /// that finds nothing changed writes nothing).
     pub async fn record_over_cap(&self, id: Uuid, over: u32) -> anyhow::Result<u64> {
         let res = sqlx::query(
@@ -987,7 +987,7 @@ impl MerakiOrgRepo {
             .execute(&mut *tx)
             .await?;
         // The organization's folder and everything beneath it — network folders, any folder an
-        // operator made inside one, and any node filed there (ADR-174 決定 5). This used to delete
+        // operator made inside one, and any node filed there (ADR-174 decision 5). This used to delete
         // the root and its direct children only, so a folder two levels down fell to the top.
         crate::groups::delete_subtree(&mut tx, group).await?;
         tx.commit().await?;
@@ -1002,7 +1002,7 @@ impl MerakiOrgRepo {
     /// The `WHERE` on the conflict arm is what makes an unchanged network a no-op rather than an
     /// update to the same values — this runs every five minutes, and rewriting every row each time
     /// (which the import wizard's own upsert did, to bump `last_seen_at`) is thousands of dead
-    /// tuples a day for a table that changes a few times a year (ADR-164 決定 4).
+    /// tuples a day for a table that changes a few times a year (ADR-164 decision 4).
     ///
     /// `watch_new` is the flag a network **seen for the first time** is stored with. It is the
     /// organization's `import_devices`: with automatic import on, a new site is watched from the
@@ -1042,7 +1042,7 @@ impl MerakiOrgRepo {
         Ok(res.rows_affected())
     }
 
-    /// What each of the org's networks last said about its MX's LAN side (ADR-164 決定 28), keyed by
+    /// What each of the org's networks last said about its MX's LAN side (ADR-164 decision 28), keyed by
     /// network id. A network never read is absent — which is different from one read and holding no
     /// LAN, whose list is empty.
     pub async fn network_lans(
@@ -1074,7 +1074,7 @@ impl MerakiOrgRepo {
             .collect()
     }
 
-    /// Record the LAN sides this sync read (ADR-164 決定 28): each network's addresses, in the order
+    /// Record the LAN sides this sync read (ADR-164 decision 28): each network's addresses, in the order
     /// given, stamped now. Only networks that already have a row are written, so this runs after
     /// [`Self::record_networks`]. Returns the rows written.
     ///
@@ -1177,7 +1177,7 @@ impl MerakiOrgRepo {
     }
 
     /// `(organization, its name, its nodes)` for every organization — what the alert engine's
-    /// snapshot of Meraki organizations is built from (ADR-164 決定 18). An organization with no
+    /// snapshot of Meraki organizations is built from (ADR-164 decision 18). An organization with no
     /// imported device is listed with no nodes: its name is still what an alert about it is
     /// called.
     pub async fn alert_bindings(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>> {
@@ -1411,7 +1411,7 @@ pub struct MerakiDeviceRepo {
 }
 
 /// What the node list says about one Meraki node beyond its kind: the Dashboard's product type
-/// (the "AP" badge, ADR-168 決定 11) and whether it is a mesh repeater (the "Repeater" badge,
+/// (the "AP" badge, ADR-168 decision 11) and whether it is a mesh repeater (the "Repeater" badge,
 /// ADR-175).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MerakiProduct {
@@ -1420,7 +1420,7 @@ pub struct MerakiProduct {
 }
 
 /// Whether a Meraki device is a mesh repeater — an access point with no wired uplink, which the
-/// Dashboard's device listing reports with no `lanIp` (ADR-175 決定 1).
+/// Dashboard's device listing reports with no `lanIp` (ADR-175 decision 1).
 ///
 /// Read from the inventory row the sync keeps current, so an AP later cabled in loses the mark at
 /// the next sync. A device with **no** inventory row is not called a repeater: nothing has said it
@@ -1460,7 +1460,7 @@ impl MerakiDeviceRepo {
 
     /// Of the given node ids, the Meraki devices and each one's product type as the Dashboard names
     /// it (`wireless`, `switch`, `appliance`, …) — what the node list needs for both its kind and
-    /// the "AP" badge beside it (ADR-168 決定 11), in the one read it already made for the kind —
+    /// the "AP" badge beside it (ADR-168 decision 11), in the one read it already made for the kind —
     /// and whether it is a mesh repeater (ADR-175), read from the inventory row in the same query.
     /// Empty input short-circuits so we never run an empty-array query.
     pub async fn product_types(
@@ -1501,7 +1501,7 @@ impl MerakiDeviceRepo {
     /// poller can attribute each API row to a node.
     ///
     /// Every imported device, except for the switch-port tier, which gets the switches alone
-    /// (ADR-167 決定 10), and the wireless tier, which gets the access points alone (ADR-168 決定 8):
+    /// (ADR-167 decision 10), and the wireless tier, which gets the access points alone (ADR-168 decision 8):
     /// only a switch has ports and only an access point has radios to report, and an organization
     /// with none is sent no such collect at all. The product type is compared case-blind, as
     /// `yagra_common::category_for_product_type` reads it.
@@ -1512,7 +1512,7 @@ impl MerakiDeviceRepo {
     ) -> anyhow::Result<Vec<MerakiDeviceRef>> {
         let only: Option<&str> = match tier {
             MerakiTier::SwitchPorts => Some("switch"),
-            // The access points alone (ADR-168 決定 8) — the Dashboard's word for an MR.
+            // The access points alone (ADR-168 decision 8) — the Dashboard's word for an MR.
             MerakiTier::Wireless => Some("wireless"),
             MerakiTier::Availability
             | MerakiTier::Uplink
@@ -1692,7 +1692,7 @@ mod tests {
     /// tier whose failures raise an alert. `PUT …/cadence` writes `enabled_tiers` in the caller's
     /// order and checks membership only, so `["uplink", "availability"]` is a stored state an
     /// external client can produce — and it used to mean a key that cannot be opened raised
-    /// nothing at all (ADR-164 決定 18).
+    /// nothing at all (ADR-164 decision 18).
     ///
     /// This pins the only place the scheduler's tier order comes from; what the fast lane does
     /// with it is `meraki_schedule`'s `a_restart_puts_availability_first_in_the_fast_lane`.
@@ -1821,7 +1821,7 @@ mod tests {
         ));
     }
 
-    /// 決定 1: the names are read on the first switch-port collect after a restart, then hourly.
+    /// decision 1: the names are read on the first switch-port collect after a restart, then hourly.
     #[test]
     fn the_port_names_are_read_at_once_and_then_hourly() {
         let now = Instant::now();
@@ -1830,7 +1830,7 @@ mod tests {
         assert!(port_names_due(Some(now), now + PORT_NAMES_EVERY));
     }
 
-    /// ADR-168 決定 1: the SSIDs and radio settings are read on the first wireless collect after a
+    /// ADR-168 decision 1: the SSIDs and radio settings are read on the first wireless collect after a
     /// restart, then every twenty minutes — inside the thirty minutes a latest value is looked back
     /// for, so the SSID count and a radio's channel never go blank between two reads.
     #[test]
@@ -1848,7 +1848,7 @@ mod tests {
         );
     }
 
-    /// 決定 16. The poller reads an empty list as "every network", so the two states that used to
+    /// decision 16. The poller reads an empty list as "every network", so the two states that used to
     /// produce one — nothing watched, and a read that failed — must produce no collect instead.
     #[test]
     fn an_organization_that_watches_nothing_is_sent_no_collect() {
@@ -1895,7 +1895,7 @@ mod tests {
         assert!(f.acquire_sync(org, MerakiLane::Fast, Uuid::from_u128(12), lease, now));
     }
 
-    /// ADR-169 決定 1: the two lanes are held independently — a slow collect in flight no longer
+    /// ADR-169 decision 1: the two lanes are held independently — a slow collect in flight no longer
     /// keeps availability, or the sync, waiting — and each is still one collect at a time.
     #[test]
     fn an_organization_holds_at_most_one_flight_per_lane() {
@@ -1976,7 +1976,7 @@ mod tests {
         ));
     }
 
-    /// ADR-164 決定 30: a sync that finds it has minutes of reading to do extends the lease it took,
+    /// ADR-164 decision 30: a sync that finds it has minutes of reading to do extends the lease it took,
     /// so a collect cannot take its lane mid-read — and only the job that holds the lane can.
     #[test]
     fn a_sync_extends_its_own_lease_and_no_other() {
@@ -2044,7 +2044,7 @@ mod tests {
         assert!(!f.is_inflight(org, MerakiLane::Fast, later));
     }
 
-    /// A collect nobody answered is evidence (決定 18) — reported once, whether the next dispatch or
+    /// A collect nobody answered is evidence (decision 18) — reported once, whether the next dispatch or
     /// the health loop is what notices the lease has run out. The sync's flight never is: its
     /// failures are recorded on the row. Both lanes' collects are evidence the same way.
     #[test]
@@ -2112,7 +2112,7 @@ mod tests {
         assert_eq!(f.take_unanswered(later + lease + lease), vec![]);
     }
 
-    /// ADR-169 決定 1: only the two slow reads leave the fast lane. A wireless round is fast unless
+    /// ADR-169 decision 1: only the two slow reads leave the fast lane. A wireless round is fast unless
     /// it carries the SSID read, and nothing else a collect can make changes its lane.
     #[test]
     fn only_the_switch_ports_and_the_ssid_read_run_in_the_slow_lane() {
@@ -2137,7 +2137,7 @@ mod tests {
         }
     }
 
-    /// ADR-169 決定 4: `target_rps` stays the organization's total — each lane paces at half — down
+    /// ADR-169 decision 4: `target_rps` stays the organization's total — each lane paces at half — down
     /// to where no session paces slower.
     #[test]
     fn lane_rps_splits_the_org_budget_and_never_exceeds_it() {
@@ -2196,7 +2196,7 @@ mod tests {
         );
     }
 
-    /// ADR-175 決定 1: a repeater is an MR whose inventory row carries no usable LAN address. Every
+    /// ADR-175 decision 1: a repeater is an MR whose inventory row carries no usable LAN address. Every
     /// other combination is not one — including an MR with no inventory row, where nothing has
     /// said it lacks an address.
     #[test]
@@ -2320,7 +2320,7 @@ mod tests {
         );
         // The last one is the device sync interval. It was 21600 until migration 0124 made the sync
         // what brings a new device in, and moved its default to five minutes (ADR-164). Traffic was
-        // 1800 until migration 0135 (ADR-164 決定 34): the tier's read takes a five-minute window.
+        // 1800 until migration 0135 (ADR-164 decision 34): the tier's read takes a five-minute window.
         assert_eq!(
             (
                 org.availability_secs,
@@ -2489,7 +2489,7 @@ mod tests {
             "the enabled tier set did not survive the round trip"
         );
 
-        // ADR-167 決定 12: a client that does not know the switch-port tier does not reset it.
+        // ADR-167 decision 12: a client that does not know the switch-port tier does not reset it.
         assert!(repo
             .update_cadence(id, &cadence(600, 43200, None, 4.5))
             .await
@@ -2913,7 +2913,7 @@ mod tests {
         );
     }
 
-    /// What the alert engine's snapshot of Meraki organizations is built from (ADR-164 決定 18): every
+    /// What the alert engine's snapshot of Meraki organizations is built from (ADR-164 decision 18): every
     /// organization with its name and its nodes — including one with no imported device, whose name
     /// is still what an alert about it is called.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -3271,7 +3271,7 @@ mod tests {
         assert_eq!(theirs.len(), 1);
         assert_eq!(theirs[0].serial, "Q3-9");
 
-        // ADR-167 決定 10: a switch-port collect is about the switches alone. Acme holds an access
+        // ADR-167 decision 10: a switch-port collect is about the switches alone. Acme holds an access
         // point only, so it has none — until a switch (spelt as the Dashboard may spell it) joins.
         assert!(devices
             .device_refs(acme, MerakiTier::SwitchPorts)
@@ -3296,7 +3296,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Q3-SW"]
         );
-        // ADR-168 決定 8: a wireless collect is about the access points alone — the switch that just
+        // ADR-168 decision 8: a wireless collect is about the access points alone — the switch that just
         // joined is not one.
         assert_eq!(
             devices
@@ -3346,7 +3346,7 @@ mod tests {
     }
 
     /// Purging removes the org, its device nodes and its groups, and leaves every other org alone.
-    /// On the way: the two sync-outcome writers, in both directions (ADR-164 決定 3) — a success
+    /// On the way: the two sync-outcome writers, in both directions (ADR-164 decision 3) — a success
     /// moves `last_sync_at`, a failure records its reason and leaves the stamp exactly where it was.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3415,7 +3415,7 @@ mod tests {
             "a success must clear the previous failure's reason"
         );
 
-        // `record_networks` writes what changed and nothing else (ADR-164 決定 4).
+        // `record_networks` writes what changed and nothing else (ADR-164 decision 4).
         let nets = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
             pairs
                 .iter()

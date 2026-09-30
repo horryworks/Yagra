@@ -33,11 +33,11 @@ use yagra_common::{ap_id, WlanApObservation, WlanApState, WlanFlavor, WlanInvent
 /// down by the one that is still answering, rather than frozen at its last good state.
 pub const OWNER_STALE_AFTER_SECS: i64 = 15 * 60;
 
-/// The word the AP list shows for an AP its controller's table no longer lists (ADR-064 増分 F, F9).
+/// The word the AP list shows for an AP its controller's table no longer lists (ADR-064 Inc.F, F9).
 ///
 /// Not a vendor word — the controller said nothing, which is the point — so it is spelled so an
 /// operator reading the list sees why the state changed. The AP tab shows `run_state` untranslated
-/// (ADR-064 決定 14), and this is the one value Yagra writes there itself.
+/// (ADR-064 decision 14), and this is the one value Yagra writes there itself.
 pub const ABSENT_RUN_STATE: &str = "not_listed";
 
 /// The controller that last reported an AP associated, and when.
@@ -59,7 +59,7 @@ pub struct Verdict {
 }
 
 /// Decide what `reporter`'s statement that an AP is `state` may change, given who currently serves
-/// it (ADR-064 決定 8c, as revised by R4).
+/// it (ADR-064 decision 8c, as revised by R4).
 ///
 /// * **Associated** — the reporter serves the AP: it becomes the owner, and its state stands.
 /// * **Backup or not associated, while another controller served it within `stale_after`** — the
@@ -139,7 +139,7 @@ pub struct ControllerRow {
     pub aps_reported: i32,
     pub aps_truncated_at: Option<i32>,
     pub last_inventory_at: Option<DateTime<Utc>>,
-    /// Whether this controller's APs become nodes (ADR-064 決定 8). **On unless an operator turns it
+    /// Whether this controller's APs become nodes (ADR-064 decision 8). **On unless an operator turns it
     /// off** — since ADR-064 R22 the column defaults to `TRUE` (migration 0123), and that default is
     /// the only place it is written: the row is created by the first inventory, whose INSERT does
     /// not name the column.
@@ -148,8 +148,8 @@ pub struct ControllerRow {
     pub max_aps: i32,
     /// Where its imported AP nodes are filed. `None` ⇒ the folder the controller node itself is
     /// in. No folder is created: a name derived from one member of an HA pair is wrong as soon as
-    /// the pair switches over, and the standby would file its own APs in a second one (ADR-064 B2
-    /// の手直し). Which controller serves an AP is `wireless_aps.owner_controller_id`, not a name.
+    /// the pair switches over, and the standby would file its own APs in a second one (ADR-064 Inc.B2
+    /// rework). Which controller serves an AP is `wireless_aps.owner_controller_id`, not a name.
     /// ⚠️ `migrations/0121`'s column comment still describes the first design and cannot be edited.
     pub ap_group_id: Option<Uuid>,
     /// How many APs the cap left out on the importer's last pass.
@@ -228,7 +228,7 @@ pub struct WirelessRepo {
     pool: PgPool,
 }
 
-/// What a neighbour's management address is to the AP inventory (ADR-179 増分 3): the AP some
+/// What a neighbour's management address is to the AP inventory (ADR-179 Inc.3): the AP some
 /// controller reports at that address, and a controller the caller can see that reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApAtAddress {
@@ -248,7 +248,7 @@ impl WirelessRepo {
         Self { pool }
     }
 
-    /// The AP a controller reports at each of `addresses` (ADR-179 増分 3), so the Neighbors tab can
+    /// The AP a controller reports at each of `addresses` (ADR-179 Inc.3), so the Neighbors tab can
     /// send an access point to the controller that manages it instead of registering it by hand —
     /// which would leave a second node for the same AP once the controller imports it.
     ///
@@ -311,8 +311,8 @@ impl WirelessRepo {
     /// Record one controller's complete inventory (ADR-064).
     ///
     /// Only ever called with an inventory the poller published — a walk that missed a column publishes
-    /// none (決定 9b) — so this never reads a half table as APs leaving. APs the controller no longer
-    /// reports are not touched: their sighting's `last_seen` simply stops advancing (決定 10).
+    /// none (decision 9b) — so this never reads a half table as APs leaving. APs the controller no longer
+    /// reports are not touched: their sighting's `last_seen` simply stops advancing (decision 10).
     ///
     /// One transaction per inventory, holding the AP rows it reads, so two controllers of a pair
     /// arriving in one batch decide ownership one after the other rather than over each other.
@@ -362,7 +362,7 @@ impl WirelessRepo {
             }
             Err(e) => return Err(e.into()),
         }
-        // A Cisco controller drops an AP it has lost from its table (ADR-064 増分 F, F9): an AP this
+        // A Cisco controller drops an AP it has lost from its table (ADR-064 Inc.F, F9): an AP this
         // controller last served and no longer lists reads as not associated — here, in the AP list,
         // and in the fan-out, on the AP's node, both asking `absence_is_evidence`. Its `last_seen`
         // does not move, because nothing reported it, and its owner does not either: whoever serves
@@ -795,7 +795,7 @@ impl WirelessRepo {
         .transpose()
     }
 
-    /// Store how a controller's APs are imported (ADR-064 決定 8).
+    /// Store how a controller's APs are imported (ADR-064 decision 8).
     ///
     /// Upserts, because an operator may switch import on before the controller's first AP walk has
     /// run — the row the walk would have created is created here instead, and the walk's upsert
@@ -885,7 +885,7 @@ impl WirelessRepo {
             .collect()
     }
 
-    /// One pass of the importer (ADR-064 決定 8, 改訂 R7): every AP that has **ever** been in
+    /// One pass of the importer (ADR-064 decision 8, revision R7): every AP that has **ever** been in
     /// service, is reported by a controller with import switched on, and has never been imported
     /// becomes a node — up to each controller's cap.
     ///
@@ -1296,7 +1296,7 @@ mod tests {
         inv
     }
 
-    /// ADR-064 増分 F, F9, through the database: an AP a Cisco controller served and no longer
+    /// ADR-064 Inc.F, F9, through the database: an AP a Cisco controller served and no longer
     /// lists reads as not associated in the list — without its `last_seen` moving, since nothing
     /// reported it — while an AP another controller serves, and every AP of a table read inside the
     /// grace after a boot, is left exactly as it was. The first assertion is the accepting one.
@@ -1626,7 +1626,7 @@ mod tests {
     }
 
     /// A controller deleted between its poll and the write drops the inventory without an error, and
-    /// an AP a controller stops reporting keeps its row (決定 10).
+    /// an AP a controller stops reporting keeps its row (decision 10).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_vanished_controller_or_ap_deletes_nothing_and_fails_nothing(pool: sqlx::PgPool) {
@@ -1673,7 +1673,7 @@ mod tests {
         assert_eq!(summary.aps_reported, 0);
     }
 
-    /// The importer (ADR-064 決定 8, 改訂 R7 and R22): on by default once a controller's first
+    /// The importer (ADR-064 decision 8, revision R7 and R22): on by default once a controller's first
     /// inventory arrives; nothing while import is off; with it on, only APs that have been in
     /// service, up to the cap, with the rest counted; each under the member of a pair that serves
     /// it; and an AP whose node someone deleted is never brought back.
@@ -1786,7 +1786,7 @@ mod tests {
             1
         );
         // Filed in the controller's own folder, and no folder was created for them: a name taken
-        // from one member of a pair would be wrong after a switchover (ADR-064 B2 の手直し).
+        // from one member of a pair would be wrong after a switchover (ADR-064 Inc.B2 rework).
         let folders: Vec<Option<Uuid>> =
             sqlx::query_scalar("SELECT DISTINCT group_id FROM nodes WHERE id = ANY($1)")
                 .bind(ap_nodes.iter().copied().collect::<Vec<_>>())
@@ -1904,7 +1904,7 @@ mod tests {
         assert_eq!(read(pool).await.0, "lobby");
     }
 
-    /// ADR-179 増分 3: an address a controller reports an AP at names that AP and the controller —
+    /// ADR-179 Inc.3: an address a controller reports an AP at names that AP and the controller —
     /// and a caller who cannot see the controller learns only that one exists.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -1951,7 +1951,7 @@ mod tests {
     }
 
     /// The Neighbors tab asks which access point sits at an address through an index, not a scan. Sequential scans are switched off for the statement so a tiny test table cannot hide a
-    /// query shape the index cannot serve (ADR-180 増分 2, migration 0139).
+    /// query shape the index cannot serve (ADR-180 Inc.2, migration 0139).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_address_lookup_can_use_the_ip_index(pool: sqlx::PgPool) {

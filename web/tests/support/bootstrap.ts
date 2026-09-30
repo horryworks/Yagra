@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The handful of responses the generator must not decide for itself, typed against the generated
-// contract (ADR-052 決定 2). `satisfies` is the point: if a Rust handler changes one of these
+// contract (ADR-052 decision 2). `satisfies` is the point: if a Rust handler changes one of these
 // shapes, `tsc -p tsconfig.e2e.json` fails here instead of the walk quietly testing a fiction.
 
 import type { components } from '../../src/api/schema';
@@ -180,7 +180,7 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // `groupOptions`, the inventory tree), so the single group is unreachable and every folder-group
   // picker in the app renders with nothing but its placeholder — a `<select>` that is present,
   // correct, and empty. Patch the generated body rather than hand-writing one.
-  // The metric picker (ADR-075 増分 4) joins this catalog against the translated meanings, and the
+  // The metric picker (ADR-075 Inc.4) joins this catalog against the translated meanings, and the
   // generator gives it one row with an invented name — enough to prove a list renders, and unable
   // to prove any of the three things that actually matter. So three rows, one per behaviour:
   //
@@ -189,7 +189,7 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   //    dropping it is the reason this control removes an error rather than just looking nicer.
   //  - `ymock_widget_temp` — a name nothing explains, standing in for an operator's own metric.
   //    Proves the fallback renders its OID instead of a blank line.
-  // The metric picker (ADR-075 増分 4) joins this catalog against the translated meanings, and the
+  // The metric picker (ADR-075 Inc.4) joins this catalog against the translated meanings, and the
   // generator gives it one row with an invented name — enough to prove a list renders, and unable
   // to prove any of the three things that actually matter. So the generated row is **kept** (the
   // route walk demands a visible `ymock-` string on Settings ▸ MIB repository, and a hand-written
@@ -252,7 +252,7 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     return body as unknown as Json;
   })(),
 
-  // A nullable object and an array the generator fills (ADR-164 決定 18). Left alone, every node in
+  // A nullable object and an array the generator fills (ADR-164 decision 18). Left alone, every node in
   // the walk would arrive saying "the Meraki API is not answering — this state is the last one
   // collected", and every Meraki organization would arrive with a collect failing. A walk where
   // everything is marked says nothing; `collectionFault.spec.ts` brings the ones that are.

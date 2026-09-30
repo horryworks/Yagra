@@ -9,7 +9,7 @@
 //
 // 🚨 **The CSS keeps the same list as its fallback, and `interfaceColumns.test.ts` pins the two
 // together.** That is a second copy of a fact, which this repo's rules would normally refuse — it
-// is kept deliberately, for the reason ADR-074 決定 2 gives: an inline `grid-template-columns`
+// is kept deliberately, for the reason ADR-074 decision 2 gives: an inline `grid-template-columns`
 // beats every media query, and this table is re-laid-out on a phone
 // (`html[data-viewport='mobile'] .nd-if-row` turns it into a named 2×2 grid). So the width is
 // passed as an inline **custom property** and the CSS keeps its own declaration — which means the

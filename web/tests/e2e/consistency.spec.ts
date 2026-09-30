@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Tier2a, ADR-052 決定 9 型 2 and 型 3: the same fact, read two ways, must come out the same.
+// Tier2a, ADR-052 decision 9 shape 2 and shape 3: the same fact, read two ways, must come out the same.
 //
 // WHY THIS SHAPE. A live deployment's data moves, so "there are three nodes" is not an assertion
 // anyone can write. What survives is *agreement* — the aggregate against the list, the list against
@@ -55,11 +55,11 @@ test('the inventory header agrees with the list it is a summary of', async ({ pa
     api<{ id: string }[]>('/api/v1/node-groups'),
   ]);
 
-  // 出典 1 — an invariant, true whatever the fleet contains: a total is the sum of its parts.
+  // source 1 — an invariant, true whatever the fleet contains: a total is the sum of its parts.
   const bucketed = Object.values(summary.states).reduce((a, b) => a + b, 0);
   expect(bucketed, 'the fleet summary does not add up to its own total').toBe(summary.total);
 
-  // 型 2 — the aggregate against the list. Two different queries answer "how many nodes are
+  // shape 2 — the aggregate against the list. Two different queries answer "how many nodes are
   // there", and the header shows the first while the tree below it is built from the second.
   // 🚨 **Both signals, and the second one was missing for a year.** `GET /nodes` answers in two
   // modes: a filtered query returns one capped page and sets `truncated`, while an unfiltered one
@@ -81,7 +81,7 @@ test('the inventory header agrees with the list it is a summary of', async ({ pa
   const note = page.locator('.pageheader-note');
   await expect(note).toBeVisible();
 
-  // 型 3 — and the screen says what the server said. Pluralization is part of it: the count and
+  // shape 3 — and the screen says what the server said. Pluralization is part of it: the count and
   // the noun come from different places (`nodeCount` and an i18n plural rule) and a 1-node fleet
   // reading "1 nodes" is the kind of thing only a real deployment with one node ever shows.
   const noun = summary.total === 1 ? 'node' : 'nodes';
@@ -126,7 +126,7 @@ test('a node’s state on the list is the state on its own page', async ({ page,
 });
 
 test('searching the inventory narrows it to matching nodes', async ({ page, api }) => {
-  // 型 4 — an interaction, on data nobody wrote down. The search is served by `/nodes/search`,
+  // shape 4 — an interaction, on data nobody wrote down. The search is served by `/nodes/search`,
   // a different endpoint from the one that fills the tree, so this also asks whether the two
   // agree about what a node is called.
   const list = await api<NodeList>('/api/v1/nodes?limit=500');

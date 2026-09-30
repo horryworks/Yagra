@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// "Where do I send syslog?" — answered on the Events screen (ADR-055 決定 3).
+// "Where do I send syslog?" — answered on the Events screen (ADR-055 decision 3).
 //
 // The Events tab used to promise this in a nav description (`Event sources` → "Syslog and SNMP trap
 // listeners") while the screen behind it managed webhook senders and nothing else. That label is

@@ -199,7 +199,7 @@ impl GroupOrigin {
     pub const ALL: [GroupOrigin; 2] = [GroupOrigin::Meraki, GroupOrigin::Netbox];
 }
 
-/// Who put a prefix row on a folder (ADR-131 決定 9).
+/// Who put a prefix row on a folder (ADR-131 decision 9).
 ///
 /// This is not decoration: it decides what the editor may offer. A row a NetBox sync owns is
 /// listed read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI
@@ -216,7 +216,7 @@ pub enum PrefixSource {
 /// One IP prefix attached to a folder.
 ///
 /// Three fields, and the third was added under the rule the original two were chosen by
-/// (ADR-131 決定 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a
+/// (ADR-131 decision 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a
 /// tenant, and none of them has a reader here — the bar for a field is a real reader, not
 /// availability. `source` cleared that bar when two appeared at once: the range editor must not
 /// offer to delete a row it cannot delete, and the folder detail pane says where a range came
@@ -319,7 +319,7 @@ where
 
 /// Take the nodes [`GroupRepo::nodes_in_place`] found out of a node match before it is folded, so
 /// a node already where it belongs is neither proposed, nor ambiguous, nor unmatched (ADR-176
-/// 決定 2). Returns what is left to ask about, and its hits.
+/// decision 2). Returns what is left to ask about, and its hits.
 #[must_use]
 pub fn without_in_place(
     requested: &[Uuid],
@@ -363,7 +363,7 @@ fn placement_gap(
 /// last one. Pure so the placement maths is unit-tested without a database.
 #[must_use]
 pub fn placement_order(siblings: &[(Uuid, f64)], before: Option<Uuid>, after: Option<Uuid>) -> f64 {
-    // One item is a batch of one, so there is one answer to where a drop lands (ADR-124 増分 8).
+    // One item is a batch of one, so there is one answer to where a drop lands (ADR-124 Inc.8).
     placement_orders(siblings, before, after, 1)[0]
 }
 
@@ -373,7 +373,7 @@ pub fn placement_order(siblings: &[(Uuid, f64)], before: Option<Uuid>, after: Op
 /// it and their relative order is the one the caller passed. At an edge the step is 1.0, matching
 /// the integer spacing migration 0015 seeded and the `MAX + 1` an append writes.
 ///
-/// 🚨 **This is what a multi-node drag needed and did not have** (ADR-124 増分 4 決定 C): with only
+/// 🚨 **This is what a multi-node drag needed and did not have** (ADR-124 Inc.4 decision C): with only
 /// the single-item form, dropping three nodes between two rows had to append them instead, so the
 /// same gesture answered differently at one node and at three. Calling the single form `n` times
 /// would give all `n` the *same* order, because none of them is in `siblings`.
@@ -1003,7 +1003,7 @@ impl GroupRepo {
     }
 
     /// Which folder's IP range each of these nodes falls inside, narrowed to the **longest**
-    /// prefix that contains the address (ADR-124 決定 5). A node with no hit is simply absent
+    /// prefix that contains the address (ADR-124 decision 5). A node with no hit is simply absent
     /// from the result; a node with two hits of the same length is **ambiguous** and appears
     /// twice, because choosing between two sites on the caller's behalf is exactly the decision
     /// this feature refuses to make.
@@ -1037,7 +1037,7 @@ impl GroupRepo {
         let scope_bind: Option<Vec<Uuid>> = scope.map(<[Uuid]>::to_vec);
         // The longest match is a `rank()`, for the reason `match_address_prefixes` gives: the
         // correlated `MAX(masklen)` it replaced re-scanned every range once per candidate row
-        // (ADR-131 増分 2 決定 12). Ties share rank 1, so an ambiguity still comes back twice.
+        // (ADR-131 Inc.2 decision 12). Ties share rank 1, so an ambiguity still comes back twice.
         let rows = sqlx::query(&format!(
             "WITH hits AS ( \
                SELECT n.id AS node_id, p.group_id, p.prefix, \
@@ -1071,7 +1071,7 @@ impl GroupRepo {
     }
 
     /// Which of `hits`' nodes **already sit where a match would put them** — in the claimed folder
-    /// or anywhere beneath it (ADR-176 決定 2).
+    /// or anywhere beneath it (ADR-176 decision 2).
     ///
     /// Such a node is not a move. Counting it as one both inflated the proposal and, worse, pulled a
     /// node an operator had filed into a child folder with no range of its own back up into the
@@ -1109,7 +1109,7 @@ impl GroupRepo {
 
     /// Every node in `root`'s subtree, or in the whole inventory when `root` is `None`, that the
     /// caller may see — ordered by name, so a capped proposal is the same slice on every press
-    /// (ADR-176 決定 3). Ungrouped nodes belong to the whole inventory and to no folder's subtree.
+    /// (ADR-176 decision 3). Ungrouped nodes belong to the whole inventory and to no folder's subtree.
     pub async fn nodes_under(
         &self,
         root: Option<Uuid>,
@@ -1152,7 +1152,7 @@ impl GroupRepo {
     }
 
     /// The same question as [`GroupRepo::match_prefixes`], asked about **addresses that are not
-    /// nodes yet** — the candidates a discovery sweep just found (ADR-131 決定 4).
+    /// nodes yet** — the candidates a discovery sweep just found (ADR-131 decision 4).
     ///
     /// 🚨 **`$1` is `text[]`, not `inet[]`.** sqlx has no `inet` mapping without the `ipnetwork`
     /// feature, which this module keeps out of the build on purpose (see `attach_prefixes`). The
@@ -1179,8 +1179,8 @@ impl GroupRepo {
     /// `DISTINCT` in the CTE so fifty candidates in one /24 are ranked once rather than fifty times;
     /// [`fold_prefix_matches`] still answers per requested address.
     ///
-    /// 🚨 **The longest match is a `rank()`, not a correlated `MAX(masklen)`** (ADR-131 増分 2
-    /// 決定 12). The correlated form re-scanned every range once per candidate row — addresses ×
+    /// 🚨 **The longest match is a `rank()`, not a correlated `MAX(masklen)`** (ADR-131 Inc.2
+    /// decision 12). The correlated form re-scanned every range once per candidate row — addresses ×
     /// ranges² — and against the PoC box's 2,618 NetBox ranges one address took 8.9 s, which held a
     /// 64-device import for fifteen minutes. Ranking each address's containing ranges once is
     /// addresses × ranges: the same data answered 65 addresses in 43 ms. Ties at the longest length
@@ -1236,7 +1236,7 @@ scope_predicate(2, "p.group_id"),
     /// Whether any folder the caller may see carries an IP range at all.
     ///
     /// Exists so "nothing matched" can be told apart from "there was nothing to match against"
-    /// (ADR-124 決定 6). Folding the two into one message is the shape that ships an inert
+    /// (ADR-124 decision 6). Folding the two into one message is the shape that ships an inert
     /// feature looking like a working one: a deployment with no NetBox would report every node as
     /// unmatched and give the operator no way to learn that the answer was never possible.
     pub async fn any_prefixes(&self, scope: Option<&[Uuid]>) -> anyhow::Result<bool> {
@@ -1285,7 +1285,7 @@ scope_predicate(2, "p.group_id"),
         }
     }
 
-    /// Replace this folder's **hand-made** ranges with `rows` (ADR-131 決定 5).
+    /// Replace this folder's **hand-made** ranges with `rows` (ADR-131 decision 5).
     ///
     /// 🚨 **The `DELETE` is scoped to `netbox_server_id IS NULL`, and that is the whole safety
     /// property.** A plain "replace the folder's list" would let an operator delete rows a NetBox
@@ -1411,7 +1411,7 @@ scope_predicate(2, "p.group_id"),
     /// ⚠️ **Only as fresh as the generation.** A write to `node_groups` that does not end in
     /// [`crate::config_gen::bump`] leaves this answering with the old tree until something else
     /// bumps it. Every API write bumps through the audit middleware; a background writer has to do
-    /// it itself — the Meraki sync does, and the NetBox sync does since ADR-178 決定 7.
+    /// it itself — the Meraki sync does, and the NetBox sync does since ADR-178 decision 7.
     pub async fn cached_edges(&self) -> anyhow::Result<GroupEdges> {
         let generation = crate::config_gen::current();
         if let Some((at, cached)) = self
@@ -1992,7 +1992,7 @@ mod tests {
         );
     }
 
-    /// ADR-178 決定 7: the folder-tree cache belongs to the store that read it. Two stores see
+    /// ADR-178 decision 7: the folder-tree cache belongs to the store that read it. Two stores see
     /// their own reads even at one generation — the property the process-wide `static` lacked,
     /// which let one parallel test resolve its scope against another test's database — and a
     /// bump is what makes a store read again.
@@ -2281,7 +2281,7 @@ mod tests {
     }
 
     /// The four edge conventions a single drop has always written, kept named after
-    /// `order_between` was folded into [`placement_orders`] (ADR-124 増分 8): it was that function
+    /// `order_between` was folded into [`placement_orders`] (ADR-124 Inc.8): it was that function
     /// at `n = 1`, so keeping both would have been two copies of these four numbers.
     #[test]
     fn one_item_keeps_the_midpoint_and_integer_edge_conventions() {
@@ -2323,7 +2323,7 @@ mod tests {
         assert_eq!(placement_order(&[], None, None), 0.0);
     }
 
-    /// 🚨 The property ADR-124 増分 8 turns on: **N items land inside the gap, in the order given.**
+    /// 🚨 The property ADR-124 Inc.8 turns on: **N items land inside the gap, in the order given.**
     ///
     /// Calling the single form N times cannot do this — none of the moving items is in `siblings`,
     /// so every call finds the same gap and answers with the same number, and the batch arrives
@@ -2546,7 +2546,7 @@ mod tests {
     }
 
     /// 🚨 A node already in the claimed folder, or filed by hand into a child of it, is in place —
-    /// the one elsewhere is not (ADR-176 決定 2). Before this, the child's node was proposed back
+    /// the one elsewhere is not (ADR-176 decision 2). Before this, the child's node was proposed back
     /// up into the parent.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -2578,7 +2578,7 @@ mod tests {
     }
 
     /// A folder's subtree reaches its grandchildren and nothing beside it; the whole inventory
-    /// includes ungrouped nodes, and a scope narrows it (ADR-176 決定 3).
+    /// includes ungrouped nodes, and a scope narrows it (ADR-176 decision 3).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn nodes_under_walks_the_subtree_or_the_whole_inventory(pool: sqlx::PgPool) {
@@ -2955,9 +2955,9 @@ mod tests {
         assert_eq!(scoped[0].key, addr);
     }
 
-    // ── ADR-131 増分 2: the ranked longest match, against the correlated form it replaced ────
+    // ── ADR-131 Inc.2: the ranked longest match, against the correlated form it replaced ────
 
-    /// The address match as it was before ADR-131 増分 2 — kept **only** as the oracle the ranked
+    /// The address match as it was before ADR-131 Inc.2 — kept **only** as the oracle the ranked
     /// form is compared against. It re-scans every range once per candidate row, which is why it
     /// left production: 8.9 s per address against the PoC box's 2,618 ranges.
     const CORRELATED_ADDRESS_MATCH: &str =
@@ -2971,7 +2971,7 @@ mod tests {
                  WHERE addrs.addr <<= q.prefix \
                    AND ($2::uuid[] IS NULL OR q.group_id = ANY($2)))";
 
-    /// The node match as it was before ADR-131 増分 2 — the same oracle, for `match_prefixes`.
+    /// The node match as it was before ADR-131 Inc.2 — the same oracle, for `match_prefixes`.
     const CORRELATED_NODE_MATCH: &str =
         "SELECT n.id AS node_id, p.group_id AS group_id, p.prefix::TEXT AS prefix \
          FROM nodes n \
@@ -3111,7 +3111,7 @@ mod tests {
         }
     }
 
-    /// 🚨 **A full sweep against thousands of ranges answers promptly** (ADR-131 増分 2).
+    /// 🚨 **A full sweep against thousands of ranges answers promptly** (ADR-131 Inc.2).
     ///
     /// The PoC box held 2,618 ranges; this holds 3,001 and asks about 1,024 addresses — the most one
     /// sweep may carry. The correlated form was addresses × ranges² and would take hours here, so a
@@ -3288,7 +3288,7 @@ mod tests {
         assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
     }
 
-    /// The other direction, decided by ADR-131 決定 6: a sync that learns a hand-made CIDR
+    /// The other direction, decided by ADR-131 decision 6: a sync that learns a hand-made CIDR
     /// **takes the row over**, and it then becomes sweepable.
     ///
     /// This was already how `netbox.rs`'s `ON CONFLICT ... DO UPDATE SET netbox_server_id =

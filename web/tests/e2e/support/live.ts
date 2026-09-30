@@ -2,7 +2,7 @@
 // The Tier2 fixture: a signed-in browser pointed at a REAL deployment, with nothing mocked.
 //
 // Tier1 and Tier2 answer different questions, and mixing them is how Tier2 becomes a slow
-// duplicate nobody runs (ADR-052 決定 9). Tier1 owns everything reachable by controlling the data.
+// duplicate nobody runs (ADR-052 decision 9). Tier1 owns everything reachable by controlling the data.
 // What is left here — and the only thing that belongs here — is what no mock can produce:
 //
 //   (i)   two surfaces of the running system agreeing on a fact neither test nor mock chose,

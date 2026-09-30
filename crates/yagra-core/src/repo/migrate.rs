@@ -4,7 +4,7 @@
 //! [`MIGRATIONS`] is the **one** `sqlx::migrate!` call site in the workspace, because two call
 //! sites of that macro are two answers to "what does this build embed?" that nothing keeps equal.
 //! It has three readers: [`NodeRepo::migrate`] applies it, `yagra-core migrations` prints it
-//! **without a database** (ADR-050 決定 6), and `#[sqlx::test(migrator = …)]` migrates each test's
+//! **without a database** (ADR-050 decision 6), and `#[sqlx::test(migrator = …)]` migrates each test's
 //! throwaway database from it (ADR-114). The first two go through [`embedded_migrations`], which
 //! hands back an owned value they may adjust.
 //!
@@ -533,7 +533,7 @@ mod tests {
     }
 
     /// **Migration 0128 adds the Cisco controller profile to the seeded AP-walk rule — and only to
-    /// the row as it shipped** (ADR-064 増分 F).
+    /// the row as it shipped** (ADR-064 Inc.F).
     ///
     /// The harness has applied 0128 to an empty table and the seeder has since written the new,
     /// two-profile row, so the fixture first puts the row back to what v0.3.27/28 shipped — the
@@ -624,7 +624,7 @@ mod tests {
     ///
     /// PostgreSQL runs one referential action per deleted row against every table whose foreign
     /// key points at it; where the referencing column has no index, each action reads the whole
-    /// table. ADR-124 増分 7 found six such columns to `nodes` by querying the catalog by hand —
+    /// table. ADR-124 Inc.7 found six such columns to `nodes` by querying the catalog by hand —
     /// the review that prompted it had listed three — and indexed the two that grow with the
     /// fleet. The first run of this check (2026-09-15, ADR-150) asked the same question of every
     /// foreign key in the schema and found eighteen, in three classes:
@@ -724,7 +724,7 @@ mod tests {
     }
 
     /// **Every foreign key column has an index leading on it, or a written reason not to**
-    /// (ADR-150 決定 4(c)).
+    /// (ADR-150 decision 4(c)).
     ///
     /// The detector is proven before the schema is judged by it: a throwaway table with an
     /// unindexed key to `nodes` must be reported, or the catalog query has drifted and the empty
@@ -808,7 +808,7 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const IMPORT_SETTINGS: i64 = 125;
-        // 0134 raises the cap's default for organizations added after it (ADR-164 決定 33), which
+        // 0134 raises the cap's default for organizations added after it (ADR-164 decision 33), which
         // is its own test below; this one stops before it, so it pins what 0125 did and nothing after.
         const CAP_DEFAULT: i64 = 134;
         let embedded = embedded_migrations();
@@ -873,7 +873,7 @@ mod tests {
     }
 
     /// **Migration 0134 raises the import cap only for an organization added after it** (ADR-164
-    /// 決定 33).
+    /// decision 33).
     ///
     /// It changes nothing but the column's default, so an organization already added keeps the 1,000
     /// it was given — which may be one an operator chose, and nothing tells the two apart — while
@@ -927,7 +927,7 @@ mod tests {
     }
 
     /// **Migration 0135 shortens the traffic interval only for an organization added after it**
-    /// (ADR-164 決定 34).
+    /// (ADR-164 decision 34).
     ///
     /// Like 0134 it changes nothing but the column's default: an organization already added keeps
     /// the 1,800 seconds it was given — which may be one an operator chose — while one added
@@ -981,7 +981,7 @@ mod tests {
     }
 
     /// **Migration 0126 gives availability back to an organization saved without it, and touches no
-    /// other row** (ADR-164 決定 17).
+    /// other row** (ADR-164 decision 17).
     ///
     /// Since Inc.3 that tier is the only one that says whether a Meraki device is up, so such an
     /// organization's nodes could never be reported down. The API refuses the shape from here on,
@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     /// **Migration 0130 starts every existing organization collecting its switch ports** (ADR-167
-    /// 決定 12, the user's decision): the tier is appended once, whatever else the row holds, the
+    /// decision 12, the user's decision): the tier is appended once, whatever else the row holds, the
     /// interval takes its default, and a new organization gets both from the column defaults.
     /// Applied in two steps with the rows written in between, like 0126's test.
     #[sqlx::test(migrations = false)]
@@ -1160,7 +1160,7 @@ mod tests {
     }
 
     /// **Migration 0131 starts every existing organization collecting its access points' readings**
-    /// (ADR-168 決定 10): the tier is appended once, whatever else the row holds, the interval takes
+    /// (ADR-168 decision 10): the tier is appended once, whatever else the row holds, the interval takes
     /// its default, and a new organization gets both from the column defaults. Applied in two steps
     /// with the rows written in between, like 0130's test.
     #[sqlx::test(migrations = false)]
@@ -1276,7 +1276,7 @@ mod tests {
         assert_eq!(after_first, after_second);
     }
 
-    /// **A database a newer core migrated still boots** (ADR-050 決定 7) — the downgrade path.
+    /// **A database a newer core migrated still boots** (ADR-050 decision 7) — the downgrade path.
     ///
     /// [`relax_ignore_missing`] is unit-tested above as a pure function; what was never tested is
     /// that [`NodeRepo::migrate`] actually consults it and passes the answer to sqlx. That is the

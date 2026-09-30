@@ -109,7 +109,7 @@ export function NodeDetail({
   // What the tab rules are asked about. `null` until the config load resolves — the render below
   // returns a loading pane until then, so the bar is never painted from an unresolved node. All
   // three fields come off the same fetch, so there is no window where one is known and another is
-  // not — including `wireless.controller`, which the node read fills in (ADR-064 増分 B3).
+  // not — including `wireless.controller`, which the node read fills in (ADR-064 Inc.B3).
   // Memoized so it is referentially stable: the tab-correction effect below depends on it, and a
   // fresh object every render would re-run that effect — which writes the URL — on every render.
   const subject: NodeDetailSubject | null = useMemo(
@@ -159,7 +159,7 @@ export function NodeDetail({
 
   // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump) —
   // and quietly after a Poll now, whose identity read (ADR-149) lands on this same document, or
-  // when someone else changes the configuration (ADR-019 増分 2).
+  // when someone else changes the configuration (ADR-019 Inc.2).
   const configChanges = useConfigChanges();
   const blankedFor = useRef<string | null>(null);
   useEffect(() => {
@@ -472,7 +472,7 @@ export function NodeDetail({
               role="tab"
               aria-selected={activeTab === key}
               className={`nd-tab${activeTab === key ? ' on' : ''}`}
-              // 🚨 A **click** is the only thing that writes the memory (ADR-134 決定 2). The
+              // 🚨 A **click** is the only thing that writes the memory (ADR-134 decision 2). The
               // correction effect above rewrites a tab the loaded node does not offer, and if that
               // recorded too, walking a row of switches on Interfaces with one URL monitor among
               // them would leave the memory on Overview — so the memory would mean "the last screen

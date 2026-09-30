@@ -194,7 +194,7 @@ const FLOW_FILTER_MAX: usize = 8;
 
 /// Parse one comma-separated drill-down set into strong values.
 ///
-/// **Every token must parse, or the request is a 400** (ADR-053 Inc.8, 決定 Q). This used to drop
+/// **Every token must parse, or the request is a 400** (ADR-053 Inc.8, decision Q). This used to drop
 /// what it could not read, which meant `port=abc` returned the *unfiltered* top-N — an answer to a
 /// question nobody asked, presented as the answer. Silently widening a filter is the failure this
 /// ADR exists to remove, so the flow endpoints now follow the same rule the event and alert filters

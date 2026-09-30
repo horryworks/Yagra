@@ -100,7 +100,7 @@
   background: var(--bg-tertiary);
 }
 
-/* Active item = 朱 left border + secondary background (§2.1). */
+/* Active item = vermilion left border + secondary background (§2.1). */
 .sidebar-item.active {
   color: var(--text-primary);
   background: var(--bg-tertiary);

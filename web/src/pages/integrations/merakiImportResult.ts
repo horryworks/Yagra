@@ -27,7 +27,7 @@ export function merakiImportMessage(
   folder: string,
 ): MerakiImportMessagePart[] {
   const count = result.imported;
-  // What was not imported, and why — said whether or not anything else was (ADR-164 決定 39). An MX
+  // What was not imported, and why — said whether or not anything else was (ADR-164 decision 39). An MX
   // waiting for its LAN read is not "already monitored", so it must not fall into that sentence.
   const skipped: MerakiImportMessagePart[] = [];
   if (result.waiting_lan > 0) {

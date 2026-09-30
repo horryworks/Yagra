@@ -203,7 +203,7 @@ const MERAKI_WRITE: Scoping = Refused(
 );
 
 /// A **Meraki configuration read** — the organizations, one organization's networks, the polling
-/// switch. Served whole to a group-scoped caller by decision (ADR-164 決定 9): an organization's
+/// switch. Served whole to a group-scoped caller by decision (ADR-164 decision 9): an organization's
 /// name, cadence, sync state and org-wide counts are the same for everyone, and the device list —
 /// the one read that names equipment — is refused separately (`MERAKI_DEVICES`).
 ///
@@ -262,7 +262,7 @@ const NO_MCP_WRITE: Mcp = Exempt(
 // ⚠️ **The spread was restated here too, and this copy had rotted furthest** — it said
 // `ManageConfig` ×14 and never mentioned `ManageSystem`, which four of the kinds have demanded
 // since ADR-057. The numbers now live in `folded.rs` alone, where a test compares them against
-// the table itself (ADR-079 決定 3). A third copy of a count is a third thing to forget.
+// the table itself (ADR-079 decision 3). A third copy of a count is a third thing to forget.
 
 /// The five SSE streams. Recorded as a gap rather than an exemption on purpose — `/mcp` declares
 /// `enable_tools()` only, so there is no subscription transport, and that is a missing capability
@@ -580,7 +580,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/discovered-endpoints/:id/import",
-        // `GroupFiltered` since ADR-179 増分 2, where it used to claim `ADMIN_CFG`: `manage_config`
+        // `GroupFiltered` since ADR-179 Inc.2, where it used to claim `ADMIN_CFG`: `manage_config`
         // is held by a group-scoped Operator too, and the row is read through the list's own scope
         // predicate, so an id is actionable exactly when its row is listable.
         GroupFiltered,
@@ -603,7 +603,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/discovery/import",
-        // `GroupFiltered` since ADR-131 決定 8, where it used to claim `ADMIN_CFG`. Two reasons.
+        // `GroupFiltered` since ADR-131 decision 8, where it used to claim `ADMIN_CFG`. Two reasons.
         // `manage_config` is held by Operator and an Operator can be group-scoped, so "an Admin is
         // unscoped by construction" never described everyone who reaches this — the same defect
         // `PUT /nodes/:id/group` still carries. And `file_by_prefix` makes it load-bearing: without
@@ -825,7 +825,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         // `GroupFiltered`, unlike the single-window `POST` above it, which is `NodeScoped` because
         // it addresses one stored row's target. This one names a set of nodes and pushes the
         // caller's scope into the store's `JOIN nodes`, which is what `GroupFiltered` describes
-        // (ADR-124 増分 11). A node outside the scope is not suppressed and not counted.
+        // (ADR-124 Inc.11). A node outside the scope is not suppressed and not counted.
         GroupFiltered,
         NO_MCP_WRITE,
     ),
@@ -921,7 +921,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/metric-meanings",
         DEPLOY_WIDE,
-        // The dictionary behind a bare metric name (ADR-079 決定 4). ⚠️ **The WebUI does not call
+        // The dictionary behind a bare metric name (ADR-079 decision 4). ⚠️ **The WebUI does not call
         // this** — it needs the sentence in the operator's language and during render, so it reads
         // the i18n bundle, whose English half is generated from the same Rust table. That makes the
         // OpenAPI document and this tool the documented consumers, which is the point: "what does
@@ -975,7 +975,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "POST",
         "/api/v1/mutes/bulk",
         // `GroupFiltered` for the reason `/maintenance-windows/bulk` is: it names a set of nodes
-        // and the scope becomes a predicate in the write (ADR-124 増分 11).
+        // and the scope becomes a predicate in the write (ADR-124 Inc.11).
         GroupFiltered,
         NO_MCP_WRITE,
     ),
@@ -1058,7 +1058,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "PUT",
         "/api/v1/node-groups/:id/prefixes",
         // `GroupFiltered`, deliberately not inheriting the `ADMIN_CFG` its siblings claim
-        // (ADR-131 決定 8). `manage_config` is held by Operator too and an Operator can be
+        // (ADR-131 decision 8). `manage_config` is held by Operator too and an Operator can be
         // group-scoped, so "an Admin is unscoped by construction" does not describe everyone who
         // reaches this — and what it writes is exactly what `visible_groups` clears `prefixes` on
         // a breadcrumb ancestor to protect.
@@ -1069,7 +1069,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "PUT",
         "/api/v1/node-groups/:id/tags",
         // `GroupFiltered`, the same call `/prefixes` above makes and deliberately not the
-        // `ADMIN_CFG` its `geo` / `pool` / `placement` siblings claim (ADR-131 決定 8).
+        // `ADMIN_CFG` its `geo` / `pool` / `placement` siblings claim (ADR-131 decision 8).
         // `manage_config` is held by Operator too, an Operator can be group-scoped, and a folder's
         // labels reach every node beneath it — so an unscoped claim would let one site's operator
         // change another site's alert routing and maintenance coverage (ADR-135 inc. 2).
@@ -1099,7 +1099,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         // Scoped, unlike the single-node `PUT /nodes/:id/group` and `PUT /nodes/:id/placement`
         // beside it, which claim `ADMIN_CFG`. `manage_config` is held by Operator too and an
         // Operator can be group-scoped, so the claim is wrong there — a defect this route
-        // deliberately does not inherit (ADR-124 決定 8). Since 増分 8 this route carries the
+        // deliberately does not inherit (ADR-124 decision 8). Since Inc.8 this route carries the
         // placement too, so no WebUI gesture reaches either of the older two; what is left of that
         // defect is an external client holding the published contract.
         GroupFiltered,
@@ -1110,17 +1110,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/nodes/move-by-prefix",
         // Scoped for the reason `/nodes/move` is: it is that route's several-destination form,
         // written in one transaction so a closed tab cannot leave the move half done (ADR-172
-        // 決定 2).
+        // decision 2).
         GroupFiltered,
         NO_MCP_WRITE,
     ),
     (
         "POST",
         "/api/v1/nodes/delete",
-        // Scoped for the reason `/nodes/move` is (ADR-124 増分 6): an Operator holds
+        // Scoped for the reason `/nodes/move` is (ADR-124 Inc.6): an Operator holds
         // `manage_config` and can be group-scoped, and a bulk delete that skipped the scope would
         // remove another site's inventory. The single-node `DELETE` below keeps its `ADMIN_CFG`
-        // claim; that is 決定 8's known gap, not a precedent.
+        // claim; that is decision 8's known gap, not a precedent.
         GroupFiltered,
         NO_MCP_WRITE,
     ),
@@ -1137,7 +1137,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "POST",
         "/api/v1/nodes/poll",
         // `GroupFiltered`: the ids are narrowed by the store read that loads them, so a node
-        // outside the caller's folders is neither polled nor counted (ADR-124 増分 12). The
+        // outside the caller's folders is neither polled nor counted (ADR-124 Inc.12). The
         // single-node `POST /nodes/:node_id/poll` is `NodeScoped` because it addresses one node by
         // path; this one names a set in the body.
         GroupFiltered,
@@ -1146,11 +1146,11 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "POST",
         "/api/v1/nodes/pool",
-        // Scoped for the same reason `/nodes/move` and `/nodes/tags` are (ADR-124 増分 10): an
+        // Scoped for the same reason `/nodes/move` and `/nodes/tags` are (ADR-124 Inc.10): an
         // Operator holds `manage_config` and can be group-scoped, and the pool decides which
         // poller reaches a device — so an unscoped claim would let one site's operator strand
         // another site's inventory on a poller that cannot see it. The single-node
-        // `PUT /nodes/:node_id/pool` keeps its `ADMIN_CFG` claim; that is 決定 8's known gap.
+        // `PUT /nodes/:node_id/pool` keeps its `ADMIN_CFG` claim; that is decision 8's known gap.
         GroupFiltered,
         NO_MCP_WRITE,
     ),
@@ -1299,7 +1299,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
         NodeScoped,
         // Which threshold rules reach one port, from any of the six scope levels, each flagged
-        // with whether it is in force (ADR-076 決定 11). A tool of its own rather than a branch of
+        // with whether it is in force (ADR-076 decision 11). A tool of its own rather than a branch of
         // `get_config`: that tool answers "what is configured" by kind, and this one answers "what
         // governs this port", which needs the node's profile, tags and folder chain resolved
         // against the ruleset — an MCP client holding `get_config`'s output cannot do that itself.
@@ -1560,7 +1560,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("POST", "/api/v1/pools", INFRA, NO_MCP_WRITE),
     ("PUT", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
     ("DELETE", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
-    // Cover a pool that has lost its poller, and stop covering it (ADR-107 増分 4). Both move
+    // Cover a pool that has lost its poller, and stop covering it (ADR-107 Inc.4). Both move
     // every node and folder the pool holds, which is the same blast radius as the poller move
     // below and takes the same ManageSystem + global scope: there is no narrower unit of "this
     // pool's members". Writes, so MCP stays out by decision.
@@ -2617,7 +2617,7 @@ mod tests {
         );
     }
 
-    // ── Every route has a caller, or says why it has none (ADR-150 決定 4(d)) ──────────
+    // ── Every route has a caller, or says why it has none (ADR-150 decision 4(d)) ──────────
 
     /// Routes the WebUI never calls, and why each one exists anyway.
     ///
@@ -2837,7 +2837,7 @@ mod tests {
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
     ///
-    /// **Since I3b the remaining ones are the `/stream/*` SSE routes (five since ADR-019 増分 2 added
+    /// **Since I3b the remaining ones are the `/stream/*` SSE routes (five since ADR-019 Inc.2 added
     /// `/stream/config`), and they are a different kind
     /// of number.** Every earlier value was a backlog that the next increment would spend down;
     /// this one is not, because MCP declares `enable_tools()` and there is no subscription

@@ -110,7 +110,7 @@ describe('pad2', () => {
   });
 });
 
-// 🚨 Every pane that draws a range picker reads the SHARED window (ADR-134 決定 6).
+// 🚨 Every pane that draws a range picker reads the SHARED window (ADR-134 decision 6).
 //
 // The defect this exists for: `RangeControl.tsx` says in its own comment that the window "is shared
 // across the Overview / Interfaces / Flow / DNS panes", `store.ts` names the same set — and `FlowTab`

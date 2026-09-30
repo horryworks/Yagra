@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Which import-preview requests to send for the addresses the setup cells asked about in one tick
-// (ADR-179 増分 8). Each cell asks for its own address on mount; sent one by one, a 100-row page was
+// (ADR-179 Inc.8). Each cell asks for its own address on mount; sent one by one, a 100-row page was
 // 100 POSTs — and every POST under /api/v1 is an audit row. Gathered here, it is one.
 
 import { SWEEP_LIMIT } from './cidr';

@@ -5,7 +5,7 @@
 // the organization's own page. A second copy of this would drift on the part that is easy to get
 // wrong: what happens after the request, whichever way it went.
 //
-// Since ADR-164 決定 32 the request only asks: the server answers 202 at once and the read it asked
+// Since ADR-164 decision 32 the request only asks: the server answers 202 at once and the read it asked
 // for runs in the background for minutes, shown by the organization's `full_sync`
 // (`orgFullRead`, `useSyncWatch`). `busy` covers the request, not the read.
 

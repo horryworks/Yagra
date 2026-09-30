@@ -21,7 +21,7 @@
 //!
 //! | Kind | Strength | What it says |
 //! |---|---|---|
-//! | `address` | strong | two device nodes are monitored at the same address — unless each is bound to a different Meraki device (a warm-spare MX pair, ADR-164 決定 28) |
+//! | `address` | strong | two device nodes are monitored at the same address — unless each is bound to a different Meraki device (a warm-spare MX pair, ADR-164 decision 28) |
 //! | `serial` | strong | a chassis serial (one member of a stack's list) or a Meraki serial is shared |
 //! | `own_ip` | strong | each node's own interface-address list names the other's monitored address |
 //! | `own_ip_one_way` | weak | one list names the other's address, and the other has no list to confirm |
@@ -47,7 +47,7 @@
 //!
 //! ## A Discovery candidate that is already a node at another address
 //!
-//! [`same_device_candidates`] asks the same question of a scan's candidates (ADR-139 増分 3). A
+//! [`same_device_candidates`] asks the same question of a scan's candidates (ADR-139 Inc.3). A
 //! candidate has only an address, a sysName and a `sysObjectID`, so two kinds are usable: a node's
 //! interface list carrying the candidate's address (`own_ip_one_way` — one direction only, since
 //! the candidate has no list), and the name. The screen only marks what this returns; nothing is
@@ -360,7 +360,7 @@ pub fn mac_identifies(mac: &str) -> bool {
     !VIRTUAL_MAC_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
-/// Whether every node in `nodes` is bound to a Meraki device, each a different one (ADR-164 決定
+/// Whether every node in `nodes` is bound to a Meraki device, each a different one (ADR-164 decision
 /// 28). Then they are different devices by construction — a Meraki serial is the device — and an
 /// address they share says nothing about them.
 ///
@@ -724,7 +724,7 @@ fn build_group(
     }
 }
 
-/// A Discovery candidate, as far as saying it is a known device goes (ADR-139 増分 3).
+/// A Discovery candidate, as far as saying it is a known device goes (ADR-139 Inc.3).
 #[derive(Debug, Clone, Copy)]
 pub struct CandidateIdentity<'a> {
     pub address: IpAddr,
@@ -749,7 +749,7 @@ fn oid_key(oid: Option<&str>) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Which device nodes each Discovery candidate may be, at another address (ADR-139 増分 3).
+/// Which device nodes each Discovery candidate may be, at another address (ADR-139 Inc.3).
 ///
 /// - `carriers`: a node whose own interface-address list carries a candidate's address, paired with
 ///   that address. `named`: nodes whose name matches some candidate's sysName (the reader returns at
@@ -982,7 +982,7 @@ mod tests {
         assert!(serial_parts("N/A, , FOX1820GVER").eq(&["FOX1820GVER".to_owned()]));
     }
 
-    /// ADR-164 決定 28: a warm-spare MX pair stands at one address — its network's VLAN — and is two
+    /// ADR-164 decision 28: a warm-spare MX pair stands at one address — its network's VLAN — and is two
     /// devices, which their Meraki serials say. A third node at that address that Meraki does not
     /// know still makes a group: that may be the same MX, added again by hand.
     #[test]
@@ -1465,7 +1465,7 @@ mod tests {
         );
     }
 
-    // ── Discovery candidates at another address (ADR-139 増分 3) ──
+    // ── Discovery candidates at another address (ADR-139 Inc.3) ──
 
     const CATALYST: &str = "1.3.6.1.4.1.9.1.1208";
     const NEXUS: &str = "1.3.6.1.4.1.9.12.3.1.3.1238";

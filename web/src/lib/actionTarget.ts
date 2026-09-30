@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // What an action started from the inventory tree acts on: one row, or the whole working set.
 //
-// 🚨 **Every batch-aware action needs this, and before ADR-124 増分 10 each one invented it.** The
+// 🚨 **Every batch-aware action needs this, and before ADR-124 Inc.10 each one invented it.** The
 // moves took `readonly string[]`, the dialogs took `NodeSummary[]`, and the pool and suppression
 // handlers took a single `SuppressionTarget` — which is exactly why they kept acting on one row
 // while sitting in a menu headed "Move 20 selected…". Giving them all one argument type is what

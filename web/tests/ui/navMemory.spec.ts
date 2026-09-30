@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The top-bar tab returns to the screen the operator left in that section (ADR-134 増分 2).
+// The top-bar tab returns to the screen the operator left in that section (ADR-134 Inc.2).
 //
 // Why Tier1 and not a unit test: the decision itself is pure and tested in `src/nav.test.ts`
 // (`sectionLandingPath` / `rememberableRoute`). What cannot be tested there is the loop this
@@ -24,7 +24,7 @@ function tab(page: import('@playwright/test').Page, name: string) {
 }
 
 /** The sub-page the sidebar is showing as current, in the menu's own words. This is the thing the
- *  report was about — "Dashboard に戻ってくると Shared dashboard が見える" — so asserting the
+ *  report was about — "come back to Dashboard and it shows Shared dashboard" — so asserting the
  *  screen rather than only the URL is what makes the test about the complaint. */
 function activeItem(page: import('@playwright/test').Page) {
   return page.locator('.sidebar-item.active .sidebar-label');
@@ -43,12 +43,12 @@ test('the Dashboard tab returns to the board the operator left, not to Shared da
 
   await tab(page, 'Dashboard').click();
   await expect(page).toHaveURL(/\/dashboard\/my$/);
-  // Before 増分 2 this read "Shared dashboard": the tab's `to=` was a constant.
+  // Before Inc.2 this read "Shared dashboard": the tab's `to=` was a constant.
   await expect(activeItem(page)).toHaveText('My dashboard');
 });
 
 test('a narrowed list comes back narrowed, and says so', async ({ page }) => {
-  // 決定 9 carries the query string, and what makes that safe is on screen rather than in the
+  // decision 9 carries the query string, and what makes that safe is on screen rather than in the
   // code: the filter row cannot be closed while it filters, and this button counts what is
   // narrowing the list (ADR-053 Inc.9). If the reset control ever stops being drawn, the decision
   // to remember filters has lost its justification — which is why it is asserted here and not
@@ -67,7 +67,7 @@ test('a narrowed list comes back narrowed, and says so', async ({ page }) => {
 });
 
 test('the logo stays home while the tabs remember', async ({ page }) => {
-  // 決定 10. The memory for the dashboard section says `/dashboard/my` by the time the logo is
+  // decision 10. The memory for the dashboard section says `/dashboard/my` by the time the logo is
   // pressed, so a home button that followed the memory would land there — this asserts it does
   // not. One control with a predictable destination is the way out of a memory that surprises.
   await page.goto('/dashboard/my');
@@ -89,8 +89,8 @@ function sideItem(page: import('@playwright/test').Page, name: string) {
 test('a sidebar item returns to its own search term after a visit to a sibling item', async ({
   page,
 }) => {
-  // ADR-134 増分 3, the reported symptom: "All nodes から Discovery に行って、戻ったら保持されて
-  // いない". Both items are in the Nodes section, so the section memory now names Discovery and
+  // ADR-134 Inc.3, the reported symptom: "go from All nodes to Discovery, come back, and it
+  // was not kept". Both items are in the Nodes section, so the section memory now names Discovery and
   // cannot bring the term back — the per-item memory the sidebar reads is what does.
   const box = page.locator('.nodes-pane-search input');
 
@@ -103,7 +103,7 @@ test('a sidebar item returns to its own search term after a visit to a sibling i
   await expect(page).toHaveURL(/\/nodes\/discovery(\?scan=[^&]+)?$/);
 
   await sideItem(page, 'All nodes').click();
-  // Before 増分 3 the link was the bare `/nodes`, and the box came back empty.
+  // Before Inc.3 the link was the bare `/nodes`, and the box came back empty.
   await expect(page).toHaveURL(/\/nodes\?q=sw$/);
   await expect(box).toHaveValue('sw');
   await expect(activeItem(page)).toHaveText('All nodes');

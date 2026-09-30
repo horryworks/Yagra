@@ -47,7 +47,7 @@ fn metric_kind_str(k: MetricKind) -> &'static str {
 /// the seeder, and the generator behind `the_committed_metric_catalog_is_current` that writes
 /// `web/src/api/metricCatalog.json`. Two copies of "which metrics are built in" would drift the
 /// moment someone adds a template, and the drift would be silent on the WebUI side — a metric with
-/// no explanation degrades to its OID rather than failing (ADR-075 増分 4 決定 17).
+/// no explanation degrades to its OID rather than failing (ADR-075 Inc.4 decision 17).
 #[must_use]
 pub fn builtin_mib_rows() -> Vec<(CollectionItem, Option<&'static str>)> {
     let mut rows: Vec<(CollectionItem, Option<&'static str>)> =
@@ -189,7 +189,7 @@ mod tests {
     /// Only the built-ins. An operator's own `mib_catalog` rows arrive over the API at runtime;
     /// what this file is for is the **coverage gate** — `web/src/lib/metricMeaning.ts` derives the
     /// set of metrics that owe an explanation from it, so adding a metric in Rust fails a WebUI
-    /// test until someone writes the EN and JA sentences (ADR-075 増分 4 決定 17).
+    /// test until someone writes the EN and JA sentences (ADR-075 Inc.4 decision 17).
     fn metric_catalog_json() -> String {
         // First row wins, exactly as `seed_builtin`'s `ON CONFLICT (metric_name) DO NOTHING`
         // decides it — so this file says what the deployment's catalog will say. BTreeMap for a
@@ -228,7 +228,7 @@ mod tests {
         for (name, family) in crate::metric_meaning::CHECK_FAMILIES {
             let Some(family) = family else { continue };
             // 🚨 A check metric is node-level — except the ones a Meraki collect publishes per port
-            // or per radio (ADR-167 決定 8, ADR-168 決定 2). The alert engine already judges those
+            // or per radio (ADR-167 decision 8, ADR-168 decision 2). The alert engine already judges those
             // per interface (`per_interface_metric_names` adds the same list), so a `false` here
             // only ever disagreed with it in one direction: the threshold editor's port-rule picker
             // filters on this flag, so a rule could not be written for the very metrics that are
@@ -252,7 +252,7 @@ mod tests {
         out
     }
 
-    /// ADR-167 決定 8 and ADR-168 決定 2: the metrics a Meraki collect stores one series per port or
+    /// ADR-167 decision 8 and ADR-168 decision 2: the metrics a Meraki collect stores one series per port or
     /// per radio are marked per-interface in the generated catalogue, because the WebUI's port-rule
     /// picker filters on that flag — and the alert engine, which judges them, reads its own list.
     /// A disagreement is a rule an operator cannot write for a metric that has the rows for it.

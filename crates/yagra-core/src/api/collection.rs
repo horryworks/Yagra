@@ -708,7 +708,7 @@ impl InterfaceAddress {
 }
 
 /// Each interface's addresses out of one node's stored address set, keyed by `ifIndex` — the
-/// join the Interfaces list and `get_node_status` both perform (ADR-157 決定 3).
+/// join the Interfaces list and `get_node_status` both perform (ADR-157 decision 3).
 pub(crate) fn addresses_by_ifindex(
     snapshot: Option<&yagra_common::L3Snapshot>,
 ) -> std::collections::BTreeMap<u32, Vec<InterfaceAddress>> {

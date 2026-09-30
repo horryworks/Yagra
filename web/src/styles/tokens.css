@@ -16,7 +16,7 @@
 :root {
   /* ---- fixed brand seal (§1.1) — a physical brand surface, identical in both themes ---- */
   --brand-fixed: #e95d08; /* orange seal tile / login brand panel */
-  --brand-mark: #faf7f3; /* off-white 生成り mark on the seal     */
+  --brand-mark: #faf7f3; /* off-white unbleached mark on the seal     */
 
   /* ---- third-party marks — an integration's own colour, on the badge that names it ----
      Theme-independent like the seal: it is their logo's colour, not ours to shift per theme.
@@ -48,20 +48,20 @@
   --accent-hover: #cf5207;
 
   /* ---- series (§1.2) — categorical graph colors; carry NO status meaning ---- */
-  --series-1: #4c8dd6; /* 青 */
-  --series-2: #9b7bd4; /* 紫 */
-  --series-3: #4caf9b; /* 青緑 (extension) */
-  --series-4: #d68a4c; /* 橙茶 (extension) */
-  --series-5: #b05c8e; /* 臙脂 (extension) */
-  --series-6: #7c9b4c; /* 苔   (extension) */
+  --series-1: #4c8dd6; /* blue */
+  --series-2: #9b7bd4; /* purple */
+  --series-3: #4caf9b; /* teal (extension) */
+  --series-4: #d68a4c; /* orange-brown (extension) */
+  --series-5: #b05c8e; /* crimson (extension) */
+  --series-6: #7c9b4c; /* moss (extension) */
   /* Severity 'info' is not a network status — borrow the categorical blue, not a status. */
   --severity-info: var(--series-1);
 
   /* ---- role (categorical) — a user's role is neither a status nor a graph series, so it
      borrows the series palette to keep the status and brand channels clean (design-system). ---- */
-  --role-admin: var(--series-2); /* 紫 */
-  --role-operator: var(--series-1); /* 青 */
-  --role-viewer: var(--series-3); /* 青緑 */
+  --role-admin: var(--series-2); /* purple */
+  --role-operator: var(--series-1); /* blue */
+  --role-viewer: var(--series-3); /* teal */
 
   /* ---- suppression (categorical) — "a maintenance window / a mute is in force on this row",
      shown as the filled marker chips in the All nodes tree.
@@ -76,8 +76,8 @@
 
      The maintenance blue is deliberately lighter and more cyan than --status-maintenance: the dot
      and the chip sit inches apart on the same row and should read as related, not identical. ---- */
-  --supp-maintenance: #2c94c8; /* 空色 — 水色と青の中間 */
-  --supp-mute: #b59a2b; /* 芥子 — 黄 */
+  --supp-maintenance: #2c94c8; /* sky blue — between light blue and blue */
+  --supp-mute: #b59a2b; /* mustard — yellow */
 
   /* ---- search-match highlight (ADR-053 Inc.2e) ----
      Deliberately NOT the accent and NOT a status colour: an accent-coloured run of text inside a
@@ -87,7 +87,7 @@
      the ink. Both themes keep the body text at full contrast on top of it. */
   --match-bg: #ffe08a;
 
-  /* ---- tag chip (ADR-135 増分 2) ----
+  /* ---- tag chip (ADR-135 Inc.2) ----
      A filled chip, because an operator scanning a node's detail is looking for *which* labels it
      carries, and an outline chip in body-text grey has to be read rather than seen.
 

@@ -123,7 +123,7 @@ export function ActiveAlertsPage() {
         emptyFiltered={t('active.emptyFiltered')}
         // The toolbar is a slot of the list rather than a sibling because the counts come from the
         // sorted-and-filtered set, which only the list has. Fixed order (design-system §4.1):
-        // 検索 → フィルタ → spacer → 件数 → 主アクション (there is no primary action here — creating
+        // search → filters → spacer → count → primary action (there is no primary action here — creating
         // an alert is not a thing an operator does).
         toolbar={({ shown, total, nameOf, rows }) => {
           // Built here, with the resolver the list already owns. `severity` / `state` / `ack` never

@@ -10,10 +10,10 @@
 // `detail.source_ip` instead so the value is structured and localizable around.
 //
 // **This is the one of the fifteen report bodies whose chips were a plain severity filter, so it is
-// the one Inc.7 converted** (決定 J). The other twelve select a tool-specific lens — `soon/mid/far`,
+// the one Inc.7 converted** (decision J). The other twelve select a tool-specific lens — `soon/mid/far`,
 // `chronic/intermittent`, `inverse` — which is not a row attribute and must not be folded into a
 // generic filter. Being a card list with no header row, this gets a `FilterBar` rather than a filter
-// row (決定 E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
+// row (decision E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
 
 import { useMemo } from 'react';
 import { useFilterParams } from '../../../lib/useFilterParams';
@@ -121,7 +121,7 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
         }}
       />
       {/* A run of `FindingRow`s has no header row to hang a filter row under, so the controls carry
-          their own names (決定 E). */}
+          their own names (decision E). */}
       <FilterBar
         columns={filterCols}
         labels={labels}

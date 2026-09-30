@@ -405,7 +405,7 @@ html[data-viewport='mobile'] .vpnsess-actions select {
 }
 
 /* The unit noun is the whole reason a Cisco session count may sit beside a FortiGate user count
-   (ADR-136 決定 3), so it is quieter than the number but never hidden. */
+   (ADR-136 decision 3), so it is quieter than the number but never hidden. */
 .vpnsess-chip-unit {
   color: var(--text-tertiary);
   font-size: var(--font-xs);

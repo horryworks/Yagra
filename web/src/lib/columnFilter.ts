@@ -289,7 +289,7 @@ export function isAnyFiltered<T>(
   return isFiltered(filled, defaults);
 }
 
-/** How many columns are narrowing — the `フィルタ (N)` badge, the clear-all affordance, and (since
+/** How many columns are narrowing — the `Filters (N)` badge, the clear-all affordance, and (since
  *  ADR-053 Inc.9) whether the filter row is forced open and its toggle locked.
  *
  *  ⚠️ One column counts once however many dimensions its condition carries. The Events toolbar this
@@ -382,7 +382,7 @@ export function reservedKeyCollisions<T>(columns: readonly FilterableColumn<T>[]
  *  which is `readEnumParam`'s rule and the opposite of the API edge's. A stale bookmark must show
  *  the default view, never a 400 and never a control displaying a value it does not offer.
  *
- *  `prefix` is prepended to each column key to make its URL key (ADR-153 決定 3) — `'interfaces.'`
+ *  `prefix` is prepended to each column key to make its URL key (ADR-153 decision 3) — `'interfaces.'`
  *  reads `?interfaces.oper=`. The state it returns is still keyed by the bare column key, so nothing
  *  above the codec knows a prefix exists. */
 export function readFilterParams<T>(
@@ -420,7 +420,7 @@ export function writeFilterParams<T>(
  * Re-encode every `enum` column's token set in its own options order, dropping tokens the column
  * does not offer.
  *
- * **This is where an unknown token dies, and something has to be** (ADR-053 Inc.10, 決定 AA).
+ * **This is where an unknown token dies, and something has to be** (ADR-053 Inc.10, decision AA).
  * [`readFilterParams`] deliberately does not validate — a stale bookmark must open the default view
  * rather than a broken control — but the API edge does the opposite and 400s a token it does not
  * know. So every server-side `queryFor` runs its state through here before building a request;
@@ -504,7 +504,7 @@ export function decodeRange(raw: string, spec: RangeShape): RangeValue {
  * How far back a range column's stored value reaches, in seconds — `null` for "no lower bound".
  *
  * The length comes off the spec's own presets, which `filterPresets.ts::rangePresets` fills from
- * the one seconds table (Inc.10, 決定 X). Going through [`decodeRange`] first is what makes a
+ * the one seconds table (Inc.10, decision X). Going through [`decodeRange`] first is what makes a
  * stale or hand-typed value fall back to **the column's default** rather than to "all time": the
  * widening answer is the dangerous one, which is why `rangeSeconds` refuses a bare `string` at all.
  *

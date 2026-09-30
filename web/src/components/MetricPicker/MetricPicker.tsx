@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Choosing a metric for an alert rule or a mute (ADR-075 増分 4).
+// Choosing a metric for an alert rule or a mute (ADR-075 Inc.4).
 //
 // It replaces a free-text box whose only help was a five-entry `datalist`, against a catalog of
 // eighty-eight. Three things it has to do that a `<select>` could not:
@@ -39,7 +39,7 @@ interface Props {
   value: string;
   onChange: (metric: string) => void;
   id?: string;
-  /** Offer only the metrics that publish one series per port (ADR-076 増分 5).
+  /** Offer only the metrics that publish one series per port (ADR-076 Inc.5).
    *
    *  Set by the dialog when the rule's scope is one interface, where a node-wide metric would
    *  produce a rule that saves, lists and never fires — see `metricOptions`. */

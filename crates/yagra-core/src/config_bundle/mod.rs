@@ -34,7 +34,7 @@
 //!   imported channel could never be made to work, and a routing rule pointing at one would notify
 //!   nobody, silently — the worst possible outcome for an alerting system. Re-create channels on
 //!   the target, then re-create the rules.
-//! * **The nodes a Meraki organization or a wireless controller owns** (ADR-164 決定 40). Their
+//! * **The nodes a Meraki organization or a wireless controller owns** (ADR-164 decision 40). Their
 //!   binding (`meraki_devices`, `wireless_aps`) is the only thing that keeps them out of a pool's
 //!   polling, and it does not travel, so they would arrive as ordinary devices and be pinged at
 //!   their LAN address. Adding the same organization on the target recreates them under the same

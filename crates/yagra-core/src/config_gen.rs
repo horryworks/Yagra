@@ -76,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn a_bump_reaches_the_browsers_change_feed() {
         // The importers call `bump()` and nothing else, so this is the only thing that puts their
-        // changes in front of an open inventory tree (ADR-019 増分 2).
+        // changes in front of an open inventory tree (ADR-019 Inc.2).
         let mut rx = crate::change_feed::subscribe();
         let before = crate::change_feed::current();
         bump();

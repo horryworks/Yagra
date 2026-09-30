@@ -745,7 +745,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         nodes: repo.clone(),
     };
     // A failed priming load leaves the engine with its empty starting config rather than
-    // installing a degraded one (ADR-080 決定 3); the leader's 30s refresh installs the real one.
+    // installing a degraded one (ADR-080 decision 3); the leader's 30s refresh installs the real one.
     // Refusing to start would be worse — a transient query failure right after migrations would
     // take monitoring down.
     //
@@ -754,7 +754,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // `alert_history` by the time this runs. An empty ruleset then reads as "the liveness rule was
     // deleted", which closes every restored outage on the first poll and leaves nothing that could
     // re-open it. The engine tells a config it has never loaded from one with no rules in it
-    // (ADR-160 決定 6); this comment is the reason that distinction has to exist.
+    // (ADR-160 decision 6); this comment is the reason that distinction has to exist.
     match alerts::config::load_alert_config(
         &alerts::config::LiveConfigSources {
             repo: repo.clone(),
@@ -1296,7 +1296,7 @@ impl LeaderTasks {
         match self.wireless.ap_bindings().await {
             Ok(bindings) => {
                 ap_fanout.install(&bindings);
-                // When each AP was last served, and by which controller (ADR-064 増分 G, G7): what
+                // When each AP was last served, and by which controller (ADR-064 Inc.G, G7): what
                 // lets an AP whose controller was already silent when this core came up still say
                 // why it reads `unknown`. The same rows, read once — no query of its own.
                 self.alerts.seed_reports(bindings.iter().filter_map(|b| {
@@ -1619,7 +1619,7 @@ impl LeaderTasks {
                 self.alert_sink("a deleted-node resolution"),
             ),
         );
-        // APs whose controller stopped reporting them, and ones it reported again (ADR-064 増分 G):
+        // APs whose controller stopped reporting them, and ones it reported again (ADR-064 Inc.G):
         // told to the node-state stream, since going stale is not a transition anything observes.
         // Leader-only because the ledger it reads is filled by the leader's ingest.
         spawn_cancellable(
@@ -1650,7 +1650,7 @@ impl LeaderTasks {
                 self.alert_sink("a pool-coverage transition"),
             ),
         );
-        // Whether the Dashboard API is answering each Meraki organization (ADR-164 決定 18). Leader-
+        // Whether the Dashboard API is answering each Meraki organization (ADR-164 decision 18). Leader-
         // only because it raises alerts and reads a record only the leader's result stream feeds;
         // it shares `meraki_inflight` with the collect scheduler and the sync above.
         spawn_cancellable(
@@ -2017,7 +2017,7 @@ struct EndpointSweepStores {
 /// **Leader-only** for the same reason the derivation is: a whole-fleet read followed by a
 /// whole-table write, idempotent but pure waste if two cores do it.
 ///
-/// **No longer free on a deployment that never enabled ARP** (ADR-179 決定 6). Neighbours are
+/// **No longer free on a deployment that never enabled ARP** (ADR-179 decision 6). Neighbours are
 /// walked by default, so a watermark is almost always present and the sweep reads the same tables
 /// the topology derivation already reads on the same five-minute cycle. Nothing observed at all
 /// still returns before reading anything.
@@ -2182,7 +2182,7 @@ struct MerakiScheduler {
     inflight: Arc<meraki::MerakiInflight>,
     /// The deployment's settings — the global Meraki kill switch.
     settings: Arc<NodeRepo>,
-    /// Which capabilities the pool's live pollers claim (ADR-167 決定 9).
+    /// Which capabilities the pool's live pollers claim (ADR-167 decision 9).
     coordinator: Arc<Coordinator>,
     /// The pool Meraki collects are published to.
     pool: String,
@@ -2204,7 +2204,7 @@ struct MerakiScheduler {
 /// core started. The wireless tier (ADR-168) is the same shape: [`yagra_bus::CAP_MERAKI_WIRELESS`],
 /// the access points alone, and the SSIDs and radio settings every twenty minutes — read by a
 /// collect of their own in the slow lane (`ssid_only`), which publishes no client count or
-/// utilization, so the fast lane's wireless rounds keep their spacing (ADR-169 決定 2).
+/// utilization, so the fast lane's wireless rounds keep their spacing (ADR-169 decision 2).
 ///
 /// ⚠️ Every decision below is [`meraki_schedule::MerakiSchedule`]'s, which is what a test drives;
 /// this loop reads the stores and publishes.
@@ -2233,7 +2233,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             continue;
         }
         // A switch's LLDP/CDP neighbours follow the deployment's neighbour settings, the ones an SNMP
-        // node's neighbour walk follows (ADR-181 決定 2). Read every tick so a change applies within
+        // node's neighbour walk follows (ADR-181 decision 2). Read every tick so a change applies within
         // one; a failed read answers the defaults (on, hourly), never "off".
         let adjacency = settings.get_adjacency_settings().await;
         schedule.set_neighbor_interval(
@@ -2249,7 +2249,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             }
         };
         let now = Instant::now();
-        // Which tiers this pool can run at all (ADR-167 決定 9, ADR-168 決定 7): asked once a tick,
+        // Which tiers this pool can run at all (ADR-167 decision 9, ADR-168 decision 7): asked once a tick,
         // since every organization's collect goes to the same pool.
         let caps = meraki::PoolCaps {
             switch_ports: coordinator.pollers_support(
@@ -2266,7 +2266,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
         for org in orgs {
             // A tier switched off, or one no poller in the pool can run, is never asked about:
             // nothing will answer it again, so it must not go on showing — or holding open — a
-            // failure from before (ADR-164 決定 35).
+            // failure from before (ADR-164 decision 35).
             let active = org.active_tiers();
             for tier in yagra_common::MerakiTier::ALL {
                 if tier != yagra_common::MerakiTier::Inventory
@@ -2284,15 +2284,15 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             for work in plan.works() {
                 let tier = work.tier;
                 // Three things below stop this collect before a job is sent, and no poller can
-                // report any of them — so core counts them itself (ADR-164 決定 18), at the
+                // report any of them — so core counts them itself (ADR-164 decision 18), at the
                 // collect's own rate rather than this loop's 15-second one.
                 let cadence = Duration::from_secs(u64::from(org.tier_cadence(tier)));
                 let device_refs = match devices.device_refs(org.id, tier).await {
                     Ok(d) if !d.is_empty() => d,
                     // No imported device is not a failure — there is nothing to ask about, and this
                     // organization is what "save the budget" was always for. For the switch-port
-                    // tier it means no switch (ADR-167 決定 10), for a wireless round no access
-                    // point (ADR-169 決定 3): the work is marked as having had its turn, or, never
+                    // tier it means no switch (ADR-167 decision 10), for a wireless round no access
+                    // point (ADR-169 decision 3): the work is marked as having had its turn, or, never
                     // dispatched and so always the most overdue, it would be picked on every tick
                     // ahead of the work that does have something to ask.
                     Ok(_) => {
@@ -2317,7 +2317,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     }
                 };
                 // Before the key is opened: an organization that watches nothing gets no collect,
-                // and neither does a tick on which that could not be read (ADR-164 決定 16). An
+                // and neither does a tick on which that could not be read (ADR-164 decision 16). An
                 // empty list on the bus means "every network", so it must not be what either case
                 // sends.
                 if watched.is_none() {
@@ -2331,10 +2331,10 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     Ok(ids) => ids,
                     Err(why) => {
                         tracing::debug!(org = %org.org_id, ?why, "no meraki collect this tick");
-                        // Watching nothing is a configuration, not a fault — 決定 16 says such an
+                        // Watching nothing is a configuration, not a fault — decision 16 says such an
                         // organization is sent no collect, so there is nothing failing to report,
                         // and nothing will answer any of its tiers: an alert raised before must
-                        // close on that (決定 35). A read that *failed* is the other thing
+                        // close on that (decision 35). A read that *failed* is the other thing
                         // entirely, and is counted.
                         if why == meraki::NoCollect::NothingWatched {
                             for idle in &active {
@@ -2361,7 +2361,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                 let Some(api_key) = key.clone().expect("read above") else {
                     tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
                     // No job is sent, so no poller can report this: it is core that knows the
-                    // organization's devices are not being asked about (ADR-164 決定 18).
+                    // organization's devices are not being asked about (ADR-164 decision 18).
                     if schedule.count_core_failure(org.id, tier, cadence, now) {
                         inflight.health.set_active(org.id, tier);
                         inflight.health.record_failed(
@@ -2418,7 +2418,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             "meraki collect publish failed"
                         );
                         // No job went out, so no poller will ever report this one: core counts it,
-                        // like the three failures above (ADR-164 決定 36). A publish refused for its
+                        // like the three failures above (ADR-164 decision 36). A publish refused for its
                         // size fails on every tick — an organization of about 13,000 imported devices
                         // outgrows NATS's 1 MiB `max_payload` — and used to leave every node at its
                         // last state with nothing alerting.

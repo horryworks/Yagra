@@ -19,7 +19,7 @@
   list-style: none;
 }
 
-/* Filled, matching `.badge-tag` (ADR-135 増分 2): the chip an operator edits here is the same
+/* Filled, matching `.badge-tag` (ADR-135 Inc.2): the chip an operator edits here is the same
    object the node's Overview shows them, so it has to look like the same object. `--tag-bg` is
    categorical — never the accent, never a status colour; tokens.css carries the argument. */
 .chipinput-chip {

@@ -13,7 +13,7 @@
 //! sync. Each runs one collect at a time.
 //!
 //! 🚨 **The SSID read is a job of its own, and publishes no client count or utilization**
-//! (決定 2, `MerakiCollectCheck::ssid_only`). Two designs were measured and dropped on the way:
+//! (decision 2, `MerakiCollectCheck::ssid_only`). Two designs were measured and dropped on the way:
 //! sent as an *extra* wireless round, it adds a sample between two rounds — VictoriaMetrics
 //! estimates a series' interval from its samples, a short interval shrinks the estimate, and the
 //! ordinary interval is then drawn as a gap, the dotted line this whole change exists to remove;
@@ -33,7 +33,7 @@ use crate::meraki::{
 };
 
 /// How long an SSID read holds the slow lane, with room to spare: about 80 s measured on a real
-/// organization of 1,710 access points, 85–90 s on the lab deployment (決定 2). The read starts
+/// organization of 1,710 access points, 85–90 s on the lab deployment (decision 2). The read starts
 /// only when the switch ports are not due for at least this long, so it ends before they are —
 /// measured on the lab deployment, the read going first made every fourth switch-port interval
 /// 360 s, which a chart draws as a gap.
@@ -60,7 +60,7 @@ impl MerakiWork {
         MerakiLane::of(self.tier, self.slow)
     }
 
-    /// The SSID read on its own (決定 2) — a wireless job, but not a wireless round.
+    /// The SSID read on its own (decision 2) — a wireless job, but not a wireless round.
     fn is_ssid_read(&self) -> bool {
         self.tier == MerakiTier::Wireless && self.slow.ssid_statuses
     }
@@ -83,13 +83,13 @@ impl LanePlan {
 
 /// When each organization's tiers and slow reads last had their turn, and when core last counted a
 /// failure of its own against a tier. Lives in the scheduler's loop; lost on restart, which makes
-/// everything due at once — and the fast lane then starts with availability (決定 5).
+/// everything due at once — and the fast lane then starts with availability (decision 5).
 #[derive(Debug, Default)]
 pub struct MerakiSchedule {
     last: HashMap<(Uuid, MerakiTier), Instant>,
-    // When each organization's switch-port collect last asked for the ports' names (ADR-167 決定 1).
+    // When each organization's switch-port collect last asked for the ports' names (ADR-167 decision 1).
     port_names_at: HashMap<Uuid, Instant>,
-    // When each organization's SSIDs and radio settings were last read (ADR-168 決定 1).
+    // When each organization's SSIDs and radio settings were last read (ADR-168 decision 1).
     ssid_statuses_at: HashMap<Uuid, Instant>,
     // When each organization's switch-port collect last asked for the ports' neighbours (ADR-181).
     neighbors_at: HashMap<Uuid, Instant>,
@@ -100,7 +100,7 @@ pub struct MerakiSchedule {
     // When a tier was last counted as failed for a reason **core itself** knows about — its key
     // could not be opened, its imported devices could not be read, or which networks it watches
     // could not be read. No job is sent for any of the three, so no poller can report them (ADR-164
-    // 決定 18). The tier stays due and is retried every tick, but it is *counted* once per cadence
+    // decision 18). The tier stays due and is retried every tick, but it is *counted* once per cadence
     // (`meraki_health::count_once_per_cadence`), or three ticks of 15 s would read as three failed
     // collects.
     core_failures: HashMap<(Uuid, MerakiTier), Instant>,
@@ -126,13 +126,13 @@ impl MerakiSchedule {
     ///   when due) then went ahead of availability (60 s) and availability waited two ticks.
     ///   Everything in this lane takes seconds, so a tier that waits a tick behind one before it
     ///   loses 15 s, never a cadence. Availability being first is also what makes a restart count
-    ///   core's own failures against it (ADR-164 決定 18).
+    ///   core's own failures against it (ADR-164 decision 18).
     ///   ⚠️ Nothing else the scheduler sends may take this lane. The periodic inventory sync did,
     ///   from its own loop, and delayed availability by one tick on every run — a 75 s interval at a
     ///   60 s cadence, which a chart draws as a gap (VictoriaMetrics: about 1.125× the interval). It
     ///   is in the slow lane now (`meraki_sync::MerakiSync::sync_org_scheduled`). The one exception
-    ///   is an operator's "Sync now" while the slow lane is busy (ADR-169 決定 1), and that sync
-    ///   reads no network's LAN side here (ADR-164 決定 29), so it stays a few seconds.
+    ///   is an operator's "Sync now" while the slow lane is busy (ADR-169 decision 1), and that sync
+    ///   reads no network's LAN side here (ADR-164 decision 29), so it stays a few seconds.
     #[must_use]
     pub fn plan(
         &self,
@@ -166,7 +166,7 @@ impl MerakiSchedule {
         plan
     }
 
-    /// How often the switch ports' neighbours are read (ADR-181 決定 2): the deployment's neighbour
+    /// How often the switch ports' neighbours are read (ADR-181 decision 2): the deployment's neighbour
     /// interval, or `None` while neighbour discovery is off.
     pub fn set_neighbor_interval(&mut self, every: Option<Duration>) {
         self.neighbor_every = every;
@@ -237,10 +237,10 @@ impl MerakiSchedule {
     /// `work` had its turn at `now`: it was published — or there was nothing to send it about
     /// (no imported device of its kind), which must count as a turn too, or it stays "never had
     /// one", and is picked on every tick ahead of the work that does have something to ask
-    /// (ADR-167 決定 10; for the SSID read, ADR-169 決定 3). Never call it for a publish that
+    /// (ADR-167 decision 10; for the SSID read, ADR-169 decision 3). Never call it for a publish that
     /// failed.
     ///
-    /// The SSID read moves its own clock and not the wireless rounds' — it is not a round (決定 2).
+    /// The SSID read moves its own clock and not the wireless rounds' — it is not a round (decision 2).
     pub fn dispatched(&mut self, org: Uuid, work: &MerakiWork, now: Instant) {
         if work.is_ssid_read() {
             self.ssid_statuses_at.insert(org, now);
@@ -358,7 +358,7 @@ mod tests {
             .expect("the switch ports are due")
     }
 
-    /// ADR-181 決定 2: with neighbour discovery off the switch ports never ask for neighbours.
+    /// ADR-181 decision 2: with neighbour discovery off the switch ports never ask for neighbours.
     #[test]
     fn the_neighbours_are_never_read_while_neighbour_discovery_is_off() {
         let mut s = MerakiSchedule::new();
@@ -415,7 +415,7 @@ mod tests {
         assert!(!check(MerakiTier::Availability).neighbors);
     }
 
-    /// 決定 5 / ADR-164 決定 18: after a restart everything is due at once; the fast lane starts
+    /// decision 5 / ADR-164 decision 18: after a restart everything is due at once; the fast lane starts
     /// with availability — the one tier whose failures raise the organization's alert — whatever
     /// order the tiers were stored in, and the slow work does not delay it.
     #[test]
@@ -437,7 +437,7 @@ mod tests {
         );
     }
 
-    /// 決定 2: the SSID read is a slow-lane job of its own, and it moves only its own clock — the
+    /// decision 2: the SSID read is a slow-lane job of its own, and it moves only its own clock — the
     /// wireless rounds keep theirs, so no round comes early or late because of it.
     #[test]
     fn the_ssid_read_is_a_job_of_its_own_and_leaves_the_wireless_rounds_alone() {
@@ -481,7 +481,7 @@ mod tests {
         );
     }
 
-    /// 決定 2: where the switch ports never leave room — a switch-port collect slower than its
+    /// decision 2: where the switch ports never leave room — a switch-port collect slower than its
     /// interval minus SSID_HOLD — the read waits SSID_DEFER and then goes anyway, before the
     /// SSID values it keeps on screen have expired.
     #[test]
@@ -516,7 +516,7 @@ mod tests {
         );
     }
 
-    /// 決定 3: an organization with no access point has its wireless rounds skipped for want of a
+    /// decision 3: an organization with no access point has its wireless rounds skipped for want of a
     /// device. Each skip is a turn — or the SSID read, never made, stays the most overdue work of
     /// all and holds the slow lane on every tick ahead of the switch ports.
     #[test]
@@ -545,7 +545,7 @@ mod tests {
         );
     }
 
-    /// 決定 2: an SSID read never starts where it would make the switch ports late — within
+    /// decision 2: an SSID read never starts where it would make the switch ports late — within
     /// [`SSID_HOLD`] of their next collect it waits — and they are never kept waiting for it.
     #[test]
     fn the_ssid_read_does_not_start_where_the_switch_ports_would_wait_for_it() {
@@ -577,7 +577,7 @@ mod tests {
         );
     }
 
-    /// ADR-167 決定 9, ADR-168 決定 7: a tier the pool cannot run is never offered — in either lane —
+    /// ADR-167 decision 9, ADR-168 decision 7: a tier the pool cannot run is never offered — in either lane —
     /// and the tiers it can run carry on.
     #[test]
     fn a_tier_the_pool_cannot_run_is_offered_in_neither_lane() {
@@ -717,7 +717,7 @@ mod tests {
                     true
                 }
             });
-            // The sync loop is its own task; it takes the slow lane when it is free (決定 1).
+            // The sync loop is its own task; it takes the slow lane when it is free (decision 1).
             if now >= next_sync {
                 job += 1;
                 let id = Uuid::from_u128(job);
@@ -753,7 +753,7 @@ mod tests {
                 }
                 if w.tier == MerakiTier::Wireless && !w.is_ssid_read() {
                     // Every wireless round publishes the client count; the SSID read on its own
-                    // publishes none (決定 2).
+                    // publishes none (decision 2).
                     sent.entry("wireless_samples").or_default().push(at(now));
                 }
             }

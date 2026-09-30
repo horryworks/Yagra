@@ -459,7 +459,7 @@ mod tests {
     fn a_redundant_pair_gives_two_parents_and_one_survivor_keeps_the_alert() {
         // The HSRP case, and the reason `is_suppressed` has always required *all* parents down.
         // A star to a single elected router would silence this server the moment either router
-        // failed — the false-suppression class ADR-038 names and 決定 2 accepted the risk of.
+        // failed — the false-suppression class ADR-038 names and decision 2 accepted the risk of.
         let n = nodes(4); // 0 = anchor, 1 & 2 = routers, 3 = server
         let topo = predecessors(
             &[

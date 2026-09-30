@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Whether an edit to a NetBox server's address needs its token typed again (ADR-178 決定 3).
+// Whether an edit to a NetBox server's address needs its token typed again (ADR-178 decision 3).
 //
 // A `.ts` because Vitest never loads a `.tsx` (`testing.md`).
 //

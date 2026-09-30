@@ -50,7 +50,7 @@ import { toRows } from './flowTabFilters';
 
 /** How many rows each Top-N and the conversations table hold.
  *
- *  🚨 **This is why the conversations table has no filter row of its own** (ADR-053 決定 M). Those
+ *  🚨 **This is why the conversations table has no filter row of its own** (ADR-053 decision M). Those
  *  ten rows are the ten ClickHouse already ranked by bytes; a browser-side predicate over them would
  *  narrow ten out of thousands and then report "no conversations match". Narrowing conversations
  *  means asking the server for a different top-N — which is what the drill-down bar does. */
@@ -59,7 +59,7 @@ const TOP_N = 10;
 export function FlowTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
-  // The shared window, not a local one (ADR-134 決定 6). `RangeControl.tsx` and `store.ts` both
+  // The shared window, not a local one (ADR-134 decision 6). `RangeControl.tsx` and `store.ts` both
   // name Flow among the panes that share it, and this pane alone held its own `useState` — so
   // picking 24h on Overview and opening Flow silently snapped back to 1h.
   const range = useRangeStore((s) => s.range);
@@ -116,7 +116,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     let cancelled = false;
     const { from, to } = resolveRange(range);
     // Comma-joined sets; an absent one is omitted, and the endpoint 400s on a value it cannot parse
-    // rather than silently returning the unfiltered top-N (ADR-053 決定 Q).
+    // rather than silently returning the unfiltered top-N (ADR-053 decision Q).
     const f = { proto: qProto, port: qPort, peer: qPeer, asn: qAsn };
 
     setLoading(true);
@@ -246,7 +246,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     <div className="nd-flow">
       {/* The drill-down governs the whole tab — the chart, all four Top-N cards, the Sankey and the
           conversations table — so it sits above all of them rather than under any one table's
-          headers (ADR-053 決定 N). The trigger of each cell is what the hand-rolled chip row used to
+          headers (ADR-053 decision N). The trigger of each cell is what the hand-rolled chip row used to
           say; the ✕ inside it removes one value, and Clear removes them all. */}
       <div className="nd-flow-toolbar">
         {/* ⚠️ Both of these render `null` most of the time, so they are wrapped: the toolbar is

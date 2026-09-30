@@ -69,7 +69,7 @@ fn parse_scope_level(s: &str) -> ScopeLevel {
 /// The engine needs the set, not a per-metric probe, because it asks the question once per distinct
 /// metric on every poll result. `items` is [`CollectionRepo::collected_items`].
 ///
-/// ➕ Plus [`yagra_common::meraki_interface_metrics`] (ADR-167 決定 8, ADR-168 決定 2): a Meraki
+/// ➕ Plus [`yagra_common::meraki_interface_metrics`] (ADR-167 decision 8, ADR-168 decision 2): a Meraki
 /// switch port's traffic and an access point's non-Wi-Fi utilization are read from the Dashboard, so
 /// no collection item — and so no OID — could ever declare them. The port's status and speed use the
 /// SNMP names, and the radio's other readings the controller-walked radios' names, which the
@@ -520,7 +520,7 @@ mod tests {
         crate::module_source::code_no_comments("src", "collection")
     }
 
-    /// ADR-167 決定 8 and ADR-168 決定 2: a Meraki switch port's traffic and an access point's
+    /// ADR-167 decision 8 and ADR-168 decision 2: a Meraki switch port's traffic and an access point's
     /// non-Wi-Fi utilization are per-interface whatever the catalogue holds — no item can declare
     /// them — and only those three names are added.
     #[test]
