@@ -96,7 +96,7 @@ impl YagraMcp {
                        different from a device that reports no neighbours. \
                        `current.peers` says, per advertised management address, whether one \
                        monitored node owns it (with its id and name), one outside your scope does \
-                       (no name), several do (a shared or duplicate address), or none does; for \
+                       (no name), several do (a shared or duplicate address), or none does. When                        several do and exactly one of them bears the name the neighbour sent, that                        one is answered with `matched_by_name` set; either way `also_claimed_by`                        lists the other claimants you may see (at most ten, each with `port_state`:                        up, link_down or unknown for the ports carrying the address) and                        `also_claimed_total` counts them all, so a duplicate address stays visible. For \
                        an address no node owns, `managed_by` names the wireless controller or \
                        Meraki organization that already lists the device there, and for one \
                        nothing adds, `setup_blocked` says why (not a device address, an end \
@@ -155,7 +155,13 @@ impl YagraMcp {
         // Current and history are one question, so this returns both rather than branching on a
         // mode param — a result whose shape depends on an argument is harder for a model than two
         // tools would be, and buys nothing.
-        let current = match crate::api::neighbors::current_neighbors(admin, scope, p.node_id).await
+        let current = match crate::api::neighbors::current_neighbors(
+            admin,
+            self.state.store.as_ref(),
+            scope,
+            p.node_id,
+        )
+        .await
         {
             Ok(c) => c,
             // 404 here means "never walked", which `tool_api_error` renders as an availability note

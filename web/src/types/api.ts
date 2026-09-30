@@ -86,6 +86,7 @@ const schemaEnumPins: {
   DuplicateContradiction: AssertEqual<DuplicateContradiction, components['schemas']['DuplicateContradiction']>;
   NeighborCapability: AssertEqual<NeighborCapability, components['schemas']['NeighborCapability']>;
   NeighborPeerState: AssertEqual<NeighborPeerState, components['schemas']['NeighborPeerState']>;
+  ClaimPortState: AssertEqual<ClaimPortState, components['schemas']['ClaimPortState']>;
   LinkSource: AssertEqual<LinkSource, components['schemas']['LinkSource']>;
   LinkOverrideAction: AssertEqual<LinkOverrideAction, components['schemas']['LinkOverrideAction']>;
   LinkDirection: AssertEqual<LinkDirection, components['schemas']['LinkDirection']>;
@@ -145,6 +146,7 @@ const schemaEnumPins: {
   NeighborProto: true,
   NeighborCapability: true,
   NeighborPeerState: true,
+  ClaimPortState: true,
   LinkSource: true,
   LinkOverrideAction: true,
   LinkDirection: true,
@@ -962,9 +964,16 @@ export type NeighborCapability = (typeof NEIGHBOR_CAPABILITIES)[number];
 export const NEIGHBOR_PEER_STATES = ['node', 'outside_scope', 'ambiguous', 'unregistered'] as const;
 export type NeighborPeerState = (typeof NEIGHBOR_PEER_STATES)[number];
 
+/** Whether another node claiming a neighbour's address has link on the ports carrying it (ADR-180
+ *  増分 4). Iterated by the i18n coverage test. */
+export const CLAIM_PORT_STATES = ['up', 'link_down', 'unknown'] as const;
+export type ClaimPortState = (typeof CLAIM_PORT_STATES)[number];
+
 /** One advertised management address and the node it belongs to (ADR-180). */
 export type NeighborPeer = components['schemas']['NeighborPeer'];
 export type NeighborManagedBy = components['schemas']['NeighborManagedBy'];
+/** Another node that claims a neighbour's management address (ADR-180 増分 4). */
+export type AlsoClaimedBy = components['schemas']['AlsoClaimedBy'];
 /** A MAC-address chassis on a row with no management address, and the Meraki device listed under
  *  it (ADR-180 増分 3). */
 export type NeighborChassisPeer = components['schemas']['NeighborChassisPeer'];

@@ -12,6 +12,7 @@
 
 ### Improvements
 
+- **Neighbors tab: an address several nodes have is matched by name, and the duplicate stays visible.** When a neighbor's management address is on more than one node, the node whose name matches the name the neighbor sent is now linked, if exactly one does. Either way a "+N with this address" mark sits beside the name, and opening the row lists the other nodes with whether their port carrying the address has link. Before, such a row said only "Several nodes". The network map is unchanged. API clients: `peers` entries of `GET /api/v1/nodes/{node_id}/neighbors` and MCP `get_neighbors` gain `matched_by_name`, `also_claimed_by` and `also_claimed_total`; a visible node on an ambiguous address is now named there.
 - **NetBox sync imports only sites whose Status is Active.** Planned, staging, decommissioning and retired sites no longer become folders, and their prefixes are no longer offered as Discovery targets. A folder already created for a site that is no longer Active is kept, together with the nodes in it, and counted under "folders not in NetBox". A site whose response carries no status is still imported.
 
 ## v0.3.37 — Rediscover a monitored node from its right-click menu, Subnet overlaps lists address ranges used at more than one site

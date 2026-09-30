@@ -62,6 +62,7 @@ import {
   OVERLAP_HINT_KINDS,
   EXCLUSION_REASONS,
   MERAKI_LISTINGS,
+  CLAIM_PORT_STATES,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -1064,6 +1065,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'outside_scope',
       'unregistered',
     ]);
+    // ADR-180 増分 4: a name picks one of several claimants only when it picks a node, seen or not;
+    // the other claimants say whether their port has link.
+    expectKeys('neighbor explain by name', locales, 'neighbors.peer.explainName.', [
+      'node',
+      'outside_scope',
+    ]);
+    expectKeys('neighbor claimant link', locales, 'neighbors.peer.also.port.', CLAIM_PORT_STATES);
     // ADR-179 増分 9: why a "Not monitored" row has no setup button.
     expectKeys('neighbor setup blocked', locales, 'neighbors.setup.blocked.', SETUP_BLOCKED_REASONS);
     // The badge beside a neighbour's name (ADR-179 増分 3): every state but "none", which draws none.

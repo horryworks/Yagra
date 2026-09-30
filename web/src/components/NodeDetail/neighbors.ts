@@ -8,6 +8,7 @@
 
 import {
   NEIGHBOR_PEER_STATES,
+  type AlsoClaimedBy,
   type CurrentNeighbors,
   type Neighbor,
   type NeighborCapability,
@@ -289,6 +290,10 @@ export function peerOf(n: Neighbor, lookups: NeighborLookups): NeighborPeer | nu
     discovery_listed: false,
     discovery_id: null,
     managed_by: c.managed_by ?? null,
+    // A MAC match is one organization's listing, never several claimants (ADR-180 増分 3).
+    matched_by_name: false,
+    also_claimed_by: [],
+    also_claimed_total: 0,
   };
 }
 
@@ -378,6 +383,29 @@ export function neighborDetails(n: Neighbor, lookups: NeighborLookups): Neighbor
   return rows
     .filter(([, v]) => v != null && v.trim() !== '')
     .map(([labelKey, value, mono]) => ({ labelKey, value: value as string, mono }));
+}
+
+/** The other nodes that claim a peer's address (ADR-180 増分 4): the ones the caller may see, and
+ *  how many more there are — outside the caller's folders, or past the ten the server names. `null`
+ *  when one node or none claims it, or the core predates the field. */
+export interface AlsoClaimed {
+  listed: readonly AlsoClaimedBy[];
+  unlisted: number;
+  total: number;
+}
+
+export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
+  // Absent on a core older than 増分 4: read as "nothing known", like the lists above.
+  const total = peer?.also_claimed_total ?? 0;
+  if (!peer || total <= 0) return null;
+  const listed = peer.also_claimed_by ?? [];
+  return { listed, unlisted: Math.max(0, total - listed.length), total };
+}
+
+/** Whether the badge explains a pick made by name among several claimants (ADR-180 増分 4) — only
+ *  a pick of a node, visible or not. The other states read the same with or without it. */
+export function pickedByName(peer: NeighborPeer | null): boolean {
+  return !!peer?.matched_by_name && (peer.state === 'node' || peer.state === 'outside_scope');
 }
 
 /** Where the peer's inventory entry is, when exactly one visible node owns its address. */

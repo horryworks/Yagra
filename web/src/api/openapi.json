@@ -24999,6 +24999,28 @@
           }
         }
       },
+      "AlsoClaimedBy": {
+        "type": "object",
+        "description": "Another node that claims a neighbour's management address (ADR-180 増分 4).",
+        "required": [
+          "node_id",
+          "node_name",
+          "port_state"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "port_state": {
+            "$ref": "#/components/schemas/ClaimPortState",
+            "description": "Whether the ports carrying the address on that node have link."
+          }
+        }
+      },
       "AnalysisFinding": {
         "type": "object",
         "description": "One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row).",
@@ -26702,6 +26724,15 @@
         "format": "uuid",
         "description": "Stable identifier for a single check on a node (e.g. \"icmp liveness\", a specific\nthreshold). Part of the alert dedup key `(node, check, severity)`."
       },
+      "ClaimPortState": {
+        "type": "string",
+        "description": "Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180\n増分 4 決定 4). A claimant that is down is still counted: a standby line configured with the\nsame address is part of the duplicate.",
+        "enum": [
+          "up",
+          "link_down",
+          "unknown"
+        ]
+      },
       "ClassificationRule": {
         "type": "object",
         "description": "A persisted rule mapping a device signature to a profile. At least one of\n`sysobjectid_prefix` / `sysdescr_regex` is set (the DB enforces this with a CHECK).",
@@ -28266,7 +28297,7 @@
             "items": {
               "$ref": "#/components/schemas/NeighborPeer"
             },
-            "description": "For each distinct management address the neighbours advertise, which monitored node it\nbelongs to. Matched on the address alone — an inventory address or any address one of a\nnode's interfaces carries — never on a name or chassis id."
+            "description": "For each distinct management address the neighbours advertise, which monitored node it\nbelongs to. Matched on the address — an inventory address or any address one of a node's\ninterfaces carries. Only when several nodes claim it is the name the neighbour sent used,\nand only to choose among those nodes (ADR-180 増分 4); a name alone never matches."
           }
         }
       },
@@ -34631,12 +34662,28 @@
         "required": [
           "address",
           "state",
-          "discovery_listed"
+          "discovery_listed",
+          "matched_by_name",
+          "also_claimed_by",
+          "also_claimed_total"
         ],
         "properties": {
           "address": {
             "type": "string",
             "description": "The address exactly as the neighbour row carries it in `remote_mgmt_addr`."
+          },
+          "also_claimed_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlsoClaimedBy"
+            },
+            "description": "The other nodes that claim the address, when more than one does — the ones the caller may\nsee, by name, at most ten. Empty when one node or none claims it. A duplicate address stays\nvisible even when the name picked the peer out."
+          },
+          "also_claimed_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many other nodes claim the address, including those outside the caller's folders and\nthose past the first ten. `0` when one node or none claims it.",
+            "minimum": 0
           },
           "discovery_id": {
             "type": [
@@ -34660,6 +34707,10 @@
                 "description": "Who adds this device instead of a hand registration: a wireless controller or a Meraki\norganization that already lists it. Present only when `state` is `unregistered`."
               }
             ]
+          },
+          "matched_by_name": {
+            "type": "boolean",
+            "description": "Several nodes claim the address and the node answered was chosen among them by the name the\nneighbour sent (ADR-180 増分 4). The others are in `also_claimed_by`."
           },
           "node_id": {
             "type": [

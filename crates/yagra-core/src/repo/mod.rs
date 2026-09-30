@@ -250,6 +250,22 @@ pub struct AddressMatch {
     pub visible: bool,
 }
 
+/// One way a node claims an address ([`NodeRepo::address_claims`], ADR-180).
+///
+/// A node that carries the address on two ports, or as its inventory address as well, comes back
+/// once per way: the Neighbors tab reads a claimant's link state from the ports, so collapsing
+/// them here would throw away the one fact it asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressClaim {
+    pub address: IpAddr,
+    pub id: Uuid,
+    pub name: String,
+    pub visible: bool,
+    /// The interface carrying the address, or `None` when the claim is the node's inventory
+    /// address, which names no port.
+    pub ifindex: Option<u32>,
+}
+
 /// A device node the caller may see, with what a Discovery candidate is compared against to say it
 /// may be the same device at another address (ADR-139 増分 3).
 #[derive(Debug, Clone, PartialEq, Eq)]

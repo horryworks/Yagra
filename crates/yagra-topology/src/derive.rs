@@ -66,7 +66,9 @@ pub struct DeriveOutput {
 /// An address claimed by more than one node — by inventory address or by an interface address —
 /// identifies neither: it is a VRRP/HSRP virtual IP or a duplicate-address misconfiguration, and
 /// picking one claimant would be a guess (ADR-043 決定 2). The map's links and the Neighbors tab's
-/// "which node is this peer" (ADR-180) both ask this, so the two cannot disagree.
+/// "which node is this peer" (ADR-180) both ask this, so the two agree whenever one node claims an
+/// address. Where several do, the tab alone goes on to ask whether the name the neighbour sent
+/// picks out exactly one of them, and still lists the rest (ADR-180 増分 4); the map draws no line.
 #[must_use]
 pub fn sole_claimant<T: Copy + Ord>(claimants: &BTreeSet<T>) -> Option<T> {
     match claimants.len() {

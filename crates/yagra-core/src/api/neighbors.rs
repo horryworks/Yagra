@@ -22,14 +22,15 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNod
 use super::scope::NodeScope;
 use super::ApiState;
 use crate::neighbors::{self, AdjacencySettings};
-use crate::repo::AddressMatch;
-use axum::extract::{Path, Query};
+use crate::repo::AddressClaim;
+use crate::store::MetricStore;
+use axum::extract::{Path, Query, State};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_common::{NeighborCapability, NeighborIdKind, NeighborSet};
+use yagra_common::{Neighbor, NeighborCapability, NeighborIdKind, NeighborSet};
 
 /// Default page size for the change history.
 const HISTORY_DEFAULT_LIMIT: i64 = 50;
@@ -72,8 +73,9 @@ pub(crate) struct CurrentNeighbors {
     /// When it was last confirmed unchanged (RFC 3339).
     last_seen: String,
     /// For each distinct management address the neighbours advertise, which monitored node it
-    /// belongs to. Matched on the address alone — an inventory address or any address one of a
-    /// node's interfaces carries — never on a name or chassis id.
+    /// belongs to. Matched on the address — an inventory address or any address one of a node's
+    /// interfaces carries. Only when several nodes claim it is the name the neighbour sent used,
+    /// and only to choose among those nodes (ADR-180 増分 4); a name alone never matches.
     peers: Vec<NeighborPeer>,
     /// For each distinct MAC-address chassis id on a row that advertises **no** usable management
     /// address, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180
@@ -94,12 +96,13 @@ pub(crate) struct CurrentNeighbors {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NeighborPeerState {
-    /// Exactly one monitored node claims the address, and the caller may see it.
+    /// Exactly one monitored node claims the address — or, of several, exactly one bears the name
+    /// the neighbour sent (`matched_by_name`) — and the caller may see it.
     Node,
-    /// Exactly one monitored node claims the address, outside the caller's folders.
+    /// As `node`, for a node outside the caller's folders.
     OutsideScope,
-    /// More than one node claims the address (a shared virtual address, or a duplicate), so it
-    /// identifies none of them.
+    /// More than one node claims the address (a shared virtual address, or a duplicate) and the
+    /// name the neighbour sent does not pick out exactly one of them.
     Ambiguous,
     /// No monitored node claims the address.
     Unregistered,
@@ -126,6 +129,44 @@ pub(crate) struct NeighborPeer {
     /// Why nothing adds this device from here (ADR-179 増分 9): present only when `state` is
     /// `unregistered`, it is not on the caller's Unregistered list, and nothing manages it.
     setup_blocked: Option<SetupBlocked>,
+    /// Several nodes claim the address and the node answered was chosen among them by the name the
+    /// neighbour sent (ADR-180 増分 4). The others are in `also_claimed_by`.
+    matched_by_name: bool,
+    /// The other nodes that claim the address, when more than one does — the ones the caller may
+    /// see, by name, at most ten. Empty when one node or none claims it. A duplicate address stays
+    /// visible even when the name picked the peer out.
+    also_claimed_by: Vec<AlsoClaimedBy>,
+    /// How many other nodes claim the address, including those outside the caller's folders and
+    /// those past the first ten. `0` when one node or none claims it.
+    also_claimed_total: u32,
+}
+
+/// At most this many other claimants are named per address; `also_claimed_total` says how many
+/// there are. A private range reused at every site would otherwise name one node per site.
+const ALSO_CLAIMED_MAX: usize = 10;
+
+/// Another node that claims a neighbour's management address (ADR-180 増分 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct AlsoClaimedBy {
+    node_id: Uuid,
+    node_name: String,
+    /// Whether the ports carrying the address on that node have link.
+    port_state: ClaimPortState,
+}
+
+/// Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180
+/// 増分 4 決定 4). A claimant that is down is still counted: a standby line configured with the
+/// same address is part of the duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ClaimPortState {
+    /// At least one port carrying the address is up.
+    Up,
+    /// Every port carrying the address that has a reading is down.
+    LinkDown,
+    /// No reading: the node claims it only as its inventory address, which names no port, or no
+    /// status was collected for the port lately.
+    Unknown,
 }
 
 /// Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are
@@ -318,9 +359,12 @@ async fn get_neighbors(
     _visible: VisibleNode,
     Scoped(scope): Scoped,
     admin: Admin,
+    State(st): State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<CurrentNeighbors>> {
-    Ok(Json(current_neighbors(&admin, &scope, node_id).await?))
+    Ok(Json(
+        current_neighbors(&admin, st.store.as_ref(), &scope, node_id).await?,
+    ))
 }
 
 /// One node's current adjacency, with the "nothing recorded" rule.
@@ -333,8 +377,13 @@ async fn get_neighbors(
 ///
 /// `scope` decides what `peers` may name: a claimant outside it is reported as `outside_scope`
 /// with no id and no name (ADR-180 決定 3, the disclosure ADR-139 already accepted).
+///
+/// `store` is asked once, and only when some address has several claimants, for the link state
+/// of the ports carrying it (ADR-180 増分 4). A store that does not answer leaves every such port
+/// `unknown` rather than failing the tab.
 pub(crate) async fn current_neighbors(
     admin: &super::AdminState,
+    store: &dyn MetricStore,
     scope: &NodeScope,
     node_id: Uuid,
 ) -> ApiResult<CurrentNeighbors> {
@@ -431,6 +480,19 @@ pub(crate) async fn current_neighbors(
         end_station_only: end_station_only(&current.set),
         listed_elsewhere,
     };
+    let contested = contested_claimants(&claims);
+    let oper = if contested.is_empty() {
+        HashMap::new()
+    } else {
+        store
+            .series_rows(
+                "if_oper_status",
+                Some(&contested),
+                crate::store::INSTANT_LOOKBACK_SECS,
+            )
+            .await
+    };
+    let names = advertised_names(&current.set);
     let unaddressed = unaddressed_mac_chassis(&current.set);
     let by_mac = admin
         .meraki_inventory
@@ -445,7 +507,17 @@ pub(crate) async fn current_neighbors(
         })?;
     Ok(CurrentNeighbors {
         chassis_peers: classify_chassis(&unaddressed, &by_mac, scope),
-        peers: classify_peers(&advertised, &claims, &listed, &managed, &blockers),
+        peers: classify_peers(
+            &advertised,
+            &claims,
+            &Evidence {
+                listed: &listed,
+                managed: &managed,
+                blockers: &blockers,
+                names: &names,
+                oper: &oper,
+            },
+        ),
         mac_vendors: mac_vendors(&current.set),
         neighbors: current.set,
         first_seen: current.first_seen.to_rfc3339(),
@@ -493,21 +565,184 @@ fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
         .collect()
 }
 
-/// Each advertised address against the nodes that claim it (ADR-180 決定 2/3).
+/// The name each row advertising an address sent, per address (ADR-180 増分 4 決定 2): the LLDP
+/// system name, else the chassis id when it is text — CDP's device id serves as both. An id the
+/// poller labelled as a MAC, an address or raw octets is not a name.
+fn advertised_names(set: &NeighborSet) -> BTreeMap<IpAddr, Vec<String>> {
+    let mut out: BTreeMap<IpAddr, Vec<String>> = BTreeMap::new();
+    for n in &set.neighbors {
+        let Some(ip) = n
+            .remote_mgmt_addr
+            .as_deref()
+            .and_then(|a| a.parse::<IpAddr>().ok())
+        else {
+            continue;
+        };
+        if let Some(name) = advertised_name(n) {
+            out.entry(ip).or_default().push(name.to_owned());
+        }
+    }
+    out
+}
+
+/// One row's name for itself, if it sent one.
+fn advertised_name(n: &Neighbor) -> Option<&str> {
+    if let Some(sys) = n
+        .remote_sys_name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return Some(sys);
+    }
+    match n.remote_chassis_kind {
+        // A record older than the kind field says nothing about its chassis; a MAC read as a name
+        // matches no node name, so it is harmless to try.
+        Some(NeighborIdKind::Text) | None => Some(n.remote_chassis.as_str()),
+        Some(
+            NeighborIdKind::Mac
+            | NeighborIdKind::NetworkAddress
+            | NeighborIdKind::Hex
+            | NeighborIdKind::Unknown,
+        ) => None,
+    }
+}
+
+/// A name as it is compared (ADR-180 増分 4 決定 2): the shared name key, less a trailing `(…)` —
+/// CDP appends a serial as `name(FOC1234X0YZ)`.
+fn peer_name_key(raw: &str) -> Option<String> {
+    let key = crate::duplicates::name_key(raw)?;
+    let bare = match key
+        .strip_suffix(')')
+        .and_then(|s| s.rfind('(').map(|i| &s[..i]))
+    {
+        Some(stem) => stem.trim_end(),
+        None => key.as_str(),
+    };
+    (!bare.is_empty()).then(|| bare.to_owned())
+}
+
+/// The part before the first dot, so `sw-01.example.com` and `sw-01` compare equal. `None` for a
+/// key that is an address, whose first dot separates octets rather than a domain.
+fn host_label(key: &str) -> Option<&str> {
+    if key.parse::<IpAddr>().is_ok() {
+        return None;
+    }
+    key.split('.').next().filter(|h| !h.is_empty())
+}
+
+/// Which of `candidates` the names the neighbour sent pick out (ADR-180 増分 4 決定 2), or `None`.
 ///
-/// Pure, so the two rules a mistake here would break — one claimant or none, and a hidden
-/// claimant's name never leaves — are tested without a database.
+/// Each name is compared whole first and by its host label second, and counts only when exactly one
+/// candidate matches. The names must agree: two rows naming two different candidates pick neither.
+/// A name that matches no candidate is simply not evidence.
+fn claimant_named(names: &[String], candidates: &[(Uuid, &str)]) -> Option<Uuid> {
+    let keyed: Vec<(Uuid, String)> = candidates
+        .iter()
+        .filter_map(|(id, name)| peer_name_key(name).map(|k| (*id, k)))
+        .collect();
+    let one = |matching: Vec<Uuid>| match matching.as_slice() {
+        [id] => Some(*id),
+        _ => None,
+    };
+    let mut picked: BTreeSet<Uuid> = BTreeSet::new();
+    for raw in names {
+        let Some(key) = peer_name_key(raw) else {
+            continue;
+        };
+        let whole: Vec<Uuid> = keyed
+            .iter()
+            .filter(|(_, k)| *k == key)
+            .map(|(id, _)| *id)
+            .collect();
+        let hit = if whole.is_empty() {
+            host_label(&key).and_then(|host| {
+                one(keyed
+                    .iter()
+                    .filter(|(_, k)| host_label(k) == Some(host))
+                    .map(|(id, _)| *id)
+                    .collect())
+            })
+        } else {
+            one(whole)
+        };
+        if let Some(id) = hit {
+            picked.insert(id);
+        }
+    }
+    yagra_topology::derive::sole_claimant(&picked)
+}
+
+/// A claimant's link state over the ports carrying the address (ADR-180 増分 4 決定 4):
+/// `if_oper_status` 1 is up; 2 (down) and 7 (lowerLayerDown) have no link; anything else, or no
+/// reading at all, says nothing.
+fn claim_port_state(
+    node: Uuid,
+    ports: impl Iterator<Item = u32>,
+    oper: &HashMap<(Uuid, i64), f64>,
+) -> ClaimPortState {
+    let mut down = false;
+    for p in ports {
+        match oper.get(&(node, i64::from(p))).copied() {
+            Some(v) if (v - 1.0).abs() < f64::EPSILON => return ClaimPortState::Up,
+            Some(v) if (v - 2.0).abs() < f64::EPSILON || (v - 7.0).abs() < f64::EPSILON => {
+                down = true;
+            }
+            _ => {}
+        }
+    }
+    if down {
+        ClaimPortState::LinkDown
+    } else {
+        ClaimPortState::Unknown
+    }
+}
+
+/// Every node that claims an address some other node also claims — the only ones whose link
+/// state the tab shows, so the only ones worth a store query.
+fn contested_claimants(claims: &[AddressClaim]) -> Vec<Uuid> {
+    let mut by_address: BTreeMap<IpAddr, BTreeSet<Uuid>> = BTreeMap::new();
+    for c in claims {
+        by_address.entry(c.address).or_default().insert(c.id);
+    }
+    by_address
+        .into_values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Everything besides the claims that decides a peer, read once per request.
+struct Evidence<'a> {
+    listed: &'a BTreeMap<IpAddr, Uuid>,
+    managed: &'a HashMap<IpAddr, NeighborManagedBy>,
+    blockers: &'a Blockers,
+    names: &'a BTreeMap<IpAddr, Vec<String>>,
+    oper: &'a HashMap<(Uuid, i64), f64>,
+}
+
+/// Each advertised address against the nodes that claim it (ADR-180 決定 2/3, 増分 4).
+///
+/// Pure, so the rules a mistake here would break — one claimant or none, a name choosing only among
+/// claimants, the others staying listed, and a hidden claimant's name never leaving — are tested
+/// without a database.
 fn classify_peers(
     advertised: &BTreeMap<String, IpAddr>,
-    claims: &[AddressMatch],
-    listed: &BTreeMap<IpAddr, Uuid>,
-    managed: &HashMap<IpAddr, NeighborManagedBy>,
-    blockers: &Blockers,
+    claims: &[AddressClaim],
+    ev: &Evidence<'_>,
 ) -> Vec<NeighborPeer> {
-    let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, &AddressMatch>> = BTreeMap::new();
+    // Address → node → that node's claims (one per port, plus its inventory address).
+    let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, Vec<&AddressClaim>>> = BTreeMap::new();
     for c in claims {
-        by_address.entry(c.address).or_default().insert(c.id, c);
+        by_address
+            .entry(c.address)
+            .or_default()
+            .entry(c.id)
+            .or_default()
+            .push(c);
     }
+    let no_names = Vec::new();
     advertised
         .iter()
         .map(|(text, ip)| {
@@ -515,32 +750,82 @@ fn classify_peers(
             let ids: BTreeSet<Uuid> = owners
                 .map(|o| o.keys().copied().collect())
                 .unwrap_or_default();
-            let sole = yagra_topology::derive::sole_claimant(&ids)
-                .and_then(|id| owners.and_then(|o| o.get(&id)).copied());
-            let (state, node_id, node_name) = match sole {
+            let by_name = || {
+                let candidates: Vec<(Uuid, &str)> = owners
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(id, cs)| cs.first().map(|c| (*id, c.name.as_str())))
+                    .collect();
+                claimant_named(ev.names.get(ip).unwrap_or(&no_names), &candidates)
+            };
+            let (chosen, matched_by_name) = match yagra_topology::derive::sole_claimant(&ids) {
+                Some(id) => (Some(id), false),
+                None if ids.len() > 1 => {
+                    let named = by_name();
+                    (named, named.is_some())
+                }
+                None => (None, false),
+            };
+            let first = |id: Uuid| owners.and_then(|o| o.get(&id)).and_then(|cs| cs.first());
+            let (state, node_id, node_name) = match chosen.and_then(first) {
                 Some(m) if m.visible => (NeighborPeerState::Node, Some(m.id), Some(m.name.clone())),
                 Some(_) => (NeighborPeerState::OutsideScope, None, None),
                 None if ids.is_empty() => (NeighborPeerState::Unregistered, None, None),
                 None => (NeighborPeerState::Ambiguous, None, None),
             };
+            // The rest of the claimants, when there is more than one: listed by name if the
+            // caller may see them, counted either way.
+            let others: Vec<(&Uuid, &Vec<&AddressClaim>)> = if ids.len() > 1 {
+                owners
+                    .into_iter()
+                    .flatten()
+                    .filter(|(id, _)| Some(**id) != chosen)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut also_claimed_by: Vec<AlsoClaimedBy> = others
+                .iter()
+                .filter_map(|(id, cs)| {
+                    let c = cs.first().filter(|c| c.visible)?;
+                    Some(AlsoClaimedBy {
+                        node_id: **id,
+                        node_name: c.name.clone(),
+                        port_state: claim_port_state(
+                            **id,
+                            cs.iter().filter_map(|c| c.ifindex),
+                            ev.oper,
+                        ),
+                    })
+                })
+                .collect();
+            also_claimed_by.sort_by(|a, b| {
+                a.node_name
+                    .cmp(&b.node_name)
+                    .then(a.node_id.cmp(&b.node_id))
+            });
+            also_claimed_by.truncate(ALSO_CLAIMED_MAX);
             let unregistered = state == NeighborPeerState::Unregistered;
-            let managed_by = managed.get(ip).filter(|_| unregistered).cloned();
-            let stuck = unregistered && managed_by.is_none() && !listed.contains_key(ip);
+            let managed_by = ev.managed.get(ip).filter(|_| unregistered).cloned();
+            let stuck = unregistered && managed_by.is_none() && !ev.listed.contains_key(ip);
             NeighborPeer {
                 address: text.clone(),
                 state,
                 node_id,
                 node_name,
-                discovery_listed: listed.contains_key(ip),
-                discovery_id: listed.get(ip).copied(),
+                discovery_listed: ev.listed.contains_key(ip),
+                discovery_id: ev.listed.get(ip).copied(),
                 managed_by,
                 setup_blocked: stuck.then(|| {
                     setup_blocked(
                         *ip,
-                        blockers.end_station_only.contains(ip),
-                        blockers.listed_elsewhere.contains(ip),
+                        ev.blockers.end_station_only.contains(ip),
+                        ev.blockers.listed_elsewhere.contains(ip),
                     )
                 }),
+                matched_by_name,
+                also_claimed_by,
+                also_claimed_total: u32::try_from(others.len()).unwrap_or(u32::MAX),
             }
         })
         .collect()
@@ -1175,13 +1460,36 @@ mod peer_tests {
     use super::*;
     use yagra_common::{Neighbor, NeighborProto};
 
-    fn claim(address: &str, id: Uuid, name: &str, visible: bool) -> AddressMatch {
-        AddressMatch {
+    fn claim(address: &str, id: Uuid, name: &str, visible: bool) -> AddressClaim {
+        AddressClaim {
             address: address.parse().unwrap(),
             id,
             name: name.to_owned(),
             visible,
+            ifindex: None,
         }
+    }
+
+    /// [`classify_peers`] with no names sent and no link readings — every test written before
+    /// ADR-180 増分 4.
+    fn classify(
+        advertised: &BTreeMap<String, IpAddr>,
+        claims: &[AddressClaim],
+        listed: &BTreeMap<IpAddr, Uuid>,
+        managed: &HashMap<IpAddr, NeighborManagedBy>,
+        blockers: &Blockers,
+    ) -> Vec<NeighborPeer> {
+        classify_peers(
+            advertised,
+            claims,
+            &Evidence {
+                listed,
+                managed,
+                blockers,
+                names: &BTreeMap::new(),
+                oper: &HashMap::new(),
+            },
+        )
     }
 
     fn advertised(addrs: &[&str]) -> BTreeMap<String, IpAddr> {
@@ -1204,7 +1512,7 @@ mod peer_tests {
         ];
         let row = Uuid::from_u128(9);
         let listed = BTreeMap::from([("192.0.2.4".parse().unwrap(), row)]);
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4"]),
             &claims,
             &listed,
@@ -1284,7 +1592,7 @@ mod peer_tests {
                 NeighborManagedBy::ControllerHidden,
             ),
         ]);
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&["192.0.2.1", "192.0.2.2"]),
             &claims,
             &BTreeMap::new(),
@@ -1301,15 +1609,16 @@ mod peer_tests {
     }
 
     /// The rule the whole scope design rests on: a claimant the caller may not see never lends
-    /// the answer its id or its name — and neither does either half of an ambiguous pair.
+    /// the answer its id or its name. An ambiguous address answers no node, and since ADR-180
+    /// 増分 4 lists the claimants the caller may see — the hidden one is only counted.
     #[test]
-    fn a_hidden_or_ambiguous_claimant_gives_away_no_id_and_no_name() {
+    fn a_hidden_claimant_gives_away_no_id_and_no_name() {
         let claims = [
             claim("192.0.2.2", Uuid::from_u128(2), "rtr-hidden", false),
             claim("192.0.2.3", Uuid::from_u128(3), "fw-a", true),
-            claim("192.0.2.3", Uuid::from_u128(4), "fw-b", false),
+            claim("192.0.2.3", Uuid::from_u128(4), "fw-hidden", false),
         ];
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&["192.0.2.2", "192.0.2.3"]),
             &claims,
             &BTreeMap::new(),
@@ -1320,11 +1629,20 @@ mod peer_tests {
             assert_eq!(p.node_id, None, "{}", p.address);
             assert_eq!(p.node_name, None, "{}", p.address);
         }
+        assert_eq!(peers[1].state, NeighborPeerState::Ambiguous);
+        let listed: Vec<&str> = peers[1]
+            .also_claimed_by
+            .iter()
+            .map(|a| a.node_name.as_str())
+            .collect();
+        assert_eq!(listed, ["fw-a"]);
+        assert_eq!(peers[1].also_claimed_total, 2);
         let json = serde_json::to_string(&peers).unwrap();
         assert!(
-            !json.contains("rtr-hidden") && !json.contains("fw-"),
+            !json.contains("rtr-hidden") && !json.contains("fw-hidden"),
             "{json}"
         );
+        assert!(!json.contains(&Uuid::from_u128(4).to_string()), "{json}");
     }
 
     /// One node claiming an address twice (by inventory address and by an interface) is still one
@@ -1336,7 +1654,7 @@ mod peer_tests {
             claim("192.0.2.9", id, "rtr", true),
             claim("192.0.2.9", id, "rtr", true),
         ];
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&["192.0.2.9"]),
             &claims,
             &BTreeMap::new(),
@@ -1351,7 +1669,7 @@ mod peer_tests {
         let id = Uuid::from_u128(6);
         // The row spells it one way; the claim was parsed from another.
         let claims = [claim("2001:db8::6", id, "rtr6", true)];
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&["2001:0db8:0:0:0:0:0:6"]),
             &claims,
             &BTreeMap::new(),
@@ -1360,6 +1678,238 @@ mod peer_tests {
         );
         assert_eq!(peers[0].state, NeighborPeerState::Node);
         assert_eq!(peers[0].address, "2001:0db8:0:0:0:0:0:6");
+    }
+
+    fn port_claim(address: &str, id: Uuid, name: &str, ifindex: u32) -> AddressClaim {
+        AddressClaim {
+            ifindex: Some(ifindex),
+            ..claim(address, id, name, true)
+        }
+    }
+
+    /// [`classify_peers`] for one address, with the names its rows sent and the link readings.
+    fn classify_named(
+        claims: &[AddressClaim],
+        names: &[&str],
+        oper: &HashMap<(Uuid, i64), f64>,
+    ) -> NeighborPeer {
+        let names = BTreeMap::from([(
+            "192.0.2.182".parse().unwrap(),
+            names.iter().map(|n| (*n).to_owned()).collect(),
+        )]);
+        let mut peers = classify_peers(
+            &advertised(&["192.0.2.182"]),
+            claims,
+            &Evidence {
+                listed: &BTreeMap::new(),
+                managed: &HashMap::new(),
+                blockers: &Blockers::default(),
+                names: &names,
+                oper,
+            },
+        );
+        peers.remove(0)
+    }
+
+    /// ADR-180 増分 4, the case that prompted it: a core switch and two WAN routers all carry the
+    /// switch's advertised address. The name picks the switch; the routers stay listed, one with
+    /// link and one without.
+    #[test]
+    fn a_name_picks_one_of_several_claimants_and_the_rest_stay_listed() {
+        let (core, wan1, wan2) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let claims = [
+            port_claim("192.0.2.182", core, "core-sw-01", 76),
+            port_claim("192.0.2.182", wan1, "wan-rtr-01", 1),
+            port_claim("192.0.2.182", wan2, "wan-rtr-02", 5),
+        ];
+        let oper = HashMap::from([((wan1, 1), 1.0), ((wan2, 5), 2.0), ((core, 76), 1.0)]);
+        let p = classify_named(&claims, &["core-sw-01"], &oper);
+        assert_eq!(p.state, NeighborPeerState::Node);
+        assert!(p.matched_by_name);
+        assert_eq!(p.node_id, Some(core));
+        assert_eq!(p.node_name.as_deref(), Some("core-sw-01"));
+        let others: Vec<(&str, ClaimPortState)> = p
+            .also_claimed_by
+            .iter()
+            .map(|a| (a.node_name.as_str(), a.port_state))
+            .collect();
+        assert_eq!(
+            others,
+            [
+                ("wan-rtr-01", ClaimPortState::Up),
+                ("wan-rtr-02", ClaimPortState::LinkDown)
+            ]
+        );
+        assert_eq!(p.also_claimed_total, 2);
+    }
+
+    /// A name matching none of the claimants, or two of them, leaves the address ambiguous — and
+    /// every claimant is still listed.
+    #[test]
+    fn a_name_that_does_not_pick_exactly_one_leaves_it_ambiguous() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let claims = [
+            claim("192.0.2.182", a, "fw-01.site-a.example.com", true),
+            claim("192.0.2.182", b, "fw-01.site-b.example.com", true),
+        ];
+        let none = HashMap::new();
+        for names in [&["sw-99"][..], &["fw-01"][..], &[][..]] {
+            let p = classify_named(&claims, names, &none);
+            assert_eq!(p.state, NeighborPeerState::Ambiguous, "{names:?}");
+            assert!(!p.matched_by_name);
+            assert_eq!(p.also_claimed_by.len(), 2);
+            assert_eq!(p.also_claimed_total, 2);
+        }
+    }
+
+    /// CDP's `name(serial)` and a domain on either side still match; a whole-name match beats a
+    /// host-label one.
+    #[test]
+    fn a_serial_suffix_and_a_domain_do_not_stop_a_match() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let claims = [
+            claim("192.0.2.182", a, "SW-01", true),
+            claim("192.0.2.182", b, "rtr-01", true),
+        ];
+        let none = HashMap::new();
+        for sent in ["sw-01(FOC0000X0AB)", "sw-01.example.com", " SW-01 "] {
+            let p = classify_named(&claims, &[sent], &none);
+            assert_eq!(p.node_id, Some(a), "{sent}");
+        }
+        // A node named with its domain, a neighbour sending the bare host name.
+        let fqdn = [
+            claim("192.0.2.182", a, "sw-01.example.com", true),
+            claim("192.0.2.182", b, "rtr-01", true),
+        ];
+        assert_eq!(classify_named(&fqdn, &["sw-01"], &none).node_id, Some(a));
+        // Whole-name first: `sw-01` is exactly one node although both share the host label.
+        let both = [
+            claim("192.0.2.182", a, "sw-01", true),
+            claim("192.0.2.182", b, "sw-01.example.com", true),
+        ];
+        assert_eq!(classify_named(&both, &["sw-01"], &none).node_id, Some(a));
+        // An address is not split at its dots.
+        let ips = [
+            claim("192.0.2.182", a, "10.0.0.1", true),
+            claim("192.0.2.182", b, "10.0.0.2", true),
+        ];
+        let p = classify_named(&ips, &["10.9.9.9"], &none);
+        assert_eq!(p.state, NeighborPeerState::Ambiguous);
+    }
+
+    /// Two rows advertising the address name two different claimants: neither is picked.
+    #[test]
+    fn rows_that_disagree_pick_nobody() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let claims = [
+            claim("192.0.2.182", a, "sw-01", true),
+            claim("192.0.2.182", b, "sw-02", true),
+        ];
+        let none = HashMap::new();
+        let p = classify_named(&claims, &["sw-01", "sw-02"], &none);
+        assert_eq!(p.state, NeighborPeerState::Ambiguous);
+        // A second row that names nobody is not disagreement.
+        let p = classify_named(&claims, &["sw-01", "unknown-host"], &none);
+        assert_eq!(p.node_id, Some(a));
+    }
+
+    /// A name that picks a node the caller may not see answers `outside_scope` with no id and no
+    /// name, and the visible claimant beside it is still listed.
+    #[test]
+    fn a_name_picking_a_hidden_node_discloses_nothing_about_it() {
+        let (hidden, seen) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let claims = [
+            claim("192.0.2.182", hidden, "core-hidden", false),
+            claim("192.0.2.182", seen, "rtr-seen", true),
+        ];
+        let p = classify_named(&claims, &["core-hidden"], &HashMap::new());
+        assert_eq!(p.state, NeighborPeerState::OutsideScope);
+        assert!(p.matched_by_name);
+        assert_eq!((p.node_id, p.node_name.as_deref()), (None, None));
+        assert_eq!(p.also_claimed_by.len(), 1);
+        assert_eq!(p.also_claimed_total, 1);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(
+            !json.contains("core-hidden") && !json.contains(&hidden.to_string()),
+            "{json}"
+        );
+    }
+
+    /// Link state: any port up is up; only down readings is link-down; an inventory-only claim, no
+    /// reading, or an unrecognised value says nothing. One address carried by one node has no list.
+    #[test]
+    fn link_state_comes_from_the_ports_carrying_the_address() {
+        let n = Uuid::from_u128(1);
+        let oper = HashMap::from([((n, 1), 2.0), ((n, 2), 1.0), ((n, 3), 7.0), ((n, 4), 5.0)]);
+        let st = |ports: &[u32]| claim_port_state(n, ports.iter().copied(), &oper);
+        assert_eq!(st(&[1, 2]), ClaimPortState::Up);
+        assert_eq!(st(&[1, 3]), ClaimPortState::LinkDown);
+        assert_eq!(st(&[1, 9]), ClaimPortState::LinkDown);
+        assert_eq!(st(&[4]), ClaimPortState::Unknown);
+        assert_eq!(st(&[9]), ClaimPortState::Unknown);
+        assert_eq!(st(&[]), ClaimPortState::Unknown);
+
+        let single = classify_named(&[port_claim("192.0.2.182", n, "sw-01", 1)], &[], &oper);
+        assert!(single.also_claimed_by.is_empty());
+        assert_eq!(single.also_claimed_total, 0);
+        assert!(!single.matched_by_name);
+    }
+
+    /// No link readings (the store did not answer) leaves every claimant `unknown`, never `up`.
+    #[test]
+    fn no_readings_leave_every_claimant_unknown() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let claims = [
+            port_claim("192.0.2.182", a, "sw-01", 1),
+            port_claim("192.0.2.182", b, "sw-02", 2),
+        ];
+        let p = classify_named(&claims, &[], &HashMap::new());
+        assert!(p
+            .also_claimed_by
+            .iter()
+            .all(|a| a.port_state == ClaimPortState::Unknown));
+    }
+
+    /// The list stops at ten; the total counts every other claimant. Only contested nodes are
+    /// asked about, once each.
+    #[test]
+    fn the_list_is_capped_and_the_total_is_not() {
+        let claims: Vec<AddressClaim> = (1..=13u128)
+            .map(|i| {
+                claim(
+                    "192.0.2.182",
+                    Uuid::from_u128(i),
+                    &format!("rtr-{i:02}"),
+                    true,
+                )
+            })
+            .chain([claim("192.0.2.9", Uuid::from_u128(99), "alone", true)])
+            .collect();
+        let p = classify_named(&claims, &["rtr-01"], &HashMap::new());
+        assert_eq!(p.node_id, Some(Uuid::from_u128(1)));
+        assert_eq!(p.also_claimed_by.len(), ALSO_CLAIMED_MAX);
+        assert_eq!(p.also_claimed_by[0].node_name, "rtr-02");
+        assert_eq!(p.also_claimed_total, 12);
+        let asked = contested_claimants(&claims);
+        assert_eq!(asked.len(), 13);
+        assert!(!asked.contains(&Uuid::from_u128(99)));
+    }
+
+    /// The name a row sends: LLDP's system name first, else a text chassis id; never a MAC.
+    #[test]
+    fn the_name_a_row_sends_is_never_a_mac() {
+        let mut lldp = neighbor("00:00:0c:12:34:56", Some(NeighborIdKind::Mac));
+        assert_eq!(advertised_name(&lldp), None);
+        lldp.remote_sys_name = Some("sw-01".into());
+        assert_eq!(advertised_name(&lldp), Some("sw-01"));
+        let cdp = neighbor("sw-02(FOC0000X0AB)", Some(NeighborIdKind::Text));
+        assert_eq!(advertised_name(&cdp), Some("sw-02(FOC0000X0AB)"));
+        assert_eq!(
+            peer_name_key("sw-02(FOC0000X0AB)").as_deref(),
+            Some("sw-02")
+        );
+        assert_eq!(peer_name_key("  "), None);
+        assert_eq!(peer_name_key("(x)"), None);
     }
 
     fn neighbor(chassis: &str, kind: Option<NeighborIdKind>) -> Neighbor {
@@ -1419,7 +1969,7 @@ mod peer_tests {
         let listed = BTreeMap::from([(ip("192.0.2.3"), Uuid::from_u128(3))]);
         let managed = HashMap::from([(ip("192.0.2.4"), NeighborManagedBy::ControllerHidden)]);
         let claims = vec![claim("192.0.2.5", Uuid::from_u128(5), "rtr-a", true)];
-        let peers = classify_peers(
+        let peers = classify(
             &advertised(&[
                 "192.0.2.1",
                 "192.0.2.2",

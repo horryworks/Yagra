@@ -5386,6 +5386,14 @@ export interface components {
             /** @description The release every target is being moved to — this core's own build. */
             target_tag: string;
         };
+        /** @description Another node that claims a neighbour's management address (ADR-180 増分 4). */
+        AlsoClaimedBy: {
+            /** Format: uuid */
+            node_id: string;
+            node_name: string;
+            /** @description Whether the ports carrying the address on that node have link. */
+            port_state: components["schemas"]["ClaimPortState"];
+        };
         /** @description One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row). */
         AnalysisFinding: {
             detail: unknown;
@@ -6176,6 +6184,13 @@ export interface components {
          */
         CheckId: string;
         /**
+         * @description Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180
+         *     増分 4 決定 4). A claimant that is down is still counted: a standby line configured with the
+         *     same address is part of the duplicate.
+         * @enum {string}
+         */
+        ClaimPortState: "up" | "link_down" | "unknown";
+        /**
          * @description A persisted rule mapping a device signature to a profile. At least one of
          *     `sysobjectid_prefix` / `sysdescr_regex` is set (the DB enforces this with a CHECK).
          */
@@ -6880,8 +6895,9 @@ export interface components {
             neighbors: components["schemas"]["NeighborSet"];
             /**
              * @description For each distinct management address the neighbours advertise, which monitored node it
-             *     belongs to. Matched on the address alone — an inventory address or any address one of a
-             *     node's interfaces carries — never on a name or chassis id.
+             *     belongs to. Matched on the address — an inventory address or any address one of a node's
+             *     interfaces carries. Only when several nodes claim it is the name the neighbour sent used,
+             *     and only to choose among those nodes (ADR-180 増分 4); a name alone never matches.
              */
             peers: components["schemas"]["NeighborPeer"][];
         };
@@ -10015,6 +10031,18 @@ export interface components {
             /** @description The address exactly as the neighbour row carries it in `remote_mgmt_addr`. */
             address: string;
             /**
+             * @description The other nodes that claim the address, when more than one does — the ones the caller may
+             *     see, by name, at most ten. Empty when one node or none claims it. A duplicate address stays
+             *     visible even when the name picked the peer out.
+             */
+            also_claimed_by: components["schemas"]["AlsoClaimedBy"][];
+            /**
+             * Format: int32
+             * @description How many other nodes claim the address, including those outside the caller's folders and
+             *     those past the first ten. `0` when one node or none claims it.
+             */
+            also_claimed_total: number;
+            /**
              * Format: uuid
              * @description That list's row for the address, when `discovery_listed` — the id the endpoint probe and
              *     import act on (ADR-179 増分 3).
@@ -10023,6 +10051,11 @@ export interface components {
             /** @description Whether the address is on the caller's Discovery ▸ Unregistered list. */
             discovery_listed: boolean;
             managed_by?: null | components["schemas"]["NeighborManagedBy"];
+            /**
+             * @description Several nodes claim the address and the node answered was chosen among them by the name the
+             *     neighbour sent (ADR-180 増分 4). The others are in `also_claimed_by`.
+             */
+            matched_by_name: boolean;
             /**
              * Format: uuid
              * @description Present only when `state` is `node`.

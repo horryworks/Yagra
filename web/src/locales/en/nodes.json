@@ -1008,7 +1008,7 @@
       "explain": {
         "node": "A node Yagra monitors has this address.",
         "outside_scope": "A node Yagra monitors has this address, in a folder you cannot see.",
-        "ambiguous": "More than one node has this address (a shared virtual address or a duplicate), so it does not identify one of them.",
+        "ambiguous": "More than one node has this address (a shared virtual address, a standby line or a duplicate), and the name the neighbor sent does not pick out one of them. Open the row to see which nodes have it.",
         "unregistered": "No node Yagra monitors has this address.",
         "none": "The neighbor did not advertise a management address."
       },
@@ -1017,7 +1017,25 @@
         "outside_scope": "A Meraki device Yagra monitors has this MAC address, in a folder you cannot see.",
         "unregistered": "A Meraki organization lists a device with this MAC address, and it is not monitored yet."
       },
-      "hint": "Matched on the management address: a node's own address or any address on one of its interfaces. A Meraki device that sends no address is matched on the MAC its organization lists.",
+      "explainName": {
+        "node": "Several nodes have this address. This is the one whose name matches the name the neighbor sent; open the row to see the others.",
+        "outside_scope": "Several nodes have this address. The one whose name matches the name the neighbor sent is in a folder you cannot see."
+      },
+      "also": {
+        "chip_one": "+{{count}} with this address",
+        "chip_other": "+{{count}} with this address",
+        "heading_one": "{{count}} other node has this address",
+        "heading_other": "{{count}} other nodes have this address",
+        "hint": "The same address is on another node's interface or is its own address — a shared virtual address, a standby line, or a duplicate. A node whose port carrying it is down is still listed.",
+        "more_one": "…and {{count}} more not listed here (in a folder you cannot see, or past the first ten).",
+        "more_other": "…and {{count}} more not listed here (in folders you cannot see, or past the first ten).",
+        "port": {
+          "up": "link up",
+          "link_down": "link down",
+          "unknown": "link state unknown"
+        }
+      },
+      "hint": "Matched on the management address: a node's own address or any address on one of its interfaces. When several nodes have it, the one named like the neighbor is chosen if there is exactly one. A Meraki device that sends no address is matched on the MAC its organization lists.",
       "badge": {
         "node": "Monitored",
         "outside_scope": "Monitored (hidden)",

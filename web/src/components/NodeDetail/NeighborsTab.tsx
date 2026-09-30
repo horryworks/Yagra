@@ -71,8 +71,11 @@ import {
   type NeighborLookups,
   type SetupBlockedReason,
   type NeighborSetupMode,
+  alsoClaimed,
+  pickedByName,
+  type AlsoClaimed,
 } from './neighbors';
-import { merakiOrgPath } from '../../lib/entityHref';
+import { merakiOrgPath, nodeHref } from '../../lib/entityHref';
 import './NeighborsTab.css';
 
 /** How many history rows to load. Adjacency changes are rare, so one page is almost always all of
@@ -432,15 +435,35 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   // 増分 3); the badge's explanation says which. No badge where neither matched.
   const state = neighborAddressState(n, lookups);
   const byMac = peerMatchedBy(n, lookups) === 'mac';
+  const explain = byMac
+    ? t(`neighbors.peer.explainMac.${state}`)
+    : pickedByName(peer)
+      ? t(`neighbors.peer.explainName.${state}`)
+      : t(`neighbors.peer.explain.${state}`);
   const badge =
     state && state !== 'none' ? (
-      <span
-        className={`nd-nb-state ${state}`}
-        title={t(byMac ? `neighbors.peer.explainMac.${state}` : `neighbors.peer.explain.${state}`)}
-      >
+      <span className={`nd-nb-state ${state}`} title={explain}>
         {t(`neighbors.peer.badge.${state}`)}
       </span>
     ) : null;
+  // The same address on other nodes (ADR-180 増分 4): kept beside the name even when the name
+  // picked the peer, because that is what says the address is duplicated. The list is in the
+  // opened row as well — a title is hover-only.
+  const also = alsoClaimed(peer);
+  const alsoMark = also ? (
+    <span
+      className="nd-nb-dup"
+      title={[
+        t('neighbors.peer.also.hint'),
+        ...also.listed.map(
+          (a) => `${a.node_name} — ${t(`neighbors.peer.also.port.${a.port_state}`)}`,
+        ),
+        ...(also.unlisted > 0 ? [t('neighbors.peer.also.more', { count: also.unlisted })] : []),
+      ].join('\n')}
+    >
+      {t('neighbors.peer.also.chip', { count: also.total })}
+    </span>
+  ) : null;
   return (
     <span className="nd-nb-stack">
       <span className="nd-nb-peerline">
@@ -460,6 +483,7 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
         </span>
       )}
       {badge}
+      {alsoMark}
       </span>
       {secondary && (
         <span className="nd-muted nd-nb-sub" title={secondary}>
@@ -528,9 +552,11 @@ function Details({
   setup?: ReactNode;
 }) {
   const { t } = useTranslation('nodes');
+  const also = alsoClaimed(peerOf(n, lookups));
   return (
     <div className="nd-nb-details">
       {setup}
+      {also && <AlsoClaimedList also={also} />}
       <dl className="nd-nb-dl">
         {neighborDetails(n, lookups).map((d) => (
           <div key={d.labelKey} className="nd-nb-dl-row">
@@ -540,6 +566,40 @@ function Details({
         ))}
       </dl>
       <p className="nd-muted nd-nb-note">{t('neighbors.detail.note')}</p>
+    </div>
+  );
+}
+
+/** The other nodes with the peer's address, each linked and with its link state (ADR-180 増分 4). */
+function AlsoClaimedList({ also }: { also: AlsoClaimed }) {
+  const { t } = useTranslation('nodes');
+  return (
+    <div className="nd-nb-also">
+      <div className="nd-nb-also-head">{t('neighbors.peer.also.heading', { count: also.total })}</div>
+      <p className="nd-muted nd-nb-note">{t('neighbors.peer.also.hint')}</p>
+      {also.listed.length > 0 && (
+        <ul className="nd-nb-also-list">
+          {also.listed.map((a) => (
+            <li key={a.node_id}>
+              <Link
+                to={nodeHref(a.node_id)}
+                className="nd-nb-link"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {a.node_name}
+              </Link>
+              <span className={`nd-nb-port ${a.port_state}`}>
+                {t(`neighbors.peer.also.port.${a.port_state}`)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {also.unlisted > 0 && (
+        <p className="nd-muted nd-nb-note">
+          {t('neighbors.peer.also.more', { count: also.unlisted })}
+        </p>
+      )}
     </div>
   );
 }

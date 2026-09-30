@@ -119,6 +119,58 @@
   border-color: var(--severity-info);
 }
 
+/* The same address on other nodes (ADR-180 増分 4): a duplicate is worth a look, so the warning
+   colour — paired with its words, never alone. */
+.nd-nb-dup {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  padding: 0 5px;
+  border: var(--border-width) dashed var(--status-warning);
+  border-radius: var(--radius-sm);
+  color: var(--status-warning);
+  white-space: nowrap;
+}
+
+.nd-nb-also {
+  margin-bottom: var(--space-3);
+}
+
+.nd-nb-also-head {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+
+.nd-nb-also-list {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nd-nb-also-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nd-nb-port {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.nd-nb-port.up {
+  color: var(--status-ok);
+}
+
+/* No link is not a fault by itself — a standby line is down by design — so not the critical red. */
+.nd-nb-port.link_down {
+  color: var(--status-unknown);
+}
+
 /* The opened row: every field, in full, wrapped. */
 .nd-nb-details {
   padding: var(--space-2) var(--space-4) var(--space-3);

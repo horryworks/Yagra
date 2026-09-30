@@ -3,15 +3,17 @@
 //! interfaces carries (ADR-180).
 //!
 //! The same two sources the network map's `derive_links` builds its owner map from (ADR-043), so the
-//! Neighbors tab and the map cannot disagree about who stands at a peer's management address. The
-//! rule applied to what comes back — one claimant is a match, two identify nobody — is
-//! `yagra_topology::sole_claimant`, shared with the map for the same reason.
+//! Neighbors tab and the map agree about who stands at a peer's management address whenever one
+//! node does. The rule applied to what comes back — one claimant is a match — is
+//! `yagra_topology::sole_claimant`, shared with the map for the same reason. Where several nodes
+//! claim it, the tab alone may narrow them by the name the neighbour sent (ADR-180 増分 4); the map
+//! draws no line.
 //!
 //! ⚠️ Read on every Neighbors-tab refresh (15 s per open tab), so the `node_l3` half must not scan
 //! the table: each address is probed through the GIN index migration `0138` adds, via a lateral
 //! containment test — a GIN index can serve `@>` per outer row, but not `= ANY(array)`.
 
-use super::{AddressMatch, DeviceIdentity, GroupFilter, NodeRepo};
+use super::{AddressClaim, DeviceIdentity, GroupFilter, NodeRepo};
 use sqlx::Row;
 use std::net::IpAddr;
 
@@ -107,28 +109,37 @@ impl NodeRepo {
     ///
     /// Unlike it, URL and DNS monitors are **not** excluded — the map counts them as claimants too,
     /// and matching its rule is the point (ADR-180 決定 2).
+    ///
+    /// Each claim carries the port it is on (ADR-180 増分 4), so a node appears once per port
+    /// carrying the address plus once more if it is also its inventory address.
     pub async fn address_claims(
         &self,
         addresses: &[IpAddr],
         groups: GroupFilter<'_>,
-    ) -> anyhow::Result<Vec<AddressMatch>> {
+    ) -> anyhow::Result<Vec<AddressClaim>> {
         if addresses.is_empty() {
             return Ok(Vec::new());
         }
         // Canonical text: the poller writes `node_l3` addresses with `IpAddr`'s `Display`, so the
         // containment test only matches the same spelling.
         let text: Vec<String> = addresses.iter().map(ToString::to_string).collect();
-        // `COALESCE` because the scope predicate is a projection here; see `device_nodes_at`.
+        // `COALESCE` because the scope predicate is a projection here; see `device_nodes_at`. The
+        // lateral expansion runs only over the lists the containment test already matched, so the
+        // index still decides which rows are read.
         let sql = format!(
-            "SELECT q.ip AS address, n.id, n.name, COALESCE({scope}, false) AS visible \
+            "SELECT q.ip AS address, n.id, n.name, COALESCE({scope}, false) AS visible, \
+                    NULL::bigint AS ifindex \
              FROM unnest($2::text[]) AS q(ip) \
              JOIN nodes n ON n.address = q.ip::inet \
              UNION \
-             SELECT q.ip AS address, n.id, n.name, COALESCE({scope}, false) AS visible \
+             SELECT q.ip AS address, n.id, n.name, COALESCE({scope}, false) AS visible, \
+                    (a->>'ifindex')::bigint AS ifindex \
              FROM unnest($2::text[]) AS q(ip) \
              JOIN node_l3 l \
                ON l.addresses->'addresses' @> jsonb_build_array(jsonb_build_object('ip', q.ip)) \
-             JOIN nodes n ON n.id = l.node_id",
+             JOIN nodes n ON n.id = l.node_id \
+             CROSS JOIN LATERAL jsonb_array_elements(l.addresses->'addresses') a \
+             WHERE a->>'ip' = q.ip",
             scope = Self::SCOPE_PREDICATE,
         );
         let rows = sqlx::query(&sql)
@@ -139,13 +150,17 @@ impl NodeRepo {
         rows.iter()
             .map(|row| {
                 let address: String = row.try_get("address")?;
-                Ok(AddressMatch {
+                let ifindex: Option<i64> = row.try_get("ifindex")?;
+                Ok(AddressClaim {
                     address: address.parse().map_err(|e| {
                         anyhow::anyhow!("claimed address {address:?} does not parse: {e}")
                     })?,
                     id: row.try_get("id")?,
                     name: row.try_get("name")?,
                     visible: row.try_get("visible")?,
+                    // An index a `u32` cannot hold was not written by the poller; the claim still
+                    // counts, it just names no port.
+                    ifindex: ifindex.and_then(|i| u32::try_from(i).ok()),
                 })
             })
             .collect()
@@ -239,6 +254,42 @@ mod tests {
         let mut want = vec![a, b];
         want.sort();
         assert_eq!(ids, want);
+    }
+
+    /// ADR-180 増分 4: an interface claim names the port carrying the address, an inventory claim
+    /// names none, and a node carrying the address on two ports comes back once per port — the tab
+    /// reads each claimant's link state from exactly these.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn each_claim_names_the_port_that_carries_the_address(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let a = pgtest::node_at(&pool, "rtr-a", ip("192.0.2.1"), None).await;
+        let b = pgtest::node_at(&pool, "rtr-b", ip("192.0.2.2"), None).await;
+        let on = |ifindex: u32, a: &str| L3Address {
+            ifindex,
+            ip: ip(a),
+            prefix_len: 30,
+            addr_type: L3AddrType::Unicast,
+            source_table: L3SourceTable::IpAddressTable,
+        };
+        crate::l3::L3Repo::new(pool.clone())
+            .record_observation(
+                b,
+                &L3Snapshot::new(vec![
+                    on(5, "192.0.2.1"),
+                    on(7, "192.0.2.1"),
+                    on(9, "198.51.100.3"),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let found = repo.address_claims(&[ip("192.0.2.1")], None).await.unwrap();
+        let mut got: Vec<(Uuid, Option<u32>)> = found.iter().map(|m| (m.id, m.ifindex)).collect();
+        got.sort();
+        let mut want = vec![(a, None), (b, Some(5)), (b, Some(7))];
+        want.sort();
+        assert_eq!(got, want);
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

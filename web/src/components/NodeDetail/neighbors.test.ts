@@ -26,6 +26,8 @@ import {
   SETUP_BLOCKED_REASONS,
   setupMode,
   setupName,
+  alsoClaimed,
+  pickedByName,
 } from './neighbors';
 import type { Neighbor, NeighborPeer, NeighborSet } from '../../types/api';
 
@@ -566,3 +568,54 @@ describe('why a "Not monitored" row has no setup button (ADR-179 増分 9)', () 
   });
 });
 
+
+// ── ADR-180 増分 4: several nodes claim the address ─────────────────────────────────────────────
+
+describe('the other nodes that claim a peer address', () => {
+  const others = [
+    { node_id: 'n-2', node_name: 'wan-rtr-01', port_state: 'up' as const },
+    { node_id: 'n-3', node_name: 'wan-rtr-02', port_state: 'link_down' as const },
+  ];
+
+  it('lists the visible ones and counts the rest', () => {
+    const got = alsoClaimed(
+      peer({ matched_by_name: true, also_claimed_by: others, also_claimed_total: 4 }),
+    );
+    expect(got?.listed.map((a) => a.node_name)).toEqual(['wan-rtr-01', 'wan-rtr-02']);
+    expect(got?.unlisted).toBe(2);
+    expect(got?.total).toBe(4);
+  });
+
+  it('says nothing when one node or none claims it, or the core predates the field', () => {
+    expect(alsoClaimed(peer({ also_claimed_by: [], also_claimed_total: 0 }))).toBeNull();
+    // An older core sends neither field.
+    expect(alsoClaimed(peer())).toBeNull();
+    expect(alsoClaimed(null)).toBeNull();
+  });
+
+  it('keeps the duplicate on an ambiguous address, where every claimant is listed', () => {
+    const got = alsoClaimed(
+      peer({
+        state: 'ambiguous',
+        node_id: null,
+        node_name: null,
+        also_claimed_by: others,
+        also_claimed_total: 2,
+      }),
+    );
+    expect(got?.listed).toHaveLength(2);
+    expect(got?.unlisted).toBe(0);
+  });
+
+  it('explains a pick by name only for a node, seen or not', () => {
+    expect(pickedByName(peer({ matched_by_name: true }))).toBe(true);
+    expect(pickedByName(peer({ matched_by_name: true, state: 'outside_scope' }))).toBe(true);
+    expect(pickedByName(peer({ matched_by_name: false }))).toBe(false);
+    expect(pickedByName(peer())).toBe(false);
+    expect(pickedByName(null)).toBe(false);
+  });
+
+  it('links an address picked by name like any other node', () => {
+    expect(peerNodePath(peer({ matched_by_name: true }))).not.toBeNull();
+  });
+});
