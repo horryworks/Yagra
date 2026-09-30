@@ -13,6 +13,20 @@
   margin: 0 0 8px;
 }
 
+/* The map, its resize rail and its legend, no wider than the world is at the pane's height
+   (ADR-188 増分 2). The pane is border-box, so its inner height is the stored height less two
+   borders; the outer width that puts exactly the world's width inside is that times the aspect,
+   plus the two side borders. At that width the whole-world zoom floor touches all four edges; a
+   window narrower than it keeps the frame full width. `--geo-aspect` is set by the component from
+   `MAP_WIDTH / MAP_HEIGHT`, so the ratio is written down once. */
+.geopage-frame {
+  width: 100%;
+  max-width: calc(
+    (var(--geo-pane-h) - 2 * var(--border-width)) * var(--geo-aspect) + 2 * var(--border-width)
+  );
+  margin: 0 auto;
+}
+
 /* The pane's height comes from the component (an inline style), because it is an operator
    preference that persists — see `mapPaneHeight.ts`. `flex: 1` was tried first and collapsed the
    pane to a ~150px strip: the app shell's content area is not a height-constrained flex column, so

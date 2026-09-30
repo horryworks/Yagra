@@ -280,138 +280,151 @@ export function GeoMapPage() {
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}
           {placed.length === 0 && <p className="geopage-empty muted">{t('geo.empty')}</p>}
-          <div className="geopage-map" ref={wrapRef} style={{ height: `${paneHeight}px` }}>
-            <div className="geopage-controls">
-              <button
-                className="geopage-ctl"
-                onClick={fit}
-                title={t('map.control.fitToView')}
-                aria-label={t('map.control.fitToView')}
-              >
-                {t('map.control.fit')}
-              </button>
-              <button
-                className="geopage-ctl"
-                onClick={() => zoomCentre(1.3)}
-                title={t('map.control.zoomIn')}
-                aria-label={t('map.control.zoomIn')}
-              >
-                +
-              </button>
-              <button
-                className="geopage-ctl"
-                onClick={() => zoomCentre(1 / 1.3)}
-                title={t('map.control.zoomOut')}
-                aria-label={t('map.control.zoomOut')}
-              >
-                −
-              </button>
-            </div>
-            <svg
-              className="geopage-svg"
-              width="100%"
-              height="100%"
-              role="img"
-              aria-label={t('geo.aria', { count: placed.length })}
-              onWheel={onWheel}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
-              onPointerLeave={onPointerUp}
-            >
-              <g transform={`translate(${v.tx} ${v.ty}) scale(${v.scale})`}>
-                {/* Ocean, so the outline reads as land rather than as floating shapes. */}
-                <rect className="geopage-ocean" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
-                {WORLD_OUTLINE.map((d, i) => (
-                  <path className="geopage-land" d={d} key={i} />
-                ))}
-                {/* Inland water, in the ocean colour, over the land it sits in. */}
-                {WORLD_LAKES.map((d, i) => (
-                  <path className="geopage-lake" d={d} key={i} />
-                ))}
-                {placed.map((g) => {
-                  const p = project(g.latitude, g.longitude);
-                  const c = pins[g.id];
-                  const worst = c ? worstStateFromCounts(c) : 'ok';
-                  const total = c ? countsTotal(c) : 0;
-                  // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that
-                  // grows with the map turns into a blob that hides the site it marks.
-                  const r = 5 / v.scale;
-                  return (
-                    <g
-                      className="geopage-pin"
-                      data-testid={TEST_IDS.geoMapPin}
-                      key={g.id}
-                      transform={`translate(${p.x} ${p.y})`}
-                      role="button"
-                      tabIndex={0}
-                      // ⚠️ The `group:` prefix is not decoration. `parseSelection` splits on the
-                      // first colon and returns null without one, so a bare UUID landed on All
-                      // nodes with nothing selected at all — the pin navigated, and then quietly
-                      // did nothing. (`PollersPage` has always written the `node:` form.)
-                      onClick={() => navigate(nodesPageHref({ kind: 'group', id: g.id }))}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          navigate(nodesPageHref({ kind: 'group', id: g.id }));
-                        }
-                      }}
-                    >
-                      <title>
-                        {t('geo.pinTitle', {
-                          name: g.name,
-                          state: stateLabel(worst),
-                          count: total,
-                        })}
-                      </title>
-                      {/* Halo first so the dot reads against both land and ocean. */}
-                      <circle className="geopage-pin-halo" r={r * 1.9} />
-                      <circle
-                        className="geopage-pin-dot"
-                        r={r}
-                        style={{ fill: stateColorVar(worst) }}
-                      />
-                    </g>
-                  );
-                })}
-              </g>
-            </svg>
-          </div>
-          {/* Drag the bottom edge to make the map taller or shorter; the size is remembered.
-              A slider role rather than a bare div so it is announced, focusable and arrow-key
-              operable — the map is the content of this page, so how much of the screen it gets is
-              a real control, not decoration. */}
+          {/* No wider than the world is at this height (ADR-188 増分 2), so a wide monitor does
+              not get a band of grey either side of the map. The aspect comes from the projection,
+              not from the stylesheet — see `.geopage-frame`. */}
           <div
-            className="geopage-resize"
-            role="slider"
-            tabIndex={0}
-            aria-label={t('geo.resize')}
-            aria-orientation="vertical"
-            aria-valuenow={paneHeight}
-            onPointerDown={onResizeDown}
-            onPointerMove={onResizeMove}
-            onPointerUp={onResizeUp}
-            onPointerCancel={onResizeUp}
-            onKeyDown={onResizeKey}
-            onDoubleClick={() => setStoredHeight(defaultPaneHeight(window.innerHeight))}
-            title={t('geo.resize')}
+            className="geopage-frame"
+            style={
+              {
+                '--geo-pane-h': `${paneHeight}px`,
+                '--geo-aspect': MAP_WIDTH / MAP_HEIGHT,
+              } as React.CSSProperties
+            }
           >
-            <span className="geopage-resize-grip" aria-hidden="true" />
+            <div className="geopage-map" ref={wrapRef} style={{ height: `${paneHeight}px` }}>
+              <div className="geopage-controls">
+                <button
+                  className="geopage-ctl"
+                  onClick={fit}
+                  title={t('map.control.fitToView')}
+                  aria-label={t('map.control.fitToView')}
+                >
+                  {t('map.control.fit')}
+                </button>
+                <button
+                  className="geopage-ctl"
+                  onClick={() => zoomCentre(1.3)}
+                  title={t('map.control.zoomIn')}
+                  aria-label={t('map.control.zoomIn')}
+                >
+                  +
+                </button>
+                <button
+                  className="geopage-ctl"
+                  onClick={() => zoomCentre(1 / 1.3)}
+                  title={t('map.control.zoomOut')}
+                  aria-label={t('map.control.zoomOut')}
+                >
+                  −
+                </button>
+              </div>
+              <svg
+                className="geopage-svg"
+                width="100%"
+                height="100%"
+                role="img"
+                aria-label={t('geo.aria', { count: placed.length })}
+                onWheel={onWheel}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                onPointerLeave={onPointerUp}
+              >
+                <g transform={`translate(${v.tx} ${v.ty}) scale(${v.scale})`}>
+                  {/* Ocean, so the outline reads as land rather than as floating shapes. */}
+                  <rect className="geopage-ocean" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
+                  {WORLD_OUTLINE.map((d, i) => (
+                    <path className="geopage-land" d={d} key={i} />
+                  ))}
+                  {/* Inland water, in the ocean colour, over the land it sits in. */}
+                  {WORLD_LAKES.map((d, i) => (
+                    <path className="geopage-lake" d={d} key={i} />
+                  ))}
+                  {placed.map((g) => {
+                    const p = project(g.latitude, g.longitude);
+                    const c = pins[g.id];
+                    const worst = c ? worstStateFromCounts(c) : 'ok';
+                    const total = c ? countsTotal(c) : 0;
+                    // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that
+                    // grows with the map turns into a blob that hides the site it marks.
+                    const r = 5 / v.scale;
+                    return (
+                      <g
+                        className="geopage-pin"
+                        data-testid={TEST_IDS.geoMapPin}
+                        key={g.id}
+                        transform={`translate(${p.x} ${p.y})`}
+                        role="button"
+                        tabIndex={0}
+                        // ⚠️ The `group:` prefix is not decoration. `parseSelection` splits on the
+                        // first colon and returns null without one, so a bare UUID landed on All
+                        // nodes with nothing selected at all — the pin navigated, and then quietly
+                        // did nothing. (`PollersPage` has always written the `node:` form.)
+                        onClick={() => navigate(nodesPageHref({ kind: 'group', id: g.id }))}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            navigate(nodesPageHref({ kind: 'group', id: g.id }));
+                          }
+                        }}
+                      >
+                        <title>
+                          {t('geo.pinTitle', {
+                            name: g.name,
+                            state: stateLabel(worst),
+                            count: total,
+                          })}
+                        </title>
+                        {/* Halo first so the dot reads against both land and ocean. */}
+                        <circle className="geopage-pin-halo" r={r * 1.9} />
+                        <circle
+                          className="geopage-pin-dot"
+                          r={r}
+                          style={{ fill: stateColorVar(worst) }}
+                        />
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            </div>
+            {/* Drag the bottom edge to make the map taller or shorter; the size is remembered.
+                A slider role rather than a bare div so it is announced, focusable and arrow-key
+                operable — the map is the content of this page, so how much of the screen it gets is
+                a real control, not decoration. */}
+            <div
+              className="geopage-resize"
+              role="slider"
+              tabIndex={0}
+              aria-label={t('geo.resize')}
+              aria-orientation="vertical"
+              aria-valuenow={paneHeight}
+              onPointerDown={onResizeDown}
+              onPointerMove={onResizeMove}
+              onPointerUp={onResizeUp}
+              onPointerCancel={onResizeUp}
+              onKeyDown={onResizeKey}
+              onDoubleClick={() => setStoredHeight(defaultPaneHeight(window.innerHeight))}
+              title={t('geo.resize')}
+            >
+              <span className="geopage-resize-grip" aria-hidden="true" />
+            </div>
+            {/* Never colour alone (ui-conventions.md): the legend names each state in text. Derived
+                from `DISPLAY_ORDER` rather than a local list, because a pin's colour comes from
+                `worstStateFromCounts`, which walks the full `NodeState` union — a hand-written legend
+                drops whichever state nobody remembered (it omitted `maintenance`, so a site whose
+                only non-ok nodes were in a maintenance window drew a colour the legend never named). */}
+            <ul className="geopage-legend">
+              {DISPLAY_ORDER.map((s) => (
+                <li key={s}>
+                  <span className="geopage-swatch" style={{ background: stateColorVar(s) }} />
+                  {stateLabel(s)}
+                </li>
+              ))}
+            </ul>
           </div>
-          {/* Never colour alone (ui-conventions.md): the legend names each state in text. Derived
-              from `DISPLAY_ORDER` rather than a local list, because a pin's colour comes from
-              `worstStateFromCounts`, which walks the full `NodeState` union — a hand-written legend
-              drops whichever state nobody remembered (it omitted `maintenance`, so a site whose
-              only non-ok nodes were in a maintenance window drew a colour the legend never named). */}
-          <ul className="geopage-legend">
-            {DISPLAY_ORDER.map((s) => (
-              <li key={s}>
-                <span className="geopage-swatch" style={{ background: stateColorVar(s) }} />
-                {stateLabel(s)}
-              </li>
-            ))}
-          </ul>
         </>
       )}
     </div>
