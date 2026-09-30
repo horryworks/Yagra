@@ -24,7 +24,8 @@
   max-width: calc(
     (var(--geo-pane-h) - 2 * var(--border-width)) * var(--geo-aspect) + 2 * var(--border-width)
   );
-  margin: 0 auto;
+  /* Left-aligned under the page heading, like every other screen's content (user request). */
+  margin: 0;
 }
 
 /* The pane's height comes from the component (an inline style), because it is an operator
