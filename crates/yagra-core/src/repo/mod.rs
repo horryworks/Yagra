@@ -252,9 +252,11 @@ pub struct AddressMatch {
 
 /// One way a node claims an address ([`NodeRepo::address_claims`], ADR-180).
 ///
-/// A node that carries the address on two ports, or as its inventory address as well, comes back
-/// once per way: the Neighbors tab reads a claimant's link state from the ports, so collapsing
-/// them here would throw away the one fact it asks for.
+/// A node whose interface carries the address and whose inventory address is that address as well
+/// comes back twice, once each way: the Neighbors tab reads a claimant's link state from the port,
+/// so collapsing them here would throw away the one fact it asks for. (A node's stored address list
+/// keeps one record per address — `L3Snapshot::canonicalize` — so one node never names two ports
+/// for one address.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressClaim {
     pub address: IpAddr,

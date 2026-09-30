@@ -110,8 +110,8 @@ impl NodeRepo {
     /// Unlike it, URL and DNS monitors are **not** excluded — the map counts them as claimants too,
     /// and matching its rule is the point (ADR-180 決定 2).
     ///
-    /// Each claim carries the port it is on (ADR-180 増分 4), so a node appears once per port
-    /// carrying the address plus once more if it is also its inventory address.
+    /// Each claim carries the port it is on (ADR-180 増分 4), so a node appears once for the port
+    /// carrying the address and once more if it is also its inventory address.
     pub async fn address_claims(
         &self,
         addresses: &[IpAddr],
@@ -256,9 +256,10 @@ mod tests {
         assert_eq!(ids, want);
     }
 
-    /// ADR-180 増分 4: an interface claim names the port carrying the address, an inventory claim
-    /// names none, and a node carrying the address on two ports comes back once per port — the tab
-    /// reads each claimant's link state from exactly these.
+    /// ADR-180 増分 4: an interface claim names the port carrying the address and an inventory claim
+    /// names none — the tab reads each claimant's link state from exactly these. The stored list
+    /// keeps one record per address, so the second port offered for the same address is not
+    /// stored and does not come back.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn each_claim_names_the_port_that_carries_the_address(pool: sqlx::PgPool) {
@@ -287,7 +288,7 @@ mod tests {
         let found = repo.address_claims(&[ip("192.0.2.1")], None).await.unwrap();
         let mut got: Vec<(Uuid, Option<u32>)> = found.iter().map(|m| (m.id, m.ifindex)).collect();
         got.sort();
-        let mut want = vec![(a, None), (b, Some(5)), (b, Some(7))];
+        let mut want = vec![(a, None), (b, Some(5))];
         want.sort();
         assert_eq!(got, want);
     }
