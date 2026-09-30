@@ -18,6 +18,10 @@
 
 - **Network map is no longer in the Topology menu.** It is reached from the places above; Topology now opens on Dependencies. Links between sites (MPLS, internet VPN) are not drawn — that is unchanged.
 
+### Bug Fixes
+
+- **Neighbors tab: a Meraki switch that advertises no address is no longer shown as shared by dozens of nodes.** Over CDP it sends `0.0.0.0`, which matched every node recorded without an address, so the row read "Several nodes" and, since v0.3.38, listed them all as "N nodes with this address". Such a row is now treated as advertising no address and matched on its chassis MAC to the device the Meraki organization lists. Loopback and link-local addresses still say why they cannot be set up. The same applies to the `peers` of `GET /api/v1/nodes/{node_id}/neighbors` and MCP `get_neighbors`.
+
 ## v0.3.38 — Geo map shades the night side of the world, the Neighbors tab picks a shared address's node by name
 
 ### New Features

@@ -529,11 +529,7 @@ struct Blockers {
 fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
     let mut verdict: BTreeMap<IpAddr, bool> = BTreeMap::new();
     for n in &set.neighbors {
-        let Some(ip) = n
-            .remote_mgmt_addr
-            .as_deref()
-            .and_then(|a| a.trim().parse::<IpAddr>().ok())
-        else {
+        let Some(ip) = usable_mgmt_addr(n) else {
             continue;
         };
         let only = crate::arp::only_an_end_station(&n.capabilities);
@@ -545,13 +541,26 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
         .collect()
 }
 
-/// Every distinct management address the set advertises, keyed by the text the row carries.
-/// A value that does not parse as an address is left out — it cannot be matched to anything.
+/// A row's management address, when it has one. Text that does not parse is no address, and neither
+/// is the unspecified address (ADR-180 Inc.4 decision 10): a Meraki switch sends `0.0.0.0` over CDP
+/// when it has none, and a Meraki node with no LAN address is stored at `0.0.0.0`, so matching on it
+/// made every such node a claimant. Such a row is matched on its chassis MAC instead (Inc.3).
+///
+/// Loopback, link-local and the like are still addresses here — they name no device, and the row says
+/// so through [`SetupBlocked::NotADeviceAddress`] rather than going quiet.
+fn usable_mgmt_addr(n: &Neighbor) -> Option<IpAddr> {
+    n.remote_mgmt_addr
+        .as_deref()
+        .and_then(|a| a.parse::<IpAddr>().ok())
+        .filter(|ip| !ip.is_unspecified())
+}
+
+/// Every distinct management address the set advertises, keyed by the text the row carries. A row
+/// with no usable one ([`usable_mgmt_addr`]) is left out — it cannot be matched to anything by address.
 fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
     set.neighbors
         .iter()
-        .filter_map(|n| n.remote_mgmt_addr.as_deref())
-        .filter_map(|a| a.parse::<IpAddr>().ok().map(|ip| (a.to_owned(), ip)))
+        .filter_map(|n| Some((n.remote_mgmt_addr.clone()?, usable_mgmt_addr(n)?)))
         .collect()
 }
 
@@ -561,11 +570,7 @@ fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
 fn advertised_names(set: &NeighborSet) -> BTreeMap<IpAddr, Vec<String>> {
     let mut out: BTreeMap<IpAddr, Vec<String>> = BTreeMap::new();
     for n in &set.neighbors {
-        let Some(ip) = n
-            .remote_mgmt_addr
-            .as_deref()
-            .and_then(|a| a.parse::<IpAddr>().ok())
-        else {
+        let Some(ip) = usable_mgmt_addr(n) else {
             continue;
         };
         if let Some(name) = advertised_name(n) {
@@ -920,11 +925,7 @@ fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
     set.neighbors
         .iter()
         .filter(|n| n.remote_chassis_kind == Some(NeighborIdKind::Mac))
-        .filter(|n| {
-            n.remote_mgmt_addr
-                .as_deref()
-                .is_none_or(|a| a.parse::<IpAddr>().is_err())
-        })
+        .filter(|n| usable_mgmt_addr(n).is_none())
         .map(|n| n.remote_chassis.clone())
         .collect()
 }
@@ -2203,6 +2204,34 @@ mod peer_tests {
         assert_eq!(
             got.into_iter().collect::<Vec<_>>(),
             ["0c:8d:db:00:00:01", "0c:8d:db:00:00:02"]
+        );
+    }
+
+    /// Decision 10: `0.0.0.0` — what a Meraki switch sends over CDP when it has no address — and `::`
+    /// are no address. The row is not asked about by address, its name is not a claimant's, and its MAC
+    /// chassis goes to the Meraki listing instead. A loopback is still an address, and says why it
+    /// cannot be set up.
+    #[test]
+    fn an_unspecified_management_address_is_no_address() {
+        let mut v4 = neighbor("b4:df:91:00:00:01", Some(NeighborIdKind::Mac));
+        v4.remote_mgmt_addr = Some("0.0.0.0".to_owned());
+        v4.remote_sys_name = Some("ms-01".to_owned());
+        let mut v6 = neighbor("b4:df:91:00:00:02", Some(NeighborIdKind::Mac));
+        v6.remote_mgmt_addr = Some("::".to_owned());
+        let mut lo = neighbor("sw-lo", Some(NeighborIdKind::Text));
+        lo.remote_mgmt_addr = Some("127.0.0.1".to_owned());
+        let set = NeighborSet::new(vec![v4, v6, lo], 0);
+        assert_eq!(
+            advertised_addresses(&set).into_keys().collect::<Vec<_>>(),
+            ["127.0.0.1"]
+        );
+        assert!(advertised_names(&set).keys().all(|ip| !ip.is_unspecified()));
+        assert!(end_station_only(&set).iter().all(|ip| !ip.is_unspecified()));
+        assert_eq!(
+            unaddressed_mac_chassis(&set)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["b4:df:91:00:00:01", "b4:df:91:00:00:02"]
         );
     }
 
