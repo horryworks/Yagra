@@ -154,8 +154,7 @@ import type {
   LinkOverrideRow,
   LinkOverrideAction,
   LinkDirection,
-  TopologyLink,
-  TopologyLinkSummary,
+  MapLevel,
   UrlCheckConfig,
   DnsCheckConfig,
   CurrentNeighbors,
@@ -2102,30 +2101,11 @@ export const api = {
     return { nodes };
   },
 
-  /** The derived connectivity graph: undirected links between nodes, with the evidence that
-   *  produced each one. Same keyset-paging contract as `getTopology`, and the same bounded loop.
-   *
-   *  `summary` and `derived_at` come from the last derivation run and are the same on every page,
-   *  so the last page's copy is the one returned — they describe the run, not the page. */
-  getTopologyLinks: async (): Promise<{
-    links: TopologyLink[];
-    summary: TopologyLinkSummary;
-    derivedAt: string | null;
-  }> => {
-    const links: TopologyLink[] = [];
-    let cursor: number | undefined;
-    let summary: TopologyLinkSummary = {};
-    let derivedAt: string | null = null;
-    for (let i = 0; i < 200; i++) {
-      const page = await apiGet('/api/v1/topology/links', { query: { cursor } });
-      links.push(...page.links);
-      summary = page.summary;
-      derivedAt = page.derived_at ?? null;
-      if (!page.next_cursor) break;
-      cursor = page.next_cursor;
-    }
-    return { links, summary, derivedAt };
-  },
+  /** One folder level of the network map (ADR-191): the folder's own linked nodes, its subfolders
+   *  as boxes, bundled links, and stubs for links leaving it. `null` is the whole network. Not
+   *  paged: the server bounds a level and answers `overflow` past the bound. */
+  getTopologyMap: async (group: string | null): Promise<MapLevel> =>
+    apiGet('/api/v1/topology/map', { query: { group: group ?? undefined } }),
 
   /** Operator decisions that override the derived graph (pin / hide / which end is upstream).
    *  Not paged — the number of decisions is bounded by what an operator typed in, not by the fleet. */

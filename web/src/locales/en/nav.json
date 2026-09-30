@@ -93,7 +93,6 @@
     "eventsForwarding": "Relay received syslog and traps to external collectors",
     "alertsMaintenance": "Planned work — node enters maintenance, excluded from SLA",
     "alertsMutes": "Silence notifications only — state and SLA unaffected",
-    "topologyMap": "The connectivity graph Yagra derived from CDP/LLDP and shared subnets",
     "topologyDependency": "Manage parent → child dependency links",
     "troubleshootRuns": "Background analysis jobs and their reports",
     "troubleshootFindings": "What the analyses have found, across every run",

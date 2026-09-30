@@ -23457,6 +23457,83 @@
         }
       }
     },
+    "/api/v1/topology/map": {
+      "get": {
+        "tags": [
+          "topology"
+        ],
+        "summary": "One folder level of the network map: the folder's own linked nodes, each subfolder as one box\nwith its subtree's counts, links between the same two things bundled into one edge, and a stub\nfor every place links leave the level.",
+        "description": "Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the\nroots of their scope directly under the whole network, and only links whose **both** ends are\nvisible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers\n`overflow: true` with its boxes and no nodes or edges.",
+        "operationId": "get_topology_map",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "description": "The folder to draw. Omit for the whole network.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One level of the network map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapLevel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No folder with that id that the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no inventory to build the map from",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/topology/shadow": {
       "get": {
         "tags": [
@@ -32852,6 +32929,350 @@
             "type": "string"
           }
         }
+      },
+      "MapBreadcrumb": {
+        "type": "object",
+        "description": "A folder named on the map: the level itself or one of its ancestors.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MapEdge": {
+        "type": "object",
+        "description": "Every link between the same two things on this level, drawn as one line.",
+        "required": [
+          "id",
+          "a",
+          "b",
+          "count",
+          "source",
+          "sources",
+          "members"
+        ],
+        "properties": {
+          "a": {
+            "$ref": "#/components/schemas/MapEndpoint"
+          },
+          "b": {
+            "$ref": "#/components/schemas/MapEndpoint"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many links the bundle holds (`members` lists at most 50)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable id, built from the two ends."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapEdgeMember"
+            },
+            "description": "The links, strongest evidence first."
+          },
+          "source": {
+            "$ref": "#/components/schemas/LinkSource",
+            "description": "The strongest of `sources`."
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkSource"
+            },
+            "description": "Every kind of evidence behind any member."
+          }
+        }
+      },
+      "MapEdgeMember": {
+        "type": "object",
+        "description": "One link inside a bundled edge, oriented so `a_node` sits at the edge's `a` end.",
+        "required": [
+          "link_id",
+          "a_node",
+          "b_node",
+          "source"
+        ],
+        "properties": {
+          "a_if_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "a_node": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "b_if_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "b_node": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "link_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LinkSource",
+            "description": "The strongest evidence behind this link."
+          },
+          "subnet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subnet behind a shared-subnet link."
+          }
+        }
+      },
+      "MapEndpoint": {
+        "type": "object",
+        "description": "One end of a map edge. `id` is a node id for `node`, a folder id for `folder`, and the stub's\nown `id` for `external`.",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MapEndpointKind"
+          }
+        }
+      },
+      "MapEndpointKind": {
+        "type": "string",
+        "description": "What one end of a map edge is: a node on this level, a subfolder's box, or a stub for\nsomething outside the level.",
+        "enum": [
+          "node",
+          "folder",
+          "external"
+        ]
+      },
+      "MapFolder": {
+        "type": "object",
+        "description": "A subfolder drawn as one box, with its whole subtree's tally (visible nodes only).",
+        "required": [
+          "id",
+          "name",
+          "group_type",
+          "node_count",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/GroupStateCounts",
+            "description": "Those nodes, by state."
+          },
+          "group_type": {
+            "type": "string",
+            "description": "The folder's type key (`site`, `region`, …)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes the subtree holds."
+          }
+        }
+      },
+      "MapLevel": {
+        "type": "object",
+        "description": "One folder level of the network map.",
+        "required": [
+          "breadcrumbs",
+          "folders",
+          "nodes",
+          "stubs",
+          "edges",
+          "direct_node_count",
+          "linked_node_count",
+          "edge_count",
+          "isolated_count",
+          "overflow",
+          "node_limit",
+          "edge_limit"
+        ],
+        "properties": {
+          "breadcrumbs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapBreadcrumb"
+            },
+            "description": "Its ancestors, outermost first (the level itself is not included)."
+          },
+          "derived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the connectivity graph was last derived (RFC 3339), or `null` before the first run."
+          },
+          "direct_node_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every node directly in this folder, linked or not."
+          },
+          "edge_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many bundled edges the level has (also when `overflow` emptied `edges`)."
+          },
+          "edge_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most edges a level draws."
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapEdge"
+            }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapFolder"
+            },
+            "description": "Its subfolders, each drawn as a box."
+          },
+          "group": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MapBreadcrumb",
+                "description": "The folder drawn; `null` is the whole network."
+              }
+            ]
+          },
+          "isolated_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Direct nodes with no link on this level: counted, not drawn."
+          },
+          "linked_node_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of those, how many have a link on this level."
+          },
+          "node_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most linked nodes a level draws."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapNode"
+            },
+            "description": "Its own nodes that have a link on this level."
+          },
+          "overflow": {
+            "type": "boolean",
+            "description": "The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain."
+          },
+          "stubs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapStub"
+            },
+            "description": "The places links leave the level for."
+          }
+        }
+      },
+      "MapNode": {
+        "type": "object",
+        "description": "A node directly in this level's folder that has at least one link drawn on the level.",
+        "required": [
+          "id",
+          "name",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "root_cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Upstream node blamed for this node's alert (dependency suppression), if any."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState"
+          }
+        }
+      },
+      "MapStub": {
+        "type": "object",
+        "description": "Where links leave the level: a node or a folder outside it.",
+        "required": [
+          "kind",
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The node or folder the stub stands for."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MapStubKind"
+          },
+          "level_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The first level on which both ends are visible; open it to see where the links go.\n`null` is the whole network."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MapStubKind": {
+        "type": "string",
+        "description": "What a stub stands for: one node, or a folder holding the far ends.",
+        "enum": [
+          "node",
+          "folder"
+        ]
       },
       "MatchedRule": {
         "type": "object",

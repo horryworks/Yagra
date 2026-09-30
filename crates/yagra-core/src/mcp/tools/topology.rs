@@ -51,8 +51,10 @@ pub(super) struct DiscoveredEndpointsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct TopologyParams {
-    /// Which view: "dependency" (default), "links", "overrides" or "shadow".
+    /// Which view: "dependency" (default), "links", "map", "overrides" or "shadow".
     kind: Option<String>,
+    /// For kind=map: the folder (node group) UUID to draw. Omit for the whole network.
+    group: Option<Uuid>,
     /// Keyset cursor. For kind=dependency this is a node UUID; for kind=links it is the numeric
     /// `next_cursor` from the previous page.
     after: Option<String>,
@@ -69,6 +71,7 @@ pub(crate) struct TopologyParams {
 pub(super) enum TopologyKind {
     Dependency,
     Links,
+    Map,
     Overrides,
     Shadow,
     Unknown,
@@ -78,6 +81,7 @@ pub(super) fn topology_kind(kind: Option<&str>) -> TopologyKind {
     match kind {
         None | Some("dependency") => TopologyKind::Dependency,
         Some("links") => TopologyKind::Links,
+        Some("map") => TopologyKind::Map,
         Some("overrides") => TopologyKind::Overrides,
         Some("shadow") => TopologyKind::Shadow,
         Some(_) => TopologyKind::Unknown,
@@ -265,7 +269,14 @@ impl YagraMcp {
                        `kind=links` is the physical/logical connectivity graph derived from \
                        CDP/LLDP adjacency and shared IP subnets: undirected links between nodes, \
                        each with the evidence that produced it (`sources`) and the subnet behind a \
-                       shared-subnet link. `kind=overrides` lists the decisions an operator has \
+                       shared-subnet link. `kind=map` is one folder of the network map, the same \
+                       level the WebUI draws: the folder's own linked nodes, each subfolder as one \
+                       box with its subtree's state counts, links between the same two things \
+                       bundled into one edge (`count`, up to 50 `members` with ports), and `stubs` \
+                       for where links leave the folder (`level_group` is the folder to open next \
+                       to see both ends). `group` picks the folder (omit for the whole network); a \
+                       level too large to draw answers `overflow: true` with its boxes only. \
+                       `kind=overrides` lists the decisions an operator has \
                        recorded about links (pin, hide, or which end is upstream), which always \
                        beat what was derived. `kind=shadow` compares the two dependency graphs and \
                        is what answers whether derived suppression is safe to enable here: it \
@@ -332,6 +343,14 @@ impl YagraMcp {
                     Err(e) => tool_api_error(TOOL, &e),
                 }
             }
+            TopologyKind::Map => {
+                match crate::api::topology::topology_map_level(&self.state, admin, scope, p.group)
+                    .await
+                {
+                    Ok(level) => ok_json(TOOL, &level),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             TopologyKind::Overrides => {
                 match crate::api::topology::link_override_list(&self.state, admin, scope).await {
                     Ok(list) => ok_json(TOOL, &list),
@@ -346,7 +365,7 @@ impl YagraMcp {
             }
             TopologyKind::Unknown => tool_bad_params(
                 TOOL,
-                "`kind` must be one of: dependency, links, overrides, shadow",
+                "`kind` must be one of: dependency, links, map, overrides, shadow",
             ),
         }
     }
@@ -365,7 +384,8 @@ mod tests {
         assert_eq!(topology_kind(None), TopologyKind::Dependency);
         assert_eq!(topology_kind(Some("dependency")), TopologyKind::Dependency);
         assert_eq!(topology_kind(Some("links")), TopologyKind::Links);
-        for bad in ["Links", "link", "LINKS", "", "edges"] {
+        assert_eq!(topology_kind(Some("map")), TopologyKind::Map);
+        for bad in ["Links", "link", "LINKS", "", "edges", "Map", "maps"] {
             assert_eq!(
                 topology_kind(Some(bad)),
                 TopologyKind::Unknown,

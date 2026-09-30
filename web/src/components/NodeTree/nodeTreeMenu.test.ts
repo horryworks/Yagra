@@ -27,6 +27,7 @@ const caps = (over: Partial<MenuCapabilities> = {}): MenuCapabilities => ({
   canSuppress: false,
   canAddNode: false,
   canPin: false,
+  canShowOnMap: false,
   ...over,
 });
 
@@ -53,10 +54,17 @@ describe('which right-click menus have anything in them', () => {
     expect(groupMenuHasItems(caps())).toBe(false);
   });
 
-  it('gates the root menu on its one item', () => {
+  it('gates the root menu on its two items', () => {
     expect(rootMenuHasItems(caps({ canAddNode: true }))).toBe(true);
+    expect(rootMenuHasItems(caps({ canShowOnMap: true }))).toBe(true);
     // Nothing else can appear there, so no other permission may open it.
     expect(rootMenuHasItems(caps({ canEdit: true, canSuppress: true }))).toBe(false);
+  });
+
+  it('opens the folder and root menus for a viewer, to show them on the map (ADR-191)', () => {
+    // Navigation needs no permission, so a Viewer with nothing else gets both menus.
+    expect(groupMenuHasItems(caps({ canShowOnMap: true }))).toBe(true);
+    expect(rootMenuHasItems(caps({ canShowOnMap: true }))).toBe(true);
   });
 
   it('always opens a node menu, because Open needs no permission', () => {

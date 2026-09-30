@@ -1,12 +1,7 @@
 {
   "map": {
-    "note": {
-      "linked": "{{linked}} linked · {{unlinked}} unlinked (no discovered links, not shown)",
-      "default": "Connectivity graph — links discovered from CDP/LLDP adjacency and shared IP subnets."
-    },
     "loading": "Loading topology…",
     "emptyInventory": "No nodes in the inventory yet.",
-    "tooMany": "This graph has {{count}} nodes and {{links}} links — too many to render as a legible map. Drill in from a specific node’s detail page instead.",
     "legend": "Legend",
     "suppressed": "Suppressed (upstream cause)",
     "nodeTitle": "{{name}} — {{state}}",
@@ -17,12 +12,6 @@
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out"
     },
-    "noLinksYet_one": "No links discovered yet. Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run. {{count}} node in the inventory.",
-    "noLinksYet_other": "No links discovered yet. Links are derived from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run. {{count}} nodes in the inventory.",
-    "components_one": "{{count}} connected group.",
-    "components_other": "{{count}} connected groups. Separate groups are normal — a device that reports no adjacency, or a site reached over a link nothing reported, stands on its own.",
-    "unresolved_one": "{{count}} observation could not be resolved to a link (an unmatched neighbour, or a segment with no identifiable router).",
-    "unresolved_other": "{{count}} observations could not be resolved to links (unmatched neighbours, or segments with no identifiable router).",
     "source": {
       "manual": "Confirmed by hand",
       "lldp": "LLDP",
@@ -31,6 +20,53 @@
       "route": "Connected route",
       "bgp": "BGP peer",
       "l3_subnet": "Shared subnet"
+    },
+    "root": "Whole network",
+    "note": {
+      "level": "Connectivity graph — links discovered from CDP/LLDP adjacency, shared IP subnets and routing. Each subfolder is drawn as one box; select a box to go into it."
+    },
+    "empty": {
+      "level": "Nothing on this level has a discovered link yet. Links come from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run."
+    },
+    "kind": {
+      "node": "Node",
+      "folder": "Folder (select to go in)",
+      "external": "Outside this folder"
+    },
+    "folderTitle": "{{name}} — {{count}} nodes, worst: {{state}}. Select to go in.",
+    "folderSub": "{{count}} nodes",
+    "folderSubBad": "{{count}} nodes · {{bad}} down or critical",
+    "externalTitle": "Links to {{name}}, outside this folder. Select to open the level where both ends are shown.",
+    "externalSub": "outside · select to open",
+    "edgeTitle": "{{count}} links ({{source}}). Select to list the ports.",
+    "overflow": {
+      "title": "Too many to draw on one level",
+      "body": "This level has {{count}} linked nodes directly in it, and one level draws at most {{max}}. Its subfolders are still shown below; moving nodes into subfolders makes the level drawable.",
+      "openNodes": "Open this folder in the node list"
+    },
+    "panel": {
+      "summary": {
+        "title": "This level",
+        "folders": "Subfolders",
+        "linked": "Nodes with a link",
+        "isolated": "Nodes with no link (not drawn)",
+        "edges": "Lines",
+        "stubs": "Links leaving this folder"
+      },
+      "openLevelInNodes": "Open in the node list",
+      "node": {
+        "path": "Where",
+        "edges": "Lines",
+        "open": "Open node details"
+      },
+      "edge": {
+        "title": "Links on this line",
+        "members_one": "{{count}} link",
+        "members_other": "{{count}} links",
+        "more": "…and {{count}} more",
+        "noPort": "port unknown"
+      },
+      "clear": "Clear selection"
     }
   },
   "dependency": {
@@ -123,6 +159,11 @@
         "twilight": "Twilight",
         "night": "Night"
       }
+    },
+    "pinMenu": {
+      "label": "Open this site",
+      "nodes": "Open in the node list",
+      "map": "Open in the network map"
     }
   }
 }

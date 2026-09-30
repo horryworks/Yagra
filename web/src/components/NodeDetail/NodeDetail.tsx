@@ -9,6 +9,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useConfigChanges } from '../../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { topologyMapHref } from '../../lib/entityHref';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupTrail } from '../../lib/nodeTree';
@@ -104,6 +106,7 @@ export function NodeDetail({
   onChanged,
 }: Props) {
   const { t } = useTranslation('nodes');
+  const navigate = useNavigate();
   const tick = useRefreshTick();
   const [node, setNode] = useState<NodeDetailData | null>(null);
   // What the tab rules are asked about. `null` until the config load resolves — the render below
@@ -397,6 +400,18 @@ export function NodeDetail({
               id={node.id}
               onError={(e) => setPollMsg({ text: errMsg(e, t('tree.pinFailed')), tone: 'error' })}
             />
+            {/* Navigation, so shown to every account: the level holding this node, with the node
+                selected (ADR-191). */}
+            <Button
+              variant="outline"
+              onClick={() =>
+                navigate(
+                  topologyMapHref({ group: node.group_id ?? null, sel: { kind: 'node', id: node.id } }),
+                )
+              }
+            >
+              {t('detail.showOnMap')}
+            </Button>
             {canEdit && (
               <Button variant="outline" onClick={pollNow} disabled={polling}>
                 {polling ? t('detail.polling') : t('detail.pollNow')}

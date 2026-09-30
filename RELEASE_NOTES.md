@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **The network map draws one folder at a time, so it works at any fleet size.** It used to draw every node on one canvas and gave up above 2,000 nodes or 4,000 links. Now each folder is one level: the folder's own nodes are drawn one by one, each subfolder is a single box showing how many nodes it holds and how many are down, and links between the same two things are bundled into one line with a count. Links that leave the folder end in a dashed box that opens the level where both ends are shown. Select a box to go into it; the breadcrumb takes you back up. Select a line to list the ports on both ends. Open it from a folder's or a node's right-click menu in the Nodes tree ("Show on network map"; on the Ungrouped header it opens the whole network), from the new "Show on map" button on a node's page, or from a Geo map pin, which now asks whether to open the node list or the network map. A level with more than 2,000 linked nodes still shows its subfolders and says so. API clients: new `GET /api/v1/topology/map?group=<folder id>` and MCP `get_topology` with `kind=map` and `group`.
+
+### Improvements
+
+- **Network map is no longer in the Topology menu.** It is reached from the places above; Topology now opens on Dependencies. Links between sites (MPLS, internet VPN) are not drawn — that is unchanged.
+
 ## v0.3.38 — Geo map shades the night side of the world, the Neighbors tab picks a shared address's node by name
 
 ### New Features

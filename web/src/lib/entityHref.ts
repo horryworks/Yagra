@@ -22,5 +22,5 @@ export function nodeHref(id: string): string {
   return `/nodes/${id}`;
 }
 
-export { nodesPageHref } from './treeSelection';
+export { nodesPageHref, topologyMapHref } from './treeSelection';
 export { merakiOrgPath } from '../pages/integrations/merakiOrgRow';

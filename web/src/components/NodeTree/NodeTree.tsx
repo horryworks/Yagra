@@ -345,6 +345,11 @@ interface Props {
   onPollNodes?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
+  /** Right-click → open the network map on this folder, on the level holding this node, or on the
+   *  whole network (ADR-191). Navigation, so no permission. Omit to hide the items. */
+  onShowGroupOnMap?: (group: NodeGroup) => void;
+  onShowNodeOnMap?: (node: NodeSummary) => void;
+  onShowRootOnMap?: () => void;
   /** Bring the selection into view once: open the folders above it, wait for its row, scroll to it
    *  (ADR-073 Inc.2). The page makes one when the last narrowing control goes. */
   reveal?: RevealRequest | null;
@@ -409,6 +414,9 @@ export function NodeTree({
   keepGroups,
   onPollNodes,
   onTogglePin,
+  onShowGroupOnMap,
+  onShowNodeOnMap,
+  onShowRootOnMap,
   reveal,
   onRevealDone,
 }: Props) {
@@ -639,6 +647,7 @@ export function NodeTree({
     canSuppress: !!onSetMaintenance || !!onSetMute,
     canAddNode: !!onAddNode,
     canPin: !!onTogglePin,
+    canShowOnMap: !!onShowGroupOnMap || !!onShowRootOnMap,
   };
 
   // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
@@ -2165,6 +2174,17 @@ export function NodeTree({
                   {pins?.groups.has(menu.group.id) ? t('tree.unpin') : t('tree.pin')}
                 </button>
               )}
+              {onShowGroupOnMap && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onShowGroupOnMap(menu.group);
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.showOnMap')}
+                </button>
+              )}
               {canEdit && (
                 <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
                   {t('group.addSubgroup')}
@@ -2261,6 +2281,17 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
+              {onShowNodeOnMap && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onShowNodeOnMap(menu.node);
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.showOnMap')}
+                </button>
+              )}
               {/* Poll now was reachable only from a node's detail header until ADR-124 Inc.12,
                   which is the wrong place for it: it is what an operator presses right after
                   editing something in the tree. Batch-aware from the start, through the same
@@ -2423,12 +2454,26 @@ export function NodeTree({
               )}
             </>
           ) : (
-            // kind === 'root': right-click on the Ungrouped header / empty tree → add at top level.
-            onAddNode && (
-              <button type="button" onClick={() => { onAddNode(null); setMenu(null); }}>
-                {t('tree.addNodeHere')}
-              </button>
-            )
+            // kind === 'root': right-click on the Ungrouped header / empty tree → add at top level,
+            // or open the whole network on the map (ADR-191).
+            <>
+              {onAddNode && (
+                <button type="button" onClick={() => { onAddNode(null); setMenu(null); }}>
+                  {t('tree.addNodeHere')}
+                </button>
+              )}
+              {onShowRootOnMap && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onShowRootOnMap();
+                    setMenu(null);
+                  }}
+                >
+                  {t('tree.showOnMap')}
+                </button>
+              )}
+            </>
           )}
         </AnchoredPopover>
       )}

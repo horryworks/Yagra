@@ -1,0 +1,122 @@
+/* The network map's right-hand panel (ADR-191). */
+.topomap-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--gap);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+.topomap-panel-title {
+  margin: 0;
+  font-size: var(--font-md);
+  overflow-wrap: anywhere;
+}
+.topomap-panel-sub {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.topomap-panel-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+.topomap-panel-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+.topomap-panel-facts dt {
+  color: var(--text-secondary);
+}
+.topomap-panel-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.topomap-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.topomap-panel-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+.topomap-panel-row:hover,
+.topomap-panel-row:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+.topomap-panel-row-name {
+  overflow-wrap: anywhere;
+}
+.topomap-panel-member {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  border-bottom: var(--border-width) solid var(--border-color);
+  overflow-wrap: anywhere;
+}
+.topomap-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-top: var(--space-2);
+}
+.topomap-panel-link {
+  color: var(--accent-color);
+}
+.topomap-panel-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+}
+.topomap-panel-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.topomap-legend-kind {
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+}
+.topomap-legend-kind.folder {
+  background: var(--bg-tertiary);
+}
+.topomap-legend-kind.external {
+  border-style: dashed;
+  background: var(--bg-primary);
+}

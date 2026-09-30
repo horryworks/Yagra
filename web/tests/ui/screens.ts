@@ -59,6 +59,9 @@ export const EXTRA_SCREENS: Screen[] = [
     label: 'troubleshoot.report',
     query: '?job=00000000-0000-4000-8000-000000000002',
   },
+  // Off the menu since ADR-191 (opened from the tree, a node's detail and a Geo map pin), so the
+  // nav-derived walk no longer reaches it.
+  { path: '/topology/map', label: 'topology.map' },
   { path: '/login', label: 'login' },
 ];
 
@@ -119,7 +122,8 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/subnet-overlaps': MARKER,
   '/nodes/collection-templates': MARKER,
   '/nodes/mib': MARKER,
-  '/topology/map': { kind: 'text', text: 'node in the inventory' },
+  // An SVG box has no text a query reaches reliably (labels are cut to fit), so the box itself.
+  '/topology/map': { kind: 'locator', sel: '.topomap-node' },
   '/topology/dependency': MARKER,
   // The one testid in the tree. An SVG `<g>` has no text for a query to reach, so without it the
   // walk could not tell "plotted the groups it was given" from "drew an empty world map".

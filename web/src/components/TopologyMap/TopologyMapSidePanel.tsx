@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// The network map's right-hand panel (ADR-191): what the level holds when nothing is selected,
+// one node's lines when a node is, and the ports behind a bundled line when a line is.
+//
+// Every name here is device-supplied and renders as a React text child (auto-escaped).
+
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import type { MapLevel } from '../../types/api';
+import { LINK_SOURCES, MAP_ENDPOINT_KINDS } from '../../types/api';
+import { nodeHref } from '../../lib/entityHref';
+import { stateColorVar, stateLabel } from '../../lib/format';
+import { SEVERITY_ORDER } from '../../lib/nodeState';
+import { Button } from '../ui/Button';
+import { StatusDot } from '../ui/StatusDot';
+import { EntityName } from '../ui/EntityName';
+import { useEntityNames } from '../ui/entityNames';
+import { edgesOf, levelNodesHref, memberPorts, type MapSelection } from './topologyLevel';
+import './TopologyMapSidePanel.css';
+
+interface Props {
+  level: MapLevel;
+  selection: MapSelection;
+  /** The title of the level ("Whole network" or the folder's name), for the node's place. */
+  levelName: string;
+  onSelectEdge: (id: string) => void;
+  onClear: () => void;
+}
+
+export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge, onClear }: Props) {
+  const { t } = useTranslation('topology');
+  const { nodeName } = useEntityNames();
+
+  if (selection?.kind === 'node') {
+    const node = level.nodes.find((n) => n.id === selection.id);
+    if (node) {
+      const lines = edgesOf(level, node.id);
+      const endName = (e: MapLevel['edges'][number]) => {
+        const other = e.a.kind === 'node' && e.a.id === node.id ? e.b : e.a;
+        const hit =
+          level.folders.find((f) => f.id === other.id)?.name ??
+          level.stubs.find((s) => s.id === other.id)?.name ??
+          level.nodes.find((n) => n.id === other.id)?.name;
+        return hit ?? nodeName(other.id);
+      };
+      return (
+        <aside className="topomap-panel" aria-label={node.name}>
+          <h2 className="topomap-panel-title">{node.name}</h2>
+          <StatusDot state={node.state} />
+          <dl className="topomap-panel-facts">
+            <dt>{t('map.panel.node.path')}</dt>
+            <dd>{[...level.breadcrumbs.map((b) => b.name), levelName].join(' › ')}</dd>
+          </dl>
+          <h3 className="topomap-panel-sub">{t('map.panel.node.edges')}</h3>
+          <ul className="topomap-panel-list">
+            {lines.map((e) => (
+              <li key={e.id}>
+                <button type="button" className="topomap-panel-row" onClick={() => onSelectEdge(e.id)}>
+                  <span className="topomap-panel-row-name">{endName(e)}</span>
+                  <span className="muted">
+                    {t('map.panel.edge.members', { count: e.count })} · {t(`map.source.${e.source}`)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="topomap-panel-actions">
+            <Link className="topomap-panel-link" to={nodeHref(node.id)}>
+              {t('map.panel.node.open')}
+            </Link>
+            <Button onClick={onClear}>{t('map.panel.clear')}</Button>
+          </div>
+        </aside>
+      );
+    }
+  }
+
+  if (selection?.kind === 'edge') {
+    const edge = level.edges.find((e) => e.id === selection.id);
+    if (edge) {
+      const more = edge.count - edge.members.length;
+      const noPort = t('map.panel.edge.noPort');
+      return (
+        <aside className="topomap-panel" aria-label={t('map.panel.edge.title')}>
+          <h2 className="topomap-panel-title">{t('map.panel.edge.title')}</h2>
+          <p className="muted">
+            {t('map.panel.edge.members', { count: edge.count })} ·{' '}
+            {edge.sources.map((s) => t(`map.source.${s}`)).join(', ')}
+          </p>
+          <ul className="topomap-panel-list">
+            {edge.members.map((m) => {
+              const ports = memberPorts(m, noPort);
+              return (
+                <li key={m.link_id} className="topomap-panel-member">
+                  <div>
+                    <EntityName name={nodeName(m.a_node)} id={m.a_node} />{' '}
+                    <span className="mono">{ports.a}</span>
+                  </div>
+                  <div>
+                    <EntityName name={nodeName(m.b_node)} id={m.b_node} />{' '}
+                    <span className="mono">{ports.b}</span>
+                  </div>
+                  <div className="muted">
+                    {t(`map.source.${m.source}`)}
+                    {m.subnet && (
+                      <>
+                        {' · '}
+                        <span className="mono">{m.subnet}</span>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {more > 0 && <p className="muted">{t('map.panel.edge.more', { count: more })}</p>}
+          <div className="topomap-panel-actions">
+            <Button onClick={onClear}>{t('map.panel.clear')}</Button>
+          </div>
+        </aside>
+      );
+    }
+  }
+
+  // Nothing (or a folder) selected: what this level holds, and how to read it.
+  const presentStates = SEVERITY_ORDER.filter((s) => level.nodes.some((n) => n.state === s));
+  const presentSources = LINK_SOURCES.filter((s) => level.edges.some((e) => e.source === s));
+  const facts: [string, number][] = [
+    [t('map.panel.summary.folders'), level.folders.length],
+    [t('map.panel.summary.linked'), level.linked_node_count],
+    [t('map.panel.summary.isolated'), level.isolated_count],
+    [t('map.panel.summary.edges'), level.edge_count],
+    [t('map.panel.summary.stubs'), level.stubs.length],
+  ];
+  return (
+    <aside className="topomap-panel" aria-label={t('map.panel.summary.title')}>
+      <h2 className="topomap-panel-title">{t('map.panel.summary.title')}</h2>
+      <dl className="topomap-panel-facts">
+        {facts.map(([label, n]) => (
+          <div key={label} className="topomap-panel-fact">
+            <dt>{label}</dt>
+            <dd>{n}</dd>
+          </div>
+        ))}
+      </dl>
+      <Link className="topomap-panel-link" to={levelNodesHref(level)}>
+        {t('map.panel.openLevelInNodes')}
+      </Link>
+      <h3 className="topomap-panel-sub">{t('map.legend')}</h3>
+      <ul className="topomap-panel-legend">
+        {MAP_ENDPOINT_KINDS.map((k) => (
+          <li key={k}>
+            <span className={`topomap-legend-kind ${k}`} />
+            {t(`map.kind.${k}`)}
+          </li>
+        ))}
+        {presentStates.map((s) => (
+          <li key={s}>
+            <span className="topomap-legend-dot" style={{ background: stateColorVar(s) }} />
+            {stateLabel(s)}
+          </li>
+        ))}
+        {presentSources.map((s) => (
+          <li key={s}>
+            <span className={`topomap-legend-edge ${s}`} />
+            {t(`map.source.${s}`)}
+          </li>
+        ))}
+        {level.nodes.some((n) => n.root_cause) && (
+          <li>
+            <span className="topomap-legend-line" />
+            {t('map.suppressed')}
+          </li>
+        )}
+      </ul>
+    </aside>
+  );
+}

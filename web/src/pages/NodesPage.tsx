@@ -121,7 +121,7 @@ import {
 } from '../lib/nodeTree';
 import { revealRequestFor, type RevealRequest } from '../components/NodeTree/nodeTreeReveal';
 import { sameSelection } from '../components/NodeTree/nodeTreeKeys';
-import { nodeHref } from '../lib/entityHref';
+import { nodeHref, topologyMapHref } from '../lib/entityHref';
 
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
@@ -1374,6 +1374,11 @@ export function NodesPage() {
             keepGroups={createdGroups}
             // Not permission-gated: pinning is the account's own navigation (ADR-146).
             onTogglePin={pinsReady ? togglePin : undefined}
+            onShowGroupOnMap={(g) => navigate(topologyMapHref({ group: g.id }))}
+            onShowNodeOnMap={(n) =>
+              navigate(topologyMapHref({ group: n.group_id ?? null, sel: { kind: 'node', id: n.id } }))
+            }
+            onShowRootOnMap={() => navigate(topologyMapHref({}))}
             reveal={reveal}
             onRevealDone={endReveal}
           />

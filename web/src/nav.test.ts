@@ -36,6 +36,8 @@ describe('nav IA', () => {
     expect(sectionForPath('/nodes/credentials').key).toBe('nodes');
     expect(sectionForPath('/events/webhooks').key).toBe('events');
     expect(sectionForPath('/topology/map').key).toBe('topology');
+    // The map left the menu (ADR-191) but still lights its section.
+    expect(navItemForPath('/topology/map')).toBeNull();
     expect(sectionForPath('/dashboard/reports').key).toBe('dashboard'); // Reports moved here from Metrics
   });
 

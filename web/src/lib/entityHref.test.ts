@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sourceFiles as walkSources } from '../testSupport/sources';
-import { merakiOrgPath, nodeHref, nodesPageHref } from './entityHref';
+import { merakiOrgPath, nodeHref, nodesPageHref, topologyMapHref } from './entityHref';
 
 const NODE = '0b0e6a9e-1c1c-4d5e-8a3f-2f4f6a7b8c9d';
 const GROUP = '5f1d2c3b-4a59-4e6f-9a0b-1c2d3e4f5a6b';
@@ -23,6 +23,23 @@ describe('nodesPageHref (re-exported)', () => {
     );
     expect(nodesPageHref({ kind: 'group', id: GROUP })).toBe(
       `/nodes?sel=${encodeURIComponent(`group:${GROUP}`)}`,
+    );
+  });
+});
+
+describe('topologyMapHref (re-exported)', () => {
+  it('opens the whole network with no parameters', () => {
+    expect(topologyMapHref({})).toBe('/topology/map');
+    expect(topologyMapHref({ group: null, sel: null })).toBe('/topology/map');
+  });
+
+  it('names the level and the selection with the same sel spelling as the Nodes page', () => {
+    expect(topologyMapHref({ group: GROUP })).toBe(`/topology/map?group=${GROUP}`);
+    expect(topologyMapHref({ group: GROUP, sel: { kind: 'node', id: NODE } })).toBe(
+      `/topology/map?group=${GROUP}&sel=${encodeURIComponent(`node:${NODE}`)}`,
+    );
+    expect(topologyMapHref({ sel: { kind: 'group', id: GROUP } })).toBe(
+      `/topology/map?sel=${encodeURIComponent(`group:${GROUP}`)}`,
     );
   });
 });

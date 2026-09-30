@@ -36,6 +36,18 @@ export function nodesPageHref(sel: TreeSelection): string {
   return `/nodes?${new URLSearchParams({ sel: value }).toString()}`;
 }
 
+/** The network map opened on one folder level (`group`, null for the whole network), optionally
+ *  with a node or folder already selected (ADR-191). Same encoder and `sel` spelling as
+ *  `nodesPageHref`, so the two screens hand selections to each other unchanged. */
+export function topologyMapHref(to: { group?: string | null; sel?: TreeSelection }): string {
+  const params = new URLSearchParams();
+  if (to.group) params.set('group', to.group);
+  const sel = selectionToParam(to.sel ?? null);
+  if (sel) params.set('sel', sel);
+  const q = params.toString();
+  return q ? `/topology/map?${q}` : '/topology/map';
+}
+
 /** What one Escape press on the Nodes page clears, or null when there is nothing to clear. */
 export type EscapeTarget = 'checked' | 'selection' | null;
 

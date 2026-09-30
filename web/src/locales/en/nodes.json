@@ -247,7 +247,8 @@
     "seen": "seen {{time}}",
     "needsAttention": "needs attention",
     "pollDispatched_one": "Poll requested — {{count}} check dispatched.",
-    "pollDispatched_other": "Poll requested — {{count}} checks dispatched."
+    "pollDispatched_other": "Poll requested — {{count}} checks dispatched.",
+    "showOnMap": "Show on map"
   },
   "tabs": {
     "overview": "Overview",
@@ -833,7 +834,8 @@
       "meraki": "Created by the Cisco Meraki integration",
       "netbox": "Created by the NetBox integration"
     },
-    "moveGroupByPrefix": "Sort this folder by IP range…"
+    "moveGroupByPrefix": "Sort this folder by IP range…",
+    "showOnMap": "Show on network map"
   },
   "moveNode": {
     "title": "Move {{name}}",

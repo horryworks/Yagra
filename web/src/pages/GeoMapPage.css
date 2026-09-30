@@ -256,3 +256,27 @@
     height: var(--touch-target);
   }
 }
+
+/* The pin menu: where to open the site (ADR-191). */
+.geopage-pin-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  min-width: 200px;
+}
+.geopage-pin-menu button {
+  padding: 8px 10px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  text-align: left;
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.geopage-pin-menu button:hover,
+.geopage-pin-menu button:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}

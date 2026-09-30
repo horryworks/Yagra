@@ -59,7 +59,8 @@ import {
   twilightPaths,
 } from './geoDayNight';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
-import { nodesPageHref } from '../lib/entityHref';
+import { nodesPageHref, topologyMapHref } from '../lib/entityHref';
+import { AnchoredPopover } from '../components/ui/AnchoredPopover';
 import './GeoMapPage.css';
 
 /** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
@@ -111,6 +112,9 @@ export function GeoMapPage() {
   // moves once a minute, and only while the shading is showing.
   const dayNight = usePrefsStore((s) => s.geoMapDayNight) !== false;
   const [skyTime, setSkyTime] = useState(() => new Date());
+  /** The pin whose menu is open, and where (ADR-191). */
+  const [pinMenu, setPinMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null);
+  const closePinMenu = useCallback(() => setPinMenu(null), []);
   useEffect(() => {
     if (!dayNight) return;
     setSkyTime(new Date());
@@ -424,11 +428,19 @@ export function GeoMapPage() {
                         // first colon and returns null without one, so a bare UUID landed on All
                         // nodes with nothing selected at all — the pin navigated, and then quietly
                         // did nothing. (`PollersPage` has always written the `node:` form.)
-                        onClick={() => navigate(nodesPageHref({ kind: 'group', id: g.id }))}
+                        // A pin asks where to go: the node list or the network map of that
+                        // site (ADR-191). The menu opens at the pointer, or at the pin's centre
+                        // for the keyboard.
+                        aria-haspopup="menu"
+                        onClick={(e) => setPinMenu({ id: g.id, at: { x: e.clientX, y: e.clientY } })}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
-                            navigate(nodesPageHref({ kind: 'group', id: g.id }));
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setPinMenu({
+                              id: g.id,
+                              at: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+                            });
                           }
                         }}
                       >
@@ -511,6 +523,45 @@ export function GeoMapPage() {
             </ul>
           </div>
         </>
+      )}
+      {pinMenu && (
+        <AnchoredPopover
+          open
+          at={pinMenu.at}
+          role="menu"
+          label={t('geo.pinMenu.label')}
+          className="geopage-pin-menu"
+          onDismiss={closePinMenu}
+          // Focus the first item once the menu is placed (it is hidden while being measured, and a
+          // hidden element cannot take focus), so a keyboard-opened menu is usable at once.
+          onPlacedChange={(placed) => {
+            if (placed)
+              document
+                .querySelector<HTMLButtonElement>('.geopage-pin-menu button')
+                ?.focus({ preventScroll: true });
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closePinMenu();
+              navigate(nodesPageHref({ kind: 'group', id: pinMenu.id }));
+            }}
+          >
+            {t('geo.pinMenu.nodes')}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closePinMenu();
+              navigate(topologyMapHref({ group: pinMenu.id }));
+            }}
+          >
+            {t('geo.pinMenu.map')}
+          </button>
+        </AnchoredPopover>
       )}
     </div>
   );

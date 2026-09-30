@@ -1,32 +1,44 @@
 .topomap-page {
   display: flex;
   flex-direction: column;
+  gap: var(--gap);
   min-height: 0;
 }
 
-/* Bounded, scroll-free box for the map. The shell content scrolls if the page overflows, but the
-   map manages its own pan/zoom inside this fixed viewport-relative height. */
-.topomap-page-canvas {
-  display: flex;
+/* The map and its panel side by side (ADR-191); stacked on a phone. */
+.topomap-page-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--gap);
   height: 65vh;
   min-height: 420px;
 }
+html[data-viewport='mobile'] .topomap-page-body {
+  grid-template-columns: minmax(0, 1fr);
+  height: auto;
+}
 
-.topomap-legend {
+/* Bounded, scroll-free box for the map. The shell content scrolls if the page overflows, but the
+   map manages its own pan/zoom inside this box. */
+.topomap-page-canvas {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--gap);
-  margin: 0 0 var(--gap);
-  font-family: var(--ui-font-family);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
+  min-width: 0;
+  min-height: 0;
 }
-.topomap-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+html[data-viewport='mobile'] .topomap-page-canvas {
+  height: 60vh;
+  min-height: 360px;
 }
+.topomap-page-empty {
+  margin: auto;
+  max-width: 48ch;
+  text-align: center;
+}
+.topomap-overflow-title {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+}
+
 .topomap-legend-dot {
   width: 10px;
   height: 10px;

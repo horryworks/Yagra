@@ -34,6 +34,7 @@ use yagra_common::{
 #[openapi(paths(
     get_topology,
     get_topology_links,
+    get_topology_map,
     get_link_overrides,
     create_link_override,
     delete_link_override,
@@ -47,6 +48,7 @@ pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/topology/links", get(get_topology_links))
+        .route("/api/v1/topology/map", get(get_topology_map))
         .route(
             "/api/v1/topology/link-overrides",
             get(get_link_overrides).post(create_link_override),
@@ -122,14 +124,7 @@ pub(crate) async fn topology_page(
     };
 
     let states = st.alerts.node_states();
-    // node → upstream root cause (from active, suppressed alerts).
-    let mut root_causes: HashMap<NodeId, Uuid> = HashMap::new();
-    for a in st.alerts.active_alerts() {
-        // Node subjects only — this map keys the topology graph, which has no pool vertices.
-        if let (Some(node), Some(cause)) = (a.node(), a.root_cause) {
-            root_causes.entry(node).or_insert_with(|| cause.as_uuid());
-        }
-    }
+    let root_causes = root_cause_map(st);
     // Batch the coarse fallback probe for this page's unobserved nodes: a single TSDB query rather
     // than one `latest()` round-trip per node (see `fresh_fallback_ids`). After a core restart
     // (empty `states`) the per-node version fired one VM query for every node.
@@ -151,11 +146,27 @@ pub(crate) async fn topology_page(
                 // The rule lives in `nodes::state_or_fallback`, not here: this map was a fourth
                 // hand-written copy of it, and the copies had already drifted.
                 state: state_or_fallback(states.get(&nid).copied(), fresh_fallback.contains(&r.id)),
-                root_cause: root_causes.get(&nid).copied(),
+                root_cause: root_causes.get(&r.id).copied(),
             }
         })
         .collect();
     Ok(TopologyPage { nodes, next_cursor })
+}
+
+/// node → the upstream node its alert is suppressed under (from active, suppressed alerts).
+///
+/// Shared by the dependency graph and the network map, so "which node is blamed" is read once.
+fn root_cause_map(st: &ApiState) -> HashMap<Uuid, Uuid> {
+    let mut root_causes: HashMap<Uuid, Uuid> = HashMap::new();
+    for a in st.alerts.active_alerts() {
+        // Node subjects only — both graphs key on nodes and have no pool vertices.
+        if let (Some(node), Some(cause)) = (a.node(), a.root_cause) {
+            root_causes
+                .entry(node.as_uuid())
+                .or_insert_with(|| cause.as_uuid());
+        }
+    }
+    root_causes
 }
 
 /// The dependency graph: every node with its parent edge, current state, and any active root-cause
@@ -329,6 +340,260 @@ async fn get_topology_links(
     let limit = q.limit.unwrap_or(2000).clamp(1, 2000);
     Ok(Json(
         topology_link_page(&admin, &scope, q.cursor, limit).await?,
+    ))
+}
+
+// ── One folder level of the network map (ADR-191) ───────────────────────────────
+
+/// What one end of a map edge is: a node on this level, a subfolder's box, or a stub for
+/// something outside the level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapEndpointKind {
+    Node,
+    Folder,
+    External,
+}
+
+/// What a stub stands for: one node, or a folder holding the far ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapStubKind {
+    Node,
+    Folder,
+}
+
+/// One end of a map edge. `id` is a node id for `node`, a folder id for `folder`, and the stub's
+/// own `id` for `external`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapEndpoint {
+    pub kind: MapEndpointKind,
+    pub id: Uuid,
+}
+
+/// A folder named on the map: the level itself or one of its ancestors.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapBreadcrumb {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A subfolder drawn as one box, with its whole subtree's tally (visible nodes only).
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapFolder {
+    pub id: Uuid,
+    pub name: String,
+    /// The folder's type key (`site`, `region`, …).
+    pub group_type: String,
+    /// How many nodes the subtree holds.
+    pub node_count: i64,
+    /// Those nodes, by state.
+    pub counts: super::fleet::GroupStateCounts,
+}
+
+/// A node directly in this level's folder that has at least one link drawn on the level.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapNode {
+    pub id: Uuid,
+    pub name: String,
+    pub state: NodeState,
+    /// Upstream node blamed for this node's alert (dependency suppression), if any.
+    pub root_cause: Option<Uuid>,
+}
+
+/// Where links leave the level: a node or a folder outside it.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapStub {
+    pub kind: MapStubKind,
+    /// The node or folder the stub stands for.
+    pub id: Uuid,
+    pub name: String,
+    /// The first level on which both ends are visible; open it to see where the links go.
+    /// `null` is the whole network.
+    pub level_group: Option<Uuid>,
+}
+
+/// One link inside a bundled edge, oriented so `a_node` sits at the edge's `a` end.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapEdgeMember {
+    pub link_id: i64,
+    pub a_node: Uuid,
+    pub b_node: Uuid,
+    pub a_if_name: Option<String>,
+    pub b_if_name: Option<String>,
+    /// The strongest evidence behind this link.
+    pub source: LinkSource,
+    /// The subnet behind a shared-subnet link.
+    pub subnet: Option<String>,
+}
+
+/// Every link between the same two things on this level, drawn as one line.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapEdge {
+    /// Stable id, built from the two ends.
+    pub id: String,
+    pub a: MapEndpoint,
+    pub b: MapEndpoint,
+    /// How many links the bundle holds (`members` lists at most 50).
+    pub count: i64,
+    /// The strongest of `sources`.
+    pub source: LinkSource,
+    /// Every kind of evidence behind any member.
+    pub sources: Vec<LinkSource>,
+    /// The links, strongest evidence first.
+    pub members: Vec<MapEdgeMember>,
+}
+
+/// One folder level of the network map.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct MapLevel {
+    /// The folder drawn; `null` is the whole network.
+    pub group: Option<MapBreadcrumb>,
+    /// Its ancestors, outermost first (the level itself is not included).
+    pub breadcrumbs: Vec<MapBreadcrumb>,
+    /// Its subfolders, each drawn as a box.
+    pub folders: Vec<MapFolder>,
+    /// Its own nodes that have a link on this level.
+    pub nodes: Vec<MapNode>,
+    /// The places links leave the level for.
+    pub stubs: Vec<MapStub>,
+    pub edges: Vec<MapEdge>,
+    /// Every node directly in this folder, linked or not.
+    pub direct_node_count: i64,
+    /// Of those, how many have a link on this level.
+    pub linked_node_count: i64,
+    /// How many bundled edges the level has (also when `overflow` emptied `edges`).
+    pub edge_count: i64,
+    /// Direct nodes with no link on this level: counted, not drawn.
+    pub isolated_count: i64,
+    /// The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain.
+    pub overflow: bool,
+    /// The most linked nodes a level draws.
+    pub node_limit: i64,
+    /// The most edges a level draws.
+    pub edge_limit: i64,
+    /// When the connectivity graph was last derived (RFC 3339), or `null` before the first run.
+    pub derived_at: Option<String>,
+}
+
+/// Query parameters for one map level.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+pub(crate) struct MapLevelQuery {
+    /// The folder to draw. Omit for the whole network.
+    pub group: Option<Uuid>,
+}
+
+/// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.
+pub(crate) async fn topology_map_level(
+    st: &ApiState,
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    group: Option<Uuid>,
+) -> Result<MapLevel, ApiError> {
+    fn load(what: &'static str) -> impl Fn(anyhow::Error) -> ApiError {
+        move |e| ApiError::from_internal(e.as_ref(), what, "failed to load the network map")
+    }
+    let edges = admin
+        .groups
+        .cached_edges()
+        .await
+        .map_err(load("map group edges"))?;
+    if let Some(g) = group {
+        // Scope first, existence second: a scoped caller cannot tell a hidden folder from none.
+        super::scope::require_visible_group(scope, g)?;
+        if !edges.iter().any(|(id, _)| *id == g) {
+            return Err(ApiError::not_found(
+                "group_not_found",
+                format!("no group {g}"),
+            ));
+        }
+    }
+    let folders: Vec<crate::topology_level::FolderRow> =
+        super::groups::visible_groups(admin, scope)
+            .await?
+            .iter()
+            .map(Into::into)
+            .collect();
+    let visible: Option<HashSet<Uuid>> = scope.group_filter().map(|v| v.iter().copied().collect());
+    let node_groups = st
+        .nodes
+        .node_group_map(scope.group_filter())
+        .await
+        .map_err(load("map node groups"))?;
+    let raw = st.alerts.node_states();
+    let any_unobserved = node_groups
+        .iter()
+        .any(|(id, _)| !raw.contains_key(&NodeId::from(*id)));
+    let fresh = if any_unobserved {
+        super::nodes::fresh_fleet_ids(st.store.as_ref()).await
+    } else {
+        HashSet::new()
+    };
+    let states: HashMap<Uuid, NodeState> = node_groups
+        .iter()
+        .map(|(id, _)| {
+            let s = state_or_fallback(raw.get(&NodeId::from(*id)).copied(), fresh.contains(id));
+            (*id, s)
+        })
+        .collect();
+    let root_causes = root_cause_map(st);
+    let links = admin
+        .topology_links
+        .all_stored_links()
+        .await
+        .map_err(load("map links"))?;
+
+    let mut level = crate::topology_level::compute(&crate::topology_level::LevelInput {
+        level: group,
+        edges: &edges,
+        groups: &folders,
+        visible: visible.as_ref(),
+        node_groups: &node_groups,
+        states: &states,
+        root_causes: &root_causes,
+        links: &links,
+    });
+    let names =
+        super::nodes::resolve_node_names(st, scope, crate::topology_level::names_needed(&level))
+            .await;
+    crate::topology_level::apply_names(&mut level, &names);
+    level.derived_at = admin
+        .topology_links
+        .last_run()
+        .await
+        .unwrap_or(None)
+        .map(|l| l.derived_at.to_rfc3339());
+    Ok(level)
+}
+
+/// One folder level of the network map: the folder's own linked nodes, each subfolder as one box
+/// with its subtree's counts, links between the same two things bundled into one edge, and a stub
+/// for every place links leave the level.
+///
+/// Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the
+/// roots of their scope directly under the whole network, and only links whose **both** ends are
+/// visible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers
+/// `overflow: true` with its boxes and no nodes or edges.
+#[utoipa::path(
+    get, path = "/api/v1/topology/map", tag = "topology",
+    params(MapLevelQuery),
+    responses(
+        (status = 200, description = "One level of the network map", body = MapLevel),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 404, description = "No folder with that id that the caller can see", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no inventory to build the map from", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_topology_map(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    axum::extract::State(st): axum::extract::State<ApiState>,
+    Query(q): Query<MapLevelQuery>,
+) -> ApiResult<Json<MapLevel>> {
+    Ok(Json(
+        topology_map_level(&st, &admin, &scope, q.group).await?,
     ))
 }
 
@@ -1028,5 +1293,88 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "link_overrides").await, 1);
+    }
+
+    // ── One level of the network map (ADR-191), through the whole router ────────────────────
+
+    /// The whole network, a folder level, and a scoped caller, over a real database.
+    ///
+    /// ```text
+    /// (whole)            lone (ungrouped)
+    /// ├─ east            ├ sw-a ─┐ (LLDP)
+    /// │  └─ site-a       │       └ sw-b
+    /// └─ west            └ sw-c   (LLDP to sw-a)
+    /// ```
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_map_level_bundles_links_and_honours_the_scope(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        use yagra_common::{DerivedLink, NodeId};
+        let groups = crate::groups::GroupRepo::new(pool.clone());
+        let east = crate::pgtest::group(&pool, "east").await;
+        let west = crate::pgtest::group(&pool, "west").await;
+        let site = groups
+            .create("site-a", crate::groups::GroupType::Site, Some(east), None)
+            .await
+            .expect("site-a");
+        let lone = crate::pgtest::node(&pool, "lone", 1, None).await;
+        let a = crate::pgtest::node(&pool, "sw-a", 2, Some(site)).await;
+        let b = crate::pgtest::node(&pool, "sw-b", 3, Some(site)).await;
+        let c = crate::pgtest::node(&pool, "sw-c", 4, Some(west)).await;
+        crate::topology_links::TopoLinkRepo::new(pool.clone())
+            .upsert_batch(&[
+                DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp),
+                DerivedLink::new(NodeId(a), NodeId(c), LinkSource::Lldp),
+                DerivedLink::new(NodeId(lone), NodeId(c), LinkSource::Cdp),
+            ])
+            .await
+            .expect("links");
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Viewer);
+
+        // The whole network: two boxes, the ungrouped node, east↔west and lone↔west.
+        let (status, whole) = send(&st, "GET", "/api/v1/topology/map", &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{whole}");
+        assert!(whole["group"].is_null());
+        assert_eq!(whole["folders"].as_array().map(Vec::len), Some(2));
+        assert_eq!(whole["edges"].as_array().map(Vec::len), Some(2));
+        assert_eq!(whole["nodes"][0]["name"], "lone");
+
+        // site-a: its two nodes, one line between them, one stub towards west (on the whole level).
+        let (status, level) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/topology/map?group={site}"),
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{level}");
+        assert_eq!(level["group"]["name"], "site-a");
+        assert_eq!(level["breadcrumbs"][0]["name"], "east");
+        assert_eq!(level["nodes"].as_array().map(Vec::len), Some(2));
+        assert_eq!(level["stubs"][0]["name"], "west");
+        assert!(level["stubs"][0]["level_group"].is_null());
+
+        // A caller scoped to east sees east as a root, and no line into west.
+        let scoped = scoped_token(&st, &[east]);
+        let (status, mine) = send(&st, "GET", "/api/v1/topology/map", &scoped, None).await;
+        assert_eq!(status, StatusCode::OK, "{mine}");
+        assert_eq!(mine["folders"].as_array().map(Vec::len), Some(1));
+        assert_eq!(mine["folders"][0]["name"], "east");
+        assert_eq!(mine["edges"].as_array().map(Vec::len), Some(0));
+        let (status, _) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/topology/map?group={west}"),
+            &scoped,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "a folder outside the scope is not found"
+        );
     }
 }

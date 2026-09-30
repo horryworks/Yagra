@@ -37,7 +37,7 @@ const SRC = fileURLToPath(new URL('..', import.meta.url));
  *  button, a row or a list has no composition to respect. */
 const NOT_A_TEXT_FIELD: Readonly<Record<string, string>> = {
   'components/NodeDetail/CollectionTab.tsx': 'a metric row acting as a button (role="button")',
-  'components/TopologyMap/TopologyMap.tsx': 'an SVG node acting as a button',
+  'components/TopologyMap/topologyLevel.ts': 'activateOnKey: an SVG box or chip acting as a button',
   'components/ui/ActionMenu.tsx': 'menu items — focus is on a button, never in a text field',
   'dashboard/primitives/RankedBars.tsx': 'a bar acting as a link',
   'pages/GeoMapPage.tsx': 'a map pin acting as a button',

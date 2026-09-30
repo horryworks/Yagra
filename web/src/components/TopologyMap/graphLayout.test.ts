@@ -1,36 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { layoutGraph, MAX_GRAPH_NODES, NODE_H, NODE_W } from './graphLayout';
-import type { TopologyLink, TopologyNode } from '../../types/api';
+import { BOX_SIZE, CELL_H, CELL_W, layoutGraph, type GraphLink, type GraphNode } from './graphLayout';
 
-function node(id: string, extra: Partial<TopologyNode> = {}): TopologyNode {
+function node(id: string, extra: Partial<GraphNode> = {}): GraphNode {
   return {
     id,
+    kind: 'node',
     name: `node-${id}`,
-    parent_id: null,
     state: 'ok',
-    root_cause: null,
+    sub: null,
+    rootCause: null,
     ...extra,
-  } as TopologyNode;
+  };
 }
 
 let nextLinkId = 1;
-function link(a: string, b: string, extra: Partial<TopologyLink> = {}): TopologyLink {
+function link(a: string, b: string, extra: Partial<GraphLink> = {}): GraphLink {
   return {
-    id: nextLinkId++,
-    a_node: a,
-    b_node: b,
-    a_ifindex: null,
-    b_ifindex: null,
-    a_if_name: null,
-    b_if_name: null,
-    sources: ['l3_subnet'],
+    id: `l${String(nextLinkId++).padStart(6, '0')}`,
+    a,
+    b,
     source: 'l3_subnet',
-    subnet: '10.0.0.0/24',
-    first_seen: '2026-08-04T00:00:00Z',
-    last_seen: '2026-08-04T01:00:00Z',
+    count: 1,
     ...extra,
-  } as TopologyLink;
+  };
 }
 
 /** A router with three servers hanging off it, plus a second router — the shape the derivation
@@ -92,8 +85,9 @@ describe('layoutGraph', () => {
     const { nodes, links } = segment();
     const out = layoutGraph({ nodes, links });
     expect(out.edges).toHaveLength(links.length);
+    const drawn = new Set(out.edges.map((e) => e.id));
     for (const s of ['s1', 's2', 's3']) {
-      const touching = out.edges.filter((e) => e.id.includes(s));
+      const touching = links.filter((l) => (l.a === s || l.b === s) && drawn.has(l.id));
       expect(touching).toHaveLength(2);
     }
   });
@@ -129,7 +123,8 @@ describe('layoutGraph', () => {
     for (const a of out.nodes) {
       for (const b of out.nodes) {
         if (a.id === b.id) continue;
-        const overlaps = Math.abs(a.cx - b.cx) < NODE_W && Math.abs(a.cy - b.cy) < NODE_H;
+        const overlaps =
+          Math.abs(a.cx - b.cx) < BOX_SIZE.node.w && Math.abs(a.cy - b.cy) < BOX_SIZE.node.h;
         expect(overlaps).toBe(false);
       }
     }
@@ -151,16 +146,10 @@ describe('layoutGraph', () => {
     expect(out.componentCount).toBe(0);
   });
 
-  it('ignores a link whose endpoint is not a node in the graph', () => {
-    // Increment 3 introduces endpoints that are not monitored nodes, and a scoped caller can
-    // already receive a page where one end was filtered out. Neither may throw.
+  it('ignores a link whose endpoint is not a box in the graph', () => {
+    // A level drawn from a response that was cut short must not throw on a dangling end.
     const nodes = [node('a'), node('b')];
-    const links = [
-      link('a', 'b'),
-      link('a', 'ghost'),
-      { ...link('a', 'b'), a_node: null } as TopologyLink,
-      { ...link('a', 'b'), b_node: null } as TopologyLink,
-    ];
+    const links = [link('a', 'b'), link('a', 'ghost'), link('', 'b'), link('a', '')];
     const out = layoutGraph({ nodes, links });
     expect(out.edges).toHaveLength(1);
   });
@@ -192,30 +181,94 @@ describe('layoutGraph', () => {
     const nodes = [node('a'), node('b')];
     const out = layoutGraph({
       nodes,
-      links: [link('a', 'b', { source: 'lldp', sources: ['lldp', 'l3_subnet'] })],
+      links: [link('a', 'b', { source: 'lldp', count: 3 })],
     });
     expect(out.edges[0].source).toBe('lldp');
+    expect(out.edges[0].count).toBe(3);
   });
 
   it('marks an edge suppressed when its downstream end is under a root cause', () => {
-    const nodes = [node('a'), node('b', { root_cause: 'a' })];
+    const nodes = [node('a'), node('b', { rootCause: 'a' })];
     const out = layoutGraph({ nodes, links: [link('a', 'b')], anchorId: 'a' });
     expect(out.edges[0].suppressed).toBe(true);
     expect(out.nodes.find((n) => n.id === 'b')!.suppressed).toBe(true);
   });
 
   it('lays out a fleet-sized graph without exploding', () => {
-    // A star of MAX_GRAPH_NODES-1 leaves: the worst realistic shape for the barycentre pass, since
-    // every leaf shares one rank.
+    // A star of 1999 leaves (the server draws at most 2000 linked nodes per level): the worst
+    // realistic shape for the barycentre pass, since every leaf shares one rank.
+    const MAX = 2000;
     const nodes = [node('hub')];
-    const links: TopologyLink[] = [];
-    for (let i = 0; i < MAX_GRAPH_NODES - 1; i++) {
+    const links: GraphLink[] = [];
+    for (let i = 0; i < MAX - 1; i++) {
       nodes.push(node(`n${String(i).padStart(5, '0')}`));
       links.push(link('hub', `n${String(i).padStart(5, '0')}`));
     }
     const out = layoutGraph({ nodes, links });
-    expect(out.nodes).toHaveLength(MAX_GRAPH_NODES);
-    expect(out.edges).toHaveLength(MAX_GRAPH_NODES - 1);
+    expect(out.nodes).toHaveLength(MAX);
+    expect(out.edges).toHaveLength(MAX - 1);
     expect(out.componentCount).toBe(1);
+  });
+
+  it('places a folder with no link, and counts only nodes as isolated', () => {
+    // A subfolder's box is the way down a level, so it is drawn even when nothing links to it.
+    const nodes = [
+      node('a'),
+      node('b'),
+      node('lonely'),
+      node('f1', { kind: 'folder', name: 'site-b' }),
+      node('f0', { kind: 'folder', name: 'site-a' }),
+    ];
+    const out = layoutGraph({ nodes, links: [link('a', 'b')] });
+    expect(out.isolatedCount).toBe(1);
+    const ids = out.nodes.map((n) => n.id);
+    expect(ids).toContain('f0');
+    expect(ids).toContain('f1');
+    expect(ids).not.toContain('lonely');
+    // Below the linked component, in name order.
+    const f0 = out.nodes.find((n) => n.id === 'f0')!;
+    const f1 = out.nodes.find((n) => n.id === 'f1')!;
+    const a = out.nodes.find((n) => n.id === 'a')!;
+    expect(f0.cy).toBeGreaterThan(a.cy);
+    expect(f0.cx).toBeLessThan(f1.cx);
+  });
+
+  it('lays out a level of only unlinked folders deterministically', () => {
+    const folders = ['c', 'a', 'b', 'e', 'd'].map((id) => node(id, { kind: 'folder', name: id }));
+    const one = layoutGraph({ nodes: folders, links: [] });
+    const two = layoutGraph({ nodes: shuffle(folders, 3), links: [] });
+    expect(two).toEqual(one);
+    expect(one.nodes).toHaveLength(5);
+    expect(one.width).toBeGreaterThan(0);
+  });
+
+  it('sizes each box by its kind and ends a line on each box edge', () => {
+    const nodes = [node('n'), node('f', { kind: 'folder' })];
+    const out = layoutGraph({ nodes, links: [link('n', 'f')], anchorId: 'n' });
+    const n = out.nodes.find((x) => x.id === 'n')!;
+    const f = out.nodes.find((x) => x.id === 'f')!;
+    expect([n.w, n.h]).toEqual([BOX_SIZE.node.w, BOX_SIZE.node.h]);
+    expect([f.w, f.h]).toEqual([BOX_SIZE.folder.w, BOX_SIZE.folder.h]);
+    const e = out.edges[0];
+    expect(e.kind).toBe('line');
+    expect(e.y1).toBe(n.cy + BOX_SIZE.node.h / 2);
+    expect(e.y2).toBe(f.cy - BOX_SIZE.folder.h / 2);
+    expect(e.chip).toEqual({ x: (e.x1 + e.x2) / 2, y: (e.y1 + e.y2) / 2 });
+  });
+
+  it('puts the chip of a bowed edge on the curve', () => {
+    const { nodes, links } = segment();
+    const out = layoutGraph({ nodes, links });
+    const bow = out.edges.find((e) => e.kind === 'bow')!;
+    const [, mx, my] = /Q (\S+) (\S+)/.exec(bow.path!)!.map(Number);
+    expect(bow.chip.x).toBeCloseTo(0.25 * bow.x1 + 0.5 * mx + 0.25 * bow.x2);
+    expect(bow.chip.y).toBeCloseTo(0.25 * bow.y1 + 0.5 * my + 0.25 * bow.y2);
+  });
+
+  it('makes every grid cell fit the largest box', () => {
+    for (const k of ['node', 'folder', 'external'] as const) {
+      expect(CELL_W).toBeGreaterThan(BOX_SIZE[k].w);
+      expect(CELL_H).toBeGreaterThan(BOX_SIZE[k].h);
+    }
   });
 });

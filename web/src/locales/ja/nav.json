@@ -93,7 +93,6 @@
     "eventsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
     "alertsMaintenance": "計画作業 — ノードをメンテナンス状態にして SLA から除外",
     "alertsMutes": "通知だけを止める — 状態と SLA はそのまま",
-    "topologyMap": "CDP/LLDP と同一サブネットから自動で導いた接続グラフ",
     "topologyDependency": "親 → 子の依存リンクを管理",
     "troubleshootRuns": "バックグラウンドで動く分析ジョブとそのレポート",
     "troubleshootFindings": "これまでの全実行で見つかった検出結果",

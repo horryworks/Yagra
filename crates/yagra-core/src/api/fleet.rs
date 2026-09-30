@@ -164,6 +164,23 @@ pub(crate) struct GroupStateCounts {
     pub maintenance: i64,
 }
 
+impl GroupStateCounts {
+    /// Add another tally to this one — a folder's subtree roll-up on the network map (ADR-191).
+    pub(crate) fn add_assign(&mut self, other: &GroupStateCounts) {
+        self.ok += other.ok;
+        self.warning += other.warning;
+        self.critical += other.critical;
+        self.unknown += other.unknown;
+        self.unreachable += other.unreachable;
+        self.maintenance += other.maintenance;
+    }
+
+    /// How many nodes the tally covers.
+    pub(crate) fn total(&self) -> i64 {
+        self.ok + self.warning + self.critical + self.unknown + self.unreachable + self.maintenance
+    }
+}
+
 /// The per-group rollup response: `group_id → direct-member state counts`.
 #[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct FleetGroupSummary {

@@ -134,3 +134,60 @@
 .topomap-node.suppressed .topomap-label {
   fill: var(--text-secondary);
 }
+
+/* ---- ADR-191: folders, stubs, selection, bundled-edge chips ---- */
+.topomap-sub {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  fill: var(--text-secondary);
+  pointer-events: none;
+}
+.topomap-kind-folder .topomap-box {
+  fill: var(--bg-tertiary);
+}
+/* A stub is not a thing on this level: dashed, and without a state colour of its own. */
+.topomap-kind-external .topomap-box {
+  fill: var(--bg-primary);
+  stroke-dasharray: 5 4;
+}
+.topomap-node.selected .topomap-box {
+  stroke: var(--accent-color);
+  stroke-width: 2.5;
+}
+.topomap-node:focus-visible .topomap-box {
+  stroke: var(--accent-color);
+  stroke-width: 2.5;
+}
+
+/* A wide invisible twin of each line, so a thin edge can be clicked. */
+.topomap-edge-group {
+  cursor: pointer;
+}
+.topomap-edge-hit {
+  stroke: transparent;
+  stroke-width: 12;
+  fill: none;
+}
+.topomap-edge.selected {
+  stroke: var(--accent-color);
+  opacity: 1;
+}
+.topomap-chip rect {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: var(--border-width);
+}
+.topomap-chip text {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  fill: var(--text-primary);
+  pointer-events: none;
+}
+.topomap-chip.selected rect,
+.topomap-chip:focus-visible rect {
+  stroke: var(--accent-color);
+  stroke-width: 2;
+}
+.topomap-chip:focus {
+  outline: none;
+}

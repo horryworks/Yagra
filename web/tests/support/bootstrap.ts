@@ -309,6 +309,35 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     return body as unknown as Json;
   },
 
+  // One level of the network map (ADR-191). Three things the generator cannot know:
+  //
+  //  - **`group` is the level the URL asked for.** The page refuses an answer about another level
+  //    (it would draw the previous level under the new breadcrumb), and the generated body names an
+  //    arbitrary folder, so the whole-network screen waited on it forever.
+  //  - **An edge's ends are the ids of boxes in the same answer.** Generated ids point nowhere, so
+  //    the layout drops every line and every node with it (an unlinked node is counted, not drawn).
+  //  - **`overflow` is false.** A generated `true` is the "too large to draw" notice, not a map.
+  '/api/v1/topology/map': (url) => {
+    const body = defaultBodyFor('/api/v1/topology/map') as unknown as Schemas['MapLevel'];
+    const group = url.searchParams.get('group');
+    body.group = group ? { id: group, name: body.group?.name ?? 'ymock-level' } : null;
+    body.overflow = false;
+    const node = body.nodes[0];
+    const folder = body.folders[0];
+    if (node && folder && body.edges[0]) {
+      body.edges = [
+        {
+          ...body.edges[0],
+          id: `node:${node.id}|folder:${folder.id}`,
+          a: { kind: 'node', id: node.id },
+          b: { kind: 'folder', id: folder.id },
+        },
+      ];
+    }
+    body.stubs = [];
+    return body as unknown as Json;
+  },
+
   // Two things at once, both invisible to the schema:
   //
   //  - **Lifecycle enums are declared in lifecycle order**, so "the first member" is always the

@@ -2097,6 +2097,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/topology/map",
+        // Same rule as `/topology/links`: a link is drawn only when both of its ends are visible,
+        // and a folder outside the caller's scope is refused with 404 (ADR-191).
+        GroupFiltered,
+        // Folded: `get_topology(kind="map", group=…)` answers this with the same assembly.
+        Tool("get_topology"),
+    ),
+    (
+        "GET",
         "/api/v1/topology/link-overrides",
         // Both endpoints visible, exactly as for the links themselves — a decision naming a node
         // the caller cannot see would disclose that the node exists.
@@ -2680,6 +2689,11 @@ mod tests {
             "the same move as its `/group` sibling, one increment later: ADR-124 増分 8 gave \
              `POST /nodes/move` the `before`/`after` hints, so the drag sends one request whether \
              it carries one node or thirty and `services/api.ts` has no client for this route",
+        ),
+        (
+            "GET",
+            "/api/v1/topology/links",
+            "the network map reads one folder level from `/topology/map` since ADR-191; the flat              link list stays for the MCP `get_topology(kind=links)` branch and API clients that              page the whole graph",
         ),
     ];
 

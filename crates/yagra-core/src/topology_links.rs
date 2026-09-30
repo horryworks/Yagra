@@ -295,31 +295,49 @@ impl TopoLinkRepo {
             }
         };
 
-        rows.into_iter()
-            .map(|row| {
-                let tokens: Vec<String> = row.try_get("sources")?;
-                let mut sources: Vec<LinkSource> = tokens
-                    .iter()
-                    .filter_map(|t| LinkSource::from_token(t))
-                    .collect();
-                sources.sort_unstable();
-                Ok(StoredLink {
-                    id: row.try_get("id")?,
-                    a_node: row.try_get::<Option<Uuid>, _>("a_node")?.map(NodeId),
-                    b_node: row.try_get::<Option<Uuid>, _>("b_node")?.map(NodeId),
-                    a_ifindex: row.try_get("a_if")?,
-                    b_ifindex: row.try_get("b_if")?,
-                    a_if_name: row.try_get("a_if_name")?,
-                    b_if_name: row.try_get("b_if_name")?,
-                    sources,
-                    subnet: row.try_get("subnet")?,
-                    forced_parent: row.try_get::<Option<Uuid>, _>("forced_parent")?.map(NodeId),
-                    first_seen: row.try_get("first_seen")?,
-                    last_seen: row.try_get("last_seen")?,
-                })
-            })
-            .collect()
+        rows.iter().map(stored_link).collect()
     }
+
+    /// Every link between two monitored nodes, with its ports, **unscoped** — the network map's
+    /// read (ADR-191).
+    ///
+    /// ⚠️ **The caller filters, and must.** One map level is computed from the whole link table
+    /// because a link's place on a level depends on where *both* ends sit in the folder tree; the
+    /// level builder (`topology_level::compute`) drops every link with an end the caller may not
+    /// see, the same rule [`Self::list_page`] applies in SQL. Nothing else may hand these rows to
+    /// a response.
+    pub async fn all_stored_links(&self) -> anyhow::Result<Vec<StoredLink>> {
+        let rows = sqlx::query(
+            "SELECT id, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources,                     subnet, forced_parent, first_seen, last_seen              FROM node_links              WHERE a_node IS NOT NULL AND b_node IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(stored_link).collect()
+    }
+}
+
+/// One `node_links` row as a [`StoredLink`] — shared by the paged read and the map's read.
+fn stored_link(row: &sqlx::postgres::PgRow) -> anyhow::Result<StoredLink> {
+    let tokens: Vec<String> = row.try_get("sources")?;
+    let mut sources: Vec<LinkSource> = tokens
+        .iter()
+        .filter_map(|t| LinkSource::from_token(t))
+        .collect();
+    sources.sort_unstable();
+    Ok(StoredLink {
+        id: row.try_get("id")?,
+        a_node: row.try_get::<Option<Uuid>, _>("a_node")?.map(NodeId),
+        b_node: row.try_get::<Option<Uuid>, _>("b_node")?.map(NodeId),
+        a_ifindex: row.try_get("a_if")?,
+        b_ifindex: row.try_get("b_if")?,
+        a_if_name: row.try_get("a_if_name")?,
+        b_if_name: row.try_get("b_if_name")?,
+        sources,
+        subnet: row.try_get("subnet")?,
+        forced_parent: row.try_get::<Option<Uuid>, _>("forced_parent")?.map(NodeId),
+        first_seen: row.try_get("first_seen")?,
+        last_seen: row.try_get("last_seen")?,
+    })
 }
 
 #[cfg(test)]
@@ -576,6 +594,40 @@ mod tests {
             .find(|l| l.sources.contains(&LinkSource::L3Subnet))
             .expect("the l3 link");
         assert_eq!(subnet.subnet.as_deref(), Some("10.9.0.0/24"));
+    }
+
+    /// The map's read: every column, both links, no scope — the level builder filters.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn all_stored_links_returns_every_pair_with_its_ports(pool: sqlx::PgPool) {
+        let one = pgtest::group(&pool, "one").await;
+        let two = pgtest::group(&pool, "two").await;
+        let a = pgtest::node(&pool, "a", 1, Some(one)).await;
+        let b = pgtest::node(&pool, "b", 2, Some(two)).await;
+        let c = pgtest::node(&pool, "c", 3, Some(two)).await;
+        let repo = TopoLinkRepo::new(pool.clone());
+        let mut lldp = DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp);
+        lldp.a_if_name = Some("ge-0/0/1".to_owned());
+        lldp.b_if_name = Some("ge-0/0/2".to_owned());
+        repo.upsert_batch(&[
+            lldp,
+            DerivedLink::new(NodeId(b), NodeId(c), LinkSource::Cdp),
+        ])
+        .await
+        .expect("upsert");
+
+        let links = repo.all_stored_links().await.expect("all_stored_links");
+        assert_eq!(links.len(), 2, "the map read is scoped or dropping rows");
+        let l = links
+            .iter()
+            .find(|l| l.sources.contains(&LinkSource::Lldp))
+            .expect("the lldp link");
+        let mut ports = [l.a_if_name.clone(), l.b_if_name.clone()];
+        ports.sort();
+        assert_eq!(
+            ports,
+            [Some("ge-0/0/1".to_owned()), Some("ge-0/0/2".to_owned())]
+        );
     }
 
     /// Links are removed by age, one at a time. A window three cycles wide keeps a link seen a

@@ -1370,11 +1370,30 @@ export type FleetGroupSummary = components['schemas']['FleetGroupSummary'];
 /** One node in the dependency/topology graph (`GET /api/v1/topology`). */
 export type TopologyNode = components['schemas']['TopologyNode'];
 
-/** One undirected link in the derived connectivity graph (`GET /api/v1/topology/links`). */
-export type TopologyLink = components['schemas']['TopologyLink'];
 
-/** What the last derivation run observed but did not turn into a link. */
-export type TopologyLinkSummary = components['schemas']['TopologyLinkSummary'];
+/** One folder level of the network map (`GET /api/v1/topology/map`, ADR-191). */
+export type MapLevel = components['schemas']['MapLevel'];
+/** A subfolder drawn as one box on a map level. */
+export type MapFolder = components['schemas']['MapFolder'];
+/** A node drawn on a map level. */
+export type MapNode = components['schemas']['MapNode'];
+/** Where links leave a map level. */
+export type MapStub = components['schemas']['MapStub'];
+/** Every link between the same two things on a map level, drawn as one line. */
+export type MapEdge = components['schemas']['MapEdge'];
+/** One link inside a bundled map edge. */
+export type MapEdgeMember = components['schemas']['MapEdgeMember'];
+/** A folder named on the map: the level or one of its ancestors. */
+export type MapBreadcrumb = components['schemas']['MapBreadcrumb'];
+
+/** What one end of a map edge is. `as const` for the reason in `LINK_SOURCES`: the legend builds
+ *  `map.kind.<kind>` at runtime, and `i18nEnumKeys.test.ts` iterates this. */
+export const MAP_ENDPOINT_KINDS = [
+  'node',
+  'folder',
+  'external',
+] as const satisfies readonly components['schemas']['MapEndpointKind'][];
+export type MapEndpointKind = (typeof MAP_ENDPOINT_KINDS)[number];
 
 /** What kind of evidence produced a link.
  *

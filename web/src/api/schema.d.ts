@@ -4850,6 +4850,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/topology/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One folder level of the network map: the folder's own linked nodes, each subfolder as one box
+         *     with its subtree's counts, links between the same two things bundled into one edge, and a stub
+         *     for every place links leave the level.
+         * @description Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the
+         *     roots of their scope directly under the whole network, and only links whose **both** ends are
+         *     visible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers
+         *     `overflow: true` with its boxes and no nodes or edges.
+         */
+        get: operations["get_topology_map"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/topology/shadow": {
         parameters: {
             query?: never;
@@ -9054,6 +9079,155 @@ export interface components {
             mac: string;
             vendor: string;
         };
+        /** @description A folder named on the map: the level itself or one of its ancestors. */
+        MapBreadcrumb: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /** @description Every link between the same two things on this level, drawn as one line. */
+        MapEdge: {
+            a: components["schemas"]["MapEndpoint"];
+            b: components["schemas"]["MapEndpoint"];
+            /**
+             * Format: int64
+             * @description How many links the bundle holds (`members` lists at most 50).
+             */
+            count: number;
+            /** @description Stable id, built from the two ends. */
+            id: string;
+            /** @description The links, strongest evidence first. */
+            members: components["schemas"]["MapEdgeMember"][];
+            /** @description The strongest of `sources`. */
+            source: components["schemas"]["LinkSource"];
+            /** @description Every kind of evidence behind any member. */
+            sources: components["schemas"]["LinkSource"][];
+        };
+        /** @description One link inside a bundled edge, oriented so `a_node` sits at the edge's `a` end. */
+        MapEdgeMember: {
+            a_if_name?: string | null;
+            /** Format: uuid */
+            a_node: string;
+            b_if_name?: string | null;
+            /** Format: uuid */
+            b_node: string;
+            /** Format: int64 */
+            link_id: number;
+            /** @description The strongest evidence behind this link. */
+            source: components["schemas"]["LinkSource"];
+            /** @description The subnet behind a shared-subnet link. */
+            subnet?: string | null;
+        };
+        /**
+         * @description One end of a map edge. `id` is a node id for `node`, a folder id for `folder`, and the stub's
+         *     own `id` for `external`.
+         */
+        MapEndpoint: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["MapEndpointKind"];
+        };
+        /**
+         * @description What one end of a map edge is: a node on this level, a subfolder's box, or a stub for
+         *     something outside the level.
+         * @enum {string}
+         */
+        MapEndpointKind: "node" | "folder" | "external";
+        /** @description A subfolder drawn as one box, with its whole subtree's tally (visible nodes only). */
+        MapFolder: {
+            /** @description Those nodes, by state. */
+            counts: components["schemas"]["GroupStateCounts"];
+            /** @description The folder's type key (`site`, `region`, …). */
+            group_type: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description How many nodes the subtree holds.
+             */
+            node_count: number;
+        };
+        /** @description One folder level of the network map. */
+        MapLevel: {
+            /** @description Its ancestors, outermost first (the level itself is not included). */
+            breadcrumbs: components["schemas"]["MapBreadcrumb"][];
+            /** @description When the connectivity graph was last derived (RFC 3339), or `null` before the first run. */
+            derived_at?: string | null;
+            /**
+             * Format: int64
+             * @description Every node directly in this folder, linked or not.
+             */
+            direct_node_count: number;
+            /**
+             * Format: int64
+             * @description How many bundled edges the level has (also when `overflow` emptied `edges`).
+             */
+            edge_count: number;
+            /**
+             * Format: int64
+             * @description The most edges a level draws.
+             */
+            edge_limit: number;
+            edges: components["schemas"]["MapEdge"][];
+            /** @description Its subfolders, each drawn as a box. */
+            folders: components["schemas"]["MapFolder"][];
+            group?: null | components["schemas"]["MapBreadcrumb"];
+            /**
+             * Format: int64
+             * @description Direct nodes with no link on this level: counted, not drawn.
+             */
+            isolated_count: number;
+            /**
+             * Format: int64
+             * @description Of those, how many have a link on this level.
+             */
+            linked_node_count: number;
+            /**
+             * Format: int64
+             * @description The most linked nodes a level draws.
+             */
+            node_limit: number;
+            /** @description Its own nodes that have a link on this level. */
+            nodes: components["schemas"]["MapNode"][];
+            /** @description The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain. */
+            overflow: boolean;
+            /** @description The places links leave the level for. */
+            stubs: components["schemas"]["MapStub"][];
+        };
+        /** @description A node directly in this level's folder that has at least one link drawn on the level. */
+        MapNode: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description Upstream node blamed for this node's alert (dependency suppression), if any.
+             */
+            root_cause?: string | null;
+            state: components["schemas"]["NodeState"];
+        };
+        /** @description Where links leave the level: a node or a folder outside it. */
+        MapStub: {
+            /**
+             * Format: uuid
+             * @description The node or folder the stub stands for.
+             */
+            id: string;
+            kind: components["schemas"]["MapStubKind"];
+            /**
+             * Format: uuid
+             * @description The first level on which both ends are visible; open it to see where the links go.
+             *     `null` is the whole network.
+             */
+            level_group?: string | null;
+            name: string;
+        };
+        /**
+         * @description What a stub stands for: one node, or a folder holding the far ends.
+         * @enum {string}
+         */
+        MapStubKind: "node" | "folder";
         /** @description The rule behind a proposal, as the classification-rules screen shows it. */
         MatchedRule: {
             /** Format: uuid */
@@ -32890,6 +33064,65 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no inventory to build the graph from */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_topology_map: {
+        parameters: {
+            query?: {
+                /** @description The folder to draw. Omit for the whole network. */
+                group?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One level of the network map */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapLevel"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No folder with that id that the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no inventory to build the map from */
             503: {
                 headers: {
                     [name: string]: unknown;

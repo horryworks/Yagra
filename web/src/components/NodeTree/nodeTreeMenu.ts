@@ -26,6 +26,9 @@ export interface MenuCapabilities {
   /** The pin item is wired (ADR-146). Any signed-in account may pin — it is that account's own
    *  navigation, not configuration — so this is what opens a folder's menu for a Viewer. */
   canPin: boolean;
+  /** The "show on network map" item is wired (ADR-191). Navigation only, so it needs no
+   *  permission and opens a folder's menu, and the root menu, for a Viewer. */
+  canShowOnMap: boolean;
 }
 
 /**
@@ -36,7 +39,7 @@ export interface MenuCapabilities {
  * may open a maintenance window on a folder still gets that half of the menu.
  */
 export function groupMenuHasItems(c: MenuCapabilities): boolean {
-  return c.canEdit || c.canSuppress || c.canAddNode || c.canPin;
+  return c.canEdit || c.canSuppress || c.canAddNode || c.canPin || c.canShowOnMap;
 }
 
 /**
@@ -65,11 +68,11 @@ export function canRunDiscovery(group: NodeGroup, c: MenuCapabilities): boolean 
 /**
  * Whether a right-click on the **Ungrouped header or the empty tree** would produce a menu.
  *
- * Only one item can live there — "add a node at the top level" — so this is that item's own
- * condition rather than a combination.
+ * Two items can live there — "add a node at the top level" and "show the whole network on the
+ * map" (ADR-191) — and either is enough.
  */
 export function rootMenuHasItems(c: MenuCapabilities): boolean {
-  return c.canAddNode;
+  return c.canAddNode || c.canShowOnMap;
 }
 
 /**

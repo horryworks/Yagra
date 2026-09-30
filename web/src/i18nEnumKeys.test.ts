@@ -47,6 +47,7 @@ import {
   NEIGHBOR_PROTOS,
   WLAN_AP_STATES,
   LINK_SOURCES,
+  MAP_ENDPOINT_KINDS,
   TOPOLOGY_MODES,
   TLS_CERT_SOURCES,
   METRIC_STATUSES,
@@ -1094,6 +1095,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // an enum that is *going* to grow, which is exactly the case parity cannot catch.
     const locales = { en: enTopology, ja: jaTopology };
     expectKeys('link source', locales, 'map.source.', LINK_SOURCES);
+  });
+
+  it('every map box kind has strings (topology:map.kind.*)', () => {
+    // The map panel's legend names each kind of box with `t(`map.kind.${k}`)` (ADR-191).
+    const locales = { en: enTopology, ja: jaTopology };
+    expectKeys('map endpoint kind', locales, 'map.kind.', MAP_ENDPOINT_KINDS);
   });
 
   it('every sky has strings (topology:geo.dayNight.sky.*)', () => {

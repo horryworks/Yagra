@@ -247,7 +247,8 @@
     "seen": "最終確認: {{time}}",
     "needsAttention": "要対応",
     "pollDispatched_one": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
-    "pollDispatched_other": "ポーリングを要求しました — チェック {{count}} 件を送信しました。"
+    "pollDispatched_other": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
+    "showOnMap": "マップで表示"
   },
   "tabs": {
     "overview": "概要",
@@ -829,7 +830,8 @@
       "meraki": "Cisco Meraki 連携が作ったフォルダ",
       "netbox": "NetBox 連携が作ったフォルダ"
     },
-    "moveGroupByPrefix": "このフォルダの中を IP レンジで振り分け…"
+    "moveGroupByPrefix": "このフォルダの中を IP レンジで振り分け…",
+    "showOnMap": "ネットワークマップで表示"
   },
   "moveNode": {
     "title": "{{name}} を移動",

@@ -1,80 +1,181 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The network map itself: an SVG render of the derived connectivity graph with wheel-zoom +
-// drag-pan. The layout is in `graphLayout.ts` and is deterministic — see its header for why that
-// and the fit-once guard below are both required and neither substitutes for the other.
+// The network map canvas: an SVG render of one folder level (ADR-191) with wheel-zoom + drag-pan.
+// The layout is in `graphLayout.ts` and is deterministic — see its header for why that and the
+// fit-once guard below are both required and neither substitutes for the other.
+//
+// Controlled: the page owns what is selected and what a click means (select a node, enter a
+// folder, follow a stub). Three kinds of box share one renderer; a stub is drawn dashed.
 // Status color is the canonical palette (stateColorVar) — a node's color here is identical to its
-// dot in the table and its threshold line in a chart. Clicking (or Enter/Space on a focused) node
-// drills into that node's detail page. Device-supplied names render as React <text> children, so
-// they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
+// dot in the table and its threshold line in a chart. Device-supplied names render as React <text>
+// children, so they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
-import { stateColorVar, stateLabel } from '../../lib/format';
+import { stateColorVar } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
-import type { GraphLayout, PlacedNode } from './graphLayout';
-import { NODE_H, NODE_W } from './graphLayout';
+import type { GraphLayout, PlacedEdge, PlacedNode } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
-import { nodeHref } from '../../lib/entityHref';
+import { activateOnKey, fitLabel } from './topologyLevel';
 import './TopologyMap.css';
 
-function NodeBox({
+/** Which level the stored view was last fitted to, for this session. The stored pan/zoom is one
+ *  slot for the whole map, so a different level must start from a fresh fit rather than from the
+ *  previous level's position. */
+let fittedFor: string | null = null;
+
+/** The accent bar and dot take this much of a box's left edge. */
+const LABEL_X = 34;
+
+function Box({
   node,
-  onOpen,
-  nameById,
+  selected,
+  title,
+  onActivate,
 }: {
   node: PlacedNode;
-  onOpen: (id: string) => void;
-  nameById: Map<string, string>;
+  selected: boolean;
+  title: string;
+  onActivate: (node: PlacedNode) => void;
 }) {
-  const { t } = useTranslation('topology');
-  const cause = node.rootCause ? nameById.get(node.rootCause) ?? null : null;
-  const title = cause
-    ? t('map.nodeTitleSuppressed', { name: node.name, state: stateLabel(node.state), cause })
-    : t('map.nodeTitle', { name: node.name, state: stateLabel(node.state) });
-  const cls = ['topomap-node', node.suppressed ? 'suppressed' : ''].filter(Boolean).join(' ');
+  const cls = [
+    'topomap-node',
+    `topomap-kind-${node.kind}`,
+    node.suppressed ? 'suppressed' : '',
+    selected ? 'selected' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const external = node.kind === 'external';
+  const nameY = node.sub ? node.h / 2 - 3 : node.h / 2 + 4;
   return (
     <g
       className={cls}
-      transform={`translate(${node.cx - NODE_W / 2}, ${node.cy - NODE_H / 2})`}
+      transform={`translate(${node.cx - node.w / 2}, ${node.cy - node.h / 2})`}
       role="button"
       tabIndex={0}
       aria-label={title}
-      onClick={() => onOpen(node.id)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen(node.id);
-        }
-      }}
+      aria-pressed={selected}
+      onClick={() => onActivate(node)}
+      onKeyDown={(e) => activateOnKey(e, () => onActivate(node))}
     >
       <title>{title}</title>
-      {/* Status is carried by the left accent bar + dot, never color-alone: the name text and the
-          <title> label read the same state for color-blind/AT users. */}
-      <rect className="topomap-box" width={NODE_W} height={NODE_H} rx={6} />
-      <rect
-        className="topomap-accent"
-        width={4}
-        height={NODE_H}
-        rx={2}
-        style={{ fill: stateColorVar(node.state) }}
-      />
-      <circle cx={20} cy={NODE_H / 2} r={5} style={{ fill: stateColorVar(node.state) }} />
-      <text className="topomap-label" x={34} y={NODE_H / 2 + 4}>
-        {node.name}
+      <rect className="topomap-box" width={node.w} height={node.h} rx={6} />
+      {/* Status is carried by the left accent bar + dot, never color-alone: the <title> label
+          reads the same state. A stub has no state of its own and carries neither. */}
+      {!external && (
+        <>
+          <rect
+            className="topomap-accent"
+            width={4}
+            height={node.h}
+            rx={2}
+            style={{ fill: stateColorVar(node.state) }}
+          />
+          <circle cx={20} cy={node.h / 2} r={5} style={{ fill: stateColorVar(node.state) }} />
+        </>
+      )}
+      <text className="topomap-label" x={external ? 12 : LABEL_X} y={nameY}>
+        {fitLabel(node.name, node.w, external ? 12 : LABEL_X)}
       </text>
+      {node.sub && (
+        <text className="topomap-sub" x={external ? 12 : LABEL_X} y={nameY + 17}>
+          {fitLabel(node.sub, node.w, external ? 12 : LABEL_X)}
+        </text>
+      )}
     </g>
   );
 }
 
-export function TopologyMap({ layout }: { layout: GraphLayout }) {
+function Edge({
+  edge,
+  selected,
+  title,
+  showChip,
+  onSelect,
+}: {
+  edge: PlacedEdge;
+  selected: boolean;
+  title: string;
+  showChip: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const cls = `topomap-edge ${edge.source}${edge.suppressed ? ' suppressed' : ''}${
+    selected ? ' selected' : ''
+  }`;
+  const width = Math.min(1.5 + Math.log2(Math.max(1, edge.count)), 6);
+  const shape = (className: string, strokeWidth?: number) =>
+    edge.kind === 'bow' ? (
+      <path className={className} d={edge.path} fill="none" style={{ strokeWidth }} />
+    ) : (
+      <line
+        className={className}
+        x1={edge.x1}
+        y1={edge.y1}
+        x2={edge.x2}
+        y2={edge.y2}
+        style={{ strokeWidth }}
+      />
+    );
+  const label = String(edge.count);
+  return (
+    <g className="topomap-edge-group" onClick={() => onSelect(edge.id)}>
+      <title>{title}</title>
+      {/* A wide transparent twin makes a thin line clickable without making it look thick. */}
+      {shape('topomap-edge-hit')}
+      {shape(cls, width)}
+      {showChip && (
+        <g
+          className={`topomap-chip${selected ? ' selected' : ''}`}
+          transform={`translate(${edge.chip.x}, ${edge.chip.y})`}
+          role="button"
+          tabIndex={0}
+          aria-label={title}
+          aria-pressed={selected}
+          onKeyDown={(e) => activateOnKey(e, () => onSelect(edge.id))}
+        >
+          <rect x={-(8 + label.length * 3.5)} y={-10} width={16 + label.length * 7} height={20} rx={10} />
+          <text y={4} textAnchor="middle">
+            {label}
+          </text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+export interface TopologyMapProps {
+  layout: GraphLayout;
+  /** The selected box's id, or null. */
+  selectedId: string | null;
+  /** The selected edge's id, or null. */
+  selectedEdge: string | null;
+  /** Changes when the level changes; a new level starts from a fresh fit. */
+  fitKey: string;
+  /** The tooltip for a box. */
+  boxTitle: (node: PlacedNode) => string;
+  /** The tooltip for an edge. */
+  edgeTitle: (edge: PlacedEdge) => string;
+  /** Whether an edge shows its count chip. */
+  showChip: (edge: PlacedEdge) => boolean;
+  onActivate: (node: PlacedNode) => void;
+  onSelectEdge: (id: string) => void;
+}
+
+export function TopologyMap({
+  layout,
+  selectedId,
+  selectedEdge,
+  fitKey,
+  boxTitle,
+  edgeTitle,
+  showChip,
+  onActivate,
+  onSelectEdge,
+}: TopologyMapProps) {
   const { t } = useTranslation('topology');
-  const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   // Where the operator panned and zoomed to, remembered for the session (ADR-134). The `view ===
-  // null` guard below is unchanged and still does its original job — stopping the 15s refresh from
-  // re-fitting the diagram — it now just starts from a stored value instead of always from `null`,
-  // so stepping to a node and back no longer throws the position away.
+  // null` guard below stops the refresh from re-fitting the diagram; a new level clears it.
   const [view, setView] = useStoredMapView('topo');
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id. One pointer pans; two pointers pinch-zoom (touch). `pinch` freezes the
@@ -84,10 +185,13 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
     null,
   );
 
-  const nameById = useMemo(
-    () => new Map(layout.nodes.map((n) => [n.id, n.name])),
-    [layout.nodes],
-  );
+  // A different level than the one the stored view belongs to: fit again.
+  useEffect(() => {
+    if (fittedFor !== fitKey) {
+      fittedFor = fitKey;
+      setView(null);
+    }
+  }, [fitKey, setView]);
 
   // Manual "Fit to view" (also the initial fit). Re-measures the current container each call.
   const fit = useCallback(() => {
@@ -97,8 +201,6 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
   }, [layout, setView]);
 
   // Fit once, on the first render that has both a measured container and a laid-out diagram.
-  // A poll refresh re-creates `layout` every 15s, but the `view === null` guard keeps it from
-  // stomping the operator's current pan/zoom — only the very first paint auto-fits.
   useEffect(() => {
     if (view === null && wrapRef.current && layout.width > 0) {
       setView(fitView(layout, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
@@ -125,8 +227,8 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!view) return;
-      // Capture on the actual target (bubbles to this SVG either way) so a node's click/keyboard
-      // drill-through keeps working exactly as before — unchanged from the single-pointer version.
+      // Capture on the actual target (bubbles to this SVG either way) so a box's click/keyboard
+      // action keeps working.
       (e.target as Element).setPointerCapture?.(e.pointerId);
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const el = wrapRef.current;
@@ -238,36 +340,24 @@ export function TopologyMap({ layout }: { layout: GraphLayout }) {
         onPointerLeave={onPointerUp}
       >
         <g transform={`translate(${v.tx}, ${v.ty}) scale(${v.scale})`}>
-          {/* A rank-adjacent edge is a straight line, exactly as the dependency map drew it. A
-              same-rank or rank-skipping edge — which only a graph can have — bows sideways so it
-              does not run through the boxes between its ends. The evidence behind the link becomes
-              a class so the legend and the stroke agree; it is never colour-alone, the title
-              carries it too. */}
-          {layout.edges.map((e) =>
-            e.kind === 'bow' ? (
-              <path
-                key={e.id}
-                className={`topomap-edge ${e.source}${e.suppressed ? ' suppressed' : ''}`}
-                d={e.path}
-                fill="none"
-              >
-                <title>{t(`map.source.${e.source}`)}</title>
-              </path>
-            ) : (
-              <line
-                key={e.id}
-                className={`topomap-edge ${e.source}${e.suppressed ? ' suppressed' : ''}`}
-                x1={e.x1}
-                y1={e.y1}
-                x2={e.x2}
-                y2={e.y2}
-              >
-                <title>{t(`map.source.${e.source}`)}</title>
-              </line>
-            ),
-          )}
+          {layout.edges.map((e) => (
+            <Edge
+              key={e.id}
+              edge={e}
+              selected={e.id === selectedEdge}
+              title={edgeTitle(e)}
+              showChip={showChip(e)}
+              onSelect={onSelectEdge}
+            />
+          ))}
           {layout.nodes.map((n) => (
-            <NodeBox key={n.id} node={n} onOpen={(id) => navigate(nodeHref(id))} nameById={nameById} />
+            <Box
+              key={n.id}
+              node={n}
+              selected={n.id === selectedId}
+              title={boxTitle(n)}
+              onActivate={onActivate}
+            />
           ))}
         </g>
       </svg>
