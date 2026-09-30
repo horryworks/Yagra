@@ -95,37 +95,86 @@ export interface GeoView {
   scale: number;
 }
 
-/** Zoom bounds. `1` shows the whole world at its intrinsic size; the floor lets a small pane still
- *  fit the world, and the ceiling stops a single site zooming to a meaningless blur of coastline.
- *  The ceiling follows the outline's resolution: it was 12 while the coastline came from the
- *  1:110m set, whose ~19 km simplification was already several pixels wide there. The 1:10m set is
- *  simplified at ≈3.3 km, which is still under 1.5 px at 24 — the point at which a whole prefecture
- *  fills the pane and the sites in it stop overlapping. */
-export const MIN_GEO_SCALE = 0.3;
-export const MAX_GEO_SCALE = 24;
+/** The zoom ceiling. There is no fixed floor: how far out the map may go depends on the pane
+ *  (`minGeoScale`), because the only meaningful floor is "the whole world, and no more".
+ *
+ *  240 is the user's request (ADR-188): ten times the old 24, so the sites inside one city stop
+ *  overlapping. ⚠️ The coastline is simplified at ≈3.3 km (ADR-127 決定 2), which is about 14 px
+ *  here — the outline turns visibly angular near the ceiling. The pins stay exact; the outline is
+ *  context, and the resolution was accepted as the price of zooming in on a site. */
+export const MAX_GEO_SCALE = 240;
 
-/** Fraction of the viewport the fitted content fills, so pins near the edge are not flush. */
+/** Fraction of the viewport fitted pins fill, so pins near the edge are not flush. */
 const MARGIN = 0.88;
 
-/** Clamp a proposed zoom to the bounds a fit could produce. */
-export function clampGeoScale(scale: number): number {
-  return Math.min(MAX_GEO_SCALE, Math.max(MIN_GEO_SCALE, scale));
+/**
+ * The zoom floor for a pane: the scale at which the whole world just fits ("contain").
+ *
+ * Any smaller and the map floats in empty space, which is what zooming out used to do on a wide
+ * pane (ADR-188). "Fill the pane" (cover) was rejected: on a wide pane it hides the poles even at
+ * the floor. An unmeasured pane answers `1` rather than zero or NaN.
+ */
+export function minGeoScale(vw: number, vh: number): number {
+  if (vw <= 0 || vh <= 0) return 1;
+  return Math.min(MAX_GEO_SCALE, Math.min(vw / MAP_WIDTH, vh / MAP_HEIGHT));
+}
+
+/** Clamp a proposed zoom to what this pane allows. */
+export function clampGeoScale(scale: number, vw: number, vh: number): number {
+  return Math.min(MAX_GEO_SCALE, Math.max(minGeoScale(vw, vh), scale));
+}
+
+/** One axis of `clampGeoView`: a map narrower than the pane is centred; a wider one may move only
+ *  as far as keeps its edges at or beyond the pane's. */
+function clampAxis(t: number, mapLen: number, paneLen: number): number {
+  if (mapLen <= paneLen) return (paneLen - mapLen) / 2;
+  return Math.min(0, Math.max(paneLen - mapLen, t));
+}
+
+/**
+ * Hold a view inside what this pane can show without showing anything outside the world.
+ *
+ * Every write to the view goes through here — wheel, pinch, drag, the buttons, Fit, and a view
+ * restored from the session (ADR-134), which may have been saved on a pane of another size.
+ * Keeping the rule in one function is what stops one of those paths from letting the map escape.
+ */
+export function clampGeoView(v: GeoView, vw: number, vh: number): GeoView {
+  if (vw <= 0 || vh <= 0) return v;
+  const scale = clampGeoScale(v.scale, vw, vh);
+  return {
+    scale,
+    tx: clampAxis(v.tx, MAP_WIDTH * scale, vw),
+    ty: clampAxis(v.ty, MAP_HEIGHT * scale, vh),
+  };
+}
+
+/**
+ * Zoom by `factor` around a point in pane coordinates, keeping that point fixed, then clamp.
+ * The wheel passes the cursor; the buttons pass the pane's centre.
+ */
+export function zoomGeoView(
+  v: GeoView,
+  factor: number,
+  cx: number,
+  cy: number,
+  vw: number,
+  vh: number,
+): GeoView {
+  const scale = clampGeoScale(v.scale * factor, vw, vh);
+  const k = scale / v.scale;
+  return clampGeoView({ scale, tx: cx - (cx - v.tx) * k, ty: cy - (cy - v.ty) * k }, vw, vh);
 }
 
 /**
  * Fit the whole world into the viewport, centred.
  *
  * The answer when there are no pins — and the right one: an operator who has set no coordinates
- * should see the map and understand what it is for, not an empty pane.
+ * should see the map and understand what it is for, not an empty pane. It is exactly the zoom
+ * floor, with no margin: a margin would put it below the floor and the clamp would move it.
  */
 export function fitWorld(vw: number, vh: number): GeoView {
   if (vw <= 0 || vh <= 0) return { tx: 0, ty: 0, scale: 1 };
-  const scale = clampGeoScale(Math.min(vw / MAP_WIDTH, vh / MAP_HEIGHT) * MARGIN);
-  return {
-    tx: (vw - MAP_WIDTH * scale) / 2,
-    ty: (vh - MAP_HEIGHT * scale) / 2,
-    scale,
-  };
+  return clampGeoView({ tx: 0, ty: 0, scale: minGeoScale(vw, vh) }, vw, vh);
 }
 
 /**
@@ -146,7 +195,9 @@ export function fitPins(items: Placed[], vw: number, vh: number): GeoView {
   // A degenerate box means every site is effectively in one place.
   const scale =
     w <= 0 || h <= 0
-      ? clampGeoScale(4)
-      : clampGeoScale(Math.min((vw / w) * MARGIN, (vh / h) * MARGIN));
-  return { tx: vw / 2 - cx * scale, ty: vh / 2 - cy * scale, scale };
+      ? clampGeoScale(4, vw, vh)
+      : clampGeoScale(Math.min((vw / w) * MARGIN, (vh / h) * MARGIN), vw, vh);
+  // Centred on the pins, then clamped: a site near the date line or a pole is shown at the edge of
+  // the pane rather than beside empty space.
+  return clampGeoView({ tx: vw / 2 - cx * scale, ty: vh / 2 - cy * scale, scale }, vw, vh);
 }

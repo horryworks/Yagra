@@ -39,13 +39,13 @@ import {
 } from './mapPaneHeight';
 import {
   clampGeoScale,
+  clampGeoView,
   fitPins,
   MAP_HEIGHT,
   MAP_WIDTH,
-  MAX_GEO_SCALE,
-  MIN_GEO_SCALE,
   placedOnly,
   project,
+  zoomGeoView,
 } from './geoProjection';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import { nodesPageHref } from '../lib/entityHref';
@@ -115,19 +115,38 @@ export function GeoMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneHeight]);
 
+  // A view remembered from earlier in the session (ADR-134) may have been saved on a pane of another
+  // size, so hold it inside this one once, on the first measured frame (ADR-188).
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || el.clientWidth <= 0) return;
+    setView((v) => (v ? clampGeoView(v, el.clientWidth, el.clientHeight) : v));
+    // Once per mount: afterwards every gesture clamps its own write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Zoom around the pane's centre — the buttons have no cursor to anchor on. */
+  const zoomCentre = useCallback(
+    (factor: number) => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setView((v) => (v ? zoomGeoView(v, factor, w / 2, h / 2, w, h) : v));
+    },
+    [setView],
+  );
+
   const onWheel = useCallback((e: React.WheelEvent) => {
     const el = wrapRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    setView((v) => {
-      if (!v) return v;
-      const scale = clampGeoScale(v.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
-      const k = scale / v.scale;
-      // Keep the point under the cursor fixed while zooming.
-      return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
-    });
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    // Keep the point under the cursor fixed while zooming.
+    setView((v) => (v ? zoomGeoView(v, e.deltaY < 0 ? 1.15 : 1 / 1.15, mx, my, w, h) : v));
   }, [setView]);
 
   const onPointerDown = useCallback(
@@ -166,21 +185,33 @@ export function GeoMapPage() {
       const rect = el.getBoundingClientRect();
       const mx = (p1.x + p2.x) / 2 - rect.left;
       const my = (p1.y + p2.y) / 2 - rect.top;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
       setView((v) => {
         if (!v) return v;
-        const scale = clampGeoScale(p.scale * (dist / p.dist));
+        const scale = clampGeoScale(p.scale * (dist / p.dist), w, h);
         const k = scale / p.scale;
-        return {
-          scale,
-          tx: p.cx - (p.cx - p.tx) * k + (mx - p.cx),
-          ty: p.cy - (p.cy - p.ty) * k + (my - p.cy),
-        };
+        return clampGeoView(
+          {
+            scale,
+            tx: p.cx - (p.cx - p.tx) * k + (mx - p.cx),
+            ty: p.cy - (p.cy - p.ty) * k + (my - p.cy),
+          },
+          w,
+          h,
+        );
       });
       return;
     }
     const d = drag.current;
-    if (!d) return;
-    setView((v) => (v ? { ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) } : v));
+    if (!d || !el) return;
+    const w = el.clientWidth;
+    const h = el.clientHeight;
+    setView((v) =>
+      v
+        ? clampGeoView({ ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) }, w, h)
+        : v,
+    );
   }, [setView]);
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
@@ -261,9 +292,7 @@ export function GeoMapPage() {
               </button>
               <button
                 className="geopage-ctl"
-                onClick={() =>
-                  setView((s) => (s ? { ...s, scale: Math.min(MAX_GEO_SCALE, s.scale * 1.3) } : s))
-                }
+                onClick={() => zoomCentre(1.3)}
                 title={t('map.control.zoomIn')}
                 aria-label={t('map.control.zoomIn')}
               >
@@ -271,9 +300,7 @@ export function GeoMapPage() {
               </button>
               <button
                 className="geopage-ctl"
-                onClick={() =>
-                  setView((s) => (s ? { ...s, scale: Math.max(MIN_GEO_SCALE, s.scale / 1.3) } : s))
-                }
+                onClick={() => zoomCentre(1 / 1.3)}
                 title={t('map.control.zoomOut')}
                 aria-label={t('map.control.zoomOut')}
               >
