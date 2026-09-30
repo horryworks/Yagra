@@ -807,8 +807,8 @@
       "ok": "前回の同期 {{at}}",
       "requested": "同期を依頼しました。まもなく始まります",
       "running": "同期中…",
-      "missing_one": "NetBox に無いフォルダー {{count}} 件",
-      "missing_other": "NetBox に無いフォルダー {{count}} 件",
+      "missing_one": "NetBox から同期されなくなったフォルダー {{count}} 件",
+      "missing_other": "NetBox から同期されなくなったフォルダー {{count}} 件",
       "failed": "前回の同期に失敗",
       "siteId": {
         "none": "{{sites}} 件の Site すべてでサイト ID が空でした。取得元のフィールドを確認してください",

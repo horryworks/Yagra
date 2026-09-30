@@ -1018,8 +1018,7 @@
         "unregistered": "A Meraki organization lists a device with this MAC address, and it is not monitored yet."
       },
       "explainName": {
-        "node": "Several nodes have this address. This is the one whose name matches the name the neighbor sent; open the row to see the others.",
-        "outside_scope": "Several nodes have this address. The one whose name matches the name the neighbor sent is in a folder you cannot see."
+        "node": "Several nodes have this address. This is the one whose name matches the name the neighbor sent; open the row to see the others."
       },
       "also": {
         "chip_one": "+{{count}} with this address",

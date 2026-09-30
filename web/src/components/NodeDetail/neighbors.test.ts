@@ -191,7 +191,7 @@ describe('neighborsByPort', () => {
 
   it('does not place an LLDP neighbour whose port name is spelled differently', () => {
     // The known limit, pinned so nobody "fixes" it by accident into guessing: a short name against
-    // a long one, and Junos's bare number against its ifIndex (ADR-145 決定 2).
+    // a long one, and Junos's bare number against its ifIndex (ADR-145 decision 2).
     const short = n({ local_port: 'Gi0/7' });
     const numeric = n({ local_port: '7', remote_chassis: 'aa:bb:cc:dd:ee:07' });
     expect([...neighborsByPort([short, numeric], ports).keys()]).toEqual([]);
@@ -356,7 +356,7 @@ describe('the opened row', () => {
   });
 });
 
-// ── ADR-179 増分 3: adding an unmonitored neighbour from the tab ────────────────────────────────
+// ── ADR-179 Inc.3: adding an unmonitored neighbour from the tab ────────────────────────────────
 
 describe('which setup a row offers', () => {
   const at = (p: Partial<NeighborPeer>) =>
@@ -569,7 +569,7 @@ describe('why a "Not monitored" row has no setup button (ADR-179 増分 9)', () 
 });
 
 
-// ── ADR-180 増分 4: several nodes claim the address ─────────────────────────────────────────────
+// ── ADR-180 Inc.4: several nodes claim the address ─────────────────────────────────────────────
 
 describe('the other nodes that claim a peer address', () => {
   const others = [
@@ -611,9 +611,10 @@ describe('the other nodes that claim a peer address', () => {
     expect(got?.excludesPeer).toBe(false);
   });
 
-  it('explains a pick by name only for a node, seen or not', () => {
+  it('explains a pick by name only for a node the caller can see', () => {
     expect(pickedByName(peer({ matched_by_name: true }))).toBe(true);
-    expect(pickedByName(peer({ matched_by_name: true, state: 'outside_scope' }))).toBe(true);
+    // A hidden node is never picked by name (decision 6); a regression must not name one.
+    expect(pickedByName(peer({ matched_by_name: true, state: 'outside_scope' }))).toBe(false);
     expect(pickedByName(peer({ matched_by_name: false }))).toBe(false);
     expect(pickedByName(peer())).toBe(false);
     expect(pickedByName(null)).toBe(false);

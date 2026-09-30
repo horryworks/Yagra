@@ -1957,7 +1957,7 @@
           "session"
         ],
         "summary": "Change the password of the account the bearer token belongs to.",
-        "description": "**This ends the caller's own session, on purpose** (ADR-122 決定 3). `revoke_user` is the same\nprimitive an administrator's reset uses, so there is one answer to \"a password changed — what\nhappens to the tokens\", and signing in again is what proves the new password actually works.\n\nThe alternative (revoke everything, then mint a replacement) is not safe here: a signed session\nis denied when its `iat` is **at or before** the revocation cutoff, both are second-granularity,\nand `issue` reads the clock itself — so a replacement minted in the same second would be denied,\nand the caller could not tell that from a broken password.",
+        "description": "**This ends the caller's own session, on purpose** (ADR-122 decision 3). `revoke_user` is the same\nprimitive an administrator's reset uses, so there is one answer to \"a password changed — what\nhappens to the tokens\", and signing in again is what proves the new password actually works.\n\nThe alternative (revoke everything, then mint a replacement) is not safe here: a signed session\nis denied when its `iat` is **at or before** the revocation cutoff, both are second-granularity,\nand `issue` reads the clock itself — so a replacement minted in the same second would be denied,\nand the caller could not tell that from a broken password.",
         "operationId": "change_own_password",
         "requestBody": {
           "content": {
@@ -3697,7 +3697,7 @@
         "tags": [
           "discovery"
         ],
-        "summary": "Probe one discovered endpoint with the range scan's own machinery (ADR-179 増分 2).",
+        "summary": "Probe one discovered endpoint with the range scan's own machinery (ADR-179 Inc.2).",
         "description": "A one-address scan: the credentials are tried in order on the poller, the first that answers is\nreported as `matched_credential_id`, and core classifies the device into `suggested_profile_id`\n— so the Unregistered tab fills its two dropdowns by exactly the rule the Scan tab does. Nothing\nis imported; the operator reads the answer and decides.\n\nSilent addresses are still asked over SNMP (`SilentTargets::ProbeSnmp`): this row exists because\na neighbour, a peer or a sender vouched for the device, so a dropped ping is not evidence that\nnobody is there.\n\nRouted to the observing node's pool when that pool has a live poller — the poller that can\nreach the node that saw the address is the likeliest to reach the address — and to the global\nsubject otherwise, the range scan's own fallback.",
         "operationId": "probe_discovered_endpoint",
         "parameters": [
@@ -7287,7 +7287,7 @@
         "tags": [
           "maintenance"
         ],
-        "summary": "Open a maintenance window over each of many nodes at once (ADR-124 増分 11).",
+        "summary": "Open a maintenance window over each of many nodes at once (ADR-124 Inc.11).",
         "description": "\"This dozen, tonight\" rarely follows a folder boundary, so the folder-scoped window cannot\nexpress it and the single-node form meant one request each.\n\n**One window per node rather than one window naming many**: a window's scope is a single id\n(migration 0011), and widening that is a schema change the alert engine, the suppression index\nand `list_suppressions` all read.\n\n⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by\nnaming a class, and the folder level reaches a subtree — a batch of ids is the case none of them\ncovers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather\nthan a pre-check, so a node deleted between the check and the write cannot get a window.",
         "operationId": "create_maintenance_windows_bulk",
         "requestBody": {
@@ -8415,7 +8415,7 @@
         "tags": [
           "meraki"
         ],
-        "summary": "Ask for the whole organization to be read again now, rather than waiting for the periodic sync\n(ADR-164 決定 32).",
+        "summary": "Ask for the whole organization to be read again now, rather than waiting for the periodic sync\n(ADR-164 decision 32).",
         "description": "**Accepted, not run.** The read re-reads every MX network's VLANs one network at a time, which\ntakes minutes (about six for 350 networks at the default rate), so this records the request and\nanswers 202. The leader runs it once the organization's slow collect lane is free — never in the\nfast lane, which is availability's — and the organization shows `full_sync` while it waits and\nwhile it runs; how it ended is `last_sync_at` / `last_sync_ok` / `last_sync_error`, as for any\nsync. Asking while one is already asked for, or while the one asked for is running, changes\nnothing: it is the same request. Asked while a read nobody asked for is running — an\norganization's first, or a sync that found networks never read — the request stands and runs\nonce that read has ended.\n\nRead-only upstream: the three paged inventory listings, the VLANs of every MX network\n(`appliance/vlans`, falling back to `appliance/singleLan`), and the MX uplink statuses (for each\nwarm-spare pair's configured roles). Then the devices the organization imports are imported.\nWhile it runs, the organization's switch-port and SSID reads wait for the lane.",
         "operationId": "sync_meraki_org",
         "parameters": [
@@ -8601,7 +8601,7 @@
         "tags": [
           "mib"
         ],
-        "summary": "What each metric measures — the dictionary behind a bare metric name (ADR-079 決定 4).",
+        "summary": "What each metric measures — the dictionary behind a bare metric name (ADR-079 decision 4).",
         "description": "**No `Admin` extractor and no 503.** The table is compiled in, so this answers identically in\nskeleton mode and on a public dashboard; requiring the write side would refuse a question that\nneeds no database.\n\n⚠️ **The WebUI does not call this**, and that is deliberate rather than an oversight. The screen\nneeds the sentence in the operator's language and synchronously during render, so it reads the\ni18n bundle — whose English half is generated from the very same table. The documented consumers\nare the OpenAPI contract and the `get_config(kind=metric_meanings)` MCP tool, which is the whole\nreason the route exists: before it, \"what does `icmp_loss_pct` measure\" was a question the alert\nrules table answered and `/mcp` could not.",
         "operationId": "list_metric_meanings",
         "responses": {
@@ -9440,7 +9440,7 @@
         "tags": [
           "maintenance"
         ],
-        "summary": "Mute many nodes at once (ADR-124 増分 11) — the mute twin of the bulk window above, and a\nseparate route because it asks for a different permission: muting is `AckAlerts`, opening a\nwindow is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them\nfor both.",
+        "summary": "Mute many nodes at once (ADR-124 Inc.11) — the mute twin of the bulk window above, and a\nseparate route because it asks for a different permission: muting is `AckAlerts`, opening a\nwindow is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them\nfor both.",
         "operationId": "create_mutes_bulk",
         "requestBody": {
           "content": {
@@ -10772,7 +10772,7 @@
           "groups"
         ],
         "summary": "Arrange one folder's **direct** children in name order, writing the tree's stored `sort_order`.",
-        "description": "Subfolders and member nodes are renumbered as **one list** (ADR-162): under a parent they are\nsiblings, so A→Z means A→Z over everything in the folder and a subfolder can land between two\nnodes. Folders deeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 決定 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway. One request,\none transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places\nthe whole batch in a single statement rather than calling the single-node writer N times.",
+        "description": "Subfolders and member nodes are renumbered as **one list** (ADR-162): under a parent they are\nsiblings, so A→Z means A→Z over everything in the folder and a subfolder can land between two\nnodes. Folders deeper down are untouched: the operator right-clicked one folder.\n\n🚨 **This replaces an order somebody arranged by hand, and nothing keeps the old one.** That is\nthe decision (ADR-130 decision 5) rather than an oversight — the command is reached by right-clicking\nthe folder it acts on, which is the same consent a file manager asks for.\n\n⚠️ **Not a bulk `placement`.** Doing this by calling `PUT /node-groups/{id}/placement` once per\nchild would be a partial write with nothing to read back when it fails halfway. One request,\none transaction — the same shape `POST /nodes/move` takes for a multi-node drag, which places\nthe whole batch in a single statement rather than calling the single-node writer N times.",
         "operationId": "sort_group_children",
         "parameters": [
           {
@@ -11682,7 +11682,7 @@
         "tags": [
           "nodes"
         ],
-        "summary": "Poll many nodes now (ADR-124 増分 12) — the batch form of `POST /nodes/{node_id}/poll`.",
+        "summary": "Poll many nodes now (ADR-124 Inc.12) — the batch form of `POST /nodes/{node_id}/poll`.",
         "description": "Confirming a change across a set of devices is the case the single-node form serves badly: it\nis the action an operator reaches for immediately after every other bulk edit on this screen.\n\n⚠️ **The publishes are one per node and there is no transaction to roll back**, so a bus error\npartway leaves the earlier nodes polled. That is accepted rather than worked around: a poll\nwrites no configuration and is idempotent, so the failure mode is \"some nodes were polled\ntwice\", not a half-applied change — unlike every other bulk route on this screen, which is why\nthey are single statements and this one is not.",
         "operationId": "poll_nodes_now",
         "requestBody": {
@@ -11754,8 +11754,8 @@
         "tags": [
           "nodes"
         ],
-        "summary": "Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 増分 10).",
-        "description": "Re-homing a site onto different pollers is the case the two existing writers cannot serve: the\nfolder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the\nper-node `PUT /nodes/{node_id}/pool` meant one request each.\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately\n(ADR-124 決定 8). The single-node writer is `NodeScoped` too since ADR-158 A8.\n`manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which\npoller reaches a device, so an unscoped bulk write would let one site's operator strand\nanother's inventory on a poller that cannot see it.",
+        "summary": "Move many nodes to one poll-pool, or clear them all back to inherited (ADR-124 Inc.10).",
+        "description": "Re-homing a site onto different pollers is the case the two existing writers cannot serve: the\nfolder-wide `PUT /node-groups/{id}/pool` only reaches nodes that share a folder, and the\nper-node `PUT /nodes/{node_id}/pool` meant one request each.\n\n⚠️ **Scoped via `Scoped`, not `Admin` alone** — the shape `POST /nodes/move` chose deliberately\n(ADR-124 decision 8). The single-node writer is `NodeScoped` too since ADR-158 A8.\n`manage_config` is held by Operator, an Operator can be group-scoped, and the pool decides which\npoller reaches a device, so an unscoped bulk write would let one site's operator strand\nanother's inventory on a poller that cannot see it.",
         "operationId": "bulk_set_node_pool",
         "requestBody": {
           "content": {
@@ -13892,7 +13892,7 @@
         "tags": [
           "thresholds"
         ],
-        "summary": "The threshold rules that reach one port (ADR-076 決定 11).",
+        "summary": "The threshold rules that reach one port (ADR-076 decision 11).",
         "description": "A port is governed by rules at six scope levels, and the narrow ones are usually not where the\ninteresting rule lives — a fleet-wide \"any link over 90%\" is a global rule, and a page that\nlisted only the port's own rules would show an empty list about a port that is alerting.\n\nRules come from PostgreSQL on every call rather than from the alert engine's snapshot, which\nrefreshes on the config generation: a rule saved a second ago is not in that snapshot, and the\noperator who just pressed Save is precisely the caller of this endpoint. The node's own\nmetadata (profile, tag values, folder chain) does come from the snapshot — it is what decides\nwhether a broad rule reaches this node, and it does not change under the operator's hand.",
         "operationId": "list_interface_thresholds",
         "parameters": [
@@ -17148,7 +17148,7 @@
           "pollers"
         ],
         "summary": "`PUT /api/v1/pools/{name}` — rename a pool and/or replace its description.",
-        "description": "🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and\nthat refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,\n`node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned\nthe last of those, this had to refuse for *any* poller at all). What is still refused is a\npoller that will not act on the change: one that is offline, or whose build predates\n[`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for\nthe old name while the new name's nodes are published to a subject nobody subscribes to —\n**plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces\nit until `pool_coverage`'s 300s debounce.\n\n🚨 **The default pool is refused outright** (ADR-107 増分 3). Its name is a constant in the\ncode, not a row here, so renaming the row renames the description and nothing else: every\nnode that is in the pool only by inheritance keeps resolving to the constant and is left\nbehind by the pollers that follow the new name — the same hole, through a different door.",
+        "description": "🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and\nthat refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,\n`node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned\nthe last of those, this had to refuse for *any* poller at all). What is still refused is a\npoller that will not act on the change: one that is offline, or whose build predates\n[`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for\nthe old name while the new name's nodes are published to a subject nobody subscribes to —\n**plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces\nit until `pool_coverage`'s 300s debounce.\n\n🚨 **The default pool is refused outright** (ADR-107 Inc.3). Its name is a constant in the\ncode, not a row here, so renaming the row renames the description and nothing else: every\nnode that is in the pool only by inheritance keeps resolving to the constant and is left\nbehind by the pollers that follow the new name — the same hole, through a different door.",
         "operationId": "update_pool",
         "parameters": [
           {
@@ -17318,7 +17318,7 @@
           "system"
         ],
         "summary": "`POST /api/v1/pools/{name}/restore` — put a covered pool's members back.",
-        "description": "Each member returns to **its own** recorded assignment, which for an inheriting node means no\nassignment at all. Restoring them all to the pool's name would pin rows that were never pinned,\nleaving a deployment the takeover never promised to be reversible about.\n\nA member whose pool a person has since changed by hand keeps that change — a later human\ndecision outranks this bookkeeping — but its record is dropped either way, so a pool cannot stay\nmarked as covered forever.\n\nRestoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on\ntheir own the moment a link comes back is its own surprise (ADR-107 増分 4 やらないこと).",
+        "description": "Each member returns to **its own** recorded assignment, which for an inheriting node means no\nassignment at all. Restoring them all to the pool's name would pin rows that were never pinned,\nleaving a deployment the takeover never promised to be reversible about.\n\nA member whose pool a person has since changed by hand keeps that change — a later human\ndecision outranks this bookkeeping — but its record is dropped either way, so a pool cannot stay\nmarked as covered forever.\n\nRestoring is deliberately **not** automatic when the site's poller returns: 22 nodes moving on\ntheir own the moment a link comes back is its own surprise (ADR-107 Inc.4, out of scope).",
         "operationId": "restore_pool",
         "parameters": [
           {
@@ -17368,7 +17368,7 @@
           "system"
         ],
         "summary": "`POST /api/v1/pools/{name}/takeover` — point this pool's members at one that can poll them.",
-        "description": "The second of the two things an operator can do about a pool with no live poller. The first —\nbring the site back — no endpoint can do for them: the site's own box has to be handed a new\nbundle, and this deployment cannot reach it. This one is reversible; `restore_pool` puts every\nmember back where this found it, **including the ones that were inheriting rather than\nassigned**, which is why the record is a table and not a column.\n\n🚨 **This is never the right thing to do merely because a pool is uncovered.** A site poller\nusually exists because core cannot reach those devices; covering them from a host that cannot\nsee them turns one accurate pool alert into N false `unreachable` ones — worse than the silence\nit replaces, and indistinguishable from a real outage. It is offered to a person looking at the\nalert, who can test reachability from this host first (ADR-107 増分 4 決定 4). Nothing calls it\nautomatically and nothing defaults to it.",
+        "description": "The second of the two things an operator can do about a pool with no live poller. The first —\nbring the site back — no endpoint can do for them: the site's own box has to be handed a new\nbundle, and this deployment cannot reach it. This one is reversible; `restore_pool` puts every\nmember back where this found it, **including the ones that were inheriting rather than\nassigned**, which is why the record is a table and not a column.\n\n🚨 **This is never the right thing to do merely because a pool is uncovered.** A site poller\nusually exists because core cannot reach those devices; covering them from a host that cannot\nsee them turns one accurate pool alert into N false `unreachable` ones — worse than the silence\nit replaces, and indistinguishable from a real outage. It is offered to a person looking at the\nalert, who can test reachability from this host first (ADR-107 Inc.4 decision 4). Nothing calls it\nautomatically and nothing defaults to it.",
         "operationId": "take_over_pool",
         "parameters": [
           {
@@ -25001,7 +25001,7 @@
       },
       "AlsoClaimedBy": {
         "type": "object",
-        "description": "Another node that claims a neighbour's management address (ADR-180 増分 4).",
+        "description": "Another node that claims a neighbour's management address (ADR-180 Inc.4).",
         "required": [
           "node_id",
           "node_name",
@@ -25673,7 +25673,7 @@
               },
               {
                 "$ref": "#/components/schemas/UserKind",
-                "description": "How this account signs in. The WebUI draws \"Change my password\" only for `local`, and for\n`oidc`/`ldap` says where the password actually lives — one fact on the wire, so the UI holds\nno copy of the rule (ADR-122 決定 5).\n\n`null` means this core has no user store to ask (skeleton mode). **Read it as \"not local\"** —\nevery consumer fails closed, because the alternative is drawing a control whose write path\ndoes not exist here."
+                "description": "How this account signs in. The WebUI draws \"Change my password\" only for `local`, and for\n`oidc`/`ldap` says where the password actually lives — one fact on the wire, so the UI holds\nno copy of the rule (ADR-122 decision 5).\n\n`null` means this core has no user store to ask (skeleton mode). **Read it as \"not local\"** —\nevery consumer fails closed, because the alternative is drawing a control whose write path\ndoes not exist here."
               }
             ]
           },
@@ -25962,7 +25962,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Place the nodes immediately **before** this sibling, keeping the order they were given in.\nAt most one of `before`/`after`; both omitted appends to the end, which is what every\ncaller did before ADR-124 増分 8 and what an N-1 WebUI still sends."
+            "description": "Place the nodes immediately **before** this sibling, keeping the order they were given in.\nAt most one of `before`/`after`; both omitted appends to the end, which is what every\ncaller did before ADR-124 Inc.8 and what an N-1 WebUI still sends."
           },
           "group_id": {
             "type": [
@@ -26726,7 +26726,7 @@
       },
       "ClaimPortState": {
         "type": "string",
-        "description": "Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180\n増分 4 決定 4). A claimant that is down is still counted: a standby line configured with the\nsame address is part of the duplicate.",
+        "description": "Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180\nInc.4 decision 4). A claimant that is down is still counted: a standby line configured with the\nsame address is part of the duplicate.",
         "enum": [
           "up",
           "link_down",
@@ -26941,7 +26941,7 @@
       },
       "CollectionFault": {
         "type": "object",
-        "description": "Why a node's `state` is not a current reading (ADR-164 決定 18, ADR-064 増分 G).\n\nTwo kinds of node are never polled themselves, and this is what each says when the thing that\ntells it about them stops:\n\n* **A Meraki device**: what the Dashboard API says about it is all Yagra knows. When the API\n  stops answering for the whole organization, **one** alert is raised about the organization and\n  the devices keep their last state — they did not fail. This is what stops that stale `ok` from\n  being read as a current one.\n* **A wireless access point**: its controller's AP walk is what reports it. When the controller\n  stops reporting it, the AP reads `unknown` rather than its last `ok`, and nothing is raised\n  about the AP itself — the controller's own alert is the one alert. This says since when.",
+        "description": "Why a node's `state` is not a current reading (ADR-164 decision 18, ADR-064 Inc.G).\n\nTwo kinds of node are never polled themselves, and this is what each says when the thing that\ntells it about them stops:\n\n* **A Meraki device**: what the Dashboard API says about it is all Yagra knows. When the API\n  stops answering for the whole organization, **one** alert is raised about the organization and\n  the devices keep their last state — they did not fail. This is what stops that stale `ok` from\n  being read as a current one.\n* **A wireless access point**: its controller's AP walk is what reports it. When the controller\n  stops reporting it, the AP reads `unknown` rather than its last `ok`, and nothing is raised\n  about the AP itself — the controller's own alert is the one alert. This says since when.",
         "required": [
           "cause",
           "since_unix_ms"
@@ -28271,7 +28271,7 @@
             "items": {
               "$ref": "#/components/schemas/NeighborChassisPeer"
             },
-            "description": "For each distinct MAC-address chassis id on a row that advertises **no** usable management\naddress, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180\n増分 3). The Dashboard reports no management address for an MR or an MX, so this is how\nthose rows say whether the device is monitored. Only MACs a Meraki device listing states are\nmatched; any other chassis id is absent here, as is a row that has an address — that one is\nanswered in `peers`."
+            "description": "For each distinct MAC-address chassis id on a row that advertises **no** usable management\naddress, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180\nInc.3). The Dashboard reports no management address for an MR or an MX, so this is how\nthose rows say whether the device is monitored. Only MACs a Meraki device listing states are\nmatched; any other chassis id is absent here, as is a row that has an address — that one is\nanswered in `peers`."
           },
           "first_seen": {
             "type": "string",
@@ -28297,7 +28297,7 @@
             "items": {
               "$ref": "#/components/schemas/NeighborPeer"
             },
-            "description": "For each distinct management address the neighbours advertise, which monitored node it\nbelongs to. Matched on the address — an inventory address or any address one of a node's\ninterfaces carries. Only when several nodes claim it is the name the neighbour sent used,\nand only to choose among those nodes (ADR-180 増分 4); a name alone never matches."
+            "description": "For each distinct management address the neighbours advertise, which monitored node it\nbelongs to. Matched on the address — an inventory address or any address one of a node's\ninterfaces carries. Only when several nodes claim it is the name the neighbour sent used,\nand only to choose among those nodes (ADR-180 Inc.4); a name alone never matches."
           }
         }
       },
@@ -30938,7 +30938,7 @@
       },
       "GroupPrefix": {
         "type": "object",
-        "description": "One IP prefix attached to a folder.\n\nThree fields, and the third was added under the rule the original two were chosen by\n(ADR-131 決定 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a\ntenant, and none of them has a reader here — the bar for a field is a real reader, not\navailability. `source` cleared that bar when two appeared at once: the range editor must not\noffer to delete a row it cannot delete, and the folder detail pane says where a range came\nfrom. It costs one column on a SELECT `attach_prefixes` already runs.",
+        "description": "One IP prefix attached to a folder.\n\nThree fields, and the third was added under the rule the original two were chosen by\n(ADR-131 decision 9). NetBox's prefix rows also carry `status`, `vrf`, `is_pool`, `role` and a\ntenant, and none of them has a reader here — the bar for a field is a real reader, not\navailability. `source` cleared that bar when two appeared at once: the range editor must not\noffer to delete a row it cannot delete, and the folder detail pane says where a range came\nfrom. It costs one column on a SELECT `attach_prefixes` already runs.",
         "required": [
           "prefix",
           "description",
@@ -31158,7 +31158,7 @@
       },
       "GroupTags": {
         "type": "object",
-        "description": "The folder's labels, in full (ADR-135 inc. 2).\n\n⚠️ **Whole value, not a diff**, and **a sub-resource rather than a field on `GroupBody`** — the\nsame shape `geo` and `prefixes` chose, for three reasons and the first settles it:\n\n1. **Scoping.** This is `GroupFiltered` + `require_visible_group`, because a folder's labels\n   reach every node under it and `manage_config` is held by Operator, who can be group-scoped\n   (ADR-131 決定 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting\n   labels on its body would mean either widening that route's claim — changing rename, move and\n   re-pool for everyone — or shipping a scope-blind label write.\n2. **Three-state cost.** `GroupBody.pool` is already an `Option<String>` whose doc has to\n   explain that absent means unchanged, and `GroupModal` always sends it for exactly that\n   reason. A second such field doubles the trap ADR-135 決定 4 exists for.\n3. **The dialog.** A per-label `DELETE` would act the moment ✕ is clicked — before Save, and\n   with no way back. Clearing every label is `{\"tags\": []}`.",
+        "description": "The folder's labels, in full (ADR-135 inc. 2).\n\n⚠️ **Whole value, not a diff**, and **a sub-resource rather than a field on `GroupBody`** — the\nsame shape `geo` and `prefixes` chose, for three reasons and the first settles it:\n\n1. **Scoping.** This is `GroupFiltered` + `require_visible_group`, because a folder's labels\n   reach every node under it and `manage_config` is held by Operator, who can be group-scoped\n   (ADR-131 decision 8). `PUT /node-groups/{id}` claims `ADMIN_CFG` and takes no `Scoped`; putting\n   labels on its body would mean either widening that route's claim — changing rename, move and\n   re-pool for everyone — or shipping a scope-blind label write.\n2. **Three-state cost.** `GroupBody.pool` is already an `Option<String>` whose doc has to\n   explain that absent means unchanged, and `GroupModal` always sends it for exactly that\n   reason. A second such field doubles the trap ADR-135 decision 4 exists for.\n3. **The dialog.** A per-label `DELETE` would act the moment ✕ is clicked — before Save, and\n   with no way back. Clearing every label is `{\"tags\": []}`.",
         "properties": {
           "tags": {
             "type": "array",
@@ -31465,7 +31465,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's\nIP range claims its address (ADR-179 増分 8). Omitted: the tree root, as before."
+            "description": "The folder the node goes into — or, with `file_by_prefix`, where it goes when no folder's\nIP range claims its address (ADR-179 Inc.8). Omitted: the tree root, as before."
           },
           "model": {
             "type": [
@@ -31492,7 +31492,7 @@
               "string",
               "null"
             ],
-            "description": "Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 増分 2). Omitted\nwhen nothing was probed; the node's first identity read fills it then, as before."
+            "description": "Maker, as a probe of this endpoint classified it from `sysDescr` (ADR-179 Inc.2). Omitted\nwhen nothing was probed; the node's first identity read fills it then, as before."
           }
         }
       },
@@ -31518,7 +31518,7 @@
               "string",
               "null"
             ],
-            "description": "The folder this one device goes into, overriding both the IP-range rule and the request's\n`group_id` (ADR-131 決定 11).\n\n🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means \"follow the\nrule\"; an id means that folder; **`null` means the operator chose the tree root**, which is\na destination like any other. With a plain `Option<Uuid>` serde maps absent and `null` to\nthe same `None`, so a device deliberately sent to the root would silently be filed by range\ninstead — a control that lies about what it does. `deserialize_some` keeps them apart.\n\n⚠️ **This is the per-row field ADR-100 決定 10 refused, and it is admitted under a\ncondition.** That decision's objection was a UI in which fifty rows each carry an\nindependent choice and the screen has to explain the result. Here a row's destination still\ncomes from one rule by default, and this is an *override* of it — so the screen explains\nitself by saying which rows the operator changed, and a row nobody touched is still the\nrule's answer. Remove the default and the original objection applies again in full."
+            "description": "The folder this one device goes into, overriding both the IP-range rule and the request's\n`group_id` (ADR-131 decision 11).\n\n🚨 **Three states, not two, and `Option<Uuid>` cannot carry them.** Absent means \"follow the\nrule\"; an id means that folder; **`null` means the operator chose the tree root**, which is\na destination like any other. With a plain `Option<Uuid>` serde maps absent and `null` to\nthe same `None`, so a device deliberately sent to the root would silently be filed by range\ninstead — a control that lies about what it does. `deserialize_some` keeps them apart.\n\n⚠️ **This is the per-row field ADR-100 decision 10 refused, and it is admitted under a\ncondition.** That decision's objection was a UI in which fifty rows each carry an\nindependent choice and the screen has to explain the result. Here a row's destination still\ncomes from one rule by default, and this is an *override* of it — so the screen explains\nitself by saying which rows the operator changed, and a row nobody touched is still the\nrule's answer. Remove the default and the original objection applies again in full."
           },
           "model": {
             "type": [
@@ -31561,7 +31561,7 @@
       },
       "ImportPreviewResult": {
         "type": "object",
-        "description": "Where each candidate would be filed. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-131 決定 7, the same posture as ADR-124 決定 6).",
+        "description": "Where each candidate would be filed. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-131 decision 7, the same posture as ADR-124 decision 6).",
         "required": [
           "matched",
           "ambiguous",
@@ -31643,7 +31643,7 @@
               },
               {
                 "$ref": "#/components/schemas/PrefixFiling",
-                "description": "Present when the request set `file_by_prefix`, or — on a scan import — named a folder for\nany row itself. Absent otherwise: an endpoint promotion without `file_by_prefix` (a\n`group_id` alone does not bring it), and every scan import that decided nothing per row.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by\nrange would read as one that filed zero rows, and with the field absent the wire shape is\nwhat every existing client already parses. The endpoint import (ADR-179 増分 8) fills it\nonly when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
+                "description": "Present when the request set `file_by_prefix`, or — on a scan import — named a folder for\nany row itself. Absent otherwise: an endpoint promotion without `file_by_prefix` (a\n`group_id` alone does not bring it), and every scan import that decided nothing per row.\n\n⚠️ `skip_serializing_if` rather than a zero-filled struct: an import that filed nothing by\nrange would read as one that filed zero rows, and with the field absent the wire shape is\nwhat every existing client already parses. The endpoint import (ADR-179 Inc.8) fills it\nonly when it was asked to file by range, and never counts `chosen`. It counts the rows that were **created** — a skipped row was filed nowhere.\nWith `file_by_prefix` set, `created == matched + ambiguous + unmatched + chosen`; with it\noff, only `chosen` is counted and the rest went to `group_id`."
               }
             ]
           },
@@ -32893,7 +32893,7 @@
         "properties": {
           "in_force": {
             "type": "boolean",
-            "description": "Whether this rule sits at the **winning** scope level for its metric — the most specific\nlevel that reaches this port, and among folder-group rules only the nearest group in the\nchain (ADR-013 + ADR-075 決定 11).\n\nSeveral rules can carry `true` for one metric at once: the engine merges rules at the\nwinning level by keeping the more restrictive bound of each severity. So this means \"this\nrule contributes to the effective bound\", not \"this rule *is* the effective bound\"."
+            "description": "Whether this rule sits at the **winning** scope level for its metric — the most specific\nlevel that reaches this port, and among folder-group rules only the nearest group in the\nchain (ADR-013 + ADR-075 decision 11).\n\nSeveral rules can carry `true` for one metric at once: the engine merges rules at the\nwinning level by keeping the more restrictive bound of each severity. So this means \"this\nrule contributes to the effective bound\", not \"this rule *is* the effective bound\"."
           },
           "rule": {
             "$ref": "#/components/schemas/StoredThreshold",
@@ -32978,7 +32978,7 @@
               "string",
               "null"
             ],
-            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 決定 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three\n(`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when\nthe whole collect failed, or a poller from before this reported it."
+            "description": "Which of the tier's reads failed, when one did while the others answered (ADR-164 decision 25):\n`uplinks_loss_and_latency`, `appliance_uplink_statuses`, `appliance_vpn_statuses`, … — the\nuplink tier reads three, the switch-port tier up to four (`switch_port_statuses`,\n`switch_port_usage`, `switch_port_topology`, `switch_port_config`), the wireless tier up to three\n(`wireless_clients`, `wireless_channel_utilization`, `wireless_ssid_statuses`). Absent when\nthe whole collect failed, or a poller from before this reported it."
           },
           "reason": {
             "$ref": "#/components/schemas/MerakiSyncFailure",
@@ -33084,7 +33084,7 @@
           "monitored_unwatched": {
             "type": "integer",
             "format": "int32",
-            "description": "Of `monitored`, the ones in a network this organization does not watch (決定 15). Collection\nasks the Dashboard about watched networks only, so **nothing is collected for these**: the\nnode keeps the last state it was seen in and raises nothing. It happens when a device is\nmoved into an unwatched network, and when a network holding nodes is un-watched. An\norganization that watches no network at all is sent no collect, so there it is every\nmonitored device (決定 16).",
+            "description": "Of `monitored`, the ones in a network this organization does not watch (decision 15). Collection\nasks the Dashboard about watched networks only, so **nothing is collected for these**: the\nnode keeps the last state it was seen in and raises nothing. It happens when a device is\nmoved into an unwatched network, and when a network holding nodes is un-watched. An\norganization that watches no network at all is sent no collect, so there it is every\nmonitored device (decision 16).",
             "minimum": 0
           },
           "new": {
@@ -33103,7 +33103,7 @@
       },
       "MerakiDeviceState": {
         "type": "string",
-        "description": "What a device's row is shown as: read from the facts the inventory keeps about it (ADR-164\n決定 3), never stored. Serialized as the snake_case token.",
+        "description": "What a device's row is shown as: read from the facts the inventory keeps about it (ADR-164\ndecision 3), never stored. Serialized as the snake_case token.",
         "enum": [
           "monitored",
           "new",
@@ -33155,7 +33155,7 @@
               },
               {
                 "$ref": "#/components/schemas/MerakiHaRole",
-                "description": "An MX's configured warm-spare role (ADR-164 決定 26). Absent from the object — not `null` —\nfor a single MX, a device that is not an MX, and one whose role the sync has not read yet."
+                "description": "An MX's configured warm-spare role (ADR-164 decision 26). Absent from the object — not `null` —\nfor a single MX, a device that is not an MX, and one whose role the sync has not read yet."
               }
             ]
           },
@@ -33319,7 +33319,7 @@
       },
       "MerakiFullSyncView": {
         "type": "object",
-        "description": "A whole-organization read: every MX network's LAN side, then the import (ADR-164 決定 30〜32).",
+        "description": "A whole-organization read: every MX network's LAN side, then the import (ADR-164 decision 30–32).",
         "properties": {
           "networks": {
             "type": [
@@ -33359,7 +33359,7 @@
       },
       "MerakiHaRole": {
         "type": "string",
-        "description": "The role an MX is **configured** to hold in its warm-spare pair (ADR-164 決定 26), from\n`appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.\n\n⚠️ Configured, not current: measured on a real organization, a primary that was down still said\n`primary` while its spare — still saying `spare` — carried the traffic. So \"running on the spare\"\nis worked out from the two devices' liveness, never read from this.",
+        "description": "The role an MX is **configured** to hold in its warm-spare pair (ADR-164 decision 26), from\n`appliance/uplink/statuses`' `highAvailability.role` while `highAvailability.enabled` is true.\n\n⚠️ Configured, not current: measured on a real organization, a primary that was down still said\n`primary` while its spare — still saying `spare` — carried the traffic. So \"running on the spare\"\nis worked out from the two devices' liveness, never read from this.",
         "enum": [
           "primary",
           "spare"
@@ -33367,7 +33367,7 @@
       },
       "MerakiImportDeviceReq": {
         "type": "object",
-        "description": "One device to import. **Only `serial` is read** (ADR-164 決定 39): everything else about the\ndevice — its name, model, network and address — is taken from what this organization's last\nsync recorded, never from the request. A page opened before Meraki renamed a device used to\ncreate the node under the old name, and the node then never followed a rename again. The other\nfields are accepted and ignored, so a client that still sends them keeps working.",
+        "description": "One device to import. **Only `serial` is read** (ADR-164 decision 39): everything else about the\ndevice — its name, model, network and address — is taken from what this organization's last\nsync recorded, never from the request. A page opened before Meraki renamed a device used to\ncreate the node under the old name, and the node then never followed a rename again. The other\nfields are accepted and ignored, so a client that still sends them keeps working.",
         "required": [
           "serial"
         ],
@@ -33502,7 +33502,7 @@
           "waiting_lan": {
             "type": "integer",
             "format": "int32",
-            "description": "MX that were asked for and not imported, because their network's LAN side has not been read\nyet (ADR-164 決定 39) — their address, and so their folder, is not known. The next sync reads\nit; import them after that.",
+            "description": "MX that were asked for and not imported, because their network's LAN side has not been read\nyet (ADR-164 decision 39) — their address, and so their folder, is not known. The next sync reads\nit; import them after that.",
             "minimum": 0
           }
         }
@@ -33639,7 +33639,7 @@
               },
               {
                 "$ref": "#/components/schemas/MerakiFullSyncView",
-                "description": "A whole-organization read asked for or running (ADR-164 決定 30〜32); `null` when there is\nnone. \"Sync now\" asks for one; an organization's first sync is one nobody asked for."
+                "description": "A whole-organization read asked for or running (ADR-164 decision 30–32); `null` when there is\nnone. \"Sync now\" asks for one; an organization's first sync is one nobody asked for."
               }
             ]
           },
@@ -33732,7 +33732,7 @@
       },
       "MerakiPairState": {
         "type": "string",
-        "description": "What a warm-spare pair is doing, seen from one of its MX (ADR-164 決定 26).\n\nWorked out from the two devices' **liveness**, never from their roles: the role Meraki reports\nis the configured one, and on a real organization a primary that was down still said `primary`\nwhile its spare carried the traffic.",
+        "description": "What a warm-spare pair is doing, seen from one of its MX (ADR-164 decision 26).\n\nWorked out from the two devices' **liveness**, never from their roles: the role Meraki reports\nis the configured one, and on a real organization a primary that was down still said `primary`\nwhile its spare carried the traffic.",
         "enum": [
           "normal",
           "running_on_spare",
@@ -33743,7 +33743,7 @@
       },
       "MerakiPairView": {
         "type": "object",
-        "description": "One MX's warm-spare pair (ADR-164 決定 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.",
+        "description": "One MX's warm-spare pair (ADR-164 decision 26) — `GET /api/v1/nodes/{node_id}`'s `meraki_pair`.",
         "required": [
           "role",
           "state"
@@ -34172,7 +34172,7 @@
       },
       "MovePreviewResult": {
         "type": "object",
-        "description": "What the IP-range match proposes. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-124 決定 6).",
+        "description": "What the IP-range match proposes. **A proposal, not an action** — nothing is written by the\nendpoint that returns this (ADR-124 decision 6).",
         "required": [
           "matched",
           "ambiguous",
@@ -34197,7 +34197,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Ids already in the folder their range names, or in a folder beneath it (ADR-176 決定 2).\nNot a move, so in none of the three lists above."
+            "description": "Ids already in the folder their range names, or in a folder beneath it (ADR-176 decision 2).\nNot a move, so in none of the three lists above."
           },
           "matched": {
             "type": "array",
@@ -34377,7 +34377,7 @@
       },
       "NeighborChassisPeer": {
         "type": "object",
-        "description": "One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).",
+        "description": "One neighbour chassis MAC and the Meraki device listed under it (ADR-180 Inc.3).",
         "required": [
           "chassis",
           "state",
@@ -34389,7 +34389,7 @@
             "items": {
               "$ref": "#/components/schemas/NeighborCapability"
             },
-            "description": "What the device is, from the kind of product the organization lists it as — `switch` for\nan MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 増分 4 決定 2). For a row whose own\ncapabilities are blank; empty for a product with no such role."
+            "description": "What the device is, from the kind of product the organization lists it as — `switch` for\nan MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 Inc.4 decision 2). For a row whose own\ncapabilities are blank; empty for a product with no such role."
           },
           "chassis": {
             "type": "string",
@@ -34568,7 +34568,7 @@
       },
       "NeighborIdKind": {
         "type": "string",
-        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by whoever read the neighbours — the poller's SNMP walk, from the branch\n[`render_chassis_id_kind`] / [`render_port_id_kind`] took — never inferred from how the stored\ntext looks, because a text id can look like a MAC and the hex fallback always does.\n\n⚠️ **One exception: a Meraki device's rows** — a switch's (ADR-181 決定 13), read by the poller,\nand an MX's or MR's (増分 3/5), read by core's Meraki sync. The Dashboard's LLDP/CDP answers\ncarry no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a\nMeraki peer names itself there (ADR-181 増分 2). The cost of guessing wrong is a maker name\nbeside a name that happens to look like a MAC — display only (ADR-180 決定 5).",
+        "description": "How a neighbour's chassis or port id was actually rendered (ADR-180).\n\nRecorded by whoever read the neighbours — the poller's SNMP walk, from the branch\n[`render_chassis_id_kind`] / [`render_port_id_kind`] took — never inferred from how the stored\ntext looks, because a text id can look like a MAC and the hex fallback always does.\n\n⚠️ **One exception: a Meraki device's rows** — a switch's (ADR-181 decision 13), read by the poller,\nand an MX's or MR's (Inc.3/5), read by core's Meraki sync. The Dashboard's LLDP/CDP answers\ncarry no id subtype, so `yagra-transport`'s `meraki_neighbors.rs` calls a string `Mac` when\nit reads as six octets — or, for a CDP device id, as twelve bare hex digits, which is how a\nMeraki peer names itself there (ADR-181 Inc.2). The cost of guessing wrong is a maker name\nbeside a name that happens to look like a MAC — display only (ADR-180 decision 5).",
         "enum": [
           "mac",
           "network_address",
@@ -34654,7 +34654,7 @@
             }
           }
         ],
-        "description": "Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such\na device by hand would leave a second node for it once its controller or organization imports\nit, so the Neighbors tab sends the operator there instead."
+        "description": "Who manages the device at an unregistered neighbour address (ADR-179 Inc.3). Registering such\na device by hand would leave a second node for it once its controller or organization imports\nit, so the Neighbors tab sends the operator there instead."
       },
       "NeighborPeer": {
         "type": "object",
@@ -34691,7 +34691,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "That list's row for the address, when `discovery_listed` — the id the endpoint probe and\nimport act on (ADR-179 増分 3)."
+            "description": "That list's row for the address, when `discovery_listed` — the id the endpoint probe and\nimport act on (ADR-179 Inc.3)."
           },
           "discovery_listed": {
             "type": "boolean",
@@ -34710,7 +34710,7 @@
           },
           "matched_by_name": {
             "type": "boolean",
-            "description": "Several nodes claim the address and the node answered was chosen among them by the name the\nneighbour sent (ADR-180 増分 4). The others are in `also_claimed_by`."
+            "description": "Several nodes claim the address and the node answered was chosen among them by the name the\nneighbour sent (ADR-180 Inc.4). The others are in `also_claimed_by`."
           },
           "node_id": {
             "type": [
@@ -34734,7 +34734,7 @@
               },
               {
                 "$ref": "#/components/schemas/SetupBlocked",
-                "description": "Why nothing adds this device from here (ADR-179 増分 9): present only when `state` is\n`unregistered`, it is not on the caller's Unregistered list, and nothing manages it."
+                "description": "Why nothing adds this device from here (ADR-179 Inc.9): present only when `state` is\n`unregistered`, it is not on the caller's Unregistered list, and nothing manages it."
               }
             ]
           },
@@ -34848,7 +34848,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Sites the last successful run saw, or `null` before one has run."
+            "description": "Active sites the last successful run wrote as folders, or `null` before one has run. A site\nin any other status is not counted (ADR-100 decision 11)."
           },
           "last_sync_sites_without_site_id": {
             "type": [
@@ -34860,7 +34860,7 @@
           },
           "missing_folders": {
             "type": "integer",
-            "description": "Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100\ndecision 5) — surfaced so the operator can decide.",
+            "description": "Folders this server owns that the last successful run no longer synced: NetBox no longer\nlists the object, or lists the site as anything but Active (ADR-100 decision 11). **Never\nauto-deleted** (decision 5) — surfaced so the operator can decide.",
             "minimum": 0
           },
           "name": {
@@ -34880,7 +34880,7 @@
               },
               {
                 "$ref": "#/components/schemas/NetboxSyncView",
-                "description": "A \"Sync now\" not finished yet, or a run in flight; `null` when neither (ADR-172 決定 1)."
+                "description": "A \"Sync now\" not finished yet, or a run in flight; `null` when neither (ADR-172 decision 1)."
               }
             ]
           },
@@ -34892,7 +34892,7 @@
       },
       "NetboxSyncView": {
         "type": "object",
-        "description": "\"Sync now\" and the run it starts, as the row holds them (ADR-172 決定 1).",
+        "description": "\"Sync now\" and the run it starts, as the row holds them (ADR-172 decision 1).",
         "properties": {
           "requested_at": {
             "type": [
@@ -35115,7 +35115,7 @@
               },
               {
                 "$ref": "#/components/schemas/MerakiPairView",
-                "description": "A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on\nits spare (ADR-164 決定 26). `null` for a node that is not an MX in a pair."
+                "description": "A Meraki MX's warm-spare pair: its configured role, the other MX, and whether the site runs on\nits spare (ADR-164 decision 26). `null` for a node that is not an MX in a pair."
               }
             ]
           },
@@ -35734,7 +35734,7 @@
               "string",
               "null"
             ],
-            "description": "A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),\n`switch`, `appliance`, … — and absent on every other node. What the list's \"AP\" badge is\nread from (ADR-168 決定 11): an MR stays `kind: meraki`, so the kind alone cannot say it is\nan access point. The detail page reads the same value from `meraki_device.product_type`."
+            "description": "A Meraki node's product type as the Dashboard names it — `wireless` (an MR access point),\n`switch`, `appliance`, … — and absent on every other node. What the list's \"AP\" badge is\nread from (ADR-168 decision 11): an MR stays `kind: meraki`, so the kind alone cannot say it is\nan access point. The detail page reads the same value from `meraki_device.product_type`."
           },
           "meraki_repeater": {
             "type": "boolean",
@@ -36917,7 +36917,7 @@
               "string",
               "null"
             ],
-            "description": "The pool currently polling this one's members on its behalf, if an operator asked for that\n(ADR-107 増分 4). `None` is the ordinary case.\n\n⚠️ Its members are **already** in that pool — this says the move is recorded and can be\nundone, not that it is pending. A UI that reads it as \"will be\" would offer a takeover that\nhas already happened."
+            "description": "The pool currently polling this one's members on its behalf, if an operator asked for that\n(ADR-107 Inc.4). `None` is the ordinary case.\n\n⚠️ Its members are **already** in that pool — this says the move is recorded and can be\nundone, not that it is pending. A UI that reads it as \"will be\" would offer a takeover that\nhas already happened."
           },
           "description": {
             "type": [
@@ -36975,7 +36975,7 @@
               "string",
               "null"
             ],
-            "description": "The pool currently polling this one's members on its behalf (ADR-107 増分 4), if an operator\nasked for that. `null` is the ordinary case.\n\n⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are\nsomewhere else, which is the point. The two fields answer different questions: `warning` is\n\"is anything here unmonitored\", this is \"is somebody standing in for it\"."
+            "description": "The pool currently polling this one's members on its behalf (ADR-107 Inc.4), if an operator\nasked for that. `null` is the ordinary case.\n\n⚠️ A covered pool will usually **also** read `nodes: 0` with no warning — its members are\nsomewhere else, which is the point. The two fields answer different questions: `warning` is\n\"is anything here unmonitored\", this is \"is somebody standing in for it\"."
           },
           "description": {
             "type": [
@@ -37068,7 +37068,7 @@
       },
       "PrefixFiling": {
         "type": "object",
-        "description": "How the batch was filed, when the request asked for filing by IP range (ADR-131 決定 2).\n\n🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers\nboth end up in the request's fallback folder — but they are different facts, and folding them\nloses the actionable one: an ambiguous address means two folders have overlapping ranges\nconfigured, which is a thing to go and fix. Reported separately so the operator reads\n\"3 fell back, 1 of them because two folders disagree\" rather than \"3 addresses are outside\nevery range\", which would be untrue.",
+        "description": "How the batch was filed, when the request asked for filing by IP range (ADR-131 decision 2).\n\n🚨 **Three numbers, not two.** A device two folders claim equally well and one no range covers\nboth end up in the request's fallback folder — but they are different facts, and folding them\nloses the actionable one: an ambiguous address means two folders have overlapping ranges\nconfigured, which is a thing to go and fix. Reported separately so the operator reads\n\"3 fell back, 1 of them because two folders disagree\" rather than \"3 addresses are outside\nevery range\", which would be untrue.",
         "required": [
           "matched",
           "ambiguous",
@@ -37085,7 +37085,7 @@
           "chosen": {
             "type": "integer",
             "format": "int32",
-            "description": "The operator named this row's folder themselves, so no rule was applied to it\n(ADR-131 決定 11). Counted apart from the three above because it is not an outcome of the\nmatch — reporting it as `matched` would credit the rule with a choice a person made.",
+            "description": "The operator named this row's folder themselves, so no rule was applied to it\n(ADR-131 decision 11). Counted apart from the three above because it is not an outcome of the\nmatch — reporting it as `matched` would credit the rule with a choice a person made.",
             "minimum": 0
           },
           "matched": {
@@ -37126,7 +37126,7 @@
               "string",
               "null"
             ],
-            "description": "The range that contains it (`parent_only`, `other_folder`) or lies inside it (`partial`).\n`null` for `unregistered`, **and** when that range belongs to a folder this caller may not\nsee — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 決定 10)."
+            "description": "The range that contains it (`parent_only`, `other_folder`) or lies inside it (`partial`).\n`null` for `unregistered`, **and** when that range belongs to a folder this caller may not\nsee — a folder's subnet layout is not disclosed past its scope (ADR-014, ADR-100 decision 10)."
           },
           "range_group": {
             "type": [
@@ -37254,7 +37254,7 @@
       },
       "PrefixMoveReq": {
         "type": "object",
-        "description": "Apply what `POST /api/v1/nodes/move-preview` proposed and the operator accepted: every\ndestination at once, in one transaction (ADR-172 決定 2).",
+        "description": "Apply what `POST /api/v1/nodes/move-preview` proposed and the operator accepted: every\ndestination at once, in one transaction (ADR-172 decision 2).",
         "required": [
           "moves"
         ],
@@ -37307,7 +37307,7 @@
       },
       "PrefixSource": {
         "type": "string",
-        "description": "Who put a prefix row on a folder (ADR-131 決定 9).\n\nThis is not decoration: it decides what the editor may offer. A row a NetBox sync owns is\nlisted read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI\nthat could not tell the two apart would draw a remove button that does nothing.",
+        "description": "Who put a prefix row on a folder (ADR-131 decision 9).\n\nThis is not decoration: it decides what the editor may offer. A row a NetBox sync owns is\nlisted read-only — `PUT /node-groups/{id}/prefixes` deliberately cannot touch it — so a UI\nthat could not tell the two apart would draw a remove button that does nothing.",
         "enum": [
           "manual",
           "sync"
@@ -39805,7 +39805,7 @@
                 "items": {
                   "$ref": "#/components/schemas/SameDeviceMatch"
                 },
-                "description": "Candidates that look like a device node already monitored at **another** address — its\ninterface list carries the candidate's address, or its name and model match (ADR-139 増分 3).\nA mark, not a refusal: importing such a candidate is still accepted, because a site that\nreuses one private address plan can make either piece of evidence wrong. Only nodes the caller\ncan see are named. A candidate in `existing` is never here."
+                "description": "Candidates that look like a device node already monitored at **another** address — its\ninterface list carries the candidate's address, or its name and model match (ADR-139 Inc.3).\nA mark, not a refusal: importing such a candidate is still accepted, because a site that\nreuses one private address plan can make either piece of evidence wrong. Only nodes the caller\ncan see are named. A candidate in `existing` is never here."
               }
             }
           }
@@ -40142,7 +40142,7 @@
       },
       "SetupBlocked": {
         "type": "string",
-        "description": "Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are\nthe Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what\nthis says cannot drift from what the list does.",
+        "description": "Why an unregistered neighbour address offers no way to add it (ADR-179 Inc.9). The rules are\nthe Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what\nthis says cannot drift from what the list does.",
         "enum": [
           "not_a_device_address",
           "end_station",
@@ -42945,7 +42945,7 @@
       },
       "WlanApState": {
         "type": "string",
-        "description": "What one controller says about one AP, reduced to the three answers the system acts on\n(ADR-064 改訂 R5).",
+        "description": "What one controller says about one AP, reduced to the three answers the system acts on\n(ADR-064 revision R5).",
         "enum": [
           "associated",
           "backup",
@@ -42954,7 +42954,7 @@
       },
       "WlanFlavor": {
         "type": "string",
-        "description": "Which vendor dialect a controller speaks, selected by the collection item's OID\n(the [`crate::OpticalFlavor`] shape, ADR-064 決定 3).\n\nOnly dialects measured on a real controller are here. Aruba is a later increment.",
+        "description": "Which vendor dialect a controller speaks, selected by the collection item's OID\n(the [`crate::OpticalFlavor`] shape, ADR-064 decision 3).\n\nOnly dialects measured on a real controller are here. Aruba is a later increment.",
         "enum": [
           "huawei",
           "cisco_airespace"

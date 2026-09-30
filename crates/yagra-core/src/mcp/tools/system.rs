@@ -375,7 +375,7 @@ impl ThresholdFilterOwned {
     }
 }
 
-/// Parse `get_config(kind=thresholds)`'s three filters, in the REST edge's vocabulary (ADR-079 決定 1).
+/// Parse `get_config(kind=thresholds)`'s three filters, in the REST edge's vocabulary (ADR-079 decision 1).
 ///
 /// **This replaced `&Default::default()`, and the reason the old comment gave was factually wrong.**
 /// It said `get_config` is a configuration dump whose callers ask for the ruleset rather than a slice
@@ -773,7 +773,9 @@ impl YagraMcp {
                        `missing`, a monitored node whose device that sync no longer found; \
                        refused for a token restricted to folders), meraki_polling; **NetBox** — netbox_servers (the configured NetBox \
                        deployments the folder tree is pulled from, with each one's last sync \
-                       result and how many of its folders NetBox no longer lists; the API token \
+                       result and how many of its folders the last sync no longer synced, \
+                       because NetBox no longer lists the object or no longer lists the site \
+                       as Active; the API token \
                        is never included); **forwarding** — forward_destinations; **reports** — \
                        report_definitions, report_schedules; **deployment settings** — retention, \
                        adjacency_settings, llm, roles, oidc, ldap. \
@@ -1113,7 +1115,7 @@ mod tests {
     use axum::http::StatusCode;
 
     /// Every dimension `ThresholdFilter` declares is reachable from `get_config(kind=thresholds)`,
-    /// and each parameter moves **only** its own dimension (ADR-079 決定 1).
+    /// and each parameter moves **only** its own dimension (ADR-079 decision 1).
     ///
     /// The behavioural half is the point. A source scan can say `p.scope_level` appears somewhere
     /// in the initializer; it cannot say the value arrives in the right field. This drives the

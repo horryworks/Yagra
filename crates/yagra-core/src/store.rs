@@ -297,7 +297,7 @@ pub trait MetricStore: Send + Sync {
     ///
     /// Its own read rather than `rate_range` of the octet counter, because a Meraki switch port has
     /// no counter: its rate is stored as a gauge, and [`VmStore`] folds the two into one expression
-    /// (ADR-167 決定 7). The default is the counter half alone — what every store without that
+    /// (ADR-167 decision 7). The default is the counter half alone — what every store without that
     /// expression can answer, and exactly what the chart read before.
     async fn interface_bps_range(
         &self,
@@ -387,7 +387,7 @@ pub trait MetricStore: Send + Sync {
 
     /// [`Self::series_rows`] for named `(node, row)` pairs only — the selector narrows on both
     /// `node` and `ifindex`, so a node with 500 ports answers for the two that were asked about
-    /// (ADR-180 増分 4 決定 7). The two filters are independent, so the store may return a pair
+    /// (ADR-180 Inc.4 decision 7). The two filters are independent, so the store may return a pair
     /// nobody asked for (node A's row 7 because node B's row 7 was asked); those are dropped here,
     /// and the answer holds only requested pairs. An empty `rows` asks nothing and answers empty.
     ///
@@ -755,7 +755,7 @@ impl VmStore {
     /// than an oversight, and merging here instead would be worse: where a query really is
     /// single-series, a second series is a bug, and averaging it away would hide the bug rather
     /// than report it. The one time a label was left free the chart was blank for weeks with
-    /// every test green (ADR-082 増分 2).
+    /// every test green (ADR-082 Inc.2).
     async fn query_range_points(
         &self,
         query: String,
@@ -1004,7 +1004,7 @@ fn finite(v: f64) -> f64 {
 /// real series, permanently** — a single point draws no line. Measured 2026-09-03 on a two-poller
 /// pool: `[0] pool="default"` 1 point, `[1] pool="test1"` 241 points, all four host charts blank
 /// while collection was perfectly healthy. Folding the label away merges them, and since both
-/// describe the same host at the same instant the merge cannot change a value. (ADR-082 増分 2.)
+/// describe the same host at the same instant the merge cannot change a value. (ADR-082 Inc.2.)
 fn host_range_query(selector: &str, step_s: u64) -> String {
     format!(
         "avg without (pool) (avg_over_time({selector}[{}s]))",
@@ -1025,7 +1025,7 @@ fn host_range_query(selector: &str, step_s: u64) -> String {
 /// * **`sum`, not `avg`.** The one-point remnant a poller leaves under its boot-time `pool` grows by
 ///   nothing, so a sum returns the real series unchanged where an average would halve it for that
 ///   step. And the fold itself is not optional: [`VmStore::query_range_points`] reads `result[0]`,
-///   so an unfolded `pool` empties the chart exactly as it did for the gauges (ADR-082 増分 2).
+///   so an unfolded `pool` empties the chart exactly as it did for the gauges (ADR-082 Inc.2).
 fn host_counter_range_query(selector: &str, step_s: u64) -> String {
     format!(
         "sum without (pool) (increase({selector}[{}s]))",
@@ -1043,7 +1043,7 @@ fn host_counter_range_query(selector: &str, step_s: u64) -> String {
 /// caller knows; `role` cannot vary for a given instance; and `pool` *does* vary for one host —
 /// core can move a poller after it has booted — so [`host_range_query`] folds it away rather than
 /// matching it. This doc used to claim the two sets were identical. They never were, and the one
-/// unaccounted label emptied every host chart for a moved poller (ADR-082 増分 2).
+/// unaccounted label emptied every host chart for a moved poller (ADR-082 Inc.2).
 ///
 /// ⚠️ **The counters are written only when the sample carries one.** A poller too old to count sends
 /// none of the four fields and serde fills in zeros; writing those would draw a flat "no traffic"
@@ -1222,13 +1222,13 @@ impl PortDirection {
     }
 }
 
-/// How far back a port's Meraki traffic gauge is looked for (ADR-167 決定 7). A switch-port collect
+/// How far back a port's Meraki traffic gauge is looked for (ADR-167 decision 7). A switch-port collect
 /// runs every 300–600 s, so this holds the last reading across one missed collect — a line broken
 /// by one slow Dashboard answer would read as an outage. Widened to the counter window when that is
 /// longer, so both halves of an expression look back at least as far.
 const PORT_GAUGE_WINDOW_SECS: u64 = 1800;
 
-/// **The one place a port's bits per second is spelled** (ADR-167 決定 7): the SNMP octet counter's
+/// **The one place a port's bits per second is spelled** (ADR-167 decision 7): the SNMP octet counter's
 /// rate for a port that has one, and a Meraki switch port's stored rate for one that does not.
 ///
 /// `((rate(if_hc_in_octets{sel}[{w}s]) * 8) or (last_over_time(meraki_port_in_bps{sel}[{g}s]) * 1))`
@@ -1525,7 +1525,7 @@ fn node_interface_rate_query(dir: PortDirection, node: Uuid, w: u64) -> String {
 ///   incrementally: it adds each series in as it reads it instead of first building every
 ///   interface's series. ADR-167 shipped `sum(A or B)`, which gives the same numbers but puts a
 ///   binary operator under the `sum`, so every port's series was materialised on every call
-///   (ADR-167 決定 7 の補い — reasoned from how VictoriaMetrics evaluates, not measured).
+///   (ADR-167 decision 7 follow-up — reasoned from how VictoriaMetrics evaluates, not measured).
 /// * **The `or`s are what make it safe when a half is empty.** The sum of an empty vector is empty,
 ///   not zero, so on a deployment with no Meraki switch `sum(A) + sum(B)` alone would be empty
 ///   everywhere. With neither half the answer stays empty rather than 0, so a stretch with no data
@@ -1664,6 +1664,19 @@ fn series_rows_at_query(metric: &str, rows: &[(Uuid, i64)], within_secs: u64) ->
     Some(format!(
         "last_over_time({metric}{{node=~\"{nodes}\",ifindex=~\"{idx}\"}}[{w}s])"
     ))
+}
+
+/// [`parse_node_row_values`] keeping only the pairs in `rows`: the two matchers of
+/// [`series_rows_at_query`] are independent, so the store also answers for crossings nobody asked
+/// about (node A's row 7 because node B's row 7 was asked).
+fn parse_requested_rows(
+    json: &serde_json::Value,
+    rows: &[(Uuid, i64)],
+) -> std::collections::HashMap<(Uuid, i64), f64> {
+    let asked: std::collections::HashSet<(Uuid, i64)> = rows.iter().copied().collect();
+    let mut got = parse_node_row_values(json);
+    got.retain(|k, _| asked.contains(k));
+    got
 }
 
 /// Demux an instant-query result into `(node, row) → value`.
@@ -2013,16 +2026,11 @@ impl MetricStore for VmStore {
         let Some(query) = series_rows_at_query(metric, rows, within_secs) else {
             return std::collections::HashMap::new();
         };
-        let asked: std::collections::HashSet<(Uuid, i64)> = rows.iter().copied().collect();
         self.read_instant("series-rows-at", query)
             .await
             .map_or_else(
                 |_| std::collections::HashMap::new(),
-                |json| {
-                    let mut got = parse_node_row_values(&json);
-                    got.retain(|k, _| asked.contains(k));
-                    got
-                },
+                |json| parse_requested_rows(&json, rows),
             )
     }
 
@@ -2625,10 +2633,10 @@ mod tests {
     /// two series for one host. `host_metric_range` knows only the instance, so both come back,
     /// and `query_range_points` keeps `result[0]` — which is label order, so the startup remnant
     /// wins. Measured 2026-09-03: 1 point vs 241, and all four host charts blank while collection
-    /// was healthy (ADR-082 増分 2).
+    /// was healthy (ADR-082 Inc.2).
     ///
     /// Both folds are pinned here because either alone re-opens a different bug: drop the step
-    /// fold and the line aliases (増分 1), drop the pool fold and the line disappears.
+    /// fold and the line aliases (Inc.1), drop the pool fold and the line disappears.
     #[test]
     fn a_host_trend_query_folds_across_the_pool_its_selector_cannot_pin() {
         for sel in [
@@ -2800,7 +2808,7 @@ mod tests {
     }
 
     /// The pair selector narrows on both labels, once per value and in a stable order, and asks
-    /// nothing for no pairs (ADR-180 増分 4 決定 7).
+    /// nothing for no pairs (ADR-180 Inc.4 decision 7).
     #[test]
     fn the_series_rows_at_query_narrows_on_node_and_row() {
         let (a, b) = (Uuid::from_u128(2), Uuid::from_u128(1));
@@ -2810,6 +2818,25 @@ mod tests {
             format!("last_over_time(if_oper_status{{node=~\"{b}|{a}\",ifindex=~\"3|7\"}}[1800s])")
         );
         assert_eq!(series_rows_at_query("if_oper_status", &[], 1800), None);
+    }
+
+    /// The selector's crossings are read and dropped: asking for (A, 7) and (B, 3) also brings
+    /// back A's row 3 and B's row 7, and neither may reach the answer (ADR-180 Inc.4 decision 7).
+    #[test]
+    fn a_pair_nobody_asked_for_is_dropped_from_the_answer() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let series = |node: Uuid, ifindex: &str, v: &str| serde_json::json!({"metric": {"node": node.to_string(), "ifindex": ifindex}, "value": [0, v]});
+        let json = serde_json::json!({"data": {"result": [
+            series(a, "7", "1"),
+            series(a, "3", "2"),
+            series(b, "3", "1"),
+            series(b, "7", "2"),
+        ]}});
+        let got = parse_requested_rows(&json, &[(a, 7), (b, 3)]);
+        assert_eq!(
+            got,
+            std::collections::HashMap::from([((a, 7), 1.0), ((b, 3), 1.0)])
+        );
     }
 
     /// The derived evaluator asks the same question `latest` asks, so it must use the same window.
@@ -2977,7 +3004,7 @@ mod tests {
         assert!(fleet_throughput_query(PortDirection::In, 1200).contains("[1200s]"));
     }
 
-    /// ADR-167 決定 7 の補い: the fleet total keeps VictoriaMetrics' incremental aggregation, which
+    /// ADR-167 decision 7 follow-up: the fleet total keeps VictoriaMetrics' incremental aggregation, which
     /// applies only when a `sum`'s argument is a rollup over a selector. `sum(A or B)` — what shipped
     /// first — returned the same numbers and lost it, so the shape itself is what is pinned: every
     /// `sum(` opens straight onto `rate(` or `last_over_time(` — four of them, each half written

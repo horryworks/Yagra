@@ -49,17 +49,26 @@ import {
   project,
   zoomGeoView,
 } from './geoProjection';
-import { skyAt, sunAltitude, sunPosition, twilightPaths } from './geoDayNight';
+import {
+  SKIES,
+  type Sky,
+  TWILIGHT_LEVELS,
+  skyAt,
+  sunAltitude,
+  sunPosition,
+  twilightPaths,
+} from './geoDayNight';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import { nodesPageHref } from '../lib/entityHref';
 import './GeoMapPage.css';
 
 /** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
-const SKY_LEGEND = [
-  { sky: 'day', depth: 0 },
-  { sky: 'twilight', depth: 2 },
-  { sky: 'night', depth: 4 },
-] as const;
+const SKY_DEPTH: Record<Sky, number> = {
+  day: 0,
+  twilight: 2,
+  night: TWILIGHT_LEVELS.length,
+};
+const SKY_LEGEND = SKIES.map((sky) => ({ sky, depth: SKY_DEPTH[sky] }));
 
 export function GeoMapPage() {
   const { t } = useTranslation('topology');
@@ -311,7 +320,7 @@ export function GeoMapPage() {
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}
           {placed.length === 0 && <p className="geopage-empty muted">{t('geo.empty')}</p>}
-          {/* No wider than the world is at this height (ADR-188 増分 2), so a wide monitor does
+          {/* No wider than the world is at this height (ADR-188 Inc.2), so a wide monitor does
               not get a band of grey either side of the map. The aspect comes from the projection,
               not from the stylesheet — see `.geopage-frame`. */}
           <div

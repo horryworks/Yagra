@@ -832,8 +832,8 @@
       "ok": "Last sync {{at}}",
       "requested": "Sync requested — starting shortly",
       "running": "Syncing…",
-      "missing_one": "{{count}} folder no longer in NetBox",
-      "missing_other": "{{count}} folders no longer in NetBox",
+      "missing_one": "{{count}} folder no longer synced from NetBox",
+      "missing_other": "{{count}} folders no longer synced from NetBox",
       "failed": "Last sync failed",
       "siteId": {
         "none": "No Site ID on any of the {{sites}} sites — check the Site ID field",

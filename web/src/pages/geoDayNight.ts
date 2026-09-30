@@ -56,7 +56,8 @@ export function sunAltitude(sun: SubsolarPoint, lat: number, lon: number): numbe
 }
 
 /** What a site's sky is doing, for its tooltip: the same three words as the legend. */
-export type Sky = 'day' | 'twilight' | 'night';
+export const SKIES = ['day', 'twilight', 'night'] as const;
+export type Sky = (typeof SKIES)[number];
 
 export function skyAt(altitude: number): Sky {
   if (altitude > -TWILIGHT_LEVELS[0]) return 'day';

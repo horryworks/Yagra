@@ -75,11 +75,11 @@ pub(crate) struct CurrentNeighbors {
     /// For each distinct management address the neighbours advertise, which monitored node it
     /// belongs to. Matched on the address — an inventory address or any address one of a node's
     /// interfaces carries. Only when several nodes claim it is the name the neighbour sent used,
-    /// and only to choose among those nodes (ADR-180 増分 4); a name alone never matches.
+    /// and only to choose among those nodes (ADR-180 Inc.4); a name alone never matches.
     peers: Vec<NeighborPeer>,
     /// For each distinct MAC-address chassis id on a row that advertises **no** usable management
     /// address, the Meraki device a Meraki organization lists under that MAC, if any (ADR-180
-    /// 増分 3). The Dashboard reports no management address for an MR or an MX, so this is how
+    /// Inc.3). The Dashboard reports no management address for an MR or an MX, so this is how
     /// those rows say whether the device is monitored. Only MACs a Meraki device listing states are
     /// matched; any other chassis id is absent here, as is a row that has an address — that one is
     /// answered in `peers`.
@@ -100,7 +100,7 @@ pub(crate) enum NeighborPeerState {
     /// the neighbour sent (`matched_by_name`) — and the caller may see it.
     Node,
     /// Exactly one monitored node claims the address, and it is outside the caller's folders.
-    /// Never the answer for a node picked by name (ADR-180 増分 4 決定 6).
+    /// Never the answer for a node picked by name (ADR-180 Inc.4 decision 6).
     OutsideScope,
     /// More than one node claims the address (a shared virtual address, or a duplicate) and the
     /// name the neighbour sent does not pick out exactly one of them the caller may see — a name
@@ -124,16 +124,16 @@ pub(crate) struct NeighborPeer {
     /// Whether the address is on the caller's Discovery ▸ Unregistered list.
     discovery_listed: bool,
     /// That list's row for the address, when `discovery_listed` — the id the endpoint probe and
-    /// import act on (ADR-179 増分 3).
+    /// import act on (ADR-179 Inc.3).
     discovery_id: Option<Uuid>,
     /// Who adds this device instead of a hand registration: a wireless controller or a Meraki
     /// organization that already lists it. Present only when `state` is `unregistered`.
     managed_by: Option<NeighborManagedBy>,
-    /// Why nothing adds this device from here (ADR-179 増分 9): present only when `state` is
+    /// Why nothing adds this device from here (ADR-179 Inc.9): present only when `state` is
     /// `unregistered`, it is not on the caller's Unregistered list, and nothing manages it.
     setup_blocked: Option<SetupBlocked>,
     /// Several nodes claim the address and the node answered was chosen among them by the name the
-    /// neighbour sent (ADR-180 増分 4). The others are in `also_claimed_by`.
+    /// neighbour sent (ADR-180 Inc.4). The others are in `also_claimed_by`.
     matched_by_name: bool,
     /// The other nodes that claim the address, when more than one does — the ones the caller may
     /// see, by name, at most ten. Empty when one node or none claims it. A duplicate address stays
@@ -148,7 +148,7 @@ pub(crate) struct NeighborPeer {
 /// there are. A private range reused at every site would otherwise name one node per site.
 const ALSO_CLAIMED_MAX: usize = 10;
 
-/// Another node that claims a neighbour's management address (ADR-180 増分 4).
+/// Another node that claims a neighbour's management address (ADR-180 Inc.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlsoClaimedBy {
     node_id: Uuid,
@@ -158,21 +158,22 @@ pub(crate) struct AlsoClaimedBy {
 }
 
 /// Whether a claimant's ports carrying the address have link, from `if_oper_status` (ADR-180
-/// 増分 4 決定 4). A claimant that is down is still counted: a standby line configured with the
+/// Inc.4 decision 4). A claimant that is down is still counted: a standby line configured with the
 /// same address is part of the duplicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ClaimPortState {
     /// At least one port carrying the address is up.
     Up,
-    /// Every port carrying the address that has a reading is down.
+    /// No port carrying the address is up, and at least one reads down (2) or lowerLayerDown (7).
+    /// A port reading anything else (testing, dormant, notPresent) is passed over.
     LinkDown,
-    /// No reading: the node claims it only as its inventory address, which names no port, or no
-    /// status was collected for the port lately.
+    /// Neither: the node claims it only as its inventory address, which names no port; no status
+    /// was collected for its ports lately; or every reading is one of the others above.
     Unknown,
 }
 
-/// Why an unregistered neighbour address offers no way to add it (ADR-179 増分 9). The rules are
+/// Why an unregistered neighbour address offers no way to add it (ADR-179 Inc.9). The rules are
 /// the Unregistered list's own (`arp::identifies_a_device`, `arp::only_an_end_station`), so what
 /// this says cannot drift from what the list does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -202,7 +203,7 @@ fn setup_blocked(ip: IpAddr, only_end_stations: bool, listed_elsewhere: bool) ->
     }
 }
 
-/// One neighbour chassis MAC and the Meraki device listed under it (ADR-180 増分 3).
+/// One neighbour chassis MAC and the Meraki device listed under it (ADR-180 Inc.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct NeighborChassisPeer {
     /// The chassis id exactly as the neighbour row carries it (`aa:bb:cc:dd:ee:ff`).
@@ -218,12 +219,12 @@ pub(crate) struct NeighborChassisPeer {
     /// always `kind: meraki`.
     managed_by: Option<NeighborManagedBy>,
     /// What the device is, from the kind of product the organization lists it as — `switch` for
-    /// an MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 増分 4 決定 2). For a row whose own
+    /// an MS, `wlan_ap` for an MR, `router` for an MX (ADR-181 Inc.4 decision 2). For a row whose own
     /// capabilities are blank; empty for a product with no such role.
     capabilities: Vec<NeighborCapability>,
 }
 
-/// Who manages the device at an unregistered neighbour address (ADR-179 増分 3). Registering such
+/// Who manages the device at an unregistered neighbour address (ADR-179 Inc.3). Registering such
 /// a device by hand would leave a second node for it once its controller or organization imports
 /// it, so the Neighbors tab sends the operator there instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -379,12 +380,12 @@ async fn get_neighbors(
 /// when what is true is that nobody has looked.
 ///
 /// `scope` decides what `peers` may name: a claimant outside it is reported as `outside_scope`
-/// with no id and no name (ADR-180 決定 3, the disclosure ADR-139 already accepted).
+/// with no id and no name (ADR-180 decision 3, the disclosure ADR-139 already accepted).
 ///
 /// `store` is asked once, and only when some address has several claimants, for the link state
-/// of the ports carrying it on the claimants the answer lists (ADR-180 増分 4 決定 7). It is asked
+/// of the ports carrying it on the claimants the answer lists (ADR-180 Inc.4 decision 7). It is asked
 /// alongside the inventory reads and given [`LINK_STATE_BUDGET`]: a store that does not answer
-/// leaves every such port `unknown` rather than failing the tab — or holding it up (決定 8).
+/// leaves every such port `unknown` rather than failing the tab — or holding it up (decision 8).
 pub(crate) async fn current_neighbors(
     admin: &super::AdminState,
     store: &dyn MetricStore,
@@ -422,7 +423,7 @@ pub(crate) async fn current_neighbors(
     let unaddressed_list: Vec<String> = unaddressed.iter().cloned().collect();
     let ports = ports_to_read(&advertised, &claims, &names);
     // Everything below depends on the addresses or the claims and on nothing else, so it is asked
-    // at once — the link-state read in particular must not add its wait to the tab's (決定 8).
+    // at once — the link-state read in particular must not add its wait to the tab's (decision 8).
     let (listed, aps, meraki, by_mac, oper) = tokio::join!(
         admin
             .discovered
@@ -464,7 +465,7 @@ pub(crate) async fn current_neighbors(
         .iter()
         .filter_map(|ip| managed_by(aps.get(ip), meraki.get(ip)).map(|m| (*ip, m)))
         .collect();
-    // Rows on the list the caller cannot see (ADR-179 増分 9): asked only for a scoped caller, and
+    // Rows on the list the caller cannot see (ADR-179 Inc.9): asked only for a scoped caller, and
     // only about addresses nothing else explains — an unrestricted caller already sees every row.
     // An address a node claims (visible or not) is never Unregistered, so no blocker is read for it.
     let claimed: HashSet<IpAddr> = claims.iter().map(|c| c.address).collect();
@@ -554,7 +555,7 @@ fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
         .collect()
 }
 
-/// The name each row advertising an address sent, per address (ADR-180 増分 4 決定 2): the LLDP
+/// The name each row advertising an address sent, per address (ADR-180 Inc.4 decision 2): the LLDP
 /// system name, else the chassis id when it is text — CDP's device id serves as both. An id the
 /// poller labelled as a MAC, an address or raw octets is not a name.
 fn advertised_names(set: &NeighborSet) -> BTreeMap<IpAddr, Vec<String>> {
@@ -588,7 +589,7 @@ fn advertised_name(n: &Neighbor) -> Option<&str> {
         // A record older than the kind field says nothing about its chassis. It is a name only if
         // it does not read as an address or a MAC: a node added by address and never renamed is
         // *named* that address, so an address-shaped id would match it though no name was sent
-        // (ADR-180 増分 4 決定 9).
+        // (ADR-180 Inc.4 decision 9).
         None => {
             let id = n.remote_chassis.trim();
             let shaped = id.parse::<IpAddr>().is_ok() || yagra_common::mac::parse_mac(id).is_some();
@@ -603,7 +604,7 @@ fn advertised_name(n: &Neighbor) -> Option<&str> {
     }
 }
 
-/// A name as it is compared (ADR-180 増分 4 決定 2): the shared name key, less a trailing `(…)` —
+/// A name as it is compared (ADR-180 Inc.4 decision 2): the shared name key, less a trailing `(…)` —
 /// CDP appends a serial as `name(FOC1234X0YZ)`.
 fn peer_name_key(raw: &str) -> Option<String> {
     let key = crate::duplicates::name_key(raw)?;
@@ -626,7 +627,7 @@ fn host_label(key: &str) -> Option<&str> {
     key.split('.').next().filter(|h| !h.is_empty())
 }
 
-/// Which of `candidates` the names the neighbour sent pick out (ADR-180 増分 4 決定 2), or `None`.
+/// Which of `candidates` the names the neighbour sent pick out (ADR-180 Inc.4 decision 2), or `None`.
 ///
 /// Each name is compared whole first and by its host label second, and counts only when exactly one
 /// candidate matches. The names must agree: two rows naming two different candidates pick neither.
@@ -668,7 +669,7 @@ fn claimant_named(names: &[String], candidates: &[(Uuid, &str)]) -> Option<Uuid>
     yagra_topology::derive::sole_claimant(&picked)
 }
 
-/// A claimant's link state over the ports carrying the address (ADR-180 増分 4 決定 4):
+/// A claimant's link state over the ports carrying the address (ADR-180 Inc.4 decision 4):
 /// `if_oper_status` 1 is up; 2 (down) and 7 (lowerLayerDown) have no link; anything else, or no
 /// reading at all, says nothing.
 fn claim_port_state(
@@ -712,12 +713,12 @@ fn claims_by_address(claims: &[AddressClaim]) -> ClaimsByAddress<'_> {
 /// One address's answer before any link state is read: which claimant it names, and which of the
 /// others it lists. The only place those two rules are written — both the store query
 /// ([`ports_to_read`]) and the answer ([`classify_peers`]) ask it, so the ports read are exactly
-/// the ports shown (ADR-180 増分 4 決定 7).
+/// the ports shown (ADR-180 Inc.4 decision 7).
 struct Pick<'m, 'c> {
     /// How many nodes claim the address.
     claimants: usize,
     /// The claimant answered with: the sole one (seen or not), or the one a name picked — which
-    /// is never a node the caller may not see (決定 6).
+    /// is never a node the caller may not see (decision 6).
     chosen: Option<&'c AddressClaim>,
     matched_by_name: bool,
     /// Every claimant but `chosen`, when more than one claims the address.
@@ -746,7 +747,7 @@ fn pick_peer<'m, 'c>(
                 .flatten()
                 .filter_map(|(id, cs)| cs.first().map(|c| (*id, c.name.as_str())))
                 .collect();
-            // 決定 6: a name that picks a node the caller may not see picks nothing. Answering
+            // decision 6: a name that picks a node the caller may not see picks nothing. Answering
             // `outside_scope` "by name" would say the hidden node's name is the one on the row.
             match claimant_named(names, &candidates).and_then(first) {
                 Some(c) if c.visible => (Some(c), true),
@@ -784,7 +785,7 @@ fn pick_peer<'m, 'c>(
 
 /// The `(node, ifindex)` pairs whose link state the answer shows: the ports carrying each address
 /// on the claimants it lists. Never a hidden claimant, never the one answered with, never a port
-/// that does not carry the address (決定 7).
+/// that does not carry the address (decision 7).
 fn ports_to_read(
     advertised: &BTreeMap<String, IpAddr>,
     claims: &[AddressClaim],
@@ -808,7 +809,7 @@ fn ports_to_read(
     out.into_iter().collect()
 }
 
-/// How long the tab waits for link state before answering without it (決定 8). The store's own
+/// How long the tab waits for link state before answering without it (decision 8). The store's own
 /// client allows ten seconds, which is a fleet-ingest budget, not a tab's.
 const LINK_STATE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -818,18 +819,27 @@ async fn link_states(store: &dyn MetricStore, ports: &[(Uuid, i64)]) -> HashMap<
     if ports.is_empty() {
         return HashMap::new();
     }
-    tokio::time::timeout(
-        LINK_STATE_BUDGET,
+    within_budget(
         store.series_rows_at("if_oper_status", ports, crate::store::INSTANT_LOOKBACK_SECS),
+        ports.len(),
     )
     .await
-    .unwrap_or_else(|_| {
-        tracing::debug!(
-            ports = ports.len(),
-            "link state for contested neighbour addresses timed out; answered as unknown"
-        );
-        HashMap::new()
-    })
+}
+
+/// `read`, or nothing once [`LINK_STATE_BUDGET`] has passed.
+async fn within_budget(
+    read: impl std::future::Future<Output = HashMap<(Uuid, i64), f64>>,
+    ports: usize,
+) -> HashMap<(Uuid, i64), f64> {
+    tokio::time::timeout(LINK_STATE_BUDGET, read)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::debug!(
+                ports,
+                "link state for contested neighbour addresses timed out; answered as unknown"
+            );
+            HashMap::new()
+        })
 }
 
 /// Everything besides the claims that decides a peer, read once per request.
@@ -841,7 +851,7 @@ struct Evidence<'a> {
     oper: &'a HashMap<(Uuid, i64), f64>,
 }
 
-/// Each advertised address against the nodes that claim it (ADR-180 決定 2/3, 増分 4).
+/// Each advertised address against the nodes that claim it (ADR-180 decision 2/3, Inc.4).
 ///
 /// Pure, so the rules a mistake here would break — one claimant or none, a name choosing only among
 /// claimants, the others staying listed, and a hidden claimant's name never leaving — are tested
@@ -904,7 +914,7 @@ fn classify_peers(
 }
 
 /// Every distinct MAC-address chassis id on a row with no usable management address (ADR-180
-/// 増分 3 決定 2): a row that has one is decided by its address alone, so the two rules never both
+/// Inc.3 decision 2): a row that has one is decided by its address alone, so the two rules never both
 /// answer for one row.
 fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
     set.neighbors
@@ -961,8 +971,8 @@ fn classify_chassis(
         .collect()
 }
 
-/// The role a Meraki product plays, as a neighbour row's capabilities name it (ADR-181 増分 4
-/// 決定 2). A product with no such role — a camera, a sensor — has none, never a guess.
+/// The role a Meraki product plays, as a neighbour row's capabilities name it (ADR-181 Inc.4
+/// decision 2). A product with no such role — a camera, a sensor — has none, never a guess.
 fn product_capabilities(product_type: &str) -> Vec<NeighborCapability> {
     match product_type.trim().to_ascii_lowercase().as_str() {
         "switch" => vec![NeighborCapability::Switch],
@@ -973,7 +983,7 @@ fn product_capabilities(product_type: &str) -> Vec<NeighborCapability> {
 }
 
 /// The registered maker of every chassis or port id the device labelled a MAC address (ADR-180
-/// 決定 4/5). An id rendered any other way is not looked up, however much it looks like a MAC.
+/// decision 4/5). An id rendered any other way is not looked up, however much it looks like a MAC.
 fn mac_vendors(set: &NeighborSet) -> Vec<MacVendor> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for n in &set.neighbors {
@@ -1410,7 +1420,7 @@ mod tests {
         assert!(!neighbors::interval_in_bounds(cfg.max_interval_secs + 1));
     }
 
-    /// ADR-179 増分 9: a neighbour on the list only through a node outside the caller's folders
+    /// ADR-179 Inc.9: a neighbour on the list only through a node outside the caller's folders
     /// says so to that caller, and is simply listed for one who sees everything; one on no list
     /// says it is not listed yet.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -1543,7 +1553,7 @@ mod peer_tests {
     }
 
     /// [`classify_peers`] with no names sent and no link readings — every test written before
-    /// ADR-180 増分 4.
+    /// ADR-180 Inc.4.
     fn classify(
         advertised: &BTreeMap<String, IpAddr>,
         claims: &[AddressClaim],
@@ -1620,7 +1630,7 @@ mod peer_tests {
         }
     }
 
-    /// ADR-179 増分 3: a controller the caller can see wins, then a Meraki organization, then a
+    /// ADR-179 Inc.3: a controller the caller can see wins, then a Meraki organization, then a
     /// controller it cannot see — which names nothing.
     #[test]
     fn a_managed_address_names_who_adds_it() {
@@ -1682,7 +1692,7 @@ mod peer_tests {
 
     /// The rule the whole scope design rests on: a claimant the caller may not see never lends
     /// the answer its id or its name. An ambiguous address answers no node, and since ADR-180
-    /// 増分 4 lists the claimants the caller may see — the hidden one is only counted.
+    /// Inc.4 lists the claimants the caller may see — the hidden one is only counted.
     #[test]
     fn a_hidden_claimant_gives_away_no_id_and_no_name() {
         let claims = [
@@ -1783,7 +1793,7 @@ mod peer_tests {
         peers.remove(0)
     }
 
-    /// ADR-180 増分 4, the case that prompted it: a core switch and two WAN routers all carry the
+    /// ADR-180 Inc.4, the case that prompted it: a core switch and two WAN routers all carry the
     /// switch's advertised address. The name picks the switch; the routers stay listed, one with
     /// link and one without.
     #[test]
@@ -1885,7 +1895,7 @@ mod peer_tests {
         assert_eq!(p.node_id, Some(a));
     }
 
-    /// A name that picks a node the caller may not see picks nothing (決定 6): the answer is the
+    /// A name that picks a node the caller may not see picks nothing (decision 6): the answer is the
     /// same one a name matching nobody gets, so it says nothing about which hidden node bears the
     /// name on the row. The visible claimant is still listed and the hidden one still counted.
     #[test]
@@ -1970,7 +1980,7 @@ mod peer_tests {
 
     /// The list stops at ten; the total counts every other claimant. The store is asked only about
     /// the listed ones' ports carrying the address — not the node answered with, not the eleventh
-    /// and beyond, not an address with one claimant (決定 7).
+    /// and beyond, not an address with one claimant (decision 7).
     #[test]
     fn the_list_is_capped_and_the_total_is_not() {
         let claims: Vec<AddressClaim> = (1..=13u32)
@@ -2015,7 +2025,7 @@ mod peer_tests {
     }
 
     /// A record from before the kind field: a text id is still a name, an address- or MAC-shaped
-    /// one is not — a node added by address is *named* that address (決定 9).
+    /// one is not — a node added by address is *named* that address (decision 9).
     #[test]
     fn an_unlabelled_chassis_is_a_name_only_when_it_does_not_look_like_an_address() {
         assert_eq!(advertised_name(&neighbor("sw-01", None)), Some("sw-01"));
@@ -2044,6 +2054,31 @@ mod peer_tests {
         assert_eq!(p.state, NeighborPeerState::Ambiguous);
     }
 
+    /// A store that never answers costs the tab the budget and no more, and leaves every port
+    /// unknown (decision 8).
+    #[tokio::test(start_paused = true)]
+    async fn a_link_state_read_that_never_answers_is_given_up_after_the_budget() {
+        let started = tokio::time::Instant::now();
+        let got = within_budget(std::future::pending(), 2).await;
+        assert!(got.is_empty());
+        assert_eq!(started.elapsed(), LINK_STATE_BUDGET);
+    }
+
+    /// Within the budget, the answer is the store's.
+    #[tokio::test(start_paused = true)]
+    async fn a_link_state_read_inside_the_budget_is_kept() {
+        let port = (Uuid::from_u128(1), 4);
+        let got = within_budget(
+            async move {
+                tokio::time::sleep(LINK_STATE_BUDGET / 2).await;
+                HashMap::from([(port, 1.0)])
+            },
+            1,
+        )
+        .await;
+        assert_eq!(got, HashMap::from([(port, 1.0)]));
+    }
+
     fn neighbor(chassis: &str, kind: Option<NeighborIdKind>) -> Neighbor {
         let mut n = Neighbor::new(NeighborProto::Lldp, "Gi0/1", chassis, "Gi0/2");
         n.remote_chassis_kind = kind;
@@ -2068,7 +2103,7 @@ mod peer_tests {
         assert!(found[0].vendor.starts_with("Cisco"), "{}", found[0].vendor);
     }
 
-    /// ADR-179 増分 9: an unregistered address nothing adds says why, in the list's own order; one
+    /// ADR-179 Inc.9: an unregistered address nothing adds says why, in the list's own order; one
     /// that is listed, managed or monitored says nothing.
     #[test]
     fn an_address_nothing_adds_says_why_in_the_lists_own_order() {
@@ -2155,7 +2190,7 @@ mod peer_tests {
         );
     }
 
-    /// ADR-180 増分 3 決定 2: only a MAC chassis on a row with no usable address is matched by MAC.
+    /// ADR-180 Inc.3 decision 2: only a MAC chassis on a row with no usable address is matched by MAC.
     #[test]
     fn only_a_mac_chassis_with_no_usable_address_is_matched_by_mac() {
         let bare = neighbor("0c:8d:db:00:00:01", Some(NeighborIdKind::Mac));
@@ -2214,7 +2249,7 @@ mod peer_tests {
         assert_eq!(got[0].node_id, Some(node));
         assert_eq!(got[0].node_name.as_deref(), Some("mx-01"));
         assert_eq!(got[0].managed_by, None);
-        // 増分 4 決定 2: what each device is, from the product the organization lists it as.
+        // Inc.4 decision 2: what each device is, from the product the organization lists it as.
         assert_eq!(got[0].capabilities, [NeighborCapability::Router]);
         assert_eq!(got[1].capabilities, [NeighborCapability::WlanAp]);
         assert_eq!(got[1].state, NeighborPeerState::Unregistered);

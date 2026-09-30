@@ -101,6 +101,8 @@ describe('darkColumns', () => {
 });
 
 describe('darkPath / twilightPaths', () => {
+  // Three dates of four full-resolution outlines each run 1.5-3.3 s alone, and past Vitest's 5 s
+  // default when the suite's other workers are busy; the budget is for that, not for a hang.
   it('draws four closed paths inside the map, with no NaN', () => {
     for (const date of [
       new Date(Date.UTC(2026, 8, 30, 12)),
@@ -121,7 +123,7 @@ describe('darkPath / twilightPaths', () => {
         }
       }
     }
-  });
+  }, 30_000);
 
   it('shades more of the world for a shallower level', () => {
     // The four steps stack: each level's region contains the next one's, so the sunset path must

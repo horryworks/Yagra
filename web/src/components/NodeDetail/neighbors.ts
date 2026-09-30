@@ -46,7 +46,7 @@ function identity(n: Neighbor): string {
  *
  *  Mirrors the backend's content key, which is why `remote_chassis_kind` / `remote_port_kind` are
  *  **not** here: they say how an id was rendered, not what it is, and the key leaves them out so the
- *  first walk after an upgrade is not a change (ADR-180 決定 4). */
+ *  first walk after an upgrade is not a change (ADR-180 decision 4). */
 function payload(n: Neighbor): string {
   return JSON.stringify([
     n.local_ifindex ?? null,
@@ -211,7 +211,7 @@ export function neighborCellText(list: readonly Neighbor[] | undefined): Neighbo
 export interface NeighborLookups {
   peers: ReadonlyMap<string, NeighborPeer>;
   vendors: ReadonlyMap<string, string>;
-  /** By chassis MAC, for rows with no management address (ADR-180 増分 3). */
+  /** By chassis MAC, for rows with no management address (ADR-180 Inc.3). */
   chassis: ReadonlyMap<string, NeighborChassisPeer>;
 }
 
@@ -247,7 +247,7 @@ function judgedByAddress(n: Neighbor, lookups: NeighborLookups): boolean {
 }
 
 /** The Meraki device a row with no usable management address is, found by its chassis MAC
- *  (ADR-180 増分 3), or `null`. A row the server judged by its address is never matched this
+ *  (ADR-180 Inc.3), or `null`. A row the server judged by its address is never matched this
  *  way — its address decides. */
 export function chassisPeerOf(n: Neighbor, lookups: NeighborLookups): NeighborChassisPeer | null {
   if (judgedByAddress(n, lookups) || n.remote_chassis_kind !== 'mac') return null;
@@ -255,7 +255,7 @@ export function chassisPeerOf(n: Neighbor, lookups: NeighborLookups): NeighborCh
 }
 
 /** The roles to show for a row: its own, or — when it advertised none — what the Meraki device
- *  listed under its chassis MAC is (ADR-181 増分 4 決定 2). `fromListing` says the second, so the
+ *  listed under its chassis MAC is (ADR-181 Inc.4 decision 2). `fromListing` says the second, so the
  *  cell can say where the value came from rather than pass it off as advertised. */
 export function neighborCapabilities(
   n: Neighbor,
@@ -290,7 +290,7 @@ export function peerOf(n: Neighbor, lookups: NeighborLookups): NeighborPeer | nu
     discovery_listed: false,
     discovery_id: null,
     managed_by: c.managed_by ?? null,
-    // A MAC match is one organization's listing, never several claimants (ADR-180 増分 3).
+    // A MAC match is one organization's listing, never several claimants (ADR-180 Inc.3).
     matched_by_name: false,
     also_claimed_by: [],
     also_claimed_total: 0,
@@ -385,7 +385,7 @@ export function neighborDetails(n: Neighbor, lookups: NeighborLookups): Neighbor
     .map(([labelKey, value, mono]) => ({ labelKey, value: value as string, mono }));
 }
 
-/** The other nodes that claim a peer's address (ADR-180 増分 4): the ones the caller may see, and
+/** The other nodes that claim a peer's address (ADR-180 Inc.4): the ones the caller may see, and
  *  how many more there are — outside the caller's folders, or past the ten the server names. `null`
  *  when one node or none claims it, or the core predates the field. */
 export interface AlsoClaimed {
@@ -398,7 +398,7 @@ export interface AlsoClaimed {
 }
 
 export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
-  // Absent on a core older than 増分 4: read as "nothing known", like the lists above.
+  // Absent on a core older than Inc.4: read as "nothing known", like the lists above.
   const total = peer?.also_claimed_total ?? 0;
   if (!peer || total <= 0) return null;
   const listed = peer.also_claimed_by ?? [];
@@ -410,10 +410,11 @@ export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
   };
 }
 
-/** Whether the badge explains a pick made by name among several claimants (ADR-180 増分 4) — only
- *  a pick of a node, visible or not. The other states read the same with or without it. */
+/** Whether the badge explains a pick made by name among several claimants (ADR-180 Inc.4) — only
+ *  a pick of a node the caller can see. A name that picks a hidden node picks nothing (decision 6), so
+ *  the server never sends it with another state; the check is here so a regression explains nothing. */
 export function pickedByName(peer: NeighborPeer | null): boolean {
-  return !!peer?.matched_by_name && (peer.state === 'node' || peer.state === 'outside_scope');
+  return !!peer?.matched_by_name && peer.state === 'node';
 }
 
 /** Where the peer's inventory entry is, when exactly one visible node owns its address. */
@@ -421,7 +422,7 @@ export function peerNodePath(peer: NeighborPeer | null): string | null {
   return peer?.state === 'node' && peer.node_id ? nodeHref(peer.node_id) : null;
 }
 
-// ───────────────────────────────── adding an unmonitored neighbour from here (ADR-179 増分 3)
+// ───────────────────────────────── adding an unmonitored neighbour from here (ADR-179 Inc.3)
 
 /** What the "Monitoring setup" panel of one row offers — or `null` for a row it is not drawn on.
  *
@@ -479,7 +480,7 @@ export function setupMode(n: Neighbor, lookups: NeighborLookups): NeighborSetupM
     : { kind: 'device', discoveryId: id };
 }
 
-/** Why a "Not monitored" row offers no setup (ADR-179 増分 9): the server's reason, or that only a
+/** Why a "Not monitored" row offers no setup (ADR-179 Inc.9): the server's reason, or that only a
  *  controller outside the caller's folders reports the access point. Each is a key under
  *  `neighbors.setup.blocked.`.
  *
@@ -516,8 +517,8 @@ export function setupName(n: Neighbor): string | null {
 }
 
 /**
- * Whether to read the profile and credential lists the setup panel picks from (ADR-179 増分 7
- * 決定 3). They are read once, the first time a row is opened or a setup panel is drawn. The drawn
+ * Whether to read the profile and credential lists the setup panel picks from (ADR-179 Inc.7
+ * decision 3). They are read once, the first time a row is opened or a setup panel is drawn. The drawn
  * panel has to count on its own: on a phone it opens inside a card, from its "Set up monitoring"
  * button or from "Show details", and no table row is ever opened — keying this on the open row
  * alone left the panel with no credentials to try.

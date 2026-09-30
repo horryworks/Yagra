@@ -195,19 +195,21 @@ pub(crate) struct NetboxServerView {
     last_sync_at: Option<String>,
     last_sync_ok: Option<bool>,
     last_sync_error: Option<String>,
-    /// Folders this server owns that NetBox no longer lists. **Never auto-deleted** (ADR-100
-    /// decision 5) — surfaced so the operator can decide.
+    /// Folders this server owns that the last successful run no longer synced: NetBox no longer
+    /// lists the object, or lists the site as anything but Active (ADR-100 decision 11). **Never
+    /// auto-deleted** (decision 5) — surfaced so the operator can decide.
     missing_folders: usize,
-    /// A "Sync now" not finished yet, or a run in flight; `null` when neither (ADR-172 決定 1).
+    /// A "Sync now" not finished yet, or a run in flight; `null` when neither (ADR-172 decision 1).
     sync: Option<NetboxSyncView>,
-    /// Sites the last successful run saw, or `null` before one has run.
+    /// Active sites the last successful run wrote as folders, or `null` before one has run. A site
+    /// in any other status is not counted (ADR-100 decision 11).
     last_sync_sites: Option<i32>,
     /// Of those, how many had no usable Site ID. `0` when no Site ID field is configured —
     /// nothing was asked for, so nothing is missing.
     last_sync_sites_without_site_id: Option<i32>,
 }
 
-/// "Sync now" and the run it starts, as the row holds them (ADR-172 決定 1).
+/// "Sync now" and the run it starts, as the row holds them (ADR-172 decision 1).
 #[derive(Debug, Default, Serialize, utoipa::ToSchema)]
 pub(crate) struct NetboxSyncView {
     /// When "Sync now" asked; `null` when nothing is asked for. A second press keeps the first time.
@@ -447,7 +449,7 @@ async fn update_netbox_server(
         .map(str::trim)
         .filter(|t| !t.is_empty());
 
-    // 🚨 **A new address needs the token typed again** (ADR-178 決定 3). Otherwise pointing the
+    // 🚨 **A new address needs the token typed again** (ADR-178 decision 3). Otherwise pointing the
     // server at a host the caller controls delivers the sealed token there on the next sync — and
     // `ManageConfig` is an Operator's, while no Operator can read a stored token. Compared on the
     // origin only, so moving a NetBox to another path on the same host still round-trips.
@@ -754,7 +756,7 @@ async fn sync_netbox_server(
             "this NetBox server is paused; resume it before syncing",
         ));
     }
-    // Written rather than run (ADR-172 決定 1). The sync used to run inside this request, so a tab
+    // Written rather than run (ADR-172 decision 1). The sync used to run inside this request, so a tab
     // closed or reloaded mid-sync dropped the handler: some folders written, the prefix sweep never
     // run, and neither success nor failure recorded. The leader's loop runs it now and records how
     // it ended on the row either way — so any core may take the request.
@@ -878,7 +880,7 @@ mod tests {
         );
     }
 
-    /// ADR-172 決定 1: "Sync now" writes a request and answers 202; it does not run the sync.
+    /// ADR-172 decision 1: "Sync now" writes a request and answers 202; it does not run the sync.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_request_is_accepted_and_recorded_on_the_row(pool: sqlx::PgPool) {
@@ -957,7 +959,7 @@ mod tests {
         assert_eq!(missing.0, StatusCode::NOT_FOUND);
     }
 
-    /// ADR-178 決定 3: the stored token is never sent to a new host without being typed again, and
+    /// ADR-178 decision 3: the stored token is never sent to a new host without being typed again, and
     /// the edits that do not change the host still round-trip without it.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -1038,7 +1040,7 @@ mod tests {
             ("http://10.0.0.14:8000".to_owned(), first_cred)
         );
 
-        // Same host, a path added (ADR-178 決定 4): no token needed.
+        // Same host, a path added (ADR-178 decision 4): no token needed.
         let moved = send(
             &st,
             "PUT",
@@ -1107,7 +1109,7 @@ mod tests {
         let store = crate::secrets::CredentialStore::new(pool.clone(), crate::pgtest::kek());
         let (kind, bytes) = store.open(cred_id).await.expect("open").expect("row");
         assert_eq!(kind, crate::secrets::KIND_NETBOX_TOKEN);
-        // ⚠️ The raw document, not only the parsed token: since ADR-178 決定 6 `parse` trims too, so
+        // ⚠️ The raw document, not only the parsed token: since ADR-178 decision 6 `parse` trims too, so
         // on its own it would pass whether or not this endpoint did.
         let raw: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(

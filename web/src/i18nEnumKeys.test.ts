@@ -100,6 +100,7 @@ import {
   TTE_UNITS,
 } from './troubleshoot/report/format';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
+import { SKIES } from './pages/geoDayNight';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
@@ -584,7 +585,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // about to land — and EN/JA parity cannot catch it, because a key missing from both is "in
     // parity". `noRanges` is in the list but not in DESTINATION_KINDS: it is the deployment-wide
     // case (no folder has a range at all), not one of the three per-address answers.
-    // ADR-179 増分 8: the sentence over Monitor saying where an endpoint import lands.
+    // ADR-179 Inc.8: the sentence over Monitor saying where an endpoint import lands.
     expectKeys(
       'endpoint import destination',
       { en: enMonitoring, ja: jaMonitoring },
@@ -618,7 +619,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   });
 
   it('every ＋-menu label resolves (nodes:tree.*/addMenu.*)', () => {
-    // The inventory ＋ picks its two labels at runtime from the tree selection, and `t()` is not
+    // The inventory + picks its two labels at runtime from the tree selection, and `t()` is not
     // typed against a key union — so a typo or a half-added key would render raw text on the one
     // control that creates nodes. EN/JA parity cannot catch it: a key missing from both is "in
     // parity".
@@ -941,13 +942,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   });
 
   it('every Meraki collect listing has a label (system:meraki.listing.*)', () => {
-    // A tier's failure line names which of its reads failed (ADR-164 決定 25) through
+    // A tier's failure line names which of its reads failed (ADR-164 decision 25) through
     // `meraki.listing.<token>`. A listing added to the list without its label would show the raw key.
     expectKeys('meraki listing', { en: enSystem, ja: jaSystem }, 'meraki.listing.', MERAKI_LISTINGS);
   });
 
   it('every Meraki uplink state has a word (nodes:overview.uplinkState.*)', () => {
-    // The Meraki card renders `overview.uplinkState.<state>` for each WAN uplink (ADR-164 決定 24).
+    // The Meraki card renders `overview.uplinkState.<state>` for each WAN uplink (ADR-164 decision 24).
     // A state added to the decoder without its word would show the operator the raw key.
     expectKeys(
       'meraki uplink state',
@@ -959,7 +960,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
 
   it('every warm-spare role and pair state has a word (nodes:overview.haRole.* / pairState.*)', () => {
     // The Meraki card renders the node's role, its partner's role and the pair's state from the
-    // tokens the server sent (ADR-164 決定 26). A sixth state would reach the card as a raw key.
+    // tokens the server sent (ADR-164 decision 26). A sixth state would reach the card as a raw key.
     expectKeys('meraki ha role', { en: enNodes, ja: jaNodes }, 'overview.haRole.', MERAKI_HA_ROLES);
     expectKeys('meraki pair state', { en: enNodes, ja: jaNodes }, 'overview.pairState.', MERAKI_PAIR_STATES);
   });
@@ -1059,22 +1060,19 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // ADR-180: the address state is the chip, the filter option and its explanation.
     expectKeys('neighbor address state', locales, 'neighbors.peer.state.', NEIGHBOR_ADDRESS_STATES);
     expectKeys('neighbor address explain', locales, 'neighbors.peer.explain.', NEIGHBOR_ADDRESS_STATES);
-    // ADR-180 増分 3: a row matched on its MAC is never ambiguous and always has a chassis.
+    // ADR-180 Inc.3: a row matched on its MAC is never ambiguous and always has a chassis.
     expectKeys('neighbor explain by MAC', locales, 'neighbors.peer.explainMac.', [
       'node',
       'outside_scope',
       'unregistered',
     ]);
-    // ADR-180 増分 4: a name picks one of several claimants only when it picks a node, seen or not;
-    // the other claimants say whether their port has link.
-    expectKeys('neighbor explain by name', locales, 'neighbors.peer.explainName.', [
-      'node',
-      'outside_scope',
-    ]);
+    // ADR-180 Inc.4: a name picks one of several claimants only when it picks a node the caller
+    // can see (decision 6); the other claimants say whether their port has link.
+    expectKeys('neighbor explain by name', locales, 'neighbors.peer.explainName.', ['node']);
     expectKeys('neighbor claimant link', locales, 'neighbors.peer.also.port.', CLAIM_PORT_STATES);
-    // ADR-179 増分 9: why a "Not monitored" row has no setup button.
+    // ADR-179 Inc.9: why a "Not monitored" row has no setup button.
     expectKeys('neighbor setup blocked', locales, 'neighbors.setup.blocked.', SETUP_BLOCKED_REASONS);
-    // The badge beside a neighbour's name (ADR-179 増分 3): every state but "none", which draws none.
+    // The badge beside a neighbour's name (ADR-179 Inc.3): every state but "none", which draws none.
     expectKeys('neighbor monitored badge', locales, 'neighbors.peer.badge.', NEIGHBOR_PEER_STATES);
     expectKeys('neighbor detail label', locales, 'neighbors.detail.', NEIGHBOR_DETAIL_KEYS);
   });
@@ -1096,6 +1094,11 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // an enum that is *going* to grow, which is exactly the case parity cannot catch.
     const locales = { en: enTopology, ja: jaTopology };
     expectKeys('link source', locales, 'map.source.', LINK_SOURCES);
+  });
+
+  it('every sky has strings (topology:geo.dayNight.sky.*)', () => {
+    // The Geo map's legend and each site's tooltip build `geo.dayNight.sky.${sky}` (ADR-189).
+    expectKeys('geo sky', { en: enTopology, ja: jaTopology }, 'geo.dayNight.sky.', SKIES);
   });
 
   it('every topology mode has strings (topology:dependency.mode.*)', () => {
@@ -1248,7 +1251,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
     // 🚨 ADR-135 shipped `t(`field.tagErr.${problem}`)` with **no** entry here, so its three codes
     // were held up by EN/JA parity alone — which cannot see a code missing from both. Adding a
-    // fourth would have rendered a raw key in every language. ADR-135 増分 2 closes that while
+    // fourth would have rendered a raw key in every language. ADR-135 Inc.2 closes that while
     // replacing the codes.
     expectKeys(
       'node label problem',
