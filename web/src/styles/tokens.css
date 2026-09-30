@@ -256,6 +256,11 @@
   /* Ink that sits on a filled status surface (e.g. white-on-critical danger button / badge).
      Status fills are saturated in both themes, so this stays constant across light/dark. */
   --on-status: #fff;
+  /* Geo map's night side (ADR-189): four stacked shades, each this strong, so the core of the night
+     is 1 − (1 − step)^4 ≈ 37 % of this ink over the map. Indigo rather than black on the light
+     ground, so the night reads as night rather than as dirt. */
+  --geo-night: #1b2448;
+  --geo-night-step: 0.11;
 }
 
 /* ---- Dark theme — blue-slate, lets the complementary orange pop (§1.5) ---- */
@@ -268,6 +273,9 @@
   --text-secondary: #a7aebb;
   --text-tertiary: #757e8c;
   --overlay: rgba(0, 0, 0, 0.55);
+  /* The dark map ground is already near-night, so the shade is black and a step stronger. */
+  --geo-night: #000;
+  --geo-night-step: 0.15;
 
   /* The tree's one-letter brand badges, lifted to read on the dark ground (see :root). */
   --brand-meraki-ink: #7cc35a;

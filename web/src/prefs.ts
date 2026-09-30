@@ -143,6 +143,13 @@ interface PrefsStore {
    *  answer would show a different tree from the one they set up next door. Nothing should call
    *  the setter directly. */
   nodeTreeWithNodesOnly: boolean | null;
+  /** Whether Topology ▸ Geo map shades the night side of the world (ADR-189). `null` = never set,
+   *  which reads as **on** — the shading is the default.
+   *
+   *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`), by the operator's choice. `null`
+   *  rather than `true` so a machine that never pressed the button does not overwrite the account's
+   *  "off" with the default. Nothing should call the setter directly. */
+  geoMapDayNight: boolean | null;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -180,6 +187,9 @@ interface PrefsStore {
   /** Record the Folders-with-nodes-only switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which
    *  also syncs it to the account (see [`nodeTreeWithNodesOnly`]). */
   setNodeTreeWithNodesOnly: (on: boolean | null) => void;
+  /** Record the Geo map day/night switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
+   *  syncs it to the account (see [`geoMapDayNight`]). */
+  setGeoMapDayNight: (on: boolean | null) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -213,6 +223,8 @@ export const usePrefsStore = create<PrefsStore>()(
       nodeTreePinnedOnly: null,
       // Same again: absent before ADR-159, read as `null` (off), no migration owed.
       nodeTreeWithNodesOnly: null,
+      // Same again: absent before ADR-189, read as `null` (on), no migration owed.
+      geoMapDayNight: null,
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -247,6 +259,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
+      setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

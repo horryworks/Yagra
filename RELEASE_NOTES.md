@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Geo map shades the night side of the world, as it is now.** Four stacked shades run from sunset to the end of astronomical twilight, so a site near the line shows which side it is on. The shading is drawn from your browser's clock and redrawn every minute; the legend says which UTC time it shows, and a pin's tooltip adds whether it is day, twilight or night there. It is on by default, and the new Day/night button beside Fit turns it off — the choice is saved on your account, so it follows you to another machine. Pins keep their state colours at night. The dashboard Geo map widget is unchanged.
+
 ### Improvements
 
 - **Geo map: zooming out stops at the whole world, and zooming in goes ten times further.** Zooming out used to shrink the world into the middle of an empty pane; it now stops where the whole world just fits, and the map can no longer be dragged off the pane. The zoom ceiling is 240× (was 24×), close enough to tell apart the sites in one city — the coastline looks angular at that zoom, the pins stay exact. The + and − buttons now zoom around the centre of the map, and the map pane is no wider than the world at its height, so a wide monitor no longer shows grey bands either side.

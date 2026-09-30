@@ -113,6 +113,16 @@
     "error": "Could not load site health.",
     "aria": "World map with {{count}} placed site(s)",
     "pinTitle": "{{name}} — {{state}} · {{count}} node(s)",
-    "resize": "Drag to resize the map (double-click to reset)"
+    "resize": "Drag to resize the map (double-click to reset)",
+    "dayNight": {
+      "toggle": "Show day and night",
+      "label": "Day/night",
+      "asOf": "Sky as of {{time}} UTC",
+      "sky": {
+        "day": "Day",
+        "twilight": "Twilight",
+        "night": "Night"
+      }
+    }
   }
 }

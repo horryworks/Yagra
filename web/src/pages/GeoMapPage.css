@@ -115,6 +115,14 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* The night side (ADR-189). Four of these stack, so each is faint on its own; the colour and the
+   per-step strength are tokens because the dark theme's ground is already near-night. */
+.geopage-night {
+  fill: var(--geo-night);
+  fill-opacity: var(--geo-night-step);
+  pointer-events: none;
+}
+
 .geopage-pin {
   cursor: pointer;
 }
@@ -168,6 +176,22 @@
   transition: color var(--transition), border-color var(--transition);
 }
 
+.geopage-ctl-daynight {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.geopage-ctl-daynight svg {
+  width: 14px;
+  height: 14px;
+}
+
+.geopage-ctl-daynight[aria-pressed='true'] {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
 .geopage-ctl:hover {
   color: var(--text-primary);
   border-color: var(--accent-color);
@@ -194,6 +218,35 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
+}
+
+.geopage-legend-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--border-color);
+}
+
+/* A patch of the map's ground with the night shade stacked on it as many times as the map stacks
+   it there — the same token at the same strength, so it matches without a computed colour. */
+.geopage-sky-swatch {
+  position: relative;
+  width: 14px;
+  height: 9px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 2px;
+}
+
+.geopage-sky-shade {
+  position: absolute;
+  inset: 0;
+  background: var(--geo-night);
+  opacity: var(--geo-night-step);
+}
+
+.geopage-legend-time {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Touch targets: the zoom controls must stay operable by finger (ui-conventions.md). */

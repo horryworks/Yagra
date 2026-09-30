@@ -41,6 +41,7 @@ import {
   setNodeTreeCollapsed,
   setNodeTreePinnedOnly,
   setNodeTreeWithNodesOnly,
+  setGeoMapDayNight,
 } from './serverPrefs';
 import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
 import { COLUMN_MAX_PX, MAX_STORED_COLUMNS, MAX_STORED_TABLES } from './lib/columnWidths';
@@ -60,6 +61,7 @@ beforeEach(() => {
   usePrefsStore.getState().setInterfaceDockHeight(null);
   usePrefsStore.getState().setNodeTreePinnedOnly(null);
   usePrefsStore.getState().setNodeTreeWithNodesOnly(null);
+  usePrefsStore.getState().setGeoMapDayNight(null);
   usePrefsStore.getState().setNodeTreeCollapsed({});
   usePrefsStore.getState().setTableColumnWidths({});
 });
@@ -221,6 +223,35 @@ describe('the Pinned only switch (ADR-146)', () => {
     setNodeTreePinnedOnly(false);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledWith({ nodeTreePinnedOnly: false });
+  });
+
+  it('sends nothing for a machine that never touched it', () => {
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('the Geo map day/night switch (ADR-189)', () => {
+  it('reads as unset until someone presses it', () => {
+    expect(usePrefsStore.getState().geoMapDayNight).toBeNull();
+  });
+
+  it("adopts the account's answer, and nothing that is not a boolean", async () => {
+    getPreferences.mockResolvedValue({ geoMapDayNight: false });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().geoMapDayNight).toBe(false);
+    for (const value of ['true', 1, null, {}]) {
+      getPreferences.mockResolvedValue({ geoMapDayNight: value });
+      await loadServerPrefs();
+      expect(usePrefsStore.getState().geoMapDayNight).toBe(false);
+    }
+  });
+
+  it('saves switching it off — the unset value already reads as on', () => {
+    setGeoMapDayNight(false);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ geoMapDayNight: false });
   });
 
   it('sends nothing for a machine that never touched it', () => {

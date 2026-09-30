@@ -47,6 +47,8 @@ interface ServerPrefsDoc {
   nodeTreeWithNodesOnly?: boolean;
   /** The inventory tree's collapsed folders, keyed by group id (ADR-154). */
   nodeTreeCollapsed?: Record<string, true>;
+  /** Geo map's day/night shading switch (ADR-189). */
+  geoMapDayNight?: boolean;
 }
 
 /** False once the server has told us it does not serve this endpoint, so a drag on a deployment
@@ -99,6 +101,9 @@ function adopt(raw: unknown): void {
   if (typeof doc.nodeTreeWithNodesOnly === 'boolean') {
     usePrefsStore.getState().setNodeTreeWithNodesOnly(doc.nodeTreeWithNodesOnly);
   }
+  if (typeof doc.geoMapDayNight === 'boolean') {
+    usePrefsStore.getState().setGeoMapDayNight(doc.geoMapDayNight);
+  }
   // `null` means the account holds nothing that reads as a layout — keep this browser's, which the
   // next save then seeds the account with. An empty object is a layout: everything open.
   const collapsed = adoptCollapsed(doc.nodeTreeCollapsed);
@@ -116,6 +121,7 @@ function currentDoc(): ServerPrefsDoc {
     nodeTreePinnedOnly,
     nodeTreeWithNodesOnly,
     nodeTreeCollapsed,
+    geoMapDayNight,
   } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
@@ -124,6 +130,8 @@ function currentDoc(): ServerPrefsDoc {
   if (nodeTreePinnedOnly != null) doc.nodeTreePinnedOnly = nodeTreePinnedOnly;
   // Same again, and for the same reason (ADR-159).
   if (nodeTreeWithNodesOnly != null) doc.nodeTreeWithNodesOnly = nodeTreeWithNodesOnly;
+  // Same again (ADR-189) — here the unset value reads as *on*, so sending `false` is the whole point.
+  if (geoMapDayNight != null) doc.geoMapDayNight = geoMapDayNight;
   // Omitted while empty rather than sent as `{}`: the account row has a 32 KiB ceiling every
   // preference shares, and an operator who never drags a column should cost it nothing.
   if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
@@ -232,6 +240,15 @@ export function setNodeTreePinnedOnly(on: boolean): void {
  */
 export function setNodeTreeWithNodesOnly(on: boolean): void {
   usePrefsStore.getState().setNodeTreeWithNodesOnly(on);
+  scheduleSave();
+}
+
+/**
+ * Record Geo map's day/night switch: locally now, on the account shortly (ADR-189). One press is
+ * one save, as for Pinned only above.
+ */
+export function setGeoMapDayNight(on: boolean): void {
+  usePrefsStore.getState().setGeoMapDayNight(on);
   scheduleSave();
 }
 

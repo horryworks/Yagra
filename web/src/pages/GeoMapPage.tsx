@@ -16,7 +16,7 @@
 // All the geometry lives in `geoProjection.ts` because Vitest never runs `.tsx`; what is left here
 // is markup and pointer plumbing, which tsc and the build cover.
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConfigChanges } from '../lib/configChanges';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -30,6 +30,8 @@ import { stateColorVar, stateLabel } from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { useMapPaneStore } from '../store';
+import { usePrefsStore } from '../prefs';
+import { setGeoMapDayNight } from '../serverPrefs';
 import { useStoredMapView } from '../lib/storedMapView';
 import {
   clampPaneHeight,
@@ -47,9 +49,17 @@ import {
   project,
   zoomGeoView,
 } from './geoProjection';
+import { skyAt, sunAltitude, sunPosition, twilightPaths } from './geoDayNight';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import { nodesPageHref } from '../lib/entityHref';
 import './GeoMapPage.css';
+
+/** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
+const SKY_LEGEND = [
+  { sky: 'day', depth: 0 },
+  { sky: 'twilight', depth: 2 },
+  { sky: 'night', depth: 4 },
+] as const;
 
 export function GeoMapPage() {
   const { t } = useTranslation('topology');
@@ -87,6 +97,19 @@ export function GeoMapPage() {
   const resize = useRef<{ y: number; h: number } | null>(null);
 
   const placed = useMemo(() => placedOnly(groups.data ?? []), [groups.data]);
+
+  // Day/night shading (ADR-189). On unless this account switched it off; the clock it is drawn for
+  // moves once a minute, and only while the shading is showing.
+  const dayNight = usePrefsStore((s) => s.geoMapDayNight) !== false;
+  const [skyTime, setSkyTime] = useState(() => new Date());
+  useEffect(() => {
+    if (!dayNight) return;
+    setSkyTime(new Date());
+    const id = window.setInterval(() => setSkyTime(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, [dayNight]);
+  const nightPaths = useMemo(() => (dayNight ? twilightPaths(skyTime) : []), [dayNight, skyTime]);
+  const sun = useMemo(() => sunPosition(skyTime), [skyTime]);
 
   const fit = useCallback(() => {
     const el = wrapRef.current;
@@ -295,6 +318,19 @@ export function GeoMapPage() {
             <div className="geopage-map" ref={wrapRef} style={{ height: `${paneHeight}px` }}>
               <div className="geopage-controls">
                 <button
+                  className="geopage-ctl geopage-ctl-daynight"
+                  onClick={() => setGeoMapDayNight(!dayNight)}
+                  aria-pressed={dayNight}
+                  title={t('geo.dayNight.toggle')}
+                  aria-label={t('geo.dayNight.toggle')}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                    <path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" />
+                  </svg>
+                  {t('geo.dayNight.label')}
+                </button>
+                <button
                   className="geopage-ctl"
                   onClick={fit}
                   title={t('map.control.fitToView')}
@@ -342,11 +378,20 @@ export function GeoMapPage() {
                   {WORLD_LAKES.map((d, i) => (
                     <path className="geopage-lake" d={d} key={i} />
                   ))}
+                  {/* The night side, four stacked shades from sunset to the end of astronomical
+                      twilight (ADR-189). Over the land, under the pins: a site's colour is its
+                      health and must read the same at midnight as at noon. */}
+                  {nightPaths.map((d, i) => (
+                    <path className="geopage-night" d={d} key={i} />
+                  ))}
                   {placed.map((g) => {
                     const p = project(g.latitude, g.longitude);
                     const c = pins[g.id];
                     const worst = c ? worstStateFromCounts(c) : 'ok';
                     const total = c ? countsTotal(c) : 0;
+                    const sky = dayNight
+                      ? t(`geo.dayNight.sky.${skyAt(sunAltitude(sun, g.latitude, g.longitude))}`)
+                      : null;
                     // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that
                     // grows with the map turns into a blob that hides the site it marks.
                     const r = 5 / v.scale;
@@ -376,6 +421,7 @@ export function GeoMapPage() {
                             state: stateLabel(worst),
                             count: total,
                           })}
+                          {sky && ` · ${sky}`}
                         </title>
                         {/* Halo first so the dot reads against both land and ocean. */}
                         <circle className="geopage-pin-halo" r={r * 1.9} />
@@ -423,6 +469,28 @@ export function GeoMapPage() {
                   {stateLabel(s)}
                 </li>
               ))}
+              {dayNight && (
+                <>
+                  <li className="geopage-legend-sep" aria-hidden="true" />
+                  {/* Each swatch is the map's ground with the night shade stacked as deep as the map
+                      stacks it there, so the legend cannot drift from what is drawn. */}
+                  {SKY_LEGEND.map(({ sky, depth }) => (
+                    <li key={sky}>
+                      <span className="geopage-sky-swatch">
+                        {Array.from({ length: depth }, (_, k) => (
+                          <span className="geopage-sky-shade" key={k} />
+                        ))}
+                      </span>
+                      {t(`geo.dayNight.sky.${sky}`)}
+                    </li>
+                  ))}
+                  <li className="geopage-legend-time">
+                    {t('geo.dayNight.asOf', {
+                      time: skyTime.toISOString().slice(0, 16).replace('T', ' '),
+                    })}
+                  </li>
+                </>
+              )}
             </ul>
           </div>
         </>
