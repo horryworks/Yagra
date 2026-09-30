@@ -139,14 +139,23 @@ export function GeoMapPage() {
   }, [paneHeight]);
 
   // A view remembered from earlier in the session (ADR-134) may have been saved on a pane of another
-  // size, so hold it inside this one once, on the first measured frame (ADR-188).
+  // size, and the pane's width follows the window, so hold the view inside the pane whenever the
+  // pane is measured — first when it mounts, then on every resize (ADR-188). The pane is not drawn
+  // while the page is loading or failed, so this has to wait for it rather than run once on mount.
+  const busy = (loading && !summary) || (groups.loading && !groups.data);
+  const mapShown = !busy && !error && !groups.error;
   useEffect(() => {
     const el = wrapRef.current;
-    if (!el || el.clientWidth <= 0) return;
-    setView((v) => (v ? clampGeoView(v, el.clientWidth, el.clientHeight) : v));
-    // Once per mount: afterwards every gesture clamps its own write.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!mapShown || !el || typeof ResizeObserver === 'undefined') return;
+    const hold = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) setView((v) => (v ? clampGeoView(v, w, h) : v));
+    };
+    const ro = new ResizeObserver(hold);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mapShown, setView]);
 
   /** Zoom around the pane's centre — the buttons have no cursor to anchor on. */
   const zoomCentre = useCallback(
@@ -287,7 +296,6 @@ export function GeoMapPage() {
   // Per-pin totals, not per-folder: a group with no coordinates of its own is counted at the
   // nearest placed ancestor's pin (geo inheritance), which the server resolved into `geo_group`.
   const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
-  const busy = (loading && !summary) || (groups.loading && !groups.data);
 
   return (
     <div className="geopage">
@@ -298,7 +306,7 @@ export function GeoMapPage() {
         </Card>
       )}
       {busy && <p className="muted">{t('common:loading')}</p>}
-      {!busy && !error && !groups.error && (
+      {mapShown && (
         <>
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}

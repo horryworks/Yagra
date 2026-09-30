@@ -584,6 +584,8 @@ describe('the other nodes that claim a peer address', () => {
     expect(got?.listed.map((a) => a.node_name)).toEqual(['wan-rtr-01', 'wan-rtr-02']);
     expect(got?.unlisted).toBe(2);
     expect(got?.total).toBe(4);
+    // The row answers with a node, so the count is of the others.
+    expect(got?.excludesPeer).toBe(true);
   });
 
   it('says nothing when one node or none claims it, or the core predates the field', () => {
@@ -605,6 +607,8 @@ describe('the other nodes that claim a peer address', () => {
     );
     expect(got?.listed).toHaveLength(2);
     expect(got?.unlisted).toBe(0);
+    // No node was picked, so the two are every claimant — not "two others".
+    expect(got?.excludesPeer).toBe(false);
   });
 
   it('explains a pick by name only for a node, seen or not', () => {

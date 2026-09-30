@@ -1125,12 +1125,18 @@ pub struct SyncReport {
     pub prefixes: usize,
     /// Prefix rows that reached no folder: scoped to something Yagra has no folder for
     /// (`dcim.location`, `dcim.sitegroup`), scoped to an object this run did not see, or refused
-    /// by PostgreSQL as not an address.
+    /// by PostgreSQL as not an address. **Not** a prefix of an inactive site — that is
+    /// `prefixes_inactive_site`, because it is a choice rather than a problem.
     ///
     /// 🚨 Same reason as `sites_without_site_id`: without a count, "this site has no prefixes"
     /// reads identically whether NetBox has none or whether every one of them was dropped. The
     /// per-row reason goes to `tracing::warn!`; the number is what makes someone go and read it.
     pub prefixes_skipped: usize,
+    /// Prefix rows scoped to a site this run saw and did not sync because it is not active
+    /// (decision 11). Kept apart from `prefixes_skipped` so a deliberate status filter neither
+    /// warns on every sync nor reads like a site the token cannot see. Log only, like
+    /// `sites_inactive`.
+    pub prefixes_inactive_site: usize,
     /// Folders this run created or changed. Zero on a sync of an unchanged NetBox, which is what
     /// lets the config generation stay put when nothing moved (ADR-178 決定 7).
     pub folders_changed: usize,
@@ -1631,19 +1637,22 @@ pub async fn apply(
     // 🚨 Before the first write. See `SyncReport::started_at` for what goes wrong otherwise.
     let started_at = repo.db_now().await?;
 
-    // Only an active site becomes a folder (decision 11). Filtered here, before anything else reads
+    // Only an active site becomes a folder (decision 11). Split here, before anything else reads
     // the list, so the names, the sibling order, the Site-ID count and the prefix guard below all
-    // agree on one set: a prefix scoped to a planned site falls to the "did not see" skip, and a
-    // folder written before the site was retired is left to `count_missing`, never deleted.
-    let sites_inactive = sites.iter().filter(|s| !s.is_active()).count();
-    for s in sites.iter().filter(|s| !s.is_active()) {
+    // agree on one set: a prefix scoped to a planned site is counted apart from a real skip
+    // (`prefixes_inactive_site`), and a folder written before the site was retired is left to
+    // `count_missing`, never deleted.
+    let (sites, inactive): (Vec<&NetboxSite>, Vec<&NetboxSite>) =
+        sites.iter().partition(|s| s.is_active());
+    for s in &inactive {
         tracing::debug!(
             site = s.id,
             status = s.status.as_ref().map_or("", |c| c.value.as_str()),
             "netbox site is not active; not synced as a folder"
         );
     }
-    let sites: Vec<NetboxSite> = sites.iter().filter(|s| s.is_active()).cloned().collect();
+    let sites_inactive = inactive.len();
+    let inactive_sites: std::collections::HashSet<i64> = inactive.iter().map(|s| s.id).collect();
 
     // Which region ids this server actually returned. A site whose region is filtered out of the
     // caller's view (NetBox permissions) must land at the root rather than pointing at a folder
@@ -1751,6 +1760,7 @@ pub async fn apply(
     let known_sites: std::collections::HashSet<i64> = sites.iter().map(|s| s.id).collect();
     let mut prefixes_stored = 0usize;
     let mut prefixes_skipped = 0usize;
+    let mut prefixes_inactive_site = 0usize;
     for prefix in prefixes.unwrap_or_default() {
         let Some((kind, object_id)) = prefix.scope() else {
             tracing::warn!(
@@ -1765,6 +1775,17 @@ pub async fn apply(
             ObjectKind::Region => known.contains(&object_id),
             ObjectKind::Site => known_sites.contains(&object_id),
         };
+        // A site this run saw and deliberately did not sync is not a problem to warn about on
+        // every sync, and must not read like one NetBox hid from the token.
+        if !seen && kind == ObjectKind::Site && inactive_sites.contains(&object_id) {
+            tracing::debug!(
+                prefix = %prefix.prefix,
+                object_id,
+                "netbox prefix is scoped to a site that is not active; not attached to any folder"
+            );
+            prefixes_inactive_site += 1;
+            continue;
+        }
         if !seen {
             tracing::warn!(
                 prefix = %prefix.prefix,
@@ -1806,6 +1827,7 @@ pub async fn apply(
         prefixes_readable: prefixes.is_some(),
         prefixes: prefixes_stored,
         prefixes_skipped,
+        prefixes_inactive_site,
         started_at,
     })
 }
@@ -1869,6 +1891,7 @@ async fn sync_server_marked(
                 prefixes_readable = report.prefixes_readable,
                 prefixes = report.prefixes,
                 prefixes_skipped = report.prefixes_skipped,
+                prefixes_inactive_site = report.prefixes_inactive_site,
                 folders_changed = report.folders_changed,
                 "netbox sync completed"
             );
@@ -2897,7 +2920,15 @@ mod tests {
         assert!(folder(&pool, site_group_id(server, 7)).await.is_some());
         assert!(folder(&pool, site_group_id(server, 8)).await.is_none());
         assert!(folder(&pool, site_group_id(server, 9)).await.is_none());
-        assert_eq!((report.prefixes, report.prefixes_skipped), (0, 1));
+        // Counted as the deliberate filter it is, not as a skip that warns on every sync.
+        assert_eq!(
+            (
+                report.prefixes,
+                report.prefixes_skipped,
+                report.prefixes_inactive_site
+            ),
+            (0, 0, 1)
+        );
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

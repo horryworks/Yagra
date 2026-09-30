@@ -661,6 +661,33 @@ mod tests {
         );
     }
 
+    /// A description is published verbatim to AI clients. A source line broken without a `\`
+    /// continuation carries its next line's indentation into the text — `get_neighbors` shipped
+    /// five runs of 24 spaces that way — so no description may hold two spaces in a row, or a line
+    /// break followed by a space. A deliberate `\n\n` paragraph break (`query_metrics`) is fine.
+    #[test]
+    fn no_published_description_carries_source_indentation() {
+        let published = mcp().published_tools();
+        assert!(
+            published.len() >= 36,
+            "only {} tools were published",
+            published.len()
+        );
+        let bad: Vec<String> = published
+            .iter()
+            .filter(|t| {
+                t.description
+                    .as_deref()
+                    .is_some_and(|d| d.contains("  ") || d.contains("\n "))
+            })
+            .map(|t| t.name.to_string())
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "descriptions carrying source indentation: {bad:?}"
+        );
+    }
+
     /// The load-bearing half of the test above: prove the needle it searches for is what an unknown
     /// name actually produces. Without this, a dispatcher that stopped producing that message would
     /// make every tool look reachable.

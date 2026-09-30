@@ -392,6 +392,9 @@ export interface AlsoClaimed {
   listed: readonly AlsoClaimedBy[];
   unlisted: number;
   total: number;
+  /** Whether `total` leaves out a node the row already answers with. An `ambiguous` row answers
+   *  with none, so its count is every claimant and must not be worded "other" or "+N". */
+  excludesPeer: boolean;
 }
 
 export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
@@ -399,7 +402,12 @@ export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
   const total = peer?.also_claimed_total ?? 0;
   if (!peer || total <= 0) return null;
   const listed = peer.also_claimed_by ?? [];
-  return { listed, unlisted: Math.max(0, total - listed.length), total };
+  return {
+    listed,
+    unlisted: Math.max(0, total - listed.length),
+    total,
+    excludesPeer: peer.state !== 'ambiguous',
+  };
 }
 
 /** Whether the badge explains a pick made by name among several claimants (ADR-180 増分 4) — only

@@ -99,10 +99,13 @@ pub(crate) enum NeighborPeerState {
     /// Exactly one monitored node claims the address — or, of several, exactly one bears the name
     /// the neighbour sent (`matched_by_name`) — and the caller may see it.
     Node,
-    /// As `node`, for a node outside the caller's folders.
+    /// Exactly one monitored node claims the address, and it is outside the caller's folders.
+    /// Never the answer for a node picked by name (ADR-180 増分 4 決定 6).
     OutsideScope,
     /// More than one node claims the address (a shared virtual address, or a duplicate) and the
-    /// name the neighbour sent does not pick out exactly one of them.
+    /// name the neighbour sent does not pick out exactly one of them the caller may see — a name
+    /// that picks a node outside the caller's folders is answered as picking none, so this state
+    /// says nothing about which hidden node bears which name.
     Ambiguous,
     /// No monitored node claims the address.
     Unregistered,
@@ -379,8 +382,9 @@ async fn get_neighbors(
 /// with no id and no name (ADR-180 決定 3, the disclosure ADR-139 already accepted).
 ///
 /// `store` is asked once, and only when some address has several claimants, for the link state
-/// of the ports carrying it (ADR-180 増分 4). A store that does not answer leaves every such port
-/// `unknown` rather than failing the tab.
+/// of the ports carrying it on the claimants the answer lists (ADR-180 増分 4 決定 7). It is asked
+/// alongside the inventory reads and given [`LINK_STATE_BUDGET`]: a store that does not answer
+/// leaves every such port `unknown` rather than failing the tab — or holding it up (決定 8).
 pub(crate) async fn current_neighbors(
     admin: &super::AdminState,
     store: &dyn MetricStore,
@@ -413,39 +417,49 @@ pub(crate) async fn current_neighbors(
                 "failed to read the inventory",
             )
         })?;
-    let listed = admin
-        .discovered
-        .listed_among(&addresses, scope.group_filter())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "match neighbours to discovered endpoints",
-                "failed to read discovered endpoints",
-            )
-        })?;
-    let aps = admin
-        .wireless
-        .aps_at(&addresses, scope.group_filter())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "match neighbours to access points",
-                "failed to read the access point inventory",
-            )
-        })?;
-    let meraki = admin
-        .meraki_inventory
-        .devices_at(&addresses)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "match neighbours to Meraki devices",
-                "failed to read the Meraki inventory",
-            )
-        })?;
+    let names = advertised_names(&current.set);
+    let unaddressed = unaddressed_mac_chassis(&current.set);
+    let unaddressed_list: Vec<String> = unaddressed.iter().cloned().collect();
+    let ports = ports_to_read(&advertised, &claims, &names);
+    // Everything below depends on the addresses or the claims and on nothing else, so it is asked
+    // at once — the link-state read in particular must not add its wait to the tab's (決定 8).
+    let (listed, aps, meraki, by_mac, oper) = tokio::join!(
+        admin
+            .discovered
+            .listed_among(&addresses, scope.group_filter()),
+        admin.wireless.aps_at(&addresses, scope.group_filter()),
+        admin.meraki_inventory.devices_at(&addresses),
+        admin.meraki_inventory.devices_with_mac(&unaddressed_list),
+        link_states(store, &ports),
+    );
+    let listed = listed.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "match neighbours to discovered endpoints",
+            "failed to read discovered endpoints",
+        )
+    })?;
+    let aps = aps.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "match neighbours to access points",
+            "failed to read the access point inventory",
+        )
+    })?;
+    let meraki = meraki.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "match neighbours to Meraki devices",
+            "failed to read the Meraki inventory",
+        )
+    })?;
+    let by_mac = by_mac.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "match neighbour chassis to Meraki devices",
+            "failed to read the Meraki inventory",
+        )
+    })?;
     let managed: HashMap<IpAddr, NeighborManagedBy> = addresses
         .iter()
         .filter_map(|ip| managed_by(aps.get(ip), meraki.get(ip)).map(|m| (*ip, m)))
@@ -480,31 +494,6 @@ pub(crate) async fn current_neighbors(
         end_station_only: end_station_only(&current.set),
         listed_elsewhere,
     };
-    let contested = contested_claimants(&claims);
-    let oper = if contested.is_empty() {
-        HashMap::new()
-    } else {
-        store
-            .series_rows(
-                "if_oper_status",
-                Some(&contested),
-                crate::store::INSTANT_LOOKBACK_SECS,
-            )
-            .await
-    };
-    let names = advertised_names(&current.set);
-    let unaddressed = unaddressed_mac_chassis(&current.set);
-    let by_mac = admin
-        .meraki_inventory
-        .devices_with_mac(&unaddressed.iter().cloned().collect::<Vec<_>>())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "match neighbour chassis to Meraki devices",
-                "failed to read the Meraki inventory",
-            )
-        })?;
     Ok(CurrentNeighbors {
         chassis_peers: classify_chassis(&unaddressed, &by_mac, scope),
         peers: classify_peers(
@@ -595,9 +584,16 @@ fn advertised_name(n: &Neighbor) -> Option<&str> {
         return Some(sys);
     }
     match n.remote_chassis_kind {
-        // A record older than the kind field says nothing about its chassis; a MAC read as a name
-        // matches no node name, so it is harmless to try.
-        Some(NeighborIdKind::Text) | None => Some(n.remote_chassis.as_str()),
+        Some(NeighborIdKind::Text) => Some(n.remote_chassis.as_str()),
+        // A record older than the kind field says nothing about its chassis. It is a name only if
+        // it does not read as an address or a MAC: a node added by address and never renamed is
+        // *named* that address, so an address-shaped id would match it though no name was sent
+        // (ADR-180 増分 4 決定 9).
+        None => {
+            let id = n.remote_chassis.trim();
+            let shaped = id.parse::<IpAddr>().is_ok() || yagra_common::mac::parse_mac(id).is_some();
+            (!shaped).then_some(n.remote_chassis.as_str())
+        }
         Some(
             NeighborIdKind::Mac
             | NeighborIdKind::NetworkAddress
@@ -697,20 +693,143 @@ fn claim_port_state(
     }
 }
 
-/// Every node that claims an address some other node also claims — the only ones whose link
-/// state the tab shows, so the only ones worth a store query.
-fn contested_claimants(claims: &[AddressClaim]) -> Vec<Uuid> {
-    let mut by_address: BTreeMap<IpAddr, BTreeSet<Uuid>> = BTreeMap::new();
+/// Address → node → that node's claims (one per port, plus its inventory address).
+type ClaimsByAddress<'c> = BTreeMap<IpAddr, BTreeMap<Uuid, Vec<&'c AddressClaim>>>;
+
+fn claims_by_address(claims: &[AddressClaim]) -> ClaimsByAddress<'_> {
+    let mut by_address: ClaimsByAddress<'_> = BTreeMap::new();
     for c in claims {
-        by_address.entry(c.address).or_default().insert(c.id);
+        by_address
+            .entry(c.address)
+            .or_default()
+            .entry(c.id)
+            .or_default()
+            .push(c);
     }
     by_address
-        .into_values()
-        .filter(|ids| ids.len() > 1)
-        .flatten()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+}
+
+/// One address's answer before any link state is read: which claimant it names, and which of the
+/// others it lists. The only place those two rules are written — both the store query
+/// ([`ports_to_read`]) and the answer ([`classify_peers`]) ask it, so the ports read are exactly
+/// the ports shown (ADR-180 増分 4 決定 7).
+struct Pick<'m, 'c> {
+    /// How many nodes claim the address.
+    claimants: usize,
+    /// The claimant answered with: the sole one (seen or not), or the one a name picked — which
+    /// is never a node the caller may not see (決定 6).
+    chosen: Option<&'c AddressClaim>,
+    matched_by_name: bool,
+    /// Every claimant but `chosen`, when more than one claims the address.
+    others_total: usize,
+    /// Those of them the caller may see, in name order, at most [`ALSO_CLAIMED_MAX`].
+    listed: Vec<(Uuid, &'m [&'c AddressClaim])>,
+}
+
+fn pick_peer<'m, 'c>(
+    owners: Option<&'m BTreeMap<Uuid, Vec<&'c AddressClaim>>>,
+    names: &[String],
+) -> Pick<'m, 'c> {
+    let ids: BTreeSet<Uuid> = owners
+        .map(|o| o.keys().copied().collect())
+        .unwrap_or_default();
+    let first = |id: Uuid| {
+        owners
+            .and_then(|o| o.get(&id))
+            .and_then(|cs| cs.first().copied())
+    };
+    let (chosen, matched_by_name) = match yagra_topology::derive::sole_claimant(&ids) {
+        Some(id) => (first(id), false),
+        None if ids.len() > 1 => {
+            let candidates: Vec<(Uuid, &str)> = owners
+                .into_iter()
+                .flatten()
+                .filter_map(|(id, cs)| cs.first().map(|c| (*id, c.name.as_str())))
+                .collect();
+            // 決定 6: a name that picks a node the caller may not see picks nothing. Answering
+            // `outside_scope` "by name" would say the hidden node's name is the one on the row.
+            match claimant_named(names, &candidates).and_then(first) {
+                Some(c) if c.visible => (Some(c), true),
+                Some(_) | None => (None, false),
+            }
+        }
+        None => (None, false),
+    };
+    let chosen_id = chosen.map(|c| c.id);
+    let others: Vec<(Uuid, &'m [&'c AddressClaim])> = if ids.len() > 1 {
+        owners
+            .into_iter()
+            .flatten()
+            .filter(|(id, _)| Some(**id) != chosen_id)
+            .map(|(id, cs)| (*id, cs.as_slice()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut listed: Vec<(Uuid, &'m [&'c AddressClaim])> = others
+        .iter()
+        .filter(|(_, cs)| cs.first().is_some_and(|c| c.visible))
+        .copied()
+        .collect();
+    listed.sort_by(|a, b| a.1[0].name.cmp(&b.1[0].name).then(a.0.cmp(&b.0)));
+    listed.truncate(ALSO_CLAIMED_MAX);
+    Pick {
+        claimants: ids.len(),
+        chosen,
+        matched_by_name,
+        others_total: others.len(),
+        listed,
+    }
+}
+
+/// The `(node, ifindex)` pairs whose link state the answer shows: the ports carrying each address
+/// on the claimants it lists. Never a hidden claimant, never the one answered with, never a port
+/// that does not carry the address (決定 7).
+fn ports_to_read(
+    advertised: &BTreeMap<String, IpAddr>,
+    claims: &[AddressClaim],
+    names: &BTreeMap<IpAddr, Vec<String>>,
+) -> Vec<(Uuid, i64)> {
+    let by_address = claims_by_address(claims);
+    let mut out: BTreeSet<(Uuid, i64)> = BTreeSet::new();
+    for ip in advertised.values() {
+        let pick = pick_peer(
+            by_address.get(ip),
+            names.get(ip).map_or(&[][..], Vec::as_slice),
+        );
+        for (id, cs) in pick.listed {
+            out.extend(
+                cs.iter()
+                    .filter_map(|c| c.ifindex)
+                    .map(|i| (id, i64::from(i))),
+            );
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// How long the tab waits for link state before answering without it (決定 8). The store's own
+/// client allows ten seconds, which is a fleet-ingest budget, not a tab's.
+const LINK_STATE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `if_oper_status` for `ports`, or nothing — a store that fails or is slow leaves every port
+/// `unknown`.
+async fn link_states(store: &dyn MetricStore, ports: &[(Uuid, i64)]) -> HashMap<(Uuid, i64), f64> {
+    if ports.is_empty() {
+        return HashMap::new();
+    }
+    tokio::time::timeout(
+        LINK_STATE_BUDGET,
+        store.series_rows_at("if_oper_status", ports, crate::store::INSTANT_LOOKBACK_SECS),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        tracing::debug!(
+            ports = ports.len(),
+            "link state for contested neighbour addresses timed out; answered as unknown"
+        );
+        HashMap::new()
+    })
 }
 
 /// Everything besides the claims that decides a peer, read once per request.
@@ -732,79 +851,32 @@ fn classify_peers(
     claims: &[AddressClaim],
     ev: &Evidence<'_>,
 ) -> Vec<NeighborPeer> {
-    // Address → node → that node's claims (one per port, plus its inventory address).
-    let mut by_address: BTreeMap<IpAddr, BTreeMap<Uuid, Vec<&AddressClaim>>> = BTreeMap::new();
-    for c in claims {
-        by_address
-            .entry(c.address)
-            .or_default()
-            .entry(c.id)
-            .or_default()
-            .push(c);
-    }
-    let no_names = Vec::new();
+    let by_address = claims_by_address(claims);
     advertised
         .iter()
         .map(|(text, ip)| {
-            let owners = by_address.get(ip);
-            let ids: BTreeSet<Uuid> = owners
-                .map(|o| o.keys().copied().collect())
-                .unwrap_or_default();
-            let by_name = || {
-                let candidates: Vec<(Uuid, &str)> = owners
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|(id, cs)| cs.first().map(|c| (*id, c.name.as_str())))
-                    .collect();
-                claimant_named(ev.names.get(ip).unwrap_or(&no_names), &candidates)
-            };
-            let (chosen, matched_by_name) = match yagra_topology::derive::sole_claimant(&ids) {
-                Some(id) => (Some(id), false),
-                None if ids.len() > 1 => {
-                    let named = by_name();
-                    (named, named.is_some())
-                }
-                None => (None, false),
-            };
-            let first = |id: Uuid| owners.and_then(|o| o.get(&id)).and_then(|cs| cs.first());
-            let (state, node_id, node_name) = match chosen.and_then(first) {
+            let pick = pick_peer(
+                by_address.get(ip),
+                ev.names.get(ip).map_or(&[][..], Vec::as_slice),
+            );
+            let matched_by_name = pick.matched_by_name;
+            let (state, node_id, node_name) = match pick.chosen {
                 Some(m) if m.visible => (NeighborPeerState::Node, Some(m.id), Some(m.name.clone())),
                 Some(_) => (NeighborPeerState::OutsideScope, None, None),
-                None if ids.is_empty() => (NeighborPeerState::Unregistered, None, None),
+                None if pick.claimants == 0 => (NeighborPeerState::Unregistered, None, None),
                 None => (NeighborPeerState::Ambiguous, None, None),
             };
             // The rest of the claimants, when there is more than one: listed by name if the
             // caller may see them, counted either way.
-            let others: Vec<(&Uuid, &Vec<&AddressClaim>)> = if ids.len() > 1 {
-                owners
-                    .into_iter()
-                    .flatten()
-                    .filter(|(id, _)| Some(**id) != chosen)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let mut also_claimed_by: Vec<AlsoClaimedBy> = others
+            let also_claimed_by: Vec<AlsoClaimedBy> = pick
+                .listed
                 .iter()
-                .filter_map(|(id, cs)| {
-                    let c = cs.first().filter(|c| c.visible)?;
-                    Some(AlsoClaimedBy {
-                        node_id: **id,
-                        node_name: c.name.clone(),
-                        port_state: claim_port_state(
-                            **id,
-                            cs.iter().filter_map(|c| c.ifindex),
-                            ev.oper,
-                        ),
-                    })
+                .map(|(id, cs)| AlsoClaimedBy {
+                    node_id: *id,
+                    node_name: cs[0].name.clone(),
+                    port_state: claim_port_state(*id, cs.iter().filter_map(|c| c.ifindex), ev.oper),
                 })
                 .collect();
-            also_claimed_by.sort_by(|a, b| {
-                a.node_name
-                    .cmp(&b.node_name)
-                    .then(a.node_id.cmp(&b.node_id))
-            });
-            also_claimed_by.truncate(ALSO_CLAIMED_MAX);
             let unregistered = state == NeighborPeerState::Unregistered;
             let managed_by = ev.managed.get(ip).filter(|_| unregistered).cloned();
             let stuck = unregistered && managed_by.is_none() && !ev.listed.contains_key(ip);
@@ -825,7 +897,7 @@ fn classify_peers(
                 }),
                 matched_by_name,
                 also_claimed_by,
-                also_claimed_total: u32::try_from(others.len()).unwrap_or(u32::MAX),
+                also_claimed_total: u32::try_from(pick.others_total).unwrap_or(u32::MAX),
             }
         })
         .collect()
@@ -1813,26 +1885,52 @@ mod peer_tests {
         assert_eq!(p.node_id, Some(a));
     }
 
-    /// A name that picks a node the caller may not see answers `outside_scope` with no id and no
-    /// name, and the visible claimant beside it is still listed.
+    /// A name that picks a node the caller may not see picks nothing (決定 6): the answer is the
+    /// same one a name matching nobody gets, so it says nothing about which hidden node bears the
+    /// name on the row. The visible claimant is still listed and the hidden one still counted.
     #[test]
     fn a_name_picking_a_hidden_node_discloses_nothing_about_it() {
         let (hidden, seen) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let claims = [
-            claim("192.0.2.182", hidden, "core-hidden", false),
-            claim("192.0.2.182", seen, "rtr-seen", true),
+            port_claim("192.0.2.182", seen, "rtr-seen", 4),
+            AddressClaim {
+                ifindex: Some(9),
+                ..claim("192.0.2.182", hidden, "core-hidden", false)
+            },
         ];
-        let p = classify_named(&claims, &["core-hidden"], &HashMap::new());
-        assert_eq!(p.state, NeighborPeerState::OutsideScope);
-        assert!(p.matched_by_name);
-        assert_eq!((p.node_id, p.node_name.as_deref()), (None, None));
-        assert_eq!(p.also_claimed_by.len(), 1);
-        assert_eq!(p.also_claimed_total, 1);
-        let json = serde_json::to_string(&p).unwrap();
+        let named = classify_named(&claims, &["core-hidden"], &HashMap::new());
+        let unnamed = classify_named(&claims, &["nobody"], &HashMap::new());
+        assert_eq!(named, unnamed, "a hidden pick must read like no pick");
+        assert_eq!(named.state, NeighborPeerState::Ambiguous);
+        assert!(!named.matched_by_name);
+        assert_eq!((named.node_id, named.node_name.as_deref()), (None, None));
+        assert_eq!(named.also_claimed_by.len(), 1);
+        assert_eq!(named.also_claimed_total, 2);
+        let json = serde_json::to_string(&named).unwrap();
         assert!(
             !json.contains("core-hidden") && !json.contains(&hidden.to_string()),
             "{json}"
         );
+        // Its ports are not read either.
+        let names = BTreeMap::from([(
+            "192.0.2.182".parse().unwrap(),
+            vec!["core-hidden".to_owned()],
+        )]);
+        assert_eq!(
+            ports_to_read(&advertised(&["192.0.2.182"]), &claims, &names),
+            [(seen, 4)]
+        );
+    }
+
+    /// One claimant, outside the caller's folders, is still `outside_scope` — no name decides it.
+    #[test]
+    fn a_sole_hidden_claimant_is_outside_scope() {
+        let hidden = Uuid::from_u128(1);
+        let claims = [claim("192.0.2.182", hidden, "core-hidden", false)];
+        let p = classify_named(&claims, &["core-hidden"], &HashMap::new());
+        assert_eq!(p.state, NeighborPeerState::OutsideScope);
+        assert!(!p.matched_by_name);
+        assert_eq!(p.also_claimed_total, 0);
     }
 
     /// Link state: any port up is up; only down readings is link-down; an inventory-only claim, no
@@ -1870,29 +1968,33 @@ mod peer_tests {
             .all(|a| a.port_state == ClaimPortState::Unknown));
     }
 
-    /// The list stops at ten; the total counts every other claimant. Only contested nodes are
-    /// asked about, once each.
+    /// The list stops at ten; the total counts every other claimant. The store is asked only about
+    /// the listed ones' ports carrying the address — not the node answered with, not the eleventh
+    /// and beyond, not an address with one claimant (決定 7).
     #[test]
     fn the_list_is_capped_and_the_total_is_not() {
-        let claims: Vec<AddressClaim> = (1..=13u128)
+        let claims: Vec<AddressClaim> = (1..=13u32)
             .map(|i| {
-                claim(
+                port_claim(
                     "192.0.2.182",
-                    Uuid::from_u128(i),
+                    Uuid::from_u128(u128::from(i)),
                     &format!("rtr-{i:02}"),
-                    true,
+                    i,
                 )
             })
-            .chain([claim("192.0.2.9", Uuid::from_u128(99), "alone", true)])
+            .chain([port_claim("192.0.2.9", Uuid::from_u128(99), "alone", 1)])
             .collect();
         let p = classify_named(&claims, &["rtr-01"], &HashMap::new());
         assert_eq!(p.node_id, Some(Uuid::from_u128(1)));
         assert_eq!(p.also_claimed_by.len(), ALSO_CLAIMED_MAX);
         assert_eq!(p.also_claimed_by[0].node_name, "rtr-02");
         assert_eq!(p.also_claimed_total, 12);
-        let asked = contested_claimants(&claims);
-        assert_eq!(asked.len(), 13);
-        assert!(!asked.contains(&Uuid::from_u128(99)));
+        let names = BTreeMap::from([("192.0.2.182".parse().unwrap(), vec!["rtr-01".to_owned()])]);
+        let asked = ports_to_read(&advertised(&["192.0.2.182", "192.0.2.9"]), &claims, &names);
+        let want: Vec<(Uuid, i64)> = (2..=11u32)
+            .map(|i| (Uuid::from_u128(u128::from(i)), i64::from(i)))
+            .collect();
+        assert_eq!(asked, want);
     }
 
     /// The name a row sends: LLDP's system name first, else a text chassis id; never a MAC.
@@ -1910,6 +2012,36 @@ mod peer_tests {
         );
         assert_eq!(peer_name_key("  "), None);
         assert_eq!(peer_name_key("(x)"), None);
+    }
+
+    /// A record from before the kind field: a text id is still a name, an address- or MAC-shaped
+    /// one is not — a node added by address is *named* that address (決定 9).
+    #[test]
+    fn an_unlabelled_chassis_is_a_name_only_when_it_does_not_look_like_an_address() {
+        assert_eq!(advertised_name(&neighbor("sw-01", None)), Some("sw-01"));
+        assert_eq!(advertised_name(&neighbor("10.0.0.5", None)), None);
+        assert_eq!(advertised_name(&neighbor("2001:db8::5", None)), None);
+        assert_eq!(advertised_name(&neighbor("00-00-0C-12-34-56", None)), None);
+        // With the address as the sole evidence, the node named after it is not picked.
+        let (by_ip, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut row = neighbor("10.0.0.5", None);
+        row.remote_mgmt_addr = Some("192.0.2.182".into());
+        let set = NeighborSet::new(vec![row], 0);
+        let claims = [
+            claim("192.0.2.182", by_ip, "10.0.0.5", true),
+            claim("192.0.2.182", other, "rtr-01", true),
+        ];
+        let names = advertised_names(&set);
+        let p = classify_named(
+            &claims,
+            &names
+                .values()
+                .flatten()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            &HashMap::new(),
+        );
+        assert_eq!(p.state, NeighborPeerState::Ambiguous);
     }
 
     fn neighbor(chassis: &str, kind: Option<NeighborIdKind>) -> Neighbor {

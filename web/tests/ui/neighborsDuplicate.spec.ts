@@ -148,7 +148,8 @@ test('a peer picked by name keeps the duplicate mark beside it', async ({ page }
   const ambiguous = row(page, 'Gi0/23');
   await expect(ambiguous.locator('.nd-nb-state')).toHaveText('Several nodes');
   await expect(ambiguous.locator('.nd-nb-link')).toHaveCount(0);
-  await expect(ambiguous.locator('.nd-nb-dup')).toHaveText('+2 with this address');
+  // No node was picked, so the two are every claimant — "+2" would read as three nodes.
+  await expect(ambiguous.locator('.nd-nb-dup')).toHaveText('2 nodes with this address');
 });
 
 test('the opened row lists the other nodes, linked, with their link state', async ({ page }) => {

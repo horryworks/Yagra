@@ -385,6 +385,22 @@ pub trait MetricStore: Send + Sync {
         std::collections::HashMap::new()
     }
 
+    /// [`Self::series_rows`] for named `(node, row)` pairs only — the selector narrows on both
+    /// `node` and `ifindex`, so a node with 500 ports answers for the two that were asked about
+    /// (ADR-180 増分 4 決定 7). The two filters are independent, so the store may return a pair
+    /// nobody asked for (node A's row 7 because node B's row 7 was asked); those are dropped here,
+    /// and the answer holds only requested pairs. An empty `rows` asks nothing and answers empty.
+    ///
+    /// Default: empty, for the same reason as `series_rows`.
+    async fn series_rows_at(
+        &self,
+        _metric: &str,
+        _rows: &[(Uuid, i64)],
+        _within_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
+        std::collections::HashMap::new()
+    }
+
     /// Persist a host self-metrics sample as low-cardinality `yagra_host_*{instance,role[,pool]
     /// [,mount]}` series (self-observability). Core is the single writer for **every** instance —
     /// its own host (`role="core"`) and each poller (`role="poller"`, whose samples arrive over
@@ -1631,6 +1647,25 @@ fn series_rows_query(metric: &str, nodes: Option<&[Uuid]>, within_secs: u64) -> 
     }
 }
 
+/// The selector for [`MetricStore::series_rows_at`]: `node` and `ifindex` each narrowed to the
+/// values the pairs name, deduplicated and sorted so one request reads the same every time.
+/// `None` for no pairs — the caller must not ask, because both matchers empty would match
+/// everything.
+fn series_rows_at_query(metric: &str, rows: &[(Uuid, i64)], within_secs: u64) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let w = within_secs.max(1);
+    let nodes: std::collections::BTreeSet<Uuid> = rows.iter().map(|(n, _)| *n).collect();
+    let idx: std::collections::BTreeSet<i64> = rows.iter().map(|(_, i)| *i).collect();
+    let join = |it: Vec<String>| it.join("|");
+    let nodes = join(nodes.iter().map(Uuid::to_string).collect());
+    let idx = join(idx.iter().map(i64::to_string).collect());
+    Some(format!(
+        "last_over_time({metric}{{node=~\"{nodes}\",ifindex=~\"{idx}\"}}[{w}s])"
+    ))
+}
+
 /// Demux an instant-query result into `(node, row) → value`.
 ///
 /// A series with **no** `ifindex` label lands on row `0`, which is what makes a scalar and a one-row
@@ -1967,6 +2002,28 @@ impl MetricStore for VmStore {
             |_| std::collections::HashMap::new(),
             |json| parse_node_row_values(&json),
         )
+    }
+
+    async fn series_rows_at(
+        &self,
+        metric: &str,
+        rows: &[(Uuid, i64)],
+        within_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
+        let Some(query) = series_rows_at_query(metric, rows, within_secs) else {
+            return std::collections::HashMap::new();
+        };
+        let asked: std::collections::HashSet<(Uuid, i64)> = rows.iter().copied().collect();
+        self.read_instant("series-rows-at", query)
+            .await
+            .map_or_else(
+                |_| std::collections::HashMap::new(),
+                |json| {
+                    let mut got = parse_node_row_values(&json);
+                    got.retain(|k, _| asked.contains(k));
+                    got
+                },
+            )
     }
 
     async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -2740,6 +2797,19 @@ mod tests {
         assert_eq!(out.len(), 2, "two readable rows: {out:?}");
         assert_eq!(out.get(&(node, 3_237_192_130_i64)), Some(&3_702_417_408.0));
         assert_eq!(out.get(&(node, 0)), Some(&7.0));
+    }
+
+    /// The pair selector narrows on both labels, once per value and in a stable order, and asks
+    /// nothing for no pairs (ADR-180 増分 4 決定 7).
+    #[test]
+    fn the_series_rows_at_query_narrows_on_node_and_row() {
+        let (a, b) = (Uuid::from_u128(2), Uuid::from_u128(1));
+        let q = series_rows_at_query("if_oper_status", &[(a, 7), (b, 3), (a, 3)], 1800).unwrap();
+        assert_eq!(
+            q,
+            format!("last_over_time(if_oper_status{{node=~\"{b}|{a}\",ifindex=~\"3|7\"}}[1800s])")
+        );
+        assert_eq!(series_rows_at_query("if_oper_status", &[], 1800), None);
     }
 
     /// The derived evaluator asks the same question `latest` asks, so it must use the same window.

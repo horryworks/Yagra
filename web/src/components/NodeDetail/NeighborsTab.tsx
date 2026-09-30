@@ -461,7 +461,9 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
         ...(also.unlisted > 0 ? [t('neighbors.peer.also.more', { count: also.unlisted })] : []),
       ].join('\n')}
     >
-      {t('neighbors.peer.also.chip', { count: also.total })}
+      {t(also.excludesPeer ? 'neighbors.peer.also.chip' : 'neighbors.peer.also.chipAll', {
+        count: also.total,
+      })}
     </span>
   ) : null;
   return (
@@ -575,7 +577,9 @@ function AlsoClaimedList({ also }: { also: AlsoClaimed }) {
   const { t } = useTranslation('nodes');
   return (
     <div className="nd-nb-also">
-      <div className="nd-nb-also-head">{t('neighbors.peer.also.heading', { count: also.total })}</div>
+      <div className="nd-nb-also-head">{t(also.excludesPeer ? 'neighbors.peer.also.heading' : 'neighbors.peer.also.headingAll', {
+          count: also.total,
+        })}</div>
       <p className="nd-muted nd-nb-note">{t('neighbors.peer.also.hint')}</p>
       {also.listed.length > 0 && (
         <ul className="nd-nb-also-list">
