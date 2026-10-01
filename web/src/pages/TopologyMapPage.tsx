@@ -150,13 +150,18 @@ export function TopologyMapPage() {
   const search = useMemo(() => searchMap(level, viewLayout, cond), [level, viewLayout, cond]);
   // Enter steps through the hits, bringing each to the middle; Shift+Enter steps back.
   const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
+  // The hits are worked out from the box's text at the moment Enter is pressed, not from the last
+  // render: the Enter that commits a freshly typed term arrives before the URL has the term, and
+  // stepping through the previous search's hits would centre the wrong box.
   const step = useCallback(
-    (dir: 1 | -1) =>
+    (dir: 1 | -1, term: string) => {
+      const order = searchMap(level, viewLayout, { ...cond, term }).order;
       setFocus((cur) => {
-        const id = stepThrough(search.order, cur?.id ?? null, dir);
+        const id = stepThrough(order, cur?.id ?? null, dir);
         return id ? { id, seq: (cur?.seq ?? 0) + 1 } : cur;
-      }),
-    [search.order],
+      });
+    },
+    [level, viewLayout, cond],
   );
 
   const selection: MapSelection = edge
@@ -234,8 +239,9 @@ export function TopologyMapPage() {
       onKeyDown={(e) => {
         // The editor commits on Enter itself; here Enter also moves to the next hit.
         if (e.key !== 'Enter' || isImeComposing(e)) return;
-        if ((e.target as HTMLElement).tagName !== 'INPUT') return;
-        step(e.shiftKey ? -1 : 1);
+        const box = e.target as HTMLInputElement;
+        if (box.tagName !== 'INPUT') return;
+        step(e.shiftKey ? -1 : 1, box.value);
       }}
     >
       <TextConditionEditor

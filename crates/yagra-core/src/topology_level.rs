@@ -131,21 +131,11 @@ impl<'a> Tree<'a> {
     /// Whether `level` is a Site folder or lies beneath one. Walks the unscoped parents, so an
     /// ancestor the caller cannot see still counts.
     fn in_site(&self, level: Option<Uuid>, rows: &HashMap<Uuid, &FolderRow>) -> bool {
-        let mut cur = level;
-        let mut seen = HashSet::new();
-        while let Some(id) = cur {
-            if !seen.insert(id) || seen.len() > MAX_GROUP_DEPTH + 1 {
-                return false;
-            }
-            if rows
-                .get(&id)
+        let is_site = |id: Uuid| {
+            rows.get(&id)
                 .is_some_and(|g| GroupType::from_key(&g.group_type) == Some(GroupType::Site))
-            {
-                return true;
-            }
-            cur = self.parent.get(&id).copied().flatten();
-        }
-        false
+        };
+        site_of_group(level, &self.parent, &is_site).is_some()
     }
 
     /// `level` and every visible folder beneath it.
@@ -687,22 +677,23 @@ fn category_class(c: ProfileCategory) -> CategoryClass {
     }
 }
 
-/// The Site folder `group` is filed under: itself, or its nearest Site ancestor (ADR-191 Inc.10).
-/// Walks the unscoped parents; a folder in no site, or a loop, answers `None`.
+/// The Site folder `group` is filed under: itself, or its nearest Site ancestor. Walks the
+/// unscoped parents; a folder in no site, or a loop, answers `None`. The one walk both the flat
+/// drawing (Inc.2) and the way-out judgement (Inc.10) use; `is_site` is the only thing that
+/// differs between them.
 pub(crate) fn site_of_group(
     group: Option<Uuid>,
     parent: &HashMap<Uuid, Option<Uuid>>,
-    sites: &HashSet<Uuid>,
+    is_site: &dyn Fn(Uuid) -> bool,
 ) -> Option<Uuid> {
     let mut cur = group;
-    let mut steps = 0;
+    let mut seen = HashSet::new();
     while let Some(g) = cur {
-        if sites.contains(&g) {
-            return Some(g);
-        }
-        steps += 1;
-        if steps > MAX_GROUP_DEPTH + 1 {
+        if !seen.insert(g) || seen.len() > MAX_GROUP_DEPTH + 1 {
             return None;
+        }
+        if is_site(g) {
+            return Some(g);
         }
         cur = parent.get(&g).copied().flatten();
     }
@@ -710,22 +701,41 @@ pub(crate) fn site_of_group(
 }
 
 /// Which nodes route out of their site (ADR-191 Inc.10 decision 34): a node whose default route
-/// points at an address no node of the same site claims. `hops` is each asked node's default next
-/// hops (empty = it has no default route, which is not a way out); `owners` is every node claiming
-/// each hop address, as its management address or on a port; `site` is the site a node is in.
+/// points somewhere that is not inside its site. A hop is inside when a node of the same site claims
+/// it (`owners`: as its management address or on a port), **or** when it lies in a subnet another
+/// node of the same site has an address in (`subnets`, by node). The second clause is what keeps a
+/// core switch pointing at its routers' HSRP or VRRP address from reading as a way out: that shared
+/// address is often recorded on neither router, but both sit on its subnet. The asking node's own
+/// subnets do not count, since every gateway is on one of them.
+///
+/// `hops` is each asked node's default next hops (empty = no default route, which is not a way
+/// out; the unspecified address = a route out of an interface, which nothing claims, so it leaves).
 /// A node in no site is left out, and so reads as unknown.
 pub(crate) fn site_exits(
     hops: &HashMap<Uuid, Vec<std::net::IpAddr>>,
     owners: &HashMap<std::net::IpAddr, Vec<Uuid>>,
+    subnets: &HashMap<Uuid, std::collections::BTreeSet<yagra_common::SubnetKey>>,
     site: &dyn Fn(Uuid) -> Option<Uuid>,
 ) -> HashMap<Uuid, bool> {
     hops.iter()
         .filter_map(|(node, hs)| {
             let home = site(*node)?;
+            let neighbour_on = |h: &std::net::IpAddr| {
+                let Some(host) = yagra_common::subnet_key(*h, yagra_common::host_prefix_len(*h))
+                else {
+                    return false;
+                };
+                subnets.iter().any(|(other, nets)| {
+                    other != node
+                        && site(*other) == Some(home)
+                        && nets.iter().any(|net| net.contains(&host))
+                })
+            };
             let inside = |h: &std::net::IpAddr| {
                 owners
                     .get(h)
                     .is_some_and(|o| o.iter().any(|c| site(*c) == Some(home)))
+                    || neighbour_on(h)
             };
             Some((*node, hs.iter().any(|h| !inside(h))))
         })
@@ -1323,8 +1333,9 @@ mod tests {
                 .into_iter()
                 .collect();
         let sites: HashSet<Uuid> = [site_a, site_b].into_iter().collect();
-        assert_eq!(site_of_group(Some(floor), &parent, &sites), Some(site_a));
-        assert_eq!(site_of_group(None, &parent, &sites), None);
+        let is_site = |g: Uuid| sites.contains(&g);
+        assert_eq!(site_of_group(Some(floor), &parent, &is_site), Some(site_a));
+        assert_eq!(site_of_group(None, &parent, &is_site), None);
         let filed: HashMap<Uuid, Option<Uuid>> = [
             (router, Some(site_a)),
             (core, Some(floor)),
@@ -1333,7 +1344,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let site = |n: Uuid| site_of_group(filed.get(&n).copied().flatten(), &parent, &sites);
+        let site = |n: Uuid| site_of_group(filed.get(&n).copied().flatten(), &parent, &is_site);
         let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
         let hops: HashMap<Uuid, Vec<std::net::IpAddr>> = [
             // The router's gateway is the carrier's end of the WAN link: nobody's address.
@@ -1349,14 +1360,55 @@ mod tests {
         .collect();
         let owners: HashMap<std::net::IpAddr, Vec<Uuid>> =
             [(ip("192.0.2.253"), vec![router])].into_iter().collect();
-        let got = site_exits(&hops, &owners, &site);
+        let none_on = HashMap::new();
+        let got = site_exits(&hops, &owners, &none_on, &site);
         assert_eq!(got.get(&router), Some(&true));
         assert_eq!(got.get(&core), Some(&false));
         assert_eq!(got.get(&sw), None);
         assert_eq!(got.get(&other_site_router), Some(&true));
         // No default route at all is not a way out.
         let none: HashMap<Uuid, Vec<std::net::IpAddr>> = [(core, Vec::new())].into_iter().collect();
-        assert_eq!(site_exits(&none, &owners, &site).get(&core), Some(&false));
+        assert_eq!(
+            site_exits(&none, &owners, &none_on, &site).get(&core),
+            Some(&false)
+        );
+        // A route out of an interface, with no gateway, leaves.
+        let iface: HashMap<Uuid, Vec<std::net::IpAddr>> =
+            [(router, vec![ip("0.0.0.0")])].into_iter().collect();
+        assert_eq!(
+            site_exits(&iface, &owners, &none_on, &site).get(&router),
+            Some(&true)
+        );
+        // The core points at the routers' HSRP address, which no router records. A router of the
+        // same site has an address on that subnet, so the hop is inside; the core's own subnets
+        // would not have been enough.
+        let net = |s: &str, len: u8| yagra_common::subnet_key(ip(s), len).unwrap();
+        let vip: HashMap<Uuid, Vec<std::net::IpAddr>> =
+            [(core, vec![ip("203.0.113.1")])].into_iter().collect();
+        let only_own: HashMap<Uuid, std::collections::BTreeSet<yagra_common::SubnetKey>> =
+            [(core, [net("203.0.113.0", 24)].into_iter().collect())]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            site_exits(&vip, &owners, &only_own, &site).get(&core),
+            Some(&true)
+        );
+        let mut shared = only_own.clone();
+        shared.insert(router, [net("203.0.113.0", 24)].into_iter().collect());
+        assert_eq!(
+            site_exits(&vip, &owners, &shared, &site).get(&core),
+            Some(&false)
+        );
+        // A router of another site on a subnet with the same numbers does not count.
+        let mut elsewhere = only_own;
+        elsewhere.insert(
+            other_site_router,
+            [net("203.0.113.0", 24)].into_iter().collect(),
+        );
+        assert_eq!(
+            site_exits(&vip, &owners, &elsewhere, &site).get(&core),
+            Some(&true)
+        );
     }
 
     fn meraki(product: &str) -> RoleFacts {

@@ -88,9 +88,17 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
   const onResizeUp = useCallback(
     (e: React.PointerEvent) => {
       (e.target as Element).releasePointerCapture?.(e.pointerId);
-      if (!resize.current) return;
+      const r = resize.current;
+      if (!r) return;
       resize.current = null;
-      if (dragH !== null) setStored(dragH);
+      // The height is worked out from where the pointer was released, not from the last move's
+      // state, which may not have rendered yet. A cancelled gesture carries no position worth
+      // reading, so it keeps whatever the drag had reached.
+      if (e.type === 'pointercancel') {
+        if (dragH !== null) setStored(dragH);
+      } else if (e.clientY !== r.y) {
+        setStored(groupMapHeightFromDrag(r.h, r.y, e.clientY, window.innerHeight));
+      }
       setDragH(null);
     },
     [dragH, setStored],

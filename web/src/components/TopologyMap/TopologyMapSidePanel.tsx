@@ -26,9 +26,8 @@ import {
 } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
 import { membersByPort, stateCounts } from './apBundle';
-import { memberMatches } from './mapSearch';
 import { Marked } from '../ui/Marked';
-import type { TextCondition } from '../../lib/filterCondition';
+import { compileCondition, type TextCondition } from '../../lib/filterCondition';
 import type { PlacedNode } from './graphLayout';
 import './TopologyMapSidePanel.css';
 
@@ -116,7 +115,10 @@ export function TopologyMapSidePanel({
     const members = bundle.bundle.members;
     // Under a search, a port holding a hit comes first, and so does the hit inside its port. The
     // sort is stable, so everything else keeps the order `membersByPort` gave it.
-    const hit = (name: string) => !!cond && memberMatches(cond, name);
+    // Compiled once per render, never per comparison: the condition may be a regular expression.
+    const test = cond ? compileCondition(cond) : null;
+    const hits = new Set(members.filter((m) => test?.([m.name])).map((m) => m.name));
+    const hit = (name: string) => hits.has(name);
     const groups = membersByPort(level, bundle.bundle)
       .map((g) => ({ ...g, members: [...g.members].sort((x, y) => Number(hit(y.name)) - Number(hit(x.name))) }))
       .sort((x, y) => Number(y.members.some((m) => hit(m.name))) - Number(x.members.some((m) => hit(m.name))));

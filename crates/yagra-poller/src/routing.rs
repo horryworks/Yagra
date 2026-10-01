@@ -505,10 +505,12 @@ mod tests {
             ..ipcidr.clone()
         };
         let got = super::default_next_hops(&[ipcidr.clone(), inet, stray, unspecified, ipcidr]);
+        // The unspecified next hop is a route out of an interface with no gateway, and is kept.
         assert_eq!(
             got,
             vec![
-                "192.0.2.253".parse::<std::net::IpAddr>().unwrap(),
+                "0.0.0.0".parse::<std::net::IpAddr>().unwrap(),
+                "192.0.2.253".parse().unwrap(),
                 "198.51.100.9".parse().unwrap()
             ]
         );

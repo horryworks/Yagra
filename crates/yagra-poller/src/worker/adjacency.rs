@@ -207,18 +207,16 @@ pub(super) struct RoutingAsk<'a> {
 
 /// Where the IPv4 default route points: the RFC 4292 table first, the deprecated RFC 2096 one when
 /// the first gives no IPv4 next hop (ADR-191 Inc.10). `Some(empty)` is an answer — the device has no
-/// default route; `None` means neither table could be read, so nothing is claimed either way.
+/// default route — and it is given only when the table that decides it answered: the RFC 2096 one,
+/// since on some IOS releases it is the only table holding the route at all. When that read fails
+/// the answer is `None` (not known), whatever the RFC 4292 table said.
 async fn read_default_route(
     job: &PollJob,
     transport: &dyn Transport,
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> Option<Vec<std::net::IpAddr>> {
-    let mut answered = false;
-    for root in [
-        yagra_common::OID_DEFAULT_ROUTE_INET,
-        yagra_common::OID_DEFAULT_ROUTE_IPCIDR,
-    ] {
+    let read = |root: &'static str| async move {
         match walker
             .walk_instances(
                 transport,
@@ -229,19 +227,19 @@ async fn read_default_route(
             )
             .await
         {
-            Ok(rows) => {
-                answered = true;
-                let hops = crate::routing::default_next_hops(&rows);
-                if !hops.is_empty() {
-                    return Some(hops);
-                }
-            }
+            Ok(rows) => Some(crate::routing::default_next_hops(&rows)),
             Err(err) => {
                 tracing::debug!(job_id = %job.job_id, error = %err, root, "default route read failed");
+                None
             }
         }
+    };
+    if let Some(hops) = read(yagra_common::OID_DEFAULT_ROUTE_INET).await {
+        if !hops.is_empty() {
+            return Some(hops);
+        }
     }
-    answered.then(Vec::new)
+    read(yagra_common::OID_DEFAULT_ROUTE_IPCIDR).await
 }
 
 /// Execute a routing-adjacency collection (v2c or v3, selected by `walker`) — ADR-043 Increment 4.

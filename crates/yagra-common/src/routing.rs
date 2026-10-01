@@ -109,8 +109,9 @@ pub const OID_DEFAULT_ROUTE_IPCIDR: &str = "1.3.6.1.2.1.4.24.4.1.4.0.0.0.0.0.0.0
 /// The next hop in the instance of a row under [`OID_DEFAULT_ROUTE_INET`]:
 /// `policy (length-prefixed OID) . nextHopType . nextHop (length-prefixed octets)`.
 ///
-/// `None` for an instance that does not parse, and for an unspecified next hop (`0.0.0.0`, `::`):
-/// a default route out of an interface with no gateway names no device to compare against.
+/// `None` for an instance that does not parse. A route out of an interface with no gateway (a PPPoE
+/// dialer, an unnumbered WAN link) has no next hop; it reads as the unspecified address, which no
+/// node claims, so it counts as leaving the site — the strongest sign of a way out there is.
 #[must_use]
 pub fn default_next_hop_from_inet_instance(instance: &[u32]) -> Option<IpAddr> {
     let policy_len = usize::try_from(*instance.first()?).ok()?;
@@ -125,21 +126,24 @@ pub fn default_next_hop_from_inet_instance(instance: &[u32]) -> Option<IpAddr> {
         .iter()
         .map(|v| u8::try_from(*v).ok())
         .collect::<Option<_>>()?;
-    let ip = match (kind, bytes.len()) {
-        (1, 4) => IpAddr::V4(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])),
-        (2, 16) => IpAddr::from(<[u8; 16]>::try_from(bytes.as_slice()).ok()?),
-        _ => return None,
-    };
-    (!ip.is_unspecified()).then_some(ip)
+    match (kind, bytes.len()) {
+        (1, 4) => Some(IpAddr::V4(Ipv4Addr::new(
+            bytes[0], bytes[1], bytes[2], bytes[3],
+        ))),
+        (2, 16) => Some(IpAddr::from(<[u8; 16]>::try_from(bytes.as_slice()).ok()?)),
+        // `unknown(0)` with no octets: the route names an interface and no gateway.
+        (0, 0) => Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        _ => None,
+    }
 }
 
 /// The next hop of a row under [`OID_DEFAULT_ROUTE_IPCIDR`]: its value, four octets (an
-/// `IpAddress` arrives as its octets). `None` for anything else and for `0.0.0.0`.
+/// `IpAddress` arrives as its octets). `None` for anything else. `0.0.0.0` is kept: it is a route
+/// out of an interface with no gateway (see [`default_next_hop_from_inet_instance`]).
 #[must_use]
 pub fn default_next_hop_from_ipcidr_value(value: &[u8]) -> Option<IpAddr> {
     let &[a, b, c, d] = value else { return None };
-    let ip = IpAddr::V4(Ipv4Addr::new(a, b, c, d));
-    (!ip.is_unspecified()).then_some(ip)
+    Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
 }
 
 /// `inetCidrRouteType = local(3)` — the destination is reached over a local interface.
@@ -395,7 +399,6 @@ impl RoutingSnapshot {
             self.truncated = true;
         }
         if let Some(hops) = self.default_next_hops.as_mut() {
-            hops.retain(|ip| !ip.is_unspecified());
             hops.sort_unstable();
             hops.dedup();
             hops.truncate(MAX_DEFAULT_NEXT_HOPS);
@@ -887,10 +890,15 @@ mod tests {
             default_next_hop_from_inet_instance(&v6),
             Some(ip("2001:db8::1"))
         );
-        // A route out of an interface with no gateway names no device.
+        // A route out of an interface with no gateway reads as the unspecified address, however
+        // the agent spells it: a zero IPv4 next hop, or `unknown(0)` with no octets.
         assert_eq!(
             default_next_hop_from_inet_instance(&[2, 0, 0, 1, 4, 0, 0, 0, 0]),
-            None
+            Some(ip("0.0.0.0"))
+        );
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 0, 0]),
+            Some(ip("0.0.0.0"))
         );
         // Truncated, mislabelled, or out-of-range instances do not parse.
         assert_eq!(
@@ -914,7 +922,10 @@ mod tests {
             default_next_hop_from_ipcidr_value(&[198, 51, 100, 9]),
             Some(ip("198.51.100.9"))
         );
-        assert_eq!(default_next_hop_from_ipcidr_value(&[0, 0, 0, 0]), None);
+        assert_eq!(
+            default_next_hop_from_ipcidr_value(&[0, 0, 0, 0]),
+            Some(ip("0.0.0.0"))
+        );
         assert_eq!(default_next_hop_from_ipcidr_value(&[1, 2, 3]), None);
     }
 
@@ -944,7 +955,6 @@ mod tests {
 
         let asked = RoutingSnapshot::new(adj, false).with_default_next_hops(vec![
             ip("198.51.100.9"),
-            ip("0.0.0.0"),
             ip("192.0.2.254"),
             ip("198.51.100.9"),
         ]);

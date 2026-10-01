@@ -556,7 +556,7 @@ async fn role_facts(
     drawn: &[Uuid],
     links: &[crate::topology_links::StoredLink],
 ) -> HashMap<Uuid, crate::topology_level::RoleFacts> {
-    let (kinds, categories, l3) = tokio::join!(
+    let (kinds, categories, l3, hops) = tokio::join!(
         super::nodes::node_kinds_with_products(admin, drawn),
         async {
             admin
@@ -566,11 +566,19 @@ async fn role_facts(
                 .unwrap_or_default()
         },
         async { admin.l3.current_for(drawn).await.unwrap_or_default() },
+        async {
+            admin
+                .routing
+                .default_next_hops_for(drawn)
+                .await
+                .unwrap_or_default()
+        },
     );
-    let subnets: HashMap<Uuid, usize> = l3
+    let networks: HashMap<Uuid, std::collections::BTreeSet<yagra_common::SubnetKey>> = l3
         .into_iter()
-        .map(|(id, snap)| (id, snap.subnets().len()))
+        .map(|(id, snap)| (id, snap.subnets()))
         .collect();
+    let subnets: HashMap<Uuid, usize> = networks.iter().map(|(id, n)| (*id, n.len())).collect();
     let mut routing: HashSet<Uuid> = HashSet::new();
     for l in links {
         if l.sources
@@ -580,7 +588,7 @@ async fn role_facts(
             routing.extend(l.a_node.iter().chain(l.b_node.iter()).map(|n| n.as_uuid()));
         }
     }
-    let exits = site_exits_for(admin, drawn).await;
+    let exits = site_exits_for(admin, drawn, &hops, &networks).await;
     drawn
         .iter()
         .filter_map(|id| {
@@ -600,18 +608,18 @@ async fn role_facts(
         .collect()
 }
 
-/// Which of the drawn nodes route out of their site (ADR-191 Inc.10): each one's stored default
-/// next hops, who claims those addresses, and which site each of them is filed in. Read only for
-/// the nodes that have an answer, and only the hop addresses are looked up, so a level of switches
-/// that were never asked costs one query. Every read is unscoped: whether a hop is inside the site
-/// is a fact about the network, not about what the caller may see, and only the yes/no leaves here.
-/// A read that fails leaves every node unknown, which keeps the role it would have had.
-async fn site_exits_for(admin: &super::AdminState, drawn: &[Uuid]) -> HashMap<Uuid, bool> {
-    let hops = admin
-        .routing
-        .default_next_hops_for(drawn)
-        .await
-        .unwrap_or_default();
+/// Which of the drawn nodes route out of their site (ADR-191 Inc.10), from each one's stored default
+/// next hops (`hops`, read alongside the other role facts) and the subnets the drawn nodes hold
+/// (`networks`). Only the hop addresses are looked up, so a level whose nodes were never asked costs
+/// nothing more. Every read here is unscoped: whether a hop is inside the site is a fact about the
+/// network, not about what the caller may see, and only the yes/no leaves this function. A read that
+/// fails leaves every node unknown, which keeps the role it would have had.
+async fn site_exits_for(
+    admin: &super::AdminState,
+    drawn: &[Uuid],
+    hops: &HashMap<Uuid, Vec<std::net::IpAddr>>,
+    networks: &HashMap<Uuid, std::collections::BTreeSet<yagra_common::SubnetKey>>,
+) -> HashMap<Uuid, bool> {
     if hops.is_empty() {
         return HashMap::new();
     }
@@ -645,10 +653,11 @@ async fn site_exits_for(admin: &super::AdminState, drawn: &[Uuid]) -> HashMap<Uu
         })
         .map(|g| g.id)
         .collect();
+    let is_site = |g: Uuid| sites.contains(&g);
     let site = |node: Uuid| {
-        crate::topology_level::site_of_group(filed.get(&node).copied().flatten(), &parent, &sites)
+        crate::topology_level::site_of_group(filed.get(&node).copied().flatten(), &parent, &is_site)
     };
-    crate::topology_level::site_exits(&hops, &owners, &site)
+    crate::topology_level::site_exits(hops, &owners, networks, &site)
 }
 
 /// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.

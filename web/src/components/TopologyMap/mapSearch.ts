@@ -85,9 +85,4 @@ export function stepThrough(order: readonly string[], current: string | null, di
   return order[(at + dir + order.length) % order.length];
 }
 
-/** Whether one of a bundle's access points is a hit, for the side panel's list. */
-export function memberMatches(cond: TextCondition, name: string): boolean {
-  const test = compileCondition(cond);
-  return !!test && test([name]);
-}
 

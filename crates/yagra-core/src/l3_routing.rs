@@ -52,6 +52,11 @@ impl RoutingRepo {
     /// half answered sends nothing at all, so this is never reached with an empty stand-in — which
     /// is what stops one timed-out walk from erasing a node's adjacency, and with it every
     /// point-to-point link that node was in.
+    ///
+    /// The default-route answer (ADR-191 Inc.10) follows the same rule on its own: a snapshot that
+    /// carries none — the two small reads failed, or an older poller sent it — keeps the answer
+    /// already stored rather than replacing it with "not known", so one timeout does not move a
+    /// site's way out off the map's top row for an hour.
     pub async fn record_observation(
         &self,
         node_id: Uuid,
@@ -66,7 +71,12 @@ impl RoutingRepo {
              VALUES ($1, $2, $3, $4, $5, now(), now()) \
              ON CONFLICT (node_id) DO UPDATE SET \
                 routing_key = EXCLUDED.routing_key, \
-                adjacencies = EXCLUDED.adjacencies, \
+                adjacencies = CASE \
+                    WHEN EXCLUDED.adjacencies ? 'default_next_hops' \
+                      OR NOT (node_routing.adjacencies ? 'default_next_hops') \
+                    THEN EXCLUDED.adjacencies \
+                    ELSE EXCLUDED.adjacencies || jsonb_build_object('default_next_hops', \
+                         node_routing.adjacencies->'default_next_hops') END, \
                 adjacency_count = EXCLUDED.adjacency_count, \
                 truncated = EXCLUDED.truncated, \
                 first_seen = CASE WHEN node_routing.routing_key = EXCLUDED.routing_key \
@@ -385,6 +395,10 @@ mod tests {
         .await
         .unwrap();
         repo.record_observation(old, &RoutingSnapshot::new(Vec::new(), false))
+            .await
+            .unwrap();
+        // A later observation that carries no answer keeps the stored one.
+        repo.record_observation(router, &RoutingSnapshot::new(Vec::new(), false))
             .await
             .unwrap();
 
