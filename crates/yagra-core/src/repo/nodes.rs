@@ -1680,6 +1680,34 @@ impl NodeRepo {
         rows.into_iter().map(|row| Ok(row.try_get("id")?)).collect()
     }
 
+    /// The category of each node's device profile, for the nodes that have a profile whose
+    /// category this build knows (ADR-191 Inc.6). A node with none is absent.
+    pub async fn profile_categories(
+        &self,
+        ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, yagra_common::ProfileCategory>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT n.id, p.category FROM nodes n \
+               JOIN profiles p ON p.id = n.profile_id \
+              WHERE n.id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let category: String = row.try_get("category")?;
+            if let Some(c) = yagra_common::ProfileCategory::from_token(&category) {
+                out.insert(id, c);
+            }
+        }
+        Ok(out)
+    }
+
     /// The display facts a notification template renders against (ADR-039), for the given ids in
     /// one query. `LEFT JOIN`ed so an ungrouped node or one with no profile still comes back —
     /// the template just finds those variables undefined.
@@ -3455,5 +3483,37 @@ mod tests {
             vec![ours],
             "asking about a folder outside the scope must not return its nodes"
         );
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_nodes_profile_category_is_read_and_a_node_without_one_is_absent(pool: sqlx::PgPool) {
+        let routed = pgtest::node(&pool, "rt-01", 1, None).await;
+        let bare = pgtest::node(&pool, "sw-01", 2, None).await;
+        let repo = pgtest::repo(pool.clone());
+        let profile = repo
+            .create_profile("Edge routers", "router", None, None)
+            .await
+            .expect("profile");
+        sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+            .bind(routed)
+            .bind(profile)
+            .execute(&pool)
+            .await
+            .expect("bind the profile");
+        let got = repo
+            .profile_categories(&[routed, bare])
+            .await
+            .expect("read");
+        assert_eq!(
+            got.get(&routed),
+            Some(&yagra_common::ProfileCategory::Router)
+        );
+        assert!(!got.contains_key(&bare), "a node with no profile is absent");
+        assert!(repo
+            .profile_categories(&[])
+            .await
+            .expect("empty")
+            .is_empty());
     }
 }

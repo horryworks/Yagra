@@ -1396,6 +1396,29 @@ export const MAP_ENDPOINT_KINDS = [
 ] as const satisfies readonly components['schemas']['MapEndpointKind'][];
 export type MapEndpointKind = (typeof MAP_ENDPOINT_KINDS)[number];
 
+/** What a node does in the network, which decides its row on the map (ADR-191 Inc.6), top row
+ *  first. `as const` for the reason in `LINK_SOURCES`: the side panel builds `map.role.<role>`. */
+export const MAP_ROLES = [
+  'edge',
+  'l3_switch',
+  'l2_switch',
+  'access_point',
+  'other',
+] as const satisfies readonly components['schemas']['MapRole'][];
+export type MapRole = (typeof MAP_ROLES)[number];
+
+/** Why a node was given its role. `as const` for the same reason: the panel builds
+ *  `map.roleReason.<reason>`. */
+export const MAP_ROLE_REASONS = [
+  'wireless_ap',
+  'meraki_product',
+  'profile_category',
+  'routing_adjacency',
+  'subnets',
+  'default',
+] as const satisfies readonly components['schemas']['MapRoleReason'][];
+export type MapRoleReason = (typeof MAP_ROLE_REASONS)[number];
+
 /** What kind of evidence produced a link.
  *
  *  An `as const` array, not just the generated union: ~150 call sites build an i18n key at runtime

@@ -48,6 +48,8 @@ import {
   WLAN_AP_STATES,
   LINK_SOURCES,
   MAP_ENDPOINT_KINDS,
+  MAP_ROLES,
+  MAP_ROLE_REASONS,
   TOPOLOGY_MODES,
   TLS_CERT_SOURCES,
   METRIC_STATUSES,
@@ -1101,6 +1103,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // The map panel's legend names each kind of box with `t(`map.kind.${k}`)` (ADR-191).
     const locales = { en: enTopology, ja: jaTopology };
     expectKeys('map endpoint kind', locales, 'map.kind.', MAP_ENDPOINT_KINDS);
+  });
+
+  it('every map role and its reason has strings (topology:map.role.*, map.roleReason.*)', () => {
+    // The side panel names a node's role and why with keys built from the server's enums (ADR-191
+    // Inc.6).
+    const locales = { en: enTopology, ja: jaTopology };
+    expectKeys('map role', locales, 'map.role.', MAP_ROLES);
+    expectKeys('map role reason', locales, 'map.roleReason.', MAP_ROLE_REASONS);
   });
 
   it('every sky has strings (topology:geo.dayNight.sky.*)', () => {

@@ -355,6 +355,42 @@ pub(crate) enum MapEndpointKind {
     External,
 }
 
+/// What a node does in the network, which decides the row the map draws it in (ADR-191 Inc.6):
+/// the way out of the site on top, then the switches that route, the switches that do not, and
+/// access points and everything else at the bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapRole {
+    /// A router or firewall (a Meraki MX among them): the way out of the site.
+    Edge,
+    /// A switch that routes between the site's networks.
+    L3Switch,
+    /// A switch that does not route.
+    L2Switch,
+    /// A Wi-Fi access point.
+    AccessPoint,
+    /// Anything else: a wireless controller, a server, a printer, a URL or DNS monitor.
+    Other,
+}
+
+/// Why a node was given its [`MapRole`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapRoleReason {
+    /// It was imported from its wireless controller as an access point.
+    WirelessAp,
+    /// The Meraki product type says what it is.
+    MerakiProduct,
+    /// Its device profile's category says what it is.
+    ProfileCategory,
+    /// It holds an OSPF, BGP or routing-table adjacency.
+    RoutingAdjacency,
+    /// It has an address in two or more subnets, so it routes between them.
+    Subnets,
+    /// Nothing points anywhere else.
+    Default,
+}
+
 /// What a stub stands for: one node, or a folder holding the far ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -407,6 +443,13 @@ pub(crate) struct MapNode {
     /// The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki
     /// MR. The map draws it as an access-point symbol under the device it hangs off.
     pub access_point: bool,
+    /// What the node does in the network, which decides its row on the map (ADR-191 Inc.6).
+    pub role: MapRole,
+    /// Why it was given that role.
+    pub role_reason: MapRoleReason,
+    /// How many subnets the node has an address in, from its last address walk; `null` when no
+    /// walk has been recorded.
+    pub subnet_count: Option<u32>,
 }
 
 /// Where links leave the level: a node or a folder outside it.
@@ -503,6 +546,55 @@ pub(crate) struct MapLevelQuery {
 }
 
 /// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.
+/// What decides each drawn node's role on the map (ADR-191 Inc.6). A read that fails leaves its
+/// facts unknown rather than failing the map: the drawing is useful without the rows.
+async fn role_facts(
+    admin: &super::AdminState,
+    drawn: &[Uuid],
+    links: &[crate::topology_links::StoredLink],
+) -> HashMap<Uuid, crate::topology_level::RoleFacts> {
+    let (kinds, categories, l3) = tokio::join!(
+        super::nodes::node_kinds_with_products(admin, drawn),
+        async {
+            admin
+                .repo
+                .profile_categories(drawn)
+                .await
+                .unwrap_or_default()
+        },
+        async { admin.l3.current_for(drawn).await.unwrap_or_default() },
+    );
+    let subnets: HashMap<Uuid, usize> = l3
+        .into_iter()
+        .map(|(id, snap)| (id, snap.subnets().len()))
+        .collect();
+    let mut routing: HashSet<Uuid> = HashSet::new();
+    for l in links {
+        if l.sources
+            .iter()
+            .any(|s| crate::topology_level::is_routing_evidence(*s))
+        {
+            routing.extend(l.a_node.iter().chain(l.b_node.iter()).map(|n| n.as_uuid()));
+        }
+    }
+    drawn
+        .iter()
+        .filter_map(|id| {
+            let kind = *kinds.kinds.get(id)?;
+            Some((
+                *id,
+                crate::topology_level::RoleFacts {
+                    kind,
+                    meraki_product: kinds.meraki_product_types.get(id).cloned(),
+                    category: categories.get(id).copied(),
+                    subnet_count: subnets.get(id).copied(),
+                    routing_adjacency: routing.contains(id),
+                },
+            ))
+        })
+        .collect()
+}
+
 pub(crate) async fn topology_map_level(
     st: &ApiState,
     admin: &super::AdminState,
@@ -577,8 +669,8 @@ pub(crate) async fn topology_map_level(
             .await;
     crate::topology_level::apply_names(&mut level, &names);
     let drawn: Vec<Uuid> = level.nodes.iter().map(|n| n.id).collect();
-    let kinds = super::nodes::node_kinds_with_products(admin, &drawn).await;
-    crate::topology_level::apply_access_points(&mut level, &kinds.access_points());
+    let roles = role_facts(admin, &drawn, &links).await;
+    crate::topology_level::apply_roles(&mut level, &roles);
     // The drawing is useful without the run's record, so a failed read leaves both unset.
     if let Some(run) = admin.topology_links.last_run().await.unwrap_or(None) {
         level.derived_at = Some(run.derived_at.to_rfc3339());

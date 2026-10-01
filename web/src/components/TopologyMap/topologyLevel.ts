@@ -50,6 +50,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       sub: n.folder_path.length > 0 ? `▤ ${folderTrail(n).join(PATH_SEP)}` : null,
       rootCause: n.root_cause ?? null,
       ap: n.access_point,
+      role: n.role,
     })),
     ...level.folders.map((f) => ({
       id: graphId('folder', f.id),
@@ -59,6 +60,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       sub: captions.folder(f),
       rootCause: null,
       ap: false,
+      role: 'other' as const,
     })),
     ...level.stubs.map((s) => ({
       id: graphId('external', s.id),
@@ -68,6 +70,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       sub: captions.stub(s),
       rootCause: null,
       ap: false,
+      role: 'other' as const,
     })),
   ];
   const links = level.edges.map((e) => ({
@@ -137,6 +140,13 @@ export function folderHref(folderId: string): string {
 /** The Nodes page on this level's folder, or the whole inventory for the whole network. */
 export function levelNodesHref(level: MapLevel): string {
   return nodesPageHref(level.group ? { kind: 'group', id: level.group.id } : null);
+}
+
+/** Whether the level is drawn in role rows at all (ADR-191 Inc.6): some node is a router, a
+ *  firewall or a switch. A level of servers and monitors alone keeps the plain layout, so the
+ *  panel does not explain rows that are not there. */
+export function hasTiers(level: MapLevel): boolean {
+  return level.nodes.some((n) => n.role === 'edge' || n.role === 'l3_switch' || n.role === 'l2_switch');
 }
 
 /** How many observations the last derivation run declined to turn into a link (ADR-191 decision 15).

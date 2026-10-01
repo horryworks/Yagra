@@ -31,6 +31,22 @@
       "level": "この階には、検出されたリンクを持つものがまだありません。リンクは CDP/LLDP の隣接と、同じ IP サブネットに属するノードから導出するので、それらの走査が進むにつれてマップが埋まっていきます。"
     },
     "accessPoint": "Wi-Fi アクセスポイント",
+    "tiers": "上から: 出入口（ルーター・ファイアウォール）→ ルーティングするスイッチ → しないスイッチ → アクセスポイントとその他。",
+    "role": {
+      "edge": "ルーター・ファイアウォール",
+      "l3_switch": "ルーティングするスイッチ (L3)",
+      "l2_switch": "スイッチ (L2)",
+      "access_point": "Wi-Fi アクセスポイント",
+      "other": "その他の機器"
+    },
+    "roleReason": {
+      "wireless_ap": "無線コントローラーから取り込んだ AP",
+      "meraki_product": "Meraki の製品種別",
+      "profile_category": "デバイスプロファイルの分類",
+      "routing_adjacency": "OSPF・BGP・経路表の隣接を持つ",
+      "subnets": "{{count}} 個のサブネットにアドレスを持つ",
+      "default": "ほかに判断材料なし"
+    },
     "kind": {
       "node": "ノード",
       "folder": "フォルダ（押すと中に入る）",
@@ -59,6 +75,7 @@
       "openLevelInNodes": "ノード一覧で開く",
       "node": {
         "path": "場所",
+        "role": "役割",
         "edges": "線",
         "open": "ノードの詳細を開く"
       },

@@ -15,7 +15,14 @@ import { Button } from '../ui/Button';
 import { StatusDot } from '../ui/StatusDot';
 import { WifiIcon } from '../ui/icons';
 import { useEntityNames } from '../ui/entityNames';
-import { edgesOf, levelNodesHref, nodePlace, unresolvedCount, type MapSelection } from './topologyLevel';
+import {
+  edgesOf,
+  hasTiers,
+  levelNodesHref,
+  nodePlace,
+  unresolvedCount,
+  type MapSelection,
+} from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
 import './TopologyMapSidePanel.css';
 
@@ -51,6 +58,11 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
           <dl className="topomap-panel-facts">
             <dt>{t('map.panel.node.path')}</dt>
             <dd>{nodePlace(level, node, levelName)}</dd>
+            <dt>{t('map.panel.node.role')}</dt>
+            <dd>
+              {t(`map.role.${node.role}`)} —{' '}
+              {t(`map.roleReason.${node.role_reason}`, { count: node.subnet_count ?? 0 })}
+            </dd>
           </dl>
           <h3 className="topomap-panel-sub">{t('map.panel.node.edges')}</h3>
           <ul className="topomap-panel-list">
@@ -113,6 +125,7 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
           </div>
         ))}
       </dl>
+      {hasTiers(level) && <p className="topomap-panel-note muted">{t('map.tiers')}</p>}
       {unresolved > 0 && (
         <p className="topomap-panel-note muted">{t('map.unresolved', { count: unresolved })}</p>
       )}

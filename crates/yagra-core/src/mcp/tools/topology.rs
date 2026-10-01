@@ -280,7 +280,9 @@ impl YagraMcp {
                        (`flattened: true`): no boxes, every linked node in the subtree, each with \
                        the folders down to the one it is filed in (`folder_path`), and a link to \
                        another folder of the same site is a stub for the far node; over the \
-                       bounds it falls back to boxes. \
+                       bounds it falls back to boxes. Each map node carries a `role` (`edge` for \
+                       a router or firewall, `l3_switch`, `l2_switch`, `access_point`, `other`) \
+                       that decides its row, the `role_reason` behind it, and `subnet_count`. \
                        `kind=overrides` lists the decisions an operator has \
                        recorded about links (pin, hide, or which end is upstream), which always \
                        beat what was derived. `kind=shadow` compares the two dependency graphs and \

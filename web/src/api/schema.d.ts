@@ -9239,13 +9239,35 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            /** @description What the node does in the network, which decides its row on the map (ADR-191 Inc.6). */
+            role: components["schemas"]["MapRole"];
+            /** @description Why it was given that role. */
+            role_reason: components["schemas"]["MapRoleReason"];
             /**
              * Format: uuid
              * @description Upstream node blamed for this node's alert (dependency suppression), if any.
              */
             root_cause?: string | null;
             state: components["schemas"]["NodeState"];
+            /**
+             * Format: int32
+             * @description How many subnets the node has an address in, from its last address walk; `null` when no
+             *     walk has been recorded.
+             */
+            subnet_count?: number | null;
         };
+        /**
+         * @description What a node does in the network, which decides the row the map draws it in (ADR-191 Inc.6):
+         *     the way out of the site on top, then the switches that route, the switches that do not, and
+         *     access points and everything else at the bottom.
+         * @enum {string}
+         */
+        MapRole: "edge" | "l3_switch" | "l2_switch" | "access_point" | "other";
+        /**
+         * @description Why a node was given its [`MapRole`].
+         * @enum {string}
+         */
+        MapRoleReason: "wireless_ap" | "meraki_product" | "profile_category" | "routing_adjacency" | "subnets" | "default";
         /** @description Where links leave the level: a node or a folder outside it. */
         MapStub: {
             /**

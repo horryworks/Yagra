@@ -23,6 +23,7 @@ function node(id: string, extra: Partial<GraphNode> = {}): GraphNode {
     sub: null,
     rootCause: null,
     ap: false,
+    role: 'other',
     ...extra,
   };
 }
@@ -298,7 +299,8 @@ describe('layoutGraph', () => {
 });
 
 describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
-  const ap = (id: string, extra: Partial<GraphNode> = {}) => node(id, { ap: true, ...extra });
+  const ap = (id: string, extra: Partial<GraphNode> = {}) =>
+    node(id, { ap: true, role: 'access_point', ...extra });
   const byId = (out: ReturnType<typeof layoutGraph>, id: string) => out.nodes.find((n) => n.id === id)!;
 
   /** A core switch, two access switches, and the given number of APs on each. */
@@ -421,5 +423,128 @@ describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
     expect(two).toEqual(one);
     const g = one.nodes.filter((n) => n.id.startsWith('sw1-ap')).sort((x, y) => x.cx - y.cx);
     expect(g.map((n) => n.name)).toEqual([...g.map((n) => n.name)].sort());
+  });
+});
+
+describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
+  const as = (role: GraphNode['role']) => (id: string) => node(id, { role });
+  const edge = as('edge');
+  const l3 = as('l3_switch');
+  const l2 = as('l2_switch');
+
+  /** Each backbone box's row, numbered from 0 at the top. Rows are read off the centres, which
+   *  only ever grow with the row. */
+  function rows(out: ReturnType<typeof layoutGraph>): Record<string, number> {
+    const boxes = out.nodes.filter((n) => !n.ap);
+    const ys = [...new Set(boxes.map((n) => n.cy))].sort((a, b) => a - b);
+    return Object.fromEntries(boxes.map((n) => [n.id, ys.indexOf(n.cy)]));
+  }
+
+  it('puts the router on top even when the core switch has the most links', () => {
+    const nodes = [edge('rt'), l3('core'), l2('a1'), l2('a2'), l2('a3')];
+    const links = [link('rt', 'core'), link('core', 'a1'), link('core', 'a2'), link('core', 'a3')];
+    expect(rows(layoutGraph({ nodes, links }))).toEqual({ rt: 0, core: 1, a1: 2, a2: 2, a3: 2 });
+    // The same graph with no roles roots at the best-connected box, as before.
+    const plain = nodes.map((n) => ({ ...n, role: 'other' as const }));
+    expect(rows(layoutGraph({ nodes: plain, links })).core).toBe(0);
+  });
+
+  /** One real site's shape: a router and two firewalls, a core that routes, five access switches,
+   *  a wireless controller and thirteen APs — plus the five lines CDP reports from the router to
+   *  each access switch's uplink, through a core that forwards CDP without speaking it. */
+  function site() {
+    const access = ['as1', 'as2', 'as3', 'as4', 'as5'];
+    const nodes = [edge('rt'), edge('fw1'), edge('fw2'), l3('core'), ...access.map(l2), node('wlc')];
+    const links = [
+      link('rt', 'core'),
+      link('fw1', 'core'),
+      link('fw2', 'core'),
+      link('core', 'wlc'),
+      link('rt', 'wlc', { source: 'cdp' }),
+      ...access.map((a) => link('core', a)),
+      ...access.map((a) => link('rt', a, { id: `cdp-rt-${a}`, source: 'cdp' })),
+    ];
+    for (let i = 0; i < 13; i++) {
+      const id = `ap${String(i).padStart(2, '0')}`;
+      nodes.push(node(id, { ap: true, role: 'access_point', name: id }));
+      links.push(link(access[i % 4], id, { source: 'cdp' }));
+    }
+    return { nodes, links };
+  }
+
+  it('draws a site as router and firewalls, core, access switches, then APs', () => {
+    const out = layoutGraph(site());
+    expect(rows(out)).toEqual({
+      rt: 0,
+      fw1: 0,
+      fw2: 0,
+      core: 1,
+      // The controller sits one row under the nearest box it is linked to — the router here.
+      wlc: 1,
+      as1: 2,
+      as2: 2,
+      as3: 2,
+      as4: 2,
+      as5: 2,
+    });
+    const at = (id: string) => out.nodes.find((n) => n.id === id)!;
+    for (const n of out.nodes.filter((x) => x.ap)) {
+      const parent = at(`as${(Number(n.id.slice(2)) % 4) + 1}`);
+      expect(n.cy).toBeGreaterThan(parent.cy);
+    }
+    // A line that skips the core row bows rather than running through it.
+    const skip = out.edges.filter((e) => e.id.startsWith('cdp-rt-'));
+    expect(skip).toHaveLength(5);
+    expect(skip.every((e) => e.kind === 'bow')).toBe(true);
+  });
+
+  it('leaves no empty row when there is no router', () => {
+    const nodes = [l3('core'), l2('a1'), l2('a2')];
+    const links = [link('core', 'a1'), link('core', 'a2')];
+    expect(rows(layoutGraph({ nodes, links }))).toEqual({ core: 0, a1: 1, a2: 1 });
+  });
+
+  it('steps a daisy-chained access switch down under the one it hangs off', () => {
+    const nodes = [edge('rt'), l3('core'), l2('as1'), l2('as2')];
+    const links = [link('rt', 'core'), link('core', 'as1'), link('as1', 'as2')];
+    expect(rows(layoutGraph({ nodes, links }))).toEqual({ rt: 0, core: 1, as1: 2, as2: 3 });
+  });
+
+  it('puts a folder box and a chain of other devices under what they are linked to', () => {
+    const nodes = [
+      edge('rt'),
+      node('srv1'),
+      node('srv2'),
+      { ...node('f'), kind: 'folder' as const, name: 'floor-1' },
+    ];
+    const links = [link('rt', 'srv1'), link('srv1', 'srv2'), link('rt', 'f')];
+    expect(rows(layoutGraph({ nodes, links }))).toEqual({ rt: 0, srv1: 1, f: 1, srv2: 2 });
+  });
+
+  it('does not depend on input order', () => {
+    const { nodes, links } = site();
+    const one = layoutGraph({ nodes, links });
+    const two = layoutGraph({ nodes: shuffle(nodes, 3), links: shuffle(links, 7) });
+    expect(two).toEqual(one);
+  });
+
+  it('still hangs access points centred under switches that have roles', () => {
+    const nodes = [l3('core'), l2('sw1'), l2('sw2')];
+    const links = [link('core', 'sw1'), link('core', 'sw2')];
+    for (const sw of ['sw1', 'sw2']) {
+      for (let i = 0; i < 3; i++) {
+        const id = `${sw}-ap${i}`;
+        nodes.push(node(id, { ap: true, role: 'access_point', name: id }));
+        links.push(link(sw, id));
+      }
+    }
+    const out = layoutGraph({ nodes, links });
+    for (const sw of ['sw1', 'sw2']) {
+      const parent = out.nodes.find((n) => n.id === sw)!;
+      const aps = out.nodes.filter((n) => n.id.startsWith(`${sw}-ap`));
+      const mid = aps.reduce((acc, n) => acc + n.cx, 0) / aps.length;
+      expect(mid).toBeCloseTo(parent.cx, 6);
+      expect(aps.every((n) => n.cy > parent.cy)).toBe(true);
+    }
   });
 });

@@ -8,6 +8,7 @@ import {
   fitLabel,
   folderHref,
   graphId,
+  hasTiers,
   groupMapTarget,
   isLevelFor,
   levelNodesHref,
@@ -58,8 +59,28 @@ function level(): MapLevel {
     ],
     subfolder_count: 1,
     nodes: [
-      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder_path: [], access_point: false },
-      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder_path: [], access_point: false },
+      {
+        id: SW1,
+        name: 'sw-01',
+        state: 'ok',
+        root_cause: null,
+        folder_path: [],
+        access_point: false,
+        role: 'l3_switch',
+        role_reason: 'subnets',
+        subnet_count: 3,
+      },
+      {
+        id: SW2,
+        name: 'sw-02',
+        state: 'warning',
+        root_cause: SW1,
+        folder_path: [],
+        access_point: false,
+        role: 'other',
+        role_reason: 'default',
+        subnet_count: null,
+      },
     ],
     stubs: [{ kind: 'folder', id: WEST, name: 'west', level_group: null }],
     edges: [
@@ -150,6 +171,20 @@ describe('levelToGraph', () => {
     expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.ap).toBe(true);
     expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.ap).toBe(false);
     expect(g.nodes.filter((n) => n.kind !== 'node').every((n) => !n.ap)).toBe(true);
+  });
+
+  it('carries each node’s role, and draws a folder or a stub as other', () => {
+    const g = levelToGraph(level(), captions);
+    expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.role).toBe('l3_switch');
+    expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.role).toBe('other');
+    expect(g.nodes.filter((n) => n.kind !== 'node').every((n) => n.role === 'other')).toBe(true);
+  });
+
+  it('explains role rows only on a level that has a router or switch', () => {
+    expect(hasTiers(level())).toBe(true);
+    const plain = level();
+    plain.nodes = plain.nodes.map((n) => ({ ...n, role: 'other' as const }));
+    expect(hasTiers(plain)).toBe(false);
   });
 });
 

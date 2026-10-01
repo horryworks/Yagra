@@ -33232,7 +33232,9 @@
           "name",
           "state",
           "folder_path",
-          "access_point"
+          "access_point",
+          "role",
+          "role_reason"
         ],
         "properties": {
           "access_point": {
@@ -33253,6 +33255,14 @@
           "name": {
             "type": "string"
           },
+          "role": {
+            "$ref": "#/components/schemas/MapRole",
+            "description": "What the node does in the network, which decides its row on the map (ADR-191 Inc.6)."
+          },
+          "role_reason": {
+            "$ref": "#/components/schemas/MapRoleReason",
+            "description": "Why it was given that role."
+          },
           "root_cause": {
             "type": [
               "string",
@@ -33263,8 +33273,40 @@
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"
+          },
+          "subnet_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many subnets the node has an address in, from its last address walk; `null` when no\nwalk has been recorded.",
+            "minimum": 0
           }
         }
+      },
+      "MapRole": {
+        "type": "string",
+        "description": "What a node does in the network, which decides the row the map draws it in (ADR-191 Inc.6):\nthe way out of the site on top, then the switches that route, the switches that do not, and\naccess points and everything else at the bottom.",
+        "enum": [
+          "edge",
+          "l3_switch",
+          "l2_switch",
+          "access_point",
+          "other"
+        ]
+      },
+      "MapRoleReason": {
+        "type": "string",
+        "description": "Why a node was given its [`MapRole`].",
+        "enum": [
+          "wireless_ap",
+          "meraki_product",
+          "profile_category",
+          "routing_adjacency",
+          "subnets",
+          "default"
+        ]
       },
       "MapStub": {
         "type": "object",

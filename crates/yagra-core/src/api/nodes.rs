@@ -452,25 +452,6 @@ pub(crate) struct NodeKinds {
     pub(crate) meraki_repeaters: HashSet<Uuid>,
 }
 
-impl NodeKinds {
-    /// The nodes that are Wi-Fi access points: an imported AP, or a Meraki node whose product
-    /// type is an access point (an MR resolves to `Meraki`, so its kind alone does not say so).
-    pub(crate) fn access_points(&self) -> HashSet<Uuid> {
-        self.kinds
-            .iter()
-            .filter(|(id, kind)| match kind {
-                NodeKind::WirelessAp => true,
-                NodeKind::Meraki => self
-                    .meraki_product_types
-                    .get(id)
-                    .is_some_and(|p| crate::meraki::is_access_point_product(p)),
-                NodeKind::Url | NodeKind::Dns | NodeKind::Device => false,
-            })
-            .map(|(id, _)| *id)
-            .collect()
-    }
-}
-
 /// [`node_kinds`], keeping the Meraki product types the kind was read from.
 pub(crate) async fn node_kinds_with_products(admin: &AdminState, ids: &[Uuid]) -> NodeKinds {
     let (wireless_ap, meraki_products, url, dns) = tokio::join!(
@@ -3094,33 +3075,6 @@ async fn poll_node_now(
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_imported_ap_and_a_meraki_mr_are_access_points_and_nothing_else_is() {
-        let id = Uuid::from_u128;
-        let kinds = NodeKinds {
-            kinds: [
-                (id(1), NodeKind::WirelessAp),
-                (id(2), NodeKind::Meraki),
-                (id(3), NodeKind::Meraki),
-                (id(4), NodeKind::Meraki),
-                (id(5), NodeKind::Device),
-                (id(6), NodeKind::Url),
-            ]
-            .into_iter()
-            .collect(),
-            meraki_product_types: [
-                (id(2), "wireless".to_owned()),
-                (id(3), "switch".to_owned()),
-                (id(4), "appliance".to_owned()),
-            ]
-            .into_iter()
-            .collect(),
-            meraki_repeaters: HashSet::new(),
-        };
-        let mut got: Vec<Uuid> = kinds.access_points().into_iter().collect();
-        got.sort();
-        assert_eq!(got, vec![id(1), id(2)]);
-    }
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};
     use axum::body::Body;

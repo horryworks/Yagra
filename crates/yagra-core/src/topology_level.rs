@@ -34,12 +34,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use uuid::Uuid;
-use yagra_common::{LinkSource, NodeState};
+use yagra_common::{LinkSource, NodeKind, NodeState, ProfileCategory};
 
 use crate::api::fleet::GroupStateCounts;
 use crate::api::topology::{
     MapBreadcrumb, MapEdge, MapEdgeMember, MapEndpoint, MapEndpointKind, MapFolder, MapLevel,
-    MapNode, MapStub, MapStubKind,
+    MapNode, MapRole, MapRoleReason, MapStub, MapStubKind,
 };
 use crate::groups::{GroupType, MAX_GROUP_DEPTH};
 use crate::topology_links::StoredLink;
@@ -497,6 +497,9 @@ fn compute_with(
             root_cause: input.root_causes.get(&id).copied(),
             folder_path: path_of(node_group.get(&id).copied().flatten()),
             access_point: false,
+            role: MapRole::Other,
+            role_reason: MapRoleReason::Default,
+            subnet_count: None,
         })
         .collect();
     nodes.sort_by_key(|n| n.id);
@@ -629,10 +632,125 @@ pub(crate) fn apply_names(level: &mut MapLevel, names: &HashMap<Uuid, String>) {
     }
 }
 
-/// Mark the level's access points, so the map draws them as an AP symbol under their parent.
-pub(crate) fn apply_access_points(level: &mut MapLevel, access_points: &HashSet<Uuid>) {
+/// What is known about one drawn node, for deciding its [`MapRole`] (ADR-191 Inc.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RoleFacts {
+    pub kind: NodeKind,
+    /// A Meraki node's product type (`appliance`, `switch`, `wireless`, ...).
+    pub meraki_product: Option<String>,
+    /// The category of the node's device profile, when it has one.
+    pub category: Option<ProfileCategory>,
+    /// How many subnets the node has an address in; `None` when no address walk is recorded.
+    pub subnet_count: Option<usize>,
+    /// A link touching the node came from OSPF, BGP or the routing table.
+    pub routing_adjacency: bool,
+}
+
+/// What a profile category says about a node's place on the map.
+enum CategoryClass {
+    Edge,
+    AccessPoint,
+    /// A switch. `promotable` is false for `L2Switch`: an operator or the vendor rule said it
+    /// does not route, and that beats an address count.
+    Switch {
+        promotable: bool,
+    },
+    /// Says nothing either way, so the observations decide.
+    Unclassified,
+    /// Not a network device the map ranks.
+    Other,
+}
+
+fn category_class(c: ProfileCategory) -> CategoryClass {
+    use ProfileCategory as C;
+    match c {
+        C::Router | C::Firewall => CategoryClass::Edge,
+        C::WirelessAp => CategoryClass::AccessPoint,
+        // The built-in switch profiles are product families, not observations: a Catalyst used as
+        // a pure access switch is `L3Switch` too, so only what it was seen doing can promote it.
+        C::L3Switch => CategoryClass::Switch { promotable: true },
+        C::L2Switch => CategoryClass::Switch { promotable: false },
+        C::GenericSnmp => CategoryClass::Unclassified,
+        C::WirelessController
+        | C::LoadBalancer
+        | C::Server
+        | C::Hypervisor
+        | C::Storage
+        | C::Power
+        | C::Printer
+        | C::PingOnly
+        | C::UrlCheck
+        | C::DnsCheck => CategoryClass::Other,
+    }
+}
+
+/// A node's role on the map and why (ADR-191 Inc.6 decision 19). The first rule that applies wins:
+/// what the node *is* (an imported AP, a Meraki product, a router or firewall profile) before what
+/// it was *seen doing* (routing adjacencies, addresses in several subnets), before what its switch
+/// profile claims. `ipForwarding` is deliberately not an input: an OS that cannot turn routing off
+/// answers 1 on every access switch.
+pub(crate) fn role_of(f: &RoleFacts) -> (MapRole, MapRoleReason) {
+    match f.kind {
+        NodeKind::WirelessAp => return (MapRole::AccessPoint, MapRoleReason::WirelessAp),
+        NodeKind::Meraki => {
+            let role = match f
+                .meraki_product
+                .as_deref()
+                .map(|p| category_class(yagra_common::category_for_product_type(p)))
+            {
+                Some(CategoryClass::Edge) => MapRole::Edge,
+                Some(CategoryClass::AccessPoint) => MapRole::AccessPoint,
+                Some(CategoryClass::Switch { .. }) => MapRole::L2Switch,
+                Some(CategoryClass::Unclassified | CategoryClass::Other) | None => MapRole::Other,
+            };
+            return (role, MapRoleReason::MerakiProduct);
+        }
+        NodeKind::Url | NodeKind::Dns => return (MapRole::Other, MapRoleReason::Default),
+        NodeKind::Device => {}
+    }
+    let (switch, promotable) = match f.category.map(category_class) {
+        Some(CategoryClass::Edge) => return (MapRole::Edge, MapRoleReason::ProfileCategory),
+        Some(CategoryClass::AccessPoint) => {
+            return (MapRole::AccessPoint, MapRoleReason::ProfileCategory)
+        }
+        // A server speaking BGP (a route reflector, a load balancer's announcer) is still drawn
+        // as what it is.
+        Some(CategoryClass::Other) => return (MapRole::Other, MapRoleReason::Default),
+        Some(CategoryClass::Switch { promotable }) => (true, promotable),
+        Some(CategoryClass::Unclassified) | None => (false, true),
+    };
+    if f.routing_adjacency {
+        return (MapRole::L3Switch, MapRoleReason::RoutingAdjacency);
+    }
+    if promotable && f.subnet_count.is_some_and(|n| n >= 2) {
+        return (MapRole::L3Switch, MapRoleReason::Subnets);
+    }
+    if switch {
+        return (MapRole::L2Switch, MapRoleReason::ProfileCategory);
+    }
+    (MapRole::Other, MapRoleReason::Default)
+}
+
+/// Whether a link came from a routing adjacency, which only a router or an L3 switch holds.
+pub(crate) fn is_routing_evidence(source: LinkSource) -> bool {
+    match source {
+        LinkSource::Ospf | LinkSource::Bgp | LinkSource::Route => true,
+        LinkSource::Manual | LinkSource::Lldp | LinkSource::Cdp | LinkSource::L3Subnet => false,
+    }
+}
+
+/// Give every drawn node its role. A node with no facts is `other`. The access-point mark follows
+/// the role, so the symbol and the row can never disagree.
+pub(crate) fn apply_roles(level: &mut MapLevel, facts: &HashMap<Uuid, RoleFacts>) {
     for n in &mut level.nodes {
-        n.access_point = access_points.contains(&n.id);
+        let f = facts.get(&n.id);
+        let (role, reason) = f.map_or((MapRole::Other, MapRoleReason::Default), role_of);
+        n.role = role;
+        n.role_reason = reason;
+        n.subnet_count = f
+            .and_then(|f| f.subnet_count)
+            .map(|c| u32::try_from(c).unwrap_or(u32::MAX));
+        n.access_point = role == MapRole::AccessPoint;
     }
 }
 
@@ -1117,16 +1235,208 @@ mod tests {
         assert_eq!(stub(&l, 110).name, id(110).to_string());
     }
 
+    fn facts(kind: NodeKind) -> RoleFacts {
+        RoleFacts {
+            kind,
+            meraki_product: None,
+            category: None,
+            subnet_count: None,
+            routing_adjacency: false,
+        }
+    }
+
+    fn device(category: Option<ProfileCategory>, subnets: Option<usize>) -> RoleFacts {
+        RoleFacts {
+            category,
+            subnet_count: subnets,
+            ..facts(NodeKind::Device)
+        }
+    }
+
+    fn meraki(product: &str) -> RoleFacts {
+        RoleFacts {
+            meraki_product: Some(product.to_owned()),
+            ..facts(NodeKind::Meraki)
+        }
+    }
+
     #[test]
-    fn only_the_named_nodes_are_marked_as_access_points() {
+    fn every_rule_of_the_role_table_decides_what_it_names() {
+        use MapRole as R;
+        use MapRoleReason as W;
+        use ProfileCategory as C;
+        let ospf = RoleFacts {
+            routing_adjacency: true,
+            ..device(Some(C::GenericSnmp), Some(1))
+        };
+        let bgp_server = RoleFacts {
+            routing_adjacency: true,
+            ..device(Some(C::Server), Some(1))
+        };
+        let cases: Vec<(&str, RoleFacts, (MapRole, MapRoleReason))> = vec![
+            (
+                "imported AP",
+                facts(NodeKind::WirelessAp),
+                (R::AccessPoint, W::WirelessAp),
+            ),
+            ("MR", meraki("wireless"), (R::AccessPoint, W::MerakiProduct)),
+            ("MX", meraki("appliance"), (R::Edge, W::MerakiProduct)),
+            ("MS", meraki("switch"), (R::L2Switch, W::MerakiProduct)),
+            ("MV", meraki("camera"), (R::Other, W::MerakiProduct)),
+            ("URL", facts(NodeKind::Url), (R::Other, W::Default)),
+            ("DNS", facts(NodeKind::Dns), (R::Other, W::Default)),
+            (
+                "router",
+                device(Some(C::Router), Some(1)),
+                (R::Edge, W::ProfileCategory),
+            ),
+            (
+                "firewall",
+                device(Some(C::Firewall), None),
+                (R::Edge, W::ProfileCategory),
+            ),
+            (
+                "SNMP AP",
+                device(Some(C::WirelessAp), None),
+                (R::AccessPoint, W::ProfileCategory),
+            ),
+            ("OSPF speaker", ospf, (R::L3Switch, W::RoutingAdjacency)),
+            ("BGP server", bgp_server, (R::Other, W::Default)),
+            (
+                "core",
+                device(Some(C::L3Switch), Some(3)),
+                (R::L3Switch, W::Subnets),
+            ),
+            (
+                "access",
+                device(Some(C::L3Switch), Some(1)),
+                (R::L2Switch, W::ProfileCategory),
+            ),
+            (
+                "declared L2",
+                device(Some(C::L2Switch), Some(3)),
+                (R::L2Switch, W::ProfileCategory),
+            ),
+            (
+                "generic, 2 nets",
+                device(Some(C::GenericSnmp), Some(2)),
+                (R::L3Switch, W::Subnets),
+            ),
+            (
+                "no profile, 2 nets",
+                device(None, Some(2)),
+                (R::L3Switch, W::Subnets),
+            ),
+            (
+                "server, 2 nets",
+                device(Some(C::Server), Some(2)),
+                (R::Other, W::Default),
+            ),
+            (
+                "WLC",
+                device(Some(C::WirelessController), Some(4)),
+                (R::Other, W::Default),
+            ),
+            (
+                "switch, no walk",
+                device(Some(C::L3Switch), None),
+                (R::L2Switch, W::ProfileCategory),
+            ),
+            (
+                "generic, 1 net",
+                device(Some(C::GenericSnmp), Some(1)),
+                (R::Other, W::Default),
+            ),
+        ];
+        for (what, f, want) in cases {
+            assert_eq!(role_of(&f), want, "{what}");
+        }
+    }
+
+    #[test]
+    fn only_routing_sources_count_as_routing_evidence() {
+        let routing: Vec<LinkSource> = LinkSource::ALL
+            .into_iter()
+            .filter(|s| is_routing_evidence(*s))
+            .collect();
+        assert_eq!(
+            routing,
+            [LinkSource::Ospf, LinkSource::Route, LinkSource::Bgp]
+        );
+    }
+
+    #[test]
+    fn roles_are_applied_and_the_access_point_mark_follows_them() {
         let f = fx();
         let mut l = run(&f, Some(2), &[link(1, 120, 121, LinkSource::Lldp)], None);
         assert!(
-            l.nodes.iter().all(|n| !n.access_point),
+            l.nodes
+                .iter()
+                .all(|n| !n.access_point && n.role == MapRole::Other && n.subnet_count.is_none()),
             "unmarked by default"
         );
-        apply_access_points(&mut l, &[id(121), id(999)].into_iter().collect());
-        assert!(!node(&l, 120).access_point);
-        assert!(node(&l, 121).access_point);
+        let given: HashMap<Uuid, RoleFacts> = [
+            (id(120), device(Some(ProfileCategory::L3Switch), Some(4))),
+            (id(121), facts(NodeKind::WirelessAp)),
+            (id(999), facts(NodeKind::WirelessAp)),
+        ]
+        .into_iter()
+        .collect();
+        apply_roles(&mut l, &given);
+        let sw = node(&l, 120);
+        assert_eq!(
+            (sw.role, sw.role_reason),
+            (MapRole::L3Switch, MapRoleReason::Subnets)
+        );
+        assert_eq!(sw.subnet_count, Some(4));
+        assert!(!sw.access_point);
+        let ap = node(&l, 121);
+        assert_eq!(ap.role, MapRole::AccessPoint);
+        assert!(ap.access_point);
+        assert_eq!(ap.subnet_count, None);
+    }
+
+    fn token<T: serde::Serialize>(v: &T) -> String {
+        serde_json::to_value(v)
+            .expect("serialize")
+            .as_str()
+            .expect("a string")
+            .to_owned()
+    }
+
+    #[test]
+    fn roles_serialize_as_the_tokens_the_webui_lists() {
+        let roles = [
+            MapRole::Edge,
+            MapRole::L3Switch,
+            MapRole::L2Switch,
+            MapRole::AccessPoint,
+            MapRole::Other,
+        ];
+        let got: Vec<String> = roles.iter().map(token).collect();
+        assert_eq!(
+            got,
+            ["edge", "l3_switch", "l2_switch", "access_point", "other"]
+        );
+        let reasons = [
+            MapRoleReason::WirelessAp,
+            MapRoleReason::MerakiProduct,
+            MapRoleReason::ProfileCategory,
+            MapRoleReason::RoutingAdjacency,
+            MapRoleReason::Subnets,
+            MapRoleReason::Default,
+        ];
+        let got: Vec<String> = reasons.iter().map(token).collect();
+        assert_eq!(
+            got,
+            [
+                "wireless_ap",
+                "meraki_product",
+                "profile_category",
+                "routing_adjacency",
+                "subnets",
+                "default"
+            ]
+        );
     }
 }

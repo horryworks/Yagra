@@ -19,6 +19,14 @@
 // a group never overlaps its neighbour's. An island of access points with no backbone box to hang
 // from is laid out as backbone, so it is still drawn.
 //
+// Since ADR-191 Inc.6 the rows follow what each device does, as the server judged it: routers and
+// firewalls on top, then switches that route, then switches that do not, and everything else (a
+// wireless controller, a server, a folder or stub box, an island of access points) one row below
+// the nearest box it is linked to. Inside one of those three bands a box linked to the band above
+// starts it, and the band splits into rows by hops from those starts, so a daisy-chained access
+// switch sits under the one it hangs off. A component with no router or switch in it at all keeps
+// the plain layout below (rooted at its best-connected box), so such a level does not move.
+//
 // ⚠️ DETERMINISM IS A REQUIREMENT, NOT A NICETY.
 // The map re-fetches on a timer. A layout that depends on input order, on a random seed, or on
 // iteration-until-converged would reshuffle every cycle and be unusable. So: adjacency lists are
@@ -30,7 +38,7 @@
 // other: the guard stops the viewport being reset under the operator, determinism stops the content
 // moving underneath a preserved viewport. Removing either one brings the jumping back.
 
-import type { NodeState } from '../../types/api';
+import type { MapRole, NodeState } from '../../types/api';
 
 /** What a box on the map stands for: a node, a subfolder drawn as one box, or a stub for links
  *  that leave the level. */
@@ -96,6 +104,24 @@ export interface GraphNode {
   /** A Wi-Fi access point: drawn as a circle under its parent rather than as a box in the grid.
    *  Only a `node` can be one. */
   ap: boolean;
+  /** What the node does in the network, which decides its row (ADR-191 Inc.6). A folder or stub
+   *  box is `other`. */
+  role: MapRole;
+}
+
+/** The band a role is drawn in, top first. Everything at `UNTIERED` takes the row under the
+ *  nearest box it is linked to instead of a band of its own. */
+const TIER_OF_ROLE: Record<MapRole, number> = {
+  edge: 0,
+  l3_switch: 1,
+  l2_switch: 2,
+  access_point: 3,
+  other: 3,
+};
+const UNTIERED = 3;
+
+function tierOf(n: GraphNode): number {
+  return n.kind === 'node' ? TIER_OF_ROLE[n.role] : UNTIERED;
 }
 
 /** One line to draw between two boxes. */
@@ -167,6 +193,90 @@ export interface GraphInput {
 
 function byText(x: string, y: string): number {
   return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** The caller's anchor when it is among `ids`, otherwise the box with the most backbone links,
+ *  ties broken by the lowest id. `ids` must be sorted and non-empty. */
+function anchorOf(ids: string[], badj: Map<string, string[]>, anchorId: string | null): string {
+  if (anchorId && ids.includes(anchorId)) return anchorId;
+  return ids.reduce((best, id) => {
+    const d = (badj.get(id) ?? []).length;
+    const bd = (badj.get(best) ?? []).length;
+    return d > bd || (d === bd && id < best) ? id : best;
+  }, ids[0]);
+}
+
+/** Hop distance from `starts` (all at 0), moving only through `within`. */
+function hops(starts: string[], within: Set<string>, badj: Map<string, string[]>): Map<string, number> {
+  const depth = new Map<string, number>(starts.map((id) => [id, 0]));
+  const queue = [...starts];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const d = depth.get(cur)!;
+    for (const next of badj.get(cur) ?? []) {
+      if (within.has(next) && !depth.has(next)) {
+        depth.set(next, d + 1);
+        queue.push(next);
+      }
+    }
+  }
+  return depth;
+}
+
+/**
+ * The row of every box of one connected component (`members`, sorted).
+ *
+ * With no router or switch in the component this is the plain layout: hop distance from the
+ * anchor. Otherwise each role band (edge, L3, L2) gets consecutive rows — a band starts from its
+ * boxes linked to a higher band and splits by hops inside itself; an empty band takes no row — and
+ * every other box sits one row under the nearest box it is linked to.
+ */
+function rankComponent(
+  members: string[],
+  badj: Map<string, string[]>,
+  byId: Map<string, GraphNode>,
+  anchorId: string | null,
+): Map<string, number> {
+  const tier = new Map(members.map((id) => [id, tierOf(byId.get(id)!)]));
+  if (members.every((id) => tier.get(id) === UNTIERED)) {
+    return hops([anchorOf(members, badj, anchorId)], new Set(members), badj);
+  }
+  const rank = new Map<string, number>();
+  let base = 0;
+  for (let t = 0; t < UNTIERED; t++) {
+    const band = members.filter((id) => tier.get(id) === t);
+    if (band.length === 0) continue;
+    let starts = band.filter((id) => (badj.get(id) ?? []).some((n) => tier.get(n)! < t));
+    if (starts.length === 0) starts = [anchorOf(band, badj, anchorId)];
+    const depth = hops(starts, new Set(band), badj);
+    let deepest = 0;
+    for (const id of band) {
+      const d = depth.get(id) ?? 0;
+      rank.set(id, base + d);
+      deepest = Math.max(deepest, d);
+    }
+    base += deepest + 1;
+  }
+  // Everything else: one row under the nearest ranked box, relaxed to a fixed point so a chain of
+  // such boxes (a controller behind a server) steps down one row per hop. The fixed point is the
+  // shortest distance, so it does not depend on the order the boxes are visited in.
+  const rest = members.filter((id) => tier.get(id) === UNTIERED);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of rest) {
+      let best = Infinity;
+      for (const n of badj.get(id) ?? []) {
+        const r = rank.get(n);
+        if (r !== undefined) best = Math.min(best, r + 1);
+      }
+      if (best < (rank.get(id) ?? Infinity)) {
+        rank.set(id, best);
+        changed = true;
+      }
+    }
+  }
+  return rank;
 }
 
 /**
@@ -267,33 +377,9 @@ export function layoutGraph(input: GraphInput): GraphLayout {
   let maxRank = -1;
 
   for (const members of components) {
-    // 3. Anchor: the caller's, when it is in this component; otherwise the highest-degree box,
-    //    ties broken by the lowest id. Degree counts backbone links only, so an access point can
-    //    never take the top row from the switch it hangs off.
-    const anchor =
-      input.anchorId && members.includes(input.anchorId)
-        ? input.anchorId
-        : members.reduce((best, id) => {
-            const d = (badj.get(id) ?? []).length;
-            const bd = (badj.get(best) ?? []).length;
-            return d > bd || (d === bd && id < best) ? id : best;
-          }, members[0]);
-
-    // 4. Rank = hop distance from the anchor. Boxes at equal rank share a row, which is where a
-    //    redundant path survives: a second route to the same box is two boxes at one rank plus a
-    //    same-rank edge, a shape a tree layout cannot express at all.
-    const rank = new Map<string, number>([[anchor, 0]]);
-    const queue = [anchor];
-    while (queue.length > 0) {
-      const cur = queue.shift()!;
-      const r = rank.get(cur)!;
-      for (const next of badj.get(cur) ?? []) {
-        if (!rank.has(next)) {
-          rank.set(next, r + 1);
-          queue.push(next);
-        }
-      }
-    }
+    // 3-4. Rows. See the file header: role bands when the component holds a router or switch,
+    //      otherwise hop distance from one anchor.
+    const rank = rankComponent(members, badj, byId, input.anchorId ?? null);
 
     const rows = new Map<number, string[]>();
     for (const id of members) {
