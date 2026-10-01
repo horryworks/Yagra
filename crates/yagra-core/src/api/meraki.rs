@@ -1299,10 +1299,10 @@ impl From<&Filing> for MerakiFilingView {
 }
 
 impl MerakiFilingView {
-    /// An MX no import takes yet: its network's LAN side has not been read (ADR-164 decision 39).
-    fn lan_pending() -> Self {
+    /// A device the sync does not import yet, for `reason` — no folder and no range to name.
+    fn waiting(reason: FilingReason) -> Self {
         Self {
-            reason: FilingReason::LanPending,
+            reason,
             prefix: None,
             folders: None,
         }
@@ -1312,19 +1312,26 @@ impl MerakiFilingView {
 impl MerakiDeviceView {
     /// `filing` is what an import would do with the device; `None` for one that is already a node.
     /// An MX still waiting for its network's LAN side says so instead (decision 39), whatever the match
-    /// made of the address it does not have yet.
+    /// made of the address it does not have yet; so does an access point or switch still waiting for
+    /// its own address (decision 41), which would otherwise read `no_address` — true of a hand
+    /// import, but not what the sync is going to do with it.
     fn new(d: DeviceRecord, filing: Option<&Filing>) -> Self {
-        let waiting = filing.is_some() && d.lan_pending;
+        let waiting = match filing {
+            Some(_) if d.lan_pending => Some(FilingReason::LanPending),
+            // Only a match that was asked: with filing off the device goes under its network's
+            // folder whatever its address, so the sync has nothing to wait for (`pick_automatic`).
+            Some(Filing::NoAddress) if d.address_pending() => Some(FilingReason::AddressPending),
+            Some(_) | None => None,
+        };
         Self {
             folder_id: match filing {
-                Some(_) if waiting => None,
+                Some(_) if waiting.is_some() => None,
                 Some(f) => f.folder(),
                 None => d.node_group_id,
             },
-            filing: if waiting {
-                Some(MerakiFilingView::lan_pending())
-            } else {
-                filing.map(MerakiFilingView::from)
+            filing: match waiting {
+                Some(reason) => Some(MerakiFilingView::waiting(reason)),
+                None => filing.map(MerakiFilingView::from),
             },
             serial: d.serial,
             name: d.name,
@@ -3077,6 +3084,76 @@ mod tests {
         assert_eq!(folder_of(pool.clone(), "Q3-4").await, Some(network));
     }
 
+    /// ADR-164 decision 41: an access point Meraki reports no address for yet says so on the page —
+    /// the sync is waiting for it, so `no_address` would describe a hand import, not what happens —
+    /// and a hand import is still accepted, filing it under the network's folder as before.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_ap_with_no_address_yet_is_listed_as_waiting_and_can_still_be_imported_by_hand(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        let caller = token(&st, yagra_common::Role::Admin);
+        listed(
+            &pool,
+            org,
+            ("Q5-AP", "ap-fresh", "MR36", "wireless", "N_1", None),
+        )
+        .await;
+        listed(
+            &pool,
+            org,
+            ("Q5-MT", "sensor", "MT10", "sensor", "N_1", None),
+        )
+        .await;
+
+        let (status, list) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/meraki/orgs/{org}/devices"),
+            &caller,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        let reason_of = |serial: &str| {
+            let d = list
+                .as_array()
+                .expect("a list")
+                .iter()
+                .find(|d| d["serial"] == serial)
+                .expect("listed")
+                .clone();
+            assert!(d["folder_id"].is_null(), "{d}");
+            d["filing"]["reason"].clone()
+        };
+        assert_eq!(reason_of("Q5-AP"), "address_pending");
+        assert_eq!(reason_of("Q5-MT"), "no_address", "a sensor never waits");
+
+        let (status, answer) = send(
+            &st,
+            "POST",
+            "/api/v1/meraki/import",
+            &caller,
+            Some(serde_json::json!({
+                "org_uuid": org,
+                "devices": [{ "serial": "Q5-AP" }],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{answer}");
+        assert_eq!(answer["imported"], 1, "{answer}");
+        assert_eq!(answer["filed"]["no_address"], 1, "{answer}");
+    }
+
     /// 🚨 ADR-164 decision 39: a manual import takes everything about a device from the inventory, by
     /// serial. A page opened before Meraki renamed a device used to create the node under the old
     /// name — which then never followed a rename again (decision 14 follows only while the node still
@@ -3662,9 +3739,10 @@ mod tests {
             serde_json::json!({ "reason": "matched", "prefix": "10.1.0.0/24", "folders": null }),
             "{a}"
         );
+        // An access point with no address yet: the sync waits for it (decision 41).
         let b = row(&list, "Q3-B");
         assert!(b["folder_id"].is_null(), "{b}");
-        assert_eq!(b["filing"]["reason"], "no_address", "{b}");
+        assert_eq!(b["filing"]["reason"], "address_pending", "{b}");
         assert_eq!(row(&list, "Q3-C")["filing"]["reason"], "unmatched");
 
         // Imported with no `file_by_prefix` in the request: the organization's own setting decides,

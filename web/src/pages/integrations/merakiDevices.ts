@@ -128,6 +128,7 @@ function filingNote(filing: MerakiDevice['filing']): FilingNote | null {
     case 'no_address':
     case 'not_asked':
     case 'lan_pending':
+    case 'address_pending':
       return { reason: filing.reason, args: {} };
   }
 }

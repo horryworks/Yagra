@@ -56,6 +56,10 @@ describe('isImportable', () => {
     expect(isImportable(device({ state: 'new', filing: { reason: 'no_address' } }))).toBe(true);
   });
 
+  it('keeps the box for an AP or switch waiting for its address — a hand import is accepted (ADR-164 decision 41)', () => {
+    expect(isImportable(device({ state: 'new', filing: { reason: 'address_pending' } }))).toBe(true);
+  });
+
   it('offers exactly the rows Meraki lists that are not nodes here', () => {
     const importable = MERAKI_DEVICE_STATES.filter((state) => isImportable({ state }));
     // `never_online` and `deleted` are the two the automatic import skips on purpose; if the manual

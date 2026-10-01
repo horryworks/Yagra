@@ -65,6 +65,7 @@ use yagra_transport::{
 };
 
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
+use crate::meraki_filing::MerakiFiled;
 use crate::meraki_import::{pick_automatic, ImportResolver};
 use crate::meraki_inventory::{
     lan_addresses, lan_order, lan_reads_due, lan_rereads_per_sync, networks_with_an_mx, plan_sync,
@@ -358,6 +359,11 @@ pub struct MerakiSyncReport {
     pub imported: u32,
     /// Devices that qualified for import and were left out by the organization's `max_devices`.
     pub over_cap: u32,
+    /// How the devices this sync imported were filed.
+    pub filed: MerakiFiled,
+    /// Access points and switches this sync did not import because Meraki reports no address for
+    /// them yet (ADR-164 decision 41). A mesh repeater stays here for good.
+    pub address_pending: u32,
     /// Nodes that took a new address, a new name or a new network from the Dashboard in this sync
     /// (ADR-164 decision 14). A node is renamed only while it still carries the name Meraki gave it,
     /// and is never moved to another folder. Zero is the ordinary answer.
@@ -521,6 +527,7 @@ impl MerakiSync {
                     devices = report.devices,
                     written = report.written,
                     newly_missing = report.newly_missing,
+                    address_pending = report.address_pending,
                     "meraki sync completed"
                 );
                 if report.imported > 0 {
@@ -530,6 +537,11 @@ impl MerakiSync {
                         org = %org.org_id,
                         imported = report.imported,
                         over_cap = report.over_cap,
+                        matched = report.filed.matched,
+                        ambiguous = report.filed.ambiguous,
+                        unmatched = report.filed.unmatched,
+                        no_address = report.filed.no_address,
+                        address_pending = report.address_pending,
                         "imported meraki devices as nodes"
                     );
                     metrics::counter!("yagra_meraki_devices_imported_total")
@@ -686,9 +698,9 @@ impl MerakiSync {
             .get(org.id)
             .await
             .map_err(internal("reading the organization again failed"))?;
-        let (imported, over_cap) = match now {
+        let stage = match now {
             Some(now) if now.enabled => self.import(&now, lans.complete).await?,
-            _ => (0, 0),
+            _ => ImportStage::default(),
         };
         // Last, and never a reason to fail the sync: what it reads is each MX's and MR's own, and
         // one not read keeps what it said last time.
@@ -700,8 +712,10 @@ impl MerakiSync {
             // Not the LAN reads: those are the same network rows, updated again.
             written: u32::try_from(network_rows + applied.rows + roles).unwrap_or(u32::MAX),
             newly_missing: count(plan.newly_missing.len()),
-            imported,
-            over_cap,
+            imported: stage.imported,
+            over_cap: stage.over_cap,
+            filed: stage.filed,
+            address_pending: stage.address_pending,
             followed: applied.followed,
         })
     }
@@ -1085,7 +1099,7 @@ impl MerakiSync {
         0
     }
 
-    /// The import stage: `(imported, over_cap)`. Runs on every successful listing, and for an
+    /// The import stage. Runs on every successful listing, and for an
     /// organization whose automatic import is off it does one thing — make sure the row does not
     /// go on claiming a cap is leaving devices out.
     ///
@@ -1100,7 +1114,7 @@ impl MerakiSync {
         &self,
         org: &MerakiOrg,
         mx_ready: bool,
-    ) -> Result<(u32, u32), MerakiSyncFailure> {
+    ) -> Result<ImportStage, MerakiSyncFailure> {
         let internal = |what: &'static str| {
             move |e: anyhow::Error| {
                 tracing::warn!(error = %e, "meraki sync: {what}");
@@ -1112,27 +1126,29 @@ impl MerakiSync {
                 .record_over_cap(org.id, 0)
                 .await
                 .map_err(internal("clearing the import cap count failed"))?;
-            return Ok((0, 0));
+            return Ok(ImportStage::default());
         }
         let devices = self
             .inventory
             .devices(org.id)
             .await
             .map_err(internal("reading the devices to import failed"))?;
-        let pick = pick_automatic(&devices, org.max_devices, mx_ready);
+        let pick = pick_automatic(&devices, org.max_devices, mx_ready, org.file_by_prefix);
         let mut imported = 0;
+        let mut filed = MerakiFiled::default();
         if !pick.chosen.is_empty() {
             let resolved = self
                 .resolver
                 .resolve(pick.chosen, org.file_by_prefix)
                 .await
                 .map_err(internal("resolving where imported devices go failed"))?;
-            imported = self
+            let outcome = self
                 .orgs
                 .import_devices(org, &resolved.devices)
                 .await
-                .map_err(internal("importing devices failed"))?
-                .imported;
+                .map_err(internal("importing devices failed"))?;
+            imported = outcome.imported;
+            filed = outcome.filed;
             // At once, for the reason `attempt` bumps after `apply` (decision 38).
             if imported > 0 {
                 crate::config_gen::bump();
@@ -1142,8 +1158,22 @@ impl MerakiSync {
             .record_over_cap(org.id, pick.over_cap)
             .await
             .map_err(internal("recording the import cap count failed"))?;
-        Ok((imported, pick.over_cap))
+        Ok(ImportStage {
+            imported,
+            over_cap: pick.over_cap,
+            filed,
+            address_pending: pick.address_pending,
+        })
     }
+}
+
+/// What the import stage of one sync did.
+#[derive(Debug, Clone, Copy, Default)]
+struct ImportStage {
+    imported: u32,
+    over_cap: u32,
+    filed: MerakiFiled,
+    address_pending: u32,
 }
 
 /// Which sync this is.
@@ -3083,13 +3113,65 @@ mod tests {
         );
     }
 
+    /// ADR-164 decision 41, the case that was reported: an access point listed online before its
+    /// address arrives is not imported by no address — it would sit under its network's folder for
+    /// good — but waits, and goes into the folder whose range holds its address once Meraki reports
+    /// one.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_ap_listed_before_its_address_is_imported_into_its_range_once_it_has_one(
+        pool: sqlx::PgPool,
+    ) {
+        let site = crate::pgtest::group(&pool, "Site A").await;
+        crate::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
+        let r = rig(&pool, Ok(listing_of("Q2-A", "ap-1", "N_1", None))).await;
+        let first = r
+            .sync
+            .sync_org_scheduled(&r.org().await)
+            .await
+            .expect("first sync");
+        assert_eq!((first.imported, first.address_pending), (0, 1), "{first:?}");
+        assert!(nodes_of(&pool, r.org).await.is_empty());
+
+        r.directory
+            .now_answers(Ok(listing_of("Q2-A", "ap-1", "N_1", Some("10.0.0.9"))));
+        let second = r
+            .sync
+            .sync_org_scheduled(&r.org().await)
+            .await
+            .expect("second sync");
+        assert_eq!(
+            (second.imported, second.address_pending),
+            (1, 0),
+            "{second:?}"
+        );
+        assert_eq!(second.filed.matched, 1, "{second:?}");
+        let folder: Option<Uuid> = sqlx::query_scalar(
+            "SELECT n.group_id FROM nodes n JOIN meraki_devices d ON d.node_id = n.id              WHERE d.serial = 'Q2-A'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the node");
+        assert_eq!(
+            folder,
+            Some(site),
+            "filed by its address, not under its network"
+        );
+    }
+
     /// A node imported while Meraki reported no address stands at `0.0.0.0`, and nothing but this
     /// could ever change that — no screen edits a node's address. It gets one from the first sync
-    /// that has one, and a later sync that has none again leaves it alone.
+    /// that has one, and a later sync that has none again leaves it alone. With filing by range
+    /// off, an access point with no address is imported at once (there is no folder to wait for,
+    /// decision 41) — which is how such a node comes to exist without a hand import.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_imported_without_an_address_gets_one_and_never_loses_it(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing_of("Q2-A", "ap-1", "N_1", None))).await;
+        r.orgs
+            .set_import_settings(r.org, true, false, 1000)
+            .await
+            .expect("stop filing by range");
         r.sync
             .sync_org_scheduled(&r.org().await)
             .await

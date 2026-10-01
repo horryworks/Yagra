@@ -665,7 +665,8 @@
         "unmatched": "No matching IP range",
         "no_address": "No address",
         "not_asked": "Filing by IP range is off",
-        "lan_pending": "LAN address not read yet — can be imported after the next sync"
+        "lan_pending": "LAN address not read yet — can be imported after the next sync",
+        "address_pending": "No address reported yet — imported automatically once Meraki reports one. Importing it now puts it under its network's folder"
       },
       "allStates": "All states",
       "notWatched": "not watched",

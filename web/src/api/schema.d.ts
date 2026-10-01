@@ -7687,7 +7687,7 @@ export interface components {
          * @description Why a device would be filed where it would be. Serialized as the snake_case token; never stored.
          * @enum {string}
          */
-        FilingReason: "matched" | "ambiguous" | "unmatched" | "no_address" | "not_asked" | "lan_pending";
+        FilingReason: "matched" | "ambiguous" | "unmatched" | "no_address" | "not_asked" | "lan_pending" | "address_pending";
         /** @description A destination's filter as stored and edited. `{}` deserializes to "match everything". */
         FilterExpr: {
             /** @description The conditions; empty means match everything. */

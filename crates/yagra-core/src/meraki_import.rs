@@ -64,6 +64,10 @@ pub struct AutoPick {
     /// Written back to the organization's row — a cap that leaves things out silently is
     /// indistinguishable from an import that is not working.
     pub over_cap: u32,
+    /// Access points and switches inside the cap that were not picked because Meraki reports no
+    /// address for them yet (decision 41). Logged, so a wait is told apart from an import that is
+    /// not working.
+    pub address_pending: u32,
 }
 
 /// The devices the sync imports on its own (ADR-164 decision 5). Pure.
@@ -98,8 +102,22 @@ pub struct AutoPick {
 /// whose own read failed does not make this false: it was asked, and only its MX waits
 /// (`lan_pending`). That is what keeps one unreadable network from holding up every MX of the
 /// organization — the reason increment 15 gave for not waiting at all.
+///
+/// An access point or switch with no address yet ([`DeviceRecord::address_pending`], decision 41)
+/// waits the same way and for the same reason: listed online a sync before its `lanIp` arrives, it
+/// would be filed under its network's folder by no address, and never moved. It keeps its place
+/// too. There is no time limit, so a mesh repeater — which never reports an address — holds its
+/// place and is never picked; it is imported by hand. Only while `file_by_prefix` is on: with it
+/// off every device goes under its network's folder whatever its address, so there is nothing to
+/// wait for.
 #[must_use]
-pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32, mx_ready: bool) -> AutoPick {
+pub fn pick_automatic(
+    devices: &[DeviceRecord],
+    max_devices: u32,
+    mx_ready: bool,
+    file_by_prefix: bool,
+) -> AutoPick {
+    let waits = |d: &DeviceRecord| file_by_prefix && d.address_pending();
     let held = devices.iter().filter(|d| d.node_id.is_some()).count();
     let room = usize::try_from(max_devices)
         .unwrap_or(usize::MAX)
@@ -108,11 +126,14 @@ pub fn pick_automatic(devices: &[DeviceRecord], max_devices: u32, mx_ready: bool
         .iter()
         .filter(|d| d.state == MerakiDeviceState::New && d.network_monitored)
         .collect();
+    let in_room = || qualifying.iter().take(room);
     AutoPick {
-        chosen: qualifying
-            .iter()
-            .take(room)
-            .filter(|d| !d.lan_pending && (mx_ready || !takes_lan_from_vlans(&d.product_type)))
+        address_pending: u32::try_from(in_room().filter(|d| !d.lan_pending && waits(d)).count())
+            .unwrap_or(u32::MAX),
+        chosen: in_room()
+            .filter(|d| {
+                !d.lan_pending && !waits(d) && (mx_ready || !takes_lan_from_vlans(&d.product_type))
+            })
             .map(|d| ImportCandidate::from(*d))
             .collect(),
         over_cap: u32::try_from(qualifying.len().saturating_sub(room)).unwrap_or(u32::MAX),
@@ -307,7 +328,7 @@ mod tests {
             record("already-a-node", S::Monitored, true),
             record("node-gone-from-meraki", S::Missing, true),
         ];
-        let pick = pick_automatic(&devices, 1000, true);
+        let pick = pick_automatic(&devices, 1000, true, true);
         assert_eq!(serials(&pick), ["QUALIFIES"]);
         assert_eq!(pick.over_cap, 0);
     }
@@ -321,9 +342,9 @@ mod tests {
             ..record(serial, MerakiDeviceState::New, true)
         };
         let devices = [named("Q3-1"), named("Q3-2")];
-        let pick = pick_automatic(&devices, 1000, true);
+        let pick = pick_automatic(&devices, 1000, true, true);
         assert_eq!(serials(&pick), ["Q3-1", "Q3-2"]);
-        let capped = pick_automatic(&devices, 1, true);
+        let capped = pick_automatic(&devices, 1, true, true);
         assert_eq!((serials(&capped), capped.over_cap), (vec!["Q3-1"], 1));
     }
 
@@ -345,19 +366,19 @@ mod tests {
         ];
         // Room for all: the MX waits, the rest go in.
         assert_eq!(
-            serials(&pick_automatic(&devices, 1000, true)),
+            serials(&pick_automatic(&devices, 1000, true, true)),
             ["ap-1", "ap-2"]
         );
         // Room for two: the MX holds the first slot, so only one access point goes in, and the one
         // behind it is the one the cap leaves out — the same one it will leave out once the MX is in.
-        let two = pick_automatic(&devices, 2, true);
+        let two = pick_automatic(&devices, 2, true, true);
         assert_eq!(serials(&two), ["ap-1"]);
         assert_eq!(two.over_cap, 1);
 
         // Once the network has been read, the same MX goes into the slot it held.
         let mut read = devices.clone();
         read[0].lan_pending = false;
-        let after = pick_automatic(&read, 2, true);
+        let after = pick_automatic(&read, 2, true, true);
         assert_eq!(serials(&after), ["mx-unread", "ap-1"]);
         assert_eq!(after.over_cap, 1);
     }
@@ -377,13 +398,70 @@ mod tests {
             record("ap-2", S::New, true),
         ];
 
-        let cut = pick_automatic(&devices, 2, false);
+        let cut = pick_automatic(&devices, 2, false, true);
         assert_eq!(serials(&cut), ["ap-1"], "the MX gave up its slot");
         assert_eq!(cut.over_cap, 1);
 
-        let whole = pick_automatic(&devices, 2, true);
+        let whole = pick_automatic(&devices, 2, true, true);
         assert_eq!(serials(&whole), ["mx-read", "ap-1"]);
         assert_eq!(whole.over_cap, 1);
+    }
+
+    /// ADR-164 decision 41: an access point or switch listed online before Meraki reports its
+    /// address waits — in its place — rather than being filed under its network's folder by no
+    /// address and never moved. The next sync, with the address, imports it into the slot it held.
+    #[test]
+    fn an_ap_or_switch_with_no_address_yet_keeps_its_place_and_goes_in_once_it_has_one() {
+        use MerakiDeviceState as S;
+        let mut ap = record("ap-new", S::New, true);
+        ap.lan_ip = None;
+        let mut switch = record("sw-new", S::New, true);
+        switch.product_type = "Switch".into();
+        switch.lan_ip = None;
+        let devices = [ap, switch, record("ap-wired", S::New, true)];
+
+        let pick = pick_automatic(&devices, 1000, true, true);
+        assert_eq!(serials(&pick), ["ap-wired"]);
+        assert_eq!((pick.address_pending, pick.over_cap), (2, 0));
+
+        // Room for two: the two waiting devices hold both slots, and the one behind is over the cap.
+        let two = pick_automatic(&devices, 2, true, true);
+        assert!(two.chosen.is_empty());
+        assert_eq!((two.address_pending, two.over_cap), (2, 1));
+
+        // The address arrives: the same devices go into the slots they held.
+        let mut listed = devices.clone();
+        listed[0].lan_ip = Some("10.0.0.8".parse().expect("ip"));
+        listed[1].lan_ip = Some("10.0.0.9".parse().expect("ip"));
+        let after = pick_automatic(&listed, 2, true, true);
+        assert_eq!(serials(&after), ["ap-new", "sw-new"]);
+        assert_eq!((after.address_pending, after.over_cap), (0, 1));
+    }
+
+    /// Only access points and switches wait (decision 41): a sensor never has an address, so waiting
+    /// would keep it out for good, and a camera is unchanged. And with filing by IP range off there
+    /// is nothing to wait for — every device goes under its network's folder anyway.
+    #[test]
+    fn only_aps_and_switches_wait_and_only_while_filing_by_range() {
+        use MerakiDeviceState as S;
+        let addressless = |serial: &str, product_type: &str| {
+            let mut d = record(serial, S::New, true);
+            d.product_type = product_type.into();
+            d.lan_ip = None;
+            d
+        };
+        let devices = [
+            addressless("ap", "wireless"),
+            addressless("cam", "camera"),
+            addressless("mt", "sensor"),
+        ];
+        let on = pick_automatic(&devices, 1000, true, true);
+        assert_eq!(serials(&on), ["cam", "mt"]);
+        assert_eq!(on.address_pending, 1);
+
+        let off = pick_automatic(&devices, 1000, true, false);
+        assert_eq!(serials(&off), ["ap", "cam", "mt"]);
+        assert_eq!(off.address_pending, 0);
     }
 
     /// The cap counts the nodes the organization already holds, stops the import at the limit, and
@@ -398,7 +476,7 @@ mod tests {
             record("b", S::New, true),
             record("c", S::New, true),
         ];
-        let pick = pick_automatic(&devices, 3, true);
+        let pick = pick_automatic(&devices, 3, true, true);
         assert_eq!(
             serials(&pick),
             ["a"],
@@ -407,15 +485,15 @@ mod tests {
         assert_eq!(pick.over_cap, 2);
 
         // At or past the cap nothing is picked and everything that qualified is reported.
-        let full = pick_automatic(&devices, 2, true);
+        let full = pick_automatic(&devices, 2, true, true);
         assert!(full.chosen.is_empty());
         assert_eq!(full.over_cap, 3);
-        let past = pick_automatic(&devices, 1, true);
+        let past = pick_automatic(&devices, 1, true, true);
         assert!(past.chosen.is_empty());
         assert_eq!(past.over_cap, 3);
 
         // Room for everything: nothing is left out.
-        assert_eq!(pick_automatic(&devices, 5, true).over_cap, 0);
+        assert_eq!(pick_automatic(&devices, 5, true, true).over_cap, 0);
     }
 
     /// A device that does not qualify is not "over the cap" — the number on the page must be
@@ -428,7 +506,7 @@ mod tests {
             record("never-online", S::NeverOnline, true),
             record("unwatched", S::New, false),
         ];
-        let pick = pick_automatic(&devices, 1, true);
+        let pick = pick_automatic(&devices, 1, true, true);
         assert!(pick.chosen.is_empty());
         assert_eq!(pick.over_cap, 0);
     }

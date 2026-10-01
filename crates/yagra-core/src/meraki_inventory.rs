@@ -104,6 +104,29 @@ pub fn takes_lan_from_vlans(product_type: &str) -> bool {
     product_type == LAN_FROM_VLANS
 }
 
+/// The product types the sync waits for an address on (decision 41): an access point or a switch
+/// whose `lanIp` is empty is not imported automatically until Meraki reports one.
+const AWAIT_ADDRESS: [&str; 2] = ["wireless", "switch"];
+
+/// Whether automatic import waits for this device's address (ADR-164 decision 41). Pure.
+///
+/// A device just brought online can be listed online before its `lanIp` arrives, and an import
+/// files a node once and never moves it (decision 6) — so imported in that window, it would sit in
+/// its network's folder for good while the address followed it a sync later. Only access points and
+/// switches wait: a sensor never has an address, so waiting would keep it out forever, and an MX
+/// takes its address from its VLANs (decision 28) and waits on `lan_pending` instead.
+///
+/// ⚠️ There is no time limit (user decision 2026-10-01), so a mesh repeater (ADR-175), which never
+/// reports an address, is not imported automatically at all. Importing it by hand is not refused.
+#[must_use]
+pub fn awaits_address(product_type: &str, lan_ip: Option<IpAddr>) -> bool {
+    let product_type = product_type.trim();
+    lan_ip.is_none()
+        && AWAIT_ADDRESS
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(product_type))
+}
+
 /// How long a network's LAN addresses stand before a sync reads them again. VLANs are configuration
 /// and move a few times a year, and an organization of 350 networks is 350 requests a round.
 pub const LAN_REFRESH: chrono::Duration = chrono::Duration::hours(24);
@@ -645,6 +668,15 @@ pub struct DeviceRecord {
     pub missing_since: Option<DateTime<Utc>>,
     /// The MX's configured warm-spare role, when the sync has read one (ADR-164 decision 26).
     pub ha_role: Option<MerakiHaRole>,
+}
+
+impl DeviceRecord {
+    /// An access point or switch with no address yet (decision 41): the sync does not import it,
+    /// and the device list says so. Derived rather than stored, so it cannot disagree with `lan_ip`.
+    #[must_use]
+    pub fn address_pending(&self) -> bool {
+        awaits_address(&self.product_type, self.lan_ip)
+    }
 }
 
 /// One MX's warm-spare pair as the inventory records it (ADR-164 decision 26).
@@ -1207,6 +1239,20 @@ fn facts_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Decision 41: only an access point or a switch with no address waits, in whatever case the
+    /// Dashboard spells its product type.
+    #[test]
+    fn only_an_addressless_ap_or_switch_awaits_its_address() {
+        let some: Option<IpAddr> = Some("10.0.0.5".parse().expect("ip"));
+        assert!(awaits_address("wireless", None));
+        assert!(awaits_address(" Switch ", None));
+        assert!(!awaits_address("wireless", some));
+        assert!(!awaits_address("switch", some));
+        for other in ["appliance", "camera", "sensor", "cellularGateway", ""] {
+            assert!(!awaits_address(other, None), "{other}");
+        }
+    }
     use yagra_transport::{MerakiAvailability, MerakiDeviceInfo};
 
     fn at(secs: i64) -> DateTime<Utc> {

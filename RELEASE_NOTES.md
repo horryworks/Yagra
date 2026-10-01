@@ -14,6 +14,11 @@
 
 - **The network map draws Wi-Fi access points as round AP symbols under the switch they hang off.** An access point used to be the same box as a switch, and could land in any row — or at the top, if it had the most links. Now it is a small disc with the Wi-Fi mark, its rim in its state colour and its name underneath, lined up under the non-AP device it is linked to in the highest row (8 to a line, then the next line). A device whose only links go to access points is drawn too, and an access point linked only to other access points hangs beside the one it repeats. Access points with no link are still counted rather than drawn. Both imported access points and Meraki MRs count. API clients: `GET /api/v1/topology/map` and MCP `get_topology kind=map` add `access_point` to each node.
 
+### Bug Fixes
+
+- **A Meraki access point or switch added later is no longer filed under its network's folder just because its address had not arrived yet.** Automatic import took a device the moment Meraki first listed it online. A newly added access point can be listed online a sync before its LAN address arrives; imported in that window it went under its network's folder by no address and stayed there, because an imported node's folder is never moved — only its address followed a sync later. With filing by IP range on, an access point or switch with no address now waits, keeping its place under the device cap, and is imported into the folder whose range holds its address once Meraki reports one. ⚠️ There is no time limit, so a **mesh repeater** (which never reports an address) is no longer imported automatically — import it from the organization's page, which still puts it under its network's folder. Cameras, sensors and MX are unchanged. API clients: `GET /api/v1/meraki/orgs/{id}/devices` reports such a device with the new filing reason `address_pending`.
+
+
 ## v0.3.39 — The network map draws one folder at a time, and a site's devices flat with their subfolders
 
 ### New Features
