@@ -16,6 +16,7 @@ import {
   liveByGraphId,
   mapEscapeTarget,
   memberPorts,
+  nodePlace,
   selectedGraphId,
   selectionFromParam,
   splitGraphId,
@@ -54,9 +55,10 @@ function level(): MapLevel {
         counts: counts({ ok: 2, critical: 1 }),
       },
     ],
+    subfolder_count: 1,
     nodes: [
-      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder: null },
-      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder: null },
+      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder_path: [] },
+      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder_path: [] },
     ],
     stubs: [{ kind: 'folder', id: WEST, name: 'west', level_group: null }],
     edges: [
@@ -124,13 +126,43 @@ describe('levelToGraph', () => {
     expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.rootCause).toBe(SW1);
   });
 
-  it('puts a node’s subfolder on its second line on a level drawn flat', () => {
+  it('puts the folders down to a node’s own on its second line on a level drawn flat', () => {
     const flat = level();
     flat.flattened = true;
-    flat.nodes[1] = { ...flat.nodes[1], folder: { id: FLOOR, name: 'floor-1' } };
+    flat.nodes[1] = {
+      ...flat.nodes[1],
+      folder_path: [
+        { id: FLOOR, name: 'floor-1' },
+        { id: WEST, name: 'room-1' },
+      ],
+    };
     const g = levelToGraph(flat, captions);
-    expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.sub).toBe('▤ floor-1');
+    expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.sub).toBe('▤ floor-1 › room-1');
     expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.sub).toBeNull();
+  });
+});
+
+describe('nodePlace', () => {
+  it('is the breadcrumbs and the level for a node directly on it', () => {
+    const l = { ...level(), breadcrumbs: [{ id: WEST, name: 'east' }] };
+    expect(nodePlace(l, l.nodes[0], 'site-a')).toBe('east › site-a');
+  });
+
+  it('goes on down to the node’s own folder on a level drawn flat', () => {
+    const l = { ...level(), flattened: true, breadcrumbs: [{ id: WEST, name: 'east' }] };
+    const n = {
+      ...l.nodes[1],
+      folder_path: [
+        { id: FLOOR, name: 'floor-1' },
+        { id: FAR, name: 'room-1' },
+      ],
+    };
+    expect(nodePlace(l, n, 'site-a')).toBe('east › site-a › floor-1 › room-1');
+  });
+
+  it('starts at the level for the whole network', () => {
+    const whole = { ...level(), group: null, breadcrumbs: [] };
+    expect(nodePlace(whole, whole.nodes[0], 'Whole network')).toBe('Whole network');
   });
 
   it('lays out as a connected level with no loose node', () => {

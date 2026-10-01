@@ -14,11 +14,13 @@
 //! folder the two have in common (their lowest common ancestor, "L"): the stub is the child of L
 //! that contains the far end, so opening the stub lands on L with that child selected — the first
 //! level where both ends are visible at once. When the far end sits directly in L, the stub is the
-//! far node itself.
+//! far node itself — and so is it when L is drawn flat (below), since L then draws every node of
+//! its subtree and has no box for the far end's folder.
 //!
 //! **Inside a site the level is flat.** A Site folder, and any folder beneath one, does not draw its
 //! subfolders as boxes: one site split into floors or buildings is still one network, so every
-//! node in the level's subtree is drawn and tagged with the subfolder it is filed in. Whether a
+//! node in the level's subtree is drawn and tagged with the folders down to the one it is filed in
+//! (`folder_path`). Whether a
 //! level is inside a site is read from the unscoped parent chain, so a caller scoped to a floor
 //! still gets the site's drawing; only the yes/no answer reaches the response. A flat drawing over
 //! the bounds falls back to boxes, which can still be opened one at a time.
@@ -230,20 +232,22 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
     let tree = Tree::new(input.edges, input.visible);
     let rows: HashMap<Uuid, &FolderRow> = input.groups.iter().map(|g| (g.id, g)).collect();
     if tree.in_site(input.level, &rows) {
-        let flat = compute_with(input, &tree, &rows, true);
-        if !flat.overflow {
+        if let Some(flat) = compute_with(input, &tree, &rows, true) {
             return flat;
         }
     }
     compute_with(input, &tree, &rows, false)
+        .unwrap_or_else(|| unreachable!("only a flat drawing gives up"))
 }
 
+/// One level, flat or with boxes. A flat drawing gives up (`None`) the moment it crosses a bound,
+/// before building anything it would throw away; a boxed one always answers, with `overflow`.
 fn compute_with(
     input: &LevelInput<'_>,
     tree: &Tree<'_>,
     rows: &HashMap<Uuid, &FolderRow>,
     flatten: bool,
-) -> MapLevel {
+) -> Option<MapLevel> {
     // Flat: the whole subtree is the level's own, and there are no boxes.
     let flat: HashSet<Uuid> = match (flatten, input.level) {
         (true, Some(level)) => tree.subtree(level),
@@ -251,17 +255,16 @@ fn compute_with(
     };
     let own = |g: Option<Uuid>| g == input.level || g.is_some_and(|g| flat.contains(&g));
 
-    // 1. The level's subfolders, in the tree's own order.
-    let mut subfolders: Vec<&FolderRow> = if flatten {
-        Vec::new()
-    } else {
-        tree.children
-            .get(&input.level)
-            .into_iter()
-            .flatten()
-            .filter_map(|id| rows.get(id).copied())
-            .collect()
-    };
+    // 1. The level's subfolders, in the tree's own order. A flat level counts them but boxes none.
+    let children: Vec<&FolderRow> = tree
+        .children
+        .get(&input.level)
+        .into_iter()
+        .flatten()
+        .filter_map(|id| rows.get(id).copied())
+        .collect();
+    let subfolder_count = children.len() as i64;
+    let mut subfolders = if flatten { Vec::new() } else { children };
     subfolders.sort_by(|x, y| {
         x.sort_order
             .total_cmp(&y.sort_order)
@@ -307,6 +310,8 @@ fn compute_with(
             let at = if in_chain.contains(&y) { y } else { None };
             match below {
                 None => Place::NodeStub { at },
+                // L is drawn flat, so it holds the far node itself and no box for its folder.
+                Some(_) if tree.in_site(at, rows) => Place::NodeStub { at },
                 Some(folder) => Place::FolderStub { folder, at },
             }
         };
@@ -331,6 +336,8 @@ fn compute_with(
     // 5. Bundle every visible link by the pair of things it joins on this level.
     let mut bundles: BTreeMap<(EndKey, EndKey), Bundle> = BTreeMap::new();
     let mut stubs: BTreeMap<EndKey, MapStub> = BTreeMap::new();
+    // A flat drawing's linked nodes so far, to give up as soon as it is too large.
+    let mut flat_linked: HashSet<Uuid> = HashSet::new();
     for link in input.links {
         let (Some(a), Some(b)) = (link.a_node, link.b_node) else {
             continue;
@@ -354,6 +361,9 @@ fn compute_with(
         for (p, e, n) in [(pa, &ea, a), (pb, &eb, b)] {
             if let Some(stub) = stub_of(p, n) {
                 stubs.entry(endpoint_key(e)).or_insert(stub);
+            }
+            if flatten && e.kind == MapEndpointKind::Node {
+                flat_linked.insert(e.id);
             }
         }
         let (ka, kb) = (endpoint_key(&ea), endpoint_key(&eb));
@@ -394,6 +404,9 @@ fn compute_with(
             }
         }
         bundle.members.push(member);
+        if flatten && (flat_linked.len() > MAP_MAX_NODES || bundles.len() > MAP_MAX_EDGES) {
+            return None;
+        }
     }
 
     let mut linked: HashSet<Uuid> = HashSet::new();
@@ -454,6 +467,27 @@ fn compute_with(
         id,
         name: rows.get(&id).map(|g| g.name.clone()).unwrap_or_default(),
     };
+    // The folders from just below the level down to a node's own, memoized per folder.
+    let mut paths: HashMap<Uuid, Vec<MapBreadcrumb>> = HashMap::new();
+    let mut path_of = |g: Option<Uuid>| -> Vec<MapBreadcrumb> {
+        let Some(g) = g else { return Vec::new() };
+        paths
+            .entry(g)
+            .or_insert_with(|| {
+                let mut out = Vec::new();
+                let mut cur = Some(g);
+                while let Some(id) = cur {
+                    if Some(id) == input.level || out.len() > MAX_GROUP_DEPTH {
+                        break;
+                    }
+                    out.push(crumb(id));
+                    cur = tree.pvis(id);
+                }
+                out.reverse();
+                out
+            })
+            .clone()
+    };
     let mut nodes: Vec<MapNode> = linked
         .iter()
         .map(|&id| MapNode {
@@ -461,12 +495,7 @@ fn compute_with(
             name: String::new(),
             state: state_of(id),
             root_cause: input.root_causes.get(&id).copied(),
-            folder: node_group
-                .get(&id)
-                .copied()
-                .flatten()
-                .filter(|g| Some(*g) != input.level)
-                .map(crumb),
+            folder_path: path_of(node_group.get(&id).copied().flatten()),
         })
         .collect();
     nodes.sort_by_key(|n| n.id);
@@ -490,15 +519,19 @@ fn compute_with(
     let linked_node_count = linked.len() as i64;
     let edge_count = edges.len() as i64;
     let overflow = linked.len() > MAP_MAX_NODES || edges.len() > MAP_MAX_EDGES;
+    if flatten && overflow {
+        return None;
+    }
     if overflow {
         nodes.clear();
         stubs.clear();
         edges.clear();
     }
-    MapLevel {
+    Some(MapLevel {
         group: input.level.map(crumb),
         breadcrumbs,
         folders,
+        subfolder_count,
         nodes,
         stubs,
         edges,
@@ -511,7 +544,7 @@ fn compute_with(
         node_limit: MAP_MAX_NODES as i64,
         edge_limit: MAP_MAX_EDGES as i64,
         derived_at: None,
-    }
+    })
 }
 
 fn tally(c: &mut GroupStateCounts, s: NodeState) {
@@ -918,9 +951,14 @@ mod tests {
         let l = run(&f, Some(2), &links, None);
         assert!(l.flattened);
         assert!(l.folders.is_empty(), "no boxes inside a site");
-        assert!(node(&l, 120).folder.is_none(), "directly in site-a");
-        let floor = node(&l, 130).folder.as_ref().expect("130 is on floor-1");
-        assert_eq!((floor.id, floor.name.as_str()), (id(3), "floor-1"));
+        assert!(node(&l, 120).folder_path.is_empty(), "directly in site-a");
+        let path = &node(&l, 130).folder_path;
+        assert_eq!(path.len(), 1, "130 is on floor-1");
+        assert_eq!((path[0].id, path[0].name.as_str()), (id(3), "floor-1"));
+        assert_eq!(
+            l.subfolder_count, 1,
+            "floor-1 is counted though it is not a box"
+        );
         let inside = l.edges.iter().find(|e| e.b.id == id(130)).unwrap();
         assert_eq!(
             (inside.a.kind, inside.b.kind),
@@ -943,11 +981,8 @@ mod tests {
         ];
         let l = run(&f, Some(3), &links, None);
         assert!(l.flattened);
-        assert_eq!(
-            node(&l, 170).folder.as_ref().map(|g| g.name.as_str()),
-            Some("room-1")
-        );
-        assert!(node(&l, 130).folder.is_none());
+        assert_eq!(path_names(node(&l, 170)), ["room-1"]);
+        assert!(node(&l, 130).folder_path.is_empty());
         // 120 sits directly in site-a, the common ancestor: a node stub opening there.
         let s = stub(&l, 120);
         assert_eq!((s.kind, s.level_group), (MapStubKind::Node, Some(id(2))));
@@ -961,7 +996,8 @@ mod tests {
         let names: Vec<&str> = l.folders.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(names, ["site-a", "site-b"]);
         assert_eq!(l.edges[0].b.kind, MapEndpointKind::Folder);
-        assert!(l.nodes.iter().all(|n| n.folder.is_none()));
+        assert!(l.nodes.iter().all(|n| n.folder_path.is_empty()));
+        assert_eq!(l.subfolder_count, 2);
         assert!(!run(&f, None, &[], None).flattened);
     }
 
@@ -1004,6 +1040,60 @@ mod tests {
             "the chain still stops at the scope root"
         );
         assert_eq!(l.edges.len(), 1);
+    }
+
+    fn path_names(n: &MapNode) -> Vec<&str> {
+        n.folder_path.iter().map(|g| g.name.as_str()).collect()
+    }
+
+    /// Adds `floor-2` (8, generic) under site-a, holding node 180.
+    fn with_floor_2(f: &mut Fx) {
+        let (row, edge) = folder(8, "floor-2", GroupType::Generic, Some(2));
+        f.groups.push(row);
+        f.edges.push(edge);
+        f.node_groups.push((id(180), Some(id(8))));
+        f.states.insert(id(180), NodeState::Ok);
+    }
+
+    #[test]
+    fn a_sibling_floor_inside_a_site_is_a_node_stub_opening_on_the_site() {
+        let mut f = fx();
+        with_floor_2(&mut f);
+        // floor-1 (3) ↔ floor-2 (8): L is site-a, drawn flat, which has no box for floor-2.
+        let l = run(&f, Some(3), &[link(1, 130, 180, LinkSource::Lldp)], None);
+        let s = stub(&l, 180);
+        assert_eq!((s.kind, s.level_group), (MapStubKind::Node, Some(id(2))));
+        assert!(l.stubs.iter().all(|s| s.id != id(8)), "no stub for floor-2");
+        // The site it opens on does draw 180.
+        let site = run(&f, Some(2), &[link(1, 130, 180, LinkSource::Lldp)], None);
+        assert!(site.flattened);
+        assert_eq!(path_names(node(&site, 180)), ["floor-2"]);
+    }
+
+    #[test]
+    fn a_node_two_folders_deep_carries_the_whole_path() {
+        let mut f = fx();
+        with_room(&mut f);
+        let l = run(&f, Some(2), &[link(1, 120, 170, LinkSource::Lldp)], None);
+        assert_eq!(path_names(node(&l, 170)), ["floor-1", "room-1"]);
+        assert!(node(&l, 120).folder_path.is_empty());
+    }
+
+    #[test]
+    fn subfolder_count_is_the_direct_children_on_both_kinds_of_level() {
+        let mut f = fx();
+        with_room(&mut f);
+        with_floor_2(&mut f);
+        assert_eq!(run(&f, None, &[], None).subfolder_count, 2, "east, west");
+        assert_eq!(
+            run(&f, Some(1), &[], None).subfolder_count,
+            2,
+            "site-a, site-b"
+        );
+        let site = run(&f, Some(2), &[], None);
+        assert!(site.flattened && site.folders.is_empty());
+        assert_eq!(site.subfolder_count, 2, "floor-1, floor-2 — not room-1");
+        assert_eq!(run(&f, Some(7), &[], None).subfolder_count, 0);
     }
 
     #[test]

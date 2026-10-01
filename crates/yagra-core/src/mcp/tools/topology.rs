@@ -278,8 +278,9 @@ impl YagraMcp {
                        level too large to draw answers `overflow: true` with its boxes only. \
                        A Site folder and every folder beneath it is drawn flat \
                        (`flattened: true`): no boxes, every linked node in the subtree, each with \
-                       the subfolder it is filed in (`folder`); over the bounds it falls back to \
-                       boxes. \
+                       the folders down to the one it is filed in (`folder_path`), and a link to \
+                       another folder of the same site is a stub for the far node; over the \
+                       bounds it falls back to boxes. \
                        `kind=overrides` lists the decisions an operator has \
                        recorded about links (pin, hide, or which end is upstream), which always \
                        beat what was derived. `kind=shadow` compares the two dependency graphs and \

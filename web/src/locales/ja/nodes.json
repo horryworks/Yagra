@@ -711,7 +711,12 @@
       "empty": "線はまだ見つかっていません。",
       "overflow": "このフォルダは大きすぎて、ここには描けません。大きく開くと、サブフォルダに分けて見られます。",
       "wheelHint": "Ctrl（Mac は ⌘）を押しながらホイールで拡大します",
-      "summary": "線のある機器 {{nodes}} 台 · 線 {{edges}} 組 · 外への線 {{stubs}} 組"
+      "summaryNodes_one": "線のある機器 {{count}} 台",
+      "summaryNodes_other": "線のある機器 {{count}} 台",
+      "summaryEdges_one": "線 {{count}} 組",
+      "summaryEdges_other": "線 {{count}} 組",
+      "summaryStubs_one": "外への線 {{count}} 組",
+      "summaryStubs_other": "外への線 {{count}} 組"
     }
   },
   "prefixGaps": {

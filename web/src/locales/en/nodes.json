@@ -713,7 +713,12 @@
       "empty": "No links found yet between these devices.",
       "overflow": "This folder is too large to draw here. Open the full map to go into its subfolders.",
       "wheelHint": "Hold Ctrl (⌘ on a Mac) and scroll to zoom",
-      "summary": "{{nodes}} linked devices · {{edges}} lines · {{stubs}} leaving the folder"
+      "summaryNodes_one": "{{count}} linked device",
+      "summaryNodes_other": "{{count}} linked devices",
+      "summaryEdges_one": "{{count}} line",
+      "summaryEdges_other": "{{count}} lines",
+      "summaryStubs_one": "{{count}} leaving the folder",
+      "summaryStubs_other": "{{count}} leaving the folder"
     }
   },
   "prefixGaps": {

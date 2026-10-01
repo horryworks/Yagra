@@ -9,7 +9,7 @@
 // dot in the table and its threshold line in a chart. Device-supplied names render as React <text>
 // children, so they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { stateColorVar } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
@@ -194,7 +194,9 @@ export function TopologyMap({
   // Where the operator panned and zoomed to, remembered for the session (ADR-134). The `view ===
   // null` guard below stops the refresh from re-fitting the diagram; a new level clears it.
   const [view, setView] = useStoredMapView(viewKey);
-  const [hint, setHint] = useState(false);
+  // The hint is toggled on the element itself: a state change here would redraw every box and line
+  // of the map twice per wheel turn, for a label.
+  const hintRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id. One pointer pans; two pointers pinch-zoom (touch). `pinch` freezes the
   // view at the moment the second finger lands so scale/pan stay anchored to the gesture.
@@ -236,9 +238,9 @@ export function TopologyMap({
     const onWheel = (e: WheelEvent) => {
       if (!wheelZooms(e, wheelNeedsModifier)) {
         // Left to the page; say once, briefly, how to zoom instead.
-        setHint(true);
+        hintRef.current?.classList.add('on');
         clearTimeout(hintTimer);
-        hintTimer = setTimeout(() => setHint(false), WHEEL_HINT_MS);
+        hintTimer = setTimeout(() => hintRef.current?.classList.remove('on'), WHEEL_HINT_MS);
         return;
       }
       e.preventDefault();
@@ -368,7 +370,7 @@ export function TopologyMap({
         </button>
       </div>
       {wheelHint && (
-        <div className={`topomap-wheel-hint${hint ? ' on' : ''}`} aria-hidden="true">
+        <div ref={hintRef} className="topomap-wheel-hint" aria-hidden="true">
           {wheelHint}
         </div>
       )}

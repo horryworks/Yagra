@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The judgements behind one level of the network map (ADR-191), kept out of the `.tsx` files so
 // Vitest can reach them: turning the server's level into boxes and lines, what the URL's `sel=`
-// selects, where a stub leads, and what one Escape press clears.
+// selects, where a stub leads, where a node sits, and what one Escape press clears.
 
-import type { MapEdge, MapLevel, MapStub, NodeState } from '../../types/api';
+import type { MapEdge, MapLevel, MapNode, MapStub, NodeState } from '../../types/api';
 import type { TreeSelection } from '../NodeTree/NodeTree';
 import { worstStateFromCounts } from '../../dashboard/widgets/util';
 import { nodesPageHref, topologyMapHref } from '../../lib/entityHref';
@@ -22,10 +22,24 @@ export interface LevelCaptions {
   stub: (s: MapStub) => string;
 }
 
+/** How a folder path is joined, on a box and in the side panel alike. */
+const PATH_SEP = ' › ';
+
+/** The folders between a flat level and a node, outermost first; empty for a node directly on it. */
+function folderTrail(node: MapNode): string[] {
+  return node.folder_path.map((g) => g.name);
+}
+
+/** Where a node sits, from the top of the tree: the level's ancestors, the level itself, and — on a
+ *  level drawn flat — the folders down to the one the node is filed in. */
+export function nodePlace(level: MapLevel, node: MapNode, levelName: string): string {
+  return [...level.breadcrumbs.map((b) => b.name), levelName, ...folderTrail(node)].join(PATH_SEP);
+}
+
 /** The server's level as the layout's input: one box per node, folder and stub, one line per
  *  bundled edge. Stubs carry no state colour of their own, so they are drawn `unknown`. On a level
- *  drawn flat (inside a site), a node filed in a subfolder carries that folder's name as its second
- *  line. */
+ *  drawn flat (inside a site), a node filed in a subfolder carries the folders down to its own as
+ *  its second line. */
 export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInput {
   const nodes: GraphInput['nodes'] = [
     ...level.nodes.map((n) => ({
@@ -33,7 +47,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       kind: 'node' as const,
       name: n.name,
       state: n.state,
-      sub: n.folder ? `▤ ${n.folder.name}` : null,
+      sub: n.folder_path.length > 0 ? `▤ ${folderTrail(n).join(PATH_SEP)}` : null,
       rootCause: n.root_cause ?? null,
     })),
     ...level.folders.map((f) => ({

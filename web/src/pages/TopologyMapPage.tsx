@@ -17,7 +17,7 @@
 // The layout is hand-written SVG (`components/TopologyMap/graphLayout.ts`); every judgement this
 // page makes lives in `components/TopologyMap/topologyLevel.ts`, where a test reaches it.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -49,12 +49,14 @@ export function TopologyMapPage() {
   const group = params.get('group');
   const selParam = params.get('sel');
   const urlSel = useMemo(() => selectionFromParam(parseSelection(selParam)), [selParam]);
-  // A line's id names two ends of one level, so the edge selection is kept with the level it was
-  // made on and simply stops applying when the level changes.
-  const [edgeSel, setEdgeSel] = useState<{ group: string | null; id: string } | null>(null);
-  const edge = edgeSel && edgeSel.group === group ? edgeSel.id : null;
-
-  const { level, error, layout: viewLayout } = useTopologyLevel(group);
+  const {
+    level,
+    error,
+    layout: viewLayout,
+    edge,
+    selectEdge: onSelectEdge,
+    clearEdge,
+  } = useTopologyLevel(group);
 
   const setSelection = useCallback(
     (sel: TreeSelection) => {
@@ -71,7 +73,7 @@ export function TopologyMapPage() {
     (box: PlacedNode) => {
       const ref = splitGraphId(box.id);
       if (!ref || !level) return;
-      setEdgeSel(null);
+      clearEdge();
       if (ref.kind === 'folder') {
         navigate(folderHref(ref.id));
       } else if (ref.kind === 'external') {
@@ -83,16 +85,12 @@ export function TopologyMapPage() {
         setSelection(same ? null : { kind: 'node', id: ref.id });
       }
     },
-    [level, navigate, setSelection, urlSel],
-  );
-  const onSelectEdge = useCallback(
-    (id: string) => setEdgeSel((cur) => (cur?.id === id && cur.group === group ? null : { group, id })),
-    [group],
+    [level, navigate, setSelection, urlSel, clearEdge],
   );
   const clearAll = useCallback(() => {
-    setEdgeSel(null);
+    clearEdge();
     setSelection(null);
-  }, [setSelection]);
+  }, [setSelection, clearEdge]);
 
   // Escape unwinds the line first, then the URL's selection (`mapEscapeTarget`). One listener.
   useEffect(() => {
@@ -100,12 +98,12 @@ export function TopologyMapPage() {
     const onKey = (e: KeyboardEvent) => {
       if (!escapeClearsSelection(e)) return;
       const target = mapEscapeTarget(!!edge, !!urlSel);
-      if (target === 'edge') setEdgeSel(null);
+      if (target === 'edge') clearEdge();
       else if (target === 'selection') setSelection(null);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [edge, urlSel, setSelection]);
+  }, [edge, urlSel, setSelection, clearEdge]);
 
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
 

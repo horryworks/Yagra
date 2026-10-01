@@ -3,7 +3,7 @@
 // page and the map drawn inside a folder's pane on the Nodes page, so both draw the same boxes from
 // the same rules.
 
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useConfigChanges } from '../../lib/configChanges';
 import { stateLabel } from '../../lib/format';
@@ -37,6 +37,11 @@ export interface TopologyLevelView {
   error: string | null;
   /** The laid-out level with the live states overlaid. */
   layout: GraphLayout;
+  /** The selected line's id on this level, or null. */
+  edge: string | null;
+  /** Select a line; pressing the selected one again lets it go. */
+  selectEdge: (id: string) => void;
+  clearEdge: () => void;
 }
 
 /** Fetch one level (`group` null = the whole network) and lay it out. */
@@ -51,6 +56,16 @@ export function useTopologyLevel(group: string | null): TopologyLevelView {
   );
   const level = isLevelFor(data, group) ? data : null;
   const live = useNodeStates();
+
+  // A line's id names two ends of one level, so the selection is kept with the level it was made on
+  // and simply stops applying when another level is opened.
+  const [edgeSel, setEdgeSel] = useState<{ group: string | null; id: string } | null>(null);
+  const edge = edgeSel && edgeSel.group === group ? edgeSel.id : null;
+  const selectEdge = useCallback(
+    (id: string) => setEdgeSel((cur) => (cur?.id === id && cur.group === group ? null : { group, id })),
+    [group],
+  );
+  const clearEdge = useCallback(() => setEdgeSel(null), []);
 
   const captions: LevelCaptions = useMemo(
     () => ({
@@ -80,7 +95,7 @@ export function useTopologyLevel(group: string | null): TopologyLevelView {
     () => (placedNodes === layout.nodes ? layout : { ...layout, nodes: placedNodes }),
     [layout, placedNodes],
   );
-  return { level, error: error ?? null, layout: viewLayout };
+  return { level, error: error ?? null, layout: viewLayout, edge, selectEdge, clearEdge };
 }
 
 /** The tooltips and the chip rule every drawing of a level uses. */

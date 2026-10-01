@@ -4867,8 +4867,9 @@ export interface paths {
          *     `overflow: true` with its boxes and no nodes or edges.
          *
          *     A Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders
-         *     are not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A
-         *     flat drawing over the bounds falls back to boxes.
+         *     are not boxes, every node in its subtree is drawn and carries the folders down to the one it is
+         *     filed in (`folder_path`). A link to another folder of the same site leaves as a stub for the far
+         *     node itself, since the site draws it. A flat drawing over the bounds falls back to boxes.
          */
         get: operations["get_topology_map"];
         put?: never;
@@ -9177,7 +9178,7 @@ export interface components {
             edges: components["schemas"]["MapEdge"][];
             /**
              * @description The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node
-             *     in the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would
+             *     in the subtree is drawn, tagged with its `folder_path`. `false` when the flat drawing would
              *     exceed the bounds, in which case the level falls back to boxes.
              */
             flattened: boolean;
@@ -9208,13 +9209,23 @@ export interface components {
             overflow: boolean;
             /** @description The places links leave the level for. */
             stubs: components["schemas"]["MapStub"][];
+            /**
+             * Format: int64
+             * @description How many subfolders sit directly in it — on a `flattened` level too, where none is a box.
+             */
+            subfolder_count: number;
         };
         /**
          * @description A node drawn on the level that has at least one link there. On an ordinary level it sits
          *     directly in the level's folder; on a `flattened` level it may sit anywhere in the subtree.
          */
         MapNode: {
-            folder?: null | components["schemas"]["MapBreadcrumb"];
+            /**
+             * @description On a `flattened` level, the folders between the level and the node, outermost first, ending
+             *     with the one the node is filed in; empty when it sits directly in the level's own folder
+             *     (always empty on an ordinary level).
+             */
+            folder_path: components["schemas"]["MapBreadcrumb"][];
             /** Format: uuid */
             id: string;
             name: string;

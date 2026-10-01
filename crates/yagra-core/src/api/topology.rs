@@ -400,9 +400,10 @@ pub(crate) struct MapNode {
     pub state: NodeState,
     /// Upstream node blamed for this node's alert (dependency suppression), if any.
     pub root_cause: Option<Uuid>,
-    /// On a `flattened` level, the subfolder the node is filed in; `null` when it sits directly in
-    /// the level's own folder (always `null` on an ordinary level).
-    pub folder: Option<MapBreadcrumb>,
+    /// On a `flattened` level, the folders between the level and the node, outermost first, ending
+    /// with the one the node is filed in; empty when it sits directly in the level's own folder
+    /// (always empty on an ordinary level).
+    pub folder_path: Vec<MapBreadcrumb>,
 }
 
 /// Where links leave the level: a node or a folder outside it.
@@ -457,6 +458,8 @@ pub(crate) struct MapLevel {
     pub breadcrumbs: Vec<MapBreadcrumb>,
     /// Its subfolders, each drawn as a box (empty on a `flattened` level).
     pub folders: Vec<MapFolder>,
+    /// How many subfolders sit directly in it — on a `flattened` level too, where none is a box.
+    pub subfolder_count: i64,
     /// Its own nodes that have a link on this level — on a `flattened` level, every such node in
     /// the subtree.
     pub nodes: Vec<MapNode>,
@@ -475,7 +478,7 @@ pub(crate) struct MapLevel {
     /// The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain.
     pub overflow: bool,
     /// The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node
-    /// in the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would
+    /// in the subtree is drawn, tagged with its `folder_path`. `false` when the flat drawing would
     /// exceed the bounds, in which case the level falls back to boxes.
     pub flattened: bool,
     /// The most linked nodes a level draws.
@@ -586,8 +589,9 @@ pub(crate) async fn topology_map_level(
 /// `overflow: true` with its boxes and no nodes or edges.
 ///
 /// A Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders
-/// are not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A
-/// flat drawing over the bounds falls back to boxes.
+/// are not boxes, every node in its subtree is drawn and carries the folders down to the one it is
+/// filed in (`folder_path`). A link to another folder of the same site leaves as a stub for the far
+/// node itself, since the site draws it. A flat drawing over the bounds falls back to boxes.
 #[utoipa::path(
     get, path = "/api/v1/topology/map", tag = "topology",
     params(MapLevelQuery),
@@ -1387,11 +1391,15 @@ mod tests {
             .iter()
             .find(|n| n["name"] == "sw-d")
             .expect("sw-d is drawn on site-a");
-        assert_eq!(sw_d["folder"]["name"], "floor-1");
+        assert_eq!(sw_d["folder_path"][0]["name"], "floor-1");
+        assert_eq!(
+            level["subfolder_count"], 1,
+            "floor-1, though it is not a box"
+        );
         assert!(nodes
             .iter()
             .find(|n| n["name"] == "sw-a")
-            .is_some_and(|n| n["folder"].is_null()));
+            .is_some_and(|n| n["folder_path"].as_array().is_some_and(Vec::is_empty)));
         assert_eq!(level["stubs"][0]["name"], "west");
         assert!(level["stubs"][0]["level_group"].is_null());
 

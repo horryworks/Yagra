@@ -8,7 +8,7 @@
 // Folding the section is remembered, and a folded map is not fetched at all — the level is the most
 // expensive read the pane makes, so an operator who does not want it does not pay for it.
 
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { usePrefsStore } from '../../prefs';
@@ -58,12 +58,8 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
 
 function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
   const { t } = useTranslation('nodes');
-  const { level, error, layout } = useTopologyLevel(groupId);
+  const { level, error, layout, edge: edgeId, selectEdge } = useTopologyLevel(groupId);
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
-  // A line's id names two ends of one level, so the selection is kept with the folder it was made
-  // on and stops applying when another folder is opened.
-  const [edgeSel, setEdgeSel] = useState<{ group: string; id: string } | null>(null);
-  const edgeId = edgeSel?.group === groupId ? edgeSel.id : null;
   const edge = edgeId ? (level?.edges.find((e) => e.id === edgeId) ?? null) : null;
 
   const onActivate = useCallback(
@@ -73,11 +69,6 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
       else if (target?.kind === 'group') onOpenGroup?.(target.id);
     },
     [level, onOpenNode, onOpenGroup],
-  );
-  const onSelectEdge = useCallback(
-    (id: string) =>
-      setEdgeSel((cur) => (cur?.id === id && cur.group === groupId ? null : { group: groupId, id })),
-    [groupId],
   );
 
   if (error && !level) return <p className="nd-muted">{error}</p>;
@@ -96,7 +87,7 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
           edgeTitle={edgeTitle}
           showChip={showChip}
           onActivate={onActivate}
-          onSelectEdge={onSelectEdge}
+          onSelectEdge={selectEdge}
           viewKey="topoGroup"
           wheelNeedsModifier
           wheelHint={t('groupDetail.map.wheelHint')}
@@ -104,11 +95,11 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
         />
       </div>
       <p className="nd-grpmap-summary">
-        {t('groupDetail.map.summary', {
-          nodes: level.linked_node_count,
-          edges: level.edge_count,
-          stubs: level.stubs.length,
-        })}
+        {[
+          t('groupDetail.map.summaryNodes', { count: level.linked_node_count }),
+          t('groupDetail.map.summaryEdges', { count: level.edge_count }),
+          t('groupDetail.map.summaryStubs', { count: level.stubs.length }),
+        ].join(' · ')}
       </p>
       {edge && (
         <div className="nd-grpmap-edge">

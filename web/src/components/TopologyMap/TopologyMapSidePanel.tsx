@@ -14,7 +14,7 @@ import { SEVERITY_ORDER } from '../../lib/nodeState';
 import { Button } from '../ui/Button';
 import { StatusDot } from '../ui/StatusDot';
 import { useEntityNames } from '../ui/entityNames';
-import { edgesOf, levelNodesHref, type MapSelection } from './topologyLevel';
+import { edgesOf, levelNodesHref, nodePlace, type MapSelection } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
 import './TopologyMapSidePanel.css';
 
@@ -49,7 +49,7 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
           <StatusDot state={node.state} />
           <dl className="topomap-panel-facts">
             <dt>{t('map.panel.node.path')}</dt>
-            <dd>{[...level.breadcrumbs.map((b) => b.name), levelName].join(' › ')}</dd>
+            <dd>{nodePlace(level, node, levelName)}</dd>
           </dl>
           <h3 className="topomap-panel-sub">{t('map.panel.node.edges')}</h3>
           <ul className="topomap-panel-list">
@@ -94,7 +94,7 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
   const presentStates = SEVERITY_ORDER.filter((s) => level.nodes.some((n) => n.state === s));
   const presentSources = LINK_SOURCES.filter((s) => level.edges.some((e) => e.source === s));
   const facts: [string, number][] = [
-    [t('map.panel.summary.folders'), level.folders.length],
+    [t('map.panel.summary.folders'), level.subfolder_count],
     [t('map.panel.summary.linked'), level.linked_node_count],
     [t('map.panel.summary.isolated'), level.isolated_count],
     [t('map.panel.summary.edges'), level.edge_count],

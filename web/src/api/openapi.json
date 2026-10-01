@@ -23463,7 +23463,7 @@
           "topology"
         ],
         "summary": "One folder level of the network map: the folder's own linked nodes, each subfolder as one box\nwith its subtree's counts, links between the same two things bundled into one edge, and a stub\nfor every place links leave the level.",
-        "description": "Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the\nroots of their scope directly under the whole network, and only links whose **both** ends are\nvisible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers\n`overflow: true` with its boxes and no nodes or edges.\n\nA Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders\nare not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A\nflat drawing over the bounds falls back to boxes.",
+        "description": "Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the\nroots of their scope directly under the whole network, and only links whose **both** ends are\nvisible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers\n`overflow: true` with its boxes and no nodes or edges.\n\nA Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders\nare not boxes, every node in its subtree is drawn and carries the folders down to the one it is\nfiled in (`folder_path`). A link to another folder of the same site leaves as a stub for the far\nnode itself, since the site draws it. A flat drawing over the bounds falls back to boxes.",
         "operationId": "get_topology_map",
         "parameters": [
           {
@@ -33107,6 +33107,7 @@
         "required": [
           "breadcrumbs",
           "folders",
+          "subfolder_count",
           "nodes",
           "stubs",
           "edges",
@@ -33157,7 +33158,7 @@
           },
           "flattened": {
             "type": "boolean",
-            "description": "The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node\nin the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would\nexceed the bounds, in which case the level falls back to boxes."
+            "description": "The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node\nin the subtree is drawn, tagged with its `folder_path`. `false` when the flat drawing would\nexceed the bounds, in which case the level falls back to boxes."
           },
           "folders": {
             "type": "array",
@@ -33209,6 +33210,11 @@
               "$ref": "#/components/schemas/MapStub"
             },
             "description": "The places links leave the level for."
+          },
+          "subfolder_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many subfolders sit directly in it — on a `flattened` level too, where none is a box."
           }
         }
       },
@@ -33218,19 +33224,16 @@
         "required": [
           "id",
           "name",
-          "state"
+          "state",
+          "folder_path"
         ],
         "properties": {
-          "folder": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/MapBreadcrumb",
-                "description": "On a `flattened` level, the subfolder the node is filed in; `null` when it sits directly in\nthe level's own folder (always `null` on an ordinary level)."
-              }
-            ]
+          "folder_path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapBreadcrumb"
+            },
+            "description": "On a `flattened` level, the folders between the level and the node, outermost first, ending\nwith the one the node is filed in; empty when it sits directly in the level's own folder\n(always empty on an ordinary level)."
           },
           "id": {
             "type": "string",
