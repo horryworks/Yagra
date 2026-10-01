@@ -137,3 +137,49 @@
   background: var(--bg-secondary);
   color: var(--text-secondary);
 }
+
+/* ---- ADR-191 Inc.9: a bundle of access points, port by port ---- */
+.topomap-panel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.topomap-panel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+}
+.topomap-panel-port {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.topomap-panel-port-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-xs);
+  font-weight: normal;
+  color: var(--text-secondary);
+}
+.topomap-panel-port-head .mono {
+  font-family: var(--font-family);
+}
+/* One access point: the state dot, the name, the state in words. */
+.topomap-panel-row.topomap-panel-ap {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}

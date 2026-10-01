@@ -17,14 +17,14 @@
 // The layout is hand-written SVG (`components/TopologyMap/graphLayout.ts`); every judgement this
 // page makes lives in `components/TopologyMap/topologyLevel.ts`, where a test reaches it.
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { TopologyMap } from '../components/TopologyMap/TopologyMap';
 import { TopologyMapSidePanel } from '../components/TopologyMap/TopologyMapSidePanel';
-import { type PlacedNode } from '../components/TopologyMap/graphLayout';
+import { isBundleId, type PlacedNode } from '../components/TopologyMap/graphLayout';
 import { useMapTitles, useTopologyLevel } from '../components/TopologyMap/useTopologyLevel';
 import {
   folderHref,
@@ -54,9 +54,25 @@ export function TopologyMapPage() {
     error,
     layout: viewLayout,
     edge,
-    selectEdge: onSelectEdge,
-    clearEdge,
+    selectEdge,
+    clearEdge: clearLine,
   } = useTopologyLevel(group);
+
+  // A bundle of access points (ADR-191 Inc.9) is selected in the page only, like a line: it names
+  // something that exists on this level and nowhere else.
+  const [bundleSel, setBundleSel] = useState<{ group: string | null; id: string } | null>(null);
+  const bundle = bundleSel && bundleSel.group === group ? bundleSel.id : null;
+  const clearEdge = useCallback(() => {
+    clearLine();
+    setBundleSel(null);
+  }, [clearLine]);
+  const onSelectEdge = useCallback(
+    (id: string) => {
+      setBundleSel(null);
+      selectEdge(id);
+    },
+    [selectEdge],
+  );
 
   const setSelection = useCallback(
     (sel: TreeSelection) => {
@@ -71,6 +87,12 @@ export function TopologyMapPage() {
 
   const onActivate = useCallback(
     (box: PlacedNode) => {
+      if (isBundleId(box.id)) {
+        // A second press lets it go, as on a node (ADR-073).
+        clearLine();
+        setBundleSel((cur) => (cur?.id === box.id && cur.group === group ? null : { group, id: box.id }));
+        return;
+      }
       const ref = splitGraphId(box.id);
       if (!ref || !level) return;
       clearEdge();
@@ -85,7 +107,7 @@ export function TopologyMapPage() {
         setSelection(same ? null : { kind: 'node', id: ref.id });
       }
     },
-    [level, navigate, setSelection, urlSel, clearEdge],
+    [level, navigate, setSelection, urlSel, clearEdge, clearLine, group],
   );
   const clearAll = useCallback(() => {
     clearEdge();
@@ -94,20 +116,25 @@ export function TopologyMapPage() {
 
   // Escape unwinds the line first, then the URL's selection (`mapEscapeTarget`). One listener.
   useEffect(() => {
-    if (!edge && !urlSel) return;
+    if (!edge && !bundle && !urlSel) return;
     const onKey = (e: KeyboardEvent) => {
       if (!escapeClearsSelection(e)) return;
-      const target = mapEscapeTarget(!!edge, !!urlSel);
+      const target = mapEscapeTarget(!!edge || !!bundle, !!urlSel);
       if (target === 'edge') clearEdge();
       else if (target === 'selection') setSelection(null);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [edge, urlSel, setSelection, clearEdge]);
+  }, [edge, bundle, urlSel, setSelection, clearEdge]);
 
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
 
-  const selection: MapSelection = edge ? { kind: 'edge', id: edge } : urlSel;
+  const selection: MapSelection = edge
+    ? { kind: 'edge', id: edge }
+    : bundle
+      ? { kind: 'bundle', id: bundle }
+      : urlSel;
+  const bundleNode = bundle ? (viewLayout.nodes.find((n) => n.id === bundle) ?? null) : null;
   const levelName = level?.group?.name ?? t('map.root');
 
   function body() {
@@ -136,7 +163,7 @@ export function TopologyMapPage() {
             ) : (
               <TopologyMap
                 layout={viewLayout}
-                selectedId={selectedGraphId(urlSel)}
+                selectedId={bundle ?? selectedGraphId(urlSel)}
                 selectedEdge={edge}
                 fitKey={group ?? ''}
                 boxTitle={boxTitle}
@@ -150,6 +177,7 @@ export function TopologyMapPage() {
           <TopologyMapSidePanel
             level={level}
             selection={selection}
+            bundle={bundleNode}
             levelName={levelName}
             onSelectEdge={onSelectEdge}
             onClear={clearAll}

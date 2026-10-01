@@ -11,12 +11,13 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { stateColorVar } from '../../lib/format';
+import { stateColorVar, stateLabel } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
 import { useMapViewStore, type MapViewKey } from '../../store';
 import { AP_PITCH, type GraphLayout, type PlacedEdge, type PlacedNode } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
 import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
+import { rimArcs, troubleCounts } from './apBundle';
 import { WifiIcon } from '../ui/icons';
 import './TopologyMap.css';
 
@@ -45,6 +46,7 @@ function Box({
   ]
     .filter(Boolean)
     .join(' ');
+  if (node.bundle) return <ApBundle node={node} cls={cls} selected={selected} title={title} onActivate={onActivate} />;
   if (node.ap) return <AccessPoint node={node} cls={cls} selected={selected} title={title} onActivate={onActivate} />;
   const external = node.kind === 'external';
   const nameY = node.sub ? node.h / 2 - 3 : node.h / 2 + 4;
@@ -137,6 +139,79 @@ function AccessPoint({
           {fitLabel(node.sub, AP_PITCH, 0)}
         </text>
       )}
+    </g>
+  );
+}
+
+/** Two or more Wi-Fi access points under one parent, drawn as one circle (ADR-191 Inc.9). Two
+ *  offset discs behind it say "more than one"; the rim is cut into one arc per state, as long as
+ *  that state's share of the members; the Wi-Fi mark takes the worst state's colour; the count sits
+ *  top right, and "N APs" with what is not ok goes underneath. The <title> reads all of it, so
+ *  nothing is carried by colour alone. */
+function ApBundle({
+  node,
+  cls,
+  selected,
+  title,
+  onActivate,
+}: {
+  node: PlacedNode;
+  cls: string;
+  selected: boolean;
+  title: string;
+  onActivate: (node: PlacedNode) => void;
+}) {
+  const { t } = useTranslation('topology');
+  const members = node.bundle!.members;
+  const r = node.w / 2;
+  const circumference = 2 * Math.PI * r;
+  const trouble = troubleCounts(members);
+  const count = String(members.length);
+  const badgeW = 12 + count.length * 7;
+  const nameY = r + 17;
+  return (
+    <g
+      className={`${cls} topomap-ap topomap-bundle`}
+      transform={`translate(${node.cx}, ${node.cy})`}
+      role="button"
+      tabIndex={0}
+      aria-label={title}
+      aria-pressed={selected}
+      onClick={() => onActivate(node)}
+      onKeyDown={(e) => activateOnKey(e, () => onActivate(node))}
+    >
+      <title>{title}</title>
+      <rect className="topomap-ap-hit" x={-AP_PITCH / 2 + 4} y={-r - 10} width={AP_PITCH - 8} height={nameY + r + 34} />
+      <circle className="topomap-bundle-stack" cx={7} cy={-5} r={r} />
+      <circle className="topomap-bundle-stack" cx={3.5} cy={-2.5} r={r} />
+      <circle className="topomap-ap-ring" r={r + 5} />
+      <circle className="topomap-ap-disc topomap-bundle-disc" r={r} />
+      {rimArcs(members, circumference).map((a) => (
+        <circle
+          key={a.state}
+          className="topomap-bundle-arc"
+          r={r}
+          transform="rotate(-90)"
+          strokeDasharray={`${a.length} ${circumference - a.length}`}
+          strokeDashoffset={-a.offset}
+          style={{ stroke: stateColorVar(a.state) }}
+        />
+      ))}
+      <WifiIcon x={-13} y={-14} width={26} height={26} style={{ color: stateColorVar(node.state) }} />
+      <g className="topomap-bundle-badge" transform={`translate(${r - 8}, ${-r - 10})`}>
+        <rect width={badgeW} height={18} rx={9} />
+        <text x={badgeW / 2} y={13} textAnchor="middle">
+          {count}
+        </text>
+      </g>
+      <text className="topomap-label" textAnchor="middle" y={nameY}>
+        {t('map.bundle.label', { count: members.length })}
+      </text>
+      <text className={`topomap-sub${trouble.length ? ' topomap-bundle-trouble' : ''}`} textAnchor="middle" y={nameY + 15}>
+        {trouble.length
+          ? trouble.map(([st, c]) => t('map.bundle.part', { state: stateLabel(st), count: c })).join(t('map.bundle.sep'))
+          : t('map.bundle.allOk')}
+      </text>
     </g>
   );
 }
@@ -389,6 +464,16 @@ export function TopologyMap({
     }
   }, [setView]);
 
+  // A line drawn for a bundle stands for several of the level's lines, so pressing it selects the
+  // bundle (ADR-191 Inc.9).
+  const selectBox = useCallback(
+    (id: string) => {
+      const box = layout.nodes.find((n) => n.id === id);
+      if (box) onActivate(box);
+    },
+    [layout.nodes, onActivate],
+  );
+
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
 
   return (
@@ -440,10 +525,10 @@ export function TopologyMap({
             <Edge
               key={e.id}
               edge={e}
-              selected={e.id === selectedEdge}
+              selected={e.id === selectedEdge || (!!e.box && e.box === selectedId)}
               title={edgeTitle(e)}
               showChip={showChip(e)}
-              onSelect={onSelectEdge}
+              onSelect={e.box ? () => selectBox(e.box!) : onSelectEdge}
             />
           ))}
           {layout.nodes.map((n) => (

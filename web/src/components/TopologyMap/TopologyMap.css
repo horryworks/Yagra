@@ -244,3 +244,32 @@
 .topomap-node.topomap-ap.suppressed .topomap-ap-disc {
   fill: var(--bg-tertiary);
 }
+
+/* ---- ADR-191 Inc.9: two or more access points under one parent drawn as one bundle ---- */
+.topomap-bundle-stack {
+  fill: var(--bg-secondary);
+  stroke: var(--border-color);
+  stroke-width: 1.2;
+}
+.topomap-bundle-disc {
+  stroke: var(--border-color);
+}
+/* The rim: one arc per state, coloured inline from the canonical palette. */
+.topomap-bundle-arc {
+  fill: none;
+  stroke-width: 3.5;
+}
+.topomap-bundle-badge rect {
+  fill: var(--text-primary);
+}
+.topomap-bundle-badge text {
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  fill: var(--bg-primary);
+  pointer-events: none;
+}
+.topomap-sub.topomap-bundle-trouble {
+  fill: var(--status-critical);
+}

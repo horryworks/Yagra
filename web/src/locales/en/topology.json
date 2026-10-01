@@ -31,6 +31,15 @@
       "level": "Nothing on this level has a discovered link yet. Links come from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run."
     },
     "accessPoint": "Wi-Fi access point",
+    "bundle": {
+      "label_one": "{{count}} AP",
+      "label_other": "{{count}} APs",
+      "part": "{{state}} {{count}}",
+      "sep": ", ",
+      "allOk": "All OK",
+      "title_one": "{{count}} Wi-Fi access point under {{name}} — {{summary}}. Select to list it.",
+      "title_other": "{{count}} Wi-Fi access points under {{name}} — {{summary}}. Select to list them."
+    },
     "tiers": "Top to bottom: the way out (routers, firewalls) → switches that route → switches that do not → access points and everything else.",
     "role": {
       "edge": "Router or firewall",
@@ -86,7 +95,16 @@
         "more": "…and {{count}} more",
         "noPort": "port unknown"
       },
-      "clear": "Clear selection"
+      "clear": "Clear selection",
+      "bundle": {
+        "title": "Wi-Fi access points under {{name}}",
+        "stateCount_one": "{{state}}: {{count}}",
+        "stateCount_other": "{{state}}: {{count}}",
+        "sharedPort_one": "{{count}} access point on {{port}}.",
+        "sharedPort_other": "{{count}} access points on {{port}} — there is probably a switch Yagra does not monitor between them.",
+        "portCount_one": "{{count}} AP",
+        "portCount_other": "{{count}} APs"
+      }
     }
   },
   "dependency": {

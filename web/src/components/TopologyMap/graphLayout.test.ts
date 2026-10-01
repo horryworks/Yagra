@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
-  AP_LINE_H,
-  AP_PER_LINE,
   AP_PITCH,
   AP_SIZE,
   BOX_SIZE,
+  BUNDLE_SIZE,
+  SIDE_GAP,
+  bundleId,
+  worstState,
   CELL_H,
   CELL_W,
   NODE_TALL,
@@ -298,7 +300,7 @@ describe('layoutGraph', () => {
   });
 });
 
-describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
+describe('layoutGraph — access points (ADR-191 Inc.5, Inc.9)', () => {
   const ap = (id: string, extra: Partial<GraphNode> = {}) =>
     node(id, { ap: true, role: 'access_point', ...extra });
   const byId = (out: ReturnType<typeof layoutGraph>, id: string) => out.nodes.find((n) => n.id === id)!;
@@ -317,59 +319,131 @@ describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
     return { nodes, links };
   }
 
+  /** No two drawn things overlap (a circle counts its label's width), and all fit the canvas. */
+  function expectNoOverlap(out: ReturnType<typeof layoutGraph>) {
+    const rects = out.nodes.map((n) => {
+      const w = n.ap ? AP_PITCH : n.w;
+      return { id: n.id, l: n.cx - w / 2, r: n.cx + w / 2, t: n.cy - n.h / 2, b: n.cy + n.h / 2 };
+    });
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const [p, q] = [rects[i], rects[j]];
+        const overlap = p.l < q.r && q.l < p.r && p.t < q.b && q.t < p.b;
+        expect(overlap, `${p.id} overlaps ${q.id}`).toBe(false);
+      }
+    }
+    for (const n of out.nodes) {
+      expect(n.cx + (n.ap ? AP_PITCH : n.w) / 2).toBeLessThanOrEqual(out.width);
+      expect(n.cy + n.h / 2).toBeLessThanOrEqual(out.height);
+    }
+  }
+
   it('keeps the old grid exactly when a level has no access point', () => {
     const out = layoutGraph({ nodes: [node('a'), node('b')], links: [link('a', 'b')], anchorId: 'a' });
     expect([byId(out, 'a').cx, byId(out, 'a').cy]).toEqual([24 + 100, 24 + 38]);
     expect([byId(out, 'b').cx, byId(out, 'b').cy]).toEqual([24 + 100, 24 + CELL_H + 38]);
   });
 
-  it('hangs each access point in the band below its parent, centred under it', () => {
+  it('draws two or more access points under one parent as one bundle, centred under it', () => {
     const out = layoutGraph(floor(3));
     for (const sw of ['sw1', 'sw2']) {
       const parent = byId(out, sw);
-      const aps = out.nodes.filter((n) => n.id.startsWith(`${sw}-ap`));
-      expect(aps).toHaveLength(3);
-      for (const a of aps) {
-        expect(a.cy).toBeGreaterThan(parent.cy + parent.h / 2);
-        expect([a.w, a.h]).toEqual([AP_SIZE.w, AP_SIZE.h]);
-      }
-      const mean = aps.reduce((s, a) => s + a.cx, 0) / aps.length;
-      expect(mean).toBeCloseTo(parent.cx);
-      const xs = aps.map((a) => a.cx).sort((x, y) => x - y);
-      expect(xs[1] - xs[0]).toBe(AP_PITCH);
+      expect(out.nodes.some((n) => n.id.startsWith(`${sw}-ap`))).toBe(false);
+      const b = byId(out, bundleId(sw));
+      expect([b.w, b.h]).toEqual([BUNDLE_SIZE.w, BUNDLE_SIZE.h]);
+      expect(b.ap).toBe(true);
+      expect(b.cx).toBe(parent.cx);
+      expect(b.cy).toBeGreaterThan(parent.cy + parent.h / 2);
+      expect(b.bundle?.parent).toBe(sw);
+      expect(b.bundle?.members.map((m) => m.id)).toEqual([`${sw}-ap00`, `${sw}-ap01`, `${sw}-ap02`]);
     }
   });
 
-  it('draws the line to the parent straight, from the box to the top of the circle', () => {
+  it('colours a bundle with the worst state among its members', () => {
+    const { nodes, links } = floor(3);
+    const sick = nodes.map((n) =>
+      n.id === 'sw1-ap01' ? { ...n, state: 'critical' as const } : n.id === 'sw1-ap02' ? { ...n, state: 'warning' as const } : n,
+    );
+    const out = layoutGraph({ nodes: sick, links });
+    expect(byId(out, bundleId('sw1')).state).toBe('critical');
+    expect(byId(out, bundleId('sw2')).state).toBe('ok');
+    expect(worstState([])).toBe('ok');
+  });
+
+  it('keeps a lone access point as itself, with a straight line from the box to the top of it', () => {
     const out = layoutGraph(floor(1));
     const parent = byId(out, 'sw1');
     const a = byId(out, 'sw1-ap00');
-    const e = out.edges.find((x) => [x.x1, x.x2].includes(a.cx) && x.y2 === a.cy - AP_SIZE.h / 2)!;
+    expect([a.w, a.h]).toEqual([AP_SIZE.w, AP_SIZE.h]);
+    expect(a.bundle).toBeUndefined();
+    const e = out.edges.find((x) => x.x2 === a.cx && x.y2 === a.cy - AP_SIZE.h / 2)!;
     expect(e.kind).toBe('line');
+    expect(e.box).toBeUndefined();
     expect([e.x1, e.y1]).toEqual([parent.cx, parent.cy + parent.h / 2]);
   });
 
-  it('never roots the layout at an access point, however many links it has', () => {
+  it('collapses the lines from a parent to its bundle into one, counting every link', () => {
+    const out = layoutGraph(floor(3));
+    const parent = byId(out, 'sw1');
+    const b = byId(out, bundleId('sw1'));
+    const lines = out.edges.filter((e) => e.box === b.id);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].count).toBe(3);
+    expect(lines[0].kind).toBe('line');
+    expect([lines[0].x1, lines[0].y1, lines[0].x2, lines[0].y2]).toEqual([
+      parent.cx,
+      parent.cy + parent.h / 2,
+      b.cx,
+      b.cy - b.h / 2,
+    ]);
+    // Two backbone lines and one per bundle.
+    expect(out.edges).toHaveLength(4);
+  });
+
+  it('never roots the layout at an access point, and folds a mesh into its parent bundle', () => {
     const nodes = [node('sw'), ap('a1'), ap('a2'), ap('a3'), ap('a4')];
     const links = [link('sw', 'a1'), link('a1', 'a2'), link('a1', 'a3'), link('a1', 'a4')];
     const out = layoutGraph({ nodes, links });
-    const top = Math.min(...out.nodes.map((n) => n.cy));
-    expect(byId(out, 'sw').cy).toBe(top);
-    // The mesh repeaters hang beside the AP they repeat, under its switch.
-    for (const id of ['a2', 'a3', 'a4']) expect(byId(out, id).cy).toBe(byId(out, 'a1').cy);
+    expect(out.nodes.map((n) => n.id).sort()).toEqual([bundleId('sw'), 'sw']);
+    expect(byId(out, bundleId('sw')).bundle?.members).toHaveLength(4);
+    expect(byId(out, 'sw').cy).toBeLessThan(byId(out, bundleId('sw')).cy);
+    // The lines between the repeaters are inside the bundle and are not drawn.
+    expect(out.edges).toHaveLength(1);
+    expect(out.edges[0].count).toBe(1);
   });
 
-  it('puts an access point linked to two switches under the higher one', () => {
+  it('puts a lone access point beside a parent that has a child below, and bows its second link', () => {
     const nodes = [node('core'), node('dist'), node('acc'), ap('a')];
     const links = [link('core', 'dist'), link('dist', 'acc'), link('dist', 'a'), link('acc', 'a')];
     const out = layoutGraph({ nodes, links, anchorId: 'core' });
+    const dist = byId(out, 'dist');
     const a = byId(out, 'a');
-    expect(a.cx).toBe(byId(out, 'dist').cx);
-    expect(a.cy).toBeGreaterThan(byId(out, 'dist').cy);
-    expect(a.cy).toBeLessThan(byId(out, 'acc').cy);
+    expect(a.cy).toBe(dist.cy);
+    expect(a.cx).toBe(dist.cx + dist.w / 2 + SIDE_GAP + AP_PITCH / 2);
+    // The line to the parent runs sideways, from the box's edge to the circle's.
+    const side = out.edges.find((e) => e.y1 === dist.cy && e.y2 === dist.cy)!;
+    expect([side.x1, side.x2]).toEqual([dist.cx + dist.w / 2, a.cx - a.w / 2]);
     // The second link is a bow, not a line through the boxes between.
     const second = out.edges.find((e) => e.kind === 'bow')!;
     expect(second.path).toMatch(/^M .* Q .*/);
+  });
+
+  it('collapses a bundle’s links to a second switch into one bow that selects the bundle', () => {
+    const nodes = [node('core'), node('dist'), node('acc'), ap('a'), ap('b')];
+    const links = [
+      link('core', 'dist'),
+      link('dist', 'acc'),
+      link('dist', 'a'),
+      link('dist', 'b'),
+      link('acc', 'a'),
+      link('acc', 'b'),
+    ];
+    const out = layoutGraph({ nodes, links, anchorId: 'core' });
+    const b = byId(out, bundleId('dist'));
+    expect(b.cy).toBe(byId(out, 'dist').cy);
+    const toAcc = out.edges.filter((e) => e.box === b.id && e.kind === 'bow');
+    expect(toAcc).toHaveLength(1);
+    expect(toAcc[0].count).toBe(2);
   });
 
   it('draws a switch whose only links go to access points', () => {
@@ -391,38 +465,30 @@ describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
     expect(out.componentCount).toBe(1);
   });
 
-  it(`wraps a group after ${AP_PER_LINE} and keeps neighbouring groups apart`, () => {
-    const out = layoutGraph(floor(AP_PER_LINE + 1));
-    const g1 = out.nodes.filter((n) => n.id.startsWith('sw1-ap'));
-    const lines = [...new Set(g1.map((n) => n.cy))].sort((x, y) => x - y);
-    expect(lines).toHaveLength(2);
-    expect(g1.filter((n) => n.cy === lines[0])).toHaveLength(AP_PER_LINE);
-    expect(lines[1] - lines[0]).toBe(AP_LINE_H);
-    // No two drawn things overlap, labels' width included for the circles.
-    const rects = out.nodes.map((n) => {
-      const w = n.ap ? AP_PITCH : n.w;
-      return { id: n.id, l: n.cx - w / 2, r: n.cx + w / 2, t: n.cy - n.h / 2, b: n.cy + n.h / 2 };
-    });
-    for (let i = 0; i < rects.length; i++) {
-      for (let j = i + 1; j < rects.length; j++) {
-        const [p, q] = [rects[i], rects[j]];
-        const overlap = p.l < q.r && q.l < p.r && p.t < q.b && q.t < p.b;
-        expect(overlap, `${p.id} overlaps ${q.id}`).toBe(false);
-      }
+  it('widens a column for a bundle drawn beside its box, so nothing overlaps', () => {
+    const { nodes, links } = floor(2);
+    for (let i = 0; i < 5; i++) {
+      nodes.push(ap(`core-ap${i}`, { name: `core-ap${i}` }));
+      links.push(link('core', `core-ap${i}`));
     }
-    for (const n of out.nodes) {
-      expect(n.cx + (n.ap ? AP_PITCH : n.w) / 2).toBeLessThanOrEqual(out.width);
-      expect(n.cy + n.h / 2).toBeLessThanOrEqual(out.height);
-    }
+    const out = layoutGraph({ nodes, links });
+    const core = byId(out, 'core');
+    const b = byId(out, bundleId('core'));
+    expect(b.cy).toBe(core.cy);
+    expect(b.cx).toBeGreaterThan(core.cx + core.w / 2);
+    expectNoOverlap(out);
+    expectNoOverlap(layoutGraph(floor(9)));
   });
 
-  it('orders a group by name and does not depend on input order', () => {
+  it('orders a bundle by name and does not depend on input order', () => {
     const { nodes, links } = floor(5);
+    nodes.push(ap('core-ap', { name: 'core-ap' }), ap('core-ap2', { name: 'core-ap2' }));
+    links.push(link('core', 'core-ap'), link('core', 'core-ap2'), link('sw1-ap00', 'sw2-ap00'));
     const one = layoutGraph({ nodes, links });
     const two = layoutGraph({ nodes: shuffle(nodes, 5), links: shuffle(links, 11) });
     expect(two).toEqual(one);
-    const g = one.nodes.filter((n) => n.id.startsWith('sw1-ap')).sort((x, y) => x.cx - y.cx);
-    expect(g.map((n) => n.name)).toEqual([...g.map((n) => n.name)].sort());
+    const names = byId(one, bundleId('sw1')).bundle!.members.map((m) => m.name);
+    expect(names).toEqual([...names].sort());
   });
 });
 
@@ -497,10 +563,9 @@ describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
       as5: 2,
     });
     const at = (id: string) => out.nodes.find((n) => n.id === id)!;
-    for (const n of out.nodes.filter((x) => x.ap)) {
-      const parent = at(`as${(Number(n.id.slice(2)) % 4) + 1}`);
-      expect(n.cy).toBeGreaterThan(parent.cy);
-    }
+    const bundles = out.nodes.filter((x) => x.ap);
+    expect(bundles.map((n) => n.bundle?.members.length)).toEqual([4, 3, 3, 3]);
+    for (const n of bundles) expect(n.cy).toBeGreaterThan(at(n.bundle!.parent).cy);
     // A line that skips the core row bows rather than running through it.
     const skip = out.edges.filter((e) => e.id.startsWith('cdp-rt-'));
     expect(skip).toHaveLength(5);
@@ -550,10 +615,9 @@ describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
     const out = layoutGraph({ nodes, links });
     for (const sw of ['sw1', 'sw2']) {
       const parent = out.nodes.find((n) => n.id === sw)!;
-      const aps = out.nodes.filter((n) => n.id.startsWith(`${sw}-ap`));
-      const mid = aps.reduce((acc, n) => acc + n.cx, 0) / aps.length;
-      expect(mid).toBeCloseTo(parent.cx, 6);
-      expect(aps.every((n) => n.cy > parent.cy)).toBe(true);
+      const b = out.nodes.find((n) => n.id === bundleId(sw))!;
+      expect(b.cx).toBeCloseTo(parent.cx, 6);
+      expect(b.cy).toBeGreaterThan(parent.cy);
     }
   });
 });

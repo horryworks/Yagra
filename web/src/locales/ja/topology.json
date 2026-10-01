@@ -31,6 +31,13 @@
       "level": "この階には、検出されたリンクを持つものがまだありません。リンクは CDP/LLDP の隣接と、同じ IP サブネットに属するノードから導出するので、それらの走査が進むにつれてマップが埋まっていきます。"
     },
     "accessPoint": "Wi-Fi アクセスポイント",
+    "bundle": {
+      "label_other": "AP {{count}} 台",
+      "part": "{{state}} {{count}}",
+      "sep": "・",
+      "allOk": "すべて正常",
+      "title_other": "{{name}} の下の Wi-Fi AP {{count}} 台 — {{summary}}。押すと一覧を出します。"
+    },
     "tiers": "上から: 出入口（ルーター・ファイアウォール）→ ルーティングするスイッチ → しないスイッチ → アクセスポイントとその他。",
     "role": {
       "edge": "ルーター・ファイアウォール",
@@ -85,7 +92,13 @@
         "more": "…ほか {{count}} 本",
         "noPort": "ポート不明"
       },
-      "clear": "選択を外す"
+      "clear": "選択を外す",
+      "bundle": {
+        "title": "{{name}} の Wi-Fi AP",
+        "stateCount_other": "{{state}} {{count}}",
+        "sharedPort_other": "{{port}} に {{count}} 台。間に監視していないスイッチがあると思われます。",
+        "portCount_other": "{{count}} 台"
+      }
     }
   },
   "dependency": {

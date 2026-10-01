@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The network map's right-hand panel (ADR-191): what the level holds when nothing is selected,
-// one node's lines when a node is, and the ports behind a bundled line when a line is.
+// one node's lines when a node is, the ports behind a bundled line when a line is, and the access
+// points behind a bundle (ADR-191 Inc.9), port by port, when a bundle is.
 //
 // Every name here is device-supplied and renders as a React text child (auto-escaped).
 
@@ -24,18 +25,22 @@ import {
   type MapSelection,
 } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
+import { membersByPort, stateCounts } from './apBundle';
+import type { PlacedNode } from './graphLayout';
 import './TopologyMapSidePanel.css';
 
 interface Props {
   level: MapLevel;
   selection: MapSelection;
+  /** The selected bundle's box, with its members' live states, when a bundle is selected. */
+  bundle?: PlacedNode | null;
   /** The title of the level ("Whole network" or the folder's name), for the node's place. */
   levelName: string;
   onSelectEdge: (id: string) => void;
   onClear: () => void;
 }
 
-export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge, onClear }: Props) {
+export function TopologyMapSidePanel({ level, selection, bundle, levelName, onSelectEdge, onClear }: Props) {
   const { t } = useTranslation('topology');
   const { nodeName } = useEntityNames();
 
@@ -91,6 +96,54 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
         </aside>
       );
     }
+  }
+
+  if (selection?.kind === 'bundle' && bundle?.bundle) {
+    const members = bundle.bundle.members;
+    const groups = membersByPort(level, bundle.bundle);
+    // Several access points on one port: the line runs through a switch nobody monitors.
+    const shared = groups.find((g) => g.port !== null && g.members.length > 1);
+    const title = t('map.panel.bundle.title', { name: bundle.name });
+    return (
+      <aside className="topomap-panel" aria-label={title}>
+        <h2 className="topomap-panel-title">{title}</h2>
+        <ul className="topomap-panel-chips">
+          {stateCounts(members).map(([st, n]) => (
+            <li key={st} className="topomap-panel-chip">
+              <span className="topomap-legend-dot" style={{ background: stateColorVar(st) }} />
+              {t('map.panel.bundle.stateCount', { state: stateLabel(st), count: n })}
+            </li>
+          ))}
+        </ul>
+        {shared && (
+          <p className="topomap-panel-note muted">
+            {t('map.panel.bundle.sharedPort', { port: shared.port, count: shared.members.length })}
+          </p>
+        )}
+        {groups.map((g) => (
+          <section key={g.port ?? ''} className="topomap-panel-port">
+            <h3 className="topomap-panel-port-head">
+              <span className="mono">{g.port ?? t('map.panel.edge.noPort')}</span>
+              <span className="muted">{t('map.panel.bundle.portCount', { count: g.members.length })}</span>
+            </h3>
+            <ul className="topomap-panel-list">
+              {g.members.map((m) => (
+                <li key={m.id}>
+                  <Link className="topomap-panel-row topomap-panel-ap" to={nodeHref(m.id)} title={t('map.panel.node.open')}>
+                    <span className="topomap-legend-dot" style={{ background: stateColorVar(m.state) }} />
+                    <span className="topomap-panel-row-name">{m.name}</span>
+                    <span className="muted">{stateLabel(m.state)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+        <div className="topomap-panel-actions">
+          <Button onClick={onClear}>{t('map.panel.clear')}</Button>
+        </div>
+      </aside>
+    );
   }
 
   if (selection?.kind === 'edge') {

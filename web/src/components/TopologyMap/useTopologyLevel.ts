@@ -12,6 +12,7 @@ import { api } from '../../services/api';
 import { usePolled } from '../../dashboard/usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../../dashboard/useNodeStates';
 import type { MapLevel } from '../../types/api';
+import { overlayBundleStates, troubleCounts } from './apBundle';
 import { layoutGraph, type GraphLayout, type PlacedEdge, type PlacedNode } from './graphLayout';
 import {
   edgeShowsChip,
@@ -88,8 +89,10 @@ export function useTopologyLevel(group: string | null): TopologyLevelView {
   );
   const overlay = useRef<LiveOverlay<PlacedNode> | null>(null);
   const placedNodes = useMemo(() => {
-    overlay.current = overlayLiveStates(layout.nodes, liveByGraphId(level, live), overlay.current);
-    return overlay.current.out;
+    const byBox = liveByGraphId(level, live);
+    overlay.current = overlayLiveStates(layout.nodes, byBox, overlay.current);
+    // A bundle (ADR-191 Inc.9) is not a node of the level; its colour follows its members.
+    return overlayBundleStates(overlay.current.out, byBox);
   }, [layout.nodes, level, live]);
   const viewLayout = useMemo(
     () => (placedNodes === layout.nodes ? layout : { ...layout, nodes: placedNodes }),
@@ -110,6 +113,13 @@ export function useMapTitles(level: MapLevel | null) {
         return t('map.folderTitle', { name: n.name, count: f?.node_count ?? 0, state: stateLabel(n.state) });
       }
       if (n.kind === 'external') return t('map.externalTitle', { name: n.name });
+      if (n.bundle) {
+        const trouble = troubleCounts(n.bundle.members);
+        const summary = trouble.length
+          ? trouble.map(([s, c]) => t('map.bundle.part', { state: stateLabel(s), count: c })).join(t('map.bundle.sep'))
+          : t('map.bundle.allOk');
+        return t('map.bundle.title', { name: n.name, count: n.bundle.members.length, summary });
+      }
       const cause = n.rootCause ? (names.get(n.rootCause) ?? null) : null;
       const title = cause
         ? t('map.nodeTitleSuppressed', { name: n.name, state: stateLabel(n.state), cause })
@@ -122,6 +132,7 @@ export function useMapTitles(level: MapLevel | null) {
     (e: PlacedEdge) => t('map.edgeTitle', { count: e.count, source: t(`map.source.${e.source}`) }),
     [t],
   );
-  const showChip = useCallback((e: PlacedEdge) => edgeShowsChip(e.id, e.count), []);
+  // A bundle's line stands for its members, and the bundle already shows how many.
+  const showChip = useCallback((e: PlacedEdge) => !e.box && edgeShowsChip(e.id, e.count), []);
   return { boxTitle, edgeTitle, showChip };
 }

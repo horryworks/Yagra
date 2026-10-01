@@ -14,10 +14,16 @@
 //
 // Since ADR-191 Inc.5 a Wi-Fi access point is not a box in the grid. The grid is laid out from the
 // other boxes and the links between them (the backbone); each access point then hangs in a band
-// under its parent — the backbone box it is linked to in the highest row — at a narrower pitch,
-// wrapping after `AP_PER_LINE`. A column widens to fit its group and a row grows by its bands, so
-// a group never overlaps its neighbour's. An island of access points with no backbone box to hang
+// under its parent — the backbone box it is linked to in the highest row. A column widens for
+// whatever is drawn beside one of its boxes and a row grows by one band for whatever hangs under
+// it, so nothing overlaps its neighbour. An island of access points with no backbone box to hang
 // from is laid out as backbone, so it is still drawn.
+//
+// Since ADR-191 Inc.9 a parent carries one drawn thing at most: the access point itself when it
+// has one, or a single bundle standing for all of them when it has two or more. The lines from the
+// members collapse onto the bundle, and lines between two members of one bundle are not drawn. A
+// parent with a backbone box in a row below it carries that thing beside its box instead of under
+// it, so the bundle does not sit on the lines down to its children.
 //
 // Since ADR-191 Inc.6 the rows follow what each device does, as the server judged it: routers and
 // firewalls on top, then switches that route, then switches that do not, and everything else (a
@@ -39,6 +45,7 @@
 // moving underneath a preserved viewport. Removing either one brings the jumping back.
 
 import type { MapRole, NodeState } from '../../types/api';
+import { SEVERITY_ORDER } from '../../lib/nodeState';
 
 /** What a box on the map stands for: a node, a subfolder drawn as one box, or a stub for links
  *  that leave the level. */
@@ -57,15 +64,34 @@ export const NODE_TALL = { w: BOX_SIZE.node.w, h: 52 };
 
 /** An access point is a circle this wide, with its name underneath (ADR-191 Inc.5). */
 export const AP_SIZE = { w: 40, h: 40 };
-/** The horizontal pitch of access points under one parent; the name below is cut to fit it. */
+/** A bundle of access points is a slightly larger circle (ADR-191 Inc.9). */
+export const BUNDLE_SIZE = { w: 48, h: 48 };
+/** The width an access point or a bundle takes, its label included; the label is cut to fit it. */
 export const AP_PITCH = 104;
-/** How many access points share one line under their parent before the group wraps. */
-export const AP_PER_LINE = 8;
-/** One band of access points: the circle, two lines of text under it, and the gap below. */
+/** The band under a row that holds the access points hanging below it: the circle, two lines of
+ *  text under it, and the gap below. */
 export const AP_LINE_H = 96;
+/** Gap between a parent's box and the access points drawn beside it. */
+export const SIDE_GAP = 28;
+
+/** The id of the bundle standing for the access points under `parent` (a box id). */
+export function bundleId(parent: string): string {
+  return `apgroup:${parent}`;
+}
+
+/** Whether a box id names a bundle of access points. */
+export function isBundleId(id: string): boolean {
+  return id.startsWith('apgroup:');
+}
+
+/** The worst of some states, by the canonical severity order; `ok` for none. */
+export function worstState(states: readonly NodeState[]): NodeState {
+  return SEVERITY_ORDER.find((s) => states.includes(s)) ?? 'ok';
+}
 
 /** The size one box is drawn at. */
-export function boxSize(n: Pick<GraphNode, 'kind' | 'sub' | 'ap'>): { w: number; h: number } {
+export function boxSize(n: Pick<GraphNode, 'kind' | 'sub' | 'ap' | 'bundle'>): { w: number; h: number } {
+  if (n.bundle) return BUNDLE_SIZE;
   if (n.kind === 'node' && n.ap) return AP_SIZE;
   return n.kind === 'node' && n.sub ? NODE_TALL : BOX_SIZE[n.kind];
 }
@@ -107,6 +133,25 @@ export interface GraphNode {
   /** What the node does in the network, which decides its row (ADR-191 Inc.6). A folder or stub
    *  box is `other`. */
   role: MapRole;
+  /** Set by the layout only, on the box standing for two or more access points under one parent
+   *  (ADR-191 Inc.9). Never part of the input. */
+  bundle?: ApBundleInfo;
+}
+
+/** One access point inside a bundle. */
+export interface BundleMember {
+  /** Its box id, the one it would have had on its own. */
+  id: string;
+  name: string;
+  state: NodeState;
+}
+
+/** What a bundle stands for. */
+export interface ApBundleInfo {
+  /** The box id of the parent the access points hang from. */
+  parent: string;
+  /** In name order, then id. */
+  members: BundleMember[];
 }
 
 /** The band a role is drawn in, top first. Everything at `UNTIERED` takes the row under the
@@ -167,6 +212,9 @@ export interface PlacedEdge {
   chip: { x: number; y: number };
   /** The end farther from the anchor is suppressed under an upstream cause — drawn muted. */
   suppressed: boolean;
+  /** Set on a line drawn for a bundle of access points (ADR-191 Inc.9): it stands for several of
+   *  the level's lines, so selecting it selects this box (the bundle) instead. */
+  box?: string;
 }
 
 export interface GraphLayout {
@@ -449,23 +497,63 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     list.sort((x, y) => byText(byId.get(x)!.name, byId.get(y)!.name) || byText(x, y));
   }
 
-  // 6d. Column widths and row heights. A column is as wide as the widest group hanging in it, and
-  //     a row grows by the bands of access points under it. With no access point every column is
-  //     CELL_W and every row CELL_H, so a level without one lays out exactly as before.
+  // 6c'. One drawn thing per parent (Inc.9): the access point itself, or one bundle for two or
+  //      more. `itemOf` maps every hung access point to the box that stands for it.
+  const items = new Map<string, GraphNode>();
+  const itemOf = new Map<string, string>();
+  const parentOfItem = new Map<string, string>();
+  for (const [parent, list] of [...groups].sort((x, y) => byText(x[0], y[0]))) {
+    let item: GraphNode;
+    if (list.length === 1) {
+      item = byId.get(list[0])!;
+    } else {
+      const members = list.map((id) => {
+        const n = byId.get(id)!;
+        return { id, name: n.name, state: n.state };
+      });
+      item = {
+        id: bundleId(parent),
+        kind: 'node',
+        name: byId.get(parent)!.name,
+        state: worstState(members.map((m) => m.state)),
+        sub: null,
+        rootCause: null,
+        ap: true,
+        role: 'access_point',
+        bundle: { parent, members },
+      };
+    }
+    items.set(parent, item);
+    parentOfItem.set(item.id, parent);
+    for (const id of list) itemOf.set(id, item.id);
+  }
+  // A parent with a backbone box in a lower row carries its thing beside its box, off the lines down.
+  const beside = new Set<string>();
+  for (const parent of items.keys()) {
+    const r = cell.get(parent)!.rank;
+    if ((badj.get(parent) ?? []).some((n) => (cell.get(n)?.rank ?? -1) > r)) beside.add(parent);
+  }
+  const besideOffset = (parent: string) => boxSize(byId.get(parent)!).w / 2 + SIDE_GAP + AP_PITCH / 2;
+
+  // 6d. Column widths and row heights. A column is centred on its boxes and reaches out on the
+  //     right for anything drawn beside one; a row grows by one band when something hangs under it.
+  //     With no access point every column is CELL_W and every row CELL_H, so a level without one
+  //     lays out exactly as before.
   let maxCol = 0;
   for (const { col } of cell.values()) maxCol = Math.max(maxCol, col);
-  const colContent = new Array<number>(maxCol + 1).fill(BOX_W);
+  const colL = new Array<number>(maxCol + 1).fill(BOX_W / 2);
+  const colR = new Array<number>(maxCol + 1).fill(BOX_W / 2);
   const apBands = new Array<number>(Math.max(maxRank, 0) + 1).fill(0);
-  for (const [parent, list] of groups) {
+  for (const parent of items.keys()) {
     const { col, rank } = cell.get(parent)!;
-    colContent[col] = Math.max(colContent[col], Math.min(list.length, AP_PER_LINE) * AP_PITCH);
-    apBands[rank] = Math.max(apBands[rank], Math.ceil(list.length / AP_PER_LINE));
+    if (beside.has(parent)) colR[col] = Math.max(colR[col], besideOffset(parent) + AP_PITCH / 2);
+    else apBands[rank] = 1;
   }
   const colLeft: number[] = [];
   let x = PAD;
   for (let c = 0; c <= maxCol; c++) {
     colLeft.push(x);
-    x += colContent[c] + COL_GAP;
+    x += colL[c] + colR[c] + COL_GAP;
   }
   const rowTop: number[] = [];
   let y = PAD;
@@ -473,38 +561,72 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     rowTop.push(y);
     y += CELL_H + apBands[r] * AP_LINE_H;
   }
-  const cxOf = (col: number) => colLeft[col] + colContent[col] / 2;
+  const cxOf = (col: number) => colLeft[col] + colL[col];
   const cyOf = (rank: number) => rowTop[rank] + BOX_H / 2;
 
   const placed: PlacedNode[] = [];
-  const at = new Map<string, { cx: number; cy: number; h: number }>();
+  const at = new Map<string, { cx: number; cy: number; w: number; h: number; rootCause: string | null }>();
   const put = (n: GraphNode, cx: number, cy: number) => {
     const size = boxSize(n);
-    at.set(n.id, { cx, cy, h: size.h });
+    at.set(n.id, { cx, cy, w: size.w, h: size.h, rootCause: n.rootCause });
     placed.push({ ...n, cx, cy, w: size.w, h: size.h, suppressed: n.rootCause != null });
   };
   for (const [id, { col, rank }] of cell) put(byId.get(id)!, cxOf(col), cyOf(rank));
-  for (const [parent, list] of groups) {
+  for (const [parent, item] of items) {
     const { col, rank } = cell.get(parent)!;
-    list.forEach((id, i) => {
-      const line = Math.floor(i / AP_PER_LINE);
-      const inLine = Math.min(AP_PER_LINE, list.length - line * AP_PER_LINE);
-      const k = i % AP_PER_LINE;
-      put(
-        byId.get(id)!,
-        cxOf(col) + (k - (inLine - 1) / 2) * AP_PITCH,
-        rowTop[rank] + CELL_H + line * AP_LINE_H + AP_SIZE.h / 2,
-      );
-    });
+    if (beside.has(parent)) put(item, cxOf(col) + besideOffset(parent), cyOf(rank));
+    else put(item, cxOf(col), rowTop[rank] + CELL_H + boxSize(item).h / 2);
   }
   placed.sort((a, b) => byText(a.id, b.id));
 
   // 7. Edges. A rank-adjacent pair is a straight line from the bottom of one box to the top of the
   //    next. A same-rank or rank-skipping pair bows sideways so it does not run through the boxes
   //    between its ends; the bow's direction and size come from the endpoints' own coordinates, so
-  //    it is deterministic. An access point's line to its parent is straight; any other line that
-  //    touches a hung access point bows off the straight line between the two centres.
+  //    it is deterministic. A line touching a hung access point is drawn to the thing standing for
+  //    it (Inc.9): the lines from one bundle to one box collapse into one, and a line between two
+  //    members of one bundle is not drawn. The line from a parent to its own thing is straight —
+  //    sideways when the thing is beside it — and any other bows off the straight line.
   const edges: PlacedEdge[] = [];
+  const drawHung = (id: string, a: string, b: string, source: string, count: number, box?: string) => {
+    const qa = at.get(a)!;
+    const qb = at.get(b)!;
+    // Draw from the higher end, so the far end is the one whose suppression mutes the line.
+    const aFirst = qa.cy < qb.cy || (qa.cy === qb.cy && qa.cx <= qb.cx);
+    const fromId = aFirst ? a : b;
+    const [from, to] = aFirst ? [qa, qb] : [qb, qa];
+    const suppressed = to.rootCause != null;
+    const parent = parentOfItem.get(a) === b ? b : parentOfItem.get(b) === a ? a : null;
+    let edge: PlacedEdge;
+    if (parent !== null && beside.has(parent)) {
+      const p = at.get(parent)!;
+      const it = parent === a ? qb : qa;
+      const x1 = p.cx + p.w / 2;
+      const x2 = it.cx - it.w / 2;
+      edge = {
+        id,
+        x1,
+        y1: p.cy,
+        x2,
+        y2: it.cy,
+        kind: 'line',
+        source,
+        count,
+        chip: { x: (x1 + x2) / 2, y: p.cy },
+        suppressed: it.rootCause != null,
+      };
+    } else if (parent === fromId) {
+      const y1 = from.cy + from.h / 2;
+      const y2 = to.cy - to.h / 2;
+      const chip = { x: (from.cx + to.cx) / 2, y: (y1 + y2) / 2 };
+      edge = { id, x1: from.cx, y1, x2: to.cx, y2, kind: 'line', source, count, chip, suppressed };
+    } else {
+      edge = bowBelow(id, from, to, source, count, suppressed);
+    }
+    edges.push(box ? { ...edge, box } : edge);
+  };
+  // Lines that collapse onto a bundle, keyed by their two drawn ends. `keys` is sorted, so the
+  // first link seen — whose evidence colours the line — does not depend on input order.
+  const collapsed = new Map<string, { a: string; b: string; source: string; count: number }>();
   const keys = [...edgeOf.keys()].sort();
   for (const key of keys) {
     const link = edgeOf.get(key)!;
@@ -513,32 +635,17 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     const count = link.count;
 
     if (hung.has(a) || hung.has(b)) {
-      const qa = at.get(a)!;
-      const qb = at.get(b)!;
-      // Draw from the higher end, so the far end is the one whose suppression mutes the line.
-      const aFirst = qa.cy < qb.cy || (qa.cy === qb.cy && qa.cx <= qb.cx);
-      const [fromId, toId] = aFirst ? [a, b] : [b, a];
-      const [from, to] = aFirst ? [qa, qb] : [qb, qa];
-      const suppressed = byId.get(toId)?.rootCause != null;
-      if (parentOf.get(toId) === fromId) {
-        const y1 = from.cy + from.h / 2;
-        const y2 = to.cy - to.h / 2;
-        const chip = { x: (from.cx + to.cx) / 2, y: (y1 + y2) / 2 };
-        edges.push({
-          id: link.id,
-          x1: from.cx,
-          y1,
-          x2: to.cx,
-          y2,
-          kind: 'line',
-          source,
-          count,
-          chip,
-          suppressed,
-        });
-      } else {
-        edges.push(bowBelow(link.id, from, to, source, count, suppressed));
+      const ea = itemOf.get(a) ?? a;
+      const eb = itemOf.get(b) ?? b;
+      if (ea === eb) continue;
+      if (!isBundleId(ea) && !isBundleId(eb)) {
+        drawHung(link.id, ea, eb, source, count);
+        continue;
       }
+      const k = ea < eb ? `${ea}|${eb}` : `${eb}|${ea}`;
+      const prev = collapsed.get(k);
+      if (prev) prev.count += count;
+      else collapsed.set(k, { a: ea < eb ? ea : eb, b: ea < eb ? eb : ea, source, count });
       continue;
     }
 
@@ -585,15 +692,19 @@ export function layoutGraph(input: GraphInput): GraphLayout {
       });
     }
   }
+  for (const [k, c] of [...collapsed].sort((x, y) => byText(x[0], y[0]))) {
+    drawHung(`apgroup-edge:${k}`, c.a, c.b, c.source, c.count, isBundleId(c.a) ? c.a : c.b);
+  }
+  edges.sort((p, q) => byText(p.id, q.id));
 
-  // The last row ends at its boxes, or at the bottom of the last band of access points under it.
-  const bottomOf = (r: number) =>
-    apBands[r] > 0 ? CELL_H + apBands[r] * AP_LINE_H - (AP_LINE_H - AP_SIZE.h) / 2 : BOX_H;
+  // The last row ends at its boxes, or at the bottom of the band under it: the circle and the two
+  // lines of text a bundle carries under it.
+  const bottomOf = (r: number) => (apBands[r] > 0 ? CELL_H + AP_LINE_H - 8 : BOX_H);
   const hasNodes = placed.length > 0;
   return {
     nodes: placed,
     edges,
-    width: hasNodes ? colLeft[maxCol] + colContent[maxCol] + PAD : 0,
+    width: hasNodes ? colLeft[maxCol] + colL[maxCol] + colR[maxCol] + PAD : 0,
     height: hasNodes ? rowTop[maxRank] + bottomOf(maxRank) + PAD : 0,
     isolatedCount,
     componentCount: components.length,

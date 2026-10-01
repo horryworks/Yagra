@@ -7,7 +7,7 @@ import type { MapEdge, MapLevel, MapNode, MapStub, NodeState } from '../../types
 import type { TreeSelection } from '../NodeTree/NodeTree';
 import { worstStateFromCounts } from '../../dashboard/widgets/util';
 import { nodesPageHref, topologyMapHref } from '../../lib/entityHref';
-import type { GraphInput, GraphNodeKind } from './graphLayout';
+import { isBundleId, type GraphInput, type GraphNodeKind } from './graphLayout';
 
 /** A box's id on the canvas. Kinds are prefixed because a node, a folder and a stub are separate
  *  things that must never share a box, whatever their ids. */
@@ -97,12 +97,14 @@ export function liveByGraphId(
   return out;
 }
 
-/** What is selected on the map: a node or folder (kept in the URL), or a bundled edge (kept in the
- *  page only — an edge id names two ends of one level and is meaningless on any other). */
+/** What is selected on the map: a node or folder (kept in the URL), or a bundled edge or a bundle of
+ *  access points (kept in the page only — both name things that exist on one level and are
+ *  meaningless on any other). A bundle's `id` is its box id. */
 export type MapSelection =
   | { kind: 'node'; id: string }
   | { kind: 'folder'; id: string }
   | { kind: 'edge'; id: string }
+  | { kind: 'bundle'; id: string }
   | null;
 
 /** The URL's `sel=` (the Nodes page's spelling) as a map selection. */
@@ -114,6 +116,7 @@ export function selectionFromParam(sel: TreeSelection): MapSelection {
 /** The canvas id of the selected box, or null (nothing, or an edge). */
 export function selectedGraphId(sel: MapSelection): string | null {
   if (!sel || sel.kind === 'edge') return null;
+  if (sel.kind === 'bundle') return sel.id;
   return graphId(sel.kind, sel.id);
 }
 
@@ -241,6 +244,8 @@ export function edgeShowsChip(edgeId: string, count: number): boolean {
  *  or folder becomes the tree's selection. A stub selects what it stands for — the far node, or the
  *  folder holding the far end. The map in the pane never descends on its own. */
 export function groupMapTarget(boxId: string, level: MapLevel | null): TreeSelection {
+  // A bundle of access points (ADR-191 Inc.9) has no row in the tree; its parent does.
+  if (isBundleId(boxId)) return groupMapTarget(boxId.slice('apgroup:'.length), level);
   const ref = splitGraphId(boxId);
   if (!ref) return null;
   if (ref.kind === 'node') return { kind: 'node', id: ref.id };
