@@ -358,4 +358,56 @@ mod tests {
             );
         }
     }
+
+    /// ADR-191 Inc.10: the default next hops ride inside the stored document. A node observed by an
+    /// older poller reads as not asked; one asked with no default route reads as an empty list; and
+    /// the folder each node is filed in comes back unscoped.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn default_next_hops_round_trip_inside_the_stored_snapshot(pool: sqlx::PgPool) {
+        use crate::pgtest;
+        let site = pgtest::group(&pool, "site-a").await;
+        let router = pgtest::node(&pool, "rt-01", 1, Some(site)).await;
+        let core = pgtest::node(&pool, "core-01", 2, Some(site)).await;
+        let old = pgtest::node(&pool, "old-01", 3, None).await;
+        let repo = RoutingRepo::new(pool.clone());
+        let hop: IpAddr = "198.51.100.9".parse().unwrap();
+        repo.record_observation(
+            router,
+            &RoutingSnapshot::new(Vec::new(), false).with_default_next_hops(vec![hop]),
+        )
+        .await
+        .unwrap();
+        repo.record_observation(
+            core,
+            &RoutingSnapshot::new(Vec::new(), false).with_default_next_hops(Vec::new()),
+        )
+        .await
+        .unwrap();
+        repo.record_observation(old, &RoutingSnapshot::new(Vec::new(), false))
+            .await
+            .unwrap();
+
+        let got = repo
+            .default_next_hops_for(&[router, core, old])
+            .await
+            .unwrap();
+        assert_eq!(got.get(&router), Some(&vec![hop]));
+        assert_eq!(got.get(&core), Some(&Vec::new()));
+        assert!(
+            !got.contains_key(&old),
+            "an older poller's snapshot must read as not asked"
+        );
+        assert!(repo.default_next_hops_for(&[]).await.unwrap().is_empty());
+        // The adjacency reader still sees the same document.
+        assert_eq!(repo.all_current().await.unwrap().len(), 3);
+
+        let filed = pgtest::repo(pool)
+            .group_ids_of(&[router, old, Uuid::new_v4()])
+            .await
+            .unwrap();
+        assert_eq!(filed.get(&router), Some(&Some(site)));
+        assert_eq!(filed.get(&old), Some(&None));
+        assert_eq!(filed.len(), 2);
+    }
 }
