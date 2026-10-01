@@ -33118,7 +33118,8 @@
           "overflow",
           "flattened",
           "node_limit",
-          "edge_limit"
+          "edge_limit",
+          "summary"
         ],
         "properties": {
           "breadcrumbs": {
@@ -33215,6 +33216,10 @@
             "type": "integer",
             "format": "int64",
             "description": "How many subfolders sit directly in it — on a `flattened` level too, where none is a box."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TopologyLinkSummary",
+            "description": "What that run observed but did not turn into a link — the same counts `/topology/links`\ncarries, for the whole network rather than this level. All zero before the first run."
           }
         }
       },

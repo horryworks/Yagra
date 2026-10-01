@@ -21,6 +21,7 @@ import {
   selectionFromParam,
   splitGraphId,
   stubHref,
+  unresolvedCount,
   wheelZooms,
 } from './topologyLevel';
 import { layoutGraph } from './graphLayout';
@@ -100,6 +101,7 @@ function level(): MapLevel {
     node_limit: 2000,
     edge_limit: 4000,
     derived_at: null,
+    summary: {},
   };
 }
 
@@ -323,5 +325,22 @@ describe('wheelZooms', () => {
     expect(wheelZooms({ ctrlKey: false, metaKey: false }, true)).toBe(false);
     expect(wheelZooms({ ctrlKey: true, metaKey: false }, true)).toBe(true);
     expect(wheelZooms({ ctrlKey: false, metaKey: true }, true)).toBe(true);
+  });
+});
+
+describe('unresolvedCount', () => {
+  // The four counters the derivation declined to turn into links; the link counts are not in it.
+  it('adds what could not be resolved and nothing else', () => {
+    const l = level();
+    expect(unresolvedCount(l)).toBe(0);
+    l.summary = {
+      unmatched_lldp_rows: 2,
+      unmatched_cdp_rows: 1,
+      ambiguous_mgmt_addrs: 3,
+      oversized_segments: 4,
+      lldp_links: 50,
+      unmatched_routing_peers: 7,
+    };
+    expect(unresolvedCount(l)).toBe(10);
   });
 });

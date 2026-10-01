@@ -544,6 +544,7 @@ fn compute_with(
         node_limit: MAP_MAX_NODES as i64,
         edge_limit: MAP_MAX_EDGES as i64,
         derived_at: None,
+        summary: Default::default(),
     })
 }
 

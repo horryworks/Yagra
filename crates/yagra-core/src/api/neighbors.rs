@@ -551,7 +551,7 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
 fn usable_mgmt_addr(n: &Neighbor) -> Option<IpAddr> {
     n.remote_mgmt_addr
         .as_deref()
-        .and_then(|a| a.parse::<IpAddr>().ok())
+        .and_then(|a| a.trim().parse::<IpAddr>().ok())
         .filter(|ip| !ip.is_unspecified())
 }
 
@@ -2233,6 +2233,21 @@ mod peer_tests {
                 .collect::<Vec<_>>(),
             ["b4:df:91:00:00:01", "b4:df:91:00:00:02"]
         );
+    }
+
+    /// Surrounding whitespace does not make an address unusable: the end-station check trimmed
+    /// before parsing until the three readers shared [`usable_mgmt_addr`], and all three now do.
+    #[test]
+    fn a_management_address_with_surrounding_whitespace_is_still_an_address() {
+        let mut padded = neighbor("sw-pad", Some(NeighborIdKind::Text));
+        padded.remote_mgmt_addr = Some(" 192.0.2.7 ".to_owned());
+        assert_eq!(
+            usable_mgmt_addr(&padded),
+            Some("192.0.2.7".parse::<IpAddr>().unwrap())
+        );
+        let mut blank = neighbor("sw-blank", Some(NeighborIdKind::Text));
+        blank.remote_mgmt_addr = Some(" 0.0.0.0 ".to_owned());
+        assert_eq!(usable_mgmt_addr(&blank), None);
     }
 
     #[test]

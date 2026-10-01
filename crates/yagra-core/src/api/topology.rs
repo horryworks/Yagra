@@ -487,6 +487,9 @@ pub(crate) struct MapLevel {
     pub edge_limit: i64,
     /// When the connectivity graph was last derived (RFC 3339), or `null` before the first run.
     pub derived_at: Option<String>,
+    /// What that run observed but did not turn into a link — the same counts `/topology/links`
+    /// carries, for the whole network rather than this level. All zero before the first run.
+    pub summary: TopologyLinkSummary,
 }
 
 /// Query parameters for one map level.
@@ -570,12 +573,11 @@ pub(crate) async fn topology_map_level(
         super::nodes::resolve_node_names(st, scope, crate::topology_level::names_needed(&level))
             .await;
     crate::topology_level::apply_names(&mut level, &names);
-    level.derived_at = admin
-        .topology_links
-        .last_run()
-        .await
-        .unwrap_or(None)
-        .map(|l| l.derived_at.to_rfc3339());
+    // The drawing is useful without the run's record, so a failed read leaves both unset.
+    if let Some(run) = admin.topology_links.last_run().await.unwrap_or(None) {
+        level.derived_at = Some(run.derived_at.to_rfc3339());
+        level.summary = run.summary;
+    }
     Ok(level)
 }
 
@@ -1423,5 +1425,33 @@ mod tests {
             StatusCode::NOT_FOUND,
             "a folder outside the scope is not found"
         );
+
+        // What the derivation could not turn into a link rides on every level, so the map can say
+        // it is incomplete (ADR-191 decision 15): zero before any run, the run's counts after one.
+        assert!(whole["derived_at"].is_null());
+        assert_eq!(whole["summary"]["unmatched_lldp_rows"], 0);
+        crate::topology_links::TopoLinkRepo::new(pool.clone())
+            .record_run(
+                &TopologyLinkSummary {
+                    unmatched_lldp_rows: 2,
+                    ambiguous_mgmt_addrs: 1,
+                    ..TopologyLinkSummary::default()
+                },
+                4,
+            )
+            .await
+            .expect("record the run");
+        let (status, after) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/topology/map?group={site}"),
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{after}");
+        assert!(after["derived_at"].is_string());
+        assert_eq!(after["summary"]["unmatched_lldp_rows"], 2);
+        assert_eq!(after["summary"]["ambiguous_mgmt_addrs"], 1);
     }
 }

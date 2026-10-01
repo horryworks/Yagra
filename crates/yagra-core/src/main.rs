@@ -155,8 +155,6 @@ mod tagres;
 mod thresholds;
 mod tls;
 mod token;
-// Storage + volume materialization for the WebUI's certificate (ADR-044). `server_cert` decides
-// what is acceptable; this decides where it lives.
 mod topology_level;
 mod topology_links;
 mod topology_mode;
@@ -169,6 +167,8 @@ mod poller_upgrade;
 mod upgrade;
 mod url_check;
 mod volatile;
+// Storage + volume materialization for the WebUI's certificate (ADR-044). `server_cert` decides
+// what is acceptable; this decides where it lives.
 mod webtls;
 mod wireless;
 mod wireless_fanout;

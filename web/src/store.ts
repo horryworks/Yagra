@@ -279,22 +279,35 @@ interface MapViewStore {
   topo: MapView | null;
   topoGroup: MapView | null;
   geo: MapView | null;
+  /** Which level (folder id, `''` for the root) each stored view was fitted to. Persisted beside the
+   *  view it describes: held in module memory instead, a reload forgot it and the first mount threw
+   *  the restored view away as if it belonged to another level. */
+  fitted: Partial<Record<MapViewKey, string>>;
   /** Set one map's view. Accepts an updater so a gesture can read the live value, and resolves it
    *  **here** rather than in the hook — a judgement inside a `.tsx` hook is one no test can run. */
   setMapView: (
     key: MapViewKey,
     next: MapView | null | ((prev: MapView | null) => MapView | null),
   ) => void;
+  /** Record that `key` now draws `level`. True when its stored view belongs to a different level,
+   *  which the caller answers with a fresh fit — one pan/zoom slot per drawing, not per level. */
+  enterLevel: (key: MapViewKey, level: string) => boolean;
 }
 
 export const useMapViewStore = create<MapViewStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       topo: null,
       topoGroup: null,
       geo: null,
+      fitted: {},
       setMapView: (key, next) =>
         set((s) => ({ [key]: typeof next === 'function' ? next(s[key]) : next }) as Partial<MapViewStore>),
+      enterLevel: (key, level) => {
+        if (get().fitted[key] === level) return false;
+        set((s) => ({ fitted: { ...s.fitted, [key]: level } }));
+        return true;
+      },
     }),
     { name: 'yagra.mapview', storage: createJSONStorage(sessionStore) },
   ),

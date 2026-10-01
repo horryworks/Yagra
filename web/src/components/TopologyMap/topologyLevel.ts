@@ -136,6 +136,19 @@ export function levelNodesHref(level: MapLevel): string {
   return nodesPageHref(level.group ? { kind: 'group', id: level.group.id } : null);
 }
 
+/** How many observations the last derivation run declined to turn into a link (ADR-191 decision 15).
+ *  Showing the total is what keeps an incomplete graph from reading as a complete one — and
+ *  `unmatched_lldp_rows` is the number that moves the day a switch that speaks LLDP is racked. */
+export function unresolvedCount(level: MapLevel): number {
+  const s = level.summary;
+  return (
+    (s.unmatched_lldp_rows ?? 0) +
+    (s.unmatched_cdp_rows ?? 0) +
+    (s.ambiguous_mgmt_addrs ?? 0) +
+    (s.oversized_segments ?? 0)
+  );
+}
+
 /** Whether a response belongs to the level the URL asks for. `usePolled` keeps the previous
  *  level's answer until the new one arrives, and drawing it under the new breadcrumb would be a
  *  wrong map, not a slow one. */

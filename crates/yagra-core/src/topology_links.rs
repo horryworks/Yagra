@@ -308,7 +308,10 @@ impl TopoLinkRepo {
     /// a response.
     pub async fn all_stored_links(&self) -> anyhow::Result<Vec<StoredLink>> {
         let rows = sqlx::query(
-            "SELECT id, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources,                     subnet, forced_parent, first_seen, last_seen              FROM node_links              WHERE a_node IS NOT NULL AND b_node IS NOT NULL",
+            "SELECT id, a_node, b_node, a_if, b_if, a_if_name, b_if_name, sources, \
+                    subnet, forced_parent, first_seen, last_seen \
+             FROM node_links \
+             WHERE a_node IS NOT NULL AND b_node IS NOT NULL",
         )
         .fetch_all(&self.pool)
         .await?;

@@ -14,7 +14,7 @@ import { SEVERITY_ORDER } from '../../lib/nodeState';
 import { Button } from '../ui/Button';
 import { StatusDot } from '../ui/StatusDot';
 import { useEntityNames } from '../ui/entityNames';
-import { edgesOf, levelNodesHref, nodePlace, type MapSelection } from './topologyLevel';
+import { edgesOf, levelNodesHref, nodePlace, unresolvedCount, type MapSelection } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
 import './TopologyMapSidePanel.css';
 
@@ -100,6 +100,7 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
     [t('map.panel.summary.edges'), level.edge_count],
     [t('map.panel.summary.stubs'), level.stubs.length],
   ];
+  const unresolved = unresolvedCount(level);
   return (
     <aside className="topomap-panel" aria-label={t('map.panel.summary.title')}>
       <h2 className="topomap-panel-title">{t('map.panel.summary.title')}</h2>
@@ -111,6 +112,9 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
           </div>
         ))}
       </dl>
+      {unresolved > 0 && (
+        <p className="topomap-panel-note muted">{t('map.unresolved', { count: unresolved })}</p>
+      )}
       <Link className="topomap-panel-link" to={levelNodesHref(level)}>
         {t('map.panel.openLevelInNodes')}
       </Link>

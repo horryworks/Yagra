@@ -4,6 +4,8 @@
     "emptyInventory": "No nodes in the inventory yet.",
     "legend": "Legend",
     "suppressed": "Suppressed (upstream cause)",
+    "unresolved_one": "{{count}} observation could not be resolved to a link (an unmatched neighbour, or a segment with no identifiable router).",
+    "unresolved_other": "{{count}} observations could not be resolved to links (unmatched neighbours, or segments with no identifiable router).",
     "nodeTitle": "{{name}} — {{state}}",
     "nodeTitleSuppressed": "{{name}} — {{state}} · suppressed, root cause: {{cause}}",
     "control": {

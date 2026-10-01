@@ -9214,6 +9214,11 @@ export interface components {
              * @description How many subfolders sit directly in it — on a `flattened` level too, where none is a box.
              */
             subfolder_count: number;
+            /**
+             * @description What that run observed but did not turn into a link — the same counts `/topology/links`
+             *     carries, for the whole network rather than this level. All zero before the first run.
+             */
+            summary: components["schemas"]["TopologyLinkSummary"];
         };
         /**
          * @description A node drawn on the level that has at least one link there. On an ordinary level it sits

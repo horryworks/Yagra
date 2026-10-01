@@ -4,6 +4,8 @@
     "emptyInventory": "インベントリにノードがまだありません。",
     "legend": "凡例",
     "suppressed": "抑制（上流原因）",
+    "unresolved_one": "リンクに解決できなかった観測が {{count}} 件あります（照合できなかった隣接、またはルータを特定できなかったセグメント）。",
+    "unresolved_other": "リンクに解決できなかった観測が {{count}} 件あります（照合できなかった隣接、またはルータを特定できなかったセグメント）。",
     "nodeTitle": "{{name}} — {{state}}",
     "nodeTitleSuppressed": "{{name}} — {{state}} · 抑制中、根本原因: {{cause}}",
     "control": {

@@ -2693,7 +2693,9 @@ mod tests {
         (
             "GET",
             "/api/v1/topology/links",
-            "the network map reads one folder level from `/topology/map` since ADR-191; the flat              link list stays for the MCP `get_topology(kind=links)` branch and API clients that              page the whole graph",
+            "the network map reads one folder level from `/topology/map` since ADR-191; the flat \
+             link list stays for the MCP `get_topology(kind=links)` branch and API clients that \
+             page the whole graph",
         ),
     ];
 

@@ -91,6 +91,10 @@
 .topomap-panel-link {
   color: var(--accent-color);
 }
+.topomap-panel-note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-sm);
+}
 .topomap-panel-legend {
   display: flex;
   flex-direction: column;

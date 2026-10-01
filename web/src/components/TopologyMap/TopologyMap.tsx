@@ -13,16 +13,11 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { stateColorVar } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
-import type { MapViewKey } from '../../store';
+import { useMapViewStore, type MapViewKey } from '../../store';
 import type { GraphLayout, PlacedEdge, PlacedNode } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
 import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
 import './TopologyMap.css';
-
-/** Which level each stored view was last fitted to, for this session. A stored pan/zoom is one slot
- *  per drawing, so a different level must start from a fresh fit rather than from the previous
- *  level's position. */
-const fittedFor = new Map<MapViewKey, string>();
 
 /** How long the "hold Ctrl to zoom" hint stays up after a plain wheel turn. */
 const WHEEL_HINT_MS = 1200;
@@ -205,13 +200,12 @@ export function TopologyMap({
     null,
   );
 
-  // A different level than the one the stored view belongs to: fit again.
+  // A different level than the one the stored view belongs to: fit again. The level is stored with
+  // the view (sessionStorage), so a reload keeps the position rather than reading as a new level.
+  const enterLevel = useMapViewStore((s) => s.enterLevel);
   useEffect(() => {
-    if (fittedFor.get(viewKey) !== fitKey) {
-      fittedFor.set(viewKey, fitKey);
-      setView(null);
-    }
-  }, [fitKey, viewKey, setView]);
+    if (enterLevel(viewKey, fitKey)) setView(null);
+  }, [enterLevel, fitKey, viewKey, setView]);
 
   // Manual "Fit to view" (also the initial fit). Re-measures the current container each call.
   const fit = useCallback(() => {

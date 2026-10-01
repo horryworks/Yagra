@@ -186,6 +186,23 @@ describe('map view memory (ADR-134)', () => {
     useMapViewStore.getState().setMapView('topo', null);
     expect(useMapViewStore.getState().topo).toBeNull();
   });
+
+  // The level a view was fitted to is stored with it, so a reload (which rebuilds every module but
+  // restores this store) does not read the same level as a new one and discard the position.
+  it('asks for a fresh fit only when the level changes', () => {
+    useMapViewStore.setState({ fitted: {} });
+    const { enterLevel } = useMapViewStore.getState();
+    expect(enterLevel('topo', '')).toBe(true);
+    expect(enterLevel('topo', '')).toBe(false);
+    expect(enterLevel('topo', 'g1')).toBe(true);
+    expect(enterLevel('topoGroup', 'g1')).toBe(true);
+    expect(useMapViewStore.getState().fitted).toEqual({ topo: 'g1', topoGroup: 'g1' });
+  });
+
+  it('keeps the fitted level across a restore of the stored state', () => {
+    useMapViewStore.setState({ fitted: { topo: 'g1' } });
+    expect(useMapViewStore.getState().enterLevel('topo', 'g1')).toBe(false);
+  });
 });
 
 describe('nav route memory (ADR-134 増分 2 and 3)', () => {
