@@ -9226,8 +9226,9 @@ export interface components {
          */
         MapNode: {
             /**
-             * @description The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki
-             *     MR. The map draws it as an access-point symbol under the device it hangs off.
+             * @description The node's role is `access_point` — one imported from its wireless controller, a Meraki
+             *     MR, or a device whose profile is classified Wireless AP. The map draws it as an
+             *     access-point symbol under the device it hangs off.
              */
             access_point: boolean;
             /**

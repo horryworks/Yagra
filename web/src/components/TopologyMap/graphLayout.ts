@@ -121,7 +121,8 @@ const TIER_OF_ROLE: Record<MapRole, number> = {
 const UNTIERED = 3;
 
 function tierOf(n: GraphNode): number {
-  return n.kind === 'node' ? TIER_OF_ROLE[n.role] : UNTIERED;
+  // An N-1 core sends no `role`; such a node takes the untiered row rather than no row at all.
+  return n.kind === 'node' ? (TIER_OF_ROLE[n.role] ?? UNTIERED) : UNTIERED;
 }
 
 /** One line to draw between two boxes. */

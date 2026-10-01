@@ -58,11 +58,16 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
           <dl className="topomap-panel-facts">
             <dt>{t('map.panel.node.path')}</dt>
             <dd>{nodePlace(level, node, levelName)}</dd>
-            <dt>{t('map.panel.node.role')}</dt>
-            <dd>
-              {t(`map.role.${node.role}`)} —{' '}
-              {t(`map.roleReason.${node.role_reason}`, { count: node.subnet_count ?? 0 })}
-            </dd>
+            {/* An N-1 core sends no role; show nothing rather than a raw key. */}
+            {node.role && (
+              <>
+                <dt>{t('map.panel.node.role')}</dt>
+                <dd>
+                  {t(`map.role.${node.role}`)} —{' '}
+                  {t(`map.roleReason.${node.role_reason}`, { count: node.subnet_count ?? 0 })}
+                </dd>
+              </>
+            )}
           </dl>
           <h3 className="topomap-panel-sub">{t('map.panel.node.edges')}</h3>
           <ul className="topomap-panel-list">

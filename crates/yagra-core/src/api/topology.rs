@@ -440,8 +440,9 @@ pub(crate) struct MapNode {
     /// with the one the node is filed in; empty when it sits directly in the level's own folder
     /// (always empty on an ordinary level).
     pub folder_path: Vec<MapBreadcrumb>,
-    /// The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki
-    /// MR. The map draws it as an access-point symbol under the device it hangs off.
+    /// The node's role is `access_point` — one imported from its wireless controller, a Meraki
+    /// MR, or a device whose profile is classified Wireless AP. The map draws it as an
+    /// access-point symbol under the device it hangs off.
     pub access_point: bool,
     /// What the node does in the network, which decides its row on the map (ADR-191 Inc.6).
     pub role: MapRole,
@@ -545,7 +546,6 @@ pub(crate) struct MapLevelQuery {
     pub group: Option<Uuid>,
 }
 
-/// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.
 /// What decides each drawn node's role on the map (ADR-191 Inc.6). A read that fails leaves its
 /// facts unknown rather than failing the map: the drawing is useful without the rows.
 async fn role_facts(
@@ -595,6 +595,7 @@ async fn role_facts(
         .collect()
 }
 
+/// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.
 pub(crate) async fn topology_map_level(
     st: &ApiState,
     admin: &super::AdminState,

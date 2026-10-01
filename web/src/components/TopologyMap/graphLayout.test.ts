@@ -449,6 +449,15 @@ describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
     expect(rows(layoutGraph({ nodes: plain, links })).core).toBe(0);
   });
 
+  it('lays out a graph from an N-1 core, which sends no role, as if every role were other', () => {
+    const nodes = [edge('rt'), l3('core'), l2('a1'), l2('a2')];
+    const links = [link('rt', 'core'), link('core', 'a1'), link('core', 'a2')];
+    const plain = nodes.map((n) => ({ ...n, role: 'other' as const }));
+    const missing = nodes.map((n) => ({ ...n, role: undefined }) as unknown as GraphNode);
+    const at = (out: ReturnType<typeof layoutGraph>) => out.nodes.map((n) => [n.id, n.cx, n.cy]);
+    expect(at(layoutGraph({ nodes: missing, links }))).toEqual(at(layoutGraph({ nodes: plain, links })));
+  });
+
   /** One real site's shape: a router and two firewalls, a core that routes, five access switches,
    *  a wireless controller and thirteen APs — plus the five lines CDP reports from the router to
    *  each access switch's uplink, through a core that forwards CDP without speaking it. */
