@@ -24,7 +24,7 @@ export interface MapSearch {
   order: string[];
 }
 
-export const NO_SEARCH: MapSearch = { matched: null, bundleHits: new Map(), total: 0, undrawn: 0, order: [] };
+const NO_SEARCH: MapSearch = { matched: null, bundleHits: new Map(), total: 0, undrawn: 0, order: [] };
 
 /** Run `cond` over the level's node names and map the hits onto the drawn boxes. */
 export function searchMap(level: MapLevel | null, layout: GraphLayout, cond: TextCondition): MapSearch {

@@ -4,7 +4,7 @@
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
 # fetched: 2026-10-01
-# counts: MA-L=40175 MA-L-repeats-dropped=3 MA-M=6532 MA-S=7180 withheld=3
+# counts: MA-L=40176 MA-L-repeats-dropped=3 MA-M=6533 MA-S=7180 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -23368,6 +23368,7 @@
 4C8125	ZOWEE TECHNOLOGY(HEYUAN)Co.,Ltd
 4C81BE	IEEE Registration Authority
 4C81BE4	Suzhou APAQI Robotics Technology Co., Ltd.
+4C81BE7	Renson NV
 4C820C	Apple, Inc.
 4C8237	Telink Micro LLC
 4C82A9	CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.
@@ -24958,6 +24959,7 @@
 5876AC	SERNET (SUZHOU) TECHNOLOGIES CORPORATION
 5876B3	Ubee Interactive Co., Limited
 5876C5	DIGI I'S LTD
+587803	Unitek A/S
 587961	Microsoft Corporation
 5879E0	Samsung Electronics Co.,Ltd
 587A4D	Stonesoft Corporation

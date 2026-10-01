@@ -383,8 +383,9 @@ pub(crate) enum MapRoleReason {
     MerakiProduct,
     /// Its device profile's category says what it is.
     ProfileCategory,
-    /// It routes, and its default route points at an address no node of its site claims: it is the
-    /// site's way out (ADR-191 Inc.10).
+    /// It routes, and its default route leaves its site: the next hop is an address no node of the
+    /// site claims and not on a subnet another node of the site holds, or the route points out of an
+    /// interface with no gateway. It is the site's way out (ADR-191 Inc.10).
     DefaultRoute,
     /// It holds an OSPF, BGP or routing-table adjacency.
     RoutingAdjacency,
