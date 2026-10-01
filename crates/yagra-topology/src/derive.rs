@@ -50,11 +50,13 @@ pub struct DeriveInput<'a> {
     pub routing: &'a [(NodeId, RoutingSnapshot)],
     /// Operator decisions. Empty in Increment 1.
     pub overrides: &'a [LinkOverride],
-    /// The MAC of every device a Meraki organization lists and a node is bound to, as the listing
-    /// spells it (ADR-191 decision 22). What lets a CDP/LLDP row that advertises no management
-    /// address — an MX heard by a Meraki switch — still name its node. A MAC bound to more than one
-    /// node identifies neither (decision 24).
-    pub chassis_macs: &'a [(String, NodeId)],
+    /// The MAC of every device a Meraki organization lists, as the listing spells it, with the node
+    /// it is bound to — `None` when it is not imported (ADR-191 decision 22). What lets a CDP/LLDP
+    /// row that advertises no management address — an MX heard by a Meraki switch — still name its
+    /// node. A MAC names a node only when every listing of it is bound to that one node: one bound
+    /// to two nodes identifies neither (decision 24), and so does one also listed unbound (decision
+    /// 28), where the Neighbors tab may name the unbound listing.
+    pub chassis_macs: &'a [(String, Option<NodeId>)],
 }
 
 /// The derived graph plus what the run declined to turn into an edge.
@@ -134,9 +136,10 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         .iter()
         .filter_map(|(ip, owners)| sole_claimant(owners).map(|n| (*ip, n)))
         .collect();
-    // The same rule for a listed MAC: one bound node, or nobody. A text the listing holds that is not
-    // a MAC matches nothing rather than being compared as a string.
-    let mut mac_claimants: BTreeMap<[u8; 6], BTreeSet<NodeId>> = BTreeMap::new();
+    // The same rule for a listed MAC: one bound node, or nobody. An unbound listing is a claimant
+    // like any other (decision 28), so a MAC listed bound and unbound names nobody. A text the
+    // listing holds that is not a MAC matches nothing rather than being compared as a string.
+    let mut mac_claimants: BTreeMap<[u8; 6], BTreeSet<Option<NodeId>>> = BTreeMap::new();
     for (mac, id) in input.chassis_macs {
         if let Some(bytes) = parse_mac(mac) {
             mac_claimants.entry(bytes).or_default().insert(*id);
@@ -144,7 +147,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     }
     let mac_owner: BTreeMap<[u8; 6], NodeId> = mac_claimants
         .iter()
-        .filter_map(|(mac, owners)| sole_claimant(owners).map(|n| (*mac, n)))
+        .filter_map(|(mac, owners)| sole_claimant(owners).flatten().map(|n| (*mac, n)))
         .collect();
 
     // ── Subnet membership, and how many networks each node has a foot in ─────
@@ -795,7 +798,7 @@ mod tests {
         reporter: NodeId,
         rows: Vec<Neighbor>,
         nodes: &[(NodeId, IpAddr)],
-        macs: &[(String, NodeId)],
+        macs: &[(String, Option<NodeId>)],
     ) -> DeriveOutput {
         derive_links(DeriveInput {
             nodes,
@@ -811,7 +814,12 @@ mod tests {
     fn a_row_with_no_address_is_matched_by_the_listed_mac_of_a_bound_device() {
         let n = ids(2);
         let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
-        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[1])]);
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &[],
+            &[("02:00:00:00:00:01".into(), Some(n[1]))],
+        );
         assert_eq!(out.links.len(), 1);
         assert_eq!(out.links[0].sources, vec![LinkSource::Lldp]);
         assert_eq!(out.summary.lldp_links, 1);
@@ -830,7 +838,12 @@ mod tests {
     fn the_mac_is_compared_as_octets_not_as_text() {
         let n = ids(2);
         let row = unaddressed("02-00-00-00-0A-BC", Some(NeighborIdKind::Mac), None);
-        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:0a:bc".into(), n[1])]);
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &[],
+            &[("02:00:00:00:0a:bc".into(), Some(n[1]))],
+        );
         assert_eq!(out.links.len(), 1);
     }
 
@@ -839,7 +852,7 @@ mod tests {
         // A text id that happens to spell a listed MAC is still text: only the poller's label says
         // the octets are a MAC.
         let n = ids(2);
-        let macs = [("02:00:00:00:00:01".to_owned(), n[1])];
+        let macs = [("02:00:00:00:00:01".to_owned(), Some(n[1]))];
         for kind in [None, Some(NeighborIdKind::Text), Some(NeighborIdKind::Hex)] {
             let row = unaddressed("02:00:00:00:00:01", kind, None);
             let out = derive_macs(n[0], vec![row], &[], &macs);
@@ -852,7 +865,12 @@ mod tests {
     fn a_mac_nobody_lists_is_counted_as_unmatched() {
         let n = ids(2);
         let row = unaddressed("02:00:00:00:00:09", Some(NeighborIdKind::Mac), None);
-        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[1])]);
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &[],
+            &[("02:00:00:00:00:01".into(), Some(n[1]))],
+        );
         assert!(out.links.is_empty());
         assert_eq!(out.summary.unmatched_lldp_rows, 1);
     }
@@ -864,12 +882,41 @@ mod tests {
         let n = ids(3);
         let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
         let macs = [
-            ("02:00:00:00:00:01".to_owned(), n[1]),
-            ("02:00:00:00:00:01".to_owned(), n[2]),
+            ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+            ("02:00:00:00:00:01".to_owned(), Some(n[2])),
         ];
         let out = derive_macs(n[0], vec![row], &[], &macs);
         assert!(out.links.is_empty());
         assert_eq!(out.summary.unmatched_lldp_rows, 1);
+    }
+
+    #[test]
+    fn a_mac_also_listed_unbound_names_neither() {
+        // Two organizations list one MAC and only one listing is imported. The Neighbors tab may
+        // pick the unbound one and say "not monitored", so the map does not link the bound one
+        // either (ADR-191 decision 28) — in either listing order.
+        let n = ids(2);
+        let row = || unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
+        for macs in [
+            [
+                ("02:00:00:00:00:01".to_owned(), None),
+                ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+            ],
+            [
+                ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+                ("02:00:00:00:00:01".to_owned(), None),
+            ],
+        ] {
+            let out = derive_macs(n[0], vec![row()], &[], &macs);
+            assert!(out.links.is_empty());
+            assert_eq!(out.summary.unmatched_lldp_rows, 1);
+        }
+        // A bound device listed twice under one node is still one claimant.
+        let macs = [
+            ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+            ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+        ];
+        assert_eq!(derive_macs(n[0], vec![row()], &[], &macs).links.len(), 1);
     }
 
     #[test]
@@ -887,7 +934,7 @@ mod tests {
             n[0],
             vec![row],
             &nodes,
-            &[("02:00:00:00:00:01".into(), n[1])],
+            &[("02:00:00:00:00:01".into(), Some(n[1]))],
         );
         assert_eq!(out.links.len(), 1);
         assert_eq!(out.summary.ambiguous_mgmt_addrs, 0);
@@ -907,7 +954,12 @@ mod tests {
     fn a_row_naming_its_own_listed_mac_is_no_link() {
         let n = ids(1);
         let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
-        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[0])]);
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &[],
+            &[("02:00:00:00:00:01".into(), Some(n[0]))],
+        );
         assert!(out.links.is_empty());
     }
 
@@ -925,7 +977,7 @@ mod tests {
             n[0],
             vec![row],
             &[(n[1], ip("10.0.0.2"))],
-            &[("02:00:00:00:00:01".into(), n[2])],
+            &[("02:00:00:00:00:01".into(), Some(n[2]))],
         );
         assert_eq!(out.links.len(), 1);
         let l = &out.links[0];
@@ -941,9 +993,9 @@ mod tests {
             unaddressed("02:00:00:00:00:02", Some(NeighborIdKind::Mac), None),
         ];
         let macs = vec![
-            ("02:00:00:00:00:01".to_owned(), n[1]),
-            ("02:00:00:00:00:02".to_owned(), n[2]),
-            ("02:00:00:00:00:03".to_owned(), n[3]),
+            ("02:00:00:00:00:01".to_owned(), Some(n[1])),
+            ("02:00:00:00:00:02".to_owned(), Some(n[2])),
+            ("02:00:00:00:00:03".to_owned(), Some(n[3])),
         ];
         let mut reversed = macs.clone();
         reversed.reverse();

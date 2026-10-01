@@ -1866,10 +1866,11 @@ const TOPO_DERIVE_INTERVAL_SECS: u64 = 300;
 /// `config_gen` (ADR-026), and it needs both: `config_gen` moves when an operator edits
 /// configuration, which is exactly what a poll does not do — gating on it alone would leave the map
 /// frozen while the network changed underneath it. Gating on the watermark alone would miss a node
-/// being deleted or re-addressed by hand.
+/// being deleted or re-addressed by hand. The Meraki listing's MACs are an input too, with their
+/// own generation (ADR-191 decision 27).
 async fn run_topology_derivation(stores: TopologyStores) {
     type Watermark = Option<chrono::DateTime<chrono::Utc>>;
-    let mut last_signal: Option<(u64, Watermark, Watermark, Watermark)> = None;
+    let mut last_signal: Option<(u64, Watermark, Watermark, Watermark, u64)> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(TOPO_DERIVE_INTERVAL_SECS)).await;
 
@@ -1882,7 +1883,15 @@ async fn run_topology_derivation(stores: TopologyStores) {
         // The third watermark, added with Increment 4: a point-to-point link appearing changes no
         // address and no CDP/LLDP row, so without this the map would not redraw for it.
         let rt_mark = stores.routing.observation_watermark().await.unwrap_or(None);
-        let signal = (config_gen::current(), l3_mark, nb_mark, rt_mark);
+        // The fifth, added with ADR-191 decision 27: a Meraki device's MAC arriving or leaving the
+        // listing changes none of the above, and the map matches unaddressed neighbours on it.
+        let signal = (
+            config_gen::current(),
+            l3_mark,
+            nb_mark,
+            rt_mark,
+            meraki_inventory::inventory_generation(),
+        );
         if last_signal.as_ref() == Some(&signal) {
             metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
             continue;
@@ -1970,12 +1979,15 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
     };
     // Read in full like the rest (ADR-191 decision 26): a cycle without it would drop every link
     // matched by a listed MAC, and the prune would delete them.
-    let chassis_macs: Vec<(String, yagra_common::NodeId)> = match stores
+    let chassis_macs: Vec<(String, Option<yagra_common::NodeId>)> = match stores
         .meraki_inventory
         .listed_mac_nodes()
         .await
     {
-        Ok(rows) => rows.into_iter().map(|(mac, id)| (mac, id.into())).collect(),
+        Ok(rows) => rows
+            .into_iter()
+            .map(|(mac, id)| (mac, id.map(Into::into)))
+            .collect(),
         Err(e) => {
             tracing::warn!(error = %e, "topology derivation: reading the Meraki device MACs failed");
             return DeriveCycle::Incomplete;

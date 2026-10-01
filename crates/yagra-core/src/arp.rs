@@ -415,11 +415,8 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
             if only_an_end_station(&nb.capabilities) {
                 continue;
             }
-            let Some(ip) = nb
-                .remote_mgmt_addr
-                .as_deref()
-                .and_then(|a| a.trim().parse::<IpAddr>().ok())
-            else {
+            // The one rule for "does this row carry an address" (ADR-191 decision 23).
+            let Some(ip) = nb.usable_mgmt_addr() else {
                 continue;
             };
             let Some(g) = admit(&mut by_ip, known, ip) else {

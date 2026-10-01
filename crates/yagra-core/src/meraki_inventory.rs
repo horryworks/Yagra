@@ -25,6 +25,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -484,6 +485,21 @@ pub struct Applied {
     pub followed: u32,
 }
 
+/// How many times [`MerakiInventoryRepo::apply`] has changed the inventory in this process (ADR-191
+/// decision 27). The topology derivation reads each listed device's MAC from the inventory, and
+/// re-derives only when a signal moves; a MAC arriving or a device leaving the listing moves none of
+/// the others, so this is that input's own signal.
+///
+/// Not [`crate::config_gen`]: bumping that wakes the scheduler and the change feed too, for a change
+/// only the map reads. In-process is enough — the sync and the derivation are both leader-only, and a
+/// new leader starts with no remembered signal, so it derives once regardless.
+static INVENTORY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The current [`INVENTORY_GENERATION`].
+pub fn inventory_generation() -> u64 {
+    INVENTORY_GENERATION.load(Ordering::Relaxed)
+}
+
 /// Decide what a sync writes, from what is stored, what a **complete** listing contained, and which
 /// serials have a node (`bound`: serial → the node as it stands).
 ///
@@ -822,14 +838,22 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
-    /// Every listed device's MAC with the node it is bound to (ADR-191 Inc.7): what the topology
-    /// derivation matches a neighbour row with no management address against. Only devices the
-    /// last listing still contained, that carry a MAC and are imported. The whole fleet, unscoped —
-    /// the derivation is, and the map's readers narrow what they show. A MAC listed under two
-    /// serials comes back twice, and the derivation then matches neither.
-    pub async fn listed_mac_nodes(&self) -> anyhow::Result<Vec<(String, Uuid)>> {
+    /// Every listed device's MAC with the node it is bound to, if any (ADR-191 Inc.7): what the
+    /// topology derivation matches a neighbour row with no management address against. Only devices
+    /// the last listing still contained and that carry a MAC. The whole fleet, unscoped — the
+    /// derivation is, and the map's readers narrow what they show.
+    ///
+    /// A device with no node comes back too, with `None` (decision 28): a MAC listed under two
+    /// serials comes back twice whether or not both are imported, and the derivation then matches
+    /// neither — rather than linking the imported one while the Neighbors tab, which picks the
+    /// first listing by organization name, names the other as not monitored.
+    pub async fn listed_mac_nodes(&self) -> anyhow::Result<Vec<(String, Option<Uuid>)>> {
         let rows = sqlx::query(
-            "SELECT i.mac, d.node_id              FROM meraki_inventory i              JOIN meraki_devices d ON d.serial = i.serial AND d.org_id = i.org_id              WHERE i.mac IS NOT NULL AND i.missing_since IS NULL              ORDER BY i.mac, d.node_id",
+            "SELECT i.mac, d.node_id \
+             FROM meraki_inventory i \
+             LEFT JOIN meraki_devices d ON d.serial = i.serial AND d.org_id = i.org_id \
+             WHERE i.mac IS NOT NULL AND i.missing_since IS NULL \
+             ORDER BY i.mac, d.node_id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -1050,6 +1074,10 @@ impl MerakiInventoryRepo {
             followed += u32::from(changed);
         }
         tx.commit().await?;
+        // After the commit, so a derivation woken by it reads the rows it was woken for.
+        if touched > 0 {
+            INVENTORY_GENERATION.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(Applied {
             rows: touched,
             followed,
@@ -2138,11 +2166,14 @@ mod tests {
             })
         );
         assert_eq!(found["0c:8d:db:00:00:02"].node, None);
-        // ADR-191 Inc.7: the derivation's read is the bound device only — the listed one with no
-        // node matches nothing on the map.
+        // ADR-191 Inc.7: the derivation reads every listed MAC, and decision 28 the one with no
+        // node too — so a MAC also listed under a bound serial names neither on the map.
         assert_eq!(
             repo.listed_mac_nodes().await.expect("macs"),
-            vec![("0c:8d:db:00:00:01".to_owned(), node)]
+            vec![
+                ("0c:8d:db:00:00:01".to_owned(), Some(node)),
+                ("0c:8d:db:00:00:02".to_owned(), None),
+            ]
         );
 
         // The stored MAC reads back, so the next sync of the same listing writes nothing.
@@ -2161,7 +2192,10 @@ mod tests {
         let found = repo.devices_with_mac(&asked).await.expect("lookup");
         assert!(!found.contains_key("0c:8d:db:00:00:02"));
 
-        // A bound device the listing no longer contains stops naming its node on the map.
+        // A bound device the listing no longer contains stops naming its node on the map, and the
+        // change moves the derivation's signal (decision 27). Only "moved" is asserted: other
+        // database tests in this process apply too, so the exact count is not this test's.
+        let before = inventory_generation();
         let gone = SyncPlan {
             writes: vec![],
             newly_missing: vec!["Q2AA-0001".into()],
@@ -2169,6 +2203,7 @@ mod tests {
         };
         repo.apply(org, &gone).await.expect("apply");
         assert!(repo.listed_mac_nodes().await.expect("macs").is_empty());
+        assert!(inventory_generation() > before);
     }
 
     /// The planner's choice for `sql` over an inventory of 500 listed devices, statistics taken,

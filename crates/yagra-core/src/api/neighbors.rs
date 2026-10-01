@@ -529,7 +529,7 @@ struct Blockers {
 fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
     let mut verdict: BTreeMap<IpAddr, bool> = BTreeMap::new();
     for n in &set.neighbors {
-        let Some(ip) = usable_mgmt_addr(n) else {
+        let Some(ip) = n.usable_mgmt_addr() else {
             continue;
         };
         let only = crate::arp::only_an_end_station(&n.capabilities);
@@ -541,20 +541,15 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
         .collect()
 }
 
-/// A row's management address, when it has one — [`Neighbor::usable_mgmt_addr`], the rule the map's
-/// link derivation reads too (ADR-191 decision 23). Loopback, link-local and the like are still
-/// addresses here — they name no device, and the row says so through
-/// [`SetupBlocked::NotADeviceAddress`] rather than going quiet.
-fn usable_mgmt_addr(n: &Neighbor) -> Option<IpAddr> {
-    n.usable_mgmt_addr()
-}
-
 /// Every distinct management address the set advertises, keyed by the text the row carries. A row
-/// with no usable one ([`usable_mgmt_addr`]) is left out — it cannot be matched to anything by address.
+/// with no usable one ([`Neighbor::usable_mgmt_addr`], the rule the map's link derivation reads too —
+/// ADR-191 decision 23) is left out: it cannot be matched to anything by address. Loopback,
+/// link-local and the like are still addresses here — they name no device, and the row says so
+/// through [`SetupBlocked::NotADeviceAddress`] rather than going quiet.
 fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
     set.neighbors
         .iter()
-        .filter_map(|n| Some((n.remote_mgmt_addr.clone()?, usable_mgmt_addr(n)?)))
+        .filter_map(|n| Some((n.remote_mgmt_addr.clone()?, n.usable_mgmt_addr()?)))
         .collect()
 }
 
@@ -564,7 +559,7 @@ fn advertised_addresses(set: &NeighborSet) -> BTreeMap<String, IpAddr> {
 fn advertised_names(set: &NeighborSet) -> BTreeMap<IpAddr, Vec<String>> {
     let mut out: BTreeMap<IpAddr, Vec<String>> = BTreeMap::new();
     for n in &set.neighbors {
-        let Some(ip) = usable_mgmt_addr(n) else {
+        let Some(ip) = n.usable_mgmt_addr() else {
             continue;
         };
         if let Some(name) = advertised_name(n) {
@@ -919,7 +914,7 @@ fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
     set.neighbors
         .iter()
         .filter(|n| n.remote_chassis_kind == Some(NeighborIdKind::Mac))
-        .filter(|n| usable_mgmt_addr(n).is_none())
+        .filter(|n| n.usable_mgmt_addr().is_none())
         .map(|n| n.remote_chassis.clone())
         .collect()
 }
@@ -2230,18 +2225,19 @@ mod peer_tests {
     }
 
     /// Surrounding whitespace does not make an address unusable: the end-station check trimmed
-    /// before parsing until the three readers shared [`usable_mgmt_addr`], and all three now do.
+    /// before parsing until the three readers shared [`Neighbor::usable_mgmt_addr`], and all three
+    /// now do.
     #[test]
     fn a_management_address_with_surrounding_whitespace_is_still_an_address() {
         let mut padded = neighbor("sw-pad", Some(NeighborIdKind::Text));
         padded.remote_mgmt_addr = Some(" 192.0.2.7 ".to_owned());
         assert_eq!(
-            usable_mgmt_addr(&padded),
+            padded.usable_mgmt_addr(),
             Some("192.0.2.7".parse::<IpAddr>().unwrap())
         );
         let mut blank = neighbor("sw-blank", Some(NeighborIdKind::Text));
         blank.remote_mgmt_addr = Some(" 0.0.0.0 ".to_owned());
-        assert_eq!(usable_mgmt_addr(&blank), None);
+        assert_eq!(blank.usable_mgmt_addr(), None);
     }
 
     #[test]
