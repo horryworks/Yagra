@@ -75,6 +75,10 @@ interface PrefsStore {
    *  One boolean for every folder: folding it is a statement about the operator's screen, not
    *  about one folder. Local-only, like `nodesPaneCollapsed`. While folded the map is not fetched. */
   groupMapCollapsed: boolean;
+  /** How tall the operator dragged that map, in px (ADR-191 Inc.12). `null` = never resized, so it
+   *  keeps the 300px it has always had (`components/NodeDetail/groupMapHeight.ts`). Local-only and
+   *  one value for every folder, like `groupMapCollapsed`. */
+  groupMapHeight: number | null;
   /** How wide the operator dragged the All-nodes inventory pane, in px. `null` = never resized, so
    *  the split keeps the 312px it has always had (`pages/nodesPaneWidth.ts`).
    *
@@ -173,6 +177,8 @@ interface PrefsStore {
   toggleNodesPane: () => void;
   /** Fold or unfold the network map in a folder's pane (persisted). */
   toggleGroupMap: () => void;
+  /** Store the folder pane map's height. Call it on gesture *end*, not per pointer event. */
+  setGroupMapHeight: (px: number | null) => void;
   /** Record the All-nodes inventory pane width. `null` restores the default (see
    *  [`nodesPaneWidth`]). Call it on gesture *end*, not per pointer event. */
   setNodesPaneWidth: (px: number | null) => void;
@@ -214,6 +220,9 @@ export const usePrefsStore = create<PrefsStore>()(
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `false` and no migration is owed.
       groupMapCollapsed: false,
+      // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
+      // object over the initial state, so a missing key reads as `null` and no migration is owed.
+      groupMapHeight: null,
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `null` and no migration is owed.
       nodesPaneWidth: null,
@@ -262,6 +271,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
       toggleGroupMap: () => set((s) => ({ groupMapCollapsed: !s.groupMapCollapsed })),
+      setGroupMapHeight: (groupMapHeight) => set({ groupMapHeight }),
       setNodesPaneWidth: (nodesPaneWidth) => set({ nodesPaneWidth }),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),

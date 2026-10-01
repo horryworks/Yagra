@@ -716,7 +716,8 @@
       "summaryEdges_one": "線 {{count}} 組",
       "summaryEdges_other": "線 {{count}} 組",
       "summaryStubs_one": "外への線 {{count}} 組",
-      "summaryStubs_other": "外への線 {{count}} 組"
+      "summaryStubs_other": "外への線 {{count}} 組",
+      "resize": "ドラッグで地図の高さを変える（ダブルクリックで元に戻す）"
     }
   },
   "prefixGaps": {

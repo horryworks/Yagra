@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The network map of the selected folder, drawn in its pane on the Nodes page under Health (ADR-191
 // Inc.2). The same level the full map draws — inside a site, every node of the site with the
-// subfolder it is filed in — at a fixed height, with three differences that come from living in a
+// subfolder it is filed in — at a height the operator drags (ADR-191 Inc.12), with three differences that come from living in a
 // scrolling pane: the plain wheel scrolls the pane (Ctrl/⌘ + wheel zooms), one finger scrolls it
 // on a touch screen, and pressing a box selects it in the tree instead of descending the map.
 //
 // Folding the section is remembered, and a folded map is not fetched at all — the level is the most
 // expensive read the pane makes, so an operator who does not want it does not pay for it.
 
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { usePrefsStore } from '../../prefs';
@@ -18,6 +18,13 @@ import { MapEdgeMembers } from '../TopologyMap/MapEdgeMembers';
 import { useMapTitles, useTopologyLevel } from '../TopologyMap/useTopologyLevel';
 import { groupMapTarget } from '../TopologyMap/topologyLevel';
 import type { PlacedNode } from '../TopologyMap/graphLayout';
+import {
+  MIN_GROUP_MAP_PX,
+  groupMapCeiling,
+  groupMapHeight,
+  groupMapHeightFromDrag,
+  groupMapHeightFromKey,
+} from './groupMapHeight';
 
 interface Props {
   groupId: string;
@@ -58,6 +65,45 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
 
 function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
   const { t } = useTranslation('nodes');
+  // The map's height (ADR-191 Inc.12): the stored one, re-clamped for this window, while no drag is
+  // in flight; the drag's own value while one is. The store is written once, when the drag ends.
+  const stored = usePrefsStore((s) => s.groupMapHeight);
+  const setStored = usePrefsStore((s) => s.setGroupMapHeight);
+  const viewportH = typeof window === 'undefined' ? 0 : window.innerHeight;
+  const committed = groupMapHeight(stored, viewportH);
+  const [dragH, setDragH] = useState<number | null>(null);
+  const height = dragH ?? committed;
+  const resize = useRef<{ y: number; h: number } | null>(null);
+  const onResizeDown = useCallback(
+    (e: React.PointerEvent) => {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      resize.current = { y: e.clientY, h: committed };
+    },
+    [committed],
+  );
+  const onResizeMove = useCallback((e: React.PointerEvent) => {
+    const r = resize.current;
+    if (r) setDragH(groupMapHeightFromDrag(r.h, r.y, e.clientY, window.innerHeight));
+  }, []);
+  const onResizeUp = useCallback(
+    (e: React.PointerEvent) => {
+      (e.target as Element).releasePointerCapture?.(e.pointerId);
+      if (!resize.current) return;
+      resize.current = null;
+      if (dragH !== null) setStored(dragH);
+      setDragH(null);
+    },
+    [dragH, setStored],
+  );
+  const onResizeKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      const next = groupMapHeightFromKey(committed, e.key, window.innerHeight);
+      if (next === null) return;
+      e.preventDefault();
+      setStored(next);
+    },
+    [committed, setStored],
+  );
   const { level, error, layout, edge: edgeId, selectEdge } = useTopologyLevel(groupId);
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
   const edge = edgeId ? (level?.edges.find((e) => e.id === edgeId) ?? null) : null;
@@ -77,12 +123,13 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
   if (layout.nodes.length === 0) return <p className="nd-muted">{t('groupDetail.map.empty')}</p>;
   return (
     <>
-      <div className="nd-grpmap">
+      <div className="nd-grpmap" style={{ ['--nd-grpmap-h' as string]: `${height}px` }}>
         <TopologyMap
           layout={layout}
           selectedId={null}
           selectedEdge={edgeId}
-          fitKey={groupId}
+          // A new height fits the level to the new pane once the drag ends; mid-drag the view stays.
+          fitKey={`${groupId}@${committed}`}
           boxTitle={boxTitle}
           edgeTitle={edgeTitle}
           showChip={showChip}
@@ -93,6 +140,27 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
           wheelHint={t('groupDetail.map.wheelHint')}
           touchPans={false}
         />
+      </div>
+      {/* Drag the bottom edge to make the map taller or shorter; the size is remembered. The same
+          handle as the Geo map's (ADR-074): a slider, so it is announced and arrow-key operable. */}
+      <div
+        className="nd-grpmap-resize"
+        role="slider"
+        tabIndex={0}
+        aria-label={t('groupDetail.map.resize')}
+        aria-orientation="vertical"
+        aria-valuemin={MIN_GROUP_MAP_PX}
+        aria-valuemax={groupMapCeiling(viewportH)}
+        aria-valuenow={height}
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+        onPointerCancel={onResizeUp}
+        onKeyDown={onResizeKey}
+        onDoubleClick={() => setStored(null)}
+        title={t('groupDetail.map.resize')}
+      >
+        <span className="nd-grpmap-resize-grip" aria-hidden="true" />
       </div>
       <p className="nd-grpmap-summary">
         {[

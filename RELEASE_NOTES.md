@@ -13,6 +13,7 @@
 ### Improvements
 
 - **The network map draws the Wi-Fi access points under one device as a single bundle.** A switch with 21 access points used to carry 21 circles and 21 lines. Now two or more access points under the same device are one circle with the count on it; its rim is split by state in proportion (one stopped access point shows as a red arc), and the line under it reads, for example, "21 APs" and "Unreachable 1". Select the bundle to list its access points in the side panel, grouped by the port they reach the device through; several access points on one port is called out, because it usually means a switch Yagra does not monitor sits between them. A lone access point is still drawn on its own with its name. When the device also has switches cabled below it, its access points are drawn beside it instead of under it, off the lines going down. Nothing changes in the API.
+- **The network map in a folder's pane on the Nodes page can be made taller or shorter.** It was fixed at 300 px. Drag the bar under it (or focus it and use the up and down arrow keys); double-click the bar to go back to 300 px. The height is remembered in this browser, one height for every folder.
 
 ## v0.3.40 — The network map stacks each site by device role, draws Wi-Fi access points as AP symbols under their switch, and gives a Meraki MX its lines
 

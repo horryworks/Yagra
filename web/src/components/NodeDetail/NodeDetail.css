@@ -2285,8 +2285,43 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 /* A fixed height: the map has none of its own, and the pane scrolls around it. */
 .nd-grpmap {
   display: flex;
-  height: 300px;
+  /* Set inline from the operator's dragged height (ADR-191 Inc.12, `groupMapHeight.ts`). */
+  height: var(--nd-grpmap-h, 300px);
   min-height: 0;
+}
+/* The handle along the map's bottom edge: the same shape as the Geo map's (ADR-074). */
+.nd-grpmap-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  cursor: ns-resize;
+  touch-action: none; /* the drag is ours; the browser must not scroll the pane instead */
+}
+.nd-grpmap-resize-grip {
+  width: 34px;
+  height: 3px;
+  background: var(--border-color);
+  border-radius: 2px;
+  transition: background var(--transition);
+}
+.nd-grpmap-resize:hover .nd-grpmap-resize-grip,
+.nd-grpmap-resize:focus-visible .nd-grpmap-resize-grip {
+  background: var(--accent-color);
+}
+.nd-grpmap-resize:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+/* Touch: a 14px rail is not a target, so give it a taller one. */
+@media (hover: none) {
+  .nd-grpmap-resize {
+    height: 22px;
+  }
 }
 .nd-grpmap-summary {
   margin: 6px 0 0;
