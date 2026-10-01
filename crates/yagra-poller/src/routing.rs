@@ -134,6 +134,31 @@ fn walked_adjacency(field: RoutingColumn, row: &SnmpInstanceRow) -> Option<Routi
     }
 }
 
+/// The next hops in the rows of a default-route read (ADR-191 Inc.10), sorted and without repeats.
+///
+/// A row is read by the root it came from: under the RFC 4292 root the next hop is in the instance,
+/// under the RFC 2096 one it is the value. A row under neither root, or one that does not parse, is
+/// left out rather than guessed at — the same contract as every assembler here.
+#[must_use]
+pub fn default_next_hops(rows: &[SnmpInstanceRow]) -> Vec<std::net::IpAddr> {
+    let mut hops: Vec<std::net::IpAddr> = rows
+        .iter()
+        .filter_map(|row| match row.oid_base.as_str() {
+            yagra_common::OID_DEFAULT_ROUTE_INET => {
+                yagra_common::default_next_hop_from_inet_instance(&row.instance)
+            }
+            yagra_common::OID_DEFAULT_ROUTE_IPCIDR => match &row.value {
+                SnmpValue::Bytes(b) => yagra_common::default_next_hop_from_ipcidr_value(b),
+                SnmpValue::Int(_) | SnmpValue::Oid(_) => None,
+            },
+            _ => None,
+        })
+        .collect();
+    hops.sort_unstable();
+    hops.dedup();
+    hops
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +478,39 @@ mod tests {
         assert!(
             snap.truncated,
             "an empty answer from a walk that ran out of budget is not a complete answer"
+        );
+    }
+
+    /// ADR-191 Inc.10: the default route's next hop is read from the index under the RFC 4292 root
+    /// and from the value under the RFC 2096 one; anything else is left out.
+    #[test]
+    fn reads_the_default_next_hops_from_either_table() {
+        let inet = SnmpInstanceRow {
+            oid_base: yagra_common::OID_DEFAULT_ROUTE_INET.to_owned(),
+            instance: vec![2, 0, 0, 1, 4, 198, 51, 100, 9],
+            value: SnmpValue::Int(5),
+        };
+        let ipcidr = SnmpInstanceRow {
+            oid_base: yagra_common::OID_DEFAULT_ROUTE_IPCIDR.to_owned(),
+            instance: vec![0, 192, 0, 2, 253],
+            value: SnmpValue::Bytes(vec![192, 0, 2, 253]),
+        };
+        let stray = SnmpInstanceRow {
+            oid_base: "1.3.6.1.2.1.4.24.4.1.5".to_owned(),
+            instance: vec![1],
+            value: SnmpValue::Bytes(vec![10, 0, 0, 1]),
+        };
+        let unspecified = SnmpInstanceRow {
+            value: SnmpValue::Bytes(vec![0, 0, 0, 0]),
+            ..ipcidr.clone()
+        };
+        let got = super::default_next_hops(&[ipcidr.clone(), inet, stray, unspecified, ipcidr]);
+        assert_eq!(
+            got,
+            vec![
+                "192.0.2.253".parse::<std::net::IpAddr>().unwrap(),
+                "198.51.100.9".parse().unwrap()
+            ]
         );
     }
 }

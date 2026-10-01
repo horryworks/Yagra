@@ -1413,6 +1413,7 @@ export const MAP_ROLE_REASONS = [
   'wireless_ap',
   'meraki_product',
   'profile_category',
+  'default_route',
   'routing_adjacency',
   'subnets',
   'default',

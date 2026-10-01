@@ -962,10 +962,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dns_checks,
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
+        // Read by the map for where each node's default route points (ADR-191 Inc.10). It adds no
+        // endpoint: the answer reaches the API as a node's role on `/topology/map`, so the route
+        // ledger gains no line and the MCP gap does not move (ADR-042).
+        routing: routing_repo.clone(),
         arp: arp_repo.clone(),
-        // No `routing` here on purpose: Increment 4 adds no read endpoint. Its edges reach the API
-        // through the links `run_topology_derivation` writes, which `/topology/links` already
-        // serves — so the route ledger gains no line and the MCP gap does not move (ADR-042).
         discovered: discovered_repo.clone(),
         wireless: wireless_repo.clone(),
         topology_links: topo_link_repo.clone(),

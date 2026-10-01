@@ -62,7 +62,7 @@ mod wlan;
 
 // Re-exported so a sibling's `use super::*` sees them: a private `use` here is visible to every
 // descendant, which is what keeps each conversation file free of its own import block.
-use adjacency::{execute_arp, execute_l3, execute_neighbors, execute_routing};
+use adjacency::{execute_arp, execute_l3, execute_neighbors, execute_routing, RoutingAsk};
 use identity::IdentityRead;
 use interfaces::{execute_snmp_table, execute_snmp_v3_table};
 use meraki::execute_meraki;
@@ -251,8 +251,11 @@ pub(crate) async fn execute_reading(
                 job,
                 transport,
                 at_unix_ms,
-                &check.columns,
-                &check.route_probes,
+                RoutingAsk {
+                    columns: &check.columns,
+                    probes: &check.route_probes,
+                    default_route: check.default_route,
+                },
                 timeout,
                 &walker,
             )
@@ -265,8 +268,11 @@ pub(crate) async fn execute_reading(
                 job,
                 transport,
                 at_unix_ms,
-                &check.columns,
-                &check.route_probes,
+                RoutingAsk {
+                    columns: &check.columns,
+                    probes: &check.route_probes,
+                    default_route: check.default_route,
+                },
                 timeout,
                 &walker,
             )

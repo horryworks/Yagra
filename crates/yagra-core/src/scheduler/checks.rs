@@ -458,6 +458,9 @@ pub fn build_snmp_v3_arp_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3
 /// `targets` is the node's slice of the fleet's host-route addresses, decided by [`RoutingPlan`].
 /// The probe OIDs are built **here** rather than poller-side, so `inetCidrRouteTable`'s index
 /// grammar stays a fact core owns — the same reason every other check is sent its column OIDs.
+///
+/// Every routing job also asks where the default route points (ADR-191 Inc.10): it is what tells a
+/// site's way out from its core switch on the map, and it costs two small reads an hour.
 #[must_use]
 pub fn build_snmp_routing_check(
     community: &str,
@@ -468,6 +471,7 @@ pub fn build_snmp_routing_check(
         community: community.to_owned(),
         columns: routing_columns(),
         route_probes: route_probes(targets),
+        default_route: true,
         timeout_ms,
     }
 }
@@ -484,6 +488,7 @@ pub fn build_snmp_v3_routing_check(
         auth: secret.auth(),
         columns: routing_columns(),
         route_probes: route_probes(targets),
+        default_route: true,
         timeout_ms,
     }
 }

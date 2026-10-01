@@ -1977,6 +1977,11 @@ pub struct SnmpRoutingCheck {
     /// Empty is the normal case — only a node holding a host address of its own is asked to probe.
     #[serde(default)]
     pub route_probes: Vec<SnmpRouteProbe>,
+    /// Also read where the IPv4 default route points (ADR-191 Inc.10). Defaults to false, so a job
+    /// from an older core asks nothing new; an older poller ignores the key and sends no answer,
+    /// which core reads as "not asked".
+    #[serde(default)]
+    pub default_route: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -2000,6 +2005,9 @@ pub struct SnmpV3RoutingCheck {
     /// Targeted route probes — see [`SnmpRoutingCheck::route_probes`].
     #[serde(default)]
     pub route_probes: Vec<SnmpRouteProbe>,
+    /// See [`SnmpRoutingCheck::default_route`].
+    #[serde(default)]
+    pub default_route: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -4817,6 +4825,11 @@ mod tests {
         let v3: SnmpV3RoutingCheck =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
         assert!(v3.auth.auth_key.is_none() && v3.columns.is_empty() && v3.route_probes.is_empty());
+        // A job from a core that predates ADR-191 Inc.10 asks nothing new.
+        assert!(!v2c.default_route && !v3.default_route);
+        let asked: SnmpRoutingCheck =
+            serde_json::from_str(r#"{"community":"public","default_route":true}"#).unwrap();
+        assert!(asked.default_route);
 
         // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
         let wire = serde_json::to_string(&CheckSpec::SnmpRouting(v2c)).unwrap();

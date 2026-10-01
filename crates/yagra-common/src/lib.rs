@@ -124,11 +124,14 @@ pub use notify_template::{
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};
 pub use routing::{
-    bgp_mib_covers, bgp_peer_from_instance, builtin_routing_columns, host_prefix_len,
+    bgp_mib_covers, bgp_peer_from_instance, builtin_routing_columns,
+    default_next_hop_from_inet_instance, default_next_hop_from_ipcidr_value, host_prefix_len,
     ospf_neighbor_from_instance, route_prefix_len_from_instance, route_probe_columns,
     route_probe_oid, RoutingAdjacency, RoutingColumn, RoutingProto, RoutingSnapshot,
-    INET_CIDR_ROUTE_TYPE_LOCAL, MAX_ROUTE_PROBES_PER_NODE, MAX_ROUTE_PROBE_ROWS,
-    MAX_ROUTING_ADJACENCIES_PER_NODE, MAX_ROUTING_WALK_ROWS, METRIC_SNMP_ROUTING_ADJACENCY_COUNT,
+    INET_CIDR_ROUTE_TYPE_LOCAL, MAX_DEFAULT_NEXT_HOPS, MAX_DEFAULT_ROUTE_ROWS,
+    MAX_ROUTE_PROBES_PER_NODE, MAX_ROUTE_PROBE_ROWS, MAX_ROUTING_ADJACENCIES_PER_NODE,
+    MAX_ROUTING_WALK_ROWS, METRIC_SNMP_ROUTING_ADJACENCY_COUNT, OID_DEFAULT_ROUTE_INET,
+    OID_DEFAULT_ROUTE_IPCIDR,
 };
 pub use severity::Severity;
 pub use snmp_auth::SnmpV3Auth;

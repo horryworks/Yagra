@@ -198,6 +198,52 @@ pub(super) async fn execute_arp(
     r
 }
 
+/// What one routing job asks for (ADR-043 Increment 4, ADR-191 Inc.10).
+pub(super) struct RoutingAsk<'a> {
+    pub columns: &'a [yagra_bus::SnmpRoutingColumn],
+    pub probes: &'a [yagra_bus::SnmpRouteProbe],
+    pub default_route: bool,
+}
+
+/// Where the IPv4 default route points: the RFC 4292 table first, the deprecated RFC 2096 one when
+/// the first gives no IPv4 next hop (ADR-191 Inc.10). `Some(empty)` is an answer — the device has no
+/// default route; `None` means neither table could be read, so nothing is claimed either way.
+async fn read_default_route(
+    job: &PollJob,
+    transport: &dyn Transport,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> Option<Vec<std::net::IpAddr>> {
+    let mut answered = false;
+    for root in [
+        yagra_common::OID_DEFAULT_ROUTE_INET,
+        yagra_common::OID_DEFAULT_ROUTE_IPCIDR,
+    ] {
+        match walker
+            .walk_instances(
+                transport,
+                job.target,
+                &[root.to_owned()],
+                timeout,
+                yagra_common::MAX_DEFAULT_ROUTE_ROWS,
+            )
+            .await
+        {
+            Ok(rows) => {
+                answered = true;
+                let hops = crate::routing::default_next_hops(&rows);
+                if !hops.is_empty() {
+                    return Some(hops);
+                }
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, root, "default route read failed");
+            }
+        }
+    }
+    answered.then(Vec::new)
+}
+
 /// Execute a routing-adjacency collection (v2c or v3, selected by `walker`) — ADR-043 Increment 4.
 ///
 /// Shares the three properties of [`execute_neighbors`], [`execute_l3`] and [`execute_arp`] —
@@ -212,15 +258,23 @@ pub(super) async fn execute_arp(
 /// A failure of *either* call leaves that half's rows out and lets the other half through: a device
 /// that answers `bgpPeerState` but has no `inetCidrRouteTable` is ordinary, and refusing the whole
 /// observation because one table is absent would collect nothing from most of the fleet.
+///
+/// Since ADR-191 Inc.10 a job may also ask where the IPv4 default route points. That read rides on
+/// an observation the two halves above already made — it never makes one on its own, because a
+/// snapshot sent when neither half answered would erase the node's stored adjacency.
 pub(super) async fn execute_routing(
     job: &PollJob,
     transport: &dyn Transport,
     at_unix_ms: i64,
-    columns: &[yagra_bus::SnmpRoutingColumn],
-    probes: &[yagra_bus::SnmpRouteProbe],
+    ask: RoutingAsk<'_>,
     timeout: Duration,
     walker: &SnmpWalker,
 ) -> PollResult {
+    let RoutingAsk {
+        columns,
+        probes,
+        default_route,
+    } = ask;
     let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
     r.observational = true;
 
@@ -283,7 +337,12 @@ pub(super) async fn execute_routing(
         return r;
     }
 
-    let snapshot = crate::routing::assemble(columns, probes, &rows, truncated);
+    let mut snapshot = crate::routing::assemble(columns, probes, &rows, truncated);
+    if default_route {
+        if let Some(hops) = read_default_route(job, transport, timeout, walker).await {
+            snapshot = snapshot.with_default_next_hops(hops);
+        }
+    }
     if snapshot.truncated {
         metrics::counter!("yagra_routing_rows_truncated_total").increment(1);
         tracing::warn!(

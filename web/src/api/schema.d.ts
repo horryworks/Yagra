@@ -9268,7 +9268,7 @@ export interface components {
          * @description Why a node was given its [`MapRole`].
          * @enum {string}
          */
-        MapRoleReason: "wireless_ap" | "meraki_product" | "profile_category" | "routing_adjacency" | "subnets" | "default";
+        MapRoleReason: "wireless_ap" | "meraki_product" | "profile_category" | "default_route" | "routing_adjacency" | "subnets" | "default";
         /** @description Where links leave the level: a node or a folder outside it. */
         MapStub: {
             /**

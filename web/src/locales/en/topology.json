@@ -52,6 +52,7 @@
       "wireless_ap": "imported from its wireless controller",
       "meraki_product": "the Meraki product type",
       "profile_category": "its device profile's category",
+      "default_route": "its default route leaves the site",
       "routing_adjacency": "it holds an OSPF, BGP or routing-table adjacency",
       "subnets": "it has addresses in {{count}} subnets",
       "default": "nothing says otherwise"

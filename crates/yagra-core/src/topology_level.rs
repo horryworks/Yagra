@@ -644,6 +644,9 @@ pub(crate) struct RoleFacts {
     pub subnet_count: Option<usize>,
     /// A link touching the node came from OSPF, BGP or the routing table.
     pub routing_adjacency: bool,
+    /// Its default route leaves its site (ADR-191 Inc.10): `None` when it was never asked, an older
+    /// poller sent no answer, or the node is filed in no site.
+    pub exits_site: Option<bool>,
 }
 
 /// What a profile category says about a node's place on the map.
@@ -684,6 +687,51 @@ fn category_class(c: ProfileCategory) -> CategoryClass {
     }
 }
 
+/// The Site folder `group` is filed under: itself, or its nearest Site ancestor (ADR-191 Inc.10).
+/// Walks the unscoped parents; a folder in no site, or a loop, answers `None`.
+pub(crate) fn site_of_group(
+    group: Option<Uuid>,
+    parent: &HashMap<Uuid, Option<Uuid>>,
+    sites: &HashSet<Uuid>,
+) -> Option<Uuid> {
+    let mut cur = group;
+    let mut steps = 0;
+    while let Some(g) = cur {
+        if sites.contains(&g) {
+            return Some(g);
+        }
+        steps += 1;
+        if steps > MAX_GROUP_DEPTH + 1 {
+            return None;
+        }
+        cur = parent.get(&g).copied().flatten();
+    }
+    None
+}
+
+/// Which nodes route out of their site (ADR-191 Inc.10 decision 34): a node whose default route
+/// points at an address no node of the same site claims. `hops` is each asked node's default next
+/// hops (empty = it has no default route, which is not a way out); `owners` is every node claiming
+/// each hop address, as its management address or on a port; `site` is the site a node is in.
+/// A node in no site is left out, and so reads as unknown.
+pub(crate) fn site_exits(
+    hops: &HashMap<Uuid, Vec<std::net::IpAddr>>,
+    owners: &HashMap<std::net::IpAddr, Vec<Uuid>>,
+    site: &dyn Fn(Uuid) -> Option<Uuid>,
+) -> HashMap<Uuid, bool> {
+    hops.iter()
+        .filter_map(|(node, hs)| {
+            let home = site(*node)?;
+            let inside = |h: &std::net::IpAddr| {
+                owners
+                    .get(h)
+                    .is_some_and(|o| o.iter().any(|c| site(*c) == Some(home)))
+            };
+            Some((*node, hs.iter().any(|h| !inside(h))))
+        })
+        .collect()
+}
+
 /// A node's role on the map and why (ADR-191 Inc.6 decision 19). The first rule that applies wins:
 /// what the node *is* (an imported AP, a Meraki product, a router or firewall profile) before what
 /// it was *seen doing* (routing adjacencies, addresses in several subnets), before what its switch
@@ -719,6 +767,14 @@ pub(crate) fn role_of(f: &RoleFacts) -> (MapRole, MapRoleReason) {
         Some(CategoryClass::Switch { promotable }) => (true, promotable),
         Some(CategoryClass::Unclassified) | None => (false, true),
     };
+    // ADR-191 Inc.10: a device that routes, and whose default route leaves its site, is the site's
+    // way out — a router the profile does not call one (a C800 under a generic profile). Only one
+    // that routes: an access switch pointing its gateway at an address nobody monitors must not
+    // climb to the top row.
+    let routes = f.routing_adjacency || f.subnet_count.is_some_and(|n| n >= 2);
+    if promotable && routes && f.exits_site == Some(true) {
+        return (MapRole::Edge, MapRoleReason::DefaultRoute);
+    }
     if f.routing_adjacency {
         return (MapRole::L3Switch, MapRoleReason::RoutingAdjacency);
     }
@@ -1242,6 +1298,7 @@ mod tests {
             category: None,
             subnet_count: None,
             routing_adjacency: false,
+            exits_site: None,
         }
     }
 
@@ -1251,6 +1308,55 @@ mod tests {
             subnet_count: subnets,
             ..facts(NodeKind::Device)
         }
+    }
+
+    fn exit(f: RoleFacts, exits_site: Option<bool>) -> RoleFacts {
+        RoleFacts { exits_site, ..f }
+    }
+
+    #[test]
+    fn a_node_routes_out_of_its_site_when_no_node_of_that_site_claims_its_gateway() {
+        let (router, core, sw, other_site_router) = (id(1), id(2), id(3), id(4));
+        let (site_a, floor, site_b) = (id(900), id(901), id(902));
+        let parent: HashMap<Uuid, Option<Uuid>> =
+            [(site_a, None), (floor, Some(site_a)), (site_b, None)]
+                .into_iter()
+                .collect();
+        let sites: HashSet<Uuid> = [site_a, site_b].into_iter().collect();
+        assert_eq!(site_of_group(Some(floor), &parent, &sites), Some(site_a));
+        assert_eq!(site_of_group(None, &parent, &sites), None);
+        let filed: HashMap<Uuid, Option<Uuid>> = [
+            (router, Some(site_a)),
+            (core, Some(floor)),
+            (sw, None),
+            (other_site_router, Some(site_b)),
+        ]
+        .into_iter()
+        .collect();
+        let site = |n: Uuid| site_of_group(filed.get(&n).copied().flatten(), &parent, &sites);
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        let hops: HashMap<Uuid, Vec<std::net::IpAddr>> = [
+            // The router's gateway is the carrier's end of the WAN link: nobody's address.
+            (router, vec![ip("198.51.100.9")]),
+            // The core points at the router, in a subfolder of the same site.
+            (core, vec![ip("192.0.2.253")]),
+            // A node in no site reads as unknown.
+            (sw, vec![ip("198.51.100.9")]),
+            // A gateway claimed by a node in another site still leaves this one.
+            (other_site_router, vec![ip("192.0.2.253")]),
+        ]
+        .into_iter()
+        .collect();
+        let owners: HashMap<std::net::IpAddr, Vec<Uuid>> =
+            [(ip("192.0.2.253"), vec![router])].into_iter().collect();
+        let got = site_exits(&hops, &owners, &site);
+        assert_eq!(got.get(&router), Some(&true));
+        assert_eq!(got.get(&core), Some(&false));
+        assert_eq!(got.get(&sw), None);
+        assert_eq!(got.get(&other_site_router), Some(&true));
+        // No default route at all is not a way out.
+        let none: HashMap<Uuid, Vec<std::net::IpAddr>> = [(core, Vec::new())].into_iter().collect();
+        assert_eq!(site_exits(&none, &owners, &site).get(&core), Some(&false));
     }
 
     fn meraki(product: &str) -> RoleFacts {
@@ -1300,7 +1406,11 @@ mod tests {
                 device(Some(C::WirelessAp), None),
                 (R::AccessPoint, W::ProfileCategory),
             ),
-            ("OSPF speaker", ospf, (R::L3Switch, W::RoutingAdjacency)),
+            (
+                "OSPF speaker",
+                ospf.clone(),
+                (R::L3Switch, W::RoutingAdjacency),
+            ),
             ("BGP server", bgp_server, (R::Other, W::Default)),
             (
                 "core",
@@ -1346,6 +1456,47 @@ mod tests {
                 "generic, 1 net",
                 device(Some(C::GenericSnmp), Some(1)),
                 (R::Other, W::Default),
+            ),
+            // ADR-191 Inc.10: the site's way out, told by where its default route points.
+            (
+                "site router, generic profile",
+                exit(device(Some(C::GenericSnmp), Some(2)), Some(true)),
+                (R::Edge, W::DefaultRoute),
+            ),
+            (
+                "core, default route inside the site",
+                exit(device(Some(C::L3Switch), Some(18)), Some(false)),
+                (R::L3Switch, W::Subnets),
+            ),
+            (
+                "never asked",
+                exit(device(Some(C::GenericSnmp), Some(2)), None),
+                (R::L3Switch, W::Subnets),
+            ),
+            (
+                "OSPF speaker leaving the site",
+                exit(ospf.clone(), Some(true)),
+                (R::Edge, W::DefaultRoute),
+            ),
+            (
+                "declared L2, gateway outside",
+                exit(device(Some(C::L2Switch), Some(3)), Some(true)),
+                (R::L2Switch, W::ProfileCategory),
+            ),
+            (
+                "access switch, gateway outside",
+                exit(device(Some(C::L3Switch), Some(1)), Some(true)),
+                (R::L2Switch, W::ProfileCategory),
+            ),
+            (
+                "server leaving the site",
+                exit(device(Some(C::Server), Some(2)), Some(true)),
+                (R::Other, W::Default),
+            ),
+            (
+                "router profile wins its own reason",
+                exit(device(Some(C::Router), Some(2)), Some(true)),
+                (R::Edge, W::ProfileCategory),
             ),
         ];
         for (what, f, want) in cases {
@@ -1422,6 +1573,7 @@ mod tests {
             MapRoleReason::WirelessAp,
             MapRoleReason::MerakiProduct,
             MapRoleReason::ProfileCategory,
+            MapRoleReason::DefaultRoute,
             MapRoleReason::RoutingAdjacency,
             MapRoleReason::Subnets,
             MapRoleReason::Default,
@@ -1433,6 +1585,7 @@ mod tests {
                 "wireless_ap",
                 "meraki_product",
                 "profile_category",
+                "default_route",
                 "routing_adjacency",
                 "subnets",
                 "default"

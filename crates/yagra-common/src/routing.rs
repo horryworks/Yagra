@@ -85,6 +85,63 @@ const OID_INET_CIDR_ROUTE_IF_INDEX: &str = "1.3.6.1.2.1.4.24.7.1.7";
 /// `inetCidrRouteType`, IP-FORWARD-MIB (RFC 4292).
 const OID_INET_CIDR_ROUTE_TYPE: &str = "1.3.6.1.2.1.4.24.7.1.8";
 
+/// Row budget for the default-route read (ADR-191 Inc.10): one destination, a handful of routes
+/// (equal-cost next hops) at most.
+pub const MAX_DEFAULT_ROUTE_ROWS: usize = 16;
+
+/// Cap on the default next hops kept per node, after sorting.
+pub const MAX_DEFAULT_NEXT_HOPS: usize = 8;
+
+/// `inetCidrRouteIfIndex` (RFC 4292) rooted at the IPv4 default route: destination type ipv4(1),
+/// a four-octet `0.0.0.0`, prefix length 0. What follows in each row's instance is
+/// `policy . nextHopType . nextHop` — the next hop is read out of the index.
+pub const OID_DEFAULT_ROUTE_INET: &str = "1.3.6.1.2.1.4.24.7.1.7.1.4.0.0.0.0.0";
+
+/// `ipCidrRouteNextHop` (RFC 2096, deprecated) rooted at destination `0.0.0.0` mask `0.0.0.0`.
+/// Each row's instance is `tos . nextHop` and its value is the next hop.
+///
+/// Read only when the RFC 4292 table gives no IPv4 default route. Measured on a lab deployment's
+/// site router and core switch (2026-10-01): the router reported 21 routes in `inetCidrRouteNumber`
+/// and returned no row from the table, the switch returned IPv6 rows only, and both answered this
+/// table. Without it the default route of either cannot be read.
+pub const OID_DEFAULT_ROUTE_IPCIDR: &str = "1.3.6.1.2.1.4.24.4.1.4.0.0.0.0.0.0.0.0";
+
+/// The next hop in the instance of a row under [`OID_DEFAULT_ROUTE_INET`]:
+/// `policy (length-prefixed OID) . nextHopType . nextHop (length-prefixed octets)`.
+///
+/// `None` for an instance that does not parse, and for an unspecified next hop (`0.0.0.0`, `::`):
+/// a default route out of an interface with no gateway names no device to compare against.
+#[must_use]
+pub fn default_next_hop_from_inet_instance(instance: &[u32]) -> Option<IpAddr> {
+    let policy_len = usize::try_from(*instance.first()?).ok()?;
+    let rest = instance.get(1 + policy_len..)?;
+    let (&kind, rest) = rest.split_first()?;
+    let (&len, octets) = rest.split_first()?;
+    let len = usize::try_from(len).ok()?;
+    if octets.len() != len {
+        return None;
+    }
+    let bytes: Vec<u8> = octets
+        .iter()
+        .map(|v| u8::try_from(*v).ok())
+        .collect::<Option<_>>()?;
+    let ip = match (kind, bytes.len()) {
+        (1, 4) => IpAddr::V4(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])),
+        (2, 16) => IpAddr::from(<[u8; 16]>::try_from(bytes.as_slice()).ok()?),
+        _ => return None,
+    };
+    (!ip.is_unspecified()).then_some(ip)
+}
+
+/// The next hop of a row under [`OID_DEFAULT_ROUTE_IPCIDR`]: its value, four octets (an
+/// `IpAddress` arrives as its octets). `None` for anything else and for `0.0.0.0`.
+#[must_use]
+pub fn default_next_hop_from_ipcidr_value(value: &[u8]) -> Option<IpAddr> {
+    let &[a, b, c, d] = value else { return None };
+    let ip = IpAddr::V4(Ipv4Addr::new(a, b, c, d));
+    (!ip.is_unspecified()).then_some(ip)
+}
+
 /// `inetCidrRouteType = local(3)` — the destination is reached over a local interface.
 ///
 /// ⚠️ Not `direct(3)`: that is RFC 1213's `ipRouteType` spelling. RFC 4292 renamed the enumeration
@@ -287,6 +344,14 @@ pub struct RoutingSnapshot {
     /// Whether a cap was hit and rows were dropped.
     #[serde(default)]
     pub truncated: bool,
+    /// Where the node's IPv4 default route points (ADR-191 Inc.10), sorted. `None` = not asked, or a
+    /// poller that predates the question; empty = asked, and the node has no default route.
+    ///
+    /// Stored inside the same JSON document as the adjacencies (`node_routing.adjacencies` holds the
+    /// whole snapshot), so it needs no column: an older core reading a newer row ignores the key, and
+    /// a newer core reading an older row reads `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_next_hops: Option<Vec<IpAddr>>,
 }
 
 impl RoutingSnapshot {
@@ -296,6 +361,7 @@ impl RoutingSnapshot {
         let mut set = Self {
             adjacencies,
             truncated: walk_truncated,
+            default_next_hops: None,
         };
         set.canonicalize();
         set
@@ -328,6 +394,20 @@ impl RoutingSnapshot {
             self.adjacencies.truncate(MAX_ROUTING_ADJACENCIES_PER_NODE);
             self.truncated = true;
         }
+        if let Some(hops) = self.default_next_hops.as_mut() {
+            hops.retain(|ip| !ip.is_unspecified());
+            hops.sort_unstable();
+            hops.dedup();
+            hops.truncate(MAX_DEFAULT_NEXT_HOPS);
+        }
+    }
+
+    /// The same snapshot carrying where the default route points (ADR-191 Inc.10), canonicalized.
+    #[must_use]
+    pub fn with_default_next_hops(mut self, hops: Vec<IpAddr>) -> Self {
+        self.default_next_hops = Some(hops);
+        self.canonicalize();
+        self
     }
 
     /// The stable content key used for change comparison.
@@ -360,6 +440,18 @@ impl RoutingSnapshot {
             out.push('\n');
         }
         out.push_str(if self.truncated { "x=1\n" } else { "x=0\n" });
+        // Appended only when the question was asked, so the key of every snapshot an older poller
+        // sends — and of every stored row — is byte-for-byte what it was (ADR-191 Inc.10).
+        if let Some(hops) = &self.default_next_hops {
+            out.push_str("dg=");
+            out.push_str(&hops.len().to_string());
+            out.push('\n');
+            for ip in hops {
+                out.push_str("d=");
+                out.push_str(&ip.to_string());
+                out.push('\n');
+            }
+        }
         out
     }
 }
@@ -770,5 +862,111 @@ mod tests {
         assert!(walked
             .iter()
             .all(|(_, o)| !o.starts_with("1.3.6.1.2.1.4.24")));
+    }
+
+    // ── ADR-191 Inc.10: where the default route points ──────────────────────────────────
+
+    #[test]
+    fn reads_the_next_hop_out_of_an_rfc_4292_default_route_index() {
+        // policy `0.0` (length 2), next hop ipv4(1), four octets — the shape an agent returns.
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 1, 4, 198, 51, 100, 9]),
+            Some(ip("198.51.100.9"))
+        );
+        // An IPv6 next hop on the same route reads too.
+        let mut v6 = vec![2, 0, 0, 2, 16];
+        v6.extend(
+            ip("2001:db8::1")
+                .to_string()
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+                .octets()
+                .map(u32::from),
+        );
+        assert_eq!(
+            default_next_hop_from_inet_instance(&v6),
+            Some(ip("2001:db8::1"))
+        );
+        // A route out of an interface with no gateway names no device.
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 1, 4, 0, 0, 0, 0]),
+            None
+        );
+        // Truncated, mislabelled, or out-of-range instances do not parse.
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 1, 4, 198, 51, 100]),
+            None
+        );
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 2, 4, 198, 51, 100, 9]),
+            None
+        );
+        assert_eq!(
+            default_next_hop_from_inet_instance(&[2, 0, 0, 1, 4, 198, 51, 100, 999]),
+            None
+        );
+        assert_eq!(default_next_hop_from_inet_instance(&[]), None);
+    }
+
+    #[test]
+    fn reads_the_next_hop_out_of_an_rfc_2096_value() {
+        assert_eq!(
+            default_next_hop_from_ipcidr_value(&[198, 51, 100, 9]),
+            Some(ip("198.51.100.9"))
+        );
+        assert_eq!(default_next_hop_from_ipcidr_value(&[0, 0, 0, 0]), None);
+        assert_eq!(default_next_hop_from_ipcidr_value(&[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn the_default_route_roots_are_the_ipv4_default_under_each_column() {
+        assert_eq!(
+            OID_DEFAULT_ROUTE_INET,
+            format!("{OID_INET_CIDR_ROUTE_IF_INDEX}.1.4.0.0.0.0.0")
+        );
+        assert!(OID_DEFAULT_ROUTE_IPCIDR.starts_with("1.3.6.1.2.1.4.24.4.1.4."));
+        assert_eq!(OID_DEFAULT_ROUTE_IPCIDR.split('.').count(), 19);
+    }
+
+    #[test]
+    fn a_snapshot_that_was_not_asked_keeps_its_old_key_and_its_old_document() {
+        let adj = vec![RoutingAdjacency::new(RoutingProto::Ospf, ip("192.0.2.1"))];
+        let old = RoutingSnapshot::new(adj.clone(), false);
+        assert!(!old.content_key().contains("d="));
+        // Not serialized at all, so the stored document is what an older core wrote.
+        assert!(!serde_json::to_string(&old)
+            .unwrap()
+            .contains("default_next_hops"));
+        // A row an older core stored reads as "not asked".
+        let back: RoutingSnapshot =
+            serde_json::from_str(r#"{"adjacencies":[],"truncated":false}"#).unwrap();
+        assert_eq!(back.default_next_hops, None);
+
+        let asked = RoutingSnapshot::new(adj, false).with_default_next_hops(vec![
+            ip("198.51.100.9"),
+            ip("0.0.0.0"),
+            ip("192.0.2.254"),
+            ip("198.51.100.9"),
+        ]);
+        assert_eq!(
+            asked.default_next_hops,
+            Some(vec![ip("192.0.2.254"), ip("198.51.100.9")])
+        );
+        assert!(asked.content_key().starts_with(&old.content_key()));
+        assert!(
+            asked
+                .content_key()
+                .ends_with("dg=2\nd=192.0.2.254\nd=198.51.100.9\n"),
+            "{}",
+            asked.content_key()
+        );
+        // Asked, with no default route, is a different answer from not asked.
+        let none = RoutingSnapshot::new(Vec::new(), false).with_default_next_hops(Vec::new());
+        assert!(none.content_key().ends_with("dg=0\n"));
+        let json = serde_json::to_string(&none).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RoutingSnapshot>(&json).unwrap(),
+            none
+        );
     }
 }

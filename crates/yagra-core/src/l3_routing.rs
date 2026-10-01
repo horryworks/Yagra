@@ -99,6 +99,32 @@ impl RoutingRepo {
             .collect()
     }
 
+    /// Where each of `nodes`' IPv4 default route points, for the nodes whose stored snapshot carries
+    /// an answer (ADR-191 Inc.10). A node never asked, or last observed by an older poller, is
+    /// absent; one asked that has no default route maps to an empty list. Reads the one key out of
+    /// the document rather than the adjacency set around it.
+    pub async fn default_next_hops_for(
+        &self,
+        nodes: &[Uuid],
+    ) -> anyhow::Result<std::collections::HashMap<Uuid, Vec<IpAddr>>> {
+        if nodes.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT node_id, adjacencies->'default_next_hops' AS hops FROM node_routing \
+             WHERE node_id = ANY($1) AND adjacencies->'default_next_hops' IS NOT NULL",
+        )
+        .bind(nodes)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let hops: Json<Vec<IpAddr>> = row.try_get("hops")?;
+                Ok((row.try_get("node_id")?, hops.0))
+            })
+            .collect()
+    }
+
     /// The newest `last_seen` across every node, or `None` when nothing has been observed.
     ///
     /// The third watermark in the derivation task's change signal — see

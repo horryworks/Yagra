@@ -383,6 +383,9 @@ pub(crate) enum MapRoleReason {
     MerakiProduct,
     /// Its device profile's category says what it is.
     ProfileCategory,
+    /// It routes, and its default route points at an address no node of its site claims: it is the
+    /// site's way out (ADR-191 Inc.10).
+    DefaultRoute,
     /// It holds an OSPF, BGP or routing-table adjacency.
     RoutingAdjacency,
     /// It has an address in two or more subnets, so it routes between them.
@@ -577,6 +580,7 @@ async fn role_facts(
             routing.extend(l.a_node.iter().chain(l.b_node.iter()).map(|n| n.as_uuid()));
         }
     }
+    let exits = site_exits_for(admin, drawn).await;
     drawn
         .iter()
         .filter_map(|id| {
@@ -589,10 +593,62 @@ async fn role_facts(
                     category: categories.get(id).copied(),
                     subnet_count: subnets.get(id).copied(),
                     routing_adjacency: routing.contains(id),
+                    exits_site: exits.get(id).copied(),
                 },
             ))
         })
         .collect()
+}
+
+/// Which of the drawn nodes route out of their site (ADR-191 Inc.10): each one's stored default
+/// next hops, who claims those addresses, and which site each of them is filed in. Read only for
+/// the nodes that have an answer, and only the hop addresses are looked up, so a level of switches
+/// that were never asked costs one query. Every read is unscoped: whether a hop is inside the site
+/// is a fact about the network, not about what the caller may see, and only the yes/no leaves here.
+/// A read that fails leaves every node unknown, which keeps the role it would have had.
+async fn site_exits_for(admin: &super::AdminState, drawn: &[Uuid]) -> HashMap<Uuid, bool> {
+    let hops = admin
+        .routing
+        .default_next_hops_for(drawn)
+        .await
+        .unwrap_or_default();
+    if hops.is_empty() {
+        return HashMap::new();
+    }
+    let mut addresses: Vec<std::net::IpAddr> = hops.values().flatten().copied().collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    let (claims, groups) = tokio::join!(
+        admin.repo.address_claims(&addresses, None),
+        admin.groups.list()
+    );
+    let (Ok(claims), Ok(groups)) = (claims, groups) else {
+        return HashMap::new();
+    };
+    let mut owners: HashMap<std::net::IpAddr, Vec<Uuid>> = HashMap::new();
+    for c in &claims {
+        owners.entry(c.address).or_default().push(c.id);
+    }
+    let mut members: Vec<Uuid> = drawn.to_vec();
+    members.extend(claims.iter().map(|c| c.id));
+    members.sort_unstable();
+    members.dedup();
+    let Ok(filed) = admin.repo.group_ids_of(&members).await else {
+        return HashMap::new();
+    };
+    let parent: HashMap<Uuid, Option<Uuid>> = groups.iter().map(|g| (g.id, g.parent_id)).collect();
+    let sites: HashSet<Uuid> = groups
+        .iter()
+        .filter(|g| {
+            crate::groups::GroupType::from_key(&g.group_type)
+                == Some(crate::groups::GroupType::Site)
+        })
+        .map(|g| g.id)
+        .collect();
+    let site = |node: Uuid| {
+        crate::topology_level::site_of_group(filed.get(&node).copied().flatten(), &parent, &sites)
+    };
+    crate::topology_level::site_exits(&hops, &owners, &site)
 }
 
 /// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.

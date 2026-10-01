@@ -1771,6 +1771,22 @@ impl NodeRepo {
         Ok(map)
     }
 
+    /// The folder each of these nodes is filed in (`None` = ungrouped), unscoped. A node that does not
+    /// exist is absent. Read by the map to tell which site a node and its default gateway are in
+    /// (ADR-191 Inc.10).
+    pub async fn group_ids_of(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, Option<Uuid>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query("SELECT id, group_id FROM nodes WHERE id = ANY($1)")
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("group_id")?)))
+            .collect()
+    }
+
     /// Which of these node ids still exist (ADR-141).
     ///
     /// For the batch writers' retry after a foreign-key violation: a poll result or an event queued

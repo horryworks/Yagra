@@ -50,6 +50,7 @@
       "wireless_ap": "無線コントローラーから取り込んだ AP",
       "meraki_product": "Meraki の製品種別",
       "profile_category": "デバイスプロファイルの分類",
+      "default_route": "拠点の外への既定経路を持つ",
       "routing_adjacency": "OSPF・BGP・経路表の隣接を持つ",
       "subnets": "{{count}} 個のサブネットにアドレスを持つ",
       "default": "ほかに判断材料なし"
