@@ -105,6 +105,14 @@
         "portCount_one": "{{count}} AP",
         "portCount_other": "{{count}} APs"
       }
+    },
+    "search": {
+      "placeholder": "Search host names on this level",
+      "count_one": "{{count}} match",
+      "count_other": "{{count}} matches",
+      "undrawn_one": "({{count}} not on the map: it has no line)",
+      "undrawn_other": "({{count}} not on the map: they have no line)",
+      "stepHint": "Enter: bring the next match to the middle · Shift+Enter: the previous one"
     }
   },
   "dependency": {

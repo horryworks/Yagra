@@ -15,7 +15,8 @@ import { stateColorVar, stateLabel } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
 import { useMapViewStore, type MapViewKey } from '../../store';
 import { AP_PITCH, type GraphLayout, type PlacedEdge, type PlacedNode } from './graphLayout';
-import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
+import { centerOn, clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
+import { boxEmphasis, edgeDimmed, type MapSearch } from './mapSearch';
 import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
 import { rimArcs, troubleCounts } from './apBundle';
 import { WifiIcon } from '../ui/icons';
@@ -32,21 +33,29 @@ function Box({
   selected,
   title,
   onActivate,
+  emphasis,
+  hits,
 }: {
   node: PlacedNode;
   selected: boolean;
   title: string;
   onActivate: (node: PlacedNode) => void;
+  /** Under a search (ADR-191 Inc.11): picked out, faded, or neither. */
+  emphasis: 'match' | 'dim' | null;
+  /** Under a search, how many of a bundle's access points match. */
+  hits?: number;
 }) {
   const cls = [
     'topomap-node',
     `topomap-kind-${node.kind}`,
     node.suppressed ? 'suppressed' : '',
     selected ? 'selected' : '',
+    emphasis ?? '',
   ]
     .filter(Boolean)
     .join(' ');
-  if (node.bundle) return <ApBundle node={node} cls={cls} selected={selected} title={title} onActivate={onActivate} />;
+  if (node.bundle)
+    return <ApBundle node={node} cls={cls} selected={selected} title={title} hits={hits} onActivate={onActivate} />;
   if (node.ap) return <AccessPoint node={node} cls={cls} selected={selected} title={title} onActivate={onActivate} />;
   const external = node.kind === 'external';
   const nameY = node.sub ? node.h / 2 - 3 : node.h / 2 + 4;
@@ -153,12 +162,14 @@ function ApBundle({
   cls,
   selected,
   title,
+  hits,
   onActivate,
 }: {
   node: PlacedNode;
   cls: string;
   selected: boolean;
   title: string;
+  hits?: number;
   onActivate: (node: PlacedNode) => void;
 }) {
   const { t } = useTranslation('topology');
@@ -166,7 +177,8 @@ function ApBundle({
   const r = node.w / 2;
   const circumference = 2 * Math.PI * r;
   const trouble = troubleCounts(members);
-  const count = String(members.length);
+  // Under a search the badge says how many of the members matched, out of how many (Inc.11).
+  const count = hits === undefined ? String(members.length) : `${hits}/${members.length}`;
   const badgeW = 12 + count.length * 7;
   const nameY = r + 17;
   return (
@@ -221,12 +233,15 @@ function Edge({
   selected,
   title,
   showChip,
+  dimmed,
   onSelect,
 }: {
   edge: PlacedEdge;
   selected: boolean;
   title: string;
   showChip: boolean;
+  /** Under a search, neither end matched (ADR-191 Inc.11). */
+  dimmed: boolean;
   onSelect: (id: string) => void;
 }) {
   const cls = `topomap-edge ${edge.source}${edge.suppressed ? ' suppressed' : ''}${
@@ -248,7 +263,7 @@ function Edge({
     );
   const label = String(edge.count);
   return (
-    <g className="topomap-edge-group" onClick={() => onSelect(edge.id)}>
+    <g className={`topomap-edge-group${dimmed ? ' dim' : ''}`} onClick={() => onSelect(edge.id)}>
       <title>{title}</title>
       {/* A wide transparent twin makes a thin line clickable without making it look thick. */}
       {shape('topomap-edge-hit')}
@@ -298,6 +313,11 @@ export interface TopologyMapProps {
   wheelHint?: string;
   /** Whether one finger pans the map. Off inside a pane, where one finger scrolls the page. */
   touchPans?: boolean;
+  /** What a search on this level picked out (ADR-191 Inc.11); absent or empty draws as usual. */
+  search?: MapSearch;
+  /** A box to bring to the middle of the pane. `seq` changes on every request, so asking for the
+   *  same box twice centres it twice. */
+  focus?: { id: string; seq: number } | null;
 }
 
 export function TopologyMap({
@@ -314,6 +334,8 @@ export function TopologyMap({
   wheelNeedsModifier = false,
   wheelHint,
   touchPans = true,
+  search,
+  focus,
 }: TopologyMapProps) {
   const { t } = useTranslation('topology');
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -474,6 +496,20 @@ export function TopologyMap({
     [layout.nodes, onActivate],
   );
 
+  // Bring a requested box to the middle, at the scale already in use (Inc.11). Keyed on `seq` alone:
+  // a refetch that moves nothing must not pull the view back to a box the operator has panned from.
+  const focusSeq = focus?.seq;
+  useEffect(() => {
+    if (focusSeq === undefined || !focus) return;
+    const el = wrapRef.current;
+    const box = layout.nodes.find((n) => n.id === focus.id);
+    if (!el || !box) return;
+    setView((cur) => centerOn(box.cx, box.cy, el.clientWidth, el.clientHeight, cur?.scale ?? 1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSeq]);
+
+  const matched = search?.matched ?? null;
+
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
 
   return (
@@ -528,6 +564,7 @@ export function TopologyMap({
               selected={e.id === selectedEdge || (!!e.box && e.box === selectedId)}
               title={edgeTitle(e)}
               showChip={showChip(e)}
+              dimmed={edgeDimmed(e.id, matched)}
               onSelect={e.box ? () => selectBox(e.box!) : onSelectEdge}
             />
           ))}
@@ -538,6 +575,8 @@ export function TopologyMap({
               selected={n.id === selectedId}
               title={boxTitle(n)}
               onActivate={onActivate}
+              emphasis={boxEmphasis(n.id, matched)}
+              hits={matched ? search?.bundleHits.get(n.id) : undefined}
             />
           ))}
         </g>

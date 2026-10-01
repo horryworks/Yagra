@@ -135,6 +135,17 @@ export function stubHref(stub: MapStub): string {
   });
 }
 
+/** `href` with the map's search (`?q=`, ADR-191 Inc.11) carried along, so moving between levels
+ *  keeps what the operator is looking for. An empty search adds nothing. */
+export function withSearch(href: string, q: string): string {
+  if (!q) return href;
+  const at = href.indexOf('?');
+  const path = at < 0 ? href : href.slice(0, at);
+  const params = new URLSearchParams(at < 0 ? '' : href.slice(at + 1));
+  params.set('q', q);
+  return `${path}?${params}`;
+}
+
 /** The folder a box enters. */
 export function folderHref(folderId: string): string {
   return topologyMapHref({ group: folderId });

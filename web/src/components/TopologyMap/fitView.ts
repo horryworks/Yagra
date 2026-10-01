@@ -42,6 +42,12 @@ export function fitView(layout: GraphLayout, vw: number, vh: number): View {
   return { tx, ty, scale };
 }
 
+/** Move the view so the point (`cx`, `cy`) of the diagram sits in the middle of the viewport, at
+ *  the scale the operator is already using (ADR-191 Inc.11: stepping through search hits). */
+export function centerOn(cx: number, cy: number, vw: number, vh: number, scale: number): View {
+  return { tx: vw / 2 - cx * scale, ty: vh / 2 - cy * scale, scale };
+}
+
 /** Clamp a proposed zoom to the same bounds the initial fit obeys. */
 export function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));

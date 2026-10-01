@@ -48,3 +48,17 @@ html[data-viewport='mobile'] .topomap-page-canvas {
   width: 18px;
   border-top: 2px dashed var(--status-unreachable);
 }
+
+/* The search on this level (ADR-191 Inc.11): the column filter's editor, and how many it found. */
+.topomap-search {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(360px, 100%);
+}
+.topomap-search-count {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

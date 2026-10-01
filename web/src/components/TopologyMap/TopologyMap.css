@@ -273,3 +273,17 @@
 .topomap-sub.topomap-bundle-trouble {
   fill: var(--status-critical);
 }
+
+/* ---- ADR-191 Inc.11: a search picks some boxes out and fades the rest. Layout never moves. ---- */
+.topomap-node.dim,
+.topomap-edge-group.dim {
+  opacity: 0.28;
+}
+.topomap-node.match .topomap-box {
+  stroke: var(--accent-color);
+  stroke-width: 3;
+}
+.topomap-node.match .topomap-ap-ring {
+  stroke: var(--accent-color);
+  stroke-width: 3.5;
+}

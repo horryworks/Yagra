@@ -26,6 +26,9 @@ import {
 } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
 import { membersByPort, stateCounts } from './apBundle';
+import { memberMatches } from './mapSearch';
+import { Marked } from '../ui/Marked';
+import type { TextCondition } from '../../lib/filterCondition';
 import type { PlacedNode } from './graphLayout';
 import './TopologyMapSidePanel.css';
 
@@ -34,13 +37,24 @@ interface Props {
   selection: MapSelection;
   /** The selected bundle's box, with its members' live states, when a bundle is selected. */
   bundle?: PlacedNode | null;
+  /** The map's search while one is active (ADR-191 Inc.11): a bundle's matching access points are
+   *  listed first and their names marked. */
+  cond?: TextCondition | null;
   /** The title of the level ("Whole network" or the folder's name), for the node's place. */
   levelName: string;
   onSelectEdge: (id: string) => void;
   onClear: () => void;
 }
 
-export function TopologyMapSidePanel({ level, selection, bundle, levelName, onSelectEdge, onClear }: Props) {
+export function TopologyMapSidePanel({
+  level,
+  selection,
+  bundle,
+  cond,
+  levelName,
+  onSelectEdge,
+  onClear,
+}: Props) {
   const { t } = useTranslation('topology');
   const { nodeName } = useEntityNames();
 
@@ -100,7 +114,13 @@ export function TopologyMapSidePanel({ level, selection, bundle, levelName, onSe
 
   if (selection?.kind === 'bundle' && bundle?.bundle) {
     const members = bundle.bundle.members;
-    const groups = membersByPort(level, bundle.bundle);
+    // Under a search, a port holding a hit comes first, and so does the hit inside its port. The
+    // sort is stable, so everything else keeps the order `membersByPort` gave it.
+    const hit = (name: string) => !!cond && memberMatches(cond, name);
+    const groups = membersByPort(level, bundle.bundle)
+      .map((g) => ({ ...g, members: [...g.members].sort((x, y) => Number(hit(y.name)) - Number(hit(x.name))) }))
+      .sort((x, y) => Number(y.members.some((m) => hit(m.name))) - Number(x.members.some((m) => hit(m.name))));
+    const highlight = cond ? { cond, semantics: 'substring' as const, widened: false } : undefined;
     // Several access points on one port: the line runs through a switch nobody monitors.
     const shared = groups.find((g) => g.port !== null && g.members.length > 1);
     const title = t('map.panel.bundle.title', { name: bundle.name });
@@ -131,7 +151,9 @@ export function TopologyMapSidePanel({ level, selection, bundle, levelName, onSe
                 <li key={m.id}>
                   <Link className="topomap-panel-row topomap-panel-ap" to={nodeHref(m.id)} title={t('map.panel.node.open')}>
                     <span className="topomap-legend-dot" style={{ background: stateColorVar(m.state) }} />
-                    <span className="topomap-panel-row-name">{m.name}</span>
+                    <span className="topomap-panel-row-name">
+                      <Marked text={m.name} highlight={hit(m.name) ? highlight : undefined} />
+                    </span>
                     <span className="muted">{stateLabel(m.state)}</span>
                   </Link>
                 </li>

@@ -35,9 +35,14 @@ import {
   selectionFromParam,
   splitGraphId,
   stubHref,
+  withSearch,
   type MapSelection,
 } from '../components/TopologyMap/topologyLevel';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
+import { decodeCondition, encodeCondition, type TextCondition } from '../lib/filterCondition';
+import { isImeComposing } from '../lib/ime';
+import { TextConditionEditor } from '../components/ui/TextConditionEditor';
+import { searchMap, stepThrough } from '../components/TopologyMap/mapSearch';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import type { TreeSelection } from '../components/NodeTree/NodeTree';
 import './TopologyMapPage.css';
@@ -49,6 +54,9 @@ export function TopologyMapPage() {
   const group = params.get('group');
   const selParam = params.get('sel');
   const urlSel = useMemo(() => selectionFromParam(parseSelection(selParam)), [selParam]);
+  // The search (ADR-191 Inc.11): the column filter's condition, held in `?q=` like a list's filter.
+  const q = params.get('q') ?? '';
+  const cond = useMemo(() => decodeCondition(q), [q]);
   const {
     level,
     error,
@@ -97,17 +105,17 @@ export function TopologyMapPage() {
       if (!ref || !level) return;
       clearEdge();
       if (ref.kind === 'folder') {
-        navigate(folderHref(ref.id));
+        navigate(withSearch(folderHref(ref.id), q));
       } else if (ref.kind === 'external') {
         const stub = level.stubs.find((s) => s.id === ref.id);
-        if (stub) navigate(stubHref(stub));
+        if (stub) navigate(withSearch(stubHref(stub), q));
       } else {
         // A second press on the selected node lets it go (ADR-073).
         const same = urlSel?.kind === 'node' && urlSel.id === ref.id;
         setSelection(same ? null : { kind: 'node', id: ref.id });
       }
     },
-    [level, navigate, setSelection, urlSel, clearEdge, clearLine, group],
+    [level, navigate, setSelection, urlSel, clearEdge, clearLine, group, q],
   );
   const clearAll = useCallback(() => {
     clearEdge();
@@ -128,6 +136,28 @@ export function TopologyMapPage() {
   }, [edge, bundle, urlSel, setSelection, clearEdge]);
 
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
+
+  const setCond = useCallback(
+    (next: TextCondition) => {
+      const p = new URLSearchParams(params);
+      const value = encodeCondition(next);
+      if (value) p.set('q', value);
+      else p.delete('q');
+      setParams(p, { replace: true });
+    },
+    [params, setParams],
+  );
+  const search = useMemo(() => searchMap(level, viewLayout, cond), [level, viewLayout, cond]);
+  // Enter steps through the hits, bringing each to the middle; Shift+Enter steps back.
+  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
+  const step = useCallback(
+    (dir: 1 | -1) =>
+      setFocus((cur) => {
+        const id = stepThrough(search.order, cur?.id ?? null, dir);
+        return id ? { id, seq: (cur?.seq ?? 0) + 1 } : cur;
+      }),
+    [search.order],
+  );
 
   const selection: MapSelection = edge
     ? { kind: 'edge', id: edge }
@@ -171,6 +201,8 @@ export function TopologyMapPage() {
                 showChip={showChip}
                 onActivate={onActivate}
                 onSelectEdge={onSelectEdge}
+                search={search}
+                focus={focus}
               />
             )}
           </div>
@@ -178,6 +210,7 @@ export function TopologyMapPage() {
             level={level}
             selection={selection}
             bundle={bundleNode}
+            cond={search.matched ? cond : null}
             levelName={levelName}
             onSelectEdge={onSelectEdge}
             onClear={clearAll}
@@ -189,12 +222,46 @@ export function TopologyMapPage() {
 
   const trail = [
     { label: t('nav:sections.topology') },
-    ...(level ? levelTrail(level, t('map.root')) : [{ label: t('map.root') }]),
+    ...(level
+      ? levelTrail(level, t('map.root')).map((c) => (c.to ? { ...c, to: withSearch(c.to, q) } : c))
+      : [{ label: t('map.root') }]),
   ];
+
+  const searchBox = (
+    <div
+      className="topomap-search"
+      title={t('map.search.stepHint')}
+      onKeyDown={(e) => {
+        // The editor commits on Enter itself; here Enter also moves to the next hit.
+        if (e.key !== 'Enter' || isImeComposing(e)) return;
+        if ((e.target as HTMLElement).tagName !== 'INPUT') return;
+        step(e.shiftKey ? -1 : 1);
+      }}
+    >
+      <TextConditionEditor
+        value={cond}
+        onChange={setCond}
+        modes={['contains', 'regex']}
+        allowNot
+        placeholder={t('map.search.placeholder')}
+      />
+      {search.matched && (
+        <p className="topomap-search-count" aria-live="polite">
+          {t('map.search.count', { count: search.total })}
+          {search.undrawn > 0 && ' ' + t('map.search.undrawn', { count: search.undrawn })}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="topomap-page">
-      <PageHeader title={t('nav:topology.map')} trail={trail} note={t('map.note.level')} />
+      <PageHeader
+        title={t('nav:topology.map')}
+        trail={trail}
+        note={t('map.note.level')}
+        actions={level ? searchBox : undefined}
+      />
       {body()}
     </div>
   );
