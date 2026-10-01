@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Group detail pane (shown in the split when a group row is selected, instead of a node detail).
 // No tabs: a header (type eyebrow · breadcrumb name · counts · Edit/Add actions) over a Health
-// rollup (full-width bar + per-state legend) and the group's direct members — its subfolders, then
+// rollup (full-width bar + per-state legend), the folder's network map (ADR-191 Inc.2) and the
+// group's direct members — its subfolders, then
 // its nodes. Reuses the parent page's modals for edit and add-node. The breadcrumb's ancestors and
 // every member row open what they name (ADR-142).
 
@@ -32,6 +33,7 @@ import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
 import { PrefixGaps } from './PrefixGapsSection';
+import { GroupMapSection } from './GroupMapSection';
 import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
 
@@ -181,6 +183,10 @@ export function GroupDetail({
             {tally.total === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
           </div>
         </section>
+
+        {/* The folder's network map (ADR-191 Inc.2), right under Health: what the folder is next to
+            how it is wired. Pressing a box selects it in the tree. */}
+        <GroupMapSection groupId={group.id} onOpenNode={onOpenNode} onOpenGroup={onOpenGroup} />
 
         {/* The folder's labels (ADR-135 inc. 2). Two marked groups, same as a node's overview: its
             own and the ones it inherits from above. Hidden entirely when it carries neither — an

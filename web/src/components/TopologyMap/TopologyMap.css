@@ -20,6 +20,33 @@
 .topomap-svg:active {
   cursor: grabbing;
 }
+/* Inside a scrolling pane one finger scrolls the page; the map moves by mouse and buttons. */
+.topomap-svg.scrolls {
+  touch-action: pan-y;
+}
+
+/* "Hold Ctrl to zoom": shown briefly when a plain wheel turn was left to the page. */
+.topomap-wheel-hint {
+  position: absolute;
+  left: 50%;
+  bottom: var(--gap);
+  transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--gap));
+  padding: 4px 10px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 1;
+}
+.topomap-wheel-hint.on {
+  opacity: 1;
+}
 
 /* ---- controls (top-right) ---- */
 .topomap-controls {

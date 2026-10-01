@@ -17,6 +17,8 @@
 ### Improvements
 
 - **Network map is no longer in the Topology menu.** It is reached from the places above; Topology now opens on Dependencies. Links between sites (MPLS, internet VPN) are not drawn — that is unchanged.
+- **Selecting a folder on the Nodes page shows its network map under Health.** Hold Ctrl (⌘ on a Mac) and scroll to zoom; the plain wheel still scrolls the page. Selecting a device or a folder on the map selects it in the tree, and "Open full map" opens the full network map on that folder. The section folds away from its heading, the browser remembers that, and a folded map is not loaded.
+- **Inside a site, the network map draws every device of the site, its subfolders included.** A Site folder split into floors or buildings used to show each subfolder as a box; the site's level, and every level beneath it, now draws each device with the subfolder it is filed in under its name. Folders above a site (a Region, say) still show their sites as boxes, and a site too large to draw device by device falls back to boxes. API clients: `GET /api/v1/topology/map` and MCP `get_topology kind=map` add `flattened` to the level and `folder` to each node.
 
 ### Bug Fixes
 

@@ -23463,7 +23463,7 @@
           "topology"
         ],
         "summary": "One folder level of the network map: the folder's own linked nodes, each subfolder as one box\nwith its subtree's counts, links between the same two things bundled into one edge, and a stub\nfor every place links leave the level.",
-        "description": "Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the\nroots of their scope directly under the whole network, and only links whose **both** ends are\nvisible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers\n`overflow: true` with its boxes and no nodes or edges.",
+        "description": "Omit `group` for the whole network. A group-scoped caller sees their visible folders, with the\nroots of their scope directly under the whole network, and only links whose **both** ends are\nvisible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers\n`overflow: true` with its boxes and no nodes or edges.\n\nA Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders\nare not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A\nflat drawing over the bounds falls back to boxes.",
         "operationId": "get_topology_map",
         "parameters": [
           {
@@ -33115,6 +33115,7 @@
           "edge_count",
           "isolated_count",
           "overflow",
+          "flattened",
           "node_limit",
           "edge_limit"
         ],
@@ -33136,7 +33137,7 @@
           "direct_node_count": {
             "type": "integer",
             "format": "int64",
-            "description": "Every node directly in this folder, linked or not."
+            "description": "Every node directly in this folder, linked or not — on a `flattened` level, every node in\nthe subtree."
           },
           "edge_count": {
             "type": "integer",
@@ -33154,12 +33155,16 @@
               "$ref": "#/components/schemas/MapEdge"
             }
           },
+          "flattened": {
+            "type": "boolean",
+            "description": "The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node\nin the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would\nexceed the bounds, in which case the level falls back to boxes."
+          },
           "folders": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MapFolder"
             },
-            "description": "Its subfolders, each drawn as a box."
+            "description": "Its subfolders, each drawn as a box (empty on a `flattened` level)."
           },
           "group": {
             "oneOf": [
@@ -33192,7 +33197,7 @@
             "items": {
               "$ref": "#/components/schemas/MapNode"
             },
-            "description": "Its own nodes that have a link on this level."
+            "description": "Its own nodes that have a link on this level — on a `flattened` level, every such node in\nthe subtree."
           },
           "overflow": {
             "type": "boolean",
@@ -33209,13 +33214,24 @@
       },
       "MapNode": {
         "type": "object",
-        "description": "A node directly in this level's folder that has at least one link drawn on the level.",
+        "description": "A node drawn on the level that has at least one link there. On an ordinary level it sits\ndirectly in the level's folder; on a `flattened` level it may sit anywhere in the subtree.",
         "required": [
           "id",
           "name",
           "state"
         ],
         "properties": {
+          "folder": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MapBreadcrumb",
+                "description": "On a `flattened` level, the subfolder the node is filed in; `null` when it sits directly in\nthe level's own folder (always `null` on an ordinary level)."
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"

@@ -71,6 +71,10 @@ interface PrefsStore {
   /** Collapse the Nodes page inventory-tree pane to a slim rail so the node detail uses the full
    *  width (desktop only; on mobile the pane switcher governs). */
   nodesPaneCollapsed: boolean;
+  /** Whether the network map in a folder's pane on the Nodes page is folded away (ADR-191 Inc.2).
+   *  One boolean for every folder: folding it is a statement about the operator's screen, not
+   *  about one folder. Local-only, like `nodesPaneCollapsed`. While folded the map is not fetched. */
+  groupMapCollapsed: boolean;
   /** How wide the operator dragged the All-nodes inventory pane, in px. `null` = never resized, so
    *  the split keeps the 312px it has always had (`pages/nodesPaneWidth.ts`).
    *
@@ -167,6 +171,8 @@ interface PrefsStore {
   setUiMode: (mode: UiMode) => void;
   /** Toggle the Nodes inventory pane between full and a slim rail (persisted). */
   toggleNodesPane: () => void;
+  /** Fold or unfold the network map in a folder's pane (persisted). */
+  toggleGroupMap: () => void;
   /** Record the All-nodes inventory pane width. `null` restores the default (see
    *  [`nodesPaneWidth`]). Call it on gesture *end*, not per pointer event. */
   setNodesPaneWidth: (px: number | null) => void;
@@ -205,6 +211,9 @@ export const usePrefsStore = create<PrefsStore>()(
       rateUnit: 'bps',
       uiMode: 'auto',
       nodesPaneCollapsed: false,
+      // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
+      // object over the initial state, so a missing key reads as `false` and no migration is owed.
+      groupMapCollapsed: false,
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `null` and no migration is owed.
       nodesPaneWidth: null,
@@ -252,6 +261,7 @@ export const usePrefsStore = create<PrefsStore>()(
       toggleRateUnit: () => set((s) => ({ rateUnit: s.rateUnit === 'bps' ? 'pps' : 'bps' })),
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
+      toggleGroupMap: () => set((s) => ({ groupMapCollapsed: !s.groupMapCollapsed })),
       setNodesPaneWidth: (nodesPaneWidth) => set({ nodesPaneWidth }),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),

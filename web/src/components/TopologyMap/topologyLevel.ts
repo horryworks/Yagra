@@ -23,7 +23,9 @@ export interface LevelCaptions {
 }
 
 /** The server's level as the layout's input: one box per node, folder and stub, one line per
- *  bundled edge. Stubs carry no state colour of their own, so they are drawn `unknown`. */
+ *  bundled edge. Stubs carry no state colour of their own, so they are drawn `unknown`. On a level
+ *  drawn flat (inside a site), a node filed in a subfolder carries that folder's name as its second
+ *  line. */
 export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInput {
   const nodes: GraphInput['nodes'] = [
     ...level.nodes.map((n) => ({
@@ -31,7 +33,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       kind: 'node' as const,
       name: n.name,
       state: n.state,
-      sub: null,
+      sub: n.folder ? `▤ ${n.folder.name}` : null,
       rootCause: n.root_cause ?? null,
     })),
     ...level.folders.map((f) => ({
@@ -193,4 +195,27 @@ export function edgeShowsChip(edgeId: string, count: number): boolean {
   if (count > 1) return true;
   const [a = '', b = ''] = edgeId.split('|');
   return !a.startsWith('node:') || !b.startsWith('node:');
+}
+
+/** Where pressing a box in a folder pane's map takes the Nodes page (ADR-191 Inc.2): the box's node
+ *  or folder becomes the tree's selection. A stub selects what it stands for — the far node, or the
+ *  folder holding the far end. The map in the pane never descends on its own. */
+export function groupMapTarget(boxId: string, level: MapLevel | null): TreeSelection {
+  const ref = splitGraphId(boxId);
+  if (!ref) return null;
+  if (ref.kind === 'node') return { kind: 'node', id: ref.id };
+  if (ref.kind === 'folder') return { kind: 'group', id: ref.id };
+  const stub = level?.stubs.find((s) => s.id === ref.id);
+  if (!stub) return null;
+  return { kind: stub.kind === 'node' ? 'node' : 'group', id: stub.id };
+}
+
+/** Whether a wheel turn zooms the map. A map inside a scrolling pane leaves the plain wheel to the
+ *  page and zooms only with Ctrl (⌘ on a Mac) held; a trackpad pinch arrives as a wheel with Ctrl
+ *  set, so it zooms too. */
+export function wheelZooms(
+  e: { ctrlKey: boolean; metaKey: boolean },
+  needsModifier: boolean,
+): boolean {
+  return !needsModifier || e.ctrlKey || e.metaKey;
 }

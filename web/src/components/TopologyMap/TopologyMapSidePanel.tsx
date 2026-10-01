@@ -13,9 +13,9 @@ import { stateColorVar, stateLabel } from '../../lib/format';
 import { SEVERITY_ORDER } from '../../lib/nodeState';
 import { Button } from '../ui/Button';
 import { StatusDot } from '../ui/StatusDot';
-import { EntityName } from '../ui/EntityName';
 import { useEntityNames } from '../ui/entityNames';
-import { edgesOf, levelNodesHref, memberPorts, type MapSelection } from './topologyLevel';
+import { edgesOf, levelNodesHref, type MapSelection } from './topologyLevel';
+import { MapEdgeMembers } from './MapEdgeMembers';
 import './TopologyMapSidePanel.css';
 
 interface Props {
@@ -78,42 +78,10 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
   if (selection?.kind === 'edge') {
     const edge = level.edges.find((e) => e.id === selection.id);
     if (edge) {
-      const more = edge.count - edge.members.length;
-      const noPort = t('map.panel.edge.noPort');
       return (
         <aside className="topomap-panel" aria-label={t('map.panel.edge.title')}>
           <h2 className="topomap-panel-title">{t('map.panel.edge.title')}</h2>
-          <p className="muted">
-            {t('map.panel.edge.members', { count: edge.count })} ·{' '}
-            {edge.sources.map((s) => t(`map.source.${s}`)).join(', ')}
-          </p>
-          <ul className="topomap-panel-list">
-            {edge.members.map((m) => {
-              const ports = memberPorts(m, noPort);
-              return (
-                <li key={m.link_id} className="topomap-panel-member">
-                  <div>
-                    <EntityName name={nodeName(m.a_node)} id={m.a_node} />{' '}
-                    <span className="mono">{ports.a}</span>
-                  </div>
-                  <div>
-                    <EntityName name={nodeName(m.b_node)} id={m.b_node} />{' '}
-                    <span className="mono">{ports.b}</span>
-                  </div>
-                  <div className="muted">
-                    {t(`map.source.${m.source}`)}
-                    {m.subnet && (
-                      <>
-                        {' · '}
-                        <span className="mono">{m.subnet}</span>
-                      </>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {more > 0 && <p className="muted">{t('map.panel.edge.more', { count: more })}</p>}
+          <MapEdgeMembers edge={edge} />
           <div className="topomap-panel-actions">
             <Button onClick={onClear}>{t('map.panel.clear')}</Button>
           </div>

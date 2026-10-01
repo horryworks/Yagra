@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { BOX_SIZE, CELL_H, CELL_W, layoutGraph, type GraphLink, type GraphNode } from './graphLayout';
+import {
+  BOX_SIZE,
+  CELL_H,
+  CELL_W,
+  NODE_TALL,
+  layoutGraph,
+  type GraphLink,
+  type GraphNode,
+} from './graphLayout';
 
 function node(id: string, extra: Partial<GraphNode> = {}): GraphNode {
   return {
@@ -270,5 +278,16 @@ describe('layoutGraph', () => {
       expect(CELL_W).toBeGreaterThan(BOX_SIZE[k].w);
       expect(CELL_H).toBeGreaterThan(BOX_SIZE[k].h);
     }
+    expect(CELL_H).toBeGreaterThan(NODE_TALL.h);
+  });
+
+  it('draws a node with a second line taller, and ends its lines on its own edge', () => {
+    // On a level drawn flat, a node carries the subfolder it is filed in (ADR-191 Inc.2).
+    const nodes = [node('a'), node('b', { sub: 'floor-1' })];
+    const out = layoutGraph({ nodes, links: [link('a', 'b')], anchorId: 'a' });
+    const b = out.nodes.find((n) => n.id === 'b')!;
+    expect([b.w, b.h]).toEqual([NODE_TALL.w, NODE_TALL.h]);
+    expect(out.edges[0].y2).toBe(b.cy - NODE_TALL.h / 2);
+    expect(out.nodes.find((n) => n.id === 'a')!.h).toBe(BOX_SIZE.node.h);
   });
 });

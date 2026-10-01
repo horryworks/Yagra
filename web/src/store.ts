@@ -261,8 +261,10 @@ export interface MapView {
   scale: number;
 }
 
-/** Which map a stored view belongs to. Two maps, two memories: they project different things. */
-export type MapViewKey = 'topo' | 'geo';
+/** Which map a stored view belongs to. One memory per drawing: the full network map, the map in a
+ *  folder's pane on the Nodes page (ADR-191 Inc.2), and the Geo map. The two network maps share a
+ *  renderer but not a size, so a view restored from one would be wrong in the other. */
+export type MapViewKey = 'topo' | 'topoGroup' | 'geo';
 
 // Where each map was panned and zoomed to (ADR-134). Both maps already work hard *not* to lose this
 // within one mount — the `view === null` guard is what stops their 15s refresh from stomping the
@@ -275,6 +277,7 @@ export type MapViewKey = 'topo' | 'geo';
 // still auto-fits.
 interface MapViewStore {
   topo: MapView | null;
+  topoGroup: MapView | null;
   geo: MapView | null;
   /** Set one map's view. Accepts an updater so a gesture can read the live value, and resolves it
    *  **here** rather than in the hook — a judgement inside a `.tsx` hook is one no test can run. */
@@ -288,6 +291,7 @@ export const useMapViewStore = create<MapViewStore>()(
   persist(
     (set) => ({
       topo: null,
+      topoGroup: null,
       geo: null,
       setMapView: (key, next) =>
         set((s) => ({ [key]: typeof next === 'function' ? next(s[key]) : next }) as Partial<MapViewStore>),

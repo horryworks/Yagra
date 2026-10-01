@@ -391,7 +391,8 @@ pub(crate) struct MapFolder {
     pub counts: super::fleet::GroupStateCounts,
 }
 
-/// A node directly in this level's folder that has at least one link drawn on the level.
+/// A node drawn on the level that has at least one link there. On an ordinary level it sits
+/// directly in the level's folder; on a `flattened` level it may sit anywhere in the subtree.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct MapNode {
     pub id: Uuid,
@@ -399,6 +400,9 @@ pub(crate) struct MapNode {
     pub state: NodeState,
     /// Upstream node blamed for this node's alert (dependency suppression), if any.
     pub root_cause: Option<Uuid>,
+    /// On a `flattened` level, the subfolder the node is filed in; `null` when it sits directly in
+    /// the level's own folder (always `null` on an ordinary level).
+    pub folder: Option<MapBreadcrumb>,
 }
 
 /// Where links leave the level: a node or a folder outside it.
@@ -451,14 +455,16 @@ pub(crate) struct MapLevel {
     pub group: Option<MapBreadcrumb>,
     /// Its ancestors, outermost first (the level itself is not included).
     pub breadcrumbs: Vec<MapBreadcrumb>,
-    /// Its subfolders, each drawn as a box.
+    /// Its subfolders, each drawn as a box (empty on a `flattened` level).
     pub folders: Vec<MapFolder>,
-    /// Its own nodes that have a link on this level.
+    /// Its own nodes that have a link on this level — on a `flattened` level, every such node in
+    /// the subtree.
     pub nodes: Vec<MapNode>,
     /// The places links leave the level for.
     pub stubs: Vec<MapStub>,
     pub edges: Vec<MapEdge>,
-    /// Every node directly in this folder, linked or not.
+    /// Every node directly in this folder, linked or not — on a `flattened` level, every node in
+    /// the subtree.
     pub direct_node_count: i64,
     /// Of those, how many have a link on this level.
     pub linked_node_count: i64,
@@ -468,6 +474,10 @@ pub(crate) struct MapLevel {
     pub isolated_count: i64,
     /// The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain.
     pub overflow: bool,
+    /// The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node
+    /// in the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would
+    /// exceed the bounds, in which case the level falls back to boxes.
+    pub flattened: bool,
     /// The most linked nodes a level draws.
     pub node_limit: i64,
     /// The most edges a level draws.
@@ -574,6 +584,10 @@ pub(crate) async fn topology_map_level(
 /// roots of their scope directly under the whole network, and only links whose **both** ends are
 /// visible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers
 /// `overflow: true` with its boxes and no nodes or edges.
+///
+/// A Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders
+/// are not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A
+/// flat drawing over the bounds falls back to boxes.
 #[utoipa::path(
     get, path = "/api/v1/topology/map", tag = "topology",
     params(MapLevelQuery),
@@ -1303,6 +1317,7 @@ mod tests {
     /// (whole)            lone (ungrouped)
     /// ├─ east            ├ sw-a ─┐ (LLDP)
     /// │  └─ site-a       │       └ sw-b
+    /// │     └─ floor-1   └ sw-d   (LLDP to sw-b)
     /// └─ west            └ sw-c   (LLDP to sw-a)
     /// ```
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -1321,11 +1336,22 @@ mod tests {
         let a = crate::pgtest::node(&pool, "sw-a", 2, Some(site)).await;
         let b = crate::pgtest::node(&pool, "sw-b", 3, Some(site)).await;
         let c = crate::pgtest::node(&pool, "sw-c", 4, Some(west)).await;
+        let floor = groups
+            .create(
+                "floor-1",
+                crate::groups::GroupType::Generic,
+                Some(site),
+                None,
+            )
+            .await
+            .expect("floor-1");
+        let d = crate::pgtest::node(&pool, "sw-d", 5, Some(floor)).await;
         crate::topology_links::TopoLinkRepo::new(pool.clone())
             .upsert_batch(&[
                 DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp),
                 DerivedLink::new(NodeId(a), NodeId(c), LinkSource::Lldp),
                 DerivedLink::new(NodeId(lone), NodeId(c), LinkSource::Cdp),
+                DerivedLink::new(NodeId(b), NodeId(d), LinkSource::Lldp),
             ])
             .await
             .expect("links");
@@ -1340,7 +1366,8 @@ mod tests {
         assert_eq!(whole["edges"].as_array().map(Vec::len), Some(2));
         assert_eq!(whole["nodes"][0]["name"], "lone");
 
-        // site-a: its two nodes, one line between them, one stub towards west (on the whole level).
+        // site-a is a site, so it is flat: its own two nodes and floor-1's sw-d, no boxes, and one
+        // stub towards west (on the whole level).
         let (status, level) = send(
             &st,
             "GET",
@@ -1352,7 +1379,19 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{level}");
         assert_eq!(level["group"]["name"], "site-a");
         assert_eq!(level["breadcrumbs"][0]["name"], "east");
-        assert_eq!(level["nodes"].as_array().map(Vec::len), Some(2));
+        assert_eq!(level["flattened"], true);
+        assert_eq!(level["folders"].as_array().map(Vec::len), Some(0));
+        let nodes = level["nodes"].as_array().expect("nodes");
+        assert_eq!(nodes.len(), 3);
+        let sw_d = nodes
+            .iter()
+            .find(|n| n["name"] == "sw-d")
+            .expect("sw-d is drawn on site-a");
+        assert_eq!(sw_d["folder"]["name"], "floor-1");
+        assert!(nodes
+            .iter()
+            .find(|n| n["name"] == "sw-a")
+            .is_some_and(|n| n["folder"].is_null()));
         assert_eq!(level["stubs"][0]["name"], "west");
         assert!(level["stubs"][0]["level_group"].is_null());
 

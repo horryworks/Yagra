@@ -3,6 +3,9 @@
 // graph — what is actually wired or routed to what — drawn for one folder: its own linked nodes one
 // by one, each subfolder as a box carrying its counts, links between the same two things bundled
 // into one line, and dashed stubs for links that leave the folder.
+// Inside a site the server draws the level flat instead: every node of the site, each tagged with
+// the subfolder it is filed in (ADR-191 Inc.2). The same level is drawn in a folder's pane on the
+// Nodes page; both read it through `useTopologyLevel`.
 //
 // Not in the menu: it is opened from a folder's or a node's context menu in the Nodes tree, from a
 // node's detail page, and from a Geo map pin. The URL carries the level (`?group=`) and the
@@ -14,54 +17,30 @@
 // The layout is hand-written SVG (`components/TopologyMap/graphLayout.ts`); every judgement this
 // page makes lives in `components/TopologyMap/topologyLevel.ts`, where a test reaches it.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useConfigChanges } from '../lib/configChanges';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { TopologyMap } from '../components/TopologyMap/TopologyMap';
 import { TopologyMapSidePanel } from '../components/TopologyMap/TopologyMapSidePanel';
+import { type PlacedNode } from '../components/TopologyMap/graphLayout';
+import { useMapTitles, useTopologyLevel } from '../components/TopologyMap/useTopologyLevel';
 import {
-  layoutGraph,
-  type GraphLayout,
-  type PlacedEdge,
-  type PlacedNode,
-} from '../components/TopologyMap/graphLayout';
-import {
-  edgeShowsChip,
   folderHref,
-  isLevelFor,
   levelNodesHref,
-  levelToGraph,
   levelTrail,
-  liveByGraphId,
   mapEscapeTarget,
   selectedGraphId,
   selectionFromParam,
   splitGraphId,
   stubHref,
-  type LevelCaptions,
   type MapSelection,
 } from '../components/TopologyMap/topologyLevel';
-import { stateLabel } from '../lib/format';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
-import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
-import { api } from '../services/api';
-import { usePolled } from '../dashboard/usePolled';
-import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
 import type { TreeSelection } from '../components/NodeTree/NodeTree';
 import './TopologyMapPage.css';
-
-const EMPTY_LAYOUT: GraphLayout = {
-  nodes: [],
-  edges: [],
-  width: 0,
-  height: 0,
-  isolatedCount: 0,
-  componentCount: 0,
-};
 
 export function TopologyMapPage() {
   const { t } = useTranslation('topology');
@@ -75,44 +54,7 @@ export function TopologyMapPage() {
   const [edgeSel, setEdgeSel] = useState<{ group: string | null; id: string } | null>(null);
   const edge = edgeSel && edgeSel.group === group ? edgeSel.id : null;
 
-  // A node added, removed or moved between folders is on the map at once, not at the next tick.
-  const configChanges = useConfigChanges();
-  const { data, error } = usePolled(
-    () => api.getTopologyMap(group),
-    [group, configChanges],
-    LIVE_RECONCILE_MS,
-  );
-  const level = isLevelFor(data, group) ? data : null;
-  const live = useNodeStates();
-
-  const captions: LevelCaptions = useMemo(
-    () => ({
-      folder: (f) => {
-        const bad = f.counts.critical + f.counts.unreachable;
-        return bad > 0
-          ? t('map.folderSubBad', { count: f.node_count, bad })
-          : t('map.folderSub', { count: f.node_count });
-      },
-      stub: () => t('map.externalSub'),
-    }),
-    [t],
-  );
-
-  // The layout depends on STRUCTURE ONLY — never on live state, which publishes a fresh Map on
-  // every fleet-wide flush. The state each box is drawn with is overlaid below.
-  const layout = useMemo(
-    () => (level ? layoutGraph(levelToGraph(level, captions)) : EMPTY_LAYOUT),
-    [level, captions],
-  );
-  const overlay = useRef<LiveOverlay<PlacedNode> | null>(null);
-  const placedNodes = useMemo(() => {
-    overlay.current = overlayLiveStates(layout.nodes, liveByGraphId(level, live), overlay.current);
-    return overlay.current.out;
-  }, [layout.nodes, level, live]);
-  const viewLayout = useMemo(
-    () => (placedNodes === layout.nodes ? layout : { ...layout, nodes: placedNodes }),
-    [layout, placedNodes],
-  );
+  const { level, error, layout: viewLayout } = useTopologyLevel(group);
 
   const setSelection = useCallback(
     (sel: TreeSelection) => {
@@ -165,27 +107,7 @@ export function TopologyMapPage() {
     return () => document.removeEventListener('keydown', onKey);
   }, [edge, urlSel, setSelection]);
 
-  const names = useMemo(() => new Map((level?.nodes ?? []).map((n) => [n.id, n.name])), [level]);
-  const boxTitle = useCallback(
-    (n: PlacedNode) => {
-      if (n.kind === 'folder') {
-        const ref = splitGraphId(n.id);
-        const f = level?.folders.find((x) => x.id === ref?.id);
-        return t('map.folderTitle', { name: n.name, count: f?.node_count ?? 0, state: stateLabel(n.state) });
-      }
-      if (n.kind === 'external') return t('map.externalTitle', { name: n.name });
-      const cause = n.rootCause ? (names.get(n.rootCause) ?? null) : null;
-      return cause
-        ? t('map.nodeTitleSuppressed', { name: n.name, state: stateLabel(n.state), cause })
-        : t('map.nodeTitle', { name: n.name, state: stateLabel(n.state) });
-    },
-    [level, names, t],
-  );
-  const edgeTitle = useCallback(
-    (e: PlacedEdge) => t('map.edgeTitle', { count: e.count, source: t(`map.source.${e.source}`) }),
-    [t],
-  );
-  const showChip = useCallback((e: PlacedEdge) => edgeShowsChip(e.id, e.count), []);
+  const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
 
   const selection: MapSelection = edge ? { kind: 'edge', id: edge } : urlSel;
   const levelName = level?.group?.name ?? t('map.root');
@@ -211,7 +133,7 @@ export function TopologyMapPage() {
         )}
         <div className="topomap-page-body">
           <div className="topomap-page-canvas">
-            {layout.nodes.length === 0 && !level.overflow ? (
+            {viewLayout.nodes.length === 0 && !level.overflow ? (
               <p className="muted topomap-page-empty">{t('map.empty.level')}</p>
             ) : (
               <TopologyMap

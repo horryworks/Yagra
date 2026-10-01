@@ -138,7 +138,7 @@ describe('last dashboard board memory (ADR-134)', () => {
 });
 
 describe('map view memory (ADR-134)', () => {
-  beforeEach(() => useMapViewStore.setState({ topo: null, geo: null }));
+  beforeEach(() => useMapViewStore.setState({ topo: null, topoGroup: null, geo: null }));
 
   it('starts unpositioned on both maps, so the first measured frame still auto-fits', () => {
     expect(useMapViewStore.getState().topo).toBeNull();
@@ -151,6 +151,14 @@ describe('map view memory (ADR-134)', () => {
     useMapViewStore.getState().setMapView('topo', { tx: 10, ty: 20, scale: 1.5 });
     expect(useMapViewStore.getState().topo).toEqual({ tx: 10, ty: 20, scale: 1.5 });
     expect(useMapViewStore.getState().geo).toBeNull();
+  });
+
+  // The full network map and the one in a folder's pane share a renderer but not a size (ADR-191
+  // Inc.2): zooming one must not move the other.
+  it('keeps the full network map and the folder pane map apart', () => {
+    useMapViewStore.getState().setMapView('topoGroup', { tx: 1, ty: 2, scale: 3 });
+    expect(useMapViewStore.getState().topoGroup).toEqual({ tx: 1, ty: 2, scale: 3 });
+    expect(useMapViewStore.getState().topo).toBeNull();
   });
 
   // The judgement this store exists to hold: every wheel and pinch handler in both maps passes an

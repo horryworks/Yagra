@@ -16,6 +16,13 @@
 //! level where both ends are visible at once. When the far end sits directly in L, the stub is the
 //! far node itself.
 //!
+//! **Inside a site the level is flat.** A Site folder, and any folder beneath one, does not draw its
+//! subfolders as boxes: one site split into floors or buildings is still one network, so every
+//! node in the level's subtree is drawn and tagged with the subfolder it is filed in. Whether a
+//! level is inside a site is read from the unscoped parent chain, so a caller scoped to a floor
+//! still gets the site's drawing; only the yes/no answer reaches the response. A flat drawing over
+//! the bounds falls back to boxes, which can still be opened one at a time.
+//!
 //! **Scope.** A scoped caller's visible folders form subtrees whose roots have an invisible parent.
 //! Every parent step goes through [`Tree::pvis`], which answers "no parent" above a scope root, so a
 //! scoped caller's "whole network" level is a virtual root holding their scope roots — and the same
@@ -32,7 +39,7 @@ use crate::api::topology::{
     MapBreadcrumb, MapEdge, MapEdgeMember, MapEndpoint, MapEndpointKind, MapFolder, MapLevel,
     MapNode, MapStub, MapStubKind,
 };
-use crate::groups::MAX_GROUP_DEPTH;
+use crate::groups::{GroupType, MAX_GROUP_DEPTH};
 use crate::topology_links::StoredLink;
 
 /// Above this many linked nodes on one level the level is not drawn (`overflow`).
@@ -119,6 +126,41 @@ impl<'a> Tree<'a> {
         }
     }
 
+    /// Whether `level` is a Site folder or lies beneath one. Walks the unscoped parents, so an
+    /// ancestor the caller cannot see still counts.
+    fn in_site(&self, level: Option<Uuid>, rows: &HashMap<Uuid, &FolderRow>) -> bool {
+        let mut cur = level;
+        let mut seen = HashSet::new();
+        while let Some(id) = cur {
+            if !seen.insert(id) || seen.len() > MAX_GROUP_DEPTH + 1 {
+                return false;
+            }
+            if rows
+                .get(&id)
+                .is_some_and(|g| GroupType::from_key(&g.group_type) == Some(GroupType::Site))
+            {
+                return true;
+            }
+            cur = self.parent.get(&id).copied().flatten();
+        }
+        false
+    }
+
+    /// `level` and every visible folder beneath it.
+    fn subtree(&self, level: Uuid) -> HashSet<Uuid> {
+        let mut out = HashSet::new();
+        let mut stack = vec![level];
+        while let Some(g) = stack.pop() {
+            if !out.insert(g) {
+                continue;
+            }
+            if let Some(kids) = self.children.get(&Some(g)) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        out
+    }
+
     /// `level`, its visible ancestors, and finally `None` — the levels a stub can open onto.
     fn chain(&self, level: Option<Uuid>) -> Vec<Option<Uuid>> {
         let mut out = vec![level];
@@ -181,18 +223,45 @@ fn endpoint_key(e: &MapEndpoint) -> EndKey {
 }
 
 /// Build one level. Node and node-stub names are left empty; see [`apply_names`].
+///
+/// A level inside a site is drawn flat; if that drawing is over the bounds, the level is drawn with
+/// boxes instead.
 pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
     let tree = Tree::new(input.edges, input.visible);
     let rows: HashMap<Uuid, &FolderRow> = input.groups.iter().map(|g| (g.id, g)).collect();
+    if tree.in_site(input.level, &rows) {
+        let flat = compute_with(input, &tree, &rows, true);
+        if !flat.overflow {
+            return flat;
+        }
+    }
+    compute_with(input, &tree, &rows, false)
+}
+
+fn compute_with(
+    input: &LevelInput<'_>,
+    tree: &Tree<'_>,
+    rows: &HashMap<Uuid, &FolderRow>,
+    flatten: bool,
+) -> MapLevel {
+    // Flat: the whole subtree is the level's own, and there are no boxes.
+    let flat: HashSet<Uuid> = match (flatten, input.level) {
+        (true, Some(level)) => tree.subtree(level),
+        _ => HashSet::new(),
+    };
+    let own = |g: Option<Uuid>| g == input.level || g.is_some_and(|g| flat.contains(&g));
 
     // 1. The level's subfolders, in the tree's own order.
-    let mut subfolders: Vec<&FolderRow> = tree
-        .children
-        .get(&input.level)
-        .into_iter()
-        .flatten()
-        .filter_map(|id| rows.get(id).copied())
-        .collect();
+    let mut subfolders: Vec<&FolderRow> = if flatten {
+        Vec::new()
+    } else {
+        tree.children
+            .get(&input.level)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| rows.get(id).copied())
+            .collect()
+    };
     subfolders.sort_by(|x, y| {
         x.sort_order
             .total_cmp(&y.sort_order)
@@ -222,7 +291,7 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
         if let Some(p) = places.get(&g) {
             return *p;
         }
-        let p = if g == input.level {
+        let p = if own(g) {
             Place::Direct
         } else if let Some(top) = g.and_then(|id| top_child.get(&id)) {
             Place::Folder(*top)
@@ -251,7 +320,7 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
     let mut direct_counts: HashMap<Uuid, GroupStateCounts> = HashMap::new();
     let mut direct_node_count = 0i64;
     for &(n, g) in input.node_groups {
-        if g == input.level {
+        if own(g) {
             direct_node_count += 1;
         }
         if let Some(g) = g {
@@ -381,6 +450,10 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
         })
         .collect();
 
+    let crumb = |id: Uuid| MapBreadcrumb {
+        id,
+        name: rows.get(&id).map(|g| g.name.clone()).unwrap_or_default(),
+    };
     let mut nodes: Vec<MapNode> = linked
         .iter()
         .map(|&id| MapNode {
@@ -388,6 +461,12 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
             name: String::new(),
             state: state_of(id),
             root_cause: input.root_causes.get(&id).copied(),
+            folder: node_group
+                .get(&id)
+                .copied()
+                .flatten()
+                .filter(|g| Some(*g) != input.level)
+                .map(crumb),
         })
         .collect();
     nodes.sort_by_key(|n| n.id);
@@ -400,10 +479,6 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
     }
 
     // 7. Where the level sits.
-    let crumb = |id: Uuid| MapBreadcrumb {
-        id,
-        name: rows.get(&id).map(|g| g.name.clone()).unwrap_or_default(),
-    };
     let breadcrumbs: Vec<MapBreadcrumb> = chain
         .iter()
         .skip(1)
@@ -432,6 +507,7 @@ pub(crate) fn compute(input: &LevelInput<'_>) -> MapLevel {
         edge_count,
         isolated_count: direct_node_count - linked_node_count,
         overflow,
+        flattened: flatten,
         node_limit: MAP_MAX_NODES as i64,
         edge_limit: MAP_MAX_EDGES as i64,
         derived_at: None,
@@ -528,12 +604,17 @@ mod tests {
         Uuid::from_u128(n)
     }
 
-    fn folder(n: u128, name: &str, parent: Option<u128>) -> (FolderRow, (Uuid, Option<Uuid>)) {
+    fn folder(
+        n: u128,
+        name: &str,
+        ty: GroupType,
+        parent: Option<u128>,
+    ) -> (FolderRow, (Uuid, Option<Uuid>)) {
         (
             FolderRow {
                 id: id(n),
                 name: name.to_owned(),
-                group_type: "site".to_owned(),
+                group_type: ty.key().to_owned(),
                 sort_order: n as f64,
             },
             (id(n), parent.map(id)),
@@ -561,12 +642,12 @@ mod tests {
     ///
     /// ```text
     /// (whole)                          nodes 100 (ungrouped)
-    /// ├─ east   (1)                    node 110
-    /// │  ├─ site-a (2)                 nodes 120 121
-    /// │  │  └─ floor-1 (3)             node 130
-    /// │  └─ site-b (4)                 node 140
-    /// └─ west   (5)
-    ///    └─ site-c (6)                 node 160
+    /// ├─ east   (1, region)            node 110
+    /// │  ├─ site-a (2, site)           nodes 120 121
+    /// │  │  └─ floor-1 (3, generic)    node 130
+    /// │  └─ site-b (4, site)           node 140
+    /// └─ west   (5, region)
+    ///    └─ site-c (6, site)           node 160
     /// ```
     struct Fx {
         groups: Vec<FolderRow>,
@@ -577,12 +658,12 @@ mod tests {
 
     fn fx() -> Fx {
         let (groups, edges) = [
-            folder(1, "east", None),
-            folder(2, "site-a", Some(1)),
-            folder(3, "floor-1", Some(2)),
-            folder(4, "site-b", Some(1)),
-            folder(5, "west", None),
-            folder(6, "site-c", Some(5)),
+            folder(1, "east", GroupType::Region, None),
+            folder(2, "site-a", GroupType::Site, Some(1)),
+            folder(3, "floor-1", GroupType::Generic, Some(2)),
+            folder(4, "site-b", GroupType::Site, Some(1)),
+            folder(5, "west", GroupType::Region, None),
+            folder(6, "site-c", GroupType::Site, Some(5)),
         ]
         .into_iter()
         .unzip();
@@ -704,7 +785,7 @@ mod tests {
         ];
         // On east (1): 120/121 and 130 are all inside site-a — nothing to draw.
         assert!(run(&f, Some(1), &links, None).edges.is_empty());
-        // On site-a (2): two nodes to the floor-1 box.
+        // On site-a (2), drawn flat: 120 and 121 each to 130 on floor-1.
         let l = run(&f, Some(2), &links, None);
         assert_eq!(l.edges.len(), 2);
         let e = l
@@ -726,7 +807,7 @@ mod tests {
             Some("b3"),
             "ports follow the flip"
         );
-        assert_eq!(l.linked_node_count, 2);
+        assert_eq!(l.linked_node_count, 3);
     }
 
     #[test]
@@ -809,6 +890,120 @@ mod tests {
         links.reverse();
         let two = serde_json::to_value(run(&f, Some(2), &links, None)).unwrap();
         assert_eq!(one, two);
+    }
+
+    /// Adds `room-1` (7, generic) under floor-1, holding node 170.
+    fn with_room(f: &mut Fx) {
+        let (row, edge) = folder(7, "room-1", GroupType::Generic, Some(3));
+        f.groups.push(row);
+        f.edges.push(edge);
+        f.node_groups.push((id(170), Some(id(7))));
+        f.states.insert(id(170), NodeState::Ok);
+    }
+
+    fn node(l: &MapLevel, of: u128) -> &MapNode {
+        l.nodes
+            .iter()
+            .find(|n| n.id == id(of))
+            .unwrap_or_else(|| panic!("no node {of}: {:?}", l.nodes))
+    }
+
+    #[test]
+    fn a_site_draws_its_subfolders_nodes_flat_each_tagged_with_its_folder() {
+        let f = fx();
+        let links = [
+            link(1, 120, 130, LinkSource::Lldp),
+            link(2, 130, 140, LinkSource::Lldp),
+        ];
+        let l = run(&f, Some(2), &links, None);
+        assert!(l.flattened);
+        assert!(l.folders.is_empty(), "no boxes inside a site");
+        assert!(node(&l, 120).folder.is_none(), "directly in site-a");
+        let floor = node(&l, 130).folder.as_ref().expect("130 is on floor-1");
+        assert_eq!((floor.id, floor.name.as_str()), (id(3), "floor-1"));
+        let inside = l.edges.iter().find(|e| e.b.id == id(130)).unwrap();
+        assert_eq!(
+            (inside.a.kind, inside.b.kind),
+            (MapEndpointKind::Node, MapEndpointKind::Node)
+        );
+        // The link leaving the site is still a stub for site-b, opening on east.
+        let s = stub(&l, 4);
+        assert_eq!((s.kind, s.level_group), (MapStubKind::Folder, Some(id(1))));
+        assert_eq!(l.direct_node_count, 3, "120, 121 and 130");
+        assert_eq!(l.isolated_count, 1, "121");
+    }
+
+    #[test]
+    fn a_folder_beneath_a_site_is_flat_too() {
+        let mut f = fx();
+        with_room(&mut f);
+        let links = [
+            link(1, 130, 170, LinkSource::Lldp),
+            link(2, 130, 120, LinkSource::Lldp),
+        ];
+        let l = run(&f, Some(3), &links, None);
+        assert!(l.flattened);
+        assert_eq!(
+            node(&l, 170).folder.as_ref().map(|g| g.name.as_str()),
+            Some("room-1")
+        );
+        assert!(node(&l, 130).folder.is_none());
+        // 120 sits directly in site-a, the common ancestor: a node stub opening there.
+        let s = stub(&l, 120);
+        assert_eq!((s.kind, s.level_group), (MapStubKind::Node, Some(id(2))));
+    }
+
+    #[test]
+    fn a_region_still_draws_its_sites_as_boxes() {
+        let f = fx();
+        let l = run(&f, Some(1), &[link(1, 110, 130, LinkSource::Lldp)], None);
+        assert!(!l.flattened);
+        let names: Vec<&str> = l.folders.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["site-a", "site-b"]);
+        assert_eq!(l.edges[0].b.kind, MapEndpointKind::Folder);
+        assert!(l.nodes.iter().all(|n| n.folder.is_none()));
+        assert!(!run(&f, None, &[], None).flattened);
+    }
+
+    #[test]
+    fn a_flat_site_over_the_bound_falls_back_to_boxes() {
+        let mut f = fx();
+        let n = MAP_MAX_NODES as u128 + 1;
+        let mut links = Vec::new();
+        for i in 0..n {
+            f.node_groups.push((id(10_000 + i), Some(id(3))));
+            links.push(link(i as i64, 10_000 + i, 120, LinkSource::Lldp));
+        }
+        let l = run(&f, Some(2), &links, None);
+        assert!(!l.flattened && !l.overflow);
+        assert_eq!(l.folders.len(), 1, "floor-1 is a box again");
+        assert_eq!(l.edges.len(), 1);
+        assert_eq!(l.edges[0].count, n as i64);
+        assert_eq!(l.direct_node_count, 2, "only site-a's own nodes");
+    }
+
+    #[test]
+    fn a_caller_scoped_below_a_hidden_site_still_gets_the_flat_drawing() {
+        let mut f = fx();
+        with_room(&mut f);
+        let vis: HashSet<Uuid> = [3, 7].map(id).into_iter().collect();
+        f.node_groups
+            .retain(|(_, g)| g.is_some_and(|g| vis.contains(&g)));
+        // Rows for the breadcrumb ancestors are what `visible_groups` hands over too.
+        f.groups
+            .retain(|g| vis.contains(&g.id) || g.id == id(1) || g.id == id(2));
+        let l = run(
+            &f,
+            Some(3),
+            &[link(1, 130, 170, LinkSource::Lldp)],
+            Some(&vis),
+        );
+        assert!(l.flattened);
+        assert!(
+            l.breadcrumbs.is_empty(),
+            "the chain still stops at the scope root"
+        );
+        assert_eq!(l.edges.len(), 1);
     }
 
     #[test]

@@ -35,6 +35,15 @@ export const BOX_SIZE: Record<GraphNodeKind, { w: number; h: number }> = {
   folder: { w: 200, h: 76 },
   external: { w: 160, h: 56 },
 };
+/** A node box tall enough for a second line: the subfolder a node is filed in, on a level drawn
+ *  flat (ADR-191 Inc.2). Still shorter than a folder box, so the grid cell does not grow. */
+export const NODE_TALL = { w: BOX_SIZE.node.w, h: 52 };
+
+/** The size one box is drawn at. */
+export function boxSize(n: Pick<GraphNode, 'kind' | 'sub'>): { w: number; h: number } {
+  return n.kind === 'node' && n.sub ? NODE_TALL : BOX_SIZE[n.kind];
+}
+
 /** The largest box: every grid cell fits it. */
 const BOX_W = Math.max(...GRAPH_NODE_KINDS.map((k) => BOX_SIZE[k].w));
 const BOX_H = Math.max(...GRAPH_NODE_KINDS.map((k) => BOX_SIZE[k].h));
@@ -61,7 +70,8 @@ export interface GraphNode {
   name: string;
   /** The colour it is drawn with: a node's state, a folder's worst member. */
   state: NodeState;
-  /** A second line under the name (a folder's counts, where a stub leads), or null. */
+  /** A second line under the name (a folder's counts, where a stub leads, the subfolder a node is
+   *  filed in on a flat level), or null. */
   sub: string | null;
   /** Upstream root-cause node id (dependency suppression), or null. */
   rootCause: string | null;
@@ -287,7 +297,7 @@ export function layoutGraph(input: GraphInput): GraphLayout {
   let maxCol = 0;
   for (const [id, { col, rank }] of cell) {
     const n = byId.get(id)!;
-    const size = BOX_SIZE[n.kind];
+    const size = boxSize(n);
     maxCol = Math.max(maxCol, col);
     placed.push({
       ...n,
@@ -316,8 +326,8 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     const aFirst = pa.rank <= pb.rank;
     const [from, to] = aFirst ? [pa, pb] : [pb, pa];
     const [fromId, toId] = aFirst ? [a, b] : [b, a];
-    const hFrom = BOX_SIZE[byId.get(fromId)!.kind].h;
-    const hTo = BOX_SIZE[byId.get(toId)!.kind].h;
+    const hFrom = boxSize(byId.get(fromId)!).h;
+    const hTo = boxSize(byId.get(toId)!).h;
     const x1 = cxOf(from.col);
     const x2 = cxOf(to.col);
     const adjacent = to.rank - from.rank === 1;

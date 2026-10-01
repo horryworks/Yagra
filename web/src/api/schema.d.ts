@@ -4865,6 +4865,10 @@ export interface paths {
          *     roots of their scope directly under the whole network, and only links whose **both** ends are
          *     visible to them. A level with more than `node_limit` linked nodes or `edge_limit` edges answers
          *     `overflow: true` with its boxes and no nodes or edges.
+         *
+         *     A Site folder, and every folder beneath one, is drawn flat (`flattened: true`): its subfolders
+         *     are not boxes, every node in its subtree is drawn and carries the subfolder it is filed in. A
+         *     flat drawing over the bounds falls back to boxes.
          */
         get: operations["get_topology_map"];
         put?: never;
@@ -9156,7 +9160,8 @@ export interface components {
             derived_at?: string | null;
             /**
              * Format: int64
-             * @description Every node directly in this folder, linked or not.
+             * @description Every node directly in this folder, linked or not — on a `flattened` level, every node in
+             *     the subtree.
              */
             direct_node_count: number;
             /**
@@ -9170,7 +9175,13 @@ export interface components {
              */
             edge_limit: number;
             edges: components["schemas"]["MapEdge"][];
-            /** @description Its subfolders, each drawn as a box. */
+            /**
+             * @description The level is a Site folder or lies beneath one, so its subfolders are not boxes: every node
+             *     in the subtree is drawn, tagged with its subfolder. `false` when the flat drawing would
+             *     exceed the bounds, in which case the level falls back to boxes.
+             */
+            flattened: boolean;
+            /** @description Its subfolders, each drawn as a box (empty on a `flattened` level). */
             folders: components["schemas"]["MapFolder"][];
             group?: null | components["schemas"]["MapBreadcrumb"];
             /**
@@ -9188,15 +9199,22 @@ export interface components {
              * @description The most linked nodes a level draws.
              */
             node_limit: number;
-            /** @description Its own nodes that have a link on this level. */
+            /**
+             * @description Its own nodes that have a link on this level — on a `flattened` level, every such node in
+             *     the subtree.
+             */
             nodes: components["schemas"]["MapNode"][];
             /** @description The level is too large to draw: `nodes`, `stubs` and `edges` are empty, the boxes remain. */
             overflow: boolean;
             /** @description The places links leave the level for. */
             stubs: components["schemas"]["MapStub"][];
         };
-        /** @description A node directly in this level's folder that has at least one link drawn on the level. */
+        /**
+         * @description A node drawn on the level that has at least one link there. On an ordinary level it sits
+         *     directly in the level's folder; on a `flattened` level it may sit anywhere in the subtree.
+         */
         MapNode: {
+            folder?: null | components["schemas"]["MapBreadcrumb"];
             /** Format: uuid */
             id: string;
             name: string;

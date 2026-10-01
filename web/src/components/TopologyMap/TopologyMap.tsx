@@ -9,19 +9,23 @@
 // dot in the table and its threshold line in a chart. Device-supplied names render as React <text>
 // children, so they're auto-escaped (no dangerouslySetInnerHTML) — device data is untrusted.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { stateColorVar } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
+import type { MapViewKey } from '../../store';
 import type { GraphLayout, PlacedEdge, PlacedNode } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
-import { activateOnKey, fitLabel } from './topologyLevel';
+import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
 import './TopologyMap.css';
 
-/** Which level the stored view was last fitted to, for this session. The stored pan/zoom is one
- *  slot for the whole map, so a different level must start from a fresh fit rather than from the
- *  previous level's position. */
-let fittedFor: string | null = null;
+/** Which level each stored view was last fitted to, for this session. A stored pan/zoom is one slot
+ *  per drawing, so a different level must start from a fresh fit rather than from the previous
+ *  level's position. */
+const fittedFor = new Map<MapViewKey, string>();
+
+/** How long the "hold Ctrl to zoom" hint stays up after a plain wheel turn. */
+const WHEEL_HINT_MS = 1200;
 
 /** The accent bar and dot take this much of a box's left edge. */
 const LABEL_X = 34;
@@ -159,6 +163,15 @@ export interface TopologyMapProps {
   showChip: (edge: PlacedEdge) => boolean;
   onActivate: (node: PlacedNode) => void;
   onSelectEdge: (id: string) => void;
+  /** Which remembered view this drawing uses. The full map and a folder pane's map keep separate
+   *  ones (ADR-191 Inc.2). */
+  viewKey?: MapViewKey;
+  /** Inside a scrolling pane: the plain wheel scrolls the page and Ctrl/⌘ + wheel zooms. */
+  wheelNeedsModifier?: boolean;
+  /** The hint shown when the plain wheel is left to the page. */
+  wheelHint?: string;
+  /** Whether one finger pans the map. Off inside a pane, where one finger scrolls the page. */
+  touchPans?: boolean;
 }
 
 export function TopologyMap({
@@ -171,12 +184,17 @@ export function TopologyMap({
   showChip,
   onActivate,
   onSelectEdge,
+  viewKey = 'topo',
+  wheelNeedsModifier = false,
+  wheelHint,
+  touchPans = true,
 }: TopologyMapProps) {
   const { t } = useTranslation('topology');
   const wrapRef = useRef<HTMLDivElement | null>(null);
   // Where the operator panned and zoomed to, remembered for the session (ADR-134). The `view ===
   // null` guard below stops the refresh from re-fitting the diagram; a new level clears it.
-  const [view, setView] = useStoredMapView('topo');
+  const [view, setView] = useStoredMapView(viewKey);
+  const [hint, setHint] = useState(false);
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id. One pointer pans; two pointers pinch-zoom (touch). `pinch` freezes the
   // view at the moment the second finger lands so scale/pan stay anchored to the gesture.
@@ -187,11 +205,11 @@ export function TopologyMap({
 
   // A different level than the one the stored view belongs to: fit again.
   useEffect(() => {
-    if (fittedFor !== fitKey) {
-      fittedFor = fitKey;
+    if (fittedFor.get(viewKey) !== fitKey) {
+      fittedFor.set(viewKey, fitKey);
       setView(null);
     }
-  }, [fitKey, setView]);
+  }, [fitKey, viewKey, setView]);
 
   // Manual "Fit to view" (also the initial fit). Re-measures the current container each call.
   const fit = useCallback(() => {
@@ -207,26 +225,47 @@ export function TopologyMap({
     }
   }, [view, layout, setView]);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
+  // The wheel is a native listener, not React's `onWheel`: React registers wheel listeners as
+  // passive, so a `preventDefault()` there cannot stop the page from scrolling under the zoom.
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  useEffect(() => {
+    const svg = svgRef.current;
     const el = wrapRef.current;
-    if (!el) return;
-    e.preventDefault();
-    const rect = el.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    setView((v) => {
-      if (!v) return v;
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const scale = clampScale(v.scale * factor);
-      const k = scale / v.scale;
-      // Keep the point under the cursor fixed while zooming.
-      return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
-    });
-  }, [setView]);
+    if (!svg || !el) return;
+    let hintTimer: ReturnType<typeof setTimeout> | undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (!wheelZooms(e, wheelNeedsModifier)) {
+        // Left to the page; say once, briefly, how to zoom instead.
+        setHint(true);
+        clearTimeout(hintTimer);
+        hintTimer = setTimeout(() => setHint(false), WHEEL_HINT_MS);
+        return;
+      }
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      setView((v) => {
+        if (!v) return v;
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        const scale = clampScale(v.scale * factor);
+        const k = scale / v.scale;
+        // Keep the point under the cursor fixed while zooming.
+        return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
+      });
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      svg.removeEventListener('wheel', onWheel);
+      clearTimeout(hintTimer);
+    };
+  }, [setView, wheelNeedsModifier]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (!view) return;
+      // One finger scrolls the pane instead (`touch-action: pan-y`); buttons still move the map.
+      if (!touchPans && e.pointerType === 'touch') return;
       // Capture on the actual target (bubbles to this SVG either way) so a box's click/keyboard
       // action keeps working.
       (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -250,7 +289,7 @@ export function TopologyMap({
         drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
       }
     },
-    [view],
+    [view, touchPans],
   );
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     if (!pointers.current.has(e.pointerId)) return;
@@ -328,11 +367,16 @@ export function TopologyMap({
           −
         </button>
       </div>
+      {wheelHint && (
+        <div className={`topomap-wheel-hint${hint ? ' on' : ''}`} aria-hidden="true">
+          {wheelHint}
+        </div>
+      )}
       <svg
-        className="topomap-svg"
+        ref={svgRef}
+        className={`topomap-svg${touchPans ? '' : ' scrolls'}`}
         width="100%"
         height="100%"
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

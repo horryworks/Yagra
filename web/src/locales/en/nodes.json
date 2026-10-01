@@ -705,7 +705,16 @@
     "noNodes": "No nodes in this group.",
     "noMembers": "No subfolders or nodes in this folder.",
     "prefixes": "IP prefixes",
-    "tags": "Tags"
+    "tags": "Tags",
+    "map": {
+      "title": "Network map",
+      "open": "Open full map",
+      "loading": "Loading the map…",
+      "empty": "No links found yet between these devices.",
+      "overflow": "This folder is too large to draw here. Open the full map to go into its subfolders.",
+      "wheelHint": "Hold Ctrl (⌘ on a Mac) and scroll to zoom",
+      "summary": "{{nodes}} linked devices · {{edges}} lines · {{stubs}} leaving the folder"
+    }
   },
   "prefixGaps": {
     "title": "Subnets missing from the IP prefixes",

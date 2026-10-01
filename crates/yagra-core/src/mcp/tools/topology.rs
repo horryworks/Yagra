@@ -276,6 +276,10 @@ impl YagraMcp {
                        for where links leave the folder (`level_group` is the folder to open next \
                        to see both ends). `group` picks the folder (omit for the whole network); a \
                        level too large to draw answers `overflow: true` with its boxes only. \
+                       A Site folder and every folder beneath it is drawn flat \
+                       (`flattened: true`): no boxes, every linked node in the subtree, each with \
+                       the subfolder it is filed in (`folder`); over the bounds it falls back to \
+                       boxes. \
                        `kind=overrides` lists the decisions an operator has \
                        recorded about links (pin, hide, or which end is upstream), which always \
                        beat what was derived. `kind=shadow` compares the two dependency graphs and \

@@ -2251,3 +2251,48 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* ---- The folder's network map (ADR-191 Inc.2) ---- */
+/* The section title doubles as the fold toggle, so it keeps the title's look. */
+.nd-grpmap-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-right: auto;
+  padding: 0;
+  font: inherit;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.nd-grpmap-toggle:hover .nd-section-t,
+.nd-grpmap-toggle:focus-visible .nd-section-t {
+  color: var(--text-secondary);
+}
+.nd-grpmap-toggle:focus-visible {
+  outline: none;
+  border-bottom: var(--border-width) solid var(--accent-color);
+}
+.nd-grpmap-open {
+  font-size: var(--font-sm);
+  color: var(--accent-color);
+  margin-bottom: 9px;
+}
+.nd-grpmap-open:hover {
+  color: var(--accent-hover);
+}
+/* A fixed height: the map has none of its own, and the pane scrolls around it. */
+.nd-grpmap {
+  display: flex;
+  height: 300px;
+  min-height: 0;
+}
+.nd-grpmap-summary {
+  margin: 6px 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+.nd-grpmap-edge {
+  margin-top: 8px;
+}

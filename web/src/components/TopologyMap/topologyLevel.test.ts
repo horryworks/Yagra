@@ -8,6 +8,7 @@ import {
   fitLabel,
   folderHref,
   graphId,
+  groupMapTarget,
   isLevelFor,
   levelNodesHref,
   levelToGraph,
@@ -19,6 +20,7 @@ import {
   selectionFromParam,
   splitGraphId,
   stubHref,
+  wheelZooms,
 } from './topologyLevel';
 import { layoutGraph } from './graphLayout';
 
@@ -53,8 +55,8 @@ function level(): MapLevel {
       },
     ],
     nodes: [
-      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null },
-      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1 },
+      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder: null },
+      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder: null },
     ],
     stubs: [{ kind: 'folder', id: WEST, name: 'west', level_group: null }],
     edges: [
@@ -92,6 +94,7 @@ function level(): MapLevel {
     edge_count: 2,
     isolated_count: 3,
     overflow: false,
+    flattened: false,
     node_limit: 2000,
     edge_limit: 4000,
     derived_at: null,
@@ -119,6 +122,15 @@ describe('levelToGraph', () => {
     expect(folder.sub).toBe('folder caption');
     expect(g.nodes.find((n) => n.kind === 'external')!.sub).toBe('stub caption');
     expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.rootCause).toBe(SW1);
+  });
+
+  it('puts a node’s subfolder on its second line on a level drawn flat', () => {
+    const flat = level();
+    flat.flattened = true;
+    flat.nodes[1] = { ...flat.nodes[1], folder: { id: FLOOR, name: 'floor-1' } };
+    const g = levelToGraph(flat, captions);
+    expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.sub).toBe('▤ floor-1');
+    expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.sub).toBeNull();
   });
 
   it('lays out as a connected level with no loose node', () => {
@@ -246,5 +258,38 @@ describe('splitGraphId and edgeShowsChip', () => {
     expect(edgeShowsChip(`node:${SW1}|node:${SW2}`, 2)).toBe(true);
     expect(edgeShowsChip(`node:${SW1}|folder:${FLOOR}`, 1)).toBe(true);
     expect(edgeShowsChip(`node:${SW2}|external:${WEST}`, 1)).toBe(true);
+  });
+});
+
+describe('groupMapTarget', () => {
+  // The map in a folder's pane never descends by itself: a press selects in the tree (ADR-191 Inc.2).
+  it('selects a node or a folder for what its box is', () => {
+    expect(groupMapTarget(graphId('node', SW1), level())).toEqual({ kind: 'node', id: SW1 });
+    expect(groupMapTarget(graphId('folder', FLOOR), level())).toEqual({ kind: 'group', id: FLOOR });
+  });
+
+  it('selects what a stub stands for', () => {
+    expect(groupMapTarget(graphId('external', WEST), level())).toEqual({ kind: 'group', id: WEST });
+    const l = level();
+    l.stubs = [{ kind: 'node', id: FAR, name: 'sw-far', level_group: null }];
+    expect(groupMapTarget(graphId('external', FAR), l)).toEqual({ kind: 'node', id: FAR });
+  });
+
+  it('selects nothing for a stub the level no longer has or a malformed id', () => {
+    expect(groupMapTarget(graphId('external', FAR), level())).toBeNull();
+    expect(groupMapTarget('nonsense', level())).toBeNull();
+    expect(groupMapTarget(graphId('external', WEST), null)).toBeNull();
+  });
+});
+
+describe('wheelZooms', () => {
+  it('zooms on any wheel where the map owns the wheel', () => {
+    expect(wheelZooms({ ctrlKey: false, metaKey: false }, false)).toBe(true);
+  });
+
+  it('leaves the plain wheel to the page inside a pane, and zooms with Ctrl or Cmd', () => {
+    expect(wheelZooms({ ctrlKey: false, metaKey: false }, true)).toBe(false);
+    expect(wheelZooms({ ctrlKey: true, metaKey: false }, true)).toBe(true);
+    expect(wheelZooms({ ctrlKey: false, metaKey: true }, true)).toBe(true);
   });
 });
