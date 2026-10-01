@@ -13726,12 +13726,13 @@ export interface components {
             truncated_nodes?: number;
             /**
              * Format: int32
-             * @description CDP rows whose management address matched no monitored node.
+             * @description CDP rows that matched no monitored node, by the same two rules as the LLDP ones.
              */
             unmatched_cdp_rows?: number;
             /**
              * Format: int32
-             * @description LLDP rows whose management address matched no monitored node.
+             * @description LLDP rows that matched no monitored node: by management address, or — for a row with none —
+             *     by a MAC chassis id a Meraki organization lists for exactly one node.
              */
             unmatched_lldp_rows?: number;
             /**

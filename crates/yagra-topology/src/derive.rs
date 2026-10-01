@@ -22,9 +22,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use yagra_common::{
-    subnet_key, DerivedLink, L3Snapshot, LinkOverride, LinkOverrideAction, LinkSource,
-    NeighborProto, NeighborSet, NodeId, RoutingSnapshot, SubnetKey, TopologyLinkSummary,
-    MAX_LINKS_PER_NODE,
+    parse_mac, subnet_key, DerivedLink, L3Snapshot, LinkOverride, LinkOverrideAction, LinkSource,
+    NeighborIdKind, NeighborProto, NeighborSet, NodeId, RoutingSnapshot, SubnetKey,
+    TopologyLinkSummary, MAX_LINKS_PER_NODE,
 };
 
 /// Cap on how many members of one subnet are considered. A `/16` with every host answering SNMP
@@ -50,6 +50,11 @@ pub struct DeriveInput<'a> {
     pub routing: &'a [(NodeId, RoutingSnapshot)],
     /// Operator decisions. Empty in Increment 1.
     pub overrides: &'a [LinkOverride],
+    /// The MAC of every device a Meraki organization lists and a node is bound to, as the listing
+    /// spells it (ADR-191 decision 22). What lets a CDP/LLDP row that advertises no management
+    /// address — an MX heard by a Meraki switch — still name its node. A MAC bound to more than one
+    /// node identifies neither (decision 24).
+    pub chassis_macs: &'a [(String, NodeId)],
 }
 
 /// The derived graph plus what the run declined to turn into an edge.
@@ -128,6 +133,18 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     let owner: BTreeMap<IpAddr, NodeId> = claimants
         .iter()
         .filter_map(|(ip, owners)| sole_claimant(owners).map(|n| (*ip, n)))
+        .collect();
+    // The same rule for a listed MAC: one bound node, or nobody. A text the listing holds that is not
+    // a MAC matches nothing rather than being compared as a string.
+    let mut mac_claimants: BTreeMap<[u8; 6], BTreeSet<NodeId>> = BTreeMap::new();
+    for (mac, id) in input.chassis_macs {
+        if let Some(bytes) = parse_mac(mac) {
+            mac_claimants.entry(bytes).or_default().insert(*id);
+        }
+    }
+    let mac_owner: BTreeMap<[u8; 6], NodeId> = mac_claimants
+        .iter()
+        .filter_map(|(mac, owners)| sole_claimant(owners).map(|n| (*mac, n)))
         .collect();
 
     // ── Subnet membership, and how many networks each node has a foot in ─────
@@ -239,9 +256,15 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
 
     // ── L2 adjacency, matched to inventory by management address ─────────────
     //
-    // The matching key is the IP, never the chassis id. A chassis id is device-supplied text with no
-    // relationship to anything in the inventory, so joining on it would mean string-matching a MAC
-    // or a hostname against a node name and hoping.
+    // The matching key is the IP. A chassis id is device-supplied text with no relationship to
+    // anything in the inventory, so joining on it in general would mean string-matching a MAC or a
+    // hostname against a node name and hoping.
+    //
+    // One exception (ADR-191 decision 22): a row with no usable address whose chassis id the poller
+    // labelled a MAC is matched against the MACs a Meraki organization lists for the devices bound
+    // to nodes. That is not a guess — the listing states which device owns the MAC — and it is the
+    // only way an MX, which advertises no management address over LLDP, gets a link at all. Only
+    // the octets are compared, never a name, and a MAC bound to two nodes names neither.
     for (id, set) in input.neighbors {
         for nb in &set.neighbors {
             let source = match nb.proto {
@@ -252,19 +275,20 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
                 LinkSource::Lldp => s.unmatched_lldp_rows += 1,
                 _ => s.unmatched_cdp_rows += 1,
             };
-            let Some(ip) = nb
-                .remote_mgmt_addr
-                .as_deref()
-                .and_then(|a| a.parse::<IpAddr>().ok())
-            else {
-                unmatched(&mut summary);
-                continue;
+            let peer = match nb.usable_mgmt_addr() {
+                Some(ip) => {
+                    if contested.contains(&ip) {
+                        summary.ambiguous_mgmt_addrs += 1;
+                        continue;
+                    }
+                    owner.get(&ip).copied()
+                }
+                None => (nb.remote_chassis_kind == Some(NeighborIdKind::Mac))
+                    .then(|| parse_mac(&nb.remote_chassis))
+                    .flatten()
+                    .and_then(|mac| mac_owner.get(&mac).copied()),
             };
-            if contested.contains(&ip) {
-                summary.ambiguous_mgmt_addrs += 1;
-                continue;
-            }
-            let Some(peer) = owner.get(&ip).copied() else {
+            let Some(peer) = peer else {
                 unmatched(&mut summary);
                 continue;
             };
@@ -477,6 +501,7 @@ mod tests {
             neighbors: &[],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         })
     }
 
@@ -607,6 +632,7 @@ mod tests {
             neighbors: &[],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(
             out.summary.duplicate_addresses, 0,
@@ -624,6 +650,7 @@ mod tests {
             neighbors: &[],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.summary.duplicate_addresses, 1);
     }
@@ -696,6 +723,7 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
         assert_eq!(out.summary.unmatched_lldp_rows, 1);
@@ -717,6 +745,7 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1);
         assert_eq!(out.links[0].sources, vec![LinkSource::Lldp]);
@@ -747,9 +776,183 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
         assert_eq!(out.summary.ambiguous_mgmt_addrs, 1);
+    }
+
+    /// An LLDP row with no management address and a MAC chassis id: the shape a Meraki switch
+    /// reports for an MX it is cabled to (ADR-191 Inc.7).
+    fn unaddressed(chassis: &str, kind: Option<NeighborIdKind>, addr: Option<&str>) -> Neighbor {
+        let mut nb = Neighbor::new(NeighborProto::Lldp, "Port 20", chassis, "1");
+        nb.remote_chassis_kind = kind;
+        nb.remote_mgmt_addr = addr.map(str::to_owned);
+        nb
+    }
+
+    fn derive_macs(
+        reporter: NodeId,
+        rows: Vec<Neighbor>,
+        nodes: &[(NodeId, IpAddr)],
+        macs: &[(String, NodeId)],
+    ) -> DeriveOutput {
+        derive_links(DeriveInput {
+            nodes,
+            l3: &[],
+            neighbors: &[(reporter, NeighborSet::new(rows, 0))],
+            routing: &[],
+            overrides: &[],
+            chassis_macs: macs,
+        })
+    }
+
+    #[test]
+    fn a_row_with_no_address_is_matched_by_the_listed_mac_of_a_bound_device() {
+        let n = ids(2);
+        let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
+        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[1])]);
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(out.links[0].sources, vec![LinkSource::Lldp]);
+        assert_eq!(out.summary.lldp_links, 1);
+        assert_eq!(out.summary.unmatched_lldp_rows, 0);
+        // The reporting switch's port lands on the switch's end, whichever end that is.
+        let l = &out.links[0];
+        let side = if l.a_node == n[0] {
+            &l.a_if_name
+        } else {
+            &l.b_if_name
+        };
+        assert_eq!(side.as_deref(), Some("Port 20"));
+    }
+
+    #[test]
+    fn the_mac_is_compared_as_octets_not_as_text() {
+        let n = ids(2);
+        let row = unaddressed("02-00-00-00-0A-BC", Some(NeighborIdKind::Mac), None);
+        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:0a:bc".into(), n[1])]);
+        assert_eq!(out.links.len(), 1);
+    }
+
+    #[test]
+    fn a_chassis_id_that_is_not_labelled_a_mac_is_never_matched_by_mac() {
+        // A text id that happens to spell a listed MAC is still text: only the poller's label says
+        // the octets are a MAC.
+        let n = ids(2);
+        let macs = [("02:00:00:00:00:01".to_owned(), n[1])];
+        for kind in [None, Some(NeighborIdKind::Text), Some(NeighborIdKind::Hex)] {
+            let row = unaddressed("02:00:00:00:00:01", kind, None);
+            let out = derive_macs(n[0], vec![row], &[], &macs);
+            assert!(out.links.is_empty(), "{kind:?}");
+            assert_eq!(out.summary.unmatched_lldp_rows, 1, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_mac_nobody_lists_is_counted_as_unmatched() {
+        let n = ids(2);
+        let row = unaddressed("02:00:00:00:00:09", Some(NeighborIdKind::Mac), None);
+        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[1])]);
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.unmatched_lldp_rows, 1);
+    }
+
+    #[test]
+    fn a_mac_bound_to_two_nodes_names_neither() {
+        // The Neighbors tab picks the first listing; the map feeds dependency suppression, so it
+        // draws nothing rather than guess (ADR-191 decision 24).
+        let n = ids(3);
+        let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
+        let macs = [
+            ("02:00:00:00:00:01".to_owned(), n[1]),
+            ("02:00:00:00:00:01".to_owned(), n[2]),
+        ];
+        let out = derive_macs(n[0], vec![row], &[], &macs);
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.unmatched_lldp_rows, 1);
+    }
+
+    #[test]
+    fn the_unspecified_address_is_no_address_so_the_mac_decides() {
+        // Several nodes are stored at 0.0.0.0, so the address used to read as contested and the row
+        // reached no rule at all (ADR-191 decision 23).
+        let n = ids(4);
+        let nodes = [(n[2], ip("0.0.0.0")), (n[3], ip("0.0.0.0"))];
+        let row = unaddressed(
+            "02:00:00:00:00:01",
+            Some(NeighborIdKind::Mac),
+            Some("0.0.0.0"),
+        );
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &nodes,
+            &[("02:00:00:00:00:01".into(), n[1])],
+        );
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(out.summary.ambiguous_mgmt_addrs, 0);
+
+        let row = unaddressed(
+            "02:00:00:00:00:09",
+            Some(NeighborIdKind::Mac),
+            Some("0.0.0.0"),
+        );
+        let out = derive_macs(n[0], vec![row], &nodes, &[]);
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.ambiguous_mgmt_addrs, 0);
+        assert_eq!(out.summary.unmatched_lldp_rows, 1);
+    }
+
+    #[test]
+    fn a_row_naming_its_own_listed_mac_is_no_link() {
+        let n = ids(1);
+        let row = unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None);
+        let out = derive_macs(n[0], vec![row], &[], &[("02:00:00:00:00:01".into(), n[0])]);
+        assert!(out.links.is_empty());
+    }
+
+    #[test]
+    fn an_owned_address_decides_and_the_mac_is_not_consulted() {
+        // The address names n[1]; the MAC would name n[2]. The address is the rule, the MAC only the
+        // fallback for a row that has none.
+        let n = ids(3);
+        let row = unaddressed(
+            "02:00:00:00:00:01",
+            Some(NeighborIdKind::Mac),
+            Some("10.0.0.2"),
+        );
+        let out = derive_macs(
+            n[0],
+            vec![row],
+            &[(n[1], ip("10.0.0.2"))],
+            &[("02:00:00:00:00:01".into(), n[2])],
+        );
+        assert_eq!(out.links.len(), 1);
+        let l = &out.links[0];
+        assert!([l.a_node, l.b_node].contains(&n[1]));
+        assert!(![l.a_node, l.b_node].contains(&n[2]));
+    }
+
+    #[test]
+    fn the_mac_match_does_not_depend_on_the_listing_order() {
+        let n = ids(4);
+        let rows = vec![
+            unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None),
+            unaddressed("02:00:00:00:00:02", Some(NeighborIdKind::Mac), None),
+        ];
+        let macs = vec![
+            ("02:00:00:00:00:01".to_owned(), n[1]),
+            ("02:00:00:00:00:02".to_owned(), n[2]),
+            ("02:00:00:00:00:03".to_owned(), n[3]),
+        ];
+        let mut reversed = macs.clone();
+        reversed.reverse();
+        let mut rows_rev = rows.clone();
+        rows_rev.reverse();
+        let a = derive_macs(n[0], rows, &[], &macs);
+        let b = derive_macs(n[0], rows_rev, &[], &reversed);
+        assert_eq!(a, b);
+        assert_eq!(a.links.len(), 2);
     }
 
     #[test]
@@ -767,6 +970,7 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1, "one physical link, not two rows");
         assert_eq!(
@@ -835,6 +1039,7 @@ mod tests {
                 action: LinkOverrideAction::Hide,
                 direction: None,
             }],
+            chassis_macs: &[],
         });
         assert!(hidden.links.is_empty(), "manual always wins");
 
@@ -849,6 +1054,7 @@ mod tests {
                 action: LinkOverrideAction::Pin,
                 direction: None,
             }],
+            chassis_macs: &[],
         });
         assert_eq!(pinned.links.len(), 1);
         assert_eq!(pinned.links[0].sources, vec![LinkSource::Manual]);
@@ -865,6 +1071,7 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
     }
@@ -887,6 +1094,7 @@ mod tests {
             neighbors: &[],
             routing: rows,
             overrides: &[],
+            chassis_macs: &[],
         })
     }
 
@@ -912,6 +1120,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Route, "198.51.100.2")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1);
         assert_eq!(pair(&out.links[0]), (n[0], n[1]));
@@ -932,6 +1141,7 @@ mod tests {
             neighbors: &[],
             routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1);
         assert_eq!(out.links[0].sources, vec![LinkSource::Ospf]);
@@ -962,6 +1172,7 @@ mod tests {
                 neighbors: &[],
                 routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
                 overrides: &[],
+                chassis_macs: &[],
             });
             assert_eq!(out.links.len(), 1, "state {state} must still yield an edge");
             assert_eq!(
@@ -1007,6 +1218,7 @@ mod tests {
             neighbors: &[],
             routing: &routing_rows,
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(
             out.links.is_empty(),
@@ -1033,6 +1245,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Bgp, "192.0.2.2")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1);
         assert_eq!(
@@ -1059,6 +1272,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Bgp, "10.0.0.2")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
         assert_eq!(out.summary.bgp_peers_not_adjacent, 1);
@@ -1101,6 +1315,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Ospf, "10.0.0.9")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
         assert_eq!(out.summary.ambiguous_mgmt_addrs, 1);
@@ -1118,6 +1333,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Ospf, "10.0.0.1")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert!(out.links.is_empty());
     }
@@ -1140,6 +1356,7 @@ mod tests {
                 ),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1, "one physical link, not two rows");
         assert_eq!(
@@ -1167,6 +1384,7 @@ mod tests {
             neighbors: &[(n[0], NeighborSet::new(vec![nb], 0))],
             routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1);
         assert_eq!(
@@ -1222,6 +1440,7 @@ mod tests {
                 neighbors: &[],
                 routing: rows,
                 overrides: &[],
+                chassis_macs: &[],
             })
         };
         let forward = build(&rows);
@@ -1248,6 +1467,7 @@ mod tests {
                 RoutingSnapshot::new(vec![adj(RoutingProto::Route, "203.0.113.254")], false),
             )],
             overrides: &[],
+            chassis_macs: &[],
         });
         assert_eq!(out.links.len(), 1, "only the shared /24 from Increment 1");
         assert_eq!(out.links[0].sources, vec![LinkSource::L3Subnet]);

@@ -29,7 +29,7 @@
 //!    subtype and **never** decode lossily.
 
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Stable TSDB metric: how many neighbours the node currently reports. Node-level and bounded by
 /// [`MAX_NEIGHBORS_PER_NODE`], so it is a safe series; the adjacency itself never becomes one.
@@ -307,6 +307,23 @@ impl Neighbor {
             remote_chassis_kind: None,
             remote_port_kind: None,
         }
+    }
+
+    /// The management address the row advertises, when it has a usable one. Text that does not
+    /// parse is no address, and neither is the unspecified address: a Meraki switch sends `0.0.0.0`
+    /// over CDP when it has none, and a Meraki node with no LAN address is stored at `0.0.0.0`, so
+    /// matching on it made every such node a claimant (ADR-180 Inc.4 decision 10, ADR-191 decision
+    /// 23). Such a row is matched on its chassis MAC instead, by the Neighbors tab (ADR-180 Inc.3)
+    /// and by the map's link derivation (ADR-191 decision 22) alike — both read this one rule.
+    ///
+    /// Loopback, link-local and the like are still addresses here; what they mean is the caller's
+    /// question.
+    #[must_use]
+    pub fn usable_mgmt_addr(&self) -> Option<IpAddr> {
+        self.remote_mgmt_addr
+            .as_deref()
+            .and_then(|a| a.trim().parse::<IpAddr>().ok())
+            .filter(|ip| !ip.is_unspecified())
     }
 
     /// The identity tuple: what makes two observations "the same link".
@@ -868,6 +885,29 @@ pub fn poller_neighbor_columns() -> Vec<(NeighborColumn, &'static str, NeighborC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_usable_management_address_is_a_parsed_specified_one() {
+        let with = |a: Option<&str>| {
+            let mut n = Neighbor::new(NeighborProto::Lldp, "Port 1", "sw-01", "1");
+            n.remote_mgmt_addr = a.map(str::to_owned);
+            n.usable_mgmt_addr()
+        };
+        assert_eq!(
+            with(Some(" 192.0.2.7 ")),
+            Some("192.0.2.7".parse().unwrap())
+        );
+        assert_eq!(
+            with(Some("2001:db8::1")),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(with(Some("0.0.0.0")), None);
+        assert_eq!(with(Some("::")), None);
+        assert_eq!(with(Some("not an address")), None);
+        assert_eq!(with(None), None);
+        // Loopback is still an address: what it means is the caller's question.
+        assert_eq!(with(Some("127.0.0.1")), Some("127.0.0.1".parse().unwrap()));
+    }
 
     fn lldp(local: &str, chassis: &str, port: &str) -> Neighbor {
         Neighbor::new(NeighborProto::Lldp, local, chassis, port)

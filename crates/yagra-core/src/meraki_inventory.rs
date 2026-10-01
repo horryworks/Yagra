@@ -822,6 +822,22 @@ impl MerakiInventoryRepo {
         Ok(out)
     }
 
+    /// Every listed device's MAC with the node it is bound to (ADR-191 Inc.7): what the topology
+    /// derivation matches a neighbour row with no management address against. Only devices the
+    /// last listing still contained, that carry a MAC and are imported. The whole fleet, unscoped —
+    /// the derivation is, and the map's readers narrow what they show. A MAC listed under two
+    /// serials comes back twice, and the derivation then matches neither.
+    pub async fn listed_mac_nodes(&self) -> anyhow::Result<Vec<(String, Uuid)>> {
+        let rows = sqlx::query(
+            "SELECT i.mac, d.node_id              FROM meraki_inventory i              JOIN meraki_devices d ON d.serial = i.serial AND d.org_id = i.org_id              WHERE i.mac IS NOT NULL AND i.missing_since IS NULL              ORDER BY i.mac, d.node_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("mac")?, r.try_get("node_id")?)))
+            .collect()
+    }
+
     /// The organization's MX and MR that are nodes here — the devices whose neighbours the sync
     /// reads one at a time (ADR-181 Inc.3, Inc.5). A switch is not among them: its neighbours come
     /// from the organization-wide listing. One not imported has nowhere to record them.
@@ -2122,6 +2138,12 @@ mod tests {
             })
         );
         assert_eq!(found["0c:8d:db:00:00:02"].node, None);
+        // ADR-191 Inc.7: the derivation's read is the bound device only — the listed one with no
+        // node matches nothing on the map.
+        assert_eq!(
+            repo.listed_mac_nodes().await.expect("macs"),
+            vec![("0c:8d:db:00:00:01".to_owned(), node)]
+        );
 
         // The stored MAC reads back, so the next sync of the same listing writes nothing.
         let stored = repo.stored(org).await.expect("stored");
@@ -2138,6 +2160,15 @@ mod tests {
         repo.apply(org, &gone).await.expect("apply");
         let found = repo.devices_with_mac(&asked).await.expect("lookup");
         assert!(!found.contains_key("0c:8d:db:00:00:02"));
+
+        // A bound device the listing no longer contains stops naming its node on the map.
+        let gone = SyncPlan {
+            writes: vec![],
+            newly_missing: vec!["Q2AA-0001".into()],
+            follows: vec![],
+        };
+        repo.apply(org, &gone).await.expect("apply");
+        assert!(repo.listed_mac_nodes().await.expect("macs").is_empty());
     }
 
     /// The planner's choice for `sql` over an inventory of 500 listed devices, statistics taken,

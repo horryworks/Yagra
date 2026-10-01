@@ -44,9 +44,12 @@ pub const MAX_LINKS_PER_NODE: usize = 512;
 pub enum LinkSource {
     /// An operator confirmed this link by hand.
     Manual,
-    /// LLDP adjacency (IEEE 802.1AB), matched to a node by the peer's management address.
+    /// LLDP adjacency (IEEE 802.1AB), matched to a node by the peer's management address — or, for
+    /// a row that advertises none, by its MAC chassis id against the MAC a Meraki organization lists
+    /// for a device bound to a node.
     Lldp,
-    /// Cisco Discovery Protocol adjacency, matched by the peer's cache address.
+    /// Cisco Discovery Protocol adjacency, matched by the peer's cache address — or, with none, by a
+    /// MAC device id as for LLDP.
     Cdp,
     /// An OSPF neighbour relationship, matched by the neighbour's own address.
     Ospf,
@@ -435,10 +438,11 @@ pub struct TopologyLinkSummary {
     /// interface addresses have not been observed.
     #[serde(default)]
     pub bgp_peers_not_adjacent: u32,
-    /// LLDP rows whose management address matched no monitored node.
+    /// LLDP rows that matched no monitored node: by management address, or — for a row with none —
+    /// by a MAC chassis id a Meraki organization lists for exactly one node.
     #[serde(default)]
     pub unmatched_lldp_rows: u32,
-    /// CDP rows whose management address matched no monitored node.
+    /// CDP rows that matched no monitored node, by the same two rules as the LLDP ones.
     #[serde(default)]
     pub unmatched_cdp_rows: u32,
     /// Adjacency rows whose management address matched more than one node, so no link could be

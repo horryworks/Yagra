@@ -880,6 +880,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_inflight: meraki_inflight.clone(),
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
+        meraki_inventory: meraki_inventory.clone(),
         meraki_sync: meraki_sync.clone(),
         netbox: netbox.clone(),
         meraki_pool,
@@ -1157,6 +1158,9 @@ struct LeaderTasks {
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
+    /// The organizations' device listings: the topology derivation reads each bound device's MAC
+    /// from it (ADR-191 Inc.7).
+    meraki_inventory: Arc<meraki_inventory::MerakiInventoryRepo>,
     /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
     /// an organization's lanes live in this process, so two cores syncing would each believe they
     /// held one alone.
@@ -1565,6 +1569,7 @@ impl LeaderTasks {
                 routing: self.routing.clone(),
                 links: self.topology_links.clone(),
                 overrides: self.link_overrides.clone(),
+                meraki_inventory: self.meraki_inventory.clone(),
             }),
         );
         spawn_cancellable(
@@ -1899,6 +1904,7 @@ struct TopologyStores {
     routing: Arc<l3_routing::RoutingRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
     overrides: Arc<link_overrides::LinkOverrideRepo>,
+    meraki_inventory: Arc<meraki_inventory::MerakiInventoryRepo>,
 }
 
 /// What one derivation cycle did.
@@ -1962,6 +1968,19 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
             return DeriveCycle::Incomplete;
         }
     };
+    // Read in full like the rest (ADR-191 decision 26): a cycle without it would drop every link
+    // matched by a listed MAC, and the prune would delete them.
+    let chassis_macs: Vec<(String, yagra_common::NodeId)> = match stores
+        .meraki_inventory
+        .listed_mac_nodes()
+        .await
+    {
+        Ok(rows) => rows.into_iter().map(|(mac, id)| (mac, id.into())).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "topology derivation: reading the Meraki device MACs failed");
+            return DeriveCycle::Incomplete;
+        }
+    };
 
     let out = yagra_topology::derive::derive_links(yagra_topology::derive::DeriveInput {
         nodes: &inventory,
@@ -1969,6 +1988,7 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
         neighbors: &nb_rows,
         routing: &rt_rows,
         overrides: &ovr,
+        chassis_macs: &chassis_macs,
     });
 
     if let Err(e) = stores.links.upsert_batch(&out.links).await {
@@ -2765,6 +2785,9 @@ mod tests {
             routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
             links: Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone())),
             overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
+            meraki_inventory: Arc::new(crate::meraki_inventory::MerakiInventoryRepo::new(
+                pool.clone(),
+            )),
         }
     }
 
@@ -2849,6 +2872,21 @@ mod tests {
                 .await
                 .unwrap();
         assert!(fresh);
+    }
+
+    /// The Meraki device MACs are an input like the others: unreadable, the cycle neither writes
+    /// nor prunes, or every link matched by a listed MAC would be deleted (ADR-191 decision 26).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_meraki_mac_read_neither_writes_nor_prunes_the_graph(pool: sqlx::PgPool) {
+        an_hour_old_link(&pool).await;
+        rename(&pool, "meraki_inventory", "meraki_inventory_unreadable").await;
+
+        let outcome = super::derive_cycle(&topology_stores(&pool)).await;
+
+        assert_eq!(outcome, super::DeriveCycle::Incomplete);
+        assert_eq!(pgtest::rows(&pool, "node_links").await, 1);
+        assert_eq!(pgtest::rows(&pool, "topology_derivation").await, 0);
     }
 
     /// The cycle that can read everything still prunes what nothing derives any more — the half

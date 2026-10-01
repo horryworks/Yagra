@@ -541,18 +541,12 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
         .collect()
 }
 
-/// A row's management address, when it has one. Text that does not parse is no address, and neither
-/// is the unspecified address (ADR-180 Inc.4 decision 10): a Meraki switch sends `0.0.0.0` over CDP
-/// when it has none, and a Meraki node with no LAN address is stored at `0.0.0.0`, so matching on it
-/// made every such node a claimant. Such a row is matched on its chassis MAC instead (Inc.3).
-///
-/// Loopback, link-local and the like are still addresses here — they name no device, and the row says
-/// so through [`SetupBlocked::NotADeviceAddress`] rather than going quiet.
+/// A row's management address, when it has one — [`Neighbor::usable_mgmt_addr`], the rule the map's
+/// link derivation reads too (ADR-191 decision 23). Loopback, link-local and the like are still
+/// addresses here — they name no device, and the row says so through
+/// [`SetupBlocked::NotADeviceAddress`] rather than going quiet.
 fn usable_mgmt_addr(n: &Neighbor) -> Option<IpAddr> {
-    n.remote_mgmt_addr
-        .as_deref()
-        .and_then(|a| a.trim().parse::<IpAddr>().ok())
-        .filter(|ip| !ip.is_unspecified())
+    n.usable_mgmt_addr()
 }
 
 /// Every distinct management address the set advertises, keyed by the text the row carries. A row

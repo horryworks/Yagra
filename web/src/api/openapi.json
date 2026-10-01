@@ -42245,13 +42245,13 @@
           "unmatched_cdp_rows": {
             "type": "integer",
             "format": "int32",
-            "description": "CDP rows whose management address matched no monitored node.",
+            "description": "CDP rows that matched no monitored node, by the same two rules as the LLDP ones.",
             "minimum": 0
           },
           "unmatched_lldp_rows": {
             "type": "integer",
             "format": "int32",
-            "description": "LLDP rows whose management address matched no monitored node.",
+            "description": "LLDP rows that matched no monitored node: by management address, or — for a row with none —\nby a MAC chassis id a Meraki organization lists for exactly one node.",
             "minimum": 0
           },
           "unmatched_routing_peers": {
