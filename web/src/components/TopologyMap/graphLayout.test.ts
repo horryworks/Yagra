@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  AP_LINE_H,
+  AP_PER_LINE,
+  AP_PITCH,
+  AP_SIZE,
   BOX_SIZE,
   CELL_H,
   CELL_W,
@@ -18,6 +22,7 @@ function node(id: string, extra: Partial<GraphNode> = {}): GraphNode {
     state: 'ok',
     sub: null,
     rootCause: null,
+    ap: false,
     ...extra,
   };
 }
@@ -289,5 +294,132 @@ describe('layoutGraph', () => {
     expect([b.w, b.h]).toEqual([NODE_TALL.w, NODE_TALL.h]);
     expect(out.edges[0].y2).toBe(b.cy - NODE_TALL.h / 2);
     expect(out.nodes.find((n) => n.id === 'a')!.h).toBe(BOX_SIZE.node.h);
+  });
+});
+
+describe('layoutGraph — access points (ADR-191 Inc.5)', () => {
+  const ap = (id: string, extra: Partial<GraphNode> = {}) => node(id, { ap: true, ...extra });
+  const byId = (out: ReturnType<typeof layoutGraph>, id: string) => out.nodes.find((n) => n.id === id)!;
+
+  /** A core switch, two access switches, and the given number of APs on each. */
+  function floor(perSwitch: number) {
+    const nodes = [node('core'), node('sw1'), node('sw2')];
+    const links = [link('core', 'sw1'), link('core', 'sw2')];
+    for (const sw of ['sw1', 'sw2']) {
+      for (let i = 0; i < perSwitch; i++) {
+        const id = `${sw}-ap${String(i).padStart(2, '0')}`;
+        nodes.push(ap(id, { name: id }));
+        links.push(link(sw, id));
+      }
+    }
+    return { nodes, links };
+  }
+
+  it('keeps the old grid exactly when a level has no access point', () => {
+    const out = layoutGraph({ nodes: [node('a'), node('b')], links: [link('a', 'b')], anchorId: 'a' });
+    expect([byId(out, 'a').cx, byId(out, 'a').cy]).toEqual([24 + 100, 24 + 38]);
+    expect([byId(out, 'b').cx, byId(out, 'b').cy]).toEqual([24 + 100, 24 + CELL_H + 38]);
+  });
+
+  it('hangs each access point in the band below its parent, centred under it', () => {
+    const out = layoutGraph(floor(3));
+    for (const sw of ['sw1', 'sw2']) {
+      const parent = byId(out, sw);
+      const aps = out.nodes.filter((n) => n.id.startsWith(`${sw}-ap`));
+      expect(aps).toHaveLength(3);
+      for (const a of aps) {
+        expect(a.cy).toBeGreaterThan(parent.cy + parent.h / 2);
+        expect([a.w, a.h]).toEqual([AP_SIZE.w, AP_SIZE.h]);
+      }
+      const mean = aps.reduce((s, a) => s + a.cx, 0) / aps.length;
+      expect(mean).toBeCloseTo(parent.cx);
+      const xs = aps.map((a) => a.cx).sort((x, y) => x - y);
+      expect(xs[1] - xs[0]).toBe(AP_PITCH);
+    }
+  });
+
+  it('draws the line to the parent straight, from the box to the top of the circle', () => {
+    const out = layoutGraph(floor(1));
+    const parent = byId(out, 'sw1');
+    const a = byId(out, 'sw1-ap00');
+    const e = out.edges.find((x) => [x.x1, x.x2].includes(a.cx) && x.y2 === a.cy - AP_SIZE.h / 2)!;
+    expect(e.kind).toBe('line');
+    expect([e.x1, e.y1]).toEqual([parent.cx, parent.cy + parent.h / 2]);
+  });
+
+  it('never roots the layout at an access point, however many links it has', () => {
+    const nodes = [node('sw'), ap('a1'), ap('a2'), ap('a3'), ap('a4')];
+    const links = [link('sw', 'a1'), link('a1', 'a2'), link('a1', 'a3'), link('a1', 'a4')];
+    const out = layoutGraph({ nodes, links });
+    const top = Math.min(...out.nodes.map((n) => n.cy));
+    expect(byId(out, 'sw').cy).toBe(top);
+    // The mesh repeaters hang beside the AP they repeat, under its switch.
+    for (const id of ['a2', 'a3', 'a4']) expect(byId(out, id).cy).toBe(byId(out, 'a1').cy);
+  });
+
+  it('puts an access point linked to two switches under the higher one', () => {
+    const nodes = [node('core'), node('dist'), node('acc'), ap('a')];
+    const links = [link('core', 'dist'), link('dist', 'acc'), link('dist', 'a'), link('acc', 'a')];
+    const out = layoutGraph({ nodes, links, anchorId: 'core' });
+    const a = byId(out, 'a');
+    expect(a.cx).toBe(byId(out, 'dist').cx);
+    expect(a.cy).toBeGreaterThan(byId(out, 'dist').cy);
+    expect(a.cy).toBeLessThan(byId(out, 'acc').cy);
+    // The second link is a bow, not a line through the boxes between.
+    const second = out.edges.find((e) => e.kind === 'bow')!;
+    expect(second.path).toMatch(/^M .* Q .*/);
+  });
+
+  it('draws a switch whose only links go to access points', () => {
+    const out = layoutGraph({ nodes: [node('sw'), ap('a')], links: [link('sw', 'a')] });
+    expect(out.nodes.map((n) => n.id).sort()).toEqual(['a', 'sw']);
+    expect(out.isolatedCount).toBe(0);
+  });
+
+  it('still counts an access point with no link instead of drawing it', () => {
+    const out = layoutGraph({ nodes: [node('sw'), node('r'), ap('lonely')], links: [link('sw', 'r')] });
+    expect(out.nodes.map((n) => n.id).sort()).toEqual(['r', 'sw']);
+    expect(out.isolatedCount).toBe(1);
+  });
+
+  it('lays out an island of access points with no switch like any box', () => {
+    const out = layoutGraph({ nodes: [ap('a'), ap('b')], links: [link('a', 'b')] });
+    expect(out.nodes).toHaveLength(2);
+    expect(out.edges).toHaveLength(1);
+    expect(out.componentCount).toBe(1);
+  });
+
+  it(`wraps a group after ${AP_PER_LINE} and keeps neighbouring groups apart`, () => {
+    const out = layoutGraph(floor(AP_PER_LINE + 1));
+    const g1 = out.nodes.filter((n) => n.id.startsWith('sw1-ap'));
+    const lines = [...new Set(g1.map((n) => n.cy))].sort((x, y) => x - y);
+    expect(lines).toHaveLength(2);
+    expect(g1.filter((n) => n.cy === lines[0])).toHaveLength(AP_PER_LINE);
+    expect(lines[1] - lines[0]).toBe(AP_LINE_H);
+    // No two drawn things overlap, labels' width included for the circles.
+    const rects = out.nodes.map((n) => {
+      const w = n.ap ? AP_PITCH : n.w;
+      return { id: n.id, l: n.cx - w / 2, r: n.cx + w / 2, t: n.cy - n.h / 2, b: n.cy + n.h / 2 };
+    });
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const [p, q] = [rects[i], rects[j]];
+        const overlap = p.l < q.r && q.l < p.r && p.t < q.b && q.t < p.b;
+        expect(overlap, `${p.id} overlaps ${q.id}`).toBe(false);
+      }
+    }
+    for (const n of out.nodes) {
+      expect(n.cx + (n.ap ? AP_PITCH : n.w) / 2).toBeLessThanOrEqual(out.width);
+      expect(n.cy + n.h / 2).toBeLessThanOrEqual(out.height);
+    }
+  });
+
+  it('orders a group by name and does not depend on input order', () => {
+    const { nodes, links } = floor(5);
+    const one = layoutGraph({ nodes, links });
+    const two = layoutGraph({ nodes: shuffle(nodes, 5), links: shuffle(links, 11) });
+    expect(two).toEqual(one);
+    const g = one.nodes.filter((n) => n.id.startsWith('sw1-ap')).sort((x, y) => x.cx - y.cx);
+    expect(g.map((n) => n.name)).toEqual([...g.map((n) => n.name)].sort());
   });
 });

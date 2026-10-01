@@ -404,6 +404,9 @@ pub(crate) struct MapNode {
     /// with the one the node is filed in; empty when it sits directly in the level's own folder
     /// (always empty on an ordinary level).
     pub folder_path: Vec<MapBreadcrumb>,
+    /// The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki
+    /// MR. The map draws it as an access-point symbol under the device it hangs off.
+    pub access_point: bool,
 }
 
 /// Where links leave the level: a node or a folder outside it.
@@ -573,6 +576,9 @@ pub(crate) async fn topology_map_level(
         super::nodes::resolve_node_names(st, scope, crate::topology_level::names_needed(&level))
             .await;
     crate::topology_level::apply_names(&mut level, &names);
+    let drawn: Vec<Uuid> = level.nodes.iter().map(|n| n.id).collect();
+    let kinds = super::nodes::node_kinds_with_products(admin, &drawn).await;
+    crate::topology_level::apply_access_points(&mut level, &kinds.access_points());
     // The drawing is useful without the run's record, so a failed read leaves both unset.
     if let Some(run) = admin.topology_links.last_run().await.unwrap_or(None) {
         level.derived_at = Some(run.derived_at.to_rfc3339());

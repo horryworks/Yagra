@@ -12,11 +12,19 @@
 // dashed stub for links leaving the level — each with its own size. Every grid cell fits the
 // largest, so boxes of different kinds never overlap.
 //
+// Since ADR-191 Inc.5 a Wi-Fi access point is not a box in the grid. The grid is laid out from the
+// other boxes and the links between them (the backbone); each access point then hangs in a band
+// under its parent — the backbone box it is linked to in the highest row — at a narrower pitch,
+// wrapping after `AP_PER_LINE`. A column widens to fit its group and a row grows by its bands, so
+// a group never overlaps its neighbour's. An island of access points with no backbone box to hang
+// from is laid out as backbone, so it is still drawn.
+//
 // ⚠️ DETERMINISM IS A REQUIREMENT, NOT A NICETY.
 // The map re-fetches on a timer. A layout that depends on input order, on a random seed, or on
 // iteration-until-converged would reshuffle every cycle and be unusable. So: adjacency lists are
 // sorted, components are ordered by (size, lowest id), the barycentre pass runs a fixed number of
-// sweeps with an id tiebreak, and nothing here reads a clock or a random number.
+// sweeps with an id tiebreak, an access point's parent and its place in the group break ties on
+// the id, and nothing here reads a clock or a random number.
 //
 // The fit-once guard in `TopologyMap.tsx` is the *other* half of that and neither replaces the
 // other: the guard stops the viewport being reset under the operator, determinism stops the content
@@ -39,8 +47,18 @@ export const BOX_SIZE: Record<GraphNodeKind, { w: number; h: number }> = {
  *  flat (ADR-191 Inc.2). Still shorter than a folder box, so the grid cell does not grow. */
 export const NODE_TALL = { w: BOX_SIZE.node.w, h: 52 };
 
+/** An access point is a circle this wide, with its name underneath (ADR-191 Inc.5). */
+export const AP_SIZE = { w: 40, h: 40 };
+/** The horizontal pitch of access points under one parent; the name below is cut to fit it. */
+export const AP_PITCH = 104;
+/** How many access points share one line under their parent before the group wraps. */
+export const AP_PER_LINE = 8;
+/** One band of access points: the circle, two lines of text under it, and the gap below. */
+export const AP_LINE_H = 96;
+
 /** The size one box is drawn at. */
-export function boxSize(n: Pick<GraphNode, 'kind' | 'sub'>): { w: number; h: number } {
+export function boxSize(n: Pick<GraphNode, 'kind' | 'sub' | 'ap'>): { w: number; h: number } {
+  if (n.kind === 'node' && n.ap) return AP_SIZE;
   return n.kind === 'node' && n.sub ? NODE_TALL : BOX_SIZE[n.kind];
 }
 
@@ -75,6 +93,9 @@ export interface GraphNode {
   sub: string | null;
   /** Upstream root-cause node id (dependency suppression), or null. */
   rootCause: string | null;
+  /** A Wi-Fi access point: drawn as a circle under its parent rather than as a box in the grid.
+   *  Only a `node` can be one. */
+  ap: boolean;
 }
 
 /** One line to draw between two boxes. */
@@ -174,15 +195,51 @@ export function layoutGraph(input: GraphInput): GraphLayout {
   }
   for (const list of adj.values()) list.sort();
 
-  const linked = [...adj.keys()].sort();
   const isolatedCount = input.nodes.filter((n) => n.kind === 'node' && !adj.has(n.id)).length;
   const looseFolders = input.nodes
     .filter((n) => n.kind === 'folder' && !adj.has(n.id))
     .sort((x, y) => byText(x.name, y.name) || byText(x.id, y.id));
 
-  // 2. Connected components, by iterative BFS. Each component is identified by its lowest id, and
-  //    components are ordered by (size desc, lowest id) so the biggest island reads first and the
-  //    order never depends on which box the input happened to list first.
+  // 1b. Which access points hang under a parent. An access point linked to no backbone box, even
+  //     through other access points, belongs to an island of access points only; there is nothing
+  //     to hang it from, so it joins the backbone and is laid out like any box.
+  const isAp = (id: string) => {
+    const n = byId.get(id)!;
+    return n.kind === 'node' && n.ap;
+  };
+  const hung = new Set<string>();
+  const visited = new Set<string>();
+  for (const start of [...adj.keys()].sort()) {
+    if (!isAp(start) || visited.has(start)) continue;
+    const cluster: string[] = [];
+    let attached = false;
+    const queue = [start];
+    visited.add(start);
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      cluster.push(cur);
+      for (const next of adj.get(cur) ?? []) {
+        if (!isAp(next)) {
+          attached = true;
+        } else if (!visited.has(next)) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    if (attached) for (const id of cluster) hung.add(id);
+  }
+  // The backbone: every linked box but the hung access points, and the links between them. A box
+  // whose only links go to access points is still a member — it is their parent.
+  const badj = new Map<string, string[]>();
+  for (const [id, list] of adj) {
+    if (!hung.has(id)) badj.set(id, list.filter((n) => !hung.has(n)));
+  }
+  const linked = [...badj.keys()].sort();
+
+  // 2. Connected components of the backbone, by iterative BFS. Each component is identified by its
+  //    lowest id, and components are ordered by (size desc, lowest id) so the biggest island reads
+  //    first and the order never depends on which box the input happened to list first.
   const seen = new Set<string>();
   const components: string[][] = [];
   for (const start of linked) {
@@ -193,7 +250,7 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     while (queue.length > 0) {
       const cur = queue.shift()!;
       members.push(cur);
-      for (const next of adj.get(cur) ?? []) {
+      for (const next of badj.get(cur) ?? []) {
         if (!seen.has(next)) {
           seen.add(next);
           queue.push(next);
@@ -211,13 +268,14 @@ export function layoutGraph(input: GraphInput): GraphLayout {
 
   for (const members of components) {
     // 3. Anchor: the caller's, when it is in this component; otherwise the highest-degree box,
-    //    ties broken by the lowest id.
+    //    ties broken by the lowest id. Degree counts backbone links only, so an access point can
+    //    never take the top row from the switch it hangs off.
     const anchor =
       input.anchorId && members.includes(input.anchorId)
         ? input.anchorId
         : members.reduce((best, id) => {
-            const d = (adj.get(id) ?? []).length;
-            const bd = (adj.get(best) ?? []).length;
+            const d = (badj.get(id) ?? []).length;
+            const bd = (badj.get(best) ?? []).length;
             return d > bd || (d === bd && id < best) ? id : best;
           }, members[0]);
 
@@ -229,7 +287,7 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     while (queue.length > 0) {
       const cur = queue.shift()!;
       const r = rank.get(cur)!;
-      for (const next of adj.get(cur) ?? []) {
+      for (const next of badj.get(cur) ?? []) {
         if (!rank.has(next)) {
           rank.set(next, r + 1);
           queue.push(next);
@@ -258,7 +316,7 @@ export function layoutGraph(input: GraphInput): GraphLayout {
         const row = rows.get(r)!;
         const bary = new Map<string, number>();
         for (const id of row) {
-          const neighbours = (adj.get(id) ?? []).filter((n) => (rank.get(n) ?? -1) === r + towards);
+          const neighbours = (badj.get(id) ?? []).filter((n) => (rank.get(n) ?? -1) === r + towards);
           const sum = neighbours.reduce((acc, n) => acc + (pos.get(n) ?? 0), 0);
           bary.set(id, neighbours.length > 0 ? sum / neighbours.length : (pos.get(id) ?? 0));
         }
@@ -290,22 +348,66 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     });
   }
 
-  const cxOf = (col: number) => PAD + col * CELL_W + BOX_W / 2;
-  const cyOf = (rank: number) => PAD + rank * CELL_H + BOX_H / 2;
+  // 6c. Each hung access point's parent: of its backbone neighbours, the one in the highest row,
+  //     then the lowest id. One linked only to other access points takes the parent of the nearest
+  //     one that has its own (fewest hops, then lowest id) — a mesh repeater hangs beside the AP it
+  //     repeats. Step 1b moved every island to the backbone, so every hung one finds a parent.
+  const parentOf = hangAccessPoints(hung, adj, cell);
+  const groups = new Map<string, string[]>();
+  for (const [ap, parent] of parentOf) {
+    if (!groups.has(parent)) groups.set(parent, []);
+    groups.get(parent)!.push(ap);
+  }
+  for (const list of groups.values()) {
+    list.sort((x, y) => byText(byId.get(x)!.name, byId.get(y)!.name) || byText(x, y));
+  }
+
+  // 6d. Column widths and row heights. A column is as wide as the widest group hanging in it, and
+  //     a row grows by the bands of access points under it. With no access point every column is
+  //     CELL_W and every row CELL_H, so a level without one lays out exactly as before.
+  let maxCol = 0;
+  for (const { col } of cell.values()) maxCol = Math.max(maxCol, col);
+  const colContent = new Array<number>(maxCol + 1).fill(BOX_W);
+  const apBands = new Array<number>(Math.max(maxRank, 0) + 1).fill(0);
+  for (const [parent, list] of groups) {
+    const { col, rank } = cell.get(parent)!;
+    colContent[col] = Math.max(colContent[col], Math.min(list.length, AP_PER_LINE) * AP_PITCH);
+    apBands[rank] = Math.max(apBands[rank], Math.ceil(list.length / AP_PER_LINE));
+  }
+  const colLeft: number[] = [];
+  let x = PAD;
+  for (let c = 0; c <= maxCol; c++) {
+    colLeft.push(x);
+    x += colContent[c] + COL_GAP;
+  }
+  const rowTop: number[] = [];
+  let y = PAD;
+  for (let r = 0; r <= maxRank; r++) {
+    rowTop.push(y);
+    y += CELL_H + apBands[r] * AP_LINE_H;
+  }
+  const cxOf = (col: number) => colLeft[col] + colContent[col] / 2;
+  const cyOf = (rank: number) => rowTop[rank] + BOX_H / 2;
 
   const placed: PlacedNode[] = [];
-  let maxCol = 0;
-  for (const [id, { col, rank }] of cell) {
-    const n = byId.get(id)!;
+  const at = new Map<string, { cx: number; cy: number; h: number }>();
+  const put = (n: GraphNode, cx: number, cy: number) => {
     const size = boxSize(n);
-    maxCol = Math.max(maxCol, col);
-    placed.push({
-      ...n,
-      cx: cxOf(col),
-      cy: cyOf(rank),
-      w: size.w,
-      h: size.h,
-      suppressed: n.rootCause != null,
+    at.set(n.id, { cx, cy, h: size.h });
+    placed.push({ ...n, cx, cy, w: size.w, h: size.h, suppressed: n.rootCause != null });
+  };
+  for (const [id, { col, rank }] of cell) put(byId.get(id)!, cxOf(col), cyOf(rank));
+  for (const [parent, list] of groups) {
+    const { col, rank } = cell.get(parent)!;
+    list.forEach((id, i) => {
+      const line = Math.floor(i / AP_PER_LINE);
+      const inLine = Math.min(AP_PER_LINE, list.length - line * AP_PER_LINE);
+      const k = i % AP_PER_LINE;
+      put(
+        byId.get(id)!,
+        cxOf(col) + (k - (inLine - 1) / 2) * AP_PITCH,
+        rowTop[rank] + CELL_H + line * AP_LINE_H + AP_SIZE.h / 2,
+      );
     });
   }
   placed.sort((a, b) => byText(a.id, b.id));
@@ -313,12 +415,46 @@ export function layoutGraph(input: GraphInput): GraphLayout {
   // 7. Edges. A rank-adjacent pair is a straight line from the bottom of one box to the top of the
   //    next. A same-rank or rank-skipping pair bows sideways so it does not run through the boxes
   //    between its ends; the bow's direction and size come from the endpoints' own coordinates, so
-  //    it is deterministic.
+  //    it is deterministic. An access point's line to its parent is straight; any other line that
+  //    touches a hung access point bows off the straight line between the two centres.
   const edges: PlacedEdge[] = [];
   const keys = [...edgeOf.keys()].sort();
   for (const key of keys) {
     const link = edgeOf.get(key)!;
     const [a, b] = key.split('|');
+    const source = link.source || 'l3_subnet';
+    const count = link.count;
+
+    if (hung.has(a) || hung.has(b)) {
+      const qa = at.get(a)!;
+      const qb = at.get(b)!;
+      // Draw from the higher end, so the far end is the one whose suppression mutes the line.
+      const aFirst = qa.cy < qb.cy || (qa.cy === qb.cy && qa.cx <= qb.cx);
+      const [fromId, toId] = aFirst ? [a, b] : [b, a];
+      const [from, to] = aFirst ? [qa, qb] : [qb, qa];
+      const suppressed = byId.get(toId)?.rootCause != null;
+      if (parentOf.get(toId) === fromId) {
+        const y1 = from.cy + from.h / 2;
+        const y2 = to.cy - to.h / 2;
+        const chip = { x: (from.cx + to.cx) / 2, y: (y1 + y2) / 2 };
+        edges.push({
+          id: link.id,
+          x1: from.cx,
+          y1,
+          x2: to.cx,
+          y2,
+          kind: 'line',
+          source,
+          count,
+          chip,
+          suppressed,
+        });
+      } else {
+        edges.push(bowBelow(link.id, from, to, source, count, suppressed));
+      }
+      continue;
+    }
+
     const pa = cell.get(a);
     const pb = cell.get(b);
     if (!pa || !pb) continue;
@@ -333,9 +469,7 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     const adjacent = to.rank - from.rank === 1;
     const y1 = adjacent ? cyOf(from.rank) + hFrom / 2 : cyOf(from.rank);
     const y2 = adjacent ? cyOf(to.rank) - hTo / 2 : cyOf(to.rank);
-    const source = link.source || 'l3_subnet';
     const suppressed = byId.get(toId)?.rootCause != null;
-    const count = link.count;
 
     if (adjacent) {
       const chip = { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
@@ -365,13 +499,99 @@ export function layoutGraph(input: GraphInput): GraphLayout {
     }
   }
 
+  // The last row ends at its boxes, or at the bottom of the last band of access points under it.
+  const bottomOf = (r: number) =>
+    apBands[r] > 0 ? CELL_H + apBands[r] * AP_LINE_H - (AP_LINE_H - AP_SIZE.h) / 2 : BOX_H;
   const hasNodes = placed.length > 0;
   return {
     nodes: placed,
     edges,
-    width: hasNodes ? PAD * 2 + maxCol * CELL_W + BOX_W : 0,
-    height: hasNodes ? PAD * 2 + maxRank * CELL_H + BOX_H : 0,
+    width: hasNodes ? colLeft[maxCol] + colContent[maxCol] + PAD : 0,
+    height: hasNodes ? rowTop[maxRank] + bottomOf(maxRank) + PAD : 0,
     isolatedCount,
     componentCount: components.length,
+  };
+}
+
+/** Step 6c of `layoutGraph`: which backbone box each hung access point sits under. */
+function hangAccessPoints(
+  hung: Set<string>,
+  adj: Map<string, string[]>,
+  cell: Map<string, { col: number; rank: number }>,
+): Map<string, string> {
+  const direct = new Map<string, string>();
+  for (const ap of hung) {
+    let best: string | null = null;
+    let bestRank = Infinity;
+    // `adj` lists are sorted, so the first neighbour at the best rank is the lowest id.
+    for (const n of adj.get(ap) ?? []) {
+      if (hung.has(n)) continue;
+      const r = cell.get(n)!.rank;
+      if (r < bestRank) {
+        best = n;
+        bestRank = r;
+      }
+    }
+    if (best !== null) direct.set(ap, best);
+  }
+  const parentOf = new Map(direct);
+  for (const ap of [...hung].sort()) {
+    if (parentOf.has(ap)) continue;
+    const reached = new Set([ap]);
+    let layer = [ap];
+    while (layer.length > 0 && !parentOf.has(ap)) {
+      const next: string[] = [];
+      for (const cur of layer) {
+        for (const n of adj.get(cur) ?? []) {
+          if (hung.has(n) && !reached.has(n)) {
+            reached.add(n);
+            next.push(n);
+          }
+        }
+      }
+      next.sort();
+      const found = next.find((n) => direct.has(n));
+      if (found !== undefined) parentOf.set(ap, direct.get(found)!);
+      layer = next;
+    }
+  }
+  return parentOf;
+}
+
+/** A line between two points that bows off the straight path, towards the side below it (or to the
+ *  right, for a vertical one): a bow between two access points on one line dips under the row
+ *  instead of running through the circles between them. */
+function bowBelow(
+  id: string,
+  from: { cx: number; cy: number },
+  to: { cx: number; cy: number },
+  source: string,
+  count: number,
+  suppressed: boolean,
+): PlacedEdge {
+  const dx = to.cx - from.cx;
+  const dy = to.cy - from.cy;
+  const len = Math.hypot(dx, dy) || 1;
+  let nx = -dy / len;
+  let ny = dx / len;
+  if (ny < 0 || (ny === 0 && nx < 0)) {
+    nx = -nx;
+    ny = -ny;
+  }
+  const bow = Math.min(AP_LINE_H, len / 3 + AP_SIZE.h);
+  const mx = (from.cx + to.cx) / 2 + nx * bow;
+  const my = (from.cy + to.cy) / 2 + ny * bow;
+  return {
+    id,
+    x1: from.cx,
+    y1: from.cy,
+    x2: to.cx,
+    y2: to.cy,
+    kind: 'bow',
+    path: `M ${from.cx} ${from.cy} Q ${mx} ${my} ${to.cx} ${to.cy}`,
+    source,
+    count,
+    chip: { x: 0.25 * from.cx + 0.5 * mx + 0.25 * to.cx, y: 0.25 * from.cy + 0.5 * my + 0.25 * to.cy },
+    suppressed,
   };
 }

@@ -218,3 +218,29 @@
 .topomap-chip:focus {
   outline: none;
 }
+
+/* ---- ADR-191 Inc.5: a Wi-Fi access point is a disc, not a box ---- */
+.topomap-ap-hit {
+  fill: transparent;
+}
+.topomap-ap-disc {
+  fill: var(--bg-secondary);
+  stroke-width: 2.5;
+}
+/* The selection / focus ring sits outside the state rim, so both stay readable. */
+.topomap-ap-ring {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 2.5;
+  transition: stroke var(--transition);
+}
+.topomap-node.topomap-ap:hover .topomap-ap-ring {
+  stroke: var(--border-color);
+}
+.topomap-node.topomap-ap.selected .topomap-ap-ring,
+.topomap-node.topomap-ap:focus-visible .topomap-ap-ring {
+  stroke: var(--accent-color);
+}
+.topomap-node.topomap-ap.suppressed .topomap-ap-disc {
+  fill: var(--bg-tertiary);
+}

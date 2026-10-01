@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The network map draws Wi-Fi access points as round AP symbols under the switch they hang off.** An access point used to be the same box as a switch, and could land in any row — or at the top, if it had the most links. Now it is a small disc with the Wi-Fi mark, its rim in its state colour and its name underneath, lined up under the non-AP device it is linked to in the highest row (8 to a line, then the next line). A device whose only links go to access points is drawn too, and an access point linked only to other access points hangs beside the one it repeats. Access points with no link are still counted rather than drawn. Both imported access points and Meraki MRs count. API clients: `GET /api/v1/topology/map` and MCP `get_topology kind=map` add `access_point` to each node.
+
 ## v0.3.39 — The network map draws one folder at a time, and a site's devices flat with their subfolders
 
 ### New Features

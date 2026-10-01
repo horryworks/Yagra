@@ -9226,6 +9226,11 @@ export interface components {
          */
         MapNode: {
             /**
+             * @description The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki
+             *     MR. The map draws it as an access-point symbol under the device it hangs off.
+             */
+            access_point: boolean;
+            /**
              * @description On a `flattened` level, the folders between the level and the node, outermost first, ending
              *     with the one the node is filed in; empty when it sits directly in the level's own folder
              *     (always empty on an ordinary level).

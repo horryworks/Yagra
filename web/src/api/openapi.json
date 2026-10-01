@@ -33230,9 +33230,14 @@
           "id",
           "name",
           "state",
-          "folder_path"
+          "folder_path",
+          "access_point"
         ],
         "properties": {
+          "access_point": {
+            "type": "boolean",
+            "description": "The node is a Wi-Fi access point — one imported from its wireless controller, or a Meraki\nMR. The map draws it as an access-point symbol under the device it hangs off."
+          },
           "folder_path": {
             "type": "array",
             "items": {

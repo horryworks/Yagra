@@ -496,6 +496,7 @@ fn compute_with(
             state: state_of(id),
             root_cause: input.root_causes.get(&id).copied(),
             folder_path: path_of(node_group.get(&id).copied().flatten()),
+            access_point: false,
         })
         .collect();
     nodes.sort_by_key(|n| n.id);
@@ -625,6 +626,13 @@ pub(crate) fn apply_names(level: &mut MapLevel, names: &HashMap<Uuid, String>) {
         if s.kind == MapStubKind::Node {
             s.name = name(s.id);
         }
+    }
+}
+
+/// Mark the level's access points, so the map draws them as an AP symbol under their parent.
+pub(crate) fn apply_access_points(level: &mut MapLevel, access_points: &HashSet<Uuid>) {
+    for n in &mut level.nodes {
+        n.access_point = access_points.contains(&n.id);
     }
 }
 
@@ -1107,5 +1115,18 @@ mod tests {
         apply_names(&mut l, &names);
         assert_eq!(l.nodes[0].name, "sw-01");
         assert_eq!(stub(&l, 110).name, id(110).to_string());
+    }
+
+    #[test]
+    fn only_the_named_nodes_are_marked_as_access_points() {
+        let f = fx();
+        let mut l = run(&f, Some(2), &[link(1, 120, 121, LinkSource::Lldp)], None);
+        assert!(
+            l.nodes.iter().all(|n| !n.access_point),
+            "unmarked by default"
+        );
+        apply_access_points(&mut l, &[id(121), id(999)].into_iter().collect());
+        assert!(!node(&l, 120).access_point);
+        assert!(node(&l, 121).access_point);
     }
 }

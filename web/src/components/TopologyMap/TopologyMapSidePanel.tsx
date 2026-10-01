@@ -13,6 +13,7 @@ import { stateColorVar, stateLabel } from '../../lib/format';
 import { SEVERITY_ORDER } from '../../lib/nodeState';
 import { Button } from '../ui/Button';
 import { StatusDot } from '../ui/StatusDot';
+import { WifiIcon } from '../ui/icons';
 import { useEntityNames } from '../ui/entityNames';
 import { edgesOf, levelNodesHref, nodePlace, unresolvedCount, type MapSelection } from './topologyLevel';
 import { MapEdgeMembers } from './MapEdgeMembers';
@@ -126,6 +127,14 @@ export function TopologyMapSidePanel({ level, selection, levelName, onSelectEdge
             {t(`map.kind.${k}`)}
           </li>
         ))}
+        {level.nodes.some((n) => n.access_point) && (
+          <li>
+            <span className="topomap-legend-ap">
+              <WifiIcon width={10} height={10} />
+            </span>
+            {t('map.accessPoint')}
+          </li>
+        )}
         {presentStates.map((s) => (
           <li key={s}>
             <span className="topomap-legend-dot" style={{ background: stateColorVar(s) }} />

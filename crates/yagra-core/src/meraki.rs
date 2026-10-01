@@ -1419,6 +1419,13 @@ pub struct MerakiProduct {
     pub mesh_repeater: bool,
 }
 
+/// Whether a Meraki product type is an access point (an MR). The Dashboard calls that product
+/// `wireless`; the WebUI's `isMerakiAccessPoint` answers the same question for its badge.
+#[must_use]
+pub fn is_access_point_product(product_type: &str) -> bool {
+    product_type.trim().eq_ignore_ascii_case("wireless")
+}
+
 /// Whether a Meraki device is a mesh repeater — an access point with no wired uplink, which the
 /// Dashboard's device listing reports with no `lanIp` (ADR-175 decision 1).
 ///
@@ -1428,7 +1435,7 @@ pub struct MerakiProduct {
 /// (1,710 MRs): offline APs keep their `lanIp`, so an empty one does not mean "switched off".
 #[must_use]
 pub fn is_mesh_repeater(product_type: &str, listed: bool, lan_ip: Option<&str>) -> bool {
-    product_type.trim().eq_ignore_ascii_case("wireless")
+    is_access_point_product(product_type)
         && listed
         && lan_ip
             .and_then(crate::meraki_inventory::usable_address)

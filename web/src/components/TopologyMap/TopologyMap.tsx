@@ -14,9 +14,10 @@ import { useTranslation } from 'react-i18next';
 import { stateColorVar } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
 import { useMapViewStore, type MapViewKey } from '../../store';
-import type { GraphLayout, PlacedEdge, PlacedNode } from './graphLayout';
+import { AP_PITCH, type GraphLayout, type PlacedEdge, type PlacedNode } from './graphLayout';
 import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
 import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
+import { WifiIcon } from '../ui/icons';
 import './TopologyMap.css';
 
 /** How long the "hold Ctrl to zoom" hint stays up after a plain wheel turn. */
@@ -44,6 +45,7 @@ function Box({
   ]
     .filter(Boolean)
     .join(' ');
+  if (node.ap) return <AccessPoint node={node} cls={cls} selected={selected} title={title} onActivate={onActivate} />;
   const external = node.kind === 'external';
   const nameY = node.sub ? node.h / 2 - 3 : node.h / 2 + 4;
   return (
@@ -79,6 +81,60 @@ function Box({
       {node.sub && (
         <text className="topomap-sub" x={external ? 12 : LABEL_X} y={nameY + 17}>
           {fitLabel(node.sub, node.w, external ? 12 : LABEL_X)}
+        </text>
+      )}
+    </g>
+  );
+}
+
+/** A Wi-Fi access point (ADR-191 Inc.5): a ceiling-mount disc seen from below. Its rim carries the
+ *  state colour, as a box's accent bar does, and the <title> reads the same state. The name sits
+ *  under the circle, cut to the pitch the layout gives it; the whole group is the click target. */
+function AccessPoint({
+  node,
+  cls,
+  selected,
+  title,
+  onActivate,
+}: {
+  node: PlacedNode;
+  cls: string;
+  selected: boolean;
+  title: string;
+  onActivate: (node: PlacedNode) => void;
+}) {
+  const r = node.w / 2;
+  const color = stateColorVar(node.state);
+  const nameY = r + 16;
+  return (
+    <g
+      className={`${cls} topomap-ap`}
+      transform={`translate(${node.cx}, ${node.cy})`}
+      role="button"
+      tabIndex={0}
+      aria-label={title}
+      aria-pressed={selected}
+      onClick={() => onActivate(node)}
+      onKeyDown={(e) => activateOnKey(e, () => onActivate(node))}
+    >
+      <title>{title}</title>
+      {/* Invisible, so the name under the circle is part of what can be clicked. */}
+      <rect
+        className="topomap-ap-hit"
+        x={-AP_PITCH / 2 + 4}
+        y={-r}
+        width={AP_PITCH - 8}
+        height={node.sub ? nameY + 20 : nameY + 6}
+      />
+      <circle className="topomap-ap-ring" r={r + 4} />
+      <circle className="topomap-ap-disc" r={r} style={{ stroke: color }} />
+      <WifiIcon x={-12} y={-13} width={24} height={24} style={{ color }} />
+      <text className="topomap-label" textAnchor="middle" y={nameY}>
+        {fitLabel(node.name, AP_PITCH, 0)}
+      </text>
+      {node.sub && (
+        <text className="topomap-sub" textAnchor="middle" y={nameY + 15}>
+          {fitLabel(node.sub, AP_PITCH, 0)}
         </text>
       )}
     </g>

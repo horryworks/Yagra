@@ -124,3 +124,16 @@
   border-style: dashed;
   background: var(--bg-primary);
 }
+
+/* An access point in the legend: the same disc the canvas draws, in miniature (ADR-191 Inc.5). */
+.topomap-legend-ap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-secondary);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}

@@ -49,6 +49,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       state: n.state,
       sub: n.folder_path.length > 0 ? `▤ ${folderTrail(n).join(PATH_SEP)}` : null,
       rootCause: n.root_cause ?? null,
+      ap: n.access_point,
     })),
     ...level.folders.map((f) => ({
       id: graphId('folder', f.id),
@@ -57,6 +58,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       state: worstStateFromCounts(f.counts),
       sub: captions.folder(f),
       rootCause: null,
+      ap: false,
     })),
     ...level.stubs.map((s) => ({
       id: graphId('external', s.id),
@@ -65,6 +67,7 @@ export function levelToGraph(level: MapLevel, captions: LevelCaptions): GraphInp
       state: 'unknown' as NodeState,
       sub: captions.stub(s),
       rootCause: null,
+      ap: false,
     })),
   ];
   const links = level.edges.map((e) => ({

@@ -58,8 +58,8 @@ function level(): MapLevel {
     ],
     subfolder_count: 1,
     nodes: [
-      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder_path: [] },
-      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder_path: [] },
+      { id: SW1, name: 'sw-01', state: 'ok', root_cause: null, folder_path: [], access_point: false },
+      { id: SW2, name: 'sw-02', state: 'warning', root_cause: SW1, folder_path: [], access_point: false },
     ],
     stubs: [{ kind: 'folder', id: WEST, name: 'west', level_group: null }],
     edges: [
@@ -141,6 +141,15 @@ describe('levelToGraph', () => {
     const g = levelToGraph(flat, captions);
     expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.sub).toBe('▤ floor-1 › room-1');
     expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.sub).toBeNull();
+  });
+
+  it('carries the access-point mark to the node, and never to a folder or a stub', () => {
+    const l = level();
+    l.nodes[1] = { ...l.nodes[1], access_point: true };
+    const g = levelToGraph(l, captions);
+    expect(g.nodes.find((n) => n.id === graphId('node', SW2))!.ap).toBe(true);
+    expect(g.nodes.find((n) => n.id === graphId('node', SW1))!.ap).toBe(false);
+    expect(g.nodes.filter((n) => n.kind !== 'node').every((n) => !n.ap)).toBe(true);
   });
 });
 
