@@ -592,7 +592,7 @@ impl AlertManager {
         };
         if states.len() <= ledger.len() {
             for (node, state) in states.iter_mut() {
-                if *state == NodeState::Ok && ledger.get(node).is_some_and(&stale) {
+                if *state == NodeState::Ok && ledger.get(node).is_some_and(stale) {
                     *state = NodeState::Unknown;
                 }
             }
