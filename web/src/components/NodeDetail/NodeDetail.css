@@ -2274,6 +2274,21 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   outline: none;
   border-bottom: var(--border-width) solid var(--accent-color);
 }
+/* The open map's heading row carries its search (ADR-191 Inc.13): the box takes the slack between
+   the title and the link, and the row wraps when the pane is narrow. */
+.nd-grpmap-head {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.nd-grpmap-head > .nd-grpmap-toggle {
+  margin-right: 0;
+}
+.nd-grpmap-find {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
 .nd-grpmap-open {
   font-size: var(--font-sm);
   color: var(--accent-color);

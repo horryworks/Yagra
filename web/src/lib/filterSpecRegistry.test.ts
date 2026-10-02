@@ -74,6 +74,7 @@ import { runFilters } from '../troubleshoot/runFilters';
 import { scheduleFilters } from '../troubleshoot/scheduleFilters';
 import { nodeTabFilterPrefix } from '../components/NodeDetail/tabs';
 import { TREE_SEARCH_KEY } from '../pages/inventoryFilters';
+import { GROUP_MAP_SEARCH_KEY } from '../components/TopologyMap/topologyLevel';
 import { CHANNEL_FILTER_PREFIX, ROUTING_RULE_FILTER_PREFIX } from '../pages/routingFilters';
 import { CANDIDATE_FILTER_PREFIX, ENDPOINT_FILTER_PREFIX } from '../pages/discoveryFilters';
 import { REPORT_TABLE_PREFIX } from '../reports/reportListFilters';
@@ -369,7 +370,7 @@ const NODE_TABS: readonly RouteTable[] = [
 const ROUTES: readonly Route[] = [
   {
     path: '/nodes',
-    own: ['sel', 'tab', TREE_SEARCH_KEY],
+    own: ['sel', 'tab', TREE_SEARCH_KEY, GROUP_MAP_SEARCH_KEY],
     tables: [{ entries: ['inventoryFilterSpecs'], prefix: '' }, ...NODE_TABS],
   },
   { path: '/nodes/:nodeId', own: ['tab'], tables: NODE_TABS },

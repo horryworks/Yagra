@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The network map in a folder's pane on the Nodes page can now be searched too.** The same box as on the full map sits in the map's heading row: it matches host names, takes a regular expression and NOT, outlines the matches and fades the rest, and Enter brings the next match to the middle. The search is kept in the address as `mq=`, so it stays while you move between folders, and **Open full map** takes it there.
+
 ### Bug Fixes
 
 - **A Cisco wireless controller seen over CDP can now be added from the Neighbors tab.** AireOS controllers (`AIR-CT…`) announce themselves only as a host, so Yagra treated them like an IP phone: they were left off the Unregistered devices list, and the Neighbors tab said "It announces itself as an end station (a phone, for example), so it is not listed." instead of offering **Set up monitoring**. A CDP neighbour whose platform starts with `AIR-CT` is now treated as network equipment whatever it announces; it reaches the list on the next sweep (within five minutes).

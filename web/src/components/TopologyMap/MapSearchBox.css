@@ -1,0 +1,45 @@
+/* The search over one level of the network map (ADR-191 Inc.11, Inc.13): the column filter's
+   editor, and how many it found. */
+.mapsearch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(360px, 100%);
+}
+.mapsearch-count {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Beside a heading (a folder's pane): the box, its two toggles and the count on one row, wrapping
+   when the pane is narrow. The editor's own padding is for a popover and goes. */
+.mapsearch.inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  width: auto;
+  min-width: 0;
+}
+.mapsearch.inline .tcond {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+}
+/* Width on the wrapper, never the input: the clear button is placed against the wrapper. */
+.mapsearch.inline .sfield {
+  width: 220px;
+  max-width: 100%;
+}
+.mapsearch.inline .tcond-sw {
+  flex: none;
+}
+.mapsearch.inline .tcond-error {
+  flex-basis: 100%;
+}

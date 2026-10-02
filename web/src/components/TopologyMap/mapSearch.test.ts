@@ -5,7 +5,8 @@ import { decodeCondition, EMPTY_CONDITION } from '../../lib/filterCondition';
 import { bundleId, layoutGraph } from './graphLayout';
 import { centerOn } from './fitView';
 import { boxEmphasis, edgeDimmed, edgeEnds, searchMap, stepThrough } from './mapSearch';
-import { levelToGraph, withSearch } from './topologyLevel';
+import { GROUP_MAP_SEARCH_KEY, levelToGraph, withSearch } from './topologyLevel';
+import { TREE_SEARCH_KEY } from '../../pages/inventoryFilters';
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
@@ -127,5 +128,13 @@ describe('searching a level of the map (ADR-191 Inc.11)', () => {
     expect(withSearch('/topology/map?group=g1', '!~^ap')).toBe('/topology/map?group=g1&q=%21%7E%5Eap');
     expect(withSearch('/topology/map', 'x')).toBe('/topology/map?q=x');
     expect(withSearch('/topology/map?group=g1', '')).toBe('/topology/map?group=g1');
+  });
+
+  // ADR-191 Inc.13: the folder pane's search shares /nodes with the tree's own, so it needs a key
+  // of its own; and the link out hands that condition to the full map unchanged, under its key.
+  it('the folder pane keeps its search apart from the tree and hands it to the full map', () => {
+    expect(GROUP_MAP_SEARCH_KEY).not.toBe(TREE_SEARCH_KEY);
+    const encoded = new URLSearchParams(`${GROUP_MAP_SEARCH_KEY}=%21%7E%5Eap`).get(GROUP_MAP_SEARCH_KEY) ?? '';
+    expect(withSearch('/topology/map?group=g1', encoded)).toBe('/topology/map?group=g1&q=%21%7E%5Eap');
   });
 });

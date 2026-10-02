@@ -135,6 +135,10 @@ export function stubHref(stub: MapStub): string {
   });
 }
 
+/** The URL key of the search over the map in a folder's pane on `/nodes` (ADR-191 Inc.13). Not
+ *  `q`: that route already spends it on the inventory tree's own search (ADR-153). */
+export const GROUP_MAP_SEARCH_KEY = 'mq';
+
 /** `href` with the map's search (`?q=`, ADR-191 Inc.11) carried along, so moving between levels
  *  keeps what the operator is looking for. An empty search adds nothing. */
 export function withSearch(href: string, q: string): string {

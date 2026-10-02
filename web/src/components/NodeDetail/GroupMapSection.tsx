@@ -7,17 +7,24 @@
 //
 // Folding the section is remembered, and a folded map is not fetched at all — the level is the most
 // expensive read the pane makes, so an operator who does not want it does not pay for it.
+//
+// An open map carries the full map's search in its heading row (ADR-191 Inc.13), held in `?mq=`
+// because `/nodes` already spends `q` on the tree. Moving to another folder keeps it, and "open
+// larger" hands it to the full map as its `q`.
 
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { usePrefsStore } from '../../prefs';
 import { topologyMapHref } from '../../lib/entityHref';
 import { TopologyMap } from '../TopologyMap/TopologyMap';
 import { MapEdgeMembers } from '../TopologyMap/MapEdgeMembers';
 import { useMapTitles, useTopologyLevel } from '../TopologyMap/useTopologyLevel';
-import { groupMapTarget } from '../TopologyMap/topologyLevel';
+import { GROUP_MAP_SEARCH_KEY, groupMapTarget, withSearch } from '../TopologyMap/topologyLevel';
 import type { PlacedNode } from '../TopologyMap/graphLayout';
+import { MapSearchBox } from '../TopologyMap/MapSearchBox';
+import { useMapSearch, type MapSearchState } from '../TopologyMap/useMapSearch';
+import type { TopologyLevelView } from '../TopologyMap/useTopologyLevel';
 import {
   MIN_GROUP_MAP_PX,
   groupMapCeiling,
@@ -33,13 +40,54 @@ interface Props {
 }
 
 export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
+  const collapsed = usePrefsStore((s) => s.groupMapCollapsed);
+  const [params, setParams] = useSearchParams();
+  const mq = params.get(GROUP_MAP_SEARCH_KEY) ?? '';
+  // Written from the latest query string, not this render's: the tree writes the same URL.
+  const writeMq = useCallback(
+    (value: string) =>
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (value) next.set(GROUP_MAP_SEARCH_KEY, value);
+          else next.delete(GROUP_MAP_SEARCH_KEY);
+          return next;
+        },
+        { replace: true },
+      ),
+    [setParams],
+  );
+  if (collapsed) return <GroupMapHead groupId={groupId} mq={mq} search={null} />;
+  return (
+    <GroupMapOpen
+      groupId={groupId}
+      mq={mq}
+      writeMq={writeMq}
+      onOpenNode={onOpenNode}
+      onOpenGroup={onOpenGroup}
+    />
+  );
+}
+
+/** The section's heading row and, below it, whatever the open map has to show. */
+function GroupMapHead({
+  groupId,
+  mq,
+  search,
+  children,
+}: {
+  groupId: string;
+  mq: string;
+  search: MapSearchState | null;
+  children?: React.ReactNode;
+}) {
   const { t } = useTranslation('nodes');
   const collapsed = usePrefsStore((s) => s.groupMapCollapsed);
   const toggle = usePrefsStore((s) => s.toggleGroupMap);
   const bodyId = `nd-grpmap-${groupId}`;
   return (
     <section>
-      <div className="nd-section-head">
+      <div className="nd-section-head nd-grpmap-head">
         <button
           type="button"
           className="nd-grpmap-toggle"
@@ -50,20 +98,48 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
           <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
           <span className="nd-section-t">{t('groupDetail.map.title')}</span>
         </button>
-        <Link className="nd-grpmap-open" to={topologyMapHref({ group: groupId })}>
+        <div className="nd-grpmap-find">{search && <MapSearchBox state={search} inline />}</div>
+        <Link className="nd-grpmap-open" to={withSearch(topologyMapHref({ group: groupId }), mq)}>
           {t('groupDetail.map.open')}
         </Link>
       </div>
-      {!collapsed && (
-        <div id={bodyId}>
-          <GroupMapBody groupId={groupId} onOpenNode={onOpenNode} onOpenGroup={onOpenGroup} />
-        </div>
-      )}
+      {!collapsed && <div id={bodyId}>{children}</div>}
     </section>
   );
 }
 
-function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
+function GroupMapOpen({
+  groupId,
+  mq,
+  writeMq,
+  onOpenNode,
+  onOpenGroup,
+}: Props & { mq: string; writeMq: (value: string) => void }) {
+  const view = useTopologyLevel(groupId);
+  const search = useMapSearch(view.level, view.layout, mq, writeMq);
+  // The box is offered only over a map that is drawn: searching a level that says "too big" or
+  // "no lines yet" would count hits nobody can see.
+  const drawn = !!view.level && !view.level.overflow && view.layout.nodes.length > 0;
+  return (
+    <GroupMapHead groupId={groupId} mq={mq} search={drawn ? search : null}>
+      <GroupMapBody
+        groupId={groupId}
+        view={view}
+        search={search}
+        onOpenNode={onOpenNode}
+        onOpenGroup={onOpenGroup}
+      />
+    </GroupMapHead>
+  );
+}
+
+function GroupMapBody({
+  groupId,
+  view,
+  search,
+  onOpenNode,
+  onOpenGroup,
+}: Props & { view: TopologyLevelView; search: MapSearchState }) {
   const { t } = useTranslation('nodes');
   // The map's height (ADR-191 Inc.12): the stored one, re-clamped for this window, while no drag is
   // in flight; the drag's own value while one is. The store is written once, when the drag ends.
@@ -112,7 +188,7 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
     },
     [committed, setStored],
   );
-  const { level, error, layout, edge: edgeId, selectEdge } = useTopologyLevel(groupId);
+  const { level, error, layout, edge: edgeId, selectEdge } = view;
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
   const edge = edgeId ? (level?.edges.find((e) => e.id === edgeId) ?? null) : null;
 
@@ -147,6 +223,8 @@ function GroupMapBody({ groupId, onOpenNode, onOpenGroup }: Props) {
           wheelNeedsModifier
           wheelHint={t('groupDetail.map.wheelHint')}
           touchPans={false}
+          search={search.search}
+          focus={search.focus}
         />
       </div>
       {/* Drag the bottom edge to make the map taller or shorter; the size is remembered. The same

@@ -39,10 +39,8 @@ import {
   type MapSelection,
 } from '../components/TopologyMap/topologyLevel';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
-import { decodeCondition, encodeCondition, type TextCondition } from '../lib/filterCondition';
-import { isImeComposing } from '../lib/ime';
-import { TextConditionEditor } from '../components/ui/TextConditionEditor';
-import { searchMap, stepThrough } from '../components/TopologyMap/mapSearch';
+import { MapSearchBox } from '../components/TopologyMap/MapSearchBox';
+import { useMapSearch } from '../components/TopologyMap/useMapSearch';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import type { TreeSelection } from '../components/NodeTree/NodeTree';
 import './TopologyMapPage.css';
@@ -56,7 +54,6 @@ export function TopologyMapPage() {
   const urlSel = useMemo(() => selectionFromParam(parseSelection(selParam)), [selParam]);
   // The search (ADR-191 Inc.11): the column filter's condition, held in `?q=` like a list's filter.
   const q = params.get('q') ?? '';
-  const cond = useMemo(() => decodeCondition(q), [q]);
   const {
     level,
     error,
@@ -137,32 +134,17 @@ export function TopologyMapPage() {
 
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
 
-  const setCond = useCallback(
-    (next: TextCondition) => {
+  const writeQ = useCallback(
+    (value: string) => {
       const p = new URLSearchParams(params);
-      const value = encodeCondition(next);
       if (value) p.set('q', value);
       else p.delete('q');
       setParams(p, { replace: true });
     },
     [params, setParams],
   );
-  const search = useMemo(() => searchMap(level, viewLayout, cond), [level, viewLayout, cond]);
-  // Enter steps through the hits, bringing each to the middle; Shift+Enter steps back.
-  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
-  // The hits are worked out from the box's text at the moment Enter is pressed, not from the last
-  // render: the Enter that commits a freshly typed term arrives before the URL has the term, and
-  // stepping through the previous search's hits would centre the wrong box.
-  const step = useCallback(
-    (dir: 1 | -1, term: string) => {
-      const order = searchMap(level, viewLayout, { ...cond, term }).order;
-      setFocus((cur) => {
-        const id = stepThrough(order, cur?.id ?? null, dir);
-        return id ? { id, seq: (cur?.seq ?? 0) + 1 } : cur;
-      });
-    },
-    [level, viewLayout, cond],
-  );
+  const mapSearch = useMapSearch(level, viewLayout, q, writeQ);
+  const { cond, search, focus } = mapSearch;
 
   const selection: MapSelection = edge
     ? { kind: 'edge', id: edge }
@@ -232,41 +214,13 @@ export function TopologyMapPage() {
       : [{ label: t('map.root') }]),
   ];
 
-  const searchBox = (
-    <div
-      className="topomap-search"
-      title={t('map.search.stepHint')}
-      onKeyDown={(e) => {
-        // The editor commits on Enter itself; here Enter also moves to the next hit.
-        if (e.key !== 'Enter' || isImeComposing(e)) return;
-        const box = e.target as HTMLInputElement;
-        if (box.tagName !== 'INPUT') return;
-        step(e.shiftKey ? -1 : 1, box.value);
-      }}
-    >
-      <TextConditionEditor
-        value={cond}
-        onChange={setCond}
-        modes={['contains', 'regex']}
-        allowNot
-        placeholder={t('map.search.placeholder')}
-      />
-      {search.matched && (
-        <p className="topomap-search-count" aria-live="polite">
-          {t('map.search.count', { count: search.total })}
-          {search.undrawn > 0 && ' ' + t('map.search.undrawn', { count: search.undrawn })}
-        </p>
-      )}
-    </div>
-  );
-
   return (
     <div className="topomap-page">
       <PageHeader
         title={t('nav:topology.map')}
         trail={trail}
         note={t('map.note.level')}
-        actions={level ? searchBox : undefined}
+        actions={level ? <MapSearchBox state={mapSearch} /> : undefined}
       />
       {body()}
     </div>
