@@ -453,7 +453,7 @@ async fn test_notification_channel(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<ChannelTestResult>> {
-    let (_, open) = admin
+    let open = admin
         .notifications
         .open_channel(id)
         .await
@@ -466,7 +466,7 @@ async fn test_notification_channel(
         })?
         .ok_or_else(|| ApiError::not_found("channel_not_found", format!("no channel {id}")))?;
     let kind = open.config.kind();
-    let Some(channel) = crate::alerts::notify::build_test_channel(&open.config) else {
+    let Some(channel) = crate::alerts::notify::build_channel(&open.config) else {
         // Only an email channel can fail to build: its stored addresses did not parse. The same
         // channel is silently skipped by the routing snapshot, which is worth saying here.
         return Ok(Json(ChannelTestResult {
@@ -476,12 +476,26 @@ async fn test_notification_channel(
         }));
     };
     let notification = crate::alerts::notify::test_notification(kind, &open.template);
-    let outcome = crate::alerts::notify::send_test(
-        channel.as_ref(),
-        &notification,
-        crate::alerts::notify::test_close_delay(kind),
-    )
-    .await;
+    // Spawned, then awaited: a PagerDuty or JSM test opens a real incident and closes it seconds
+    // later. Run inside this request's future, a closed tab or a dropped connection in that pause
+    // would cancel the close and leave the incident paging the on-call. A spawned task finishes
+    // whether or not anyone is still waiting for the answer.
+    let outcome = tokio::spawn(async move {
+        crate::alerts::notify::send_test(
+            channel.as_ref(),
+            &notification,
+            crate::alerts::notify::test_close_delay(kind),
+        )
+        .await
+    })
+    .await
+    .map_err(|e| {
+        ApiError::from_internal(
+            &e,
+            "notification channel test task",
+            "the test send stopped unexpectedly",
+        )
+    })?;
     tracing::info!(
         channel = %id,
         delivered = outcome.delivered,

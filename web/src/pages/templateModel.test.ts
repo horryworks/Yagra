@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
   backToFire,
@@ -17,6 +18,7 @@ import {
   serializeField,
   serializeSegments,
   subjectIsBuiltin,
+  visualChanged,
   withField,
   writeOwn,
   type Segment,
@@ -73,6 +75,31 @@ describe('writing and reading one row', () => {
     expect(serializeSegments([text('a\n'), v('metric', '', true)])).toBe(
       'a\n{% if metric is defined %}{{ metric }}{% endif %}',
     );
+  });
+
+  // A `{` the operator typed at the end of a piece used to meet the `{` of whatever the serializer
+  // wrote next - a variable, `{% endif %}`, `{% else %}` - and make an opener: `Alert {{{ x }}`.
+  it('keeps a brace at the end of a piece text, whatever follows it', () => {
+    const rows: Segment[][] = [
+      [text('Alert {'), v('node_name')],
+      [text('a {'), v('metric', '', true)],
+      [text('{'), v('severity'), text('{')],
+    ];
+    for (const row of rows) {
+      const src = serializeSegments(row);
+      expect(src).not.toMatch(/\{\{\{|\{\{%|\{\{#/);
+      expect(sameSegments(reads(src).fire, row), src).toBe(true);
+    }
+    const model: VisualTemplate = {
+      fire: { subject: [text('fire {')], body: [] },
+      resolve: { subject: [text('resolve {')], body: null },
+      suppress: { subject: null, body: null },
+    };
+    const src = serializeField(model, 'subject')!;
+    expect(src).not.toMatch(/\{\{%/);
+    const b = reads(src);
+    expect(b.fire).toEqual([text('fire {')]);
+    expect(b.resolve).toEqual([text('resolve {')]);
   });
 
   it('reads both quote styles and the joined list in either spelling', () => {
@@ -201,6 +228,23 @@ describe("the built-in draft", () => {
   it('keeps a stored body when the subject is still the built-in', () => {
     const opened = openTemplate({ subject: null, body: 'hello {{ node_name }}' }, DRAFT);
     expect(opened.ok && saveRequest(opened.model, DRAFT)).toEqual({ subject: null, body: 'hello {{ node_name }}' });
+  });
+
+  // Opening a template the editor would spell differently must not count as an edit: Save would
+  // be offered straight away and would rewrite the operator's text.
+  it('a stored template the editor only spells differently is not a change', () => {
+    const stored = { subject: `{{node_name}} {{ group | default('n/a') }}`, body: null };
+    const opened = openTemplate(stored, DRAFT);
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(visualChanged(stored, opened.model, DRAFT)).toBe(false);
+    expect(visualChanged(stored, withField(opened.model, 'fire', 'subject', [text('x')]), DRAFT)).toBe(true);
+    // Fire's built-in subject stored as text is not a change either.
+    const builtin = { subject: BUILTIN[0].subject, body: null };
+    const b = openTemplate(builtin, DRAFT);
+    expect(b.ok && visualChanged(builtin, b.model, DRAFT)).toBe(false);
+    // Nothing stored, nothing touched.
+    expect(visualChanged({ subject: null, body: null }, builtinTemplate(DRAFT), DRAFT)).toBe(false);
   });
 
   it('without a draft from the server, opens empty and saves an empty subject as built-in', () => {

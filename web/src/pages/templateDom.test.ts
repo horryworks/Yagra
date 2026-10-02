@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import {
   chipNodes,
   chipSegment,
   insertNodes,
+  isEmptiedField,
   paintChip,
   readSegments,
   renderSegments,
@@ -51,6 +53,31 @@ describe('a field as DOM', () => {
     el.appendChild(document.createTextNode('a b'));
     for (const n of chipNodes(document, v('node_name'), look)) el.appendChild(n);
     expect(readSegments(el)).toEqual([text('a b'), v('node_name')]);
+  });
+
+  // Chrome writes an empty line as `<div><br></div>`: the block is the newline, and the `<br>`
+  // only holds it open. Counting both added a line the operator never typed.
+  it('reads an empty line block as one newline', () => {
+    const el = field();
+    el.innerHTML = 'a<div><br></div>';
+    expect(readSegments(el)).toEqual([text('a\n')]);
+    el.innerHTML = 'a<div><br></div><div>b</div>';
+    expect(readSegments(el)).toEqual([text('a\n\nb')]);
+    el.innerHTML = 'a<div>b<br><br></div>';
+    expect(readSegments(el)).toEqual([text('a\nb\n')]);
+  });
+
+  it('knows a field emptied down to a lone break, padding included', () => {
+    const el = field();
+    el.innerHTML = '<br>';
+    expect(isEmptiedField(el)).toBe(true);
+    el.innerHTML = '<br data-filler="1">';
+    expect(isEmptiedField(el)).toBe(true);
+    // One typed empty line plus its padding is content.
+    el.innerHTML = '<br><br data-filler="1">';
+    expect(isEmptiedField(el)).toBe(false);
+    el.innerHTML = 'a';
+    expect(isEmptiedField(el)).toBe(false);
   });
 
   it('reads a line a browser wrapped in a block of its own', () => {

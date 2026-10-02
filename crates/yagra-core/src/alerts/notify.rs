@@ -133,8 +133,16 @@ fn hardened_client() -> reqwest::Client {
 /// either - nor go into a log line. The source chain is then appended, because the top-level text
 /// alone ("error sending request") does not say whether DNS, the TCP connect or TLS was the part
 /// that failed, which is the one thing an operator testing a channel needs to know.
+///
+/// **The host is then taken out of the chain**, because a cause can name it on its own: rustls's
+/// "certificate not valid for name \"hooks.example.com\"" is the host the sealed URL points at.
 fn delivery_error(e: reqwest::Error) -> NotifyError {
     use std::error::Error as _;
+    let host = e
+        .url()
+        .and_then(|u| u.host_str())
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned())
+        .filter(|h| !h.is_empty());
     let e = e.without_url();
     let mut text = e.to_string();
     let mut source = e.source();
@@ -142,6 +150,9 @@ fn delivery_error(e: reqwest::Error) -> NotifyError {
         text.push_str(": ");
         text.push_str(&cause.to_string());
         source = cause.source();
+    }
+    if let Some(host) = host {
+        text = text.replace(&host, "<host>");
     }
     NotifyError::Delivery(text)
 }
@@ -469,7 +480,7 @@ impl EmailChannel {
 }
 
 /// Build a live delivery channel from a stored channel config (None if email params are bad).
-fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
+pub(crate) fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
     match config {
         ChannelConfig::Webhook { url } => {
             Some(Arc::new(WebhookChannel::new(url.clone())) as Arc<dyn NotifyChannel>)
@@ -632,13 +643,6 @@ fn notify_error_text(e: NotifyError) -> String {
     match e {
         NotifyError::Delivery(text) => text,
     }
-}
-
-/// Build the live channel a test send uses - the same builder the routing snapshot uses, so the
-/// test goes through the delivery code a real alert goes through. `None` when an email channel's
-/// stored addresses do not parse.
-pub(crate) fn build_test_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
-    build_channel(config)
 }
 
 #[async_trait]
@@ -2729,5 +2733,52 @@ mod test_send_tests {
         assert!(!text.contains("s3cr3t-path"), "{text}");
         assert!(!text.contains("nonexistent.invalid"), "{text}");
         assert!(!text.is_empty());
+    }
+
+    /// The other way a host gets out: rustls names the host it expected when the certificate is for
+    /// another name, deep in the source chain the error text keeps on purpose.
+    #[tokio::test]
+    async fn a_certificate_for_another_name_does_not_carry_the_host() {
+        use std::sync::Arc;
+        let kp = rcgen::KeyPair::generate().expect("keypair");
+        let cert = rcgen::CertificateParams::new(vec!["other.test".to_owned()])
+            .expect("params")
+            .self_signed(&kp)
+            .expect("sign");
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(kp.serialize_der().into()),
+        )
+        .expect("server config");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((tcp, _)) = listener.accept().await {
+                let _ = acceptor.accept(tcp).await;
+            }
+        });
+
+        // Trusted, so the failure is the name and not the issuer.
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(cert.pem().as_bytes()).unwrap())
+            .build()
+            .unwrap();
+        let err = client
+            .post(format!("https://localhost:{port}/s3cr3t-path"))
+            .send()
+            .await
+            .unwrap_err();
+        let NotifyError::Delivery(text) = delivery_error(err);
+        // Premise: this is the name-mismatch failure, which is the one that names the host.
+        assert!(text.contains("not valid for name"), "{text}");
+        assert!(!text.contains("localhost"), "{text}");
+        assert!(!text.contains("s3cr3t-path"), "{text}");
     }
 }

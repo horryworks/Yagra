@@ -128,6 +128,9 @@ export function readSegments(el: HTMLElement): Segment[] {
       const tag = child.nodeName;
       if (tag === 'BR') {
         if ((child as HTMLElement).dataset.filler && child === el.lastChild) return;
+        // The last `<br>` of a line block only holds the block open (`<div><br></div>` is one
+        // empty line); the block already counted its newline.
+        if (child === node.lastChild && (node.nodeName === 'DIV' || node.nodeName === 'P') && node !== el) return;
         push('\n');
         return;
       }
@@ -142,6 +145,15 @@ export function readSegments(el: HTMLElement): Segment[] {
   };
   walk(el);
   return out;
+}
+
+/**
+ * Whether deleting has left the field holding nothing but a line break - the browser's own `<br>`,
+ * or the padding one `padTrailingBreak` adds. Such a field reads as empty but is not `:empty`, so
+ * it would hide the placeholder that says blank means the built-in text.
+ */
+export function isEmptiedField(el: HTMLElement): boolean {
+  return el.childNodes.length === 1 && el.firstChild?.nodeName === 'BR';
 }
 
 /** Where to insert: the given range when it is inside the field, otherwise the end of the field. */

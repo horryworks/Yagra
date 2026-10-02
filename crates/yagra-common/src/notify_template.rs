@@ -532,9 +532,6 @@ mod tests {
         assert_eq!(NotifyEvent::from_token("Fire"), None);
     }
 
-    /// The catalogue and the context are one list written twice unless this holds. A variable the
-    /// palette offers but the context never provides renders as empty text and looks like a Yagra
-    /// bug; a fact the context carries but the catalogue omits is undiscoverable.
     #[test]
     fn every_preview_sample_round_trips_through_its_token_and_through_serde() {
         for sample in PreviewSample::ALL {
@@ -573,6 +570,9 @@ mod tests {
         }
     }
 
+    /// The catalogue and the context are one list written twice unless this holds. A variable the
+    /// palette offers but the context never provides renders as empty text and looks like a Yagra
+    /// bug; a fact the context carries but the catalogue omits is undiscoverable.
     #[test]
     fn every_exposed_key_is_a_declared_variable() {
         let mut exposed = keys(&sample_facts(NotifyEvent::Fire));

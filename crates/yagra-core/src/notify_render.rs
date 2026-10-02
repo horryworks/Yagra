@@ -211,7 +211,8 @@ fn render_field(
         ));
     }
 
-    if needs_json && field == TemplateField::Body {
+    // Blank is not judged as JSON: the caller keeps the built-in body for it (`render_with_fallback`).
+    if needs_json && field == TemplateField::Body && !out.trim().is_empty() {
         if let Err(e) = serde_json::from_str::<serde_json::Value>(&out) {
             return Err(fail(
                 FailureKind::NotJson,
@@ -260,14 +261,21 @@ pub fn render_with_fallback(
         return out;
     };
     let env = environment();
+    // A field that renders to nothing keeps the built-in text, and that is not a failure: it is how
+    // a template says "the built-in text here". The visual editor writes exactly that for a point in
+    // the alert's life the operator left blank while giving another its own text
+    // (`{% if event == "resolve" %}...{% else %}{% endif %}`), and an empty subject or body is never
+    // what anyone meant to send.
     if let Some(source) = template.subject.as_deref() {
         match render_field(&env, TemplateField::Subject, source, facts, false) {
+            Ok(s) if s.trim().is_empty() => {}
             Ok(s) => out.subject = s,
             Err(e) => out.failures.push(e),
         }
     }
     if let Some(source) = template.body.as_deref() {
         match render_field(&env, TemplateField::Body, source, facts, needs_json) {
+            Ok(s) if s.trim().is_empty() => {}
             Ok(s) => out.body = s,
             Err(e) => out.failures.push(e),
         }
@@ -533,6 +541,31 @@ mod tests {
                 v.name
             );
         }
+    }
+
+    /// The visual editor saves "built-in at fire, own text at resolve" as an `if` whose `else`
+    /// arm is empty. Fire must then send the built-in text, never an empty subject or body - and on
+    /// a JSON channel the empty body is not a `not_json` failure either.
+    #[test]
+    fn a_field_that_renders_to_nothing_keeps_the_built_in_text() {
+        let branch = r#"{% if event == "resolve" %}recovered{% else %}{% endif %}"#;
+        for needs_json in [false, true] {
+            let r = render(&tpl(Some(branch), Some(branch)), needs_json);
+            assert_eq!(r.subject, BUILTIN_SUBJECT);
+            assert_eq!(r.body, BUILTIN_BODY);
+            assert!(r.failures.is_empty(), "{:?}", r.failures);
+        }
+        let r = render(&tpl(Some("  \n "), None), false);
+        assert_eq!(r.subject, BUILTIN_SUBJECT);
+        // The other arm still renders.
+        let r = render_with_fallback(
+            Some(&tpl(Some(branch), None)),
+            &sample_facts(NotifyEvent::Resolve),
+            false,
+            BUILTIN_SUBJECT,
+            BUILTIN_BODY,
+        );
+        assert_eq!(r.subject, "recovered");
     }
 
     /// Only the two channel kinds that put the body into JSON demand it. Exhaustive so a new

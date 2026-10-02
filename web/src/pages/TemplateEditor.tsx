@@ -21,6 +21,7 @@ import {
   chipNodes,
   chipSegment,
   insertNodes,
+  isEmptiedField,
   paintChip,
   readSegments,
   renderSegments,
@@ -161,7 +162,7 @@ export function TemplateField({
       onInput={() => {
         const field = el.current;
         // A field emptied by deleting leaves a lone `<br>` that would hide the placeholder.
-        if (field && field.innerHTML === '<br>') field.replaceChildren();
+        if (field && isEmptiedField(field)) field.replaceChildren();
         emit();
       }}
       onKeyDown={onKeyDown}

@@ -44,6 +44,7 @@ import {
   saveRequest,
   subjectIsBuiltin,
   TEMPLATE_EVENTS,
+  visualChanged,
   withField,
   writeOwn,
   type BuiltinDraft,
@@ -141,7 +142,16 @@ export function ChannelTemplateModal({
     () => (mode === 'visual' && model ? saveRequest(model, boot?.draft ?? null) : saveBody(code)),
     [mode, model, code, boot],
   );
-  const dirty = isDirty(channel, { subject: request.subject ?? '', body: request.body ?? '' });
+  // In the visual view, against the stored template as the editor reads it: one it would only
+  // spell differently is not an edit, and must not offer to rewrite the operator's text.
+  const dirty =
+    mode === 'visual' && model
+      ? visualChanged(
+          { subject: channel.subject_template ?? null, body: channel.body_template ?? null },
+          model,
+          boot?.draft ?? null,
+        )
+      : isDirty(channel, { subject: request.subject ?? '', body: request.body ?? '' });
   const sample = previewSample(sampleId);
 
   // The preview follows the text, a moment after the typing stops. An answer to an older request is
@@ -293,7 +303,7 @@ export function ChannelTemplateModal({
             )}
 
             {unsupported && (
-              <div className="tpl-unsupported" role="status">
+              <div className="form-warning tpl-unsupported" role="status">
                 <p>{t('routing.template.unsupportedLead')}</p>
                 <p>
                   {t(`routing.template.unsupported.${unsupported.reason}`)} <code>{unsupported.snippet}</code>

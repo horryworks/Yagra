@@ -71,19 +71,13 @@
   cursor: default;
 }
 
-.tpl-note,
-.tpl-unsupported {
+.tpl-note {
   font-size: var(--font-xs);
   color: var(--text-secondary);
   margin: 0;
 }
 
-.tpl-unsupported {
-  padding: 8px 10px;
-  border: var(--border-width) solid var(--status-warning);
-  border-radius: var(--radius-sm);
-}
-
+/* The box itself is the shared .form-warning; only the wrapping of a long snippet is local. */
 .tpl-unsupported p {
   margin: 0;
   overflow-wrap: anywhere;
@@ -485,7 +479,8 @@
   height: 1em;
   margin: 0 2px;
   vertical-align: middle;
-  background: var(--status-critical);
+  /* Not a status colour: where a title is cut says nothing about a device (tokens.css). */
+  background: var(--accent-color);
 }
 
 .tpl-cut {

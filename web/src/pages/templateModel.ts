@@ -4,8 +4,11 @@
 // the template text the server stores.
 //
 // The stored format does not change. A template saved here is the same minijinja text an operator
-// could have typed into the code editor, so the server, the database and the delivery path are not
-// involved. That makes this file the whole risk of the feature, and why it is a `.ts` with tests:
+// could have typed into the code editor, so the database is not involved. One shape leans on the
+// delivery path: "built-in at fire, own text at resolve" saves an `if` whose `else` arm is empty,
+// and it is the renderer that turns a field rendered to nothing into the built-in text
+// (notify_render.rs) - a core older than that sends the empty field. Otherwise this file is the
+// whole risk of the feature, and why it is a `.ts` with tests:
 //
 // - `serializeField` writes only a small set of shapes, and `parseField` reads exactly that set
 //   back. Anything else in a stored template (a loop, a nested `if`, another filter) is refused
@@ -137,8 +140,10 @@ function splitLines(segments: readonly Segment[]): Segment[][] {
 /** Literal text, with any `{{`, `{%` or `{#` made inert so the operator's braces stay text. */
 function escapeText(text: string): string {
   // A lookahead, not a capture: `{{{` has two openers, and consuming the second brace as part of
-  // the first match would leave it unescaped.
-  return text.replace(/\{(?=[{%#])/g, "{{ '{' }}");
+  // the first match would leave it unescaped. A `{` at the end of the piece is escaped too: what
+  // the serializer writes next (a variable, `{% endif %}`, `{% else %}`) starts with a `{`, so the
+  // two would make an opener the operator never typed.
+  return text.replace(/\{(?=[{%#]|$)/g, "{{ '{' }}");
 }
 
 function variableExpr(s: Extract<Segment, { kind: 'var' }>): string {
@@ -455,6 +460,26 @@ export function saveRequest(
     subject: subjectIsBuiltin(model, draft) ? null : serializeField(model, 'subject'),
     body: serializeField(model, 'body'),
   };
+}
+
+/**
+ * Whether saving `model` would change what the channel stores, judged against the stored template
+ * as the editor reads it rather than as text. A template the editor would only spell differently
+ * - other spacing or quotes, a subject equal to the built-in one - is not a change the operator
+ * made, and treating it as one would offer to rewrite their text the moment the dialog opens.
+ */
+export function visualChanged(
+  stored: { subject: string | null; body: string | null },
+  model: VisualTemplate,
+  draft: BuiltinDraft,
+): boolean {
+  const next = saveRequest(model, draft);
+  const opened = openTemplate(stored, draft);
+  const blank = (s: string | null) => (s === null || s.trim() === '' ? null : s);
+  const base = opened.ok
+    ? saveRequest(opened.model, draft)
+    : { subject: blank(stored.subject), body: blank(stored.body) };
+  return next.subject !== base.subject || next.body !== base.body;
 }
 
 /** Replace one field's row at one point in the alert's life. At resolve or suppress this gives

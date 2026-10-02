@@ -265,14 +265,16 @@ impl NotificationRepo {
         Ok(out)
     }
 
-    /// One channel with its config decrypted, **enabled or not**, plus its display name — for the
-    /// test send (ADR-192), which an operator uses before switching a channel on.
+    /// One channel with its config decrypted, **enabled or not** - for the test send (ADR-192),
+    /// which an operator uses before switching a channel on.
     ///
     /// `Ok(None)` = no such channel. A config that does not decrypt is an `Err`, not a `None`: the
     /// row exists, and answering 404 for it would send the operator looking for the wrong fault.
-    pub async fn open_channel(&self, id: Uuid) -> anyhow::Result<Option<(String, OpenChannel)>> {
+    pub async fn open_channel(&self, id: Uuid) -> anyhow::Result<Option<OpenChannel>> {
         let Some(row) = sqlx::query(
-            "SELECT id, name, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce,                     subject_template, body_template              FROM notification_channels WHERE id = $1",
+            "SELECT id, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
+                    subject_template, body_template \
+             FROM notification_channels WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -280,9 +282,8 @@ impl NotificationRepo {
         else {
             return Ok(None);
         };
-        let name: String = row.try_get("name")?;
         match self.open_row(&row)? {
-            Some(open) => Ok(Some((name, open))),
+            Some(open) => Ok(Some(open)),
             None => Err(anyhow::anyhow!(
                 "notification channel {id}: config decrypt failed"
             )),
