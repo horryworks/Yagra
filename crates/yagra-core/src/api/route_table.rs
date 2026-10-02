@@ -1535,6 +1535,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/notification-channels/builtin-template",
+        ADMIN_CFG,
+        // The same family as `template-variables` above: a constant of the Yagra version, the
+        // built-in subject written as a template, served so the editor need not copy it.
+        Exempt(
+            "Yagra's built-in notification subject written as a template, a constant of the              version like the variable catalogue; it returns nothing about the fleet",
+        ),
+    ),
+    (
+        "GET",
         "/api/v1/openapi.json",
         Global("the API contract document itself"),
         Exempt("the REST contract document; an MCP client reads tools/list, not OpenAPI"),

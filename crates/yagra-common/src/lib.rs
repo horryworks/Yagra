@@ -119,7 +119,8 @@ pub use node_kind::{NodeKind, NodeRows};
 #[cfg(any(test, feature = "test-util"))]
 pub use notify_template::sample_row_facts;
 pub use notify_template::{
-    minimal_facts, sample_facts, AlertFacts, NotifyEvent, TemplateVariable, TEMPLATE_VARIABLES,
+    liveness_sample_facts, minimal_facts, preview_facts, sample_facts, AlertFacts, NotifyEvent,
+    PreviewSample, TemplateVariable, TEMPLATE_VARIABLES,
 };
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::{AlertFacts, NotifyEvent};
+use yagra_common::{AlertFacts, NotifyEvent, PreviewSample};
 
 use crate::repo::{NodeFacts, NodeRepo};
 
@@ -254,11 +254,11 @@ pub fn context_for(
 /// separate copy of the rules would be worth nothing — it exists precisely to tell an operator what
 /// will actually be sent.
 ///
-/// The values are chosen to reproduce [`yagra_common::sample_facts`] exactly, which
-/// `the_preview_sample_is_the_declared_sample` pins.
+/// The values are chosen to reproduce [`yagra_common::preview_facts`] exactly, for every sample,
+/// which `the_preview_sample_is_the_declared_sample` pins.
 #[must_use]
-pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
-    let declared = yagra_common::sample_facts(NotifyEvent::Fire);
+pub fn preview_sample(sample: PreviewSample) -> (Alert, HashMap<Uuid, NodeFacts>) {
+    let declared = yagra_common::preview_facts(NotifyEvent::Fire, sample);
     let node: Uuid = declared.node_id.parse().expect("sample node id is a uuid");
     let root: Uuid = declared
         .root_cause_id
@@ -280,7 +280,12 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
         at_unix_ms: declared.at_unix_ms,
         root_cause: Some(yagra_common::NodeId::from(root)),
         flapping: declared.flapping,
-        metric: declared.metric.clone().unwrap_or_default(),
+        // An up/down alert carries the liveness sentinel, as the real one does; `context_for`
+        // hides it again, and the built-in body (the alert as JSON) shows what is really sent.
+        metric: declared
+            .metric
+            .clone()
+            .unwrap_or_else(|| crate::alerts::LIVENESS.to_owned()),
         breach: declared.value.map(|value| yagra_alert::Breach {
             value,
             threshold: declared.threshold,
@@ -448,13 +453,16 @@ pub(crate) mod tests {
     /// alert, so they get a test rather than a comment.
     #[test]
     fn the_preview_sample_is_the_declared_sample() {
-        let (alert, resolved) = preview_sample();
-        for event in NotifyEvent::ALL {
-            assert_eq!(
-                context_for(&alert, event, &resolved),
-                yagra_common::sample_facts(event),
-                "the preview's alert no longer reproduces sample_facts"
-            );
+        for sample in PreviewSample::ALL {
+            let (alert, resolved) = preview_sample(sample);
+            for event in NotifyEvent::ALL {
+                assert_eq!(
+                    context_for(&alert, event, &resolved),
+                    yagra_common::preview_facts(event, sample),
+                    "the {} preview's alert no longer reproduces its declared facts",
+                    sample.as_str()
+                );
+            }
         }
     }
 

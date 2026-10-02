@@ -393,6 +393,65 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
     }
 }
 
+/// Which representative alert a template preview renders against (ADR-039 Inc.2).
+///
+/// Two, because the one thing a single sample cannot show is a template meeting an alert that
+/// lacks a fact: the editor's "leave this line out when the value is missing" exists for exactly
+/// that alert, and an operator cannot trust it without seeing it happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewSample {
+    /// A per-interface threshold breach, with every optional fact present ([`sample_facts`]).
+    #[default]
+    Threshold,
+    /// An up/down alert: no metric, value, threshold, direction or port
+    /// ([`liveness_sample_facts`]).
+    Liveness,
+}
+
+impl PreviewSample {
+    /// Every sample, in the order the editor offers them.
+    pub const ALL: [PreviewSample; 2] = [PreviewSample::Threshold, PreviewSample::Liveness];
+
+    /// Stable lowercase token, the same spelling serde uses.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            PreviewSample::Threshold => "threshold",
+            PreviewSample::Liveness => "liveness",
+        }
+    }
+}
+
+/// The node-down alert a template preview renders against: the same node as [`sample_facts`],
+/// reported unreachable, with none of the breach facts an up/down alert never carries.
+///
+/// Production code, unlike [`minimal_facts`]: the preview serves it. It keeps the node's address,
+/// folder, profile, labels and upstream, because those are facts a real node-down alert has —
+/// only what a liveness check cannot measure is absent.
+#[must_use]
+pub fn liveness_sample_facts(event: NotifyEvent) -> AlertFacts {
+    AlertFacts {
+        state: "unreachable".to_owned(),
+        metric: None,
+        value: None,
+        threshold: None,
+        direction: None,
+        ifindex: None,
+        row_name: None,
+        ..sample_facts(event)
+    }
+}
+
+/// The declared facts of one preview sample.
+#[must_use]
+pub fn preview_facts(event: NotifyEvent, sample: PreviewSample) -> AlertFacts {
+    match sample {
+        PreviewSample::Threshold => sample_facts(event),
+        PreviewSample::Liveness => liveness_sample_facts(event),
+    }
+}
+
 /// The same alert with every optional fact absent — a liveness fire on a node with no group,
 /// no profile and no upstream. Used by the tests to prove which variables survive that.
 #[must_use]
@@ -476,6 +535,44 @@ mod tests {
     /// The catalogue and the context are one list written twice unless this holds. A variable the
     /// palette offers but the context never provides renders as empty text and looks like a Yagra
     /// bug; a fact the context carries but the catalogue omits is undiscoverable.
+    #[test]
+    fn every_preview_sample_round_trips_through_its_token_and_through_serde() {
+        for sample in PreviewSample::ALL {
+            let json = serde_json::to_value(sample).expect("serializes");
+            assert_eq!(json, serde_json::json!(sample.as_str()));
+            let back: PreviewSample = serde_json::from_value(json).expect("deserializes");
+            assert_eq!(back, sample);
+        }
+        assert_eq!(PreviewSample::default(), PreviewSample::Threshold);
+    }
+
+    /// The liveness sample exists to show a template meeting the facts an up/down alert lacks, so
+    /// it must lack exactly those and keep everything else the node has.
+    #[test]
+    fn the_liveness_sample_lacks_only_what_a_liveness_check_cannot_measure() {
+        let full = keys(&sample_facts(NotifyEvent::Fire));
+        let live = keys(&liveness_sample_facts(NotifyEvent::Fire));
+        let missing: BTreeSet<&str> = full.difference(&live).map(String::as_str).collect();
+        assert_eq!(
+            missing,
+            BTreeSet::from(["direction", "ifindex", "metric", "threshold", "value"])
+        );
+        assert_eq!(
+            liveness_sample_facts(NotifyEvent::Fire).state,
+            "unreachable"
+        );
+        for event in NotifyEvent::ALL {
+            assert_eq!(
+                preview_facts(event, PreviewSample::Threshold),
+                sample_facts(event)
+            );
+            assert_eq!(
+                preview_facts(event, PreviewSample::Liveness),
+                liveness_sample_facts(event)
+            );
+        }
+    }
+
     #[test]
     fn every_exposed_key_is_a_declared_variable() {
         let mut exposed = keys(&sample_facts(NotifyEvent::Fire));

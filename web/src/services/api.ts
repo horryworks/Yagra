@@ -135,6 +135,8 @@ import type {
   ChannelKind,
   NotifyEvent,
   TemplatePreview,
+  PreviewSample,
+  BuiltinSubjectTemplate,
   ChannelTestResult,
   TemplateVariable,
   SavedFinding,
@@ -2229,10 +2231,18 @@ export const api = {
   previewNotificationTemplate: (body: {
     kind: ChannelKind;
     event?: NotifyEvent;
+    /** Which sample alert: a port over its threshold (the default) or a node that stopped
+     *  answering, which lacks every breach variable (ADR-039 Inc.2). */
+    sample?: PreviewSample;
     subject: string | null;
     body: string | null;
   }): Promise<TemplatePreview> =>
     apiPost('/api/v1/notification-channels/preview', { body }),
+
+  /** Yagra's built-in subject for a node alert, written as a template, per point in the alert's
+   *  life. The template editor opens a channel with no template on it (ADR-039 Inc.2). */
+  getBuiltinTemplate: (): Promise<BuiltinSubjectTemplate[]> =>
+    apiGet('/api/v1/notification-channels/builtin-template'),
 
   /** Every variable a notification template may reference, with what each one means. */
   listTemplateVariables: (): Promise<TemplateVariable[]> =>

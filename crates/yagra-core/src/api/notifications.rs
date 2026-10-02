@@ -25,7 +25,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{is_ssrf_blocked, NotifyEvent, Severity};
+use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -38,6 +38,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, Severity};
     test_notification_channel,
     preview_notification_template,
     list_template_variables,
+    get_builtin_template,
     list_routing_rules,
     create_routing_rule,
     set_routing_rule_enabled,
@@ -61,6 +62,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/notification-channels/template-variables",
             get(list_template_variables),
+        )
+        .route(
+            "/api/v1/notification-channels/builtin-template",
+            get(get_builtin_template),
         )
         .route(
             "/api/v1/notification-channels/:id",
@@ -513,6 +518,11 @@ pub(super) struct PreviewRequest {
     /// Which point in an alert's life to render: `fire`, `resolve`, or `suppress`.
     #[serde(default = "default_event")]
     event: NotifyEvent,
+    /// Which representative alert to render against: `threshold` (a port over its threshold, every
+    /// optional variable present — the default) or `liveness` (a node that stopped answering, with
+    /// no metric, value, threshold, direction or port).
+    #[serde(default)]
+    sample: PreviewSample,
     #[serde(default)]
     subject: Option<String>,
     #[serde(default)]
@@ -574,7 +584,7 @@ async fn preview_notification_template(
     let needs_json = crate::notify_render::body_must_be_json(req.kind);
     // The same sample alert, the same context builder and the same built-in wording the delivery
     // path uses — a preview that agreed only with a second copy of the rules would be worthless.
-    let (alert, resolved) = crate::notify_facts::preview_sample();
+    let (alert, resolved) = crate::notify_facts::preview_sample(req.sample);
     let facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
     let builtin = crate::alerts::builtin_notification(&alert, req.event);
     let template = TemplateBody {
@@ -622,6 +632,41 @@ async fn list_template_variables(
     _guard: RequireManageSystem,
 ) -> Json<Vec<yagra_common::TemplateVariable>> {
     Json(yagra_common::TEMPLATE_VARIABLES.to_vec())
+}
+
+/// One lifecycle point's built-in subject, written as a template.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct BuiltinSubjectTemplate {
+    /// `fire`, `resolve`, or `suppress`.
+    event: NotifyEvent,
+    /// The template that renders Yagra's built-in subject for a node alert at this point.
+    subject: String,
+}
+
+/// Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
+///
+/// The template editor opens a channel that has no template on this text, so an operator starts
+/// from what is sent today. Rendering it produces exactly the built-in subject. A poller pool's
+/// and a Meraki organization's alerts have built-in wording of their own, which is not described
+/// here. There is no built-in body template: the built-in body is the whole alert as JSON.
+#[utoipa::path(
+    get, path = "/api/v1/notification-channels/builtin-template", tag = "notifications",
+    responses(
+        (status = 200, description = "The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress`", body = Vec<BuiltinSubjectTemplate>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_builtin_template(_guard: RequireManageSystem) -> Json<Vec<BuiltinSubjectTemplate>> {
+    Json(
+        NotifyEvent::ALL
+            .into_iter()
+            .map(|event| BuiltinSubjectTemplate {
+                event,
+                subject: crate::alerts::builtin_node_subject_template(event).to_owned(),
+            })
+            .collect(),
+    )
 }
 
 #[utoipa::path(
@@ -788,6 +833,10 @@ mod tests {
                 "GET",
                 "/api/v1/notification-channels/template-variables".to_owned(),
             ),
+            (
+                "GET",
+                "/api/v1/notification-channels/builtin-template".to_owned(),
+            ),
             ("GET", "/api/v1/routing-rules".to_owned()),
             ("POST", "/api/v1/routing-rules".to_owned()),
             ("PUT", format!("/api/v1/routing-rules/{ID}")),
@@ -838,6 +887,132 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Send one request as an administrator and read the JSON it answers. Neither route below takes
+    /// `Admin`, so skeleton mode serves them and no database is needed.
+    async fn admin_json(
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let st = private_state();
+        let token = st
+            .sessions
+            .issue(Uuid::new_v4(), Principal::new(Role::Admin, Scope::All), "u");
+        let resp = router(st)
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    /// The editor's preview pane is this response, so it is checked through the router: the
+    /// sample and the event it asked for, a blank field answered with the built-in text, and a
+    /// line the template leaves out on the alert that lacks its value (ADR-039 Inc.2).
+    #[tokio::test]
+    async fn a_preview_renders_the_requested_sample_and_event() {
+        let path = "/api/v1/notification-channels/preview";
+        let body = "{{ subject_name }}
+{% if metric is defined %}{{ metric }} = {{ value }}
+{% endif %}at {{ at }}";
+        let (status, out) = admin_json(
+            "POST",
+            path,
+            serde_json::json!({ "kind": "jsm", "event": "resolve", "sample": "liveness",
+                                "subject": null, "body": body }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            out["subject"], "resolved: node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 recovered",
+            "a blank subject is the built-in text for the event asked for"
+        );
+        assert_eq!(
+            out["body"],
+            "core-sw-01
+at 2026-08-04T09:41:07+00:00"
+        );
+        assert_eq!(out["problems"], serde_json::json!([]));
+        assert!(out.get("json_valid").is_none(), "JSM's body is plain text");
+
+        // No `sample`: the threshold breach, as every caller before the field existed received.
+        let (_, out) = admin_json(
+            "POST",
+            path,
+            serde_json::json!({ "kind": "jsm", "body": body }),
+        )
+        .await;
+        assert_eq!(
+            out["body"],
+            "core-sw-01
+if_in_util_pct = 94.2
+at 2026-08-04T09:41:07+00:00"
+        );
+        assert_eq!(
+            out["subject"],
+            "node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 is critical"
+        );
+    }
+
+    /// The editor's insert list groups and names the variables from its own copy of their names
+    /// (ADR-039 Inc.2). A variable added here and not there would be one an operator cannot insert;
+    /// one there and not here would be a tag that renders empty.
+    #[test]
+    fn every_template_variable_is_one_the_editor_groups() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/pages/templateVariables.ts"),
+        )
+        .expect("web/src/pages/templateVariables.ts");
+        let start = ts
+            .find("export const TEMPLATE_VARIABLE_NAMES = [")
+            .expect("TEMPLATE_VARIABLE_NAMES is declared in templateVariables.ts");
+        let block = &ts[start..];
+        let block = &block[..block.find("] as const").expect("the array closes")];
+        let listed: std::collections::BTreeSet<&str> =
+            block.split('\'').skip(1).step_by(2).collect();
+        let ours: std::collections::BTreeSet<&str> = yagra_common::TEMPLATE_VARIABLES
+            .iter()
+            .map(|v| v.name)
+            .collect();
+        assert!(listed.len() >= 20, "read too few names: {listed:?}");
+        assert_eq!(
+            listed, ours,
+            "templateVariables.ts lists exactly the template variables"
+        );
+    }
+
+    /// The draft the editor opens on: one template per lifecycle point, in lifecycle order.
+    #[tokio::test]
+    async fn the_builtin_template_names_every_lifecycle_point() {
+        let (status, out) = admin_json(
+            "GET",
+            "/api/v1/notification-channels/builtin-template",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let events: Vec<&str> = out
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|e| e["event"].as_str().expect("event"))
+            .collect();
+        assert_eq!(events, ["fire", "resolve", "suppress"]);
+        assert_eq!(out[0]["subject"], "node {{ node_id }} is {{ state }}");
     }
 
     /// The contract the editor branches on: a template that does not compile is a **typed 400**

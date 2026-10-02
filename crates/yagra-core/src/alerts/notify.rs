@@ -339,6 +339,11 @@ impl NotifyChannel for JsmChannel {
     }
 }
 
+/// JSM cuts an alert's title (`message`) at this many characters. The template editor shows the cut
+/// at the same place (`web/src/pages/templateModel.ts::JSM_MESSAGE_MAX_CHARS`), which
+/// `the_editor_cuts_a_jsm_title_where_the_channel_does` pins.
+pub(crate) const JSM_MESSAGE_MAX_CHARS: usize = 130;
+
 /// The JSM/Opsgenie create-alert body (pure — unit-tested against the wire contract).
 fn jsm_create_body(notification: &Notification) -> serde_json::Value {
     let priority = match notification.severity {
@@ -347,7 +352,7 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
         Severity::Info => "P5",
     };
     let mut body = serde_json::json!({
-        "message": truncate_chars(&notification.summary, 130),
+        "message": truncate_chars(&notification.summary, JSM_MESSAGE_MAX_CHARS),
         "alias": dedup_string(&notification.dedup_key),
         "priority": priority,
         "description": notification.payload,
@@ -520,7 +525,8 @@ pub(crate) struct TestDelivery {
 /// - the check id is new on every call, so PagerDuty's `dedup_key` and JSM's `alias` never fold a
 ///   test into an incident opened by an earlier one.
 pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -> Notification {
-    let (mut alert, resolved) = crate::notify_facts::preview_sample();
+    let (mut alert, resolved) =
+        crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
     alert.check = CheckId::from(Uuid::new_v4());
     let facts = context_for(&alert, NotifyEvent::Fire, &resolved);
     let builtin = with_subject_tags(
@@ -1302,6 +1308,26 @@ pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notific
     Notification::for_alert(alert, summary, payload)
 }
 
+/// The built-in subject of a **node** alert, written as a notification template (ADR-039 Inc.2).
+///
+/// The editor opens a channel that has no template on this text, as a draft the operator can edit,
+/// so they start from what is sent today instead of an empty field. It is served rather than copied
+/// into the WebUI because the wording lives in [`builtin_notification`]'s `format!`s, and a second
+/// copy in another language would drift from it with nothing to notice.
+/// `every_builtin_subject_template_renders_the_builtin_subject` pins the two together.
+///
+/// Node alerts only: a poller pool's and a Meraki organization's built-in wording are separate
+/// sentences, and they keep being sent as long as the operator saves the draft untouched — the
+/// editor stores no template in that case.
+#[must_use]
+pub(crate) const fn builtin_node_subject_template(event: NotifyEvent) -> &'static str {
+    match event {
+        NotifyEvent::Fire => "node {{ node_id }} is {{ state }}",
+        NotifyEvent::Resolve => "resolved: node {{ node_id }} recovered",
+        NotifyEvent::Suppress => "rolled up: node {{ node_id }} suppressed under upstream",
+    }
+}
+
 /// Counter for a template that could not be used and fell back to the built-in format (ADR-039).
 ///
 /// The `reason` label is the point: `compile` means a template stored before it could be validated,
@@ -1370,6 +1396,58 @@ mod template_tests {
             },
             needs_json,
         }
+    }
+
+    /// The editor's draft is [`builtin_node_subject_template`], and it is only honest if rendering
+    /// it sends exactly what no template sends. Rendered through the real renderer against every
+    /// preview sample, so a reworded `format!` or a renamed variable fails here, not in an inbox.
+    #[test]
+    fn every_builtin_subject_template_renders_the_builtin_subject() {
+        let mut compared = 0;
+        for sample in yagra_common::PreviewSample::ALL {
+            let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+            for event in NotifyEvent::ALL {
+                let facts = context_for(&alert, event, &resolved);
+                let template = ChannelTemplate {
+                    subject: Some(builtin_node_subject_template(event).to_owned()),
+                    body: None,
+                };
+                let rendered =
+                    render_with_fallback(Some(&template), &facts, false, "FELL BACK", "{}");
+                assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
+                assert_eq!(
+                    rendered.subject,
+                    builtin_notification(&alert, event).summary,
+                    "the {} {} draft does not render the built-in subject",
+                    sample.as_str(),
+                    event.as_str()
+                );
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, 6, "two samples times three lifecycle points");
+    }
+
+    /// The editor strikes through the part of a JSM title past the cut; it is only honest if the
+    /// cut is the one this channel makes.
+    #[test]
+    fn the_editor_cuts_a_jsm_title_where_the_channel_does() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/pages/templateModel.ts"),
+        )
+        .expect("web/src/pages/templateModel.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.starts_with("export const JSM_MESSAGE_MAX_CHARS"))
+            .expect("JSM_MESSAGE_MAX_CHARS is declared in templateModel.ts");
+        let value: usize = line
+            .trim_end_matches(';')
+            .rsplit('=')
+            .next()
+            .and_then(|v| v.trim().parse().ok())
+            .expect("a plain number");
+        assert_eq!(value, JSM_MESSAGE_MAX_CHARS);
     }
 
     /// The exact text every deployment receives today. **A change here is a change to every
@@ -2540,7 +2618,8 @@ mod test_send_tests {
         let a = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
         let b = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
         assert_ne!(dedup_string(&a.dedup_key), dedup_string(&b.dedup_key));
-        let (sample, _) = crate::notify_facts::preview_sample();
+        let (sample, _) =
+            crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
         assert_ne!(a.dedup_key, sample.dedup_key());
     }
 

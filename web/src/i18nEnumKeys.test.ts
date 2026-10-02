@@ -105,6 +105,9 @@ import {
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { SKIES } from './pages/geoDayNight';
 import { MERAKI_TIERS } from './pages/merakiTiers';
+import { PREVIEW_SAMPLES, TEMPLATE_EVENTS, UNSUPPORTED_REASONS } from './pages/templateModel';
+import { TEMPLATE_PRESETS } from './pages/templatePresets';
+import { TEMPLATE_VARIABLE_GROUPS, TEMPLATE_VARIABLE_NAMES } from './pages/templateVariables';
 import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
@@ -1364,5 +1367,23 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('overlap hint', locales, 'subnetOverlaps.hint.', OVERLAP_HINT_KINDS);
     expectKeys('overlap hint tag', locales, 'subnetOverlaps.hintTag.', OVERLAP_HINT_KINDS);
     expectKeys('exclusion reason', locales, 'subnetOverlaps.rules.reason.', EXCLUSION_REASONS);
+  });
+
+  it('every part of the visual template editor has its words (alertsConfig:routing.template.*)', () => {
+    // ADR-039 Inc.2. Every one of these keys is built from a runtime value: a variable's name and
+    // explanation from the server's catalogue, a group, a tab, a sample, a preset, and the reason a
+    // stored template opens as code. A name added in Rust reaches the insert list with a raw key in
+    // both locales, which parity passes.
+    const locales = { en: enAlertsConfig, ja: jaAlertsConfig };
+    const p = 'routing.template.';
+    expectKeys('template variable', locales, `${p}vars.`, TEMPLATE_VARIABLE_NAMES.map((n) => `${n}.label`));
+    expectKeys('template variable meaning', locales, `${p}vars.`, TEMPLATE_VARIABLE_NAMES.map((n) => `${n}.desc`));
+    expectKeys('template variable group', locales, `${p}groups.`, TEMPLATE_VARIABLE_GROUPS);
+    expectKeys('template tab', locales, `${p}tabs.`, TEMPLATE_EVENTS);
+    expectKeys('preview sample', locales, `${p}samples.`, PREVIEW_SAMPLES.map((s) => s.id));
+    expectKeys('template preset', locales, `${p}preset.`, TEMPLATE_PRESETS);
+    expectKeys('unsupported template', locales, `${p}unsupported.`, UNSUPPORTED_REASONS);
+    expectKeys('edit mode', locales, `${p}mode.`, ['visual', 'code']);
+    expectKeys('field hint', locales, p, ['subjectHint.jsm', 'subjectHint.email', 'bodyHint.jsm', 'bodyHint.email']);
   });
 });

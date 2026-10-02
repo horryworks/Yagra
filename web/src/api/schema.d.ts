@@ -3133,6 +3133,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-channels/builtin-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
+         * @description The template editor opens a channel that has no template on this text, so an operator starts
+         *     from what is sent today. Rendering it produces exactly the built-in subject. A poller pool's
+         *     and a Meraki organization's alerts have built-in wording of their own, which is not described
+         *     here. There is no built-in body template: the built-in body is the whole alert as JSON.
+         */
+        get: operations["get_builtin_template"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-channels/preview": {
         parameters: {
             query?: never;
@@ -5817,6 +5840,13 @@ export interface components {
             threshold?: number | null;
             /** Format: double */
             value: number;
+        };
+        /** @description One lifecycle point's built-in subject, written as a template. */
+        BuiltinSubjectTemplate: {
+            /** @description `fire`, `resolve`, or `suppress`. */
+            event: components["schemas"]["NotifyEvent"];
+            /** @description The template that renders Yagra's built-in subject for a node alert at this point. */
+            subject: string;
         };
         /** @description What a bulk delete actually did. */
         BulkDeleteResult: {
@@ -11737,6 +11767,12 @@ export interface components {
             event?: components["schemas"]["NotifyEvent"];
             /** @description The channel kind the template is for. Decides whether the body has to be valid JSON. */
             kind: components["schemas"]["ChannelKind"];
+            /**
+             * @description Which representative alert to render against: `threshold` (a port over its threshold, every
+             *     optional variable present — the default) or `liveness` (a node that stopped answering, with
+             *     no metric, value, threshold, direction or port).
+             */
+            sample?: components["schemas"]["PreviewSample"];
             subject?: string | null;
         };
         /** @description What the template produces, or what stopped it. */
@@ -11756,6 +11792,15 @@ export interface components {
              */
             subject: string;
         };
+        /**
+         * @description Which representative alert a template preview renders against (ADR-039 Inc.2).
+         *
+         *     Two, because the one thing a single sample cannot show is a template meeting an alert that
+         *     lacks a fact: the editor's "leave this line out when the value is missing" exists for exactly
+         *     that alert, and an operator cannot trust it without seeing it happen.
+         * @enum {string}
+         */
+        PreviewSample: "threshold" | "liveness";
         /** @description Which stored credentials to try when probing one endpoint. */
         ProbeEndpoint: {
             /**
@@ -26583,6 +26628,44 @@ export interface operations {
             };
             /** @description This core has no write side (skeleton mode) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_builtin_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuiltinSubjectTemplate"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

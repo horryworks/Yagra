@@ -15800,6 +15800,51 @@
         }
       }
     },
+    "/api/v1/notification-channels/builtin-template": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.",
+        "description": "The template editor opens a channel that has no template on this text, so an operator starts\nfrom what is sent today. Rendering it produces exactly the built-in subject. A poller pool's\nand a Meraki organization's alerts have built-in wording of their own, which is not described\nhere. There is no built-in body template: the built-in body is the whole alert as JSON.",
+        "operationId": "get_builtin_template",
+        "responses": {
+          "200": {
+            "description": "The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BuiltinSubjectTemplate"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/notification-channels/preview": {
       "post": {
         "tags": [
@@ -25999,6 +26044,24 @@
           "value": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "BuiltinSubjectTemplate": {
+        "type": "object",
+        "description": "One lifecycle point's built-in subject, written as a template.",
+        "required": [
+          "event",
+          "subject"
+        ],
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/NotifyEvent",
+            "description": "`fire`, `resolve`, or `suppress`."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The template that renders Yagra's built-in subject for a node alert at this point."
           }
         }
       },
@@ -37973,6 +38036,10 @@
             "$ref": "#/components/schemas/ChannelKind",
             "description": "The channel kind the template is for. Decides whether the body has to be valid JSON."
           },
+          "sample": {
+            "$ref": "#/components/schemas/PreviewSample",
+            "description": "Which representative alert to render against: `threshold` (a port over its threshold, every\noptional variable present — the default) or `liveness` (a node that stopped answering, with\nno metric, value, threshold, direction or port)."
+          },
           "subject": {
             "type": [
               "string",
@@ -38013,6 +38080,14 @@
             "description": "The rendered subject. Yagra's built-in wording when the subject is not overridden, or when\nrendering it failed — which is exactly what would be sent."
           }
         }
+      },
+      "PreviewSample": {
+        "type": "string",
+        "description": "Which representative alert a template preview renders against (ADR-039 Inc.2).\n\nTwo, because the one thing a single sample cannot show is a template meeting an alert that\nlacks a fact: the editor's \"leave this line out when the value is missing\" exists for exactly\nthat alert, and an operator cannot trust it without seeing it happen.",
+        "enum": [
+          "threshold",
+          "liveness"
+        ]
       },
       "ProbeEndpoint": {
         "type": "object",

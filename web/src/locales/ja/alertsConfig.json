@@ -97,19 +97,206 @@
     },
     "template": {
       "title": "通知テンプレート — {{name}}",
-      "intro": "このチャネルが送る件名と本文を上書きします。空欄のままにすると Yagra の組み込みの文面を使います。アラート発生時にテンプレートを組み立てられなかった場合も組み込みの文面で送るので、通知が消えることはありません。",
+      "intro": "このチャネルが送る文面を、届く形のまま編集します。灰色の札の所には、アラートごとの値が入ります。アラートのときにテンプレートを描けなければ組み込みの文面を送るので、通知が落ちることはありません。",
       "subject": "件名",
       "body": "本文",
       "builtinPlaceholder": "組み込みの文面",
       "builtinHint": "どちらの欄も空なので、このチャネルは Yagra の組み込みの文面を送ります。",
       "blankHint": "欄を空にすると、その項目だけ組み込みの文面に戻ります。",
       "variables": "変数",
-      "preview": "プレビュー",
       "previewTitle": "このチャネルが送る内容",
-      "stale": "プレビュー後に編集",
       "notJson": "JSON として不正",
       "fellBack": "次の項目は組み立てられなかったため、組み込みの文面を表示しています。実際に送られるのもこの内容です:",
-      "save": "テンプレートを保存"
+      "save": "テンプレートを保存",
+      "jsmSubject": "タイトル",
+      "subjectHint": {
+        "jsm": "JSM の message。{{max}} 文字を超えた分は切れます",
+        "email": "メールの件名"
+      },
+      "bodyHint": {
+        "jsm": "JSM の description",
+        "email": "メールの本文"
+      },
+      "modeLabel": "編集のしかた",
+      "mode": {
+        "visual": "見たまま",
+        "code": "コード"
+      },
+      "jsonCodeOnly": "このチャネルは本文を JSON で送るので、テンプレートはコードで書きます。",
+      "unsupportedLead": "このテンプレートには見たまま表示で出せない書き方があるので、コードで開きました。",
+      "unsupported": {
+        "statement": "「行ごと出さない」「通知の種類で書き分ける」以外の文があります:",
+        "expression": "この画面が書かないフィルタか式があります:",
+        "unknownVariable": "テンプレートの変数にない名前があります:",
+        "lineCondition": "変数を含む 1 行だけを囲んでいない条件があります:",
+        "eventBranch": "欄の全体を囲んでいない、通知の種類での書き分けがあります:",
+        "comment": "コメントがあります:",
+        "whitespaceControl": "空白の制御（カッコの内側の「-」）があります:",
+        "unclosed": "閉じていないカッコがあります:"
+      },
+      "presets": "おすすめの文面:",
+      "preset": {
+        "detailed": "詳しく",
+        "short": "短く"
+      },
+      "restoreBuiltin": "組み込みの文面に戻す",
+      "tabs": {
+        "fire": "発生したとき",
+        "resolve": "復旧したとき",
+        "suppress": "上流の障害にまとめたとき"
+      },
+      "tabSame": "{{label}}（同じ）",
+      "sameAsFire": "「発生したとき」と同じ文面を送ります。",
+      "writeOwn": "この場合だけの文面を書く",
+      "backToFire": "「発生したとき」と同じに戻す",
+      "insert": "＋ 差し込む",
+      "insertHint": "「{」を打っても差し込めます。札を押すと、値が無いときの扱いを選べます。",
+      "builtinDraftNote": "これは Yagra の組み込みの件名です。変えずに保存すると組み込みの文面のままになり、ポーラープールと Meraki 組織のアラートにもそれぞれの組み込みの文面が届きます。",
+      "poolNote": "ここで書いた件名は、ポーラープールと Meraki 組織のアラートにも使われます。名前には「対象の名前」を使うと、どちらでも正しく読めます。",
+      "builtinBodyEmpty": "本文を空のままにすると、アラート全体の JSON（組み込みの本文）が届きます。",
+      "builtinUnavailable": "組み込みの文面を読めなかったので、空の状態で開きました。空のままの欄には、組み込みの文面が届きます。",
+      "search": "探す（例: 名前、しきい値）",
+      "noMatch": "見つかりません",
+      "pickerLabel": "変数",
+      "groups": {
+        "subject": "どの機器か",
+        "what": "何が起きたか",
+        "numbers": "測った値",
+        "time": "いつ",
+        "upstream": "上流の障害",
+        "ids": "外部ツール向けの ID"
+      },
+      "vars": {
+        "subject_name": {
+          "label": "対象の名前",
+          "desc": "ノード名、またはポーラープールの名前。迷ったらこれ"
+        },
+        "node_name": {
+          "label": "ノード名",
+          "desc": "ノードの表示名"
+        },
+        "node_address": {
+          "label": "監視アドレス",
+          "desc": "ノードを監視しているアドレス"
+        },
+        "group": {
+          "label": "フォルダ",
+          "desc": "ノードが入っているインベントリのフォルダ"
+        },
+        "profile": {
+          "label": "プロファイル",
+          "desc": "ノードに付いている監視プロファイル"
+        },
+        "tags": {
+          "label": "タグ",
+          "desc": "ノードのラベル。フォルダから継いだものも含む。「, 」でつないで出す"
+        },
+        "subject_kind": {
+          "label": "対象の種類",
+          "desc": "node、またはポーラープールなら pool"
+        },
+        "event": {
+          "label": "通知の種類",
+          "desc": "fire・resolve・suppress のどれか"
+        },
+        "severity": {
+          "label": "重大度",
+          "desc": "info・warning・critical のどれか"
+        },
+        "state": {
+          "label": "状態",
+          "desc": "ok・warning・critical・unknown・unreachable・maintenance のどれか。復旧のときは、発生していたときの状態"
+        },
+        "flapping": {
+          "label": "揺れているか",
+          "desc": "状態が短い間に何度も変わっていれば true"
+        },
+        "metric": {
+          "label": "メトリクス名",
+          "desc": "しきい値を超えたメトリクス。死活のアラートには無い"
+        },
+        "value": {
+          "label": "測った値",
+          "desc": "しきい値を超えたときの値"
+        },
+        "threshold": {
+          "label": "しきい値",
+          "desc": "超えたしきい値"
+        },
+        "direction": {
+          "label": "超えた向き",
+          "desc": "above か below"
+        },
+        "ifindex": {
+          "label": "ポートの ifIndex",
+          "desc": "ポートごとに集めるメトリクスのときだけ"
+        },
+        "row_name": {
+          "label": "行の名前",
+          "desc": "メモリプールなど、行ごとに集めるメトリクスのときだけ"
+        },
+        "at": {
+          "label": "発生時刻 (UTC)",
+          "desc": "RFC 3339 形式の時刻"
+        },
+        "at_unix_ms": {
+          "label": "発生時刻（ミリ秒）",
+          "desc": "同じ時刻を数値で。計算に使う"
+        },
+        "root_cause_name": {
+          "label": "上流ノードの名前",
+          "desc": "このアラートをまとめた先のノード"
+        },
+        "root_cause_id": {
+          "label": "上流ノードの ID",
+          "desc": "そのノードの UUID"
+        },
+        "node_id": {
+          "label": "ノード ID",
+          "desc": "名前を変えても変わらない UUID"
+        },
+        "check_id": {
+          "label": "チェック ID",
+          "desc": "発報したチェックの UUID"
+        },
+        "dedup_key": {
+          "label": "重複判定キー",
+          "desc": "発生と復旧で同じ値。JSM には alias として届く"
+        }
+      },
+      "optionalMark": "無いことがある",
+      "chip": {
+        "dialog": "札の設定",
+        "always": "どのアラートにも必ず入ります。",
+        "optional": "この値が入らないアラートがあります。",
+        "missing": "値が無いとき",
+        "missText": "代わりに出す文字",
+        "missHide": "この行ごと出さない",
+        "missHideSubject": "この行ごと出さない（件名では使えません）",
+        "remove": "取り除く"
+      },
+      "missingNote": {
+        "text": "無いときは「{{text}}」",
+        "empty": "無いときは何も出さない",
+        "hide": "無いときは行ごと出さない"
+      },
+      "sampleLabel": "見本のアラート",
+      "samples": {
+        "nodeDown": "ノード停止",
+        "threshold": "ポートがしきい値超え",
+        "recovered": "ノード復旧",
+        "rolledUp": "上流の障害にまとめた"
+      },
+      "updating": "更新中…",
+      "titleCount": "{{n}} / {{max}} 文字",
+      "titleCut": "{{n}} 文字ぶん切れます",
+      "fixedTitle": "このテンプレートではなく Yagra が決める項目",
+      "fixedJsm": "priority（重大度から）、alias（重複判定キー）、tags（ノードのラベル）、source（yagra）。",
+      "fieldBuiltin": "組み込み",
+      "savedAs": "保存されるテンプレート",
+      "savedEmpty": "(空 = 組み込みの文面)",
+      "fieldFollowsFire": "「発生したとき」と同じ文面です。ここで書くと、この場合だけの文面になります。",
+      "fieldBackToFire": "この欄を「発生したとき」と同じに戻す"
     },
     "test": {
       "title": "テスト通知を送る — {{name}}",
