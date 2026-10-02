@@ -532,7 +532,7 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
         let Some(ip) = n.usable_mgmt_addr() else {
             continue;
         };
-        let only = crate::arp::only_an_end_station(&n.capabilities);
+        let only = crate::arp::only_an_end_station(n);
         verdict.entry(ip).and_modify(|v| *v &= only).or_insert(only);
     }
     verdict

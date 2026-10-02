@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{
-    ArpSummary, NeighborCapability, NeighborProto, NeighborSet, NodeId, RoutingProto,
+    ArpSummary, Neighbor, NeighborCapability, NeighborProto, NeighborSet, NodeId, RoutingProto,
     RoutingSnapshot,
 };
 
@@ -313,10 +313,32 @@ pub(crate) fn identifies_a_device(ip: IpAddr) -> bool {
 }
 
 /// Whether a neighbour says it is only an end station — a phone, a host — and so is left off the
-/// list. One that advertises no capabilities is kept: silence is not a claim. Shared with the
-/// Neighbors tab's explanation for the same reason as [`identifies_a_device`].
-pub(crate) fn only_an_end_station(capabilities: &[NeighborCapability]) -> bool {
-    !capabilities.is_empty() && capabilities.iter().all(|c| is_end_station(*c))
+/// list. One that advertises no capabilities is kept: silence is not a claim, and neither is a
+/// platform in [`NOT_AN_END_STATION_PLATFORMS`]. Shared with the Neighbors tab's explanation for
+/// the same reason as [`identifies_a_device`].
+pub(crate) fn only_an_end_station(nb: &Neighbor) -> bool {
+    !nb.capabilities.is_empty()
+        && nb.capabilities.iter().all(|c| is_end_station(*c))
+        && !is_network_platform(nb.remote_platform.as_deref())
+}
+
+/// Platform prefixes (CDP's `cdpCachePlatform`) of network equipment that advertises only `Host`
+/// (ADR-179 Inc.10). One row per model family, and only a family measured on a device: an AireOS
+/// wireless controller (`AIR-CT3504-K9`, AireOS 8.5) sends `Host` and nothing else. LLDP carries
+/// no platform, so an LLDP row never matches.
+const NOT_AN_END_STATION_PLATFORMS: &[&str] = &["AIR-CT"];
+
+/// Whether a CDP platform string names one of [`NOT_AN_END_STATION_PLATFORMS`]. Case is ignored,
+/// and a leading `cisco ` is skipped, because IOS devices spell their platform `cisco WS-C...`.
+fn is_network_platform(platform: Option<&str>) -> bool {
+    let Some(p) = platform else {
+        return false;
+    };
+    let p = p.trim().to_ascii_uppercase();
+    let p = p.strip_prefix("CISCO ").unwrap_or(&p).trim_start();
+    NOT_AN_END_STATION_PLATFORMS
+        .iter()
+        .any(|prefix| p.starts_with(prefix))
 }
 
 /// Whether a neighbour capability describes an end station rather than network equipment.
@@ -412,7 +434,7 @@ pub fn candidates(signals: &Signals<'_>, known: &BTreeSet<IpAddr>) -> Vec<Endpoi
 
     for (node, set) in signals.neighbors {
         for nb in &set.neighbors {
-            if only_an_end_station(&nb.capabilities) {
+            if only_an_end_station(nb) {
                 continue;
             }
             // The one rule for "does this row carry an address" (ADR-191 decision 23).
@@ -1369,6 +1391,48 @@ mod tests {
         .map(|e| e.ip)
         .collect();
         assert_eq!(found, vec![ip("192.0.2.33"), ip("192.0.2.34")]);
+    }
+
+    /// ADR-179 Inc.10: an AireOS wireless controller advertises only `Host` over CDP, and is
+    /// still network equipment. A phone with the same capability stays out.
+    #[test]
+    fn a_wireless_controller_that_says_host_is_still_a_candidate() {
+        let host_only = |port: &str, addr: &str, platform: Option<&str>| {
+            let mut n = lldp(port, Some(addr), None);
+            n.proto = NeighborProto::Cdp;
+            n.capabilities = vec![NeighborCapability::Host];
+            n.remote_platform = platform.map(str::to_owned);
+            n
+        };
+        let wlc = host_only("Gi1/0/21", "192.0.2.41", Some("AIR-CT3504-K9"));
+        let spelled = host_only("Gi1/0/22", "192.0.2.42", Some("  cisco air-ct5520-k9"));
+        let phone = host_only("Gi1/0/23", "192.0.2.43", Some("Cisco IP Phone 8845"));
+        let unnamed = host_only("Gi1/0/24", "192.0.2.44", None);
+        for (nb, expected) in [
+            (&wlc, false),
+            (&spelled, false),
+            (&phone, true),
+            (&unnamed, true),
+        ] {
+            assert_eq!(
+                only_an_end_station(nb),
+                expected,
+                "{:?}",
+                nb.remote_platform
+            );
+        }
+        let nbs = [neighbors(node(1), vec![wlc, spelled, phone, unnamed])];
+        let found: Vec<IpAddr> = candidates(
+            &Signals {
+                neighbors: &nbs,
+                ..Signals::default()
+            },
+            &BTreeSet::new(),
+        )
+        .into_iter()
+        .map(|e| e.ip)
+        .collect();
+        assert_eq!(found, vec![ip("192.0.2.41"), ip("192.0.2.42")]);
     }
 
     #[test]

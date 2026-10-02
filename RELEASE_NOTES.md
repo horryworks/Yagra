@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A Cisco wireless controller seen over CDP can now be added from the Neighbors tab.** AireOS controllers (`AIR-CT…`) announce themselves only as a host, so Yagra treated them like an IP phone: they were left off the Unregistered devices list, and the Neighbors tab said "It announces itself as an end station (a phone, for example), so it is not listed." instead of offering **Set up monitoring**. A CDP neighbour whose platform starts with `AIR-CT` is now treated as network equipment whatever it announces; it reaches the list on the next sweep (within five minutes).
+
 ## v0.3.41 — The network map puts a site's way out on top by its default route, bundles the Wi-Fi access points under each device, and can be searched by host name
 
 ### New Features
