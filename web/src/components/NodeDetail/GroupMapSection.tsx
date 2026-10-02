@@ -10,7 +10,9 @@
 //
 // An open map carries the full map's search in its heading row (ADR-191 Inc.13), held in `?mq=`
 // because `/nodes` already spends `q` on the tree. Moving to another folder keeps it, and "open
-// larger" hands it to the full map as its `q`.
+// larger" hands it to the full map as its `q`. Where the box is not offered — the map folded, or a
+// level that is too big, has no lines or failed to load — the same row shows the search still in
+// force as a chip that clears it, because "open larger" still hands it on.
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -98,16 +100,23 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
   );
 }
 
-/** The search in force while its box is not offered (the map folded, too big, or without lines):
+/** The search in force while its box is not offered (the map folded, too big, without lines, or
+ *  failed to load):
  *  it still fades boxes on the full map that "open larger" hands it to, so it stays visible and
  *  clearable here. */
 function ActiveSearchChip({ mq, writeMq }: { mq: string; writeMq: (value: string) => void }) {
   const { t } = useTranslation('nodes');
   const cond = useMemo(() => decodeCondition(mq), [mq]);
   if (!conditionIsActive(cond)) return null;
-  const label = t(cond.not ? 'groupDetail.map.searchActiveNot' : 'groupDetail.map.searchActive', {
-    term: cond.term,
-  });
+  const key =
+    cond.mode === 'regex'
+      ? cond.not
+        ? 'groupDetail.map.searchActiveRegexNot'
+        : 'groupDetail.map.searchActiveRegex'
+      : cond.not
+        ? 'groupDetail.map.searchActiveNot'
+        : 'groupDetail.map.searchActive';
+  const label = t(key, { term: cond.term });
   return (
     <span className="nd-grpmap-chip" title={label}>
       <span className="nd-grpmap-chip-t">{label}</span>
@@ -134,15 +143,22 @@ function GroupMapOpen({
 }: Props & { mq: string; writeMq: (value: string) => void; findSlot: HTMLDivElement | null }) {
   const view = useTopologyLevel(groupId);
   const search = useMapSearch(view.level, view.layout, mq, writeMq, groupId);
-  // The box is not offered over a level that says "too big" or "no lines yet": it would count hits
-  // nobody can see. It stays while the next folder's level loads, so a term being typed and the
-  // caret survive moving between folders.
-  const undrawn = !!view.level && (view.level.overflow || view.layout.nodes.length === 0);
+  // The box is not offered over a level that says "too big", "no lines yet" or failed to load: it
+  // would count hits nobody can see. It stays while the next folder's level loads, so a term being
+  // typed and the caret survive moving between folders. A term still inside the editor's debounce
+  // when the operator clicks elsewhere is not lost: the editor commits it when the box loses focus.
+  const undrawn = view.level
+    ? view.level.overflow || view.layout.nodes.length === 0
+    : !!view.error;
   return (
     <>
       {findSlot &&
         createPortal(
-          undrawn ? <ActiveSearchChip mq={mq} writeMq={writeMq} /> : <MapSearchBox state={search} inline />,
+          undrawn ? (
+            <ActiveSearchChip mq={mq} writeMq={writeMq} />
+          ) : (
+            <MapSearchBox state={search} inline />
+          ),
           findSlot,
         )}
       <GroupMapBody

@@ -41,6 +41,10 @@ export function usePolled<T>(
 
   useEffect(() => {
     let cancelled = false;
+    // An error is about the request that failed. Once the deps change it describes a request
+    // nobody is making any more, and a caller that reads `error` beside data it has not received
+    // yet would report the old failure as the new one. The data stays: not blanking is the point.
+    setState((s) => (s.error === null ? s : { ...s, error: null, errorStatus: null }));
     const run = () => {
       fetcher()
         .then((data) => {

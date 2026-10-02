@@ -4,7 +4,7 @@ import type { MapLevel, MapNode } from '../../types/api';
 import { decodeCondition, EMPTY_CONDITION } from '../../lib/filterCondition';
 import { bundleId, layoutGraph } from './graphLayout';
 import { centerOn } from './fitView';
-import { boxEmphasis, edgeDimmed, edgeEnds, searchMap, stepThrough } from './mapSearch';
+import { boxEmphasis, edgeDimmed, edgeEnds, searchMap, stepTermOf, stepThrough } from './mapSearch';
 import { GROUP_MAP_SEARCH_KEY, levelToGraph, withSearch } from './topologyLevel';
 import { TREE_SEARCH_KEY } from '../../pages/inventoryFilters';
 
@@ -136,5 +136,16 @@ describe('searching a level of the map (ADR-191 Inc.11)', () => {
     expect(GROUP_MAP_SEARCH_KEY).not.toBe(TREE_SEARCH_KEY);
     const encoded = new URLSearchParams(`${GROUP_MAP_SEARCH_KEY}=%21%7E%5Eap`).get(GROUP_MAP_SEARCH_KEY) ?? '';
     expect(withSearch('/topology/map?group=g1', encoded)).toBe('/topology/map?group=g1&q=%21%7E%5Eap');
+  });
+});
+
+describe('which key press steps through the hits (ADR-191 Inc.13)', () => {
+  it('steps on Enter in the term field, with the text in the box', () => {
+    expect(stepTermOf({ tagName: 'INPUT', type: 'search', value: 'core-' })).toBe('core-');
+  });
+
+  it('does not step on Enter on the Regex switch (value "on") or the Exclude button', () => {
+    expect(stepTermOf({ tagName: 'INPUT', type: 'checkbox', value: 'on' })).toBeNull();
+    expect(stepTermOf({ tagName: 'BUTTON', type: 'button', value: '' })).toBeNull();
   });
 });

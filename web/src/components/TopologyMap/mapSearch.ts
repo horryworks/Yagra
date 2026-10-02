@@ -85,4 +85,12 @@ export function stepThrough(order: readonly string[], current: string | null, di
   return order[(at + dir + order.length) % order.length];
 }
 
+/** The term an Enter steps through the hits of, or `null` when the key was not pressed in the term
+ *  field. The Regex switch beside it is an `<input type="checkbox">` whose value is "on", and the
+ *  Exclude toggle is a `<button>`; both sit inside the box's key handler. */
+export function stepTermOf(target: { tagName: string; type?: string; value?: string }): string | null {
+  if (target.tagName !== 'INPUT' || target.type !== 'search') return null;
+  return target.value ?? '';
+}
+
 

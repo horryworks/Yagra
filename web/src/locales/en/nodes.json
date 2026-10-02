@@ -722,6 +722,8 @@
       "resize": "Drag to change the map's height (double-click to reset)",
       "searchActive": "Searching: {{term}}",
       "searchActiveNot": "Searching: not {{term}}",
+      "searchActiveRegex": "Searching (regex): {{term}}",
+      "searchActiveRegexNot": "Searching (regex): not {{term}}",
       "searchClear": "Clear the map search"
     }
   },

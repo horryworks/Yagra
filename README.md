@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.41 — The network map puts a site's way out on top by its default route, bundles the Wi-Fi access points under each device, and can be searched by host name**
+> Status: **v0.3.42 — The map in a folder's pane can be searched too, Discovery takes one address per line, and a Cisco wireless controller seen over CDP can be added**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

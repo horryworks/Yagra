@@ -2289,7 +2289,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   display: flex;
   align-items: center;
 }
-/* The search still in force while its box is not offered (map folded, too big, or without lines). */
+/* The search still in force while its box is not offered (see GroupMapSection.tsx). */
 .nd-grpmap-chip {
   display: inline-flex;
   align-items: center;
@@ -2317,6 +2317,17 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 }
 .nd-grpmap-chip-x:hover {
   color: var(--text-primary);
+}
+/* The only way to clear the search here, so a real tap target on touch (ui-conventions). */
+@media (hover: none) {
+  .nd-grpmap-chip-x {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+}
+html[data-viewport='mobile'] .nd-grpmap-chip-x {
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
 }
 .nd-grpmap-open {
   font-size: var(--font-sm);

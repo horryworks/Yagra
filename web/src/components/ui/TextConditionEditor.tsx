@@ -8,7 +8,8 @@
 //   - **The term is debounced; the mode and the NOT toggle are not.** A keystroke is a draft, so
 //     committing each one would fire a request per character on a server-side list and push a
 //     history entry per character on every list. A click on Regex or Exclude is a decision, and
-//     waiting 250ms after a deliberate click reads as lag.
+//     waiting 250ms after a deliberate click reads as lag. Leaving the box commits a pending term
+//     at once, because the click that moved focus may unmount the editor and cancel the timer.
 //   - **An invalid regex is shown, not thrown.** `[` is a state every regex passes through while it
 //     is being typed; `compileCondition` stays total and matches nothing, and the message goes here
 //     beside the box.
@@ -115,15 +116,40 @@ export function TextConditionEditor({
     latest.current.onChange(next);
   };
 
+  /** The debounce timer still waiting to commit, so leaving the box can commit at once instead. */
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (draft.term === echo.current.term) return;
-    const id = setTimeout(() => commit(draftRef.current), DEBOUNCE_MS);
-    return () => clearTimeout(id);
+    const id = setTimeout(() => {
+      pending.current = null;
+      commit(draftRef.current);
+    }, DEBOUNCE_MS);
+    pending.current = id;
+    return () => {
+      clearTimeout(id);
+      pending.current = null;
+    };
   }, [draft.term]);
 
+  const cancelPending = () => {
+    if (pending.current !== null) clearTimeout(pending.current);
+    pending.current = null;
+  };
+
   const commitNow = (next: TextCondition) => {
+    cancelPending();
     setDraft(next);
     commit(next);
+  };
+
+  /** Leaving the box commits a term still inside the debounce. The click that moves focus away can
+   *  also unmount this editor (folding a section, picking another row), and an unmount cancels the
+   *  timer, so without this the last keystrokes before that click never reach the URL. Blur comes
+   *  before the click, while the page that owns the URL is still the one on screen. */
+  const flushPending = () => {
+    if (pending.current === null) return;
+    cancelPending();
+    commit(draftRef.current);
   };
 
   const error = conditionError(draft);
@@ -138,6 +164,7 @@ export function TextConditionEditor({
         placeholder={placeholder ?? t('filter.termPlaceholder')}
         aria-label={placeholder ?? t('filter.termPlaceholder')}
         onChange={(e) => setDraft({ ...draft, term: e.target.value })}
+        onBlur={flushPending}
         onKeyDown={(e) => {
           // Enter commits immediately rather than waiting out the debounce — the operator has said
           // they are done.
