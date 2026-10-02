@@ -546,3 +546,20 @@
 .tpl-link:hover {
   text-decoration: underline;
 }
+
+/* What a variable is, while the pointer rests on its button. Above the dialog like a popover, and
+   transparent to the pointer so it never covers the button the operator is about to press. */
+.tpl-tip {
+  position: fixed;
+  z-index: var(--z-popover);
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px var(--overlay);
+  pointer-events: none;
+}

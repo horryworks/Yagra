@@ -25,7 +25,7 @@ import type { Point } from '../components/ui/popoverPlacement';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
-import { draftFor, isDirty, previewView, saveBody, variableSnippet } from './channelTemplate';
+import { draftFor, insertAtCaret, isDirty, previewView, saveBody, variableSnippet } from './channelTemplate';
 import type { TemplateDraft } from './channelTemplate';
 import {
   backToFire,
@@ -54,7 +54,7 @@ import {
 } from './templateModel';
 import { presetLanguage, presetTemplate, TEMPLATE_PRESETS } from './templatePresets';
 import type { ChipLook } from './templateDom';
-import { ChipSettings, TemplateField, VariablePicker, type FieldHandle } from './TemplateEditor';
+import { ChipSettings, TemplateField, VariablePicker, VariableTooltip, type FieldHandle } from './TemplateEditor';
 import './ChannelTemplateModal.css';
 
 /** What the dialog learns before it can draw: the built-in draft, the variables, and whether the
@@ -85,6 +85,12 @@ export function ChannelTemplateModal({
   const [mode, setMode] = useState<Mode>('visual');
   const [model, setModel] = useState<VisualTemplate | null>(null);
   const [code, setCode] = useState<TemplateDraft>(() => draftFor(channel));
+  // The code view's caret, as it was last seen in either field. A variable button inserts there;
+  // with no caret seen yet it appends to the body, as the list always did.
+  const codeCaret = useRef<{ field: 'subject' | 'body'; start: number; end: number } | null>(null);
+  const codeSubjectRef = useRef<HTMLInputElement>(null);
+  const codeBodyRef = useRef<HTMLTextAreaElement>(null);
+  const [varTip, setVarTip] = useState<{ v: TemplateVariable; el: HTMLElement } | null>(null);
   const [unsupported, setUnsupported] = useState<Unsupported | null>(null);
   const [tab, setTab] = useState<NotifyEvent>('fire');
   const [sampleId, setSampleId] = useState<PreviewSampleId>('nodeDown');
@@ -173,6 +179,23 @@ export function ChannelTemplateModal({
     () => new Set((boot?.variables ?? []).filter((v) => !v.always_present).map((v) => v.name)),
     [boot],
   );
+  const rememberCaret = (field: 'subject' | 'body', el: HTMLInputElement | HTMLTextAreaElement) => {
+    codeCaret.current = { field, start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length };
+  };
+
+  const insertCodeVariable = (v: TemplateVariable) => {
+    const at = codeCaret.current ?? { field: 'body' as const, start: code.body.length, end: code.body.length };
+    const put = insertAtCaret(code[at.field], at.start, at.end, variableSnippet(v.name, v.always_present));
+    setCode({ ...code, [at.field]: put.text });
+    codeCaret.current = { field: at.field, start: put.caret, end: put.caret };
+    // After React has written the new value, or the browser moves the caret to its end.
+    requestAnimationFrame(() => {
+      const el = at.field === 'subject' ? codeSubjectRef.current : codeBodyRef.current;
+      el?.focus({ preventScroll: true });
+      el?.setSelectionRange(put.caret, put.caret);
+    });
+  };
+
   const look: ChipLook = {
     labelOf: (n) => t(`routing.template.vars.${n}.label`, { defaultValue: n }),
     isOptional: (n) => optional.has(n),
@@ -417,7 +440,9 @@ export function ChannelTemplateModal({
                   value={code.subject}
                   spellCheck={false}
                   placeholder={t('routing.template.builtinPlaceholder')}
+                  inputRef={codeSubjectRef}
                   onChange={(e) => setCode({ ...code, subject: e.target.value })}
+                  onSelect={(e) => rememberCaret('subject', e.currentTarget)}
                 />
                 <label className="form-label" htmlFor="tpl-body">
                   {t('routing.template.body')}
@@ -429,7 +454,9 @@ export function ChannelTemplateModal({
                   value={code.body}
                   spellCheck={false}
                   placeholder={t('routing.template.builtinPlaceholder')}
+                  inputRef={codeBodyRef}
                   onChange={(e) => setCode({ ...code, body: e.target.value })}
+                  onSelect={(e) => rememberCaret('body', e.currentTarget)}
                 />
                 <p className="tpl-hint">
                   {request.subject === null && request.body === null
@@ -444,10 +471,14 @@ export function ChannelTemplateModal({
                         key={v.name}
                         type="button"
                         className="tpl-var"
-                        title={v.description}
-                        onClick={() =>
-                          setCode({ ...code, body: code.body + variableSnippet(v.name, v.always_present) })
-                        }
+                        aria-describedby={varTip?.v.name === v.name ? 'tpl-var-tip' : undefined}
+                        // Keep focus (and the caret) in the field, so typing carries on after the insert.
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseEnter={(e) => setVarTip({ v, el: e.currentTarget })}
+                        onMouseLeave={() => setVarTip(null)}
+                        onFocus={(e) => setVarTip({ v, el: e.currentTarget })}
+                        onBlur={() => setVarTip(null)}
+                        onClick={() => insertCodeVariable(v)}
                       >
                         {v.name}
                         {!v.always_present && <span className="tpl-var-opt">?</span>}
@@ -534,6 +565,15 @@ export function ChannelTemplateModal({
 
       <FormError form={form} />
 
+      {varTip && varTip.el.isConnected && (
+        <VariableTooltip
+          id="tpl-var-tip"
+          anchor={varTip.el}
+          name={varTip.v.name}
+          snippet={variableSnippet(varTip.v.name, varTip.v.always_present)}
+          optional={!varTip.v.always_present}
+        />
+      )}
       {picker && (
         <VariablePicker
           anchorRef={picker.at ? undefined : insertButtons[picker.field]}

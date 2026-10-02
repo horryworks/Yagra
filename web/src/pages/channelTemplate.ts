@@ -109,3 +109,20 @@ export function variableSnippet(name: string, alwaysPresent: boolean): string {
   // blank where the operator expected something. The value is a placeholder they can edit.
   return alwaysPresent ? `{{ ${name} }}` : `{{ ${name} | default("—") }}`;
 }
+
+/**
+ * Put `snippet` where the caret is in `text`, replacing a selection when there is one. Returns the
+ * new text and where the caret goes: straight after what was put, so typing carries on from there.
+ * Offsets are the input's own `selectionStart`/`selectionEnd` (UTF-16 units), clamped so a caret
+ * remembered from an older value cannot land past the end.
+ */
+export function insertAtCaret(
+  text: string,
+  start: number,
+  end: number,
+  snippet: string,
+): { text: string; caret: number } {
+  const from = Math.max(0, Math.min(start, text.length));
+  const to = Math.max(from, Math.min(end, text.length));
+  return { text: text.slice(0, from) + snippet + text.slice(to), caret: from + snippet.length };
+}

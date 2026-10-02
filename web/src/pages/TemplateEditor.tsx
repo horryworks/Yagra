@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The pieces of the visual notification-template editor (ADR-039 Inc.2): the editable field that
-// holds text and variable tags, the list a tag is picked from, and the panel that sets what a tag
-// does when the alert lacks its value.
+// holds text and variable tags, the list a tag is picked from, the panel that sets what a tag
+// does when the alert lacks its value, and the note that says what a variable is.
 //
 // Layout and browser plumbing only. Every decision is in a `.ts` a test can reach: the template
 // model (`templateModel.ts`), the DOM conversion (`templateDom.ts`), and the list's grouping and
 // search (`templateVariables.ts`).
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { KeyboardEvent, MutableRefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover } from '../components/ui/AnchoredPopover';
-import type { Point } from '../components/ui/popoverPlacement';
+import { placeFromTrigger, type Placement, type Point } from '../components/ui/popoverPlacement';
 import { Button } from '../components/ui/Button';
 import { SearchField } from '../components/ui/SearchField';
 import { isImeComposing } from '../lib/ime';
@@ -363,5 +364,63 @@ export function ChipSettings({
         </Button>
       </div>
     </AnchoredPopover>
+  );
+}
+
+/**
+ * What a variable is, shown while the pointer rests on its button or the button has focus. Same
+ * facts as the tag settings panel: the name in the operator's language, what it holds, the text
+ * that will be inserted, and whether every alert carries it.
+ *
+ * Not an `AnchoredPopover`: that one is for panels the operator works in (it takes focus, closes on
+ * an outside press). This one is read-only and ignores the pointer, so it can never get between the
+ * operator and the button under it. It shares the placement arithmetic instead.
+ */
+export function VariableTooltip({
+  id,
+  anchor,
+  name,
+  snippet,
+  optional,
+}: {
+  id: string;
+  anchor: HTMLElement;
+  name: string;
+  /** The text a click inserts, which is what the operator will see in the field. */
+  snippet: string;
+  optional: boolean;
+}) {
+  const { t } = useTranslation('alertsConfig');
+  const el = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<Placement | null>(null);
+
+  useLayoutEffect(() => {
+    const tip = el.current;
+    if (!tip) return;
+    const r = tip.getBoundingClientRect();
+    setPos(
+      placeFromTrigger(
+        anchor.getBoundingClientRect(),
+        { width: r.width, height: r.height },
+        { width: window.innerWidth, height: window.innerHeight },
+        'start',
+      ),
+    );
+  }, [anchor, name]);
+
+  return createPortal(
+    <div
+      ref={el}
+      id={id}
+      role="tooltip"
+      className="tpl-tip"
+      style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: 'hidden' }}
+    >
+      <div className="tpl-chip-head">{t(`routing.template.vars.${name}.label`)}</div>
+      <p className="tpl-chip-desc">{t(`routing.template.vars.${name}.desc`)}</p>
+      <code className="tpl-chip-code">{snippet}</code>
+      <p className="tpl-chip-desc">{t(optional ? 'routing.template.chip.optional' : 'routing.template.chip.always')}</p>
+    </div>,
+    document.body,
   );
 }

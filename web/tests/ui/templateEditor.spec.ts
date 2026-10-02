@@ -43,6 +43,12 @@ const builtin: Schemas['BuiltinSubjectTemplate'][] = [
   { event: 'suppress', subject: 'rolled up: node {{ node_id }} suppressed under upstream' },
 ];
 
+/** Two real names, so the tooltip reads the locale strings a real list would. */
+const variables: Schemas['TemplateVariable'][] = [
+  { name: 'subject_name', description: 'subject name', always_present: true },
+  { name: 'state', description: 'state', always_present: true },
+];
+
 const preview = {
   subject: 'node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 is unreachable',
   body: '{"node":"6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60"}',
@@ -56,6 +62,7 @@ test.use({
       '/api/v1/notification-channels': channels,
       '/api/v1/notification-channels/builtin-template': builtin as unknown as Json,
       '/api/v1/notification-channels/preview': preview,
+      '/api/v1/notification-channels/template-variables': variables as unknown as Json,
     },
   },
 });
@@ -112,6 +119,45 @@ test('the built-in subject opens as tags, "{" inserts a variable, and the save c
   );
   await dialog.getByRole('button', { name: 'Save template' }).click();
   expect((await put).postDataJSON()).toEqual({ subject: null, body: 'Down: {{ subject_name }}' });
+
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('in the code view a variable goes where the caret is, and hovering one says what it is', async ({ page, errors }) => {
+  await page.goto('/alerts/routing');
+  const row = page.locator('.dt-row').filter({ hasText: 'ymock-jsm' });
+  await row.hover();
+  await row.getByRole('button', { name: 'Edit notification template' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Code' }).click();
+
+  const subject = dialog.locator('#tpl-subject');
+  const body = dialog.locator('#tpl-body');
+  await subject.fill('Down: now');
+  await body.fill('body text');
+  // Caret after "Down: " in the subject; the body was the last field typed in before this.
+  await subject.click();
+  await page.keyboard.press('End');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowLeft');
+
+  const stateButton = dialog.locator('.tpl-var').filter({ hasText: 'state' });
+  await stateButton.click();
+  await expect(subject).toHaveValue('Down: {{ state }}now');
+  await expect(body).toHaveValue('body text');
+  // Focus stayed in the subject, with the caret after the insert, so typing carries on there.
+  await page.keyboard.type('!');
+  await expect(subject).toHaveValue('Down: {{ state }}!now');
+
+  // Hovering a variable shows what it is, in the operator's language.
+  await dialog.locator('.tpl-var').filter({ hasText: 'subject_name' }).hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toContainText('Subject name');
+  await expect(tip).toContainText('The node’s name, or the poller pool’s');
+  await expect(tip).toContainText('{{ subject_name }}');
+  // Read the computed style: isVisible() counts a hidden-but-laid-out element as visible.
+  expect(await tip.evaluate((el) => getComputedStyle(el).visibility)).toBe('visible');
+  await page.mouse.move(0, 0);
+  await expect(tip).toHaveCount(0);
 
   expect(errors.uncaught).toEqual([]);
 });

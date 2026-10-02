@@ -6,20 +6,33 @@
 import type {
   InputHTMLAttributes,
   ReactNode,
+  Ref,
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import './Field.css';
 
-export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={['field', className].filter(Boolean).join(' ')} {...rest} />;
+/** `inputRef` reaches the element itself, the way `SearchField` takes it: React 18 does not pass
+ *  `ref` through a function component's props. */
+export function TextInput({
+  className,
+  inputRef,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { inputRef?: Ref<HTMLInputElement> }) {
+  return <input ref={inputRef} className={['field', className].filter(Boolean).join(' ')} {...rest} />;
 }
 
 /** Multi-line variant of {@link TextInput} for pasted blocks (PEM certificates, scripts). Shares
  *  the same `.field` styling so it sits in a form identically. */
-export function TextArea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={['field', 'field-area', className].filter(Boolean).join(' ')} {...rest} />;
+export function TextArea({
+  className,
+  inputRef,
+  ...rest
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { inputRef?: Ref<HTMLTextAreaElement> }) {
+  return (
+    <textarea ref={inputRef} className={['field', 'field-area', className].filter(Boolean).join(' ')} {...rest} />
+  );
 }
 
 /** Required-field marker: a red asterisk that also announces "required" to assistive tech.

@@ -4,6 +4,7 @@ import type { NotificationChannel, TemplatePreview } from '../types/api';
 import {
   draftFor,
   hasTemplate,
+  insertAtCaret,
   isBuiltin,
   isDirty,
   previewMatches,
@@ -138,5 +139,22 @@ describe('variable palette', () => {
   // template written by clicking should not produce a blank the operator did not expect.
   it('gives an optional variable a default', () => {
     expect(variableSnippet('value', false)).toBe('{{ value | default("—") }}');
+  });
+});
+
+describe('insertAtCaret', () => {
+  it('puts the snippet at the start, the middle and the end', () => {
+    expect(insertAtCaret('ab', 0, 0, 'X')).toEqual({ text: 'Xab', caret: 1 });
+    expect(insertAtCaret('ab', 1, 1, 'X')).toEqual({ text: 'aXb', caret: 2 });
+    expect(insertAtCaret('ab', 2, 2, 'X')).toEqual({ text: 'abX', caret: 3 });
+  });
+
+  it('replaces a selection', () => {
+    expect(insertAtCaret('node is down', 5, 7, '{{ state }}')).toEqual({ text: 'node {{ state }} down', caret: 16 });
+  });
+
+  it('works inside Japanese text and clamps a caret past the end', () => {
+    expect(insertAtCaret('障害発生', 2, 2, '{{ node_name }}')).toEqual({ text: '障害{{ node_name }}発生', caret: 17 });
+    expect(insertAtCaret('ab', 9, 12, 'X')).toEqual({ text: 'abX', caret: 3 });
   });
 });
