@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-01
-# counts: MA-L=40176 MA-L-repeats-dropped=3 MA-M=6533 MA-S=7180 withheld=3
+# fetched: 2026-10-02
+# counts: MA-L=40179 MA-L-repeats-dropped=3 MA-M=6536 MA-S=7180 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13614,6 +13614,7 @@
 04A85A	SZ DJI TECHNOLOGY CO.,LTD
 04A924	Mist Systems, Inc.
 04A959	New H3C Technologies Co., Ltd
+04AAB1	Growatt Technology Co.,Limited.
 04AAE1	BEIJING MICROVISION TECHNOLOGY CO.,LTD
 04AB08	Shenzhen Skyworth Digital Technology CO., Ltd
 04AB18	ELECOM CO.,LTD.
@@ -19105,6 +19106,7 @@
 2C8DB1	Intel Corporate
 2C9127	Eintechno Corporation
 2C91AB	AVM Audiovisuelles Marketing und Computersysteme GmbH
+2C91EF	Golmar Sistemas de Comunicacion SA
 2C922C	Kishu Giken Kogyou Company Ltd,.
 2C93FB	Sercomm France Sarl
 2C9452	HUAWEI TECHNOLOGIES CO.,LTD
@@ -23368,7 +23370,10 @@
 4C8125	ZOWEE TECHNOLOGY(HEYUAN)Co.,Ltd
 4C81BE	IEEE Registration Authority
 4C81BE4	Suzhou APAQI Robotics Technology Co., Ltd.
+4C81BE6	Shenzhen Ultra Meta Industrial Control Technology Co.,Ltd.
 4C81BE7	Renson NV
+4C81BEB	Guangdong Lidun New Energy Technology Co., Ltd.
+4C81BEC	Shenzhen Huiqincai Network Communication Co., Ltd.
 4C820C	Apple, Inc.
 4C8237	Telink Micro LLC
 4C82A9	CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.
@@ -45275,6 +45280,7 @@ BCA6E7	Sichuan Odot Automation System Co., Ltd.
 BCA8A6	Intel Corporate
 BCA920	Apple, Inc.
 BCA993	Cambium Networks Limited
+BCA9D2	Quectel Wireless Solutions Co.,Ltd.
 BCA9D6	Cyber-Rain, Inc.
 BCAA82	Fiberhome Telecommunication Technologies Co.,LTD
 BCAB7C	TRnP KOREA Co Ltd
