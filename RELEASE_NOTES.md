@@ -12,7 +12,8 @@
 
 ### Improvements
 
-- **The network map in a folder's pane on the Nodes page can now be searched too.** The same box as on the full map sits in the map's heading row: it matches host names, takes a regular expression and NOT, outlines the matches and fades the rest, and Enter brings the next match to the middle. The search is kept in the address as `mq=`, so it stays while you move between folders, and **Open full map** takes it there.
+- **The network map in a folder's pane on the Nodes page can now be searched too.** The same box as on the full map sits in the map's heading row: it matches host names, takes a regular expression and NOT, outlines the matches and fades the rest, and Enter brings the next match to the middle. The search is kept in the address as `mq=`, so it stays while you move between folders, and **Open full map** takes it there. While the box is not shown (the map folded, or the folder too large to draw), the search still in force is shown in its place with a ✕ to clear it.
+- **Discovery's Addresses field now takes several lines.** Write one address, range or CIDR per line — or paste a list straight from a spreadsheet — and commas still work as before. The address count under the field adds them all up.
 
 ### Bug Fixes
 

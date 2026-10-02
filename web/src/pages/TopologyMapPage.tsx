@@ -39,6 +39,7 @@ import {
   type MapSelection,
 } from '../components/TopologyMap/topologyLevel';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
+import { writeIdParam } from '../lib/filterParams';
 import { MapSearchBox } from '../components/TopologyMap/MapSearchBox';
 import { useMapSearch } from '../components/TopologyMap/useMapSearch';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
@@ -137,13 +138,12 @@ export function TopologyMapPage() {
   const writeQ = useCallback(
     (value: string) => {
       const p = new URLSearchParams(params);
-      if (value) p.set('q', value);
-      else p.delete('q');
+      writeIdParam(p, 'q', value || null);
       setParams(p, { replace: true });
     },
     [params, setParams],
   );
-  const mapSearch = useMapSearch(level, viewLayout, q, writeQ);
+  const mapSearch = useMapSearch(level, viewLayout, q, writeQ, group ?? '');
   const { cond, search, focus } = mapSearch;
 
   const selection: MapSelection = edge

@@ -12,11 +12,14 @@
 // because `/nodes` already spends `q` on the tree. Moving to another folder keeps it, and "open
 // larger" hands it to the full map as its `q`.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { usePrefsStore } from '../../prefs';
 import { topologyMapHref } from '../../lib/entityHref';
+import { writeIdParam } from '../../lib/filterParams';
+import { conditionIsActive, decodeCondition } from '../../lib/filterCondition';
 import { TopologyMap } from '../TopologyMap/TopologyMap';
 import { MapEdgeMembers } from '../TopologyMap/MapEdgeMembers';
 import { useMapTitles, useTopologyLevel } from '../TopologyMap/useTopologyLevel';
@@ -40,50 +43,24 @@ interface Props {
 }
 
 export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
-  const collapsed = usePrefsStore((s) => s.groupMapCollapsed);
-  const [params, setParams] = useSearchParams();
-  const mq = params.get(GROUP_MAP_SEARCH_KEY) ?? '';
-  // Written from the latest query string, not this render's: the tree writes the same URL.
-  const writeMq = useCallback(
-    (value: string) =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (value) next.set(GROUP_MAP_SEARCH_KEY, value);
-          else next.delete(GROUP_MAP_SEARCH_KEY);
-          return next;
-        },
-        { replace: true },
-      ),
-    [setParams],
-  );
-  if (collapsed) return <GroupMapHead groupId={groupId} mq={mq} search={null} />;
-  return (
-    <GroupMapOpen
-      groupId={groupId}
-      mq={mq}
-      writeMq={writeMq}
-      onOpenNode={onOpenNode}
-      onOpenGroup={onOpenGroup}
-    />
-  );
-}
-
-/** The section's heading row and, below it, whatever the open map has to show. */
-function GroupMapHead({
-  groupId,
-  mq,
-  search,
-  children,
-}: {
-  groupId: string;
-  mq: string;
-  search: MapSearchState | null;
-  children?: React.ReactNode;
-}) {
   const { t } = useTranslation('nodes');
   const collapsed = usePrefsStore((s) => s.groupMapCollapsed);
   const toggle = usePrefsStore((s) => s.toggleGroupMap);
+  const [params, setParams] = useSearchParams();
+  const mq = params.get(GROUP_MAP_SEARCH_KEY) ?? '';
+  // Built from this render's query string, like every other key on `/nodes`: two writes landing in
+  // one tick keep only the later one (the same limit `useUrlTerm` documents for the tree's `q`).
+  const writeMq = useCallback(
+    (value: string) => {
+      const next = new URLSearchParams(params);
+      writeIdParam(next, GROUP_MAP_SEARCH_KEY, value || null);
+      setParams(next, { replace: true });
+    },
+    [params, setParams],
+  );
+  // The open map's search box is drawn into this slot in the heading row. The heading itself is the
+  // same element folded or open, so the toggle the operator just pressed keeps keyboard focus.
+  const [findSlot, setFindSlot] = useState<HTMLDivElement | null>(null);
   const bodyId = `nd-grpmap-${groupId}`;
   return (
     <section>
@@ -98,13 +75,52 @@ function GroupMapHead({
           <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
           <span className="nd-section-t">{t('groupDetail.map.title')}</span>
         </button>
-        <div className="nd-grpmap-find">{search && <MapSearchBox state={search} inline />}</div>
+        <div className="nd-grpmap-find" ref={setFindSlot}>
+          {collapsed && <ActiveSearchChip mq={mq} writeMq={writeMq} />}
+        </div>
         <Link className="nd-grpmap-open" to={withSearch(topologyMapHref({ group: groupId }), mq)}>
           {t('groupDetail.map.open')}
         </Link>
       </div>
-      {!collapsed && <div id={bodyId}>{children}</div>}
+      {!collapsed && (
+        <div id={bodyId}>
+          <GroupMapOpen
+            groupId={groupId}
+            mq={mq}
+            writeMq={writeMq}
+            findSlot={findSlot}
+            onOpenNode={onOpenNode}
+            onOpenGroup={onOpenGroup}
+          />
+        </div>
+      )}
     </section>
+  );
+}
+
+/** The search in force while its box is not offered (the map folded, too big, or without lines):
+ *  it still fades boxes on the full map that "open larger" hands it to, so it stays visible and
+ *  clearable here. */
+function ActiveSearchChip({ mq, writeMq }: { mq: string; writeMq: (value: string) => void }) {
+  const { t } = useTranslation('nodes');
+  const cond = useMemo(() => decodeCondition(mq), [mq]);
+  if (!conditionIsActive(cond)) return null;
+  const label = t(cond.not ? 'groupDetail.map.searchActiveNot' : 'groupDetail.map.searchActive', {
+    term: cond.term,
+  });
+  return (
+    <span className="nd-grpmap-chip" title={label}>
+      <span className="nd-grpmap-chip-t">{label}</span>
+      <button
+        type="button"
+        className="nd-grpmap-chip-x"
+        aria-label={t('groupDetail.map.searchClear')}
+        title={t('groupDetail.map.searchClear')}
+        onClick={() => writeMq('')}
+      >
+        ✕
+      </button>
+    </span>
   );
 }
 
@@ -112,16 +128,23 @@ function GroupMapOpen({
   groupId,
   mq,
   writeMq,
+  findSlot,
   onOpenNode,
   onOpenGroup,
-}: Props & { mq: string; writeMq: (value: string) => void }) {
+}: Props & { mq: string; writeMq: (value: string) => void; findSlot: HTMLDivElement | null }) {
   const view = useTopologyLevel(groupId);
-  const search = useMapSearch(view.level, view.layout, mq, writeMq);
-  // The box is offered only over a map that is drawn: searching a level that says "too big" or
-  // "no lines yet" would count hits nobody can see.
-  const drawn = !!view.level && !view.level.overflow && view.layout.nodes.length > 0;
+  const search = useMapSearch(view.level, view.layout, mq, writeMq, groupId);
+  // The box is not offered over a level that says "too big" or "no lines yet": it would count hits
+  // nobody can see. It stays while the next folder's level loads, so a term being typed and the
+  // caret survive moving between folders.
+  const undrawn = !!view.level && (view.level.overflow || view.layout.nodes.length === 0);
   return (
-    <GroupMapHead groupId={groupId} mq={mq} search={drawn ? search : null}>
+    <>
+      {findSlot &&
+        createPortal(
+          undrawn ? <ActiveSearchChip mq={mq} writeMq={writeMq} /> : <MapSearchBox state={search} inline />,
+          findSlot,
+        )}
       <GroupMapBody
         groupId={groupId}
         view={view}
@@ -129,7 +152,7 @@ function GroupMapOpen({
         onOpenNode={onOpenNode}
         onOpenGroup={onOpenGroup}
       />
-    </GroupMapHead>
+    </>
   );
 }
 

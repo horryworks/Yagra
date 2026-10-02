@@ -26,11 +26,21 @@ export function useMapSearch(
   layout: GraphLayout,
   encoded: string,
   write: (encoded: string) => void,
+  /** The level the caller asked for. The centred hit belongs to it: a box found in one folder must
+   *  not pull the view of another — or of the same one, re-opened later — back onto itself. */
+  scope: string,
 ): MapSearchState {
   const cond = useMemo(() => decodeCondition(encoded), [encoded]);
   const setCond = useCallback((next: TextCondition) => write(encodeCondition(next)), [write]);
   const search = useMemo(() => searchMap(level, layout, cond), [level, layout, cond]);
   const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
+  // Dropped when the requested level changes, not when the drawn one does: the drawn level is null
+  // while the next one loads, and comparing against it would bring the old hit back on return.
+  const [focusScope, setFocusScope] = useState(scope);
+  if (focusScope !== scope) {
+    setFocusScope(scope);
+    setFocus(null);
+  }
   // The hits are worked out from the box's text when Enter is pressed, not from the last render:
   // the Enter that commits a freshly typed term arrives before the URL has the term, and stepping
   // through the previous search's hits would centre the wrong box.

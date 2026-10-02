@@ -2289,6 +2289,35 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   display: flex;
   align-items: center;
 }
+/* The search still in force while its box is not offered (map folded, too big, or without lines). */
+.nd-grpmap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 4px 1px 8px;
+  margin-bottom: 9px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.nd-grpmap-chip-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nd-grpmap-chip-x {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: inherit;
+  cursor: pointer;
+}
+.nd-grpmap-chip-x:hover {
+  color: var(--text-primary);
+}
 .nd-grpmap-open {
   font-size: var(--font-sm);
   color: var(--accent-color);

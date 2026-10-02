@@ -719,7 +719,10 @@
       "summaryEdges_other": "{{count}} lines",
       "summaryStubs_one": "{{count}} leaving the folder",
       "summaryStubs_other": "{{count}} leaving the folder",
-      "resize": "Drag to change the map's height (double-click to reset)"
+      "resize": "Drag to change the map's height (double-click to reset)",
+      "searchActive": "Searching: {{term}}",
+      "searchActiveNot": "Searching: not {{term}}",
+      "searchClear": "Clear the map search"
     }
   },
   "prefixGaps": {

@@ -25,8 +25,9 @@ export function MapSearchBox({ state, inline }: Props) {
       onKeyDown={(e) => {
         // The editor commits on Enter itself; here Enter also moves to the next hit.
         if (e.key !== 'Enter' || isImeComposing(e)) return;
+        // The term field only: the Regex switch beside it is an <input> too, whose value is "on".
         const box = e.target as HTMLInputElement;
-        if (box.tagName !== 'INPUT') return;
+        if (box.tagName !== 'INPUT' || box.type !== 'search') return;
         step(e.shiftKey ? -1 : 1, box.value);
       }}
     >

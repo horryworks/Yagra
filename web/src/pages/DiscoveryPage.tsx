@@ -62,7 +62,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { Button } from '../components/ui/Button';
-import { TextInput, Select, FieldHint } from '../components/ui/Field';
+import { TextInput, TextArea, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EndpointSetupCell } from '../components/discovery/EndpointSetupCell';
@@ -931,8 +931,11 @@ export function DiscoveryPage() {
               ) : (
                 <label className="form-label disco-f-targets">
                   {t('discovery.targetsLabel')}
-                  <TextInput
+                  {/* Multi-line so a list can be pasted one entry per line; `expandTargets` splits
+                      on commas and any whitespace, newlines included. */}
+                  <TextArea
                     className="mono"
+                    rows={3}
                     placeholder={t('discovery.targetPlaceholder')}
                     value={targetSpec}
                     onChange={(e) => setTargetSpec(e.target.value)}

@@ -717,7 +717,10 @@
       "summaryEdges_other": "線 {{count}} 組",
       "summaryStubs_one": "外への線 {{count}} 組",
       "summaryStubs_other": "外への線 {{count}} 組",
-      "resize": "ドラッグで地図の高さを変える（ダブルクリックで元に戻す）"
+      "resize": "ドラッグで地図の高さを変える（ダブルクリックで元に戻す）",
+      "searchActive": "検索中: {{term}}",
+      "searchActiveNot": "検索中: {{term}} 以外",
+      "searchClear": "地図の検索を消す"
     }
   },
   "prefixGaps": {

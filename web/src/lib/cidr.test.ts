@@ -78,6 +78,18 @@ describe('expandTargets', () => {
     ]);
   });
 
+  // Discovery's address field is a textarea, so a pasted list arrives one entry per line —
+  // with Windows line endings when it came from a spreadsheet, and with blank lines between.
+  it('accepts one entry per line, CRLF and blank lines included', () => {
+    expect(expandTargets('10.0.0.1\r\n10.0.0.3-4\n\n10.0.0.8/31,\n')).toEqual([
+      '10.0.0.1',
+      '10.0.0.3',
+      '10.0.0.4',
+      '10.0.0.8',
+      '10.0.0.9',
+    ]);
+  });
+
   it('rejects the whole spec if any token is malformed', () => {
     expect(expandTargets('10.0.0.1, garbage')).toEqual([]);
   });
