@@ -58,7 +58,8 @@
       "searchPlaceholder": "Search rules…",
       "searchAria": "Search routing rules",
       "allSeverities": "All severities",
-      "severityAria": "Filter by severity"
+      "severityAria": "Filter by severity",
+      "edit": "Edit rule"
     },
     "channelModal": {
       "title": "Add notification channel",
@@ -86,7 +87,9 @@
       "severity": "Severity",
       "anySeverity": "any severity",
       "channels": "Channels",
-      "add": "Add rule"
+      "add": "Add rule",
+      "editTitle": "Edit routing rule — {{name}}",
+      "save": "Save"
     },
     "err": {
       "update": "failed to update",
@@ -95,7 +98,8 @@
       "delete": "failed to delete",
       "preview": "failed to render the preview",
       "template": "failed to save the template",
-      "test": "failed to send the test"
+      "test": "failed to send the test",
+      "updateRule": "failed to save the rule"
     },
     "template": {
       "title": "Notification template — {{name}}",

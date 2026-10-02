@@ -1764,6 +1764,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("PUT", "/api/v1/routing-rules/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
+        "PUT",
+        "/api/v1/routing-rules/:id/definition",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/settings/ldap",
         ADMIN_CFG,

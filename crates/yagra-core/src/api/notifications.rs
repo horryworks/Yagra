@@ -42,6 +42,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     list_routing_rules,
     create_routing_rule,
     set_routing_rule_enabled,
+    update_routing_rule,
     delete_routing_rule
 ))]
 pub(super) struct Doc;
@@ -88,6 +89,12 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
+        )
+        // Beside `/:id` the way a channel's `/template` is: `PUT /:id` already means "switch it on
+        // or off" to every API client, so the edit gets its own path rather than a second meaning.
+        .route(
+            "/api/v1/routing-rules/:id/definition",
+            put(update_routing_rule),
         )
 }
 
@@ -693,11 +700,33 @@ async fn list_routing_rules(
 }
 
 /// Create-rule body: a name, an optional severity filter (absent = any), and target channels.
+/// Editing a rule takes the same body (ADR-193).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateRule {
     name: String,
     severity: Option<String>,
     channel_ids: Vec<Uuid>,
+}
+
+impl CreateRule {
+    /// The checks a rule passes before it is stored, shared by create and edit so the two cannot
+    /// accept different things.
+    fn parse(&self) -> ApiResult<(&str, Option<Severity>)> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_rule",
+                "name must not be empty",
+            ));
+        }
+        let severity = parse_severity_opt(self.severity.as_deref()).map_err(|()| {
+            ApiError::bad_request(
+                "invalid_rule",
+                "severity must be critical|warning|info or null",
+            )
+        })?;
+        Ok((name, severity))
+    }
 }
 
 #[utoipa::path(
@@ -716,19 +745,7 @@ async fn create_routing_rule(
     admin: Admin,
     Json(body): Json<CreateRule>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
-    let name = body.name.trim();
-    if name.is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_rule",
-            "name must not be empty",
-        ));
-    }
-    let severity = parse_severity_opt(body.severity.as_deref()).map_err(|()| {
-        ApiError::bad_request(
-            "invalid_rule",
-            "severity must be critical|warning|info or null",
-        )
-    })?;
+    let (name, severity) = body.parse()?;
     let id = admin
         .notifications
         .create_rule(name, severity, &body.channel_ids)
@@ -762,6 +779,45 @@ async fn set_routing_rule_enabled(
     Json(body): Json<EnabledBody>,
 ) -> ApiResult<StatusCode> {
     match admin.notifications.set_rule_enabled(id, body.enabled).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::not_found(
+            "rule_not_found",
+            format!("no rule {id}"),
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "update routing rule",
+            "failed to update routing rule",
+        )),
+    }
+}
+
+/// Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was.
+#[utoipa::path(
+    put, path = "/api/v1/routing-rules/{id}/definition", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Routing rule id")),
+    request_body = CreateRule,
+    responses(
+        (status = 204, description = "Rule replaced; its enabled switch is unchanged"),
+        (status = 400, description = "Empty name, or a severity outside critical|warning|info|null", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn update_routing_rule(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateRule>,
+) -> ApiResult<StatusCode> {
+    let (name, severity) = body.parse()?;
+    match admin
+        .notifications
+        .update_rule(id, name, severity, &body.channel_ids)
+        .await
+    {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(ApiError::not_found(
             "rule_not_found",
@@ -840,6 +896,7 @@ mod tests {
             ("GET", "/api/v1/routing-rules".to_owned()),
             ("POST", "/api/v1/routing-rules".to_owned()),
             ("PUT", format!("/api/v1/routing-rules/{ID}")),
+            ("PUT", format!("/api/v1/routing-rules/{ID}/definition")),
             ("DELETE", format!("/api/v1/routing-rules/{ID}")),
         ]
     }
@@ -1293,5 +1350,100 @@ at 2026-08-04T09:41:07+00:00"
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    /// ADR-193: a rule's definition is replaced in place — name, severity and channels — while
+    /// its on/off switch stays where the operator left it. The checks are the create path's.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn editing_a_rule_replaces_its_definition_and_keeps_it_switched_off(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let mut channels = Vec::new();
+        for name in ["first", "second"] {
+            let (status, created) = send(
+                &st,
+                "POST",
+                "/api/v1/notification-channels",
+                &tok,
+                Some(serde_json::json!({
+                    "name": name,
+                    "config": { "kind": "webhook", "url": "http://10.0.0.9/hook" },
+                })),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+            channels.push(created["id"].as_str().unwrap().to_owned());
+        }
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(serde_json::json!({
+                "name": "everything", "severity": null, "channel_ids": [channels[0]],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+        let id = created["id"].as_str().unwrap().to_owned();
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/routing-rules/{id}"),
+            &tok,
+            Some(serde_json::json!({ "enabled": false })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+
+        let path = format!("/api/v1/routing-rules/{id}/definition");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "  criticals  ", "severity": "critical", "channel_ids": [channels[1]],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let (status, list) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let rule = &list[0];
+        assert_eq!(rule["name"], "criticals", "{list}");
+        assert_eq!(rule["severity"], "critical", "{list}");
+        assert_eq!(
+            rule["channel_ids"],
+            serde_json::json!([channels[1]]),
+            "{list}"
+        );
+        assert_eq!(
+            rule["enabled"], false,
+            "an edit switched the rule back on: {list}"
+        );
+
+        // The create path's checks, not a looser copy of them.
+        for bad in [
+            serde_json::json!({ "name": " ", "severity": null, "channel_ids": [] }),
+            serde_json::json!({ "name": "x", "severity": "CRITICAL", "channel_ids": [] }),
+        ] {
+            let (status, body) = send(&st, "PUT", &path, &tok, Some(bad)).await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"]["code"], "invalid_rule", "{body}");
+        }
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/routing-rules/{}/definition", Uuid::new_v4()),
+            &tok,
+            Some(serde_json::json!({ "name": "x", "severity": null, "channel_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], "rule_not_found", "{body}");
     }
 }

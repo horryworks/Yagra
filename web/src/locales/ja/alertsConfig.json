@@ -56,7 +56,8 @@
       "searchPlaceholder": "ルールを検索…",
       "searchAria": "ルーティングルールを検索",
       "allSeverities": "すべての重大度",
-      "severityAria": "重大度で絞り込む"
+      "severityAria": "重大度で絞り込む",
+      "edit": "ルールを編集"
     },
     "channelModal": {
       "title": "通知チャネルを追加",
@@ -84,7 +85,9 @@
       "severity": "重大度",
       "anySeverity": "すべての重大度",
       "channels": "チャネル",
-      "add": "ルールを追加"
+      "add": "ルールを追加",
+      "editTitle": "ルーティングルールを編集 — {{name}}",
+      "save": "保存"
     },
     "err": {
       "update": "更新に失敗しました",
@@ -93,7 +96,8 @@
       "delete": "削除に失敗しました",
       "preview": "プレビューの描画に失敗しました",
       "template": "テンプレートの保存に失敗しました",
-      "test": "テストを送れませんでした"
+      "test": "テストを送れませんでした",
+      "updateRule": "ルールを保存できませんでした"
     },
     "template": {
       "title": "通知テンプレート — {{name}}",

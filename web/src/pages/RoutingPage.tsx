@@ -44,6 +44,7 @@ import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
 import { useLoad } from '../lib/useLoad';
+import { rowActionsWidth } from '../lib/rowActions';
 import { LoadGate } from '../components/ui/LoadGate';
 import './RoutingPage.css';
 import { done, step } from '../lib/submitState';
@@ -176,7 +177,8 @@ function ChannelsSection({
       {
         key: 'actions',
         header: t('routing.channels.cols.actions'),
-        width: '96px',
+        // Test, template, on/off, delete.
+        width: rowActionsWidth(4),
         align: 'right',
         render: (c) =>
           canSystem ? (
@@ -544,6 +546,7 @@ function RulesSection({
 }) {
   const { t } = useTranslation('alertsConfig');
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<RoutingRule | null>(null);
   const [deleting, setDeleting] = useState<RoutingRule | null>(null);
 
   const channelName = (id: string) => channels.find((c) => c.id === id)?.name ?? id;
@@ -578,11 +581,15 @@ function RulesSection({
         key: 'channels',
         header: t('routing.rules.cols.channels'),
         width: '1fr',
-        render: (r) => (
-          <span className="muted ellipsis">
-            {r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels')}
-          </span>
-        ),
+        render: (r) => {
+          const names = r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels');
+          // The whole list on hover: a rule may name more channels than the column can show.
+          return (
+            <span className="muted ellipsis" title={names}>
+              {names}
+            </span>
+          );
+        },
       },
       {
         key: 'status',
@@ -593,13 +600,19 @@ function RulesSection({
       {
         key: 'actions',
         header: t('routing.rules.cols.actions'),
-        width: '96px',
+        // Edit, on/off, delete.
+        width: rowActionsWidth(3),
         align: 'right',
         render: (r) =>
           canSystem ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
+                  {
+                    label: t('routing.rules.edit'),
+                    icon: <EditIcon />,
+                    onClick: () => setEditing(r),
+                  },
                   {
                     label: r.enabled ? t('routing.rules.disable') : t('routing.rules.enable'),
                     icon: <PowerIcon />,
@@ -662,11 +675,22 @@ function RulesSection({
       />
 
       {adding && (
-        <AddRuleModal
+        <RuleModal
           channels={channels}
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false);
+            onChange();
+          }}
+        />
+      )}
+      {editing && (
+        <RuleModal
+          rule={editing}
+          channels={channels}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
             onChange();
           }}
         />
@@ -694,21 +718,28 @@ function RulesSection({
   );
 }
 
-function AddRuleModal({
+/** Add a routing rule, or — given `rule` — edit one in place (ADR-193). The edit replaces the name,
+ *  severity and channels and leaves the rule's on/off switch as it was. */
+function RuleModal({
+  rule,
   channels,
   onClose,
   onDone,
 }: {
+  rule?: RoutingRule;
   channels: NotificationChannel[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
-  const [name, setName] = useState('');
-  const [severity, setSeverity] = useState<'' | Severity>('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [name, setName] = useState(rule?.name ?? '');
+  const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
-  const form = useSubmit({ errorFallback: t('routing.err.addRule'), onDone });
+  const form = useSubmit({
+    errorFallback: rule ? t('routing.err.updateRule') : t('routing.err.addRule'),
+    onDone,
+  });
 
   const toggle = (id: string) =>
     setSelected((cur) => {
@@ -722,27 +753,30 @@ function AddRuleModal({
 
   const submit = () => {
     if (!canAdd) return;
+    const body = {
+      name: name.trim(),
+      severity: severity === '' ? null : severity,
+      channel_ids: [...selected],
+    };
     form.submit(() =>
-      api
-        .createRoutingRule({
-          name: name.trim(),
-          severity: severity === '' ? null : severity,
-          channel_ids: [...selected],
-        })
-        .then(() => done()),
+      (rule ? api.updateRoutingRule(rule.id, body) : api.createRoutingRule(body)).then(() =>
+        done(),
+      ),
     );
   };
 
   return (
     <Modal
-      title={t('routing.ruleModal.title')}
+      title={
+        rule ? t('routing.ruleModal.editTitle', { name: rule.name }) : t('routing.ruleModal.title')
+      }
       onClose={onClose}
       footer={
         <FormFooter
           form={form}
           onClose={onClose}
           onSubmit={submit}
-          submitLabel={t('routing.ruleModal.add')}
+          submitLabel={rule ? t('routing.ruleModal.save') : t('routing.ruleModal.add')}
           canSubmit={canAdd}
         />
       }

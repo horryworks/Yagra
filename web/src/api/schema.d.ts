@@ -4042,6 +4042,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/routing-rules/{id}/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was. */
+        put: operations["update_routing_rule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/bus": {
         parameters: {
             query?: never;
@@ -6827,7 +6844,10 @@ export interface components {
             /** @description The pool name. Becomes a NATS subject token, so letters, digits, `_` and `-` only. */
             name: string;
         };
-        /** @description Create-rule body: a name, an optional severity filter (absent = any), and target channels. */
+        /**
+         * @description Create-rule body: a name, an optional severity filter (absent = any), and target channels.
+         *     Editing a rule takes the same body (ADR-193).
+         */
         CreateRule: {
             channel_ids: string[];
             name: string;
@@ -29995,6 +30015,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such rule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_routing_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Routing rule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRule"];
+            };
+        };
+        responses: {
+            /** @description Rule replaced; its enabled switch is unchanged */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Empty name, or a severity outside critical|warning|info|null */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
             };
             /** @description No valid bearer token */
             401: {

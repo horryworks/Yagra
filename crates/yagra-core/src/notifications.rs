@@ -363,6 +363,28 @@ impl NotificationRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Replace a rule's name, severity filter and channels (ADR-193). `enabled` is left alone: it
+    /// has its own switch, and an edit that also re-enabled a rule the operator had parked would
+    /// start paging without anyone asking for it. Returns whether a row changed.
+    pub async fn update_rule(
+        &self,
+        id: Uuid,
+        name: &str,
+        severity: Option<Severity>,
+        channel_ids: &[Uuid],
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE routing_rules SET name = $2, severity = $3, channel_ids = $4 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(severity.map(|s| s.as_str()))
+        .bind(channel_ids)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Delete a rule. Returns whether a row was removed.
     pub async fn delete_rule(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM routing_rules WHERE id = $1")
@@ -783,5 +805,66 @@ mod tests {
         // …and deleting a rule leaves the channel it named alone. The cascade runs the other way
         // round only (`delete_channel` prunes the rules' arrays).
         assert_eq!(repo.list_channels().await.expect("channels").len(), 1);
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn editing_a_rule_replaces_what_it_matches_and_keeps_its_switch(pool: sqlx::PgPool) {
+        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let a = repo
+            .create_channel("A", &a_webhook("https://a.example.test/hook"))
+            .await
+            .expect("channel");
+        let b = repo
+            .create_channel("B", &a_webhook("https://b.example.test/hook"))
+            .await
+            .expect("channel");
+        let rule = repo
+            .create_rule("Everything", None, &[a])
+            .await
+            .expect("rule");
+        let other = repo
+            .create_rule("Criticals", Some(Severity::Critical), &[a])
+            .await
+            .expect("rule");
+        assert!(repo.set_rule_enabled(rule, false).await.expect("disable"));
+
+        assert!(repo
+            .update_rule(rule, "Warnings", Some(Severity::Warning), &[b])
+            .await
+            .expect("update"));
+        let rules = repo.list_rules().await.expect("rules");
+        let edited = rules
+            .iter()
+            .find(|r| r.id == rule)
+            .expect("the edited rule");
+        assert_eq!(edited.name, "Warnings");
+        assert_eq!(edited.severity, Some(Severity::Warning));
+        assert_eq!(edited.channel_ids, vec![b]);
+        // A parked rule stays parked: an edit that switched it back on would start paging.
+        assert!(!edited.enabled);
+        let untouched = rules
+            .iter()
+            .find(|r| r.id == other)
+            .expect("the other rule");
+        assert_eq!(untouched.name, "Criticals");
+        assert_eq!(untouched.channel_ids, vec![a]);
+
+        // Back to "any severity" is a real edit, not a no-op.
+        assert!(repo
+            .update_rule(rule, "Warnings", None, &[b])
+            .await
+            .expect("update"));
+        let rules = repo.list_rules().await.expect("rules");
+        assert_eq!(
+            rules.iter().find(|r| r.id == rule).expect("rule").severity,
+            None
+        );
+
+        // The API edge turns `false` into a 404.
+        assert!(!repo
+            .update_rule(Uuid::new_v4(), "Nobody", None, &[a])
+            .await
+            .expect("update"));
     }
 }

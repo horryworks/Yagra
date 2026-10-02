@@ -2262,6 +2262,13 @@ export const api = {
   setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>
     apiPut('/api/v1/routing-rules/{id}', { path: { id }, body: { enabled } }),
 
+  /** Replace a rule's name, severity filter and channels; its on/off switch is left alone
+   *  (ADR-193). */
+  updateRoutingRule: (
+    id: string,
+    body: { name: string; severity: Severity | null; channel_ids: string[] },
+  ): Promise<void> => apiPut('/api/v1/routing-rules/{id}/definition', { path: { id }, body }),
+
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
     apiDelete('/api/v1/routing-rules/{id}', { path: { id } }),

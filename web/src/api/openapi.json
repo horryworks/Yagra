@@ -19791,6 +19791,92 @@
         }
       }
     },
+    "/api/v1/routing-rules/{id}/definition": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was.",
+        "operationId": "update_routing_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Routing rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Rule replaced; its enabled switch is unchanged"
+          },
+          "400": {
+            "description": "Empty name, or a severity outside critical|warning|info|null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/bus": {
       "get": {
         "tags": [
@@ -28203,7 +28289,7 @@
       },
       "CreateRule": {
         "type": "object",
-        "description": "Create-rule body: a name, an optional severity filter (absent = any), and target channels.",
+        "description": "Create-rule body: a name, an optional severity filter (absent = any), and target channels.\nEditing a rule takes the same body (ADR-193).",
         "required": [
           "name",
           "channel_ids"

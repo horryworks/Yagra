@@ -24,6 +24,7 @@ import { LoadGate } from '../components/ui/LoadGate';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
+import { rowActionsWidth } from '../lib/rowActions';
 
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
@@ -81,7 +82,8 @@ export function EventSourcesPage() {
       {
         key: 'actions',
         header: t('eventSources.cols.actions'),
-        width: '130px',
+        // Rotate, on/off, edit, delete.
+        width: rowActionsWidth(4),
         align: 'right',
         render: (r) =>
           canConfig ? (
