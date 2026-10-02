@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **Send a test notification from Alerts ▸ Notification delivery.** Each channel's ⋮ menu has *Send test notification*: Yagra sends the template preview's sample alert through that channel once, rendered with its template, with `[TEST] ` at the start of the subject and `"test": true` in the built-in JSON body, and shows whether it was delivered and why not. A PagerDuty or JSM test opens a real incident, so the on-call is notified once, and Yagra closes it again a few seconds later. It works on a disabled channel. API: `POST /api/v1/notification-channels/{id}/test` (Admin), which answers 200 with `{ delivered, closed, error }`; the error never contains the channel's URL. (ADR-192)
+
+### Improvements
+
+- **A failed webhook, PagerDuty or JSM delivery no longer writes the channel's URL into the core log.** A webhook URL often carries its own secret. The log line now gives the cause (DNS, connect, TLS, status) without the address.
+
 ## v0.3.42 — The map in a folder's pane can be searched too, Discovery takes one address per line, and a Cisco wireless controller seen over CDP can be added
 
 ### Improvements

@@ -643,6 +643,10 @@ fn changes_monitoring_config(path: &str) -> bool {
         // it on almost every keystroke-batch, which is the worst possible source of full-fleet
         // rebuilds.
         || path == "/api/v1/notification-channels/preview"
+        // Sends one test notification through a stored channel (ADR-192). It reads the channel and
+        // writes nothing; the outbound request is the whole point. A ManageSystem route, so the
+        // read-shaped check beside this function cannot see it - only the test below keeps it here.
+        || (path.starts_with("/api/v1/notification-channels/") && path.ends_with("/test"))
         // Asks the updater to re-read the registry's tag list (ADR-050). It refreshes a cache the
         // GET beside it serves and changes nothing this deployment monitors — the POST is only
         // because it reaches out over the network, not because it writes configuration.
@@ -1702,6 +1706,23 @@ mod tests {
     // ── Passive events API ──
 
     // ── Distributed poller pool (ADR-009/020) — Pollers API ───────────────────
+
+    /// A test send (ADR-192) reads one channel and writes nothing, and it demands ManageSystem, so
+    /// the read-shaped check cannot see it. The siblings that do write a channel still invalidate:
+    /// the exemption is the path ending in `/test`, not the channel subtree.
+    #[test]
+    fn testing_a_notification_channel_does_not_dirty_the_config_generation() {
+        assert!(!changes_monitoring_config(
+            "/api/v1/notification-channels/abc/test"
+        ));
+        for path in [
+            "/api/v1/notification-channels",
+            "/api/v1/notification-channels/abc",
+            "/api/v1/notification-channels/abc/template",
+        ] {
+            assert!(changes_monitoring_config(path), "{path} must invalidate");
+        }
+    }
 
     #[test]
     fn expensive_reads_wearing_post_do_not_dirty_the_config_generation() {

@@ -16122,6 +16122,80 @@
         }
       }
     },
+    "/api/v1/notification-channels/{id}/test": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Send one test notification through a channel, now (ADR-192).",
+        "description": "The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at\nthe start of the subject and `\"test\": true` in the built-in JSON body. Sent once, with no retry.\nA PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once\nand nothing is left open. Works on a disabled channel, so one can be checked before it is\nswitched on.",
+        "operationId": "test_notification_channel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Channel id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The test was attempted; whether the channel accepted it is in the body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "tags": [
@@ -26793,6 +26867,33 @@
               "null"
             ],
             "description": "Template for the notification subject. Absent means Yagra's built-in wording is used."
+          }
+        }
+      },
+      "ChannelTestResult": {
+        "type": "object",
+        "description": "What a test send did (ADR-192). A failure is reported **in the 200 response**, as the template\npreview does: the request worked, and what it found out is that the channel does not.",
+        "required": [
+          "delivered"
+        ],
+        "properties": {
+          "closed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the incident the test opened was closed again. `null` for a channel kind with no\nincident (webhook, email), and when the delivery itself failed."
+          },
+          "delivered": {
+            "type": "boolean",
+            "description": "Whether the channel accepted the test notification."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The first failure, as the channel reported it. Never contains the channel's URL."
           }
         }
       },

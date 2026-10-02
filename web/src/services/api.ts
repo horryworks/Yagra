@@ -135,6 +135,7 @@ import type {
   ChannelKind,
   NotifyEvent,
   TemplatePreview,
+  ChannelTestResult,
   TemplateVariable,
   SavedFinding,
   SavedFindingsQuery,
@@ -2215,6 +2216,12 @@ export const api = {
     body: { subject: string | null; body: string | null },
   ): Promise<void> =>
     apiPut('/api/v1/notification-channels/{id}/template', { path: { id }, body }),
+
+  /** Send one test notification through a channel now (ADR-192): the sample alert, through the
+   *  channel's template, marked [TEST]. PagerDuty and JSM close the incident it opened. Whether the
+   *  channel accepted it comes back in the body, beside a 200. */
+  testNotificationChannel: (id: string): Promise<ChannelTestResult> =>
+    apiPost('/api/v1/notification-channels/{id}/test', { path: { id } }),
 
   /** Render a template against a representative alert without saving it. A template that cannot
    *  be used comes back as `problems` alongside the built-in text that would be sent instead —

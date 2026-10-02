@@ -1504,6 +1504,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/notification-channels/:id/test",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/notification-channels/preview",
         ADMIN_CFG,
         // A read wearing POST, and still no tool: it renders operator-supplied template text, and

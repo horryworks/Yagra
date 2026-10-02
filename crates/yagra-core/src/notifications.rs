@@ -254,29 +254,60 @@ impl NotificationRepo {
         .await?;
         let mut out = Vec::new();
         for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let template = ChannelTemplate {
-                subject: row.try_get("subject_template")?,
-                body: row.try_get("body_template")?,
-            };
-            let sealed = sealed_from_row(&row)?;
-            match self
-                .cipher
-                .open(&sealed)
-                .ok()
-                .and_then(|pt| serde_json::from_slice::<ChannelConfig>(&pt).ok())
-            {
-                Some(config) => out.push(OpenChannel {
-                    id,
-                    config,
-                    template,
-                }),
+            match self.open_row(&row)? {
+                Some(open) => out.push(open),
                 None => {
-                    tracing::warn!(channel = %id, "notification channel config decrypt failed; skipping")
+                    let id: Uuid = row.try_get("id")?;
+                    tracing::warn!(channel = %id, "notification channel config decrypt failed; skipping");
                 }
             }
         }
         Ok(out)
+    }
+
+    /// One channel with its config decrypted, **enabled or not**, plus its display name — for the
+    /// test send (ADR-192), which an operator uses before switching a channel on.
+    ///
+    /// `Ok(None)` = no such channel. A config that does not decrypt is an `Err`, not a `None`: the
+    /// row exists, and answering 404 for it would send the operator looking for the wrong fault.
+    pub async fn open_channel(&self, id: Uuid) -> anyhow::Result<Option<(String, OpenChannel)>> {
+        let Some(row) = sqlx::query(
+            "SELECT id, name, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce,                     subject_template, body_template              FROM notification_channels WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let name: String = row.try_get("name")?;
+        match self.open_row(&row)? {
+            Some(open) => Ok(Some((name, open))),
+            None => Err(anyhow::anyhow!(
+                "notification channel {id}: config decrypt failed"
+            )),
+        }
+    }
+
+    /// Decrypt one `notification_channels` row. `Ok(None)` when the sealed config does not open or
+    /// does not parse; the two callers disagree about what that means, so neither is decided here.
+    fn open_row(&self, row: &sqlx::postgres::PgRow) -> anyhow::Result<Option<OpenChannel>> {
+        let id: Uuid = row.try_get("id")?;
+        let template = ChannelTemplate {
+            subject: row.try_get("subject_template")?,
+            body: row.try_get("body_template")?,
+        };
+        let sealed = sealed_from_row(row)?;
+        Ok(self
+            .cipher
+            .open(&sealed)
+            .ok()
+            .and_then(|pt| serde_json::from_slice::<ChannelConfig>(&pt).ok())
+            .map(|config| OpenChannel {
+                id,
+                config,
+                template,
+            }))
     }
 
     // ── Routing rules ─────────────────────────────────────────────────────────────────

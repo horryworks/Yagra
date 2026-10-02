@@ -16,6 +16,7 @@ import { useCan } from '../store';
 import {
   type ChannelConfigInput,
   type ChannelKind,
+  type ChannelTestResult,
   type NotificationChannel,
   type RoutingRule,
   type Severity,
@@ -38,14 +39,15 @@ import {
   ROUTING_RULE_FILTER_PREFIX,
   routingRuleFilters,
 } from './routingFilters';
-import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
+import { TrashIcon, PowerIcon, EditIcon, BellIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import './RoutingPage.css';
-import { done } from '../lib/submitState';
+import { done, step } from '../lib/submitState';
+import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTest';
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 
@@ -130,6 +132,7 @@ function ChannelsSection({
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<NotificationChannel | null>(null);
   const [templating, setTemplating] = useState<NotificationChannel | null>(null);
+  const [testing, setTesting] = useState<NotificationChannel | null>(null);
 
   const toggle = (c: NotificationChannel) =>
     api
@@ -180,6 +183,11 @@ function ChannelsSection({
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
+                  {
+                    label: t('routing.channels.test'),
+                    icon: <BellIcon />,
+                    onClick: () => setTesting(c),
+                  },
                   {
                     label: t('routing.channels.template'),
                     icon: <EditIcon />,
@@ -269,6 +277,7 @@ function ChannelsSection({
           }}
         />
       )}
+      {testing && <TestChannelModal channel={testing} onClose={() => setTesting(null)} />}
       {deleting && (
         <ConfirmDeleteModal
           title={t('routing.channels.delete')}
@@ -289,6 +298,62 @@ function ChannelsSection({
         </ConfirmDeleteModal>
       )}
     </section>
+  );
+}
+
+/** Send one test notification through a channel and show what happened (ADR-192). Sending writes
+ *  nothing, so it is a `step()`: the dialog stays open on the answer and can send again. */
+function TestChannelModal({
+  channel,
+  onClose,
+}: {
+  channel: NotificationChannel;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation('alertsConfig');
+  const [result, setResult] = useState<ChannelTestResult | null>(null);
+  const form = useSubmit({ errorFallback: t('routing.err.test'), onDone: onClose });
+  const warn = testWarnings(channel);
+  const verdict = result ? testVerdict(result) : null;
+
+  const send = () => {
+    setResult(null);
+    form.submit(() =>
+      api.testNotificationChannel(channel.id).then((r) => {
+        setResult(r);
+        return step();
+      }),
+    );
+  };
+
+  return (
+    <Modal
+      title={t('routing.test.title', { name: channel.name })}
+      onClose={onClose}
+      footer={
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={send}
+          submitLabel={result ? t('routing.test.again') : t('routing.test.send')}
+          busyLabel={t('routing.test.sending')}
+        />
+      }
+    >
+      <p className="routing-test-intro">{t('routing.test.intro')}</p>
+      {warn.pages && <p className="routing-test-warn">{t('routing.test.pages')}</p>}
+      {warn.unmarkedBody && <p className="routing-test-warn">{t('routing.test.unmarkedBody')}</p>}
+      {warn.disabled && <p className="modal-hint">{t('routing.test.disabled')}</p>}
+      {verdict && (
+        <p
+          className={verdictOk(verdict) ? 'routing-test-result' : 'routing-test-result form-error'}
+          role="status"
+        >
+          {t(VERDICT_KEYS[verdict], { error: result?.error ?? '' })}
+        </p>
+      )}
+      <FormError form={form} />
+    </Modal>
   );
 }
 

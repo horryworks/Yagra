@@ -682,6 +682,9 @@ export type NotifyEvent = components['schemas']['NotifyEvent'];
  *  not be rendered comes back as the built-in text plus an entry in `problems` — the same
  *  fallback delivery applies, so the preview shows what an alert would actually produce. */
 export type TemplatePreview = components['schemas']['PreviewResult'];
+/** What a channel's test send did (`POST /api/v1/notification-channels/{id}/test`, ADR-192). A
+ *  failure is reported in the body, beside a 200. */
+export type ChannelTestResult = components['schemas']['ChannelTestResult'];
 
 // ── Collection (metrics to gather) ──────────────────────────────────────────────────────────────
 

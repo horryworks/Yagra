@@ -35,6 +35,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, Severity};
     set_notification_channel_enabled,
     delete_notification_channel,
     set_notification_template,
+    test_notification_channel,
     preview_notification_template,
     list_template_variables,
     list_routing_rules,
@@ -70,6 +71,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/notification-channels/:id/template",
             put(set_notification_template),
+        )
+        .route(
+            "/api/v1/notification-channels/:id/test",
+            post(test_notification_channel),
         )
         .route(
             "/api/v1/routing-rules",
@@ -400,6 +405,84 @@ async fn set_notification_template(
     }
 }
 
+/// What a test send did (ADR-192). A failure is reported **in the 200 response**, as the template
+/// preview does: the request worked, and what it found out is that the channel does not.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(super) struct ChannelTestResult {
+    /// Whether the channel accepted the test notification.
+    delivered: bool,
+    /// Whether the incident the test opened was closed again. `null` for a channel kind with no
+    /// incident (webhook, email), and when the delivery itself failed.
+    closed: Option<bool>,
+    /// The first failure, as the channel reported it. Never contains the channel's URL.
+    error: Option<String>,
+}
+
+/// Send one test notification through a channel, now (ADR-192).
+///
+/// The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at
+/// the start of the subject and `"test": true` in the built-in JSON body. Sent once, with no retry.
+/// A PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once
+/// and nothing is left open. Works on a disabled channel, so one can be checked before it is
+/// switched on.
+#[utoipa::path(
+    post, path = "/api/v1/notification-channels/{id}/test", tag = "notifications",
+    params(("id" = Uuid, Path, description = "Channel id")),
+    responses(
+        (status = 200, description = "The test was attempted; whether the channel accepted it is in the body", body = ChannelTestResult),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 404, description = "No such channel", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn test_notification_channel(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<ChannelTestResult>> {
+    let (_, open) = admin
+        .notifications
+        .open_channel(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "open notification channel",
+                "failed to read notification channel",
+            )
+        })?
+        .ok_or_else(|| ApiError::not_found("channel_not_found", format!("no channel {id}")))?;
+    let kind = open.config.kind();
+    let Some(channel) = crate::alerts::notify::build_test_channel(&open.config) else {
+        // Only an email channel can fail to build: its stored addresses did not parse. The same
+        // channel is silently skipped by the routing snapshot, which is worth saying here.
+        return Ok(Json(ChannelTestResult {
+            delivered: false,
+            closed: None,
+            error: Some("the stored SMTP host or addresses could not be parsed".to_owned()),
+        }));
+    };
+    let notification = crate::alerts::notify::test_notification(kind, &open.template);
+    let outcome = crate::alerts::notify::send_test(
+        channel.as_ref(),
+        &notification,
+        crate::alerts::notify::test_close_delay(kind),
+    )
+    .await;
+    tracing::info!(
+        channel = %id,
+        delivered = outcome.delivered,
+        closed = ?outcome.closed,
+        "notification channel test sent"
+    );
+    Ok(Json(ChannelTestResult {
+        delivered: outcome.delivered,
+        closed: outcome.closed,
+        error: outcome.error,
+    }))
+}
+
 /// Longest template *source* accepted, per field. Matches the table CHECKs in migration 0063, and
 /// is deliberately looser than the cap on rendered output — a template can reasonably be longer
 /// than what it produces.
@@ -699,6 +782,7 @@ mod tests {
                 "PUT",
                 format!("/api/v1/notification-channels/{ID}/template"),
             ),
+            ("POST", format!("/api/v1/notification-channels/{ID}/test")),
             ("POST", "/api/v1/notification-channels/preview".to_owned()),
             (
                 "GET",
@@ -967,5 +1051,72 @@ mod tests {
             !list.to_string().contains("s3cr3t-path"),
             "the list returned the channel's target"
         );
+    }
+
+    /// ADR-192: the test send is ACCEPTED (200) even when the channel cannot deliver — the failure
+    /// is the answer, reported in the body — and the reason never carries the channel's URL, which
+    /// is sealed at rest and never returned. `.invalid` is reserved (RFC 2606), so the lookup fails
+    /// without anything leaving the machine. Works on a disabled channel, and an unknown id is 404.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn testing_a_channel_reports_the_failure_without_its_url(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/notification-channels",
+            &tok,
+            Some(serde_json::json!({
+                "name": "unreachable",
+                "config": { "kind": "webhook", "url": "http://hooks.nonexistent.invalid/s3cr3t-path" },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+        let id = created["id"].as_str().unwrap().to_owned();
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/notification-channels/{id}"),
+            &tok,
+            Some(serde_json::json!({ "enabled": false })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/notification-channels/{id}/test"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["delivered"], false, "{body}");
+        assert!(
+            body["closed"].is_null(),
+            "a webhook has no incident: {body}"
+        );
+        let error = body["error"].as_str().expect("a failure says why");
+        assert!(!error.is_empty());
+        for secret in ["s3cr3t-path", "nonexistent.invalid"] {
+            assert!(
+                !error.contains(secret),
+                "the reason leaked {secret}: {error}"
+            );
+        }
+
+        let (status, _) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/notification-channels/{}/test", Uuid::new_v4()),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
     }
 }

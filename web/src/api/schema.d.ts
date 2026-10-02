@@ -3218,6 +3218,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-channels/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send one test notification through a channel, now (ADR-192).
+         * @description The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at
+         *     the start of the subject and `"test": true` in the built-in JSON body. Sent once, with no retry.
+         *     A PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once
+         *     and nothing is left open. Works on a disabled channel, so one can be checked before it is
+         *     switched on.
+         */
+        post: operations["test_notification_channel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/openapi.json": {
         parameters: {
             query?: never;
@@ -6206,6 +6230,21 @@ export interface components {
             name: string;
             /** @description Template for the notification subject. Absent means Yagra's built-in wording is used. */
             subject_template?: string | null;
+        };
+        /**
+         * @description What a test send did (ADR-192). A failure is reported **in the 200 response**, as the template
+         *     preview does: the request worked, and what it found out is that the channel does not.
+         */
+        ChannelTestResult: {
+            /**
+             * @description Whether the incident the test opened was closed again. `null` for a channel kind with no
+             *     incident (webhook, email), and when the delivery itself failed.
+             */
+            closed?: boolean | null;
+            /** @description Whether the channel accepted the test notification. */
+            delivered: boolean;
+            /** @description The first failure, as the channel reported it. Never contains the channel's URL. */
+            error?: string | null;
         };
         /**
          * Format: uuid
@@ -26781,6 +26820,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such channel */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    test_notification_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Channel id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test was attempted; whether the channel accepted it is in the body */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelTestResult"];
                 };
             };
             /** @description No valid bearer token */

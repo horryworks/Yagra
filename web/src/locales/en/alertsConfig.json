@@ -33,7 +33,8 @@
       "searchPlaceholder": "Search channels…",
       "searchAria": "Search notification channels",
       "allKinds": "All kinds",
-      "kindAria": "Filter by channel kind"
+      "kindAria": "Filter by channel kind",
+      "test": "Send test notification"
     },
     "rules": {
       "title": "Routing rules",
@@ -93,7 +94,8 @@
       "addRule": "failed to add rule",
       "delete": "failed to delete",
       "preview": "failed to render the preview",
-      "template": "failed to save the template"
+      "template": "failed to save the template",
+      "test": "failed to send the test"
     },
     "template": {
       "title": "Notification template — {{name}}",
@@ -110,6 +112,22 @@
       "notJson": "Not valid JSON",
       "fellBack": "These fields could not be rendered, so the built-in wording is shown — that is what would actually be sent:",
       "save": "Save template"
+    },
+    "test": {
+      "title": "Send a test notification — {{name}}",
+      "intro": "Sends one sample alert through this channel now, the way a real alert would go: through its template, with [TEST] at the start of the subject and \"test\": true in the built-in body. It is sent once, without retries.",
+      "pages": "This opens a real incident, so the on-call is notified once. Yagra closes it again a few seconds later.",
+      "unmarkedBody": "This channel's body comes from its template, so the payload carries no \"test\" flag. Make sure nothing on the receiving side acts on the sample alert.",
+      "disabled": "This channel is disabled. The test is sent anyway; real alerts will not use it until it is enabled.",
+      "send": "Send test",
+      "again": "Send again",
+      "sending": "Sending…",
+      "result": {
+        "delivered": "Delivered. Check that it arrived at the destination.",
+        "deliveredAndClosed": "Delivered, and the incident was closed again.",
+        "deliveredButOpen": "Delivered, but the incident could not be closed — close it by hand. {{error}}",
+        "failed": "Not delivered: {{error}}"
+      }
     }
   },
   "thresholds": {

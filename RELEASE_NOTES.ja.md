@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **Alerts ▸ Notification delivery からテスト通知を送れるようになる。** 各チャネルの ⋮ に「テスト通知を送る」がある。テンプレートのプレビューと同じ見本アラートを、そのチャネルのテンプレートで 1 回送る。件名の頭に `[TEST] `、組込の JSON 本文に `"test": true` が付く。届いたかどうかと、届かなかった理由が画面に出る。PagerDuty と JSM では本物のインシデントが開くので当番に 1 回通知が届き、数秒後に Yagra が閉じる。無効のチャネルでも送れる。API は `POST /api/v1/notification-channels/{id}/test`（管理者）で、200 と `{ delivered, closed, error }` を返す。`error` にチャネルの URL は入らない。(ADR-192)
+
+### Improvements
+
+- **Webhook・PagerDuty・JSM への配信に失敗したとき、core のログにチャネルの URL を書かなくなる。** Webhook の URL は秘密を含むことが多い。ログには原因（DNS・接続・TLS・ステータス）だけを書く。
+
 ## v0.3.42 — フォルダを選んだときの地図でも探せるようになり、ディスカバリのアドレスを 1 行に 1 つ書けるようになり、CDP で見える Cisco の無線コントローラーを追加できるようになる
 
 ### 改善

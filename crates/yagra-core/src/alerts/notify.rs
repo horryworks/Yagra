@@ -89,9 +89,9 @@ impl NotifyChannel for WebhookChannel {
             .body(notification.payload.clone())
             .send()
             .await
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?
+            .map_err(delivery_error)?
             .error_for_status()
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(delivery_error)?;
         Ok(())
     }
 }
@@ -123,6 +123,27 @@ fn hardened_client() -> reqwest::Client {
         std::time::Duration::from_secs(10),
         crate::http::Redirects::None,
     )
+}
+
+/// A failed HTTP delivery as the text an operator may read (ADR-192).
+///
+/// **The URL is taken out first.** reqwest's `Display` names the URL it was sending to, and a
+/// webhook URL routinely carries its own secret (`.../hooks/T0/B0/XXXX`): the configured URL is
+/// sealed at rest and never returned by the API, so it must not come back through an error message
+/// either - nor go into a log line. The source chain is then appended, because the top-level text
+/// alone ("error sending request") does not say whether DNS, the TCP connect or TLS was the part
+/// that failed, which is the one thing an operator testing a channel needs to know.
+fn delivery_error(e: reqwest::Error) -> NotifyError {
+    use std::error::Error as _;
+    let e = e.without_url();
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    NotifyError::Delivery(text)
 }
 
 /// Map a vendor API response to the channel result. 429 waits out `Retry-After` (capped
@@ -191,7 +212,7 @@ impl PagerDutyChannel {
             .json(&body)
             .send()
             .await
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(delivery_error)?;
         vendor_response(resp, None).await
     }
 }
@@ -297,7 +318,7 @@ impl NotifyChannel for JsmChannel {
             .json(&jsm_create_body(notification))
             .send()
             .await
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(delivery_error)?;
         vendor_response(resp, None).await
     }
 
@@ -311,7 +332,7 @@ impl NotifyChannel for JsmChannel {
             .json(&serde_json::json!({ "source": "yagra" }))
             .send()
             .await
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(delivery_error)?;
         // 404 = no open alert with that alias (already closed / never created) — success,
         // so a resolve is idempotent and never dangles on retry.
         vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND)).await
@@ -469,6 +490,149 @@ fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
                 as Arc<dyn NotifyChannel>)
         }
     }
+}
+
+/// Prefix on a test notification's subject line (ADR-192 decision 1), so a person reading it on a
+/// phone at 3am does not mistake it for the sample alert it describes.
+pub(crate) const TEST_SUBJECT_PREFIX: &str = "[TEST] ";
+
+/// What one test send did (ADR-192).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TestDelivery {
+    /// Whether the channel accepted the notification.
+    pub delivered: bool,
+    /// Whether the incident the test opened was closed again. `None` for a channel with no
+    /// incident to close (webhook, email), and when the delivery itself failed.
+    pub closed: Option<bool>,
+    /// The first failure, as text an operator may read - never carrying the channel's URL
+    /// ([`delivery_error`]).
+    pub error: Option<String>,
+}
+
+/// The test notification for a channel: the template preview's sample alert, rendered through the
+/// channel's own template exactly as a real one would be, and marked as a test (ADR-192 decision 1).
+///
+/// Three marks, each where it can go without editing what an operator wrote:
+/// - the subject line starts with [`TEST_SUBJECT_PREFIX`], templated or not;
+/// - the **built-in** body (the alert as JSON) gains `"test": true`. A templated body is the
+///   operator's text and is left alone, so a webhook with a body template carries no mark in its
+///   payload - the dialog says so;
+/// - the check id is new on every call, so PagerDuty's `dedup_key` and JSM's `alias` never fold a
+///   test into an incident opened by an earlier one.
+pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -> Notification {
+    let (mut alert, resolved) = crate::notify_facts::preview_sample();
+    alert.check = CheckId::from(Uuid::new_v4());
+    let facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+    let builtin = with_subject_tags(
+        builtin_notification(&alert, NotifyEvent::Fire),
+        Some(&facts),
+    );
+    let builtin = Notification {
+        payload: mark_as_test(&builtin.payload),
+        ..builtin
+    };
+    let mut n = if template.is_builtin() {
+        builtin
+    } else {
+        // The same renderer `for_channel` uses, so a template that falls back on delivery falls
+        // back here too - the test shows what a real alert would send, failures included.
+        let rendered = render_with_fallback(
+            Some(template),
+            &facts,
+            body_must_be_json(kind),
+            &builtin.summary,
+            &builtin.payload,
+        );
+        Notification {
+            summary: rendered.subject,
+            payload: rendered.body,
+            ..builtin
+        }
+    };
+    n.summary = format!("{TEST_SUBJECT_PREFIX}{}", n.summary);
+    n
+}
+
+/// `"test": true` added to the built-in alert JSON. Anything that is not a JSON object comes back
+/// unchanged - the built-in payload always is one, but this must not be the place that breaks it.
+fn mark_as_test(payload: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(serde_json::Value::Object(mut obj)) => {
+            obj.insert("test".to_owned(), serde_json::Value::Bool(true));
+            serde_json::Value::Object(obj).to_string()
+        }
+        _ => payload.to_owned(),
+    }
+}
+
+/// How long to wait before closing the incident a test opened, or `None` when the channel kind has
+/// no incident to close (ADR-192 decision 2).
+///
+/// **JSM creates an alert asynchronously.** Its create call answers 202 before the alert exists,
+/// and a close-by-alias that arrives first answers 404 - which [`JsmChannel::deliver_resolve`]
+/// rightly reads as "already closed", so the test would report success and leave the alert open.
+/// The pause is the guard; whether five seconds is enough is only known against a real tenant.
+/// PagerDuty orders events per routing key, so its short pause is courtesy rather than correctness.
+pub(crate) fn test_close_delay(kind: ChannelKind) -> Option<std::time::Duration> {
+    match kind {
+        ChannelKind::Webhook | ChannelKind::Email => None,
+        ChannelKind::PagerDuty => Some(std::time::Duration::from_secs(2)),
+        ChannelKind::Jsm => Some(std::time::Duration::from_secs(5)),
+    }
+}
+
+/// Send one test notification, once, and close what it opened (ADR-192 decisions 2 and 3).
+///
+/// Deliberately **not** through a [`Dispatcher`]: no retry (the operator is waiting and wants the
+/// first failure, not the fourth) and no dedup state left behind. `close_after` is
+/// [`test_close_delay`] for the channel's kind; a test passes zero.
+pub(crate) async fn send_test(
+    channel: &dyn NotifyChannel,
+    notification: &Notification,
+    close_after: Option<std::time::Duration>,
+) -> TestDelivery {
+    if let Err(e) = channel.deliver(notification).await {
+        return TestDelivery {
+            delivered: false,
+            closed: None,
+            error: Some(notify_error_text(e)),
+        };
+    }
+    let Some(wait) = close_after else {
+        return TestDelivery {
+            delivered: true,
+            closed: None,
+            error: None,
+        };
+    };
+    tokio::time::sleep(wait).await;
+    match channel.deliver_resolve(notification).await {
+        Ok(()) => TestDelivery {
+            delivered: true,
+            closed: Some(true),
+            error: None,
+        },
+        Err(e) => TestDelivery {
+            delivered: true,
+            closed: Some(false),
+            error: Some(notify_error_text(e)),
+        },
+    }
+}
+
+/// The channel's own message, without the `delivery failed:` the error's `Display` adds - the
+/// dialog already says it failed.
+fn notify_error_text(e: NotifyError) -> String {
+    match e {
+        NotifyError::Delivery(text) => text,
+    }
+}
+
+/// Build the live channel a test send uses - the same builder the routing snapshot uses, so the
+/// test goes through the delivery code a real alert goes through. `None` when an email channel's
+/// stored addresses do not parse.
+pub(crate) fn build_test_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChannel>> {
+    build_channel(config)
 }
 
 #[async_trait]
@@ -2267,5 +2431,224 @@ mod delivery_tests {
             vec!["fire", "close"],
             "the lane delivered them in the order they arrived"
         );
+    }
+}
+
+/// The test send (ADR-192): what it sends, and what it closes.
+#[cfg(test)]
+mod test_send_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// A channel that records each call and fails the ones it is told to.
+    struct Fake {
+        calls: Mutex<Vec<&'static str>>,
+        fail_fire: bool,
+        fail_close: bool,
+    }
+
+    impl Fake {
+        fn new(fail_fire: bool, fail_close: bool) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                fail_fire,
+                fail_close,
+            }
+        }
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl NotifyChannel for Fake {
+        async fn deliver(&self, _: &Notification) -> Result<(), NotifyError> {
+            self.calls.lock().unwrap().push("fire");
+            if self.fail_fire {
+                return Err(NotifyError::Delivery("unexpected status 401".to_owned()));
+            }
+            Ok(())
+        }
+        async fn deliver_resolve(&self, _: &Notification) -> Result<(), NotifyError> {
+            self.calls.lock().unwrap().push("close");
+            if self.fail_close {
+                return Err(NotifyError::Delivery("rate limited (429)".to_owned()));
+            }
+            Ok(())
+        }
+    }
+
+    fn template(subject: Option<&str>, body: Option<&str>) -> ChannelTemplate {
+        ChannelTemplate {
+            subject: subject.map(str::to_owned),
+            body: body.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_built_in_test_is_marked_in_the_subject_and_in_the_json() {
+        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default());
+        assert!(n.summary.starts_with(TEST_SUBJECT_PREFIX), "{}", n.summary);
+        let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
+        assert_eq!(body["test"], true, "{body}");
+        // Still the alert JSON a real notification carries, with the mark beside it.
+        assert!(body.get("severity").is_some(), "{body}");
+    }
+
+    #[test]
+    fn a_template_renders_the_test_and_its_body_is_left_alone() {
+        let n = test_notification(
+            ChannelKind::Email,
+            &template(
+                Some("{{ severity }} on {{ node_name }}"),
+                Some("{{ node_name }} is down"),
+            ),
+        );
+        assert_eq!(
+            n.summary,
+            format!("{TEST_SUBJECT_PREFIX}critical on core-sw-01")
+        );
+        // The operator's body is theirs: no `"test"` key is pushed into it.
+        assert_eq!(n.payload, "core-sw-01 is down");
+    }
+
+    /// A subject-only template keeps the built-in body, so that body still carries the mark.
+    #[test]
+    fn a_subject_only_template_keeps_the_marked_built_in_body() {
+        let n = test_notification(ChannelKind::PagerDuty, &template(Some("x"), None));
+        assert_eq!(n.summary, format!("{TEST_SUBJECT_PREFIX}x"));
+        let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
+        assert_eq!(body["test"], true);
+    }
+
+    /// A template that cannot be used falls back exactly as it would on a real alert — the test
+    /// shows what would be sent, not a second opinion.
+    #[test]
+    fn a_broken_template_falls_back_to_the_marked_built_in_text() {
+        let n = test_notification(
+            ChannelKind::Webhook,
+            &template(None, Some("{{ nope.attr }}")),
+        );
+        let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
+        assert_eq!(body["test"], true);
+    }
+
+    /// PagerDuty's `dedup_key` and JSM's `alias` come from this: two tests must not fold into one
+    /// incident, nor into an incident a real alert opened.
+    #[test]
+    fn every_test_has_its_own_dedup_key() {
+        let a = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let b = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        assert_ne!(dedup_string(&a.dedup_key), dedup_string(&b.dedup_key));
+        let (sample, _) = crate::notify_facts::preview_sample();
+        assert_ne!(a.dedup_key, sample.dedup_key());
+    }
+
+    #[test]
+    fn only_the_incident_kinds_close_what_they_opened() {
+        assert_eq!(test_close_delay(ChannelKind::Webhook), None);
+        assert_eq!(test_close_delay(ChannelKind::Email), None);
+        assert!(test_close_delay(ChannelKind::PagerDuty).is_some());
+        // JSM creates asynchronously; closing at once would 404 and leave the alert open.
+        assert!(test_close_delay(ChannelKind::Jsm).unwrap() >= std::time::Duration::from_secs(3));
+    }
+
+    /// The test dialog warns that a test pages the on-call for exactly the kinds that close an
+    /// incident here. `web/src/pages/channelTest.ts::INCIDENT_KINDS` is that list's copy; read it
+    /// so the warning and the behaviour cannot drift. ⚠️ It parses one line, which says so.
+    #[test]
+    fn the_webuis_incident_kinds_are_the_kinds_a_test_closes() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/pages/channelTest.ts"),
+        )
+        .expect("web/src/pages/channelTest.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const INCIDENT_KINDS"))
+            .expect("INCIDENT_KINDS is declared in channelTest.ts");
+        let listed: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        let ours: Vec<&str> = [
+            ChannelKind::Webhook,
+            ChannelKind::Email,
+            ChannelKind::PagerDuty,
+            ChannelKind::Jsm,
+        ]
+        .into_iter()
+        .filter(|k| test_close_delay(*k).is_some())
+        .map(|k| k.as_str())
+        .collect();
+        assert_eq!(listed, ours);
+    }
+
+    #[tokio::test]
+    async fn an_incident_channel_is_fired_then_closed() {
+        let ch = Fake::new(false, false);
+        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
+        assert_eq!(ch.calls(), ["fire", "close"]);
+        assert_eq!(
+            out,
+            TestDelivery {
+                delivered: true,
+                closed: Some(true),
+                error: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_channel_with_no_incident_is_sent_once() {
+        let ch = Fake::new(false, false);
+        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default());
+        let out = send_test(&ch, &n, None).await;
+        assert_eq!(ch.calls(), ["fire"]);
+        assert_eq!(out.closed, None);
+        assert!(out.delivered);
+    }
+
+    /// One attempt, no retry, and nothing to close when nothing was opened.
+    #[tokio::test]
+    async fn a_failed_fire_is_reported_once_and_not_closed() {
+        let ch = Fake::new(true, false);
+        let n = test_notification(ChannelKind::Jsm, &ChannelTemplate::default());
+        let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
+        assert_eq!(ch.calls(), ["fire"]);
+        assert_eq!(
+            out,
+            TestDelivery {
+                delivered: false,
+                closed: None,
+                error: Some("unexpected status 401".to_owned())
+            }
+        );
+    }
+
+    /// The page went out but the incident is still open: the operator has to be told, because
+    /// someone now has to close it by hand.
+    #[tokio::test]
+    async fn a_failed_close_is_reported_as_delivered_but_still_open() {
+        let ch = Fake::new(false, true);
+        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
+        assert_eq!(ch.calls(), ["fire", "close"]);
+        assert!(out.delivered);
+        assert_eq!(out.closed, Some(false));
+        assert_eq!(out.error.as_deref(), Some("rate limited (429)"));
+    }
+
+    /// reqwest names the URL in its `Display`; a webhook's URL is its secret.
+    #[tokio::test]
+    async fn a_delivery_error_does_not_carry_the_url() {
+        let err = reqwest::Client::new()
+            .post("http://hooks.nonexistent.invalid/s3cr3t-path")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("s3cr3t-path"), "premise: {err}");
+        let NotifyError::Delivery(text) = delivery_error(err);
+        assert!(!text.contains("s3cr3t-path"), "{text}");
+        assert!(!text.contains("nonexistent.invalid"), "{text}");
+        assert!(!text.is_empty());
     }
 }
