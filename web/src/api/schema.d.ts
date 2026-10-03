@@ -3143,9 +3143,10 @@ export interface paths {
         /**
          * Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
          * @description The template editor opens a channel that has no template on this text, so an operator starts
-         *     from what is sent today. Rendering it produces exactly the built-in subject. A poller pool's
-         *     and a Meraki organization's alerts have built-in wording of their own, which is not described
-         *     here. There is no built-in body template: the built-in body is the whole alert as JSON.
+         *     from what is sent today. Rendering it produces exactly the built-in subject for that channel
+         *     kind. A poller pool's and a Meraki organization's alerts have built-in wording of their own,
+         *     which is not described here. There is no built-in body template: the built-in body is the whole
+         *     alert as JSON for webhook and PagerDuty, and one fact per line for JSM and email.
          */
         get: operations["get_builtin_template"];
         put?: never;
@@ -26659,7 +26660,14 @@ export interface operations {
     };
     get_builtin_template: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The channel kind. JSM and email name the node in their built-in subject; webhook and
+                 *     PagerDuty carry its id. Omitted means webhook, which is what this endpoint described before
+                 *     the parameter existed.
+                 */
+                kind?: components["schemas"]["ChannelKind"];
+            };
             header?: never;
             path?: never;
             cookie?: never;

@@ -18,7 +18,7 @@ use super::ApiState;
 use crate::notifications::{ChannelConfig, ChannelKind};
 use crate::notify_render::ChannelTemplate;
 use axum::{
-    extract::Path,
+    extract::{Path, Query},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
@@ -607,7 +607,7 @@ async fn preview_notification_template(
     // path uses — a preview that agreed only with a second copy of the rules would be worthless.
     let (alert, resolved) = crate::notify_facts::preview_sample(req.sample);
     let facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
-    let builtin = crate::alerts::builtin_notification(&alert, req.event);
+    let builtin = crate::alerts::builtin_for_kind(req.kind, &alert, req.event, Some(&facts));
     let template = TemplateBody {
         subject: req.subject,
         body: req.body,
@@ -664,27 +664,43 @@ pub(super) struct BuiltinSubjectTemplate {
     subject: String,
 }
 
+/// Which channel kind's built-in subject to describe.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct BuiltinTemplateQuery {
+    /// The channel kind. JSM and email name the node in their built-in subject; webhook and
+    /// PagerDuty carry its id. Omitted means webhook, which is what this endpoint described before
+    /// the parameter existed.
+    kind: Option<ChannelKind>,
+}
+
 /// Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
 ///
 /// The template editor opens a channel that has no template on this text, so an operator starts
-/// from what is sent today. Rendering it produces exactly the built-in subject. A poller pool's
-/// and a Meraki organization's alerts have built-in wording of their own, which is not described
-/// here. There is no built-in body template: the built-in body is the whole alert as JSON.
+/// from what is sent today. Rendering it produces exactly the built-in subject for that channel
+/// kind. A poller pool's and a Meraki organization's alerts have built-in wording of their own,
+/// which is not described here. There is no built-in body template: the built-in body is the whole
+/// alert as JSON for webhook and PagerDuty, and one fact per line for JSM and email.
 #[utoipa::path(
     get, path = "/api/v1/notification-channels/builtin-template", tag = "notifications",
+    params(BuiltinTemplateQuery),
     responses(
         (status = 200, description = "The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress`", body = Vec<BuiltinSubjectTemplate>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
     ),
 )]
-async fn get_builtin_template(_guard: RequireManageSystem) -> Json<Vec<BuiltinSubjectTemplate>> {
+async fn get_builtin_template(
+    _guard: RequireManageSystem,
+    Query(q): Query<BuiltinTemplateQuery>,
+) -> Json<Vec<BuiltinSubjectTemplate>> {
+    let kind = q.kind.unwrap_or(ChannelKind::Webhook);
     Json(
         NotifyEvent::ALL
             .into_iter()
             .map(|event| BuiltinSubjectTemplate {
                 event,
-                subject: crate::alerts::builtin_node_subject_template(event).to_owned(),
+                subject: crate::alerts::builtin_subject_template_for(kind, event).to_owned(),
             })
             .collect(),
     )
@@ -1008,8 +1024,8 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            out["subject"], "resolved: node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 recovered",
-            "a blank subject is the built-in text for the event asked for"
+            out["subject"], "resolved: core-sw-01 (192.0.2.11) recovered",
+            "a blank subject is JSM's built-in text, which names the node (ADR-194)"
         );
         assert_eq!(
             out["body"],
@@ -1034,7 +1050,7 @@ at 2026-08-04T09:41:07+00:00"
         );
         assert_eq!(
             out["subject"],
-            "node 6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60 is critical"
+            "core-sw-01 (192.0.2.11) is critical: if_in_util_pct on ifIndex 7"
         );
     }
 
@@ -1084,6 +1100,17 @@ at 2026-08-04T09:41:07+00:00"
             .collect();
         assert_eq!(events, ["fire", "resolve", "suppress"]);
         assert_eq!(out[0]["subject"], "node {{ node_id }} is {{ state }}");
+
+        // JSM and email name the node in their built-in title, so their draft does too (ADR-194).
+        let (status, out) = admin_json(
+            "GET",
+            "/api/v1/notification-channels/builtin-template?kind=jsm",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let fire = out[0]["subject"].as_str().expect("subject");
+        assert!(fire.starts_with("{{ node_name }}"), "{fire}");
     }
 
     /// The contract the editor branches on: a template that does not compile is a **typed 400**

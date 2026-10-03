@@ -36,6 +36,10 @@ pub struct Notification {
     /// Already resolved when it gets here: the node's own labels plus everything its inventory
     /// folder chain supplies, minus what it excludes (ADR-135 inc. 2).
     pub tags: Vec<String>,
+    /// Facts about the alert as `(key, value)` pairs, for the channel that has a field for them:
+    /// JSM's `details` ("extra properties", ADR-194). Beside the payload for the reason `tags` is.
+    /// Empty when nothing was resolved.
+    pub details: Vec<(String, String)>,
 }
 
 impl Notification {
@@ -55,6 +59,7 @@ impl Notification {
             summary: summary.into(),
             payload: payload.into(),
             tags: Vec::new(),
+            details: Vec::new(),
         }
     }
 
@@ -62,6 +67,13 @@ impl Notification {
     #[must_use]
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
+        self
+    }
+
+    /// The same notification carrying the alert's facts as key/value pairs (ADR-194).
+    #[must_use]
+    pub fn with_details(mut self, details: Vec<(String, String)>) -> Self {
+        self.details = details;
         self
     }
 }

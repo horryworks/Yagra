@@ -111,7 +111,7 @@ export function ChannelTemplateModal({
   useEffect(() => {
     let live = true;
     Promise.all([
-      api.getBuiltinTemplate().catch(() => null),
+      api.getBuiltinTemplate(channel.kind).catch(() => null),
       api.listTemplateVariables().catch(() => [] as TemplateVariable[]),
       api
         .previewNotificationTemplate({ kind: channel.kind, subject: null, body: null })

@@ -78,7 +78,7 @@ pub(crate) use engine::AlertManager;
 // (`alerts::notify::…`, `alerts::rules::…`) — re-exporting an item nobody imports would put a
 // second name on it, which is the drift this split exists to remove.
 pub(crate) use notify::{
-    builtin_node_subject_template, builtin_notification, dedup_string, ActiveMute, Notifier,
+    builtin_for_kind, builtin_subject_template_for, dedup_string, ActiveMute, Notifier,
 };
 pub(crate) use rules::{check_id, AlertConfig, MerakiOrgScope, DEFAULT_LIVENESS_DWELL, LIVENESS};
 // Gated because the item is: the seeded liveness rule exists so a test can install the rule the

@@ -366,7 +366,7 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
         "message": truncate_chars(&notification.summary, JSM_MESSAGE_MAX_CHARS),
         "alias": dedup_string(&notification.dedup_key),
         "priority": priority,
-        "description": notification.payload,
+        "description": truncate_chars(&notification.payload, JSM_DESCRIPTION_MAX_CHARS),
         "source": "yagra",
     });
     // JSM's own `tags` field, which its alert policies and routing rules match on natively — so
@@ -381,11 +381,60 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
     //
     // Omitted entirely when there are none: an empty array is a field the API has to be told to
     // ignore.
-    if !notification.tags.is_empty() {
-        body["tags"] = serde_json::json!(notification.tags);
+    let tags = jsm_tags(&notification.tags);
+    if !tags.is_empty() {
+        body["tags"] = serde_json::json!(tags);
+    }
+    // JSM's "extra properties" table: what the alert is about, one fact per row, which its rules
+    // can also match on (ADR-194 decision 3). Sent whether or not the channel has a template.
+    if !notification.details.is_empty() {
+        let details: serde_json::Map<String, serde_json::Value> = notification
+            .details
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        body["details"] = serde_json::Value::Object(details);
     }
     body
 }
+
+/// JSM keeps at most this many tags on an alert (the Opsgenie-compatible API's documented limit).
+pub(crate) const JSM_TAGS_MAX: usize = 20;
+/// ...each at most this many characters long.
+pub(crate) const JSM_TAG_MAX_CHARS: usize = 50;
+/// JSM's `description` holds at most this many characters.
+pub(crate) const JSM_DESCRIPTION_MAX_CHARS: usize = 15_000;
+
+/// The node's tags as JSM can hold them (ADR-194 decision 4): a tag longer than
+/// [`JSM_TAG_MAX_CHARS`] is left out, and the first [`JSM_TAGS_MAX`] of the rest are kept.
+///
+/// ⚠️ **Left out, never shortened.** A shortened tag is a different tag, and the reason these go
+/// to JSM at all is that its rules match on them: `TOKYO-NETWORK-…` cut short could page whichever
+/// rota owns the prefix. The node's own labels come first in the list (`tagres`), so the ones
+/// dropped by the count are inherited ones. What JSM itself does past its limits is undocumented.
+fn jsm_tags(tags: &[String]) -> Vec<&str> {
+    let fitting: Vec<&str> = tags
+        .iter()
+        .map(String::as_str)
+        .filter(|t| t.chars().count() <= JSM_TAG_MAX_CHARS)
+        .collect();
+    let too_long = tags.len() - fitting.len();
+    let over_count = fitting.len().saturating_sub(JSM_TAGS_MAX);
+    if too_long + over_count > 0 {
+        metrics::counter!(M_JSM_TAGS_DROPPED).increment((too_long + over_count) as u64);
+        tracing::warn!(
+            too_long,
+            over_count,
+            kept = fitting.len().min(JSM_TAGS_MAX),
+            "some of the node's tags were not sent to JSM: it holds {JSM_TAGS_MAX} tags of up to \
+             {JSM_TAG_MAX_CHARS} characters"
+        );
+    }
+    fitting.into_iter().take(JSM_TAGS_MAX).collect()
+}
+
+/// Counter for node tags left off a JSM alert because they would not fit its limits (ADR-194).
+const M_JSM_TAGS_DROPPED: &str = "yagra_notification_jsm_tags_dropped_total";
 
 /// The JSM/Opsgenie close-by-alias URL.
 ///
@@ -530,9 +579,9 @@ pub(crate) struct TestDelivery {
 ///
 /// Three marks, each where it can go without editing what an operator wrote:
 /// - the subject line starts with [`TEST_SUBJECT_PREFIX`], templated or not;
-/// - the **built-in** body (the alert as JSON) gains `"test": true`. A templated body is the
-///   operator's text and is left alone, so a webhook with a body template carries no mark in its
-///   payload - the dialog says so;
+/// - the **built-in** body gains `"test": true` (JSON) or a first line saying so (text). A
+///   templated body is the operator's text and is left alone, so a webhook with a body template
+///   carries no mark in its payload - the dialog says so;
 /// - the check id is new on every call, so PagerDuty's `dedup_key` and JSM's `alias` never fold a
 ///   test into an incident opened by an earlier one.
 pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -> Notification {
@@ -540,12 +589,9 @@ pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -
         crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
     alert.check = CheckId::from(Uuid::new_v4());
     let facts = context_for(&alert, NotifyEvent::Fire, &resolved);
-    let builtin = with_subject_tags(
-        builtin_notification(&alert, NotifyEvent::Fire),
-        Some(&facts),
-    );
+    let builtin = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&facts));
     let builtin = Notification {
-        payload: mark_as_test(&builtin.payload),
+        payload: mark_as_test(kind, &builtin.payload),
         ..builtin
     };
     let mut n = if template.is_builtin() {
@@ -570,9 +616,13 @@ pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -
     n
 }
 
-/// `"test": true` added to the built-in alert JSON. Anything that is not a JSON object comes back
+/// The test mark on a built-in body: `"test": true` added to the alert JSON, or a first line saying
+/// so on the text a person reads (ADR-194 decision 5). A JSON body that is not an object comes back
 /// unchanged - the built-in payload always is one, but this must not be the place that breaks it.
-fn mark_as_test(payload: &str) -> String {
+fn mark_as_test(kind: ChannelKind, payload: &str) -> String {
+    if !body_must_be_json(kind) {
+        return format!("{}\n\n{payload}", crate::notify_text::TEST_BODY_LINE);
+    }
     match serde_json::from_str::<serde_json::Value>(payload) {
         Ok(serde_json::Value::Object(mut obj)) => {
             obj.insert("test".to_owned(), serde_json::Value::Bool(true));
@@ -772,10 +822,14 @@ struct BuiltChannel {
     id: Uuid,
     channel: Option<Arc<dyn NotifyChannel>>,
     over: Option<ChannelOverride>,
-    /// Whether this channel puts the node's tags on the wire without being told to (ADR-135) —
-    /// PagerDuty into `custom_details`, JSM into its native `tags` field. Resolved here because
-    /// it reads the stored config kind, which `install_routing` no longer has.
-    carries_tags: bool,
+    /// Whether this channel reads the alert's resolved facts without being told to: PagerDuty and
+    /// JSM put the node's tags on the wire (ADR-135), and JSM and email write their built-in text
+    /// from the facts (ADR-194). Resolved here because it reads the stored config kind, which
+    /// `install_routing` no longer has.
+    reads_facts: bool,
+    /// Whether this channel's built-in notification is the text a person reads rather than the
+    /// alert as JSON (ADR-194) - see [`builtin_for_kind`].
+    text_builtin: bool,
 }
 
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
@@ -799,6 +853,8 @@ struct Routing {
     overrides: HashMap<Uuid, ChannelOverride>,
     /// Routing rules (severity → channel ids).
     rules: Vec<RoutingRule>,
+    /// The channels whose built-in notification is text rather than JSON (ADR-194).
+    text: HashSet<Uuid>,
 }
 
 impl Routing {
@@ -814,6 +870,20 @@ impl Routing {
             .filter(|r| r.enabled && rule_matches_severity(r.severity, severity))
             .flat_map(|r| r.channel_ids.iter().copied())
             .collect()
+    }
+
+    /// The built-in notification this channel starts from: the text form for a JSM or email
+    /// channel, the JSON form for the rest (ADR-194). `text` is `None` when no channel is text.
+    fn builtin_for<'a>(
+        &self,
+        channel: Uuid,
+        json: &'a Notification,
+        text: Option<&'a Notification>,
+    ) -> &'a Notification {
+        match text {
+            Some(t) if self.text.contains(&channel) => t,
+            _ => json,
+        }
     }
 }
 
@@ -902,16 +972,17 @@ pub struct Notifier {
     /// is every deployment until someone writes one — does exactly what it did before this feature
     /// landed, including issuing no extra query to resolve names nobody is going to interpolate.
     any_templates: AtomicBool,
-    /// Whether *any* channel puts the node's tags on the wire by itself (ADR-135) — i.e. a
-    /// PagerDuty or a JSM channel exists.
+    /// Whether *any* channel reads the alert's facts by itself - a PagerDuty or JSM channel puts
+    /// the node's tags on the wire (ADR-135), and a JSM or email channel writes its built-in text
+    /// from them (ADR-194).
     ///
     /// 🚨 **This exists so tag-based paging works without anyone writing a template.** The facts
     /// lookup below is gated on [`Self::any_templates`], so a variable alone would have reached
     /// only the channels an operator had already customized — shipping the feature inert for
     /// everyone else, which is the failure mode ADR-135 was opened to fix rather than repeat.
     ///
-    /// A deployment with only webhook and email channels still issues no extra query.
-    any_vendor_channel: AtomicBool,
+    /// A deployment with only webhook channels still issues no extra query.
+    any_facts_channel: AtomicBool,
 }
 
 impl Notifier {
@@ -955,11 +1026,12 @@ impl Notifier {
                 channels: HashMap::new(),
                 overrides: HashMap::new(),
                 rules: Vec::new(),
+                text: HashSet::new(),
             })),
             mutes: RwLock::new(Arc::new(Vec::new())),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
-            any_vendor_channel: AtomicBool::new(false),
+            any_facts_channel: AtomicBool::new(false),
         }
     }
 
@@ -999,10 +1071,8 @@ impl Notifier {
                     id: ch.id,
                     channel: build_channel(&ch.config),
                     over,
-                    carries_tags: matches!(
-                        ch.config.kind(),
-                        ChannelKind::PagerDuty | ChannelKind::Jsm
-                    ),
+                    reads_facts: reads_facts(ch.config.kind()),
+                    text_builtin: !body_must_be_json(ch.config.kind()),
                 }
             })
             .collect();
@@ -1023,13 +1093,17 @@ impl Notifier {
             .expect("notifier routing lock poisoned");
         let mut next = HashMap::new();
         let mut overrides = HashMap::new();
-        let mut tag_channels = HashSet::new();
+        let mut fact_channels = HashSet::new();
+        let mut text = HashSet::new();
         for built in channels {
             if let Some(over) = built.over {
                 overrides.insert(built.id, over);
             }
-            if built.carries_tags {
-                tag_channels.insert(built.id);
+            if built.reads_facts {
+                fact_channels.insert(built.id);
+            }
+            if built.text_builtin {
+                text.insert(built.id);
             }
             if let Some(existing) = slot.channels.get(&built.id) {
                 next.insert(built.id, Arc::clone(existing)); // preserve dedup
@@ -1043,16 +1117,18 @@ impl Notifier {
         // Only keep an override for a channel that actually has a live dispatcher, so the flag
         // below cannot be set by a channel whose config failed to build.
         overrides.retain(|id, _| next.contains_key(id));
-        tag_channels.retain(|id| next.contains_key(id));
+        fact_channels.retain(|id| next.contains_key(id));
+        text.retain(|id| next.contains_key(id));
         self.any_templates
             .store(!overrides.is_empty(), Ordering::Relaxed);
-        self.any_vendor_channel
-            .store(!tag_channels.is_empty(), Ordering::Relaxed);
+        self.any_facts_channel
+            .store(!fact_channels.is_empty(), Ordering::Relaxed);
         *slot = Arc::new(Routing {
             default: slot.default.clone(),
             channels: next,
             overrides,
             rules,
+            text,
         });
     }
 
@@ -1075,13 +1151,14 @@ impl Notifier {
     /// Deliberately **before** the routing snapshot is read: this is the one part of delivery that
     /// touches the database, and there is no reason for it to be inside anything.
     ///
-    /// ⚠️ **Two things read it, not one.** A channel template interpolates it, and — since
-    /// ADR-135 — a PagerDuty or JSM channel puts its `tags` on the wire whether or not anyone
-    /// wrote a template. A deployment with neither still issues no query at all, which is the
-    /// property this gate has always been for.
+    /// ⚠️ **Three things read it, not one.** A channel template interpolates it; since ADR-135 a
+    /// PagerDuty or JSM channel puts its `tags` on the wire whether or not anyone wrote a
+    /// template; and since ADR-194 a JSM or email channel writes its built-in text from it. A
+    /// deployment with none of those still issues no query at all, which is the property this
+    /// gate has always been for.
     async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
         if !self.any_templates.load(Ordering::Relaxed)
-            && !self.any_vendor_channel.load(Ordering::Relaxed)
+            && !self.any_facts_channel.load(Ordering::Relaxed)
         {
             return None;
         }
@@ -1149,10 +1226,12 @@ impl Notifier {
                     tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
-                let notification = with_subject_tags(
+                let notification = with_subject_facts(
                     builtin_notification(&alert, NotifyEvent::Fire),
                     facts.as_ref(),
                 );
+                let text = (!routing.text.is_empty())
+                    .then(|| text_notification(&alert, NotifyEvent::Fire, facts.as_ref()));
                 let matched = routing.matched(alert.severity);
                 if let Some(d) = routing.default.as_ref() {
                     let started = std::time::Instant::now();
@@ -1162,7 +1241,8 @@ impl Notifier {
                 }
                 for id in matched {
                     if let Some(d) = routing.channels.get(&id) {
-                        let n = for_channel(id, &routing.overrides, facts.as_ref(), &notification);
+                        let base = routing.builtin_for(id, &notification, text.as_ref());
+                        let n = for_channel(id, &routing.overrides, facts.as_ref(), base);
                         let started = std::time::Instant::now();
                         let outcome = d.dispatch(n).await;
                         record_dispatch(&id.to_string(), NotifyEvent::Fire, outcome, started);
@@ -1230,7 +1310,8 @@ impl Notifier {
         message: &'static str,
     ) {
         let key = alert.dedup_key();
-        let notification = with_subject_tags(builtin_notification(alert, event), facts);
+        let notification = with_subject_facts(builtin_notification(alert, event), facts);
+        let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
         let matched = routing.matched(alert.severity);
         if let Some(d) = routing.default.as_ref() {
             let started = std::time::Instant::now();
@@ -1240,7 +1321,8 @@ impl Notifier {
         }
         for (id, d) in &routing.channels {
             if matched.contains(id) {
-                let n = for_channel(*id, &routing.overrides, facts, &notification);
+                let base = routing.builtin_for(*id, &notification, text.as_ref());
+                let n = for_channel(*id, &routing.overrides, facts, base);
                 let started = std::time::Instant::now();
                 let outcome = d.dispatch_resolve(n).await;
                 record_dispatch(&id.to_string(), event, outcome, started);
@@ -1260,7 +1342,8 @@ impl Notifier {
 /// also the reason the wording lives in exactly one place: the three lifecycle points used to
 /// spell it out at three separate call sites inside `handle`, which is how two of them would
 /// eventually stop agreeing.
-/// Hang the subject node's tags on a notification (ADR-135).
+/// Hang the subject node's tags (ADR-135) and the alert's facts as key/value pairs (ADR-194) on a
+/// notification.
 ///
 /// Applied to the **built-in** notification, before `for_channel` renders any template, because
 /// `for_channel` carries every field it does not rewrite through from the built-in — so doing it
@@ -1268,10 +1351,75 @@ impl Notifier {
 ///
 /// `None` facts is the ordinary case on a deployment with no PagerDuty or JSM channel and no
 /// template: nothing is resolved, so there is nothing to hang.
-fn with_subject_tags(n: Notification, facts: Option<&AlertFacts>) -> Notification {
+fn with_subject_facts(n: Notification, facts: Option<&AlertFacts>) -> Notification {
     match facts {
-        Some(f) if !f.tags.is_empty() => n.with_tags(f.tags.clone()),
-        _ => n,
+        Some(f) => n
+            .with_tags(f.tags.clone())
+            .with_details(crate::notify_text::details(f)),
+        None => n,
+    }
+}
+
+/// Whether a channel of this kind reads the alert's facts with no template (see
+/// [`Notifier::any_facts_channel`]).
+fn reads_facts(kind: ChannelKind) -> bool {
+    match kind {
+        ChannelKind::PagerDuty | ChannelKind::Jsm | ChannelKind::Email => true,
+        ChannelKind::Webhook => false,
+    }
+}
+
+/// The built-in notification for a channel of this kind (ADR-194): the alert as JSON for the
+/// channels a program reads (webhook, PagerDuty), the text a person reads for JSM and email.
+/// Delivery, the template preview and the test send all start here, so the three cannot disagree.
+pub(crate) fn builtin_for_kind(
+    kind: ChannelKind,
+    alert: &Alert,
+    event: NotifyEvent,
+    facts: Option<&AlertFacts>,
+) -> Notification {
+    if body_must_be_json(kind) {
+        with_subject_facts(builtin_notification(alert, event), facts)
+    } else {
+        text_notification(alert, event, facts)
+    }
+}
+
+/// The text built-in (`notify_text`). With no resolved facts it still renders, naming the node by
+/// id: the facts `context_for` builds from the alert alone. A notification is never dropped for
+/// want of a name.
+fn text_notification(
+    alert: &Alert,
+    event: NotifyEvent,
+    facts: Option<&AlertFacts>,
+) -> Notification {
+    let fallback;
+    let facts = match facts {
+        Some(f) => f,
+        None => {
+            fallback = context_for(alert, event, &HashMap::new());
+            &fallback
+        }
+    };
+    with_subject_facts(
+        Notification::for_alert(
+            alert,
+            crate::notify_text::subject(alert, facts),
+            crate::notify_text::body(alert, facts),
+        ),
+        Some(facts),
+    )
+}
+
+/// The editor's draft subject for a channel of this kind (ADR-039 Inc.2, ADR-194 decision 6).
+#[must_use]
+pub(crate) const fn builtin_subject_template_for(
+    kind: ChannelKind,
+    event: NotifyEvent,
+) -> &'static str {
+    match kind {
+        ChannelKind::Webhook | ChannelKind::PagerDuty => builtin_node_subject_template(event),
+        ChannelKind::Jsm | ChannelKind::Email => crate::notify_text::node_subject_template(event),
     }
 }
 
@@ -1405,31 +1553,79 @@ mod template_tests {
     /// The editor's draft is [`builtin_node_subject_template`], and it is only honest if rendering
     /// it sends exactly what no template sends. Rendered through the real renderer against every
     /// preview sample, so a reworded `format!` or a renamed variable fails here, not in an inbox.
+    ///
+    /// Per channel kind since ADR-194: JSM and email name the node, so their draft is a different
+    /// template — and it is checked against unresolved facts too, where the name is the id.
     #[test]
     fn every_builtin_subject_template_renders_the_builtin_subject() {
         let mut compared = 0;
-        for sample in yagra_common::PreviewSample::ALL {
-            let (alert, resolved) = crate::notify_facts::preview_sample(sample);
-            for event in NotifyEvent::ALL {
-                let facts = context_for(&alert, event, &resolved);
-                let template = ChannelTemplate {
-                    subject: Some(builtin_node_subject_template(event).to_owned()),
-                    body: None,
-                };
-                let rendered =
-                    render_with_fallback(Some(&template), &facts, false, "FELL BACK", "{}");
-                assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
-                assert_eq!(
-                    rendered.subject,
-                    builtin_notification(&alert, event).summary,
-                    "the {} {} draft does not render the built-in subject",
-                    sample.as_str(),
-                    event.as_str()
-                );
-                compared += 1;
+        for kind in [
+            ChannelKind::Webhook,
+            ChannelKind::Email,
+            ChannelKind::PagerDuty,
+            ChannelKind::Jsm,
+        ] {
+            for sample in yagra_common::PreviewSample::ALL {
+                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                for resolved in [resolved, HashMap::new()] {
+                    for event in NotifyEvent::ALL {
+                        let facts = context_for(&alert, event, &resolved);
+                        let template = ChannelTemplate {
+                            subject: Some(builtin_subject_template_for(kind, event).to_owned()),
+                            body: None,
+                        };
+                        let rendered =
+                            render_with_fallback(Some(&template), &facts, false, "FELL BACK", "{}");
+                        assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
+                        assert_eq!(
+                            rendered.subject,
+                            builtin_for_kind(kind, &alert, event, Some(&facts)).summary,
+                            "the {kind:?} {} {} draft does not render the built-in subject",
+                            sample.as_str(),
+                            event.as_str()
+                        );
+                        compared += 1;
+                    }
+                }
             }
         }
-        assert_eq!(compared, 6, "two samples times three lifecycle points");
+        assert_eq!(
+            compared, 48,
+            "4 kinds x 2 samples x resolved or not x 3 points"
+        );
+    }
+
+    /// Webhook and PagerDuty are read by programs, and ADR-194 changes nothing they receive: the
+    /// built-in is still the whole alert as JSON with the id-based subject, byte for byte.
+    #[test]
+    fn a_program_reads_the_same_json_it_always_did() {
+        let alert = threshold_alert(NodeId::new());
+        for kind in [ChannelKind::Webhook, ChannelKind::PagerDuty] {
+            for event in NotifyEvent::ALL {
+                let n = builtin_for_kind(kind, &alert, event, None);
+                let old = builtin_notification(&alert, event);
+                assert_eq!(n.summary, old.summary);
+                assert_eq!(n.payload, old.payload);
+            }
+        }
+    }
+
+    /// JSM and email are read by people: the built-in body is text, never the alert JSON, and it
+    /// is there even when no facts could be resolved.
+    #[test]
+    fn a_person_reads_text_even_with_no_facts() {
+        let alert = threshold_alert(NodeId::new());
+        for kind in [ChannelKind::Jsm, ChannelKind::Email] {
+            for event in NotifyEvent::ALL {
+                let n = builtin_for_kind(kind, &alert, event, None);
+                assert!(
+                    serde_json::from_str::<serde_json::Value>(&n.payload).is_err(),
+                    "{kind:?} body is JSON: {}",
+                    n.payload
+                );
+                assert!(n.payload.starts_with(&n.summary), "{}", n.payload);
+            }
+        }
     }
 
     /// The editor strikes through the part of a JSM title past the cut; it is only honest if the
@@ -1498,7 +1694,16 @@ mod template_tests {
         let webhook = ChannelConfig::Webhook {
             url: "https://example.invalid/hook".to_owned(),
         };
-        for (config, want) in [(&webhook, false), (&pagerduty, true)] {
+        // An email channel writes its built-in text from the facts (ADR-194).
+        let email = ChannelConfig::Email {
+            host: "smtp.example.invalid".to_owned(),
+            port: None,
+            from: "yagra@example.com".to_owned(),
+            to: "noc@example.com".to_owned(),
+            user: None,
+            pass: None,
+        };
+        for (config, want) in [(&webhook, false), (&pagerduty, true), (&email, true)] {
             let n = Notifier::with_default(None);
             n.set_routing(
                 vec![OpenChannel {
@@ -1512,7 +1717,7 @@ mod template_tests {
             );
             assert!(!n.any_templates.load(Ordering::Relaxed), "no template");
             assert_eq!(
-                n.any_vendor_channel.load(Ordering::Relaxed),
+                n.any_facts_channel.load(Ordering::Relaxed),
                 want,
                 "{config:?} should {} open the facts gate",
                 if want { "" } else { "not" }
@@ -1829,6 +2034,62 @@ mod tests {
         );
     }
 
+    /// JSM holds 20 tags of up to 50 characters (ADR-194 decision 4). A longer tag is left out
+    /// rather than cut — a cut tag is a different tag, and JSM's rules match on them — and the
+    /// first 20 that fit are kept, which are the node's own because those come first.
+    #[test]
+    fn jsm_tags_are_kept_within_its_limits_by_dropping_never_cutting() {
+        let long = "x".repeat(JSM_TAG_MAX_CHARS + 1);
+        let exact = "y".repeat(JSM_TAG_MAX_CHARS);
+        let mut tags = vec![long.clone(), exact.clone()];
+        tags.extend((0..25).map(|i| format!("t{i}")));
+        let body = jsm_create_body(&vendor_notification(Severity::Critical).with_tags(tags));
+        let sent: Vec<&str> = body["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(sent.len(), JSM_TAGS_MAX);
+        assert_eq!(sent[0], exact, "a tag of exactly the limit is kept");
+        assert!(
+            !sent.iter().any(|t| t.starts_with('x')),
+            "the long one is dropped"
+        );
+        assert_eq!(
+            sent[JSM_TAGS_MAX - 1],
+            "t18",
+            "kept in order, the rest dropped"
+        );
+    }
+
+    /// The alert's facts go to JSM's own "extra properties" field as strings, and a description
+    /// longer than JSM holds is cut to fit.
+    #[test]
+    fn jsm_carries_the_facts_in_details_and_a_description_it_can_hold() {
+        let n = vendor_notification(Severity::Critical).with_details(vec![
+            ("node".to_owned(), "core-sw-01".to_owned()),
+            ("address".to_owned(), "192.0.2.11".to_owned()),
+        ]);
+        let n = Notification {
+            payload: "a".repeat(JSM_DESCRIPTION_MAX_CHARS + 5),
+            ..n
+        };
+        let body = jsm_create_body(&n);
+        assert_eq!(body["details"]["node"], "core-sw-01");
+        assert_eq!(body["details"]["address"], "192.0.2.11");
+        assert_eq!(
+            body["description"].as_str().unwrap().chars().count(),
+            JSM_DESCRIPTION_MAX_CHARS
+        );
+        assert!(
+            jsm_create_body(&vendor_notification(Severity::Critical))
+                .get("details")
+                .is_none(),
+            "no facts, no empty details"
+        );
+    }
+
     #[test]
     fn jsm_body_and_close_url_match_opsgenie_contract() {
         let n = vendor_notification(Severity::Warning);
@@ -2012,6 +2273,7 @@ mod tests {
             summary: String::new(),
             payload: String::new(),
             tags: Vec::new(),
+            details: Vec::new(),
         };
         let node = NodeId::from(Uuid::from_u128(1));
         let url = jsm_close_url("https://api.example/v2", &notification(Subject::Node(node)));
@@ -2180,7 +2442,8 @@ mod delivery_tests {
             id,
             channel: Some(Arc::new(channel)),
             over: None,
-            carries_tags: false,
+            reads_facts: false,
+            text_builtin: false,
         }
     }
 
@@ -2247,6 +2510,52 @@ mod delivery_tests {
             0,
             "no rule named channel B, so it must not be paged"
         );
+    }
+
+    /// A JSM or email channel receives the text built-in and a webhook beside it the JSON one, for
+    /// the same alert (ADR-194) — and a template that cannot be used on the text channel falls
+    /// back to the text, not to the JSON.
+    #[tokio::test]
+    async fn each_channel_starts_from_its_own_kind_of_built_in() {
+        let (json_log, text_log, broken_log) = (log(), log(), log());
+        let n = Notifier::with_default(None);
+        let (json_id, text_id, broken_id) =
+            (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let text = |id, l: &Log| BuiltChannel {
+            reads_facts: true,
+            text_builtin: true,
+            ..built(id, Recorder(l.clone()))
+        };
+        let mut broken = text(broken_id, &broken_log);
+        broken.over = Some(ChannelOverride {
+            template: ChannelTemplate {
+                subject: Some("{{ nope.attr }}".to_owned()),
+                body: None,
+            },
+            needs_json: false,
+        });
+        n.install_routing(
+            vec![
+                built(json_id, Recorder(json_log.clone())),
+                text(text_id, &text_log),
+                broken,
+            ],
+            vec![
+                rule(json_id, None),
+                rule(text_id, None),
+                rule(broken_id, None),
+            ],
+        );
+        let node = NodeId::new();
+        n.handle(NotifyAction::Fire(alert(node, Severity::Critical, None)))
+            .await;
+
+        let first = |l: &Log| l.lock().unwrap().0[0].1.clone();
+        assert_eq!(first(&json_log), format!("node {node} is critical"));
+        // No facts source is wired, so the text names the node by its id.
+        let want = format!("{node} is critical: icmp_rtt_ms");
+        assert_eq!(first(&text_log), want);
+        assert_eq!(first(&broken_log), want, "fell back to the text built-in");
     }
 
     #[tokio::test]
@@ -2575,6 +2884,25 @@ mod test_send_tests {
         assert_eq!(body["test"], true, "{body}");
         // Still the alert JSON a real notification carries, with the mark beside it.
         assert!(body.get("severity").is_some(), "{body}");
+    }
+
+    #[test]
+    fn the_built_in_test_is_marked_on_the_first_line_of_a_text_body() {
+        for kind in [ChannelKind::Jsm, ChannelKind::Email] {
+            let n = test_notification(kind, &ChannelTemplate::default());
+            assert!(n.summary.starts_with(TEST_SUBJECT_PREFIX), "{}", n.summary);
+            assert!(
+                n.payload
+                    .starts_with(&format!("{}\n\n", crate::notify_text::TEST_BODY_LINE)),
+                "{}",
+                n.payload
+            );
+            assert!(
+                n.summary.contains("core-sw-01"),
+                "names the node: {}",
+                n.summary
+            );
+        }
     }
 
     #[test]

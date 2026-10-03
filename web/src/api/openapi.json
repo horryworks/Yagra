@@ -15806,8 +15806,19 @@
           "notifications"
         ],
         "summary": "Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.",
-        "description": "The template editor opens a channel that has no template on this text, so an operator starts\nfrom what is sent today. Rendering it produces exactly the built-in subject. A poller pool's\nand a Meraki organization's alerts have built-in wording of their own, which is not described\nhere. There is no built-in body template: the built-in body is the whole alert as JSON.",
+        "description": "The template editor opens a channel that has no template on this text, so an operator starts\nfrom what is sent today. Rendering it produces exactly the built-in subject for that channel\nkind. A poller pool's and a Meraki organization's alerts have built-in wording of their own,\nwhich is not described here. There is no built-in body template: the built-in body is the whole\nalert as JSON for webhook and PagerDuty, and one fact per line for JSM and email.",
         "operationId": "get_builtin_template",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "The channel kind. JSM and email name the node in their built-in subject; webhook and\nPagerDuty carry its id. Omitted means webhook, which is what this endpoint described before\nthe parameter existed.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ChannelKind"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress`",

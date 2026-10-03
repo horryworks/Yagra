@@ -94,6 +94,7 @@ mod no_reading_filter;
 mod notifications;
 mod notify_facts;
 mod notify_render;
+mod notify_text;
 mod oidc;
 /// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
 /// that keep the convention honest (ADR-114). Test-only, like `module_source` above.

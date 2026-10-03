@@ -2240,9 +2240,10 @@ export const api = {
     apiPost('/api/v1/notification-channels/preview', { body }),
 
   /** Yagra's built-in subject for a node alert, written as a template, per point in the alert's
-   *  life. The template editor opens a channel with no template on it (ADR-039 Inc.2). */
-  getBuiltinTemplate: (): Promise<BuiltinSubjectTemplate[]> =>
-    apiGet('/api/v1/notification-channels/builtin-template'),
+   *  life. The template editor opens a channel with no template on it (ADR-039 Inc.2). JSM and
+   *  email name the node in theirs, so the draft depends on the channel kind (ADR-194). */
+  getBuiltinTemplate: (kind: ChannelKind): Promise<BuiltinSubjectTemplate[]> =>
+    apiGet('/api/v1/notification-channels/builtin-template', { query: { kind } }),
 
   /** Every variable a notification template may reference, with what each one means. */
   listTemplateVariables: (): Promise<TemplateVariable[]> =>

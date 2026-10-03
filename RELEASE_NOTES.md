@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **A JSM or email channel with no template now sends text a person can read, not the alert as JSON.** The title names the device instead of its id — `core-sw-01 (192.0.2.11) is critical: cpu_util_pct` where it used to be `node 6f1c… is critical` — and the body (JSM's description, the email body) is the title followed by one fact per line: node, folder, profile, metric with its value and threshold, port or row, severity, state, since when, tags, what it was rolled up under, the alert key and the node id. A JSM rule or a mail filter that matched the old title, or anything that parsed the JSON out of an email, has to change. Webhook and PagerDuty are unchanged, byte for byte, and so is the environment default route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`), whose webhook and email share one message. A template that cannot be used now falls back to this text on JSM and email. (ADR-194)
+- **JSM receives at most 20 of a node's tags, each at most 50 characters — JSM's own limits.** A longer tag is left out rather than shortened, since a shortened tag could match a different JSM rule, and of the rest the first 20 are sent; the node's own tags come before the ones its folders give it. Each tag left out is logged as a warning and counted in `yagra_notification_jsm_tags_dropped_total`. Keep the tags your JSM rules route on short and few. (ADR-194)
+
+### Improvements
+
+- **JSM alerts carry the alert's facts as extra properties.** `details` holds `node`, `address`, `folder`, `profile`, `metric`, `value`, `threshold`, `direction`, `ifindex`, `row`, `severity`, `state`, `node_id` and `subject_kind` (whichever the alert has), so JSM shows them as a table and its rules can match on them. They are sent whether or not the channel has a template. A description longer than JSM's 15,000 characters is cut to fit. (ADR-194)
+- **The template editor opens a JSM or email channel on its new built-in title, and its test notification is marked on the first line.** `GET /api/v1/notification-channels/builtin-template` takes `?kind=`; without it the answer is the webhook one, as before. A test sent to a JSM or email channel starts its body with `This is a test notification from Yagra.` (ADR-194)
+
 ## v0.3.43 — Notification templates are edited in the shape they arrive, a channel can send a test notification, and a routing rule can be edited
 
 ### New Features
