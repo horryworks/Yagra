@@ -389,6 +389,7 @@ async fn live_state_with(
             pool.clone(),
             kek.clone(),
         )),
+        deliveries: Arc::new(crate::notification_log::DeliveryLogRepo::new(pool.clone())),
         mib,
         discovery: Arc::new(crate::discovery::DiscoveryRunner::new(
             discovery_bus,

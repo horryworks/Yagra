@@ -49,3 +49,50 @@
   margin: 12px 0 0;
   overflow-wrap: anywhere;
 }
+
+/* The delivery log (ADR-195). An explicit height: the page is not a full-height flex column, so a
+   virtualized table needs a bounded box to scroll inside. */
+.routing-log-section {
+  margin-top: 24px;
+}
+
+.routing-log-note {
+  margin: 0 0 8px;
+}
+
+.routing-log-table {
+  display: flex;
+  flex-direction: column;
+  height: 520px;
+  min-height: 0;
+}
+
+.routing-log-detail {
+  padding: 8px 16px 12px;
+  font-size: var(--font-sm);
+}
+
+.routing-log-verdict {
+  margin: 0 0 6px;
+  font-weight: var(--weight-medium);
+}
+
+.routing-log-line {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.routing-log-response {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+}
+
+.routing-log-attempts {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}

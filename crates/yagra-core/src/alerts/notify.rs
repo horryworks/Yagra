@@ -17,11 +17,12 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_alert::{
-    Alert, DispatchOutcome, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
-    Subject,
+    Alert, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
+    NotifyChannel, NotifyError, RetryPolicy, Subject,
 };
 use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, NodeId, NotifyEvent, Severity};
 
+use crate::notification_log::{DeliveryLog, DeliveryRecord};
 use crate::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
 use crate::notify_facts::{context_for, node_ids_for, AlertFactsSource};
 use crate::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
@@ -33,6 +34,7 @@ use super::NotifyAction;
 pub struct WebhookChannel {
     http: reqwest::Client,
     url: String,
+    secrets: Secrets,
 }
 
 impl WebhookChannel {
@@ -42,6 +44,7 @@ impl WebhookChannel {
         // vector, so core never follows a redirect on the notification path.
         Self {
             http: hardened_client(),
+            secrets: Secrets::of_url(&url),
             url,
         }
     }
@@ -78,21 +81,25 @@ impl NotifyChannel for WebhookChannel {
         // blocked before any request leaves core.
         if let Ok(url) = reqwest::Url::parse(&self.url) {
             if webhook_target_blocked(&url).await {
-                return Err(NotifyError::Delivery(
-                    "webhook target address is not allowed (SSRF)".to_owned(),
-                ));
+                return Err(
+                    DeliveryFailure::yagra("webhook target address is not allowed (SSRF)").into(),
+                );
             }
         }
-        self.http
+        let resp = self
+            .http
             .post(&self.url)
             .header("content-type", "application/json")
             .body(notification.payload.clone())
             .send()
             .await
-            .map_err(delivery_error)?
-            .error_for_status()
             .map_err(delivery_error)?;
-        Ok(())
+        // No `Retry-After` wait here, unlike the vendor channels: a webhook's 429 is a refusal
+        // like any other, and waiting on it would only lengthen ADR-104's worst case.
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        Err(refusal(resp, &self.secrets).await.into())
     }
 }
 
@@ -136,6 +143,10 @@ fn hardened_client() -> reqwest::Client {
 ///
 /// **The host is then taken out of the chain**, because a cause can name it on its own: rustls's
 /// "certificate not valid for name \"hooks.example.com\"" is the host the sealed URL points at.
+///
+/// **Which side failed** (ADR-195 decision 1): a request that could not be built is Yagra's; one
+/// that carries a status was answered by the remote; everything else - a timeout, a refused
+/// connection, DNS, TLS - never got an answer, which is the network between the two.
 fn delivery_error(e: reqwest::Error) -> NotifyError {
     use std::error::Error as _;
     let host = e
@@ -143,6 +154,9 @@ fn delivery_error(e: reqwest::Error) -> NotifyError {
         .and_then(|u| u.host_str())
         .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned())
         .filter(|h| !h.is_empty());
+    let status = e.status().map(|s| s.as_u16());
+    let builder = e.is_builder();
+    let timeout = e.is_timeout();
     let e = e.without_url();
     let mut text = e.to_string();
     let mut source = e.source();
@@ -154,7 +168,128 @@ fn delivery_error(e: reqwest::Error) -> NotifyError {
     if let Some(host) = host {
         text = text.replace(&host, "<host>");
     }
-    NotifyError::Delivery(text)
+    if timeout && !text.contains("timed out") {
+        text.push_str(" (timed out)");
+    }
+    let failure = if builder {
+        DeliveryFailure::yagra(text)
+    } else if status.is_some() {
+        DeliveryFailure::remote(status, text, None)
+    } else {
+        DeliveryFailure::network(text)
+    };
+    failure.into()
+}
+
+/// The strings a channel must never let out through a delivery log: its URL, the host it points
+/// at, a webhook's path tokens, a vendor key, an SMTP login (ADR-195 decision 2).
+///
+/// A remote's error body is the reason this exists. Some services echo the request back when they
+/// refuse it, and the request carried the key in a header or the routing key in the body.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Secrets(Vec<String>);
+
+/// Which path segments are treated as tokens: `/hooks/T0/B0/XXXX`-style URLs put the secret in the
+/// path. A segment this long is a token; so is a shorter one of at least [`TOKEN_WITH_DIGIT_MIN`]
+/// characters that contains a digit. The API's own words (`v2`, `alerts`, `services`) stay readable.
+const TOKEN_MIN: usize = 16;
+const TOKEN_WITH_DIGIT_MIN: usize = 8;
+
+fn looks_like_a_token(segment: &str) -> bool {
+    let len = segment.chars().count();
+    len >= TOKEN_MIN || (len >= TOKEN_WITH_DIGIT_MIN && segment.chars().any(|c| c.is_ascii_digit()))
+}
+
+impl Secrets {
+    /// The secrets in a URL: the whole URL, its host, its query, and every long path segment.
+    pub(crate) fn of_url(url: &str) -> Self {
+        let mut out = Self::default();
+        out.push(url);
+        if let Ok(parsed) = reqwest::Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                out.push(host.trim_start_matches('[').trim_end_matches(']'));
+            }
+            if let Some(query) = parsed.query() {
+                out.push(query);
+            }
+            if let Some(segments) = parsed.path_segments() {
+                for seg in segments {
+                    if looks_like_a_token(seg) {
+                        out.push(seg);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The same, plus one more secret (a key, a password).
+    pub(crate) fn with(mut self, secret: &str) -> Self {
+        self.push(secret);
+        self
+    }
+
+    fn push(&mut self, secret: &str) {
+        let secret = secret.trim();
+        if !secret.is_empty() {
+            self.0.push(secret.to_owned());
+        }
+    }
+
+    /// `text` with every secret replaced. Longest first, so a URL is replaced whole before its
+    /// host would leave the rest of it behind.
+    pub(crate) fn redact(&self, text: &str) -> String {
+        let mut secrets: Vec<&String> = self.0.iter().collect();
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        let mut out = text.to_owned();
+        for secret in secrets {
+            out = out.replace(secret.as_str(), "<redacted>");
+        }
+        out
+    }
+}
+
+/// How much of a refusal's body is read off the wire. The rest is never downloaded, so a remote
+/// answering with megabytes costs nothing.
+const RESPONSE_READ_MAX_BYTES: usize = 4096;
+/// How much of it is kept, in characters (ADR-195 decision 2).
+pub(crate) const RESPONSE_KEEP_MAX_CHARS: usize = 512;
+
+/// A non-2xx answer as a [`DeliveryFailure`]: the status, and the start of what the remote said,
+/// with this channel's secrets taken out.
+///
+/// The body is where a vendor says *why* - "Key format is not valid", "Invalid routing key" -
+/// which is the difference between "JSM refused" and "JSM refused because the key is wrong".
+async fn refusal(mut resp: reqwest::Response, secrets: &Secrets) -> DeliveryFailure {
+    let status = resp.status();
+    let mut body = Vec::new();
+    while body.len() < RESPONSE_READ_MAX_BYTES {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    body.truncate(RESPONSE_READ_MAX_BYTES);
+    DeliveryFailure::remote(
+        Some(status.as_u16()),
+        format!("unexpected status {status}"),
+        response_excerpt(&body, secrets),
+    )
+}
+
+/// The kept part of a response body: valid text, control characters flattened, secrets taken out,
+/// then cut at [`RESPONSE_KEEP_MAX_CHARS`]. Redacting before cutting, so a secret straddling the
+/// cut cannot leave its first half behind. `None` for an empty body.
+pub(crate) fn response_excerpt(body: &[u8], secrets: &Secrets) -> Option<String> {
+    let text: String = String::from_utf8_lossy(body)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let text = secrets.redact(text.trim());
+    if text.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(&text, RESPONSE_KEEP_MAX_CHARS))
 }
 
 /// Map a vendor API response to the channel result. 429 waits out `Retry-After` (capped
@@ -164,6 +299,7 @@ fn delivery_error(e: reqwest::Error) -> NotifyError {
 async fn vendor_response(
     resp: reqwest::Response,
     also_ok: Option<reqwest::StatusCode>,
+    secrets: &Secrets,
 ) -> Result<(), NotifyError> {
     let status = resp.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -173,13 +309,15 @@ async fn vendor_response(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(2);
+        let mut failure = refusal(resp, secrets).await;
+        "rate limited (429)".clone_into(&mut failure.message);
         tokio::time::sleep(std::time::Duration::from_secs(wait_secs.min(10))).await;
-        return Err(NotifyError::Delivery("rate limited (429)".to_owned()));
+        return Err(failure.into());
     }
     if status.is_success() || also_ok.is_some_and(|s| s == status) {
         return Ok(());
     }
-    Err(NotifyError::Delivery(format!("unexpected status {status}")))
+    Err(refusal(resp, secrets).await.into())
 }
 
 /// PagerDuty Events API v2 [`NotifyChannel`]: `trigger` on fire, `resolve` on recovery,
@@ -188,6 +326,7 @@ pub struct PagerDutyChannel {
     http: reqwest::Client,
     url: String,
     routing_key: String,
+    secrets: Secrets,
 }
 
 /// Default (US) Events API v2 endpoint; EU tenants override via the channel config.
@@ -196,9 +335,11 @@ const PAGERDUTY_DEFAULT_URL: &str = "https://events.pagerduty.com/v2/enqueue";
 impl PagerDutyChannel {
     #[must_use]
     pub fn new(routing_key: String, api_url: Option<String>) -> Self {
+        let url = api_url.unwrap_or_else(|| PAGERDUTY_DEFAULT_URL.to_owned());
         Self {
             http: hardened_client(),
-            url: api_url.unwrap_or_else(|| PAGERDUTY_DEFAULT_URL.to_owned()),
+            secrets: Secrets::of_url(&url).with(&routing_key),
+            url,
             routing_key,
         }
     }
@@ -211,9 +352,10 @@ impl PagerDutyChannel {
     ) -> Result<(), NotifyError> {
         if let Ok(url) = reqwest::Url::parse(&self.url) {
             if webhook_target_blocked(&url).await {
-                return Err(NotifyError::Delivery(
-                    "PagerDuty target address is not allowed (SSRF)".to_owned(),
-                ));
+                return Err(DeliveryFailure::yagra(
+                    "PagerDuty target address is not allowed (SSRF)",
+                )
+                .into());
             }
         }
         let body = pagerduty_body(&self.routing_key, action, notification, with_payload);
@@ -224,7 +366,7 @@ impl PagerDutyChannel {
             .send()
             .await
             .map_err(delivery_error)?;
-        vendor_response(resp, None).await
+        vendor_response(resp, None, &self.secrets).await
     }
 }
 
@@ -293,14 +435,19 @@ pub struct JsmChannel {
     http: reqwest::Client,
     api_url: String,
     api_key: String,
+    secrets: Secrets,
 }
 
 impl JsmChannel {
     #[must_use]
     pub fn new(api_url: String, api_key: String) -> Self {
+        let api_url = api_url.trim_end_matches('/').to_owned();
         Self {
             http: hardened_client(),
-            api_url: api_url.trim_end_matches('/').to_owned(),
+            // The JSM API URL is a public endpoint and its path is the API's own, so only the host
+            // and the key are secret here - but `of_url` costs nothing to apply uniformly.
+            secrets: Secrets::of_url(&api_url).with(&api_key),
+            api_url,
             api_key,
         }
     }
@@ -308,9 +455,9 @@ impl JsmChannel {
     async fn guard(&self, url: &str) -> Result<(), NotifyError> {
         if let Ok(url) = reqwest::Url::parse(url) {
             if webhook_target_blocked(&url).await {
-                return Err(NotifyError::Delivery(
-                    "JSM target address is not allowed (SSRF)".to_owned(),
-                ));
+                return Err(
+                    DeliveryFailure::yagra("JSM target address is not allowed (SSRF)").into(),
+                );
             }
         }
         Ok(())
@@ -330,7 +477,7 @@ impl NotifyChannel for JsmChannel {
             .send()
             .await
             .map_err(delivery_error)?;
-        vendor_response(resp, None).await
+        vendor_response(resp, None, &self.secrets).await
     }
 
     async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
@@ -346,7 +493,7 @@ impl NotifyChannel for JsmChannel {
             .map_err(delivery_error)?;
         // 404 = no open alert with that alias (already closed / never created) — success,
         // so a resolve is idempotent and never dangles on retry.
-        vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND)).await
+        vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND), &self.secrets).await
     }
 }
 
@@ -479,6 +626,9 @@ pub struct EmailChannel {
     mailer: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
     from: lettre::message::Mailbox,
     to: lettre::message::Mailbox,
+    /// The SMTP host and login, kept out of a failure's text (ADR-195). v0.3.43's `/verify` noted
+    /// that an SMTP error was the one delivery error not redacted like an HTTP one.
+    secrets: Secrets,
 }
 
 impl EmailChannel {
@@ -501,13 +651,16 @@ impl EmailChannel {
         if let Some(port) = port {
             builder = builder.port(port);
         }
+        let mut secrets = Secrets::default().with(host);
         if let (Some(user), Some(pass)) = (user, pass) {
             builder = builder.credentials(Credentials::new(user.to_owned(), pass.to_owned()));
+            secrets = secrets.with(user).with(pass);
         }
         Some(Self {
             mailer: builder.build(),
             from,
             to,
+            secrets,
         })
     }
 
@@ -561,7 +714,7 @@ pub(crate) fn build_channel(config: &ChannelConfig) -> Option<Arc<dyn NotifyChan
 /// phone at 3am does not mistake it for the sample alert it describes.
 pub(crate) const TEST_SUBJECT_PREFIX: &str = "[TEST] ";
 
-/// What one test send did (ADR-192).
+/// What one test send did (ADR-192), and each call it made (ADR-195).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestDelivery {
     /// Whether the channel accepted the notification.
@@ -572,6 +725,10 @@ pub(crate) struct TestDelivery {
     /// The first failure, as text an operator may read - never carrying the channel's URL
     /// ([`delivery_error`]).
     pub error: Option<String>,
+    /// The send, as the delivery log records it.
+    pub send: yagra_alert::Attempt,
+    /// The close, when one was attempted.
+    pub close: Option<yagra_alert::Attempt>,
 }
 
 /// The test notification for a channel: the template preview's sample alert, rendered through the
@@ -658,11 +815,14 @@ pub(crate) async fn send_test(
     notification: &Notification,
     close_after: Option<std::time::Duration>,
 ) -> TestDelivery {
-    if let Err(e) = channel.deliver(notification).await {
+    let send = timed(channel.deliver(notification)).await;
+    if let Some(f) = &send.failure {
         return TestDelivery {
             delivered: false,
             closed: None,
-            error: Some(notify_error_text(e)),
+            error: Some(f.message.clone()),
+            send,
+            close: None,
         };
     }
     let Some(wait) = close_after else {
@@ -670,28 +830,30 @@ pub(crate) async fn send_test(
             delivered: true,
             closed: None,
             error: None,
+            send,
+            close: None,
         };
     };
     tokio::time::sleep(wait).await;
-    match channel.deliver_resolve(notification).await {
-        Ok(()) => TestDelivery {
-            delivered: true,
-            closed: Some(true),
-            error: None,
-        },
-        Err(e) => TestDelivery {
-            delivered: true,
-            closed: Some(false),
-            error: Some(notify_error_text(e)),
-        },
+    let close = timed(channel.deliver_resolve(notification)).await;
+    TestDelivery {
+        delivered: true,
+        closed: Some(close.failure.is_none()),
+        error: close.failure.as_ref().map(|f| f.message.clone()),
+        send,
+        close: Some(close),
     }
 }
 
-/// The channel's own message, without the `delivery failed:` the error's `Display` adds - the
-/// dialog already says it failed.
-fn notify_error_text(e: NotifyError) -> String {
-    match e {
-        NotifyError::Delivery(text) => text,
+/// One call to a channel, timed, as an [`yagra_alert::Attempt`].
+async fn timed(
+    call: impl std::future::Future<Output = Result<(), NotifyError>>,
+) -> yagra_alert::Attempt {
+    let started = std::time::Instant::now();
+    let result = call.await;
+    yagra_alert::Attempt {
+        duration: started.elapsed(),
+        failure: result.err().map(NotifyError::into_failure),
     }
 }
 
@@ -704,12 +866,22 @@ impl NotifyChannel for EmailChannel {
             .to(self.to.clone())
             .subject(notification.summary.clone())
             .body(notification.payload.clone())
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(|e| DeliveryFailure::yagra(self.secrets.redact(&e.to_string())))?;
         self.mailer
             .send(email)
             .await
-            .map_err(|e| NotifyError::Delivery(e.to_string()))?;
+            .map_err(|e| smtp_failure(&e, &self.secrets))?;
         Ok(())
+    }
+}
+
+/// An SMTP failure as a [`DeliveryFailure`]: a reply code means the server answered and refused
+/// (`Remote`, with the code as the status); anything else never reached a reply.
+fn smtp_failure(e: &lettre::transport::smtp::Error, secrets: &Secrets) -> DeliveryFailure {
+    let text = secrets.redact(&e.to_string());
+    match e.status() {
+        Some(code) => DeliveryFailure::remote(code.to_string().parse::<u16>().ok(), text, None),
+        None => DeliveryFailure::network(text),
     }
 }
 
@@ -830,6 +1002,8 @@ struct BuiltChannel {
     /// Whether this channel's built-in notification is the text a person reads rather than the
     /// alert as JSON (ADR-194) - see [`builtin_for_kind`].
     text_builtin: bool,
+    /// The stored kind, for the delivery log (ADR-195). `None` only for a test's fake channel.
+    kind: Option<ChannelKind>,
 }
 
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
@@ -855,6 +1029,8 @@ struct Routing {
     rules: Vec<RoutingRule>,
     /// The channels whose built-in notification is text rather than JSON (ADR-194).
     text: HashSet<Uuid>,
+    /// Each channel's kind, for the delivery log (ADR-195).
+    kinds: HashMap<Uuid, ChannelKind>,
 }
 
 impl Routing {
@@ -983,6 +1159,8 @@ pub struct Notifier {
     ///
     /// A deployment with only webhook channels still issues no extra query.
     any_facts_channel: AtomicBool,
+    /// Where each delivery is recorded (ADR-195). Recording never waits: see [`DeliveryLog`].
+    delivery_log: RwLock<Option<DeliveryLog>>,
 }
 
 impl Notifier {
@@ -1027,12 +1205,23 @@ impl Notifier {
                 overrides: HashMap::new(),
                 rules: Vec::new(),
                 text: HashSet::new(),
+                kinds: HashMap::new(),
             })),
             mutes: RwLock::new(Arc::new(Vec::new())),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
+            delivery_log: RwLock::new(None),
         }
+    }
+
+    /// Attach the delivery log (ADR-195). Called once at startup, after the shutdown token
+    /// exists; until then, and on a core with no write side, deliveries are not recorded.
+    pub fn set_delivery_log(&self, log: DeliveryLog) {
+        *self
+            .delivery_log
+            .write()
+            .expect("notifier delivery log lock poisoned") = Some(log);
     }
 
     /// Attach the source that resolves node names/group/profile for a template's context
@@ -1073,6 +1262,7 @@ impl Notifier {
                     over,
                     reads_facts: reads_facts(ch.config.kind()),
                     text_builtin: !body_must_be_json(ch.config.kind()),
+                    kind: Some(ch.config.kind()),
                 }
             })
             .collect();
@@ -1095,7 +1285,11 @@ impl Notifier {
         let mut overrides = HashMap::new();
         let mut fact_channels = HashSet::new();
         let mut text = HashSet::new();
+        let mut kinds = HashMap::new();
         for built in channels {
+            if let Some(kind) = built.kind {
+                kinds.insert(built.id, kind);
+            }
             if let Some(over) = built.over {
                 overrides.insert(built.id, over);
             }
@@ -1119,6 +1313,7 @@ impl Notifier {
         overrides.retain(|id, _| next.contains_key(id));
         fact_channels.retain(|id| next.contains_key(id));
         text.retain(|id| next.contains_key(id));
+        kinds.retain(|id, _| next.contains_key(id));
         self.any_templates
             .store(!overrides.is_empty(), Ordering::Relaxed);
         self.any_facts_channel
@@ -1129,6 +1324,7 @@ impl Notifier {
             overrides,
             rules,
             text,
+            kinds,
         });
     }
 
@@ -1233,20 +1429,27 @@ impl Notifier {
                 let text = (!routing.text.is_empty())
                     .then(|| text_notification(&alert, NotifyEvent::Fire, facts.as_ref()));
                 let matched = routing.matched(alert.severity);
+                let done = Delivered {
+                    alert: &alert,
+                    event: NotifyEvent::Fire,
+                    facts: facts.as_ref(),
+                    message: "alert notification dispatched",
+                };
                 if let Some(d) = routing.default.as_ref() {
                     let started = std::time::Instant::now();
-                    let outcome = d.dispatch(notification.clone()).await;
-                    record_dispatch("default", NotifyEvent::Fire, outcome, started);
-                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert notification dispatched");
+                    let at = chrono::Utc::now();
+                    let report = d.dispatch(notification.clone()).await;
+                    self.after_dispatch(&done, None, None, &report, at, started);
                 }
                 for id in matched {
                     if let Some(d) = routing.channels.get(&id) {
                         let base = routing.builtin_for(id, &notification, text.as_ref());
                         let n = for_channel(id, &routing.overrides, facts.as_ref(), base);
                         let started = std::time::Instant::now();
-                        let outcome = d.dispatch(n).await;
-                        record_dispatch(&id.to_string(), NotifyEvent::Fire, outcome, started);
-                        tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert notification dispatched");
+                        let at = chrono::Utc::now();
+                        let report = d.dispatch(n).await;
+                        let kind = routing.kinds.get(&id).copied();
+                        self.after_dispatch(&done, Some(id), kind, &report, at, started);
                     }
                 }
             }
@@ -1313,25 +1516,106 @@ impl Notifier {
         let notification = with_subject_facts(builtin_notification(alert, event), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
         let matched = routing.matched(alert.severity);
+        let done = Delivered {
+            alert,
+            event,
+            facts,
+            message,
+        };
         if let Some(d) = routing.default.as_ref() {
             let started = std::time::Instant::now();
-            let outcome = d.dispatch_resolve(notification.clone()).await;
-            record_dispatch("default", event, outcome, started);
-            tracing::info!(?outcome, subject = %alert.subject, route = "default", "{}", message);
+            let at = chrono::Utc::now();
+            let report = d.dispatch_resolve(notification.clone()).await;
+            self.after_dispatch(&done, None, None, &report, at, started);
         }
         for (id, d) in &routing.channels {
             if matched.contains(id) {
                 let base = routing.builtin_for(*id, &notification, text.as_ref());
                 let n = for_channel(*id, &routing.overrides, facts, base);
                 let started = std::time::Instant::now();
-                let outcome = d.dispatch_resolve(n).await;
-                record_dispatch(&id.to_string(), event, outcome, started);
-                tracing::info!(?outcome, subject = %alert.subject, channel = %id, "{}", message);
+                let at = chrono::Utc::now();
+                let report = d.dispatch_resolve(n).await;
+                let kind = routing.kinds.get(id).copied();
+                self.after_dispatch(&done, Some(*id), kind, &report, at, started);
             } else {
                 d.mark_resolved(&key).await;
             }
         }
     }
+
+    /// Everything that follows one dispatch: the two metrics, the log line, and the delivery-log
+    /// row (ADR-195). `channel` is `None` for the environment default route.
+    ///
+    /// One function rather than four copies, because the four used to be one `info!` each and
+    /// now carry the failure's side and status too - the copies that drift are the ones nobody
+    /// reads during an incident.
+    fn after_dispatch(
+        &self,
+        done: &Delivered<'_>,
+        channel: Option<Uuid>,
+        kind: Option<ChannelKind>,
+        report: &DispatchReport,
+        at: chrono::DateTime<chrono::Utc>,
+        started: std::time::Instant,
+    ) {
+        let route = channel.map_or_else(|| "default".to_owned(), |id| id.to_string());
+        let outcome = report.outcome;
+        record_dispatch(&route, done.event, outcome, started);
+        match report.last_failure() {
+            Some(f) if matches!(outcome, DispatchOutcome::Failed { .. }) => {
+                tracing::warn!(
+                    ?outcome,
+                    subject = %done.alert.subject,
+                    route = %route,
+                    side = ?f.side,
+                    status = ?f.status,
+                    error = %f.message,
+                    "{}", done.message
+                );
+            }
+            _ => {
+                tracing::info!(?outcome, subject = %done.alert.subject, route = %route, "{}", done.message);
+            }
+        }
+        let delivered = match outcome {
+            DispatchOutcome::Delivered { .. } => true,
+            DispatchOutcome::Failed { .. } => false,
+            // The channel was never called: nothing was delivered or failed, so nothing to log.
+            DispatchOutcome::Suppressed => return,
+        };
+        let log = self
+            .delivery_log
+            .read()
+            .expect("notifier delivery log lock poisoned")
+            .clone();
+        if let Some(log) = log {
+            log.record(DeliveryRecord {
+                at,
+                channel_id: channel,
+                channel_kind: kind,
+                event: done.event.into(),
+                subject: done.alert.subject.to_string(),
+                node_id: done.alert.node().map(|n| n.as_uuid()),
+                subject_name: done
+                    .facts
+                    .map(|f| f.subject_name.clone())
+                    .filter(|n| !n.is_empty()),
+                severity: Some(done.alert.severity),
+                delivered,
+                duration: started.elapsed(),
+                attempts: report.attempts.clone(),
+            });
+        }
+    }
+}
+
+/// What every dispatch of one notify action shares, for [`Notifier::after_dispatch`].
+struct Delivered<'a> {
+    alert: &'a Alert,
+    event: NotifyEvent,
+    facts: Option<&'a AlertFacts>,
+    /// The log wording, which an operator greps for and so is kept verbatim (ADR-104 decision 5).
+    message: &'static str,
 }
 
 /// The notification Yagra sends when a channel has no template — and the fallback when its
@@ -1844,28 +2128,42 @@ mod tests {
     #[tokio::test]
     async fn vendor_response_handles_success_failure_429_and_extra_ok() {
         // 202 Accepted (both vendors' success status).
-        assert!(vendor_response(synth_response(202, &[]), None)
-            .await
-            .is_ok());
+        assert!(
+            vendor_response(synth_response(202, &[]), None, &Secrets::default())
+                .await
+                .is_ok()
+        );
         // Hard failure surfaces as a delivery error (dispatcher retries).
-        assert!(vendor_response(synth_response(400, &[]), None)
-            .await
-            .is_err());
+        assert!(
+            vendor_response(synth_response(400, &[]), None, &Secrets::default())
+                .await
+                .is_err()
+        );
         // 429 waits out Retry-After then errs so the retry policy counts the attempt.
         let start = std::time::Instant::now();
-        let r = vendor_response(synth_response(429, &[("retry-after", "0")]), None).await;
-        assert!(r.is_err());
+        let r = vendor_response(
+            synth_response(429, &[("retry-after", "0")]),
+            None,
+            &Secrets::default(),
+        )
+        .await;
+        let f = r.unwrap_err().into_failure();
+        assert_eq!(f.message, "rate limited (429)");
+        assert_eq!(f.status, Some(429));
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
         // JSM close treats 404 (already closed) as success — resolve stays idempotent.
         let ok404 = vendor_response(
             synth_response(404, &[]),
             Some(reqwest::StatusCode::NOT_FOUND),
+            &Secrets::default(),
         )
         .await;
         assert!(ok404.is_ok());
-        assert!(vendor_response(synth_response(404, &[]), None)
-            .await
-            .is_err());
+        assert!(
+            vendor_response(synth_response(404, &[]), None, &Secrets::default())
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -2444,6 +2742,7 @@ mod delivery_tests {
             over: None,
             reads_facts: false,
             text_builtin: false,
+            kind: None,
         }
     }
 
@@ -2473,6 +2772,73 @@ mod delivery_tests {
             row: None,
             row_name: None,
         }
+    }
+
+    /// A channel that always refuses, the way JSM refuses a wrong key.
+    struct Refuser;
+
+    #[async_trait]
+    impl NotifyChannel for Refuser {
+        async fn deliver(&self, _: &Notification) -> Result<(), NotifyError> {
+            Err(DeliveryFailure::remote(
+                Some(401),
+                "unexpected status 401",
+                Some("bad key".to_owned()),
+            )
+            .into())
+        }
+    }
+
+    /// ADR-195: every dispatch that called a channel becomes one delivery-log row, saying which
+    /// channel, whether it arrived, and - for a failure - on whose side; a suppressed duplicate
+    /// called nothing and records nothing.
+    #[tokio::test(start_paused = true)]
+    async fn each_delivery_is_recorded_with_where_it_failed() {
+        let (ok_log, _) = (log(), log());
+        let n = Notifier::with_default(None);
+        let (dlog, mut rx) = crate::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let (good, bad) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut refusing = built(bad, Refuser);
+        refusing.kind = Some(ChannelKind::Jsm);
+        n.install_routing(
+            vec![built(good, Recorder(ok_log.clone())), refusing],
+            vec![rule(good, None), rule(bad, None)],
+        );
+        let node = NodeId::new();
+        let fire = alert(node, Severity::Critical, None);
+        n.handle(NotifyAction::Fire(fire.clone())).await;
+
+        let mut rows = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            rows.push(r);
+        }
+        assert_eq!(rows.len(), 2, "one row per channel called");
+        let ok = rows.iter().find(|r| r.channel_id == Some(good)).unwrap();
+        assert!(ok.delivered);
+        assert_eq!(ok.attempts.len(), 1);
+        assert_eq!(ok.node_id, Some(node.as_uuid()));
+        let failed = rows.iter().find(|r| r.channel_id == Some(bad)).unwrap();
+        assert!(!failed.delivered);
+        assert_eq!(failed.channel_kind, Some(ChannelKind::Jsm));
+        assert_eq!(
+            failed.attempts.len(),
+            3,
+            "the retry policy's three attempts"
+        );
+        let f = failed.attempts[2].failure.as_ref().unwrap();
+        assert_eq!(f.side, yagra_alert::FailureSide::Remote);
+        assert_eq!(f.response.as_deref(), Some("bad key"));
+
+        // The same alert again: the good channel suppresses it as a duplicate and calls nothing,
+        // so only the refusing channel (which never delivered, so has no dedup entry) is recorded.
+        n.handle(NotifyAction::Fire(fire)).await;
+        let mut again = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            again.push(r);
+        }
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].channel_id, Some(bad));
     }
 
     #[tokio::test]
@@ -2856,14 +3222,16 @@ mod test_send_tests {
         async fn deliver(&self, _: &Notification) -> Result<(), NotifyError> {
             self.calls.lock().unwrap().push("fire");
             if self.fail_fire {
-                return Err(NotifyError::Delivery("unexpected status 401".to_owned()));
+                return Err(
+                    DeliveryFailure::remote(Some(401), "unexpected status 401", None).into(),
+                );
             }
             Ok(())
         }
         async fn deliver_resolve(&self, _: &Notification) -> Result<(), NotifyError> {
             self.calls.lock().unwrap().push("close");
             if self.fail_close {
-                return Err(NotifyError::Delivery("rate limited (429)".to_owned()));
+                return Err(DeliveryFailure::remote(Some(429), "rate limited (429)", None).into());
             }
             Ok(())
         }
@@ -2998,14 +3366,12 @@ mod test_send_tests {
         let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
         let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
         assert_eq!(ch.calls(), ["fire", "close"]);
-        assert_eq!(
-            out,
-            TestDelivery {
-                delivered: true,
-                closed: Some(true),
-                error: None
-            }
-        );
+        assert!(out.delivered);
+        assert_eq!(out.closed, Some(true));
+        assert_eq!(out.error, None);
+        // Both calls are kept for the delivery log (ADR-195).
+        assert!(out.send.failure.is_none());
+        assert!(out.close.unwrap().failure.is_none());
     }
 
     #[tokio::test]
@@ -3025,14 +3391,11 @@ mod test_send_tests {
         let n = test_notification(ChannelKind::Jsm, &ChannelTemplate::default());
         let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
         assert_eq!(ch.calls(), ["fire"]);
-        assert_eq!(
-            out,
-            TestDelivery {
-                delivered: false,
-                closed: None,
-                error: Some("unexpected status 401".to_owned())
-            }
-        );
+        assert!(!out.delivered);
+        assert_eq!(out.closed, None);
+        assert_eq!(out.error.as_deref(), Some("unexpected status 401"));
+        assert_eq!(out.send.failure.unwrap().status, Some(401));
+        assert!(out.close.is_none());
     }
 
     /// The page went out but the incident is still open: the operator has to be told, because
@@ -3057,7 +3420,10 @@ mod test_send_tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("s3cr3t-path"), "premise: {err}");
-        let NotifyError::Delivery(text) = delivery_error(err);
+        let failure = delivery_error(err).into_failure();
+        // Nothing answered a name that does not resolve: the network's side, not the remote's.
+        assert_eq!(failure.side, yagra_alert::FailureSide::Network);
+        let text = failure.message;
         assert!(!text.contains("s3cr3t-path"), "{text}");
         assert!(!text.contains("nonexistent.invalid"), "{text}");
         assert!(!text.is_empty());
@@ -3103,10 +3469,84 @@ mod test_send_tests {
             .send()
             .await
             .unwrap_err();
-        let NotifyError::Delivery(text) = delivery_error(err);
+        let failure = delivery_error(err).into_failure();
+        assert_eq!(failure.side, yagra_alert::FailureSide::Network);
+        let text = failure.message;
         // Premise: this is the name-mismatch failure, which is the one that names the host.
         assert!(text.contains("not valid for name"), "{text}");
         assert!(!text.contains("localhost"), "{text}");
         assert!(!text.contains("s3cr3t-path"), "{text}");
+    }
+
+    /// ADR-195 decision 2: a refusal keeps the start of what the remote said - that is where a
+    /// vendor says why - with the channel's key, URL and host taken out first.
+    #[tokio::test]
+    async fn a_refusal_keeps_the_remotes_reason_without_the_channels_secrets() {
+        let key = "0123456789abcdef-genie";
+        let url = "https://api.example.com/v2/hooks/T0LONGTOKEN123";
+        let secrets = Secrets::of_url(url).with(key);
+        let body = format!(
+            "{{\"message\":\"Key format is not valid\",\"echo\":\"GenieKey {key} for {url}\"}}"
+        );
+        let resp = synth(401, &body);
+        let f = refusal(resp, &secrets).await;
+        assert_eq!(f.side, yagra_alert::FailureSide::Remote);
+        assert_eq!(f.status, Some(401));
+        let excerpt = f.response.unwrap();
+        assert!(excerpt.contains("Key format is not valid"), "{excerpt}");
+        assert!(!excerpt.contains(key), "{excerpt}");
+        assert!(!excerpt.contains("api.example.com"), "{excerpt}");
+        assert!(!excerpt.contains("T0LONGTOKEN123"), "{excerpt}");
+        assert!(excerpt.contains("<redacted>"), "{excerpt}");
+    }
+
+    #[test]
+    fn a_long_answer_is_cut_and_an_empty_one_is_none() {
+        let secrets = Secrets::default();
+        let long = "x".repeat(5000);
+        let cut = response_excerpt(long.as_bytes(), &secrets).unwrap();
+        assert_eq!(cut.chars().count(), RESPONSE_KEEP_MAX_CHARS);
+        assert_eq!(response_excerpt(b"  \n ", &secrets), None);
+        // Control characters would break a one-line display; they are flattened.
+        assert_eq!(
+            response_excerpt(b"a\nb\tc", &secrets).as_deref(),
+            Some("a b c")
+        );
+    }
+
+    /// Short path segments are the API's own words and stay readable; long ones are tokens.
+    #[test]
+    fn only_long_path_segments_are_treated_as_secrets() {
+        let s = Secrets::of_url("https://hooks.example.com/services/T0/B0/abcdefgh12345678");
+        let out = s.redact("posted to /services/T0/B0/abcdefgh12345678 on hooks.example.com");
+        assert!(out.contains("/services/T0/B0/"), "{out}");
+        assert!(!out.contains("abcdefgh12345678"), "{out}");
+        assert!(!out.contains("hooks.example.com"), "{out}");
+    }
+
+    /// A 2xx from the vendor is success, anything else is the remote's refusal; a 429 keeps its
+    /// own message so the operator sees it was rate limiting.
+    #[tokio::test]
+    async fn a_vendor_refusal_is_the_remotes_side_with_its_status() {
+        let secrets = Secrets::default();
+        assert!(vendor_response(synth(202, ""), None, &secrets)
+            .await
+            .is_ok());
+        let f = vendor_response(synth(403, "forbidden"), None, &secrets)
+            .await
+            .unwrap_err()
+            .into_failure();
+        assert_eq!(f.side, yagra_alert::FailureSide::Remote);
+        assert_eq!(f.status, Some(403));
+        assert_eq!(f.response.as_deref(), Some("forbidden"));
+    }
+
+    fn synth(status: u16, body: &str) -> reqwest::Response {
+        reqwest::Response::from(
+            axum::http::Response::builder()
+                .status(status)
+                .body(body.to_owned())
+                .unwrap(),
+        )
     }
 }

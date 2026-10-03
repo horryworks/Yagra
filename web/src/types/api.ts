@@ -117,6 +117,11 @@ const schemaEnumPins: {
   OverlapHintKind: AssertEqual<OverlapHintKind, components['schemas']['OverlapHint']['kind']>;
   ExclusionReason: AssertEqual<ExclusionReason, components['schemas']['ExclusionReason']>;
   RediscoverField: AssertEqual<RediscoverField, components['schemas']['RediscoverField']>;
+  // The delivery log names each kind, result and side from the token the server sent
+  // (`routing.log.event.*` and siblings, ADR-195).
+  DeliveryEvent: AssertEqual<DeliveryEvent, components['schemas']['DeliveryEvent']>;
+  DeliveryResult: AssertEqual<DeliveryResult, components['schemas']['DeliveryResult']>;
+  DeliverySide: AssertEqual<DeliverySide, components['schemas']['DeliverySide']>;
 } = {
   Severity: true,
   Role: true,
@@ -168,6 +173,9 @@ const schemaEnumPins: {
   OverlapHintKind: true,
   ExclusionReason: true,
   RediscoverField: true,
+  DeliveryEvent: true,
+  DeliveryResult: true,
+  DeliverySide: true,
 };
 void schemaEnumPins;
 
@@ -687,6 +695,39 @@ export type BuiltinSubjectTemplate = components['schemas']['BuiltinSubjectTempla
 /** What a channel's test send did (`POST /api/v1/notification-channels/{id}/test`, ADR-192). A
  *  failure is reported in the body, beside a 200. */
 export type ChannelTestResult = components['schemas']['ChannelTestResult'];
+
+/** One row of the notification delivery log (ADR-195): whether a delivery arrived and, when it did
+ *  not, on whose side it failed. */
+export type DeliveryRow = components['schemas']['DeliveryRow'];
+/** One call to the channel inside a delivery. */
+export type DeliveryAttempt = components['schemas']['DeliveryAttempt'];
+
+/** What a delivery was for. `unknown` is what a row a newer core wrote reads as; nothing filters on
+ *  it. Pinned to the schema by `schemaEnumPins`. */
+export const DELIVERY_EVENTS = [
+  'fire',
+  'resolve',
+  'suppress',
+  'test',
+  'test_close',
+  'unknown',
+] as const;
+export type DeliveryEvent = (typeof DELIVERY_EVENTS)[number];
+
+/** Whether a delivery arrived. Pinned to the schema by `schemaEnumPins`. */
+export const DELIVERY_RESULTS = ['delivered', 'failed', 'unknown'] as const;
+export type DeliveryResult = (typeof DELIVERY_RESULTS)[number];
+
+/** Where a failed delivery failed: inside Yagra, on the way, or at the receiving service. Pinned to
+ *  the schema by `schemaEnumPins`. */
+export const DELIVERY_SIDES = ['yagra', 'network', 'remote', 'unknown'] as const;
+export type DeliverySide = (typeof DELIVERY_SIDES)[number];
+
+/** Query params for the delivery log — keyset-paged on `before` + `before_id`, filtered by the
+ *  rest. */
+export type DeliveryQuery = NonNullable<
+  paths['/api/v1/notification-deliveries']['get']['parameters']['query']
+>;
 
 // ── Collection (metrics to gather) ──────────────────────────────────────────────────────────────
 

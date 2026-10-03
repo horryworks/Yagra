@@ -469,6 +469,29 @@ pub(super) struct AuditParams {
     status: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub(super) struct DeliveryParams {
+    /// Max rows (1–500, default 100).
+    limit: Option<i64>,
+    /// Keyset cursor, first half: the last row's `at` (RFC 3339). Send with `before_id`.
+    before: Option<String>,
+    /// Keyset cursor, second half: the last row's `id`.
+    before_id: Option<i64>,
+    /// Only deliveries at or after this RFC 3339 timestamp.
+    since: Option<String>,
+    /// Only deliveries at or before this RFC 3339 timestamp.
+    until: Option<String>,
+    /// Channel ids, comma-separated, and/or `default` for the environment default route. Omit for
+    /// every channel.
+    channel: Option<String>,
+    /// `delivered` | `failed`, comma-separated. Omit for both.
+    result: Option<String>,
+    /// Where a failure happened: `yagra` | `network` | `remote`, comma-separated. Omit for all.
+    side: Option<String>,
+    /// `fire` | `resolve` | `suppress` | `test` | `test_close`, comma-separated. Omit for all.
+    event: Option<String>,
+}
+
 #[tool_router(router = system_router, vis = "pub(super)")]
 impl YagraMcp {
     #[tool(
@@ -732,6 +755,57 @@ impl YagraMcp {
             status: p.status.as_deref(),
         };
         match crate::api::audit::audit_page(&self.state, input).await {
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
+        description = "The notification delivery log: one row per notification Yagra sent to a \
+                       channel (PagerDuty, JSM, webhook, email), newest first. Says whether it \
+                       arrived and, when it did not, which side failed — `yagra` (stopped before \
+                       sending), `network` (no answer: timeout, refused connection, DNS, TLS) or \
+                       `remote` (the receiving service answered and refused; `status` and \
+                       `response` say why). Use it to tell a misconfigured channel from a Yagra \
+                       fault. `limit` is 1–500 (default 100); page with `before` + `before_id` from \
+                       the last row. Narrow with `since`/`until`, `channel` (ids or `default`), \
+                       `result`, `side` and `event`, each taking several values comma-separated. \
+                       Requires the manage-system permission."
+    )]
+    async fn get_notification_deliveries(
+        &self,
+        Parameters(p): Parameters<DeliveryParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_notification_deliveries";
+        if let Some(deny) = self.deny_unless_permitted(identity_of(&ctx).as_ref(), TOOL, "") {
+            return deny;
+        }
+        self.deliveries_in(p).await
+    }
+
+    pub(super) async fn deliveries_in(
+        &self,
+        p: DeliveryParams,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_notification_deliveries";
+        // Unavailable before the parse, for the reason `audit_in` gives: an assistant told "this
+        // deployment keeps no log" stops asking.
+        if self.state.admin.is_none() {
+            return tool_unavailable(TOOL, "the delivery log requires live mode");
+        }
+        let input = crate::api::notifications::DeliveryFilterInput {
+            limit: p.limit,
+            before: p.before.as_deref(),
+            before_id: p.before_id,
+            since: p.since.as_deref(),
+            until: p.until.as_deref(),
+            channel: p.channel.as_deref(),
+            result: p.result.as_deref(),
+            side: p.side.as_deref(),
+            event: p.event.as_deref(),
+        };
+        match crate::api::notifications::delivery_page(&self.state, input).await {
             Ok(rows) => ok_json(TOOL, &rows),
             Err(e) => tool_api_error(TOOL, &e),
         }

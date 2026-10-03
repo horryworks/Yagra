@@ -138,6 +138,8 @@ import type {
   PreviewSample,
   BuiltinSubjectTemplate,
   ChannelTestResult,
+  DeliveryQuery,
+  DeliveryRow,
   TemplateVariable,
   SavedFinding,
   SavedFindingsQuery,
@@ -2224,6 +2226,10 @@ export const api = {
    *  channel accepted it comes back in the body, beside a 200. */
   testNotificationChannel: (id: string): Promise<ChannelTestResult> =>
     apiPost('/api/v1/notification-channels/{id}/test', { path: { id } }),
+
+  /** One page of the notification delivery log, newest first (ADR-195). */
+  listNotificationDeliveries: (query?: DeliveryQuery): Promise<DeliveryRow[]> =>
+    apiGet('/api/v1/notification-deliveries', { query }),
 
   /** Render a template against a representative alert without saving it. A template that cannot
    *  be used comes back as `problems` alongside the built-in text that would be sent instead —

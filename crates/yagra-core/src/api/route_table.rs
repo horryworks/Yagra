@@ -1546,6 +1546,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/notification-deliveries",
+        // ManageSystem, so only an unscoped Admin reads it. Rows name alert subjects, but the
+        // reader is unscoped by construction, as for every other notification route.
+        ADMIN_CFG,
+        Tool("get_notification_deliveries"),
+    ),
+    (
+        "GET",
         "/api/v1/openapi.json",
         Global("the API contract document itself"),
         Exempt("the REST contract document; an MCP client reads tools/list, not OpenAPI"),

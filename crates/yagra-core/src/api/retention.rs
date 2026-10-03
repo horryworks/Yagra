@@ -158,6 +158,7 @@ pub(crate) async fn retention_policy(st: &ApiState, admin: &super::AdminState) -
                 | Subject::EventsMatched
                 | Subject::EventsUnmatched
                 | Subject::MonitoringGaps
+                | Subject::NotificationDeliveries
                 | Subject::ReportRuns
                 | Subject::AnalysisRuns
                 | Subject::RcaReports
@@ -270,6 +271,7 @@ fn store_configured(st: &ApiState, subject: Subject) -> bool {
         | Subject::EventsMatched
         | Subject::EventsUnmatched
         | Subject::MonitoringGaps
+        | Subject::NotificationDeliveries
         | Subject::ReportRuns
         | Subject::AnalysisRuns
         // Rows even when the LLM is unconfigured: the table can still hold reports generated

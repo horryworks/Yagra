@@ -66,6 +66,7 @@ export const TABLE_IDS = [
   'settings.forwarding',
   'settings.merakiDevices',
   'settings.notificationChannels',
+  'settings.notificationDeliveries',
   'settings.pollers',
   'settings.routingRules',
 ] as const;

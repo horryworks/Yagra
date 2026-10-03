@@ -206,6 +206,9 @@ impl YagraMcp {
             // changed what, not a view of nodes, so `get_audit` is the one tool that does not go
             // through `admit`. Its permission gate is `ViewAudit` on the wrapper.
             "get_audit" => self.audit_in(p!(AuditParams)).await,
+            // Unscoped for the reason `get_audit` is: ManageSystem is an Admin's, and an Admin is
+            // unscoped by construction.
+            "get_notification_deliveries" => self.deliveries_in(p!(DeliveryParams)).await,
             "get_system_health" => {
                 let p = p!(SystemHealthParams);
                 match HealthSection::from_token(&p.section) {
@@ -491,6 +494,7 @@ mod tests {
             ("list_node_metrics", String::new()),
             ("fleet_state_history", String::new()),
             ("get_audit", String::new()),
+            ("get_notification_deliveries", String::new()),
             ("get_dns_chain", "current".to_owned()),
             ("get_dns_chain", "history".to_owned()),
             ("get_report_runs", "list".to_owned()),

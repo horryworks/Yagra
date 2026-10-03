@@ -91,6 +91,7 @@ mod module_source;
 mod neighbors;
 mod netbox;
 mod no_reading_filter;
+mod notification_log;
 mod notifications;
 mod notify_facts;
 mod notify_render;
@@ -505,6 +506,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let alerts = Arc::new(AlertManager::with_poll_intervals(poll_intervals.clone()));
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
+    let deliveries = Arc::new(notification_log::DeliveryLogRepo::new(repo.pool()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
     // Give the engine back what it knew before this process started (ADR-097). Awaited here, and
     // here rather than in a task, because it has to finish before the first poll result arrives:
@@ -562,6 +564,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // HTTP server, so a rolling upgrade drains in-flight work instead of being killed mid-write
     // (ADR-017). `serve` (end of `run`) installs the signal handler that cancels this token.
     let shutdown = CancellationToken::new();
+
+    // The notification delivery log (ADR-195): the writer needs the shutdown token so it can flush
+    // on the way down, which is why it is attached here and not where the notifier is built. On
+    // every core; `notification_log::start` carries why.
+    notifier.set_delivery_log(notification_log::start(deliveries.clone(), &shutdown));
 
     // IP→ASN periodic reloader (ADR-031). Nothing starts unless a dataset and a non-zero interval
     // are both configured; on every core when they are. `ipasn::start_reload` carries why.
@@ -867,6 +874,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // than enqueue to an undrained channel.
     let leader_tasks = LeaderTasks {
         llm: llm_repo.clone(),
+        deliveries: deliveries.clone(),
         shutdown: shutdown.clone(),
         bus: bus.clone(),
         coordinator: coordinator.clone(),
@@ -942,6 +950,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         thresholds,
         collection,
         notifications,
+        deliveries,
         mib,
         discovery,
         maintenance: maintenance.clone(),
@@ -1214,6 +1223,9 @@ struct LeaderTasks {
     /// Generated LLM root-cause reports — held only so the retention loop can prune them
     /// (`retention::Subject::RcaReports`); generating one is not a leader task.
     llm: Arc<rca::store::RcaRepo>,
+    /// The notification delivery log - held only so the retention loop can prune it
+    /// (`retention::Subject::NotificationDeliveries`); writing it is the notifier's.
+    deliveries: Arc<notification_log::DeliveryLogRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -1560,6 +1572,7 @@ impl LeaderTasks {
                 analyses: self.analysis_repo.clone(),
                 rca_reports: self.llm.clone(),
                 pollers: self.pollers.clone(),
+                deliveries: self.deliveries.clone(),
             }),
         );
         spawn_cancellable(
@@ -1787,6 +1800,7 @@ struct TimelineSources {
     analyses: Arc<analysis::AnalysisRepo>,
     rca_reports: Arc<rca::store::RcaRepo>,
     pollers: Arc<PollerRepo>,
+    deliveries: Arc<notification_log::DeliveryLogRepo>,
 }
 
 /// Leader-only loop: snapshot the node-state counts every few minutes into PostgreSQL so the
@@ -1805,8 +1819,9 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         analyses,
         rca_reports,
         pollers,
+        deliveries,
     } = sources;
-    // Built once: the sweep borrows these every tick rather than cloning nine Arcs per tick.
+    // Built once: the sweep borrows these every tick rather than cloning ten Arcs per tick.
     let targets = retention_sweep::Targets {
         repo: repo.clone(),
         history,
@@ -1817,6 +1832,7 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         analyses,
         rca_reports,
         pollers,
+        deliveries,
     };
     const SNAPSHOT_SECS: u64 = 300;
     loop {

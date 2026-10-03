@@ -63,7 +63,7 @@ pub(crate) mod mib;
 pub(crate) mod neighbors;
 pub(crate) mod netbox;
 pub(crate) mod nodes;
-mod notifications;
+pub(crate) mod notifications;
 mod oidc;
 pub mod openapi;
 mod pins;
@@ -154,6 +154,9 @@ pub struct AdminState {
     pub thresholds: Arc<ThresholdStore>,
     pub collection: Arc<CollectionRepo>,
     pub notifications: Arc<NotificationRepo>,
+    /// The notification delivery log (ADR-195): read by the Notification delivery screen and
+    /// written directly by a test send. Real deliveries are written by the notifier's own writer.
+    pub deliveries: Arc<crate::notification_log::DeliveryLogRepo>,
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
     pub maintenance: Arc<MaintenanceRepo>,

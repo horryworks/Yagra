@@ -18,7 +18,7 @@ use super::ApiState;
 use crate::notifications::{ChannelConfig, ChannelKind};
 use crate::notify_render::ChannelTemplate;
 use axum::{
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
@@ -43,7 +43,8 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     create_routing_rule,
     set_routing_rule_enabled,
     update_routing_rule,
-    delete_routing_rule
+    delete_routing_rule,
+    list_notification_deliveries
 ))]
 pub(super) struct Doc;
 
@@ -67,6 +68,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/notification-channels/builtin-template",
             get(get_builtin_template),
+        )
+        .route(
+            "/api/v1/notification-deliveries",
+            get(list_notification_deliveries),
         )
         .route(
             "/api/v1/notification-channels/:id",
@@ -476,6 +481,8 @@ async fn test_notification_channel(
         }));
     };
     let notification = crate::alerts::notify::test_notification(kind, &open.template);
+    let started_at = chrono::Utc::now();
+    let started = std::time::Instant::now();
     // Spawned, then awaited: a PagerDuty or JSM test opens a real incident and closes it seconds
     // later. Run inside this request's future, a closed tab or a dropped connection in that pause
     // would cancel the close and leave the incident paging the on-call. A spawned task finishes
@@ -502,11 +509,245 @@ async fn test_notification_channel(
         closed = ?outcome.closed,
         "notification channel test sent"
     );
+    // Written here rather than through the notifier's queue: a test is one operator action, and
+    // the row should be on the delivery log by the time the dialog shows the result (ADR-195).
+    let records = test_records(id, kind, &outcome, started_at, started);
+    if let Err(e) = admin.deliveries.insert(&records).await {
+        tracing::warn!(error = %e, channel = %id, "recording the test send in the delivery log failed");
+    }
     Ok(Json(ChannelTestResult {
         delivered: outcome.delivered,
         closed: outcome.closed,
         error: outcome.error,
     }))
+}
+
+/// The delivery-log rows for one test send: the send, and the close that followed it on a
+/// PagerDuty or JSM channel. The subject is `test` - the sample alert names no real node.
+fn test_records(
+    channel: Uuid,
+    kind: ChannelKind,
+    outcome: &crate::alerts::notify::TestDelivery,
+    at: chrono::DateTime<chrono::Utc>,
+    started: std::time::Instant,
+) -> Vec<crate::notification_log::DeliveryRecord> {
+    use crate::notification_log::{DeliveryEvent, DeliveryRecord};
+    let row = |event, attempt: &yagra_alert::Attempt, at| DeliveryRecord {
+        at,
+        channel_id: Some(channel),
+        channel_kind: Some(kind),
+        event,
+        subject: "test".to_owned(),
+        node_id: None,
+        subject_name: None,
+        severity: None,
+        delivered: attempt.failure.is_none(),
+        duration: attempt.duration,
+        attempts: vec![attempt.clone()],
+    };
+    let mut out = vec![row(DeliveryEvent::Test, &outcome.send, at)];
+    if let Some(close) = &outcome.close {
+        // The close happened after the send and the pause; its own start is the elapsed time
+        // minus its own duration.
+        let since_start = started.elapsed().saturating_sub(close.duration);
+        let close_at = at + chrono::Duration::from_std(since_start).unwrap_or_default();
+        out.push(row(DeliveryEvent::TestClose, close, close_at));
+    }
+    out
+}
+
+/// A page of the notification delivery log, newest first, with the filters the delivery-log table
+/// offers.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct DeliveryQuery {
+    /// Max rows (1–500, default 100).
+    limit: Option<i64>,
+    /// Keyset cursor, first half: the last row's `at`, as an RFC 3339 timestamp. Send with
+    /// `before_id`.
+    before: Option<String>,
+    /// Keyset cursor, second half: the same row's `id`.
+    before_id: Option<i64>,
+    /// Only deliveries at or after this RFC 3339 timestamp.
+    since: Option<String>,
+    /// Only deliveries at or before this RFC 3339 timestamp.
+    until: Option<String>,
+    /// Comma-separated channel ids, and/or `default` for the environment default route. Empty or
+    /// absent means every channel.
+    channel: Option<String>,
+    /// Comma-separated results (`delivered`, `failed`); empty or absent means both.
+    result: Option<String>,
+    /// Comma-separated sides a failure happened on (`yagra`, `network`, `remote`); empty or absent
+    /// means every side. A delivered row has no side, so naming any side excludes it.
+    side: Option<String>,
+    /// Comma-separated kinds (`fire`, `resolve`, `suppress`, `test`, `test_close`); empty or
+    /// absent means every kind.
+    event: Option<String>,
+}
+
+/// The raw, unvalidated filter fields, as either surface receives them.
+#[derive(Default)]
+pub(crate) struct DeliveryFilterInput<'a> {
+    pub limit: Option<i64>,
+    pub before: Option<&'a str>,
+    pub before_id: Option<i64>,
+    pub since: Option<&'a str>,
+    pub until: Option<&'a str>,
+    pub channel: Option<&'a str>,
+    pub result: Option<&'a str>,
+    pub side: Option<&'a str>,
+    pub event: Option<&'a str>,
+}
+
+/// The notification delivery log (ADR-195): one row per delivery, newest first, saying whether it
+/// arrived and, when it did not, whether Yagra, the network or the receiving service failed.
+///
+/// A failed row carries the status the receiving service answered with and the start of its
+/// answer, with the channel's URL, host and key replaced by `<redacted>`.
+#[utoipa::path(
+    get, path = "/api/v1/notification-deliveries", tag = "notifications",
+    params(DeliveryQuery),
+    responses(
+        (status = 200, description = "One page of deliveries, newest first", body = Vec<crate::notification_log::DeliveryRow>),
+        (status = 400, description = "A cursor or range bound is not RFC 3339, the cursor is half a pair, or a filter names a value that is not listed", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode) and keeps no delivery log", body = super::error::ErrorBody),
+    ),
+)]
+// No `Admin` extractor, for the reason `list_audit` gives: the filter is validated first, so a
+// malformed request answers 400 on a deployment that keeps no log. `delivery_page` resolves the
+// write side itself, after the parse.
+async fn list_notification_deliveries(
+    _guard: RequireManageSystem,
+    Query(q): Query<DeliveryQuery>,
+    State(st): State<ApiState>,
+) -> ApiResult<Json<Vec<crate::notification_log::DeliveryRow>>> {
+    Ok(Json(
+        delivery_page(
+            &st,
+            DeliveryFilterInput {
+                limit: q.limit,
+                before: q.before.as_deref(),
+                before_id: q.before_id,
+                since: q.since.as_deref(),
+                until: q.until.as_deref(),
+                channel: q.channel.as_deref(),
+                result: q.result.as_deref(),
+                side: q.side.as_deref(),
+                event: q.event.as_deref(),
+            },
+        )
+        .await?,
+    ))
+}
+
+/// One entry of the `channel` filter.
+enum ChannelPick {
+    Id(Uuid),
+    DefaultRoute,
+}
+
+/// A page of the delivery log - shared by `GET /api/v1/notification-deliveries` and the MCP
+/// `get_notification_deliveries` tool, so the two cannot validate differently.
+pub(crate) async fn delivery_page(
+    st: &ApiState,
+    input: DeliveryFilterInput<'_>,
+) -> Result<Vec<crate::notification_log::DeliveryRow>, ApiError> {
+    use super::util::ts_param as ts;
+    use crate::notification_log::{
+        DeliveryEvent, DeliveryFilter, DeliveryResult, DeliverySide, DEFAULT_LIMIT,
+    };
+    use crate::stored_enum::{filter_token_list, parse_filter_token};
+
+    let before = super::util::keyset_cursor(input.before, input.before_id, "before")?;
+    let picks = super::util::parse_set(
+        "channel",
+        input.channel,
+        "channel ids or `default`",
+        |t| match t {
+            "default" => Some(ChannelPick::DefaultRoute),
+            _ => Uuid::parse_str(t).ok().map(ChannelPick::Id),
+        },
+    )?;
+    let mut channels = Vec::new();
+    let mut default_route = false;
+    for p in picks {
+        match p {
+            ChannelPick::Id(id) => channels.push(id),
+            ChannelPick::DefaultRoute => default_route = true,
+        }
+    }
+    let filter = DeliveryFilter {
+        before,
+        since: ts(input.since, "since", "invalid_filter")?,
+        until: ts(input.until, "until", "invalid_filter")?,
+        channels,
+        default_route,
+        results: super::util::parse_set(
+            "result",
+            input.result,
+            &filter_token_list(
+                DeliveryResult::ALL,
+                DeliveryResult::Unknown,
+                DeliveryResult::as_str,
+            ),
+            |t| {
+                parse_filter_token(
+                    DeliveryResult::ALL,
+                    DeliveryResult::Unknown,
+                    DeliveryResult::as_str,
+                    t,
+                )
+            },
+        )?,
+        sides: super::util::parse_set(
+            "side",
+            input.side,
+            &filter_token_list(
+                DeliverySide::ALL,
+                DeliverySide::Unknown,
+                DeliverySide::as_str,
+            ),
+            |t| {
+                parse_filter_token(
+                    DeliverySide::ALL,
+                    DeliverySide::Unknown,
+                    DeliverySide::as_str,
+                    t,
+                )
+            },
+        )?,
+        events: super::util::parse_set(
+            "event",
+            input.event,
+            &filter_token_list(
+                DeliveryEvent::ALL,
+                DeliveryEvent::Unknown,
+                DeliveryEvent::as_str,
+            ),
+            |t| {
+                parse_filter_token(
+                    DeliveryEvent::ALL,
+                    DeliveryEvent::Unknown,
+                    DeliveryEvent::as_str,
+                    t,
+                )
+            },
+        )?,
+        limit: input.limit.unwrap_or(DEFAULT_LIMIT),
+    };
+    // Availability after the parse - see `list_notification_deliveries`.
+    let Some(admin) = st.admin.as_ref() else {
+        return Err(ApiError::admin_unavailable());
+    };
+    admin.deliveries.list(&filter).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list notification deliveries",
+            "failed to list the notification delivery log",
+        )
+    })
 }
 
 /// Longest template *source* accepted, per field. Matches the table CHECKs in migration 0063, and
@@ -928,7 +1169,44 @@ mod tests {
             ("PUT", format!("/api/v1/routing-rules/{ID}")),
             ("PUT", format!("/api/v1/routing-rules/{ID}/definition")),
             ("DELETE", format!("/api/v1/routing-rules/{ID}")),
+            ("GET", "/api/v1/notification-deliveries".to_owned()),
         ]
+    }
+
+    /// ADR-195: a malformed delivery-log filter is the caller's bug whether or not this deployment
+    /// keeps a log, so it is a 400 before availability is consulted; a well-formed one on a
+    /// deployment with no write side is a 503, never an empty page.
+    #[tokio::test]
+    async fn the_delivery_log_validates_its_filter_before_saying_it_is_unavailable() {
+        let st = private_state();
+        let token = st
+            .sessions
+            .issue(Uuid::new_v4(), Principal::new(Role::Admin, Scope::All), "a");
+        for bad in [
+            "/api/v1/notification-deliveries?side=elsewhere",
+            "/api/v1/notification-deliveries?result=unknown",
+            "/api/v1/notification-deliveries?channel=not-a-uuid",
+            "/api/v1/notification-deliveries?before=2026-10-04T00:00:00Z",
+            "/api/v1/notification-deliveries?since=yesterday",
+        ] {
+            assert_eq!(
+                status_of(st.clone(), "GET", bad, Some(&token)).await,
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            status_of(
+                st,
+                "GET",
+                &format!(
+                    "/api/v1/notification-deliveries?channel={ID},default&side=remote&event=fire,test"
+                ),
+                Some(&token)
+            )
+            .await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
@@ -1381,6 +1659,44 @@ at 2026-08-04T09:41:07+00:00"
                 "the reason leaked {secret}: {error}"
             );
         }
+
+        // ADR-195: the test is on the delivery log, as a failure on the network's side (the name
+        // does not resolve, so nothing answered), with no secret in it either.
+        let (status, log) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/notification-deliveries?channel={id}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{log}");
+        let rows = log.as_array().expect("a page is an array");
+        assert_eq!(rows.len(), 1, "{log}");
+        let row = &rows[0];
+        assert_eq!(row["event"], "test", "{row}");
+        assert_eq!(row["result"], "failed", "{row}");
+        assert_eq!(row["side"], "network", "{row}");
+        assert_eq!(row["channel_name"], "unreachable", "{row}");
+        assert_eq!(row["channel_kind"], "webhook", "{row}");
+        assert_eq!(row["attempts"], 1, "{row}");
+        for secret in ["s3cr3t-path", "nonexistent.invalid"] {
+            assert!(!log.to_string().contains(secret), "the log leaked {secret}");
+        }
+        // A filter naming no such side is refused, not answered with nothing.
+        let (status, _) = send(
+            &st,
+            "GET",
+            "/api/v1/notification-deliveries?side=elsewhere",
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        // An operator may not read it (ManageSystem).
+        let op = token(&st, yagra_common::Role::Operator);
+        let (status, _) = send(&st, "GET", "/api/v1/notification-deliveries", &op, None).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
 
         let (status, _) = send(
             &st,

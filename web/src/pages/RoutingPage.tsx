@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Notification delivery (Alerts ▸ Notification delivery). Two things: notification
+// Notification delivery (Alerts ▸ Notification delivery). Three things: notification
 // CHANNELS (where alerts can go — webhook/email; the connection config is a secret, sealed
 // server-side and never returned) and routing RULES (which alerts, by severity, fan out to
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;
-// any env-configured channel stays an always-on default route.
+// any env-configured channel stays an always-on default route. The third section is the delivery
+// log (ADR-195, `DeliveryLog.tsx`): what each delivery did, and on whose side a failure was.
 //
 // Data-table standard v2: each list is a section header + toolbar (count + "+ Add …") over the
 // shared `.ytable`. Add via modal; enable/disable is an inline icon toggle; delete confirms in a
 // modal. Channel kind and rule severity are neutral/status chips (categorical vs status).
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -39,7 +40,7 @@ import {
   ROUTING_RULE_FILTER_PREFIX,
   routingRuleFilters,
 } from './routingFilters';
-import { TrashIcon, PowerIcon, EditIcon, BellIcon } from '../components/ui/icons';
+import { TrashIcon, PowerIcon, EditIcon, BellIcon, SearchIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
@@ -51,6 +52,10 @@ import { done, step } from '../lib/submitState';
 import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTest';
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
+import { DeliveryLog } from './DeliveryLog';
+import { DELIVERY_FILTER_PREFIX, deliveryFilters } from './deliveryLogQuery';
+import { specColumns } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
@@ -85,6 +90,16 @@ export function RoutingPage() {
     reload: load,
   } = routing;
 
+  // The delivery log's filters live here rather than in its section so a channel row can narrow
+  // the log to that channel (ADR-195). In the URL under `log.`.
+  const logCols = useMemo(() => specColumns(deliveryFilters(t, channels)), [t, channels]);
+  const logFilters = useFilterParams(logCols, DELIVERY_FILTER_PREFIX);
+  const logRef = useRef<HTMLElement>(null);
+  const showLog = (channelId: string) => {
+    logFilters.setFilters({ ...logFilters.filters, channel: channelId });
+    logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div>
       <PageHeader
@@ -100,6 +115,7 @@ export function RoutingPage() {
           loading={loading}
           onChange={load}
           onError={setError}
+          onShowLog={showLog}
         />
         <RulesSection
           rules={rules}
@@ -109,6 +125,7 @@ export function RoutingPage() {
           onChange={load}
           onError={setError}
         />
+        <DeliveryLog channels={channels} filterState={logFilters} sectionRef={logRef} />
       </LoadGate>
     </div>
   );
@@ -122,12 +139,14 @@ function ChannelsSection({
   loading,
   onChange,
   onError,
+  onShowLog,
 }: {
   channels: NotificationChannel[];
   canSystem: boolean;
   loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
+  onShowLog: (channelId: string) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [adding, setAdding] = useState(false);
@@ -177,8 +196,8 @@ function ChannelsSection({
       {
         key: 'actions',
         header: t('routing.channels.cols.actions'),
-        // Test, template, on/off, delete.
-        width: rowActionsWidth(4),
+        // Test, delivery log, template, on/off, delete.
+        width: rowActionsWidth(5),
         align: 'right',
         render: (c) =>
           canSystem ? (
@@ -189,6 +208,11 @@ function ChannelsSection({
                     label: t('routing.channels.test'),
                     icon: <BellIcon />,
                     onClick: () => setTesting(c),
+                  },
+                  {
+                    label: t('routing.channels.showLog'),
+                    icon: <SearchIcon />,
+                    onClick: () => onShowLog(c.id),
                   },
                   {
                     label: t('routing.channels.template'),
@@ -216,7 +240,8 @@ function ChannelsSection({
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-    // `toggle` is rebuilt every render; listing it would rebuild the columns on every keystroke.
+    // `toggle` and `onShowLog` are rebuilt every render; listing them would rebuild the columns on
+    // every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, canSystem, channels]);
 

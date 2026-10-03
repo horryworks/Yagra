@@ -181,6 +181,7 @@ pub enum Subject {
     EventsMatched,
     EventsUnmatched,
     MonitoringGaps,
+    NotificationDeliveries,
     ReportRuns,
     AnalysisRuns,
     RcaReports,
@@ -292,7 +293,7 @@ pub struct Row {
 
 impl Subject {
     /// Every subject, in the order the UI and the ADR table present them.
-    pub const ALL: [Subject; 16] = [
+    pub const ALL: [Subject; 17] = [
         Subject::AlertHistory,
         Subject::NodeStateSnapshots,
         Subject::DnsChainChanges,
@@ -301,6 +302,7 @@ impl Subject {
         Subject::EventsMatched,
         Subject::EventsUnmatched,
         Subject::MonitoringGaps,
+        Subject::NotificationDeliveries,
         Subject::ReportRuns,
         Subject::AnalysisRuns,
         Subject::RcaReports,
@@ -324,6 +326,7 @@ impl Subject {
             Subject::EventsMatched => "events_matched",
             Subject::EventsUnmatched => "events_unmatched",
             Subject::MonitoringGaps => "monitoring_gaps",
+            Subject::NotificationDeliveries => "notification_deliveries",
             Subject::ReportRuns => "report_runs",
             Subject::AnalysisRuns => "analysis_runs",
             Subject::RcaReports => "rca_reports",
@@ -410,6 +413,15 @@ impl Subject {
                 field: Field::AlertLinkedDays,
                 pruned_from: Some("monitoring_gaps"),
                 note: "Windows in which a poller was offline, so its nodes were unmonitored. On the alert-linked window deliberately: a gap explains why no alert fired, and is only readable beside the history it explains.",
+            },
+            Subject::NotificationDeliveries => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::PgPrune,
+                tunable: Tunable::Settings,
+                field: Field::AlertLinkedDays,
+                pruned_from: Some("notification_deliveries"),
+                note: "One row per notification delivery: whether it arrived and, if not, whether Yagra, the network or the receiving service failed. On the alert-linked window: it explains what an alert did after it fired, and cannot be regenerated.",
             },
             Subject::ReportRuns => Row {
                 subject: self,
@@ -541,6 +553,7 @@ mod tests {
             Subject::EventsMatched,
             Subject::EventsUnmatched,
             Subject::MonitoringGaps,
+            Subject::NotificationDeliveries,
             Subject::ReportRuns,
             Subject::AnalysisRuns,
             Subject::RcaReports,
@@ -635,7 +648,7 @@ mod tests {
     /// Every file that implements a retention prune. Only the haystack for the test below — a file
     /// missing here can only make the search *fail* (loudly, naming the subject), never pass, which
     /// is the safe direction for a hand-maintained list.
-    const PRUNE_SITES: [&str; 10] = [
+    const PRUNE_SITES: [&str; 11] = [
         include_str!("history.rs"),
         // ADR-094 split `repo.rs` by the table each method's SQL names, so the `node_state_snapshots`
         // delete this list wants is in the file for that table. Same shape as the `analysis/` entry
@@ -658,6 +671,7 @@ mod tests {
         // the subject — which is why a hand-maintained list is tolerable at all.
         include_str!("analysis/repo.rs"),
         include_str!("rca/store.rs"),
+        include_str!("notification_log.rs"),
     ];
 
     /// The module doc claims "this module declares the table, and every prune site implements it".
@@ -691,7 +705,7 @@ mod tests {
             checked += 1;
         }
         // A floor, so "the search stopped matching" cannot masquerade as "everything is fine".
-        assert!(checked >= 11, "only {checked} pruned subjects were checked");
+        assert!(checked >= 12, "only {checked} pruned subjects were checked");
     }
 
     /// An unlimited row is a decision, so it has to read like one — a note that does not say *why*

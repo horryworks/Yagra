@@ -11,7 +11,7 @@
   },
   "routing": {
     "unavailable": "Notification delivery is unavailable in skeleton mode.",
-    "note": "Channels are where alerts go; rules pick which alerts (by severity) reach which channels.",
+    "note": "Channels are where alerts go; rules pick which alerts (by severity) reach which channels; the delivery log shows what each delivery did.",
     "channels": {
       "title": "Notification channels",
       "add": "+ Add channel",
@@ -34,7 +34,8 @@
       "searchAria": "Search notification channels",
       "allKinds": "All kinds",
       "kindAria": "Filter by channel kind",
-      "test": "Send test notification"
+      "test": "Send test notification",
+      "showLog": "Show delivery log"
     },
     "rules": {
       "title": "Routing rules",
@@ -318,6 +319,69 @@
         "deliveredAndClosed": "Delivered, and the incident was closed again.",
         "deliveredButOpen": "Delivered, but the incident could not be closed — close it by hand. {{error}}",
         "failed": "Not delivered: {{error}}"
+      }
+    },
+    "log": {
+      "title": "Delivery log",
+      "note": "One row per notification sent to a channel. A failed row says on whose side it failed; open it to see every attempt and what the receiving service answered.",
+      "refresh": "Refresh",
+      "noun_one": "delivery",
+      "noun_other": "deliveries",
+      "empty": "Nothing has been sent yet. Send a test notification from a channel to see a row here.",
+      "defaultRoute": "Default route (environment)",
+      "deletedChannel": "Deleted channel",
+      "deletedChannelOfKind": "Deleted {{kind}} channel",
+      "testSubject": "Test notification",
+      "cols": {
+        "time": "Time",
+        "channel": "Channel",
+        "subject": "About",
+        "event": "Kind",
+        "result": "Result",
+        "side": "Failed at",
+        "status": "Status",
+        "attempts": "Tries",
+        "duration": "Took"
+      },
+      "event": {
+        "fire": "Fired",
+        "resolve": "Resolved",
+        "suppress": "Rolled up",
+        "test": "Test",
+        "test_close": "Test close",
+        "unknown": "Unknown"
+      },
+      "result": {
+        "delivered": "Delivered",
+        "failed": "Failed",
+        "unknown": "Unknown"
+      },
+      "side": {
+        "yagra": "Yagra",
+        "network": "Network",
+        "remote": "Receiving service",
+        "unknown": "Unknown"
+      },
+      "sideExplain": {
+        "yagra": "Yagra stopped before sending: the target address was refused, or the request could not be built. Check the channel settings in Yagra.",
+        "network": "Sent, but nothing answered: a timeout, a refused connection, DNS or TLS. Check the path from Yagra to the service (firewall, proxy, DNS).",
+        "remote": "The receiving service answered and refused. The status and its answer say why — usually a wrong key or URL, or a limit on the service side.",
+        "unknown": "Written by a newer version of Yagra."
+      },
+      "filter": {
+        "allChannels": "All channels",
+        "allEvents": "All kinds",
+        "allResults": "All results",
+        "allSides": "Anywhere"
+      },
+      "detail": {
+        "severity": "Severity:",
+        "error": "Last error:",
+        "response": "The service answered:",
+        "attemptOk": "accepted"
+      },
+      "err": {
+        "load": "failed to load the delivery log"
       }
     }
   },

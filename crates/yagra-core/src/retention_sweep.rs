@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The PostgreSQL retention sweep: nine append-only tables, pruned on the operator's policy
+//! The PostgreSQL retention sweep: ten append-only tables, pruned on the operator's policy
 //! (ADR-040), lifted out of `main.rs::run_fleet_health_timeline` by ADR-083.
 //!
 //! [`crate::retention`] declares *how long* each table is kept and is pure; this is the half that
 //! actually deletes. Keeping them apart is that module's own rule — "this module declares the
 //! table, and every prune site implements it".
 //!
-//! 🚨 **This is nine of the ten PostgreSQL prunes, not all of them.** `report_runs` is pruned by
+//! 🚨 **This is ten of the eleven PostgreSQL prunes, not all of them.** `report_runs` is pruned by
 //! `run_report_scheduler` on its own cadence, and folding it in here would change when it happens.
 //! So do not read this module as "the place retention is enforced" — read it as "the sweep that
-//! rides the fleet-health tick". A tenth table added to `Subject` still has to find a prune site,
+//! rides the fleet-health tick". Another table added to `Subject` still has to find a prune site,
 //! and this one is only the likeliest home, not the guaranteed one.
 //!
 //! **Why it is a function and not its own task.** It runs from the same 300-second tick as the
@@ -25,10 +25,10 @@ use crate::repo::NodeRepo;
 use crate::retention::RetentionSettings;
 use crate::{analysis, dns_check, events, l3, neighbors, rca};
 
-/// The nine stores the sweep deletes from.
+/// The ten stores the sweep deletes from.
 ///
 /// Built once by the caller and reused every tick — the handles are all `Arc`, so this is a
-/// borrow, not a per-tick clone of nine reference counts.
+/// borrow, not a per-tick clone of ten reference counts.
 pub(crate) struct Targets {
     pub repo: Arc<NodeRepo>,
     pub history: Arc<AlertHistoryStore>,
@@ -39,13 +39,14 @@ pub(crate) struct Targets {
     pub analyses: Arc<analysis::AnalysisRepo>,
     pub rca_reports: Arc<rca::store::RcaRepo>,
     pub pollers: Arc<PollerRepo>,
+    pub deliveries: Arc<crate::notification_log::DeliveryLogRepo>,
 }
 
 /// Delete everything past its retention window, warning and continuing on each failure.
 ///
 /// **Every failure is a warning, never a return.** A prune that cannot run leaves rows that will
 /// be picked up on the next tick five minutes later; a prune that aborts the sweep would let one
-/// sick table stop the other eight from ever running, and the symptom would be a disk filling up
+/// sick table stop the other nine from ever running, and the symptom would be a disk filling up
 /// with no error naming the cause.
 ///
 /// `retention` is passed in rather than read here so the caller's read stays where it was — one
@@ -61,6 +62,7 @@ pub(crate) async fn sweep(t: &Targets, retention: &RetentionSettings) {
         analyses,
         rca_reports,
         pollers,
+        deliveries,
     } = t;
     let alert_linked_secs = retention.alert_linked_secs();
     if let Err(e) = repo.prune_state_snapshots(alert_linked_secs).await {
@@ -100,6 +102,11 @@ pub(crate) async fn sweep(t: &Targets, retention: &RetentionSettings) {
     // window nothing can be read against.
     if let Err(e) = pollers.prune_monitoring_gaps(alert_linked_secs).await {
         tracing::warn!(error = %e, "prune monitoring gaps failed");
+    }
+    // The notification delivery log explains what an alert did after it fired, so it is kept as
+    // long as the alerts it explains (`retention::Subject::NotificationDeliveries`, ADR-195).
+    if let Err(e) = deliveries.prune_old(alert_linked_secs).await {
+        tracing::warn!(error = %e, "prune notification delivery log failed");
     }
     // Diagnostic artefacts get their own window (`retention::Subject::AnalysisRuns` /
     // `RcaReports`): both are reproducible by asking again, unlike everything above. Analysis

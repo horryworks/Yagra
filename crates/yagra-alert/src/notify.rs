@@ -110,9 +110,102 @@ impl NotifyChannel for std::sync::Arc<dyn NotifyChannel> {
 /// Errors from a channel.
 #[derive(Debug, Error)]
 pub enum NotifyError {
-    /// Transient or permanent delivery failure (message is channel-specific).
+    /// Transient or permanent delivery failure, with where it happened (ADR-195).
     #[error("delivery failed: {0}")]
-    Delivery(String),
+    Delivery(DeliveryFailure),
+}
+
+impl NotifyError {
+    /// The failure this error carries.
+    #[must_use]
+    pub fn failure(&self) -> &DeliveryFailure {
+        match self {
+            Self::Delivery(f) => f,
+        }
+    }
+
+    /// The failure this error carries, by value.
+    #[must_use]
+    pub fn into_failure(self) -> DeliveryFailure {
+        match self {
+            Self::Delivery(f) => f,
+        }
+    }
+}
+
+impl From<DeliveryFailure> for NotifyError {
+    fn from(f: DeliveryFailure) -> Self {
+        Self::Delivery(f)
+    }
+}
+
+/// Where a delivery failed (ADR-195 decision 1) - the question an operator asks first: is this
+/// Yagra's problem, or the receiving service's?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureSide {
+    /// Stopped before anything was sent: the target address was refused, or the request or the
+    /// message could not be built.
+    Yagra,
+    /// Sent, but no answer came back: a timeout, a refused connection, DNS, TLS.
+    Network,
+    /// The receiving service answered and refused: an HTTP status outside 2xx, an SMTP reply code.
+    Remote,
+}
+
+/// One failed delivery attempt, as an operator may read it (ADR-195).
+///
+/// `message` and `response` must already be free of the channel's secrets: the channel builds
+/// them, and the channel is the only party that knows which strings are secret.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub struct DeliveryFailure {
+    /// Where it failed.
+    pub side: FailureSide,
+    /// The status the remote answered with (HTTP, or the SMTP reply code), when it answered.
+    pub status: Option<u16>,
+    /// What went wrong, in one line.
+    pub message: String,
+    /// The start of what the remote answered, when it sent a body.
+    pub response: Option<String>,
+}
+
+impl DeliveryFailure {
+    /// A failure before anything was sent.
+    #[must_use]
+    pub fn yagra(message: impl Into<String>) -> Self {
+        Self {
+            side: FailureSide::Yagra,
+            status: None,
+            message: message.into(),
+            response: None,
+        }
+    }
+
+    /// A failure on the way to the remote: nothing answered.
+    #[must_use]
+    pub fn network(message: impl Into<String>) -> Self {
+        Self {
+            side: FailureSide::Network,
+            status: None,
+            message: message.into(),
+            response: None,
+        }
+    }
+
+    /// The remote answered and refused.
+    #[must_use]
+    pub fn remote(
+        status: Option<u16>,
+        message: impl Into<String>,
+        response: Option<String>,
+    ) -> Self {
+        Self {
+            side: FailureSide::Remote,
+            status,
+            message: message.into(),
+            response,
+        }
+    }
 }
 
 /// Retry behaviour for a flaky channel.
@@ -142,6 +235,31 @@ pub enum DispatchOutcome {
     Suppressed,
     /// All retries exhausted without success.
     Failed { attempts: u32 },
+}
+
+/// One call to the channel inside a dispatch (ADR-195 decision 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attempt {
+    /// How long the channel took to answer, backoff excluded.
+    pub duration: Duration,
+    /// Why it failed, or `None` when it succeeded.
+    pub failure: Option<DeliveryFailure>,
+}
+
+/// What one dispatch did: the outcome, and every call it made to reach it. Empty `attempts` means
+/// the channel was never called (a suppressed duplicate).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchReport {
+    pub outcome: DispatchOutcome,
+    pub attempts: Vec<Attempt>,
+}
+
+impl DispatchReport {
+    /// The last failure, which is the one that decided a `Failed` outcome.
+    #[must_use]
+    pub fn last_failure(&self) -> Option<&DeliveryFailure> {
+        self.attempts.iter().rev().find_map(|a| a.failure.as_ref())
+    }
 }
 
 /// Dedups and delivers notifications over a channel, applying the retry policy.
@@ -177,31 +295,29 @@ impl<C: NotifyChannel> Dispatcher<C> {
     }
 
     /// Dispatch a notification: suppress duplicates of active alerts, else deliver with retry.
-    pub async fn dispatch(&self, notification: Notification) -> DispatchOutcome {
+    pub async fn dispatch(&self, notification: Notification) -> DispatchReport {
         let mut active = self.active.lock().await;
         if active.contains(&notification.dedup_key) {
-            return DispatchOutcome::Suppressed;
+            return DispatchReport {
+                outcome: DispatchOutcome::Suppressed,
+                attempts: Vec::new(),
+            };
         }
-        match self.deliver_with_retry(&notification, false).await {
-            Ok(attempts) => {
-                active.insert(notification.dedup_key.clone());
-                DispatchOutcome::Delivered { attempts }
-            }
-            Err(attempts) => DispatchOutcome::Failed { attempts },
+        let report = self.deliver_with_retry(&notification, false).await;
+        if matches!(report.outcome, DispatchOutcome::Delivered { .. }) {
+            active.insert(notification.dedup_key.clone());
         }
+        report
     }
 
     /// Clear the dedup state and deliver the resolve with the retry policy. The resolve is
     /// delivered even when the key wasn't locally active — core may have restarted since the
     /// fire, and PagerDuty/JSM resolves are idempotent — so a remote incident is never left
     /// dangling open.
-    pub async fn dispatch_resolve(&self, notification: Notification) -> DispatchOutcome {
+    pub async fn dispatch_resolve(&self, notification: Notification) -> DispatchReport {
         let mut active = self.active.lock().await;
         active.remove(&notification.dedup_key);
-        match self.deliver_with_retry(&notification, true).await {
-            Ok(attempts) => DispatchOutcome::Delivered { attempts },
-            Err(attempts) => DispatchOutcome::Failed { attempts },
-        }
+        self.deliver_with_retry(&notification, true).await
     }
 
     /// Mark an alert resolved so the next occurrence notifies again.
@@ -212,28 +328,51 @@ impl<C: NotifyChannel> Dispatcher<C> {
         self.active.lock().await.remove(dedup_key);
     }
 
+    /// Deliver with the retry policy, keeping every attempt's result (ADR-195 decision 3). The
+    /// failure used to be matched as `Err(_)` and dropped here, which is why nothing downstream
+    /// could say why a page did not arrive.
     async fn deliver_with_retry(
         &self,
         notification: &Notification,
         resolve: bool,
-    ) -> Result<u32, u32> {
+    ) -> DispatchReport {
         let max = self.policy.max_attempts.max(1);
+        let mut attempts = Vec::new();
         for attempt in 1..=max {
+            let started = std::time::Instant::now();
             let result = if resolve {
                 self.channel.deliver_resolve(notification).await
             } else {
                 self.channel.deliver(notification).await
             };
+            let duration = started.elapsed();
             match result {
-                Ok(()) => return Ok(attempt),
-                Err(_) if attempt < max => {
-                    let backoff = self.policy.base_backoff_ms * (1u64 << (attempt - 1));
-                    tokio::time::sleep(Duration::from_millis(backoff)).await;
+                Ok(()) => {
+                    attempts.push(Attempt {
+                        duration,
+                        failure: None,
+                    });
+                    return DispatchReport {
+                        outcome: DispatchOutcome::Delivered { attempts: attempt },
+                        attempts,
+                    };
                 }
-                Err(_) => return Err(attempt),
+                Err(e) => {
+                    attempts.push(Attempt {
+                        duration,
+                        failure: Some(e.into_failure()),
+                    });
+                    if attempt < max {
+                        let backoff = self.policy.base_backoff_ms * (1u64 << (attempt - 1));
+                        tokio::time::sleep(Duration::from_millis(backoff)).await;
+                    }
+                }
             }
         }
-        Err(max)
+        DispatchReport {
+            outcome: DispatchOutcome::Failed { attempts: max },
+            attempts,
+        }
     }
 }
 
@@ -255,7 +394,7 @@ mod tests {
         async fn deliver(&self, _n: &Notification) -> Result<(), NotifyError> {
             let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= self.fail_first {
-                Err(NotifyError::Delivery("transient".into()))
+                Err(DeliveryFailure::network("transient").into())
             } else {
                 Ok(())
             }
@@ -298,7 +437,7 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch(notification()).await,
+            d.dispatch(notification()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -315,7 +454,7 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch(notification()).await,
+            d.dispatch(notification()).await.outcome,
             DispatchOutcome::Delivered { attempts: 3 }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 3);
@@ -332,10 +471,47 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch(notification()).await,
+            d.dispatch(notification()).await.outcome,
             DispatchOutcome::Failed { attempts: 3 }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// ADR-195 decision 3: the reason each attempt failed reaches the caller, rather than being
+    /// matched as `Err(_)` and dropped - which is what left an operator unable to tell whose
+    /// problem a missing page was.
+    #[tokio::test]
+    async fn every_attempt_keeps_why_it_failed() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 2,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        let report = d.dispatch(notification()).await;
+        assert_eq!(report.outcome, DispatchOutcome::Delivered { attempts: 3 });
+        assert_eq!(report.attempts.len(), 3);
+        let sides: Vec<_> = report
+            .attempts
+            .iter()
+            .map(|a| a.failure.as_ref().map(|f| f.side))
+            .collect();
+        assert_eq!(
+            sides,
+            vec![Some(FailureSide::Network), Some(FailureSide::Network), None]
+        );
+        assert_eq!(report.last_failure().unwrap().message, "transient");
+
+        // A suppressed duplicate never called the channel, so it has no attempts to show.
+        let again = d.dispatch(notification()).await;
+        assert_eq!(again.outcome, DispatchOutcome::Delivered { attempts: 1 });
+        let n = notification();
+        d.dispatch(n.clone()).await;
+        let dup = d.dispatch(n).await;
+        assert_eq!(dup.outcome, DispatchOutcome::Suppressed);
+        assert!(dup.attempts.is_empty());
     }
 
     /// A lifecycle-aware channel counting trigger and resolve deliveries separately.
@@ -356,7 +532,7 @@ mod tests {
         async fn deliver_resolve(&self, _n: &Notification) -> Result<(), NotifyError> {
             let n = self.resolves.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= self.resolve_fail_first {
-                Err(NotifyError::Delivery("transient".into()))
+                Err(DeliveryFailure::network("transient").into())
             } else {
                 Ok(())
             }
@@ -376,7 +552,7 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch_resolve(notification()).await,
+            d.dispatch_resolve(notification()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -396,17 +572,17 @@ mod tests {
         );
         let n = notification();
         assert_eq!(
-            d.dispatch(n.clone()).await,
+            d.dispatch(n.clone()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(
-            d.dispatch_resolve(n.clone()).await,
+            d.dispatch_resolve(n.clone()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(resolves.load(Ordering::SeqCst), 1);
         // Dedup cleared by the resolve: the next fire pages again.
         assert_eq!(
-            d.dispatch(n).await,
+            d.dispatch(n).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(triggers.load(Ordering::SeqCst), 2);
@@ -426,7 +602,7 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch_resolve(notification()).await,
+            d.dispatch_resolve(notification()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(resolves.load(Ordering::SeqCst), 1);
@@ -444,7 +620,7 @@ mod tests {
             no_backoff(),
         );
         assert_eq!(
-            d.dispatch_resolve(notification()).await,
+            d.dispatch_resolve(notification()).await.outcome,
             DispatchOutcome::Delivered { attempts: 3 }
         );
         assert_eq!(resolves.load(Ordering::SeqCst), 3);
@@ -462,17 +638,20 @@ mod tests {
         );
         let n = notification();
         assert_eq!(
-            d.dispatch(n.clone()).await,
+            d.dispatch(n.clone()).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         // Same dedup key again → suppressed, channel not called.
-        assert_eq!(d.dispatch(n.clone()).await, DispatchOutcome::Suppressed);
+        assert_eq!(
+            d.dispatch(n.clone()).await.outcome,
+            DispatchOutcome::Suppressed
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // After resolve, it notifies again.
         d.mark_resolved(&n.dedup_key).await;
         assert_eq!(
-            d.dispatch(n).await,
+            d.dispatch(n).await.outcome,
             DispatchOutcome::Delivered { attempts: 1 }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2);

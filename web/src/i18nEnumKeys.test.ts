@@ -23,6 +23,9 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIT_ACTIONS,
   AUDIT_STATUS_CLASSES,
+  DELIVERY_EVENTS,
+  DELIVERY_RESULTS,
+  DELIVERY_SIDES,
   DIRECTIONS,
   FORWARD_DEST_KINDS,
   FORWARD_FILTER_MODES,
@@ -1385,5 +1388,15 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('unsupported template', locales, `${p}unsupported.`, UNSUPPORTED_REASONS);
     expectKeys('edit mode', locales, `${p}mode.`, ['visual', 'code']);
     expectKeys('field hint', locales, p, ['subjectHint.jsm', 'subjectHint.email', 'bodyHint.jsm', 'bodyHint.email']);
+  });
+
+  it('every delivery-log kind, result and side has its words (alertsConfig:routing.log.*)', () => {
+    // ADR-195. The badge, the filter options and the row's explanation are built from the token the
+    // server sent, so a fourth side added in Rust would ship as a raw key in both locales.
+    const locales = { en: enAlertsConfig, ja: jaAlertsConfig };
+    expectKeys('delivery event', locales, 'routing.log.event.', DELIVERY_EVENTS);
+    expectKeys('delivery result', locales, 'routing.log.result.', DELIVERY_RESULTS);
+    expectKeys('delivery side', locales, 'routing.log.side.', DELIVERY_SIDES);
+    expectKeys('delivery side explanation', locales, 'routing.log.sideExplain.', DELIVERY_SIDES);
   });
 });

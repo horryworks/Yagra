@@ -445,6 +445,7 @@
         "neighbor_changes": "隣接の変更",
         "l3_changes": "インターフェースアドレスの変更",
         "monitoring_gaps": "監視の空白",
+        "notification_deliveries": "通知の配信ログ",
         "analysis_runs": "解析の実行",
         "rca_reports": "AI 根本原因レポート",
         "interfaces": "インターフェース対応表"

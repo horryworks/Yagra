@@ -56,6 +56,7 @@ import {
 } from '../pages/monitoringConfigFilters';
 import { pollerFilters } from '../pages/pollerFilters';
 import { channelFilters, routingRuleFilters } from '../pages/routingFilters';
+import { DELIVERY_FILTER_PREFIX, deliveryFilters } from '../pages/deliveryLogQuery';
 import { muteFilters, windowFilters } from '../pages/suppressionFilters';
 import { thresholdFilters } from '../pages/thresholdQuery';
 import { userFilters } from '../pages/userFilters';
@@ -236,6 +237,11 @@ const REGISTRY: readonly Entry[] = [
     build: () => specColumns(routingRuleFilters(t, none)),
   },
   {
+    module: 'pages/deliveryLogQuery.ts',
+    name: 'deliveryFilters',
+    build: () => specColumns(deliveryFilters(t, [])),
+  },
+  {
     module: 'pages/suppressionFilters.ts',
     name: 'muteFilters',
     build: () => specColumns(muteFilters(t, none, 0)),
@@ -403,6 +409,11 @@ const ROUTES: readonly Route[] = [
         entries: ['routingRuleFilters'],
         prefix: ROUTING_RULE_FILTER_PREFIX,
         wiredIn: { file: 'pages/RoutingPage.tsx', spelling: 'ROUTING_RULE_FILTER_PREFIX' },
+      },
+      {
+        entries: ['deliveryFilters'],
+        prefix: DELIVERY_FILTER_PREFIX,
+        wiredIn: { file: 'pages/RoutingPage.tsx', spelling: 'DELIVERY_FILTER_PREFIX' },
       },
     ],
   },

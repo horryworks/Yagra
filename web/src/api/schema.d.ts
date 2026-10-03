@@ -3266,6 +3266,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The notification delivery log (ADR-195): one row per delivery, newest first, saying whether it
+         *     arrived and, when it did not, whether Yagra, the network or the receiving service failed.
+         * @description A failed row carries the status the receiving service answered with and the start of its
+         *     answer, with the channel's URL, host and key replaced by `<redacted>`.
+         */
+        get: operations["list_notification_deliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/openapi.json": {
         parameters: {
             query?: never;
@@ -7025,6 +7047,92 @@ export interface components {
         DashboardSaved: {
             ok: boolean;
         };
+        /** @description One call to the channel inside a delivery. */
+        DeliveryAttempt: {
+            /**
+             * Format: int64
+             * @description How long the channel took to answer, in milliseconds.
+             */
+            duration_ms: number;
+            /** @description Why it failed, in one line. */
+            error?: string | null;
+            side?: null | components["schemas"]["DeliverySide"];
+            /**
+             * Format: int32
+             * @description The status the receiving service answered with, when it answered.
+             */
+            status?: number | null;
+        };
+        /**
+         * @description What a delivery was for.
+         * @enum {string}
+         */
+        DeliveryEvent: "fire" | "resolve" | "suppress" | "test" | "test_close" | "unknown";
+        /**
+         * @description Whether a delivery arrived.
+         * @enum {string}
+         */
+        DeliveryResult: "delivered" | "failed" | "unknown";
+        /** @description One row of the delivery log (API shape). */
+        DeliveryRow: {
+            /** @description When the delivery started (RFC 3339). The first half of the paging cursor. */
+            at: string;
+            /** @description Every call made to the channel, oldest first. */
+            attempt_log: components["schemas"]["DeliveryAttempt"][];
+            /**
+             * Format: int32
+             * @description How many calls were made to the channel.
+             */
+            attempts: number;
+            /**
+             * Format: uuid
+             * @description The channel, or absent for the environment default route.
+             */
+            channel_id?: string | null;
+            channel_kind?: null | components["schemas"]["ChannelKind"];
+            /** @description The channel's current name; absent for the default route and for a deleted channel. */
+            channel_name?: string | null;
+            /**
+             * Format: int64
+             * @description Wall time for the whole delivery, retries and backoff included, in milliseconds.
+             */
+            duration_ms: number;
+            /** @description Why the last attempt failed. Never contains the channel's URL or key. */
+            error?: string | null;
+            event: components["schemas"]["DeliveryEvent"];
+            /**
+             * Format: int64
+             * @description Row id; the second half of the paging cursor.
+             */
+            id: number;
+            /**
+             * Format: uuid
+             * @description The node the alert was about, when it was about one.
+             */
+            node_id?: string | null;
+            /**
+             * @description The start of what the receiving service answered (at most 512 characters), with the
+             *     channel's URL, host and key replaced by `<redacted>`.
+             */
+            response?: string | null;
+            result: components["schemas"]["DeliveryResult"];
+            severity?: null | components["schemas"]["Severity"];
+            side?: null | components["schemas"]["DeliverySide"];
+            /**
+             * Format: int32
+             * @description The status of the last failed attempt, when the receiving service answered.
+             */
+            status?: number | null;
+            /** @description The alert's subject as stored: a node UUID, `pool:<name>`, `meraki_org:<id>`, or `test`. */
+            subject: string;
+            /** @description The subject's display name, when it was known at delivery time. */
+            subject_name?: string | null;
+        };
+        /**
+         * @description Where a failed delivery failed.
+         * @enum {string}
+         */
+        DeliverySide: "yagra" | "network" | "remote" | "unknown";
         /**
          * @description Reachability of one backing dependency. Carries only a boolean and a human label — no connection
          *     strings, no secrets.
@@ -27020,6 +27128,93 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_notification_deliveries: {
+        parameters: {
+            query?: {
+                /** @description Max rows (1–500, default 100). */
+                limit?: number;
+                /**
+                 * @description Keyset cursor, first half: the last row's `at`, as an RFC 3339 timestamp. Send with
+                 *     `before_id`.
+                 */
+                before?: string;
+                /** @description Keyset cursor, second half: the same row's `id`. */
+                before_id?: number;
+                /** @description Only deliveries at or after this RFC 3339 timestamp. */
+                since?: string;
+                /** @description Only deliveries at or before this RFC 3339 timestamp. */
+                until?: string;
+                /**
+                 * @description Comma-separated channel ids, and/or `default` for the environment default route. Empty or
+                 *     absent means every channel.
+                 */
+                channel?: string;
+                /** @description Comma-separated results (`delivered`, `failed`); empty or absent means both. */
+                result?: string;
+                /**
+                 * @description Comma-separated sides a failure happened on (`yagra`, `network`, `remote`); empty or absent
+                 *     means every side. A delivered row has no side, so naming any side excludes it.
+                 */
+                side?: string;
+                /**
+                 * @description Comma-separated kinds (`fire`, `resolve`, `suppress`, `test`, `test_close`); empty or
+                 *     absent means every kind.
+                 */
+                event?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of deliveries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryRow"][];
+                };
+            };
+            /** @description A cursor or range bound is not RFC 3339, the cursor is half a pair, or a filter names a value that is not listed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) and keeps no delivery log */
             503: {
                 headers: {
                     [name: string]: unknown;

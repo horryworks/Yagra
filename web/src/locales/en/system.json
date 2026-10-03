@@ -456,6 +456,7 @@
         "neighbor_changes": "Neighbor changes",
         "l3_changes": "Interface address changes",
         "monitoring_gaps": "Monitoring gaps",
+        "notification_deliveries": "Notification delivery log",
         "analysis_runs": "Analysis runs",
         "rca_reports": "AI root-cause reports",
         "interfaces": "Interface map"
