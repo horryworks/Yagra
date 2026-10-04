@@ -20,6 +20,20 @@ test('every row action on Notification delivery can be pressed', async ({ page }
   expect(report.buttons).toBe(8);
 });
 
+// Refresh used to write the same filters back to the URL. The query string did not change, so
+// `useSearchParams` returned the same object and the log was never asked again. If it regresses,
+// `waitForRequest` times out instead of passing on nothing.
+test('Refresh on the delivery log asks the server again', async ({ page }) => {
+  const first = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
+  await page.goto('/alerts/routing');
+  await first;
+  const section = page.locator('.routing-log-section');
+  await expect(section).toBeVisible();
+  const again = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
+  await section.getByRole('button', { name: 'Refresh' }).click();
+  await again;
+});
+
 test('a routing rule opens for editing with its own values', async ({ page }) => {
   await page.goto('/alerts/routing');
   const ruleRow = page.locator('.routing-rules-section .dt-row').first();

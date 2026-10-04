@@ -196,7 +196,8 @@ pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
 
 /// The draft the template editor opens a JSM or email channel on: [`subject`] for a node alert,
 /// written as a template (ADR-194 decision 6). Rendering it gives exactly what [`subject`] gives —
-/// `the_text_subject_template_renders_the_text_subject` pins the two together.
+/// `alerts/notify.rs::every_builtin_subject_template_renders_the_builtin_subject` pins the two
+/// together.
 #[must_use]
 pub(crate) const fn node_subject_template(event: NotifyEvent) -> &'static str {
     match event {

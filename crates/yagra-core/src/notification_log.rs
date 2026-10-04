@@ -97,7 +97,10 @@ pub enum DeliverySide {
     /// The receiving service answered and refused: an HTTP status outside 2xx, or an SMTP reply
     /// code. `status` and usually `response` say why.
     Remote,
-    /// Written by a newer core with a side this one does not know.
+    /// Written by a newer core with a side this one does not know. `serde(other)` because the
+    /// side is also read back through serde inside `attempt_log` (JSONB): without it, one
+    /// unfamiliar side would empty that row's whole attempt log.
+    #[serde(other)]
     Unknown,
 }
 
@@ -314,7 +317,7 @@ impl DeliveryLogRepo {
         Self { pool }
     }
 
-    /// Insert a batch. 15 columns × [`WRITE_BATCH_MAX`] stays far under PostgreSQL's
+    /// Insert a batch. 16 columns ×[`WRITE_BATCH_MAX`] stays far under PostgreSQL's
     /// 65,535-parameter ceiling.
     pub(crate) async fn insert(&self, records: &[DeliveryRecord]) -> anyhow::Result<u64> {
         if records.is_empty() {
@@ -510,6 +513,13 @@ mod tests {
         for v in DeliverySide::ALL {
             assert_eq!(serde_json::to_value(v).unwrap(), v.as_str(), "{v:?}");
         }
+    }
+
+    /// A side written by a newer core reads as `Unknown` instead of failing the attempt log.
+    #[test]
+    fn an_unfamiliar_side_reads_as_unknown() {
+        let side: DeliverySide = serde_json::from_value(serde_json::json!("printer")).unwrap();
+        assert_eq!(side, DeliverySide::Unknown);
     }
 
     /// A failed row carries the failure that decided it: the last one.

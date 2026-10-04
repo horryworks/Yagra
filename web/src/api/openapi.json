@@ -16184,7 +16184,7 @@
           "notifications"
         ],
         "summary": "Send one test notification through a channel, now (ADR-192).",
-        "description": "The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at\nthe start of the subject and `\"test\": true` in the built-in JSON body. Sent once, with no retry.\nA PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once\nand nothing is left open. Works on a disabled channel, so one can be checked before it is\nswitched on.",
+        "description": "The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at\nthe start of the subject. A webhook or PagerDuty body also carries `\"test\": true`; a JSM or\nemail body, which is text, starts with a line saying it is a test. Sent once, with no retry,\nand recorded in the delivery log like any other delivery.\nA PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once\nand nothing is left open. Works on a disabled channel, so one can be checked before it is\nswitched on.",
         "operationId": "test_notification_channel",
         "parameters": [
           {

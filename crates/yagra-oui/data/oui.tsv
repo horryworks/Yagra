@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-02
-# counts: MA-L=40179 MA-L-repeats-dropped=3 MA-M=6536 MA-S=7180 withheld=3
+# fetched: 2026-10-04
+# counts: MA-L=40188 MA-L-repeats-dropped=3 MA-M=6540 MA-S=7181 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -19256,6 +19256,7 @@
 2CD2E7	Nokia Corporation
 2CD3AD	Texas Instruments
 2CD444	FUJITSU LIMITED
+2CD748	Itron Inc
 2CD7FF	LANCOM Systems GmbH
 2CD8AE	Shenzhen SEI Robotics Co.,Ltd
 2CD8DE	AltoBeam Inc.
@@ -19338,6 +19339,7 @@
 30074D	SAMSUNG ELECTRO-MECHANICS(THAILAND)
 30075C	Netis Technology Co., Ltd.
 3007A3	Shenzhen Skyworth Digital Technology CO., Ltd
+3007EB	Xiaomi Communications Co Ltd
 30084D	Trumpf Hüttinger
 300916	Apple, Inc.
 3009C0	Motorola Mobility LLC, a Lenovo Company
@@ -20002,6 +20004,7 @@
 3438AF	Inlab Networks GmbH
 3438B7	HUMAX Co., Ltd.
 343916	Google, Inc.
+343932	Xiaomi Communications Co Ltd
 343A20	Hewlett Packard Enterprise
 343C30	NXP Semiconductor (Tianjin) LTD.
 343D7F	Klipsch Group, Inc.
@@ -23369,9 +23372,13 @@
 4C8120	Taicang T&W Electronics
 4C8125	ZOWEE TECHNOLOGY(HEYUAN)Co.,Ltd
 4C81BE	IEEE Registration Authority
+4C81BE2	Annapurna labs
 4C81BE4	Suzhou APAQI Robotics Technology Co., Ltd.
+4C81BE5	Pratap digital communications pvt ltd
 4C81BE6	Shenzhen Ultra Meta Industrial Control Technology Co.,Ltd.
 4C81BE7	Renson NV
+4C81BE9	Shenzhen Jooan Technology Co., Ltd
+4C81BEA	Shenzhen Sinevolt Technology Co., Ltd
 4C81BEB	Guangdong Lidun New Energy Technology Co., Ltd.
 4C81BEC	Shenzhen Huiqincai Network Communication Co., Ltd.
 4C820C	Apple, Inc.
@@ -25168,6 +25175,7 @@
 58DB8D	Fast Co., Ltd.
 58DC6D	Exceptional Innovation, Inc.
 58DF59	Cisco Systems, Inc
+58DFA5	RUIYI(HK)TELECOMMUNICATION TECHNOLOGIES LIMITED
 58E02C	Micro Technic A/S
 58E16C	Ying Hua Information Technology (Shanghai)Co., LTD
 58E28F	Apple, Inc.
@@ -26350,6 +26358,7 @@
 641ABA	Dryad Networks GmbH
 641B2F	Samsung Electronics Co.,Ltd
 641B85	Vantiva USA LLC
+641BB7	ITEL MOBILE LIMITED
 641C10	Texas Instruments
 641C67	DIGIBRAS INDUSTRIA DO BRASILS/A
 641CAE	Samsung Electronics Co.,Ltd
@@ -27691,6 +27700,7 @@
 6CCB7F	GD Midea Air-Conditioning Equipment Co.,Ltd.
 6CCDD6	NETGEAR
 6CCE44	1MORE
+6CCF36	VISIONOX TECHNOLOGY,INC.
 6CCF39	Shanghai StarFive Semiconductor Co., Ltd.
 6CD008	zte corporation
 6CD032	LG Electronics
@@ -35438,6 +35448,7 @@
 88665A	Apple, Inc.
 8866A5	Apple, Inc.
 886746	eero inc.
+886770	Huizhou Desay SV Automotive Co.,ltd
 8867DC	HUAWEI TECHNOLOGIES CO.,LTD
 88684B	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD
 88685C	Shenzhen ChuangDao & Perpetual Eternal Technology Co.,Ltd
@@ -36236,6 +36247,7 @@
 8C1F64235	Marson Technology Co., Ltd.
 8C1F64237	MB connect line GmbH
 8C1F64239	SHEKEL SCALES 2008 LTD
+8C1F6423C	Weltek Technologies Co. Ltd.
 8C1F6423D	Mokila Networks Pvt Ltd
 8C1F6423E	Quantum Blockchains Sp. z o.o.
 8C1F64240	HuiTong intelligence Company
@@ -43464,6 +43476,7 @@ B009D3	Avizia
 B009DA	Ring Solutions
 B00AD5	zte corporation
 B00B22	Huawei Device Co., Ltd.
+B00BE2	Xiaomi Communications Co Ltd
 B00C9D	Quectel Wireless Solutions Co.,Ltd.
 B00CD1	Hewlett Packard
 B01041	Hon Hai Precision Ind. Co.,Ltd.
@@ -46876,6 +46889,7 @@ C89F1A	HUAWEI TECHNOLOGIES CO.,LTD
 C89F1D	SHENZHEN COMMUNICATION TECHNOLOGIES CO.,LTD
 C89F42	VDII Innovation AB
 C8A030	Texas Instruments
+C8A162	DJI BAIWANG TECHNOLOGY CO LTD
 C8A1B6	Shenzhen Longway Technologies Co., Ltd
 C8A1BA	Neul Ltd
 C8A1DC	Motorola Mobility LLC, a Lenovo Company

@@ -191,6 +191,9 @@ export function DeliveryLog({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  // Refresh re-reads the log without touching the URL: writing the same filters back is the same
+  // query string, which `useSearchParams` hands back as the same object, so nothing would refetch.
+  const [reloadNonce, setReloadNonce] = useState(0);
   // DataTable fires onReachEnd on every render while the last row is in view; one request at a time.
   const loadingMore = useRef(false);
 
@@ -221,7 +224,7 @@ export function DeliveryLog({
     return () => {
       cancelled = true;
     };
-  }, [filterCols, filters, nowMs, t]);
+  }, [filterCols, filters, nowMs, t, reloadNonce]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || cursor === null) return;
@@ -238,7 +241,7 @@ export function DeliveryLog({
       });
   }, [cursor, filterCols, filters, nowMs, t]);
 
-  const reload = () => setFilters({ ...filters });
+  const reload = () => setReloadNonce((n) => n + 1);
 
   return (
     <section className="routing-log-section" ref={sectionRef}>

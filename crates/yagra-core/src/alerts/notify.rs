@@ -1633,8 +1633,8 @@ struct Delivered<'a> {
 /// `for_channel` carries every field it does not rewrite through from the built-in — so doing it
 /// here means the tags reach a templated channel and an untemplated one identically.
 ///
-/// `None` facts is the ordinary case on a deployment with no PagerDuty or JSM channel and no
-/// template: nothing is resolved, so there is nothing to hang.
+/// `None` facts is the ordinary case on a deployment with no PagerDuty, JSM or email channel and
+/// no template: nothing is resolved, so there is nothing to hang.
 fn with_subject_facts(n: Notification, facts: Option<&AlertFacts>) -> Notification {
     match facts {
         Some(f) => n
@@ -1746,7 +1746,8 @@ pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notific
 
 /// The built-in subject of a **node** alert, written as a notification template (ADR-039 Inc.2).
 ///
-/// The editor opens a channel that has no template on this text, as a draft the operator can edit,
+/// The editor opens a webhook or PagerDuty channel that has no template on this text, as a draft
+/// the operator can edit (JSM and email open on `notify_text::node_subject_template`),
 /// so they start from what is sent today instead of an empty field. It is served rather than copied
 /// into the WebUI because the wording lives in [`builtin_notification`]'s `format!`s, and a second
 /// copy in another language would drift from it with nothing to notice.

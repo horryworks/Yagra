@@ -41,6 +41,7 @@ export const RETENTION_SUBJECTS = [
   'events_matched',
   'events_unmatched',
   'monitoring_gaps',
+  'notification_deliveries',
   'report_runs',
   'analysis_runs',
   'rca_reports',

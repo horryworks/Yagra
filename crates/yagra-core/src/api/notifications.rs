@@ -438,7 +438,9 @@ pub(super) struct ChannelTestResult {
 /// Send one test notification through a channel, now (ADR-192).
 ///
 /// The template preview's sample alert, rendered with this channel's template, with `[TEST] ` at
-/// the start of the subject and `"test": true` in the built-in JSON body. Sent once, with no retry.
+/// the start of the subject. A webhook or PagerDuty body also carries `"test": true`; a JSM or
+/// email body, which is text, starts with a line saying it is a test. Sent once, with no retry,
+/// and recorded in the delivery log like any other delivery.
 /// A PagerDuty or JSM channel then closes the incident it opened, so the on-call is notified once
 /// and nothing is left open. Works on a disabled channel, so one can be checked before it is
 /// switched on.
