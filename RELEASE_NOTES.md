@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.44 — A notification delivery log says whether each delivery arrived, and JSM and email notifications read as text
+
 ### Breaking changes
 
 - **A JSM or email channel with no template now sends text a person can read, not the alert as JSON.** The title names the device instead of its id — `core-sw-01 (192.0.2.11) is critical: cpu_util_pct` where it used to be `node 6f1c… is critical` — and the body (JSM's description, the email body) is the title followed by one fact per line: node, folder, profile, metric with its value and threshold, port or row, severity, state, since when, tags, what it was rolled up under, the alert key and the node id. A JSM rule or a mail filter that matched the old title, or anything that parsed the JSON out of an email, has to change. Webhook and PagerDuty are unchanged, byte for byte, and so is the environment default route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`), whose webhook and email share one message. A template that cannot be used now falls back to this text on JSM and email. (ADR-194)
