@@ -336,31 +336,31 @@
     "netHeadline": "In {{rx}} / Out {{tx}}",
     "axisIn": "IN",
     "axisOut": "OUT",
-    "netNote": "Sent above the line, received below — the same way up as the Interface traffic widget. Core ⇄ poller counts message contents only, so protocol and TLS overhead lands in Other. For a component running in a container, this is that container's own traffic, not the host's."
+    "net": {
+      "info": "Core ⇄ poller counts message contents only, so protocol and TLS overhead lands in Other. In a container, this is the container's own traffic, not the host's."
+    }
   },
   "supportBundle": {
     "title": "Take a bundle",
-    "contents": "Everything inside is JSON or plain text, MANIFEST.json lists what is carried and what is deliberately left out, and a redaction scan aborts the export rather than releasing a secret. Read it before sending it anywhere.",
     "window": "Log window",
     "windowHours_one": "Last hour",
     "windowHours_other": "Last {{count}} hours",
     "node": "About one node",
     "nodeAny": "Whole deployment",
-    "nodeHelp": "Pick a node to also carry its interfaces, what it collects, which metrics are arriving, and its alerts.",
     "action": "Download bundle",
     "busy": "Collecting…",
     "done": "Downloaded {{file}} ({{size}}).",
-    "err": "The support bundle could not be produced."
+    "err": "The support bundle could not be produced.",
+    "info": "MANIFEST.json inside lists what the archive carries and what it leaves out. Read it before sending the archive anywhere."
   },
   "settings": {
-    "note": "System-wide monitoring defaults. Per-profile overrides take precedence over these.",
     "saved": "Saved.",
     "polling": {
       "title": "Polling",
       "intervalName": "Default polling interval",
-      "intervalHelp": "How often each node is polled, unless its Device profile sets its own interval. {{min}}–{{max}} seconds.",
       "intervalAria": "Default polling interval in seconds",
-      "seconds": "seconds"
+      "seconds": "seconds",
+      "info": "A device profile's own interval takes precedence over this."
     },
     "err": {
       "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
@@ -368,31 +368,30 @@
     },
     "neighbors": {
       "title": "Discovery walks",
-      "note": "What Yagra asks SNMP devices about the network around them, so the map and the dependency graph can be derived instead of typed in. All read-only: Yagra never configures a device.",
       "enabledOn": "On",
       "enabledOff": "Off",
       "intervalName": "Walk interval",
-      "intervalHelp": "How often each device is asked — currently {{cadence}}.",
       "walk": {
         "neighbors": {
           "name": "Neighbors (CDP / LLDP)",
-          "help": "Which of this fleet's ports face which devices, with a history of when that changed. Turning this off stops the walks; everything already recorded is kept."
+          "info": "Which ports face which devices, with a history of changes. Turning it off keeps what is already recorded."
         },
         "l3": {
           "name": "Interface addresses",
-          "help": "Which IP prefixes each device has a foot in. This is what lets the network map derive links from shared subnets rather than from hand-entered parents."
+          "info": "Which IP prefixes each device has an address in. The network map derives links from shared subnets."
         },
         "arp": {
           "name": "ARP / IPv6 neighbor cache",
-          "help": "Which hosts each router has actually spoken to — the only source that can name a device nobody has added yet. Off by default: this reads a table sized by the network rather than by the device, so it is the one walk that costs a busy switch measurable work. Results appear under Nodes ▸ Discovery."
+          "info": "Hosts each router has actually spoken to. It is the only source that can name a device nobody has added yet.",
+          "warn": "This walk reads a table sized by the network, so it adds load on busy switches."
         },
         "routing": {
           "name": "Routing adjacency (OSPF / BGP / routes)",
-          "help": "Which devices are peered or directly routed to each other — the links that share no subnet, such as a point-to-point /32, an unnumbered OSPF link, or an eBGP session. The routing table is never walked: it is asked about one destination at a time."
+          "info": "Devices peered or directly routed to each other, including links that share no subnet. The routing table is never walked."
         },
         "media": {
           "name": "Interface media type",
-          "help": "Which physical medium each Ethernet port runs — 1000BASE-T for copper, 1000BASE-SX or -LX for fibre — shown in the Media column of a node's Interfaces tab. Read once an hour from the device's MAU table, falling back to the transceiver's own part number. Many devices do not report it at all; on those the column stays empty whether this is on or off."
+          "info": "The physical medium of each Ethernet port, shown in the Interfaces tab. Many devices do not report it."
         }
       },
       "cadence": {
@@ -410,7 +409,6 @@
     },
     "retention": {
       "title": "Data retention",
-      "note": "How long each store keeps what. Lowering a window deletes data older than it on the next sweep. Two rows are set by a store's own start flag and cannot be changed from here.",
       "band": "({{min}}–{{max}})",
       "storeValue": "{{value}} (set on the container)",
       "storeUnknown": "Unknown — the store did not report a retention flag",
@@ -449,7 +447,9 @@
       "err": {
         "range": "{{name}}: enter a whole number between {{min}} and {{max}}.",
         "save": "failed to save retention settings"
-      }
+      },
+      "confirm": "Shorter retention deletes older data on the next sweep. This cannot be undone.",
+      "confirmSave": "Save and delete older data"
     }
   },
   "integrations": {
@@ -700,22 +700,20 @@
     }
   },
   "bundle": {
-    "notBackup": "This is not a backup. A bundle carries no credentials, no notification-channel settings, no ingest tokens and no history — for disaster recovery take a database dump (see DEPLOYMENT.md, \"Backup & restore\"). To move the whole deployment, keys included, use Settings ▸ Move to another server.",
+    "notBackup": "Not a backup — credentials, secrets and history stay behind; to move a whole deployment, use <lnk/>.",
     "empty": "This bundle carries no configuration.",
     "export": {
       "title": "Export",
-      "help": "Download this deployment’s configuration as a single JSON file. Built-in profiles, metric sets and rules are left out — the target seeds its own.",
       "action": "Download bundle",
       "done": "Exported {{count}} rows to {{file}}.",
       "err": "Could not export the configuration bundle."
     },
     "import": {
       "title": "Import",
-      "help": "Apply a bundle exported from another deployment. Rows with the same id are updated and new ones created; nothing is ever deleted.",
       "pickAria": "Choose a configuration bundle file",
       "reading": "Reading the file…",
       "picked": "Loaded {{file}} — {{count}} rows.",
-      "warning": "Applying this overwrites configuration that shares an id with a row in the bundle. Run the check first: it performs the real import and rolls it back, so the report is exactly what applying would do.",
+      "warning": "Applying overwrites rows that share an id and deletes nothing; Check shows exactly what it would do.",
       "check": "Check (dry run)",
       "apply": "Apply bundle",
       "err": {

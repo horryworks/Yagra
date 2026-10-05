@@ -17,6 +17,13 @@
   margin-top: 2px;
 }
 
+/* Shown only while a costly walk is switched on (ADR-200: a danger is said when it is chosen). */
+.sys-setting-warn {
+  font-size: var(--font-sm);
+  margin-top: 4px;
+  color: var(--status-warning);
+}
+
 .sys-setting-control {
   display: flex;
   align-items: center;

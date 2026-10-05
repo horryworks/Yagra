@@ -1161,15 +1161,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('retention unit', locales, 'settings.retention.unit.', ['days', 'hours']);
   });
 
-  it('every discovery walk has a name and help (system:settings.neighbors.walk.*)', () => {
+  it('every discovery walk has a name and info (system:settings.neighbors.walk.*)', () => {
     // The card renders one block per walk from `DISCOVERY_WALKS`, so a fourth walk with no strings
     // gives the operator two raw keys where the control's label and explanation should be — on the
-    // screen that decides whether a fleet-wide SNMP walk is issued at all.
+    // screen that decides whether a fleet-wide SNMP walk is issued at all. The explanation opens
+    // from the name (ADR-200), keyed through `WALK_INFO`.
     const locales = { en: enSystem, ja: jaSystem };
     for (const walk of DISCOVERY_WALKS) {
       expectKeys('discovery walk', locales, `settings.neighbors.walk.${walk}.`, [
         'name',
-        'help',
+        'info',
       ]);
     }
   });

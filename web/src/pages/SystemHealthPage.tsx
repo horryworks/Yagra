@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
+import { InfoTip } from '../components/ui/InfoTip';
 import { MetricChart } from '../components/MetricChart/MetricChart';
 import { PALETTE } from '../components/MetricChart/palette';
 import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
@@ -111,6 +112,7 @@ function HostMetricCard({
   yRange,
   legendFormat,
   mirrored,
+  info,
   win,
 }: {
   label: string;
@@ -123,6 +125,8 @@ function HostMetricCard({
   legendFormat?: (v: number) => string;
   /** One direction above zero and the other below, with the gutter words (ADR-128). */
   mirrored?: MirrorAxis;
+  /** A namespaced `.info` key: an ⓘ beside the label, for what the chart cannot show. */
+  info?: string;
   win: [number, number] | null;
 }) {
   const { t } = useTranslation('system');
@@ -130,7 +134,10 @@ function HostMetricCard({
   return (
     <div className="host-metric">
       <div className="host-metric-head">
-        <span className="host-metric-label">{label}</span>
+        <span className="host-metric-label">
+          {label}
+          {info && <InfoTip infoKey={info} label={label} />}
+        </span>
         <span className="host-metric-value">{value}</span>
       </div>
       {hasData ? (
@@ -291,6 +298,7 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             yFormat={(v) => formatSi(Math.abs(v))}
             legendFormat={(v) => formatBps(Math.abs(v))}
             mirrored={mirrorAxisLabels({ in: t('health.axisIn'), out: t('health.axisOut') })}
+            info="system:health.net.info"
             win={win}
           />
           <HostMetricCard
@@ -306,7 +314,6 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
             mirrored={mirrorAxisLabels({ in: t('health.axisIn'), out: t('health.axisOut') })}
             win={win}
           />
-          <p className="muted host-net-note">{t('health.netNote')}</p>
         </div>
       ) : (
         // Collapsed still answers "is anything wrong in here" — from the inventory call the page

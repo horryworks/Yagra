@@ -28,6 +28,17 @@ export const MAX_NEIGHBOR_INTERVAL_SECS = 86400;
 export const DISCOVERY_WALKS = ['neighbors', 'l3', 'arp', 'routing', 'media'] as const;
 export type DiscoveryWalk = (typeof DISCOVERY_WALKS)[number];
 
+/** What each walk collects, opened by pressing its name (ADR-200). Keyed so a new walk cannot ship
+ *  without one, and written out whole because each `.info` key is quoted exactly once in the code
+ *  (`proseBudget.test.ts` G8). */
+export const WALK_INFO: Record<DiscoveryWalk, string> = {
+  neighbors: 'system:settings.neighbors.walk.neighbors.info',
+  l3: 'system:settings.neighbors.walk.l3.info',
+  arp: 'system:settings.neighbors.walk.arp.info',
+  routing: 'system:settings.neighbors.walk.routing.info',
+  media: 'system:settings.neighbors.walk.media.info',
+};
+
 /** Which pair of `NeighborConfig` fields each walk reads and writes.
  *
  *  The API's field names are asymmetric — the adjacency pair is the bare `enabled`/`interval_secs`

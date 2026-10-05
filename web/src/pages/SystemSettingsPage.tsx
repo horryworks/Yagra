@@ -5,7 +5,8 @@
 // the polling default. ManageConfig for the polling and discovery cards, ManageSystem for
 // retention (ADR-057) — inputs are disabled (and a hint shown) without it; the
 // scheduler and the prune loops re-read their values each round so a change applies without a
-// restart.
+// restart. A retention save that shortens a window is confirmed first: it deletes data on the next
+// sweep (ADR-200 moved that warning from a card note to the moment it applies).
 //
 // The retention card shows every retained subject, not only the ones Yagra can change. Two rows are
 // owned by a store's own start flag (VictoriaMetrics / VictoriaLogs `-retentionPeriod`), which has
@@ -21,7 +22,15 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { TextInput } from '../components/ui/Field';
-import type { NeighborConfig, RetentionPolicy, RetentionRow } from '../types/api';
+import { InfoPress, InfoTip } from '../components/ui/InfoTip';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
+import type {
+  NeighborConfig,
+  RetentionPolicy,
+  RetentionRow,
+  RetentionValues,
+} from '../types/api';
 import {
   describeCadence,
   discoveryFormFrom,
@@ -30,6 +39,7 @@ import {
   DISCOVERY_WALKS,
   MAX_NEIGHBOR_INTERVAL_SECS,
   MIN_NEIGHBOR_INTERVAL_SECS,
+  WALK_INFO,
   type DiscoveryForm,
   type DiscoveryWalk,
 } from './neighborSettings';
@@ -40,6 +50,7 @@ import {
   parseRetentionForm,
   rowField,
   rowMode,
+  shortenedFields,
   storeValue,
   type RetentionForm,
 } from './retentionSettings';
@@ -94,14 +105,16 @@ export function SystemSettingsPage() {
       <PageHeader
         title={t('nav:settings.system')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.system') }]}
-        note={t('settings.note')}
       />
       <Card title={t('settings.polling.title')}>
         <div className="sys-setting">
           <div className="sys-setting-label">
-            <div className="sys-setting-name">{t('settings.polling.intervalName')}</div>
-            <div className="sys-setting-help muted">
-              {t('settings.polling.intervalHelp', { min: MIN, max: MAX })}
+            <div className="sys-setting-name">
+              {t('settings.polling.intervalName')}
+              <InfoTip
+                infoKey="system:settings.polling.info"
+                label={t('settings.polling.intervalName')}
+              />
             </div>
           </div>
           <div className="sys-setting-control">
@@ -117,6 +130,9 @@ export function SystemSettingsPage() {
               aria-label={t('settings.polling.intervalAria')}
             />
             <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
+            <span className="sys-setting-band muted">
+              {t('settings.retention.band', { min: MIN, max: MAX })}
+            </span>
             {canConfig && (
               <Button variant="primary" onClick={save} disabled={busy || !loaded}>
                 {t('common:actions.save')}
@@ -208,15 +224,22 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
 
   return (
     <Card title={t('settings.neighbors.title')}>
-      <p className="sys-setting-help muted">{t('settings.neighbors.note')}</p>
       {DISCOVERY_WALKS.map((walk) => (
         <div key={walk}>
           <div className="sys-setting">
             <div className="sys-setting-label">
-              <div className="sys-setting-name">{t(`settings.neighbors.walk.${walk}.name`)}</div>
-              <div className="sys-setting-help muted">
-                {t(`settings.neighbors.walk.${walk}.help`)}
+              <div className="sys-setting-name">
+                <InfoPress infoKey={WALK_INFO[walk]}>
+                  {t(`settings.neighbors.walk.${walk}.name`)}
+                </InfoPress>
               </div>
+              {/* The one walk whose cost scales with the network rather than the device: say so
+                  only once it is switched on, beside where its results land. */}
+              {walk === 'arp' && form?.arp.enabled && (
+                <div className="sys-setting-warn">
+                  {t('settings.neighbors.walk.arp.warn')} <ScreenLink to="/nodes/discovery" />
+                </div>
+              )}
             </div>
             <div className="sys-setting-control">
               <label className="sys-setting-toggle">
@@ -238,9 +261,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
             <div className="sys-setting-label">
               <div className="sys-setting-name">{t('settings.neighbors.intervalName')}</div>
               <div className="sys-setting-help muted">
-                {t('settings.neighbors.intervalHelp', {
-                  cadence: describeCadence(Number(form?.[walk].intervalSecs ?? 0), t),
-                })}
+                {describeCadence(Number(form?.[walk].intervalSecs ?? 0), t)}
               </div>
             </div>
             <div className="sys-setting-control">
@@ -287,6 +308,9 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // A save that shortens any window deletes data on the next sweep, so it is confirmed first; the
+  // parsed body waits here while the dialog is open.
+  const [confirming, setConfirming] = useState<RetentionValues | null>(null);
 
   const load = useCallback(() => {
     api
@@ -302,6 +326,14 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
     load();
   }, [load]);
 
+  const send = (values: RetentionValues) =>
+    api.updateRetention(values).then(() => {
+      setSaved(true);
+      // Re-read rather than assume: the flow row's TTL is applied by the server, and a store-owned
+      // row could have changed underneath us.
+      load();
+    });
+
   const save = () => {
     if (!form) return;
     const parsed = parseRetentionForm(form);
@@ -316,17 +348,14 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
       setSaved(false);
       return;
     }
-    setBusy(true);
     setError(null);
     setSaved(false);
-    api
-      .updateRetention(parsed.values)
-      .then(() => {
-        setSaved(true);
-        // Re-read rather than assume: the flow row's TTL is applied by the server, and a store-owned
-        // row could have changed underneath us.
-        load();
-      })
+    if (policy && shortenedFields(parsed.values, policy.settings).length > 0) {
+      setConfirming(parsed.values);
+      return;
+    }
+    setBusy(true);
+    send(parsed.values)
       .catch((e: unknown) => setError(errMsg(e, t('settings.retention.err.save'))))
       .finally(() => setBusy(false));
   };
@@ -335,7 +364,6 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
 
   return (
     <Card title={t('settings.retention.title')}>
-      <p className="sys-setting-help muted">{t('settings.retention.note')}</p>
       {(policy?.rows ?? []).map((row) => (
         <RetentionRowView
           key={row.subject}
@@ -360,6 +388,18 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
       )}
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
+      {confirming && (
+        <ConfirmDeleteModal
+          title={t('settings.retention.title')}
+          confirmLabel={t('settings.retention.confirmSave')}
+          onConfirm={() => send(confirming)}
+          errorFallback={t('settings.retention.err.save')}
+          onClose={() => setConfirming(null)}
+          onDone={() => setConfirming(null)}
+        >
+          {t('settings.retention.confirm')}
+        </ConfirmDeleteModal>
+      )}
     </Card>
   );
 }

@@ -27,6 +27,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
+import { InfoTip } from '../components/ui/InfoTip';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { useCan } from '../store';
 import { api, errMsg } from '../services/api';
@@ -51,7 +52,6 @@ export function SupportBundlePage() {
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.supportBundle') }]}
       />
       <Card title={t('supportBundle.title')} className="support-bundle-card">
-        <p className="muted">{t('supportBundle.contents')}</p>
         {canSystem ? (
           <TakeBundlePanel />
         ) : (
@@ -120,8 +120,10 @@ function TakeBundlePanel() {
         <Button variant="primary" onClick={download} disabled={busy}>
           {busy ? t('supportBundle.busy') : t('supportBundle.action')}
         </Button>
+        {/* What leaves the deployment is listed inside the archive; that is the one thing worth
+            knowing before pressing the button (ADR-200). */}
+        <InfoTip infoKey="system:supportBundle.info" label={t('supportBundle.action')} />
       </div>
-      <p className="muted sb-node-help">{t('supportBundle.nodeHelp')}</p>
       {error && <p className="form-error">{error}</p>}
       {done && <p className="sb-done">{t('supportBundle.done', done)}</p>}
     </>

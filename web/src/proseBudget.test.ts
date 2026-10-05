@@ -74,12 +74,12 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-auth': [5756, 3314],
   'settings-forwarding': [3454, 1893],
   'settings-relocation': [4933, 2515],
-  'settings-tls': [2614, 1345],
+  'settings-tls': [1619, 872],
   'settings-tokens': [801, 433],
   'settings-upgrade': [5335, 3023],
-  settings: [649, 359],
+  settings: [587, 310],
   suppression: [1091, 712],
-  system: [16829, 9370],
+  system: [14940, 8338],
   topology: [4304, 2334],
   troubleshoot: [7347, 3814],
 };
@@ -132,21 +132,12 @@ const LONG_LEGACY: string[] = [
   'settings-forwarding:filter.flowAnyRecord',
   'settings-forwarding:note',
   'settings-relocation:warning.secrets',
-  'settings-tls:regenerate.intro',
-  'settings-tls:warning.apiPortPublic',
-  'settings-tls:warning.keyUnreadable',
   'settings-upgrade:bundle.howTo',
   'settings-upgrade:mechanism.unsupportedHint',
   'settings-upgrade:sitePrep.fix',
   'settings-upgrade:sitePrep.warning',
   'settings-upgrade:sitePrep.warning_other',
-  'system:bundle.notBackup',
-  'system:health.netNote',
   'system:netbox.form.baseUrlHint',
-  'system:settings.neighbors.walk.arp.help',
-  'system:settings.neighbors.walk.media.help',
-  'system:settings.neighbors.walk.routing.help',
-  'system:supportBundle.contents',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -272,20 +263,10 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'Inc.12',
     why: 'a site is the nearest Site folder above a device',
   },
-  'pages/SystemSettingsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.5',
-    why: 'per-profile settings take precedence over these defaults',
-  },
   'pages/ThresholdsPage.tsx': {
     kind: 'fact',
     until: 'Inc.14',
     why: 'the most specific scope wins',
-  },
-  'pages/TlsSettingsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.5',
-    why: 'a change takes effect within seconds, with no restart',
   },
   'pages/TopologyMapPage.tsx': { kind: 'offNav', until: 'Inc.23', why: 'opened from the tree' },
   'pages/UsersPage.tsx': {
@@ -315,7 +296,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 3, press: 4 };
+const INFO_COUNT = { tip: 7, press: 6 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -351,8 +332,6 @@ const POINTER_LEGACY: string[] = [
   'settings-relocation:afterwards.item3',
   'settings-relocation:readiness.paused',
   'settings-upgrade:sitePrep.fix',
-  'system:bundle.notBackup',
-  'system:settings.neighbors.walk.arp.help',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];
@@ -363,7 +342,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 37, formHint: 20, modalHint: 69 };
+const HINT_SITES = { fieldHint: 33, formHint: 20, modalHint: 69 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

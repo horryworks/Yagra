@@ -7,7 +7,6 @@
   align-items: end;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 12px;
 }
 
 .support-bundle-card .sb-window {
@@ -27,9 +26,9 @@
   min-width: 240px;
 }
 
-.support-bundle-card .sb-node-help {
-  font-size: var(--font-sm);
-  margin: 8px 0 0;
+/* The ⓘ beside the button sits on the button's centre line, not on the labels' baseline. */
+.support-bundle-card .sb-actions .infotip {
+  align-self: center;
 }
 
 /* Prose in this card is explanatory rather than tabular, and the card is as wide as the settings

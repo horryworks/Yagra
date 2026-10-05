@@ -11,6 +11,7 @@ import {
   parseRetentionForm,
   rowField,
   rowMode,
+  shortenedFields,
   storeValue,
   type RetentionForm,
 } from './retentionSettings';
@@ -144,5 +145,34 @@ describe('isDirty', () => {
   it('is true once any window actually changes', () => {
     expect(isDirty(form({ flow_days: '7' }), saved)).toBe(true);
     expect(isDirty(form({ unmatched_event_hours: '48' }), saved)).toBe(true);
+  });
+});
+
+describe('shortenedFields', () => {
+  it('names nothing when every window is kept or lengthened', () => {
+    expect(shortenedFields(saved, saved)).toEqual([]);
+    expect(shortenedFields({ ...saved, flow_days: 60, unmatched_event_hours: 48 }, saved)).toEqual(
+      [],
+    );
+  });
+
+  it('names every window the save would shorten, in field order', () => {
+    expect(shortenedFields({ ...saved, flow_days: 7 }, saved)).toEqual(['flow_days']);
+    expect(
+      shortenedFields({ ...saved, diagnostic_days: 30, unmatched_event_hours: 1 }, saved),
+    ).toEqual(['unmatched_event_hours', 'diagnostic_days']);
+  });
+
+  it('treats one day shorter as shorter', () => {
+    expect(shortenedFields({ ...saved, alert_linked_days: 89 }, saved)).toEqual([
+      'alert_linked_days',
+    ]);
+  });
+});
+
+describe('shortenedFields with an older core', () => {
+  it('skips a window the saved policy does not carry', () => {
+    const old: RetentionValues = { ...saved, diagnostic_days: undefined };
+    expect(shortenedFields({ ...saved, diagnostic_days: 1 }, old)).toEqual([]);
   });
 });

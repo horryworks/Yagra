@@ -32,7 +32,7 @@
   },
   "about": {
     "title": "About",
-    "tagline": "Network monitoring system — ICMP / SNMP / URL monitoring, discovery, alerting and dashboards, built to scale to tens of thousands of nodes.",
+    "tagline": "Network monitoring — ICMP, SNMP and URL, built for tens of thousands of nodes",
     "coreVersion": "Core / API version",
     "webuiVersion": "WebUI version",
     "repository": "Repository",

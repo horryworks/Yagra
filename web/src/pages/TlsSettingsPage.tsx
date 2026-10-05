@@ -28,7 +28,8 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge, type Tone } from '../components/ui/Badge';
-import { TextArea, FieldHint } from '../components/ui/Field';
+import { Field, TextArea, FieldHint } from '../components/ui/Field';
+import { InfoPress } from '../components/ui/InfoTip';
 import './TlsSettingsPage.css';
 
 const EXPIRY_TONE: Record<ReturnType<typeof expiryLevel>, Tone> = {
@@ -130,7 +131,7 @@ export function TlsSettingsPage() {
   if (loadBlock) {
     return (
       <div className="tlspage">
-        <PageHeader title={t('title')} note={t('subtitle')} />
+        <PageHeader title={t('title')} />
         <LoadBlockNotice
           block={loadBlock}
           unavailable={t('error.load')}
@@ -142,7 +143,7 @@ export function TlsSettingsPage() {
 
   return (
     <div className="tlspage">
-      <PageHeader title={t('title')} note={t('subtitle')} />
+      <PageHeader title={t('title')} />
 
       {loadError && <div className="tls-alert tls-alert-error">{loadError}</div>}
 
@@ -155,12 +156,7 @@ export function TlsSettingsPage() {
 
       <Card title={t('current.heading')}>
         {!status && !loadError && <p className="tls-muted">{t('loading')}</p>}
-        {status && !view && (
-          <>
-            <p className="tls-muted">{t('none')}</p>
-            <FieldHint>{t('noneHint')}</FieldHint>
-          </>
-        )}
+        {status && !view && <p className="tls-muted">{t('none')}</p>}
         {view && (
           <>
             <div className="tls-headline">
@@ -170,14 +166,25 @@ export function TlsSettingsPage() {
               <Badge tone={EXPIRY_TONE[level]}>
                 {t(`expiry.${level}`, { days: Math.abs(view.expires_in_days) })}
               </Badge>
+              {/* Whether the web server is serving what is stored: a change goes live within
+                  seconds with no restart, and this is where that shows (ADR-200). An unreadable key
+                  has its own alert below and says nothing here. */}
+              {!view.key_unreadable &&
+                (view.materialized ? (
+                  <Badge tone="up">{t('live')}</Badge>
+                ) : (
+                  <InfoPress
+                    infoKey="settings-tls:notMaterialized.info"
+                    className="badge badge-warning"
+                  >
+                    {t('notMaterialized.label')}
+                  </InfoPress>
+                ))}
             </div>
             <FieldHint>{t(`sourceHint.${view.source}`)}</FieldHint>
 
             {view.key_unreadable && (
               <div className="tls-alert tls-alert-error">{t('warning.keyUnreadable')}</div>
-            )}
-            {!view.materialized && !view.key_unreadable && (
-              <div className="tls-alert tls-alert-warn">{t('warning.notMaterialized')}</div>
             )}
 
             <dl className="tls-facts">
@@ -205,19 +212,14 @@ export function TlsSettingsPage() {
               </dd>
             </dl>
 
-            {view.source === 'self_signed' && <FieldHint>{t('expiry.renewNote')}</FieldHint>}
-
             <div className="tls-actions">
               <Button onClick={onDownload}>{t('current.download')}</Button>
             </div>
-            <FieldHint>{t('current.downloadHint')}</FieldHint>
           </>
         )}
       </Card>
 
       <Card title={t('import.heading')}>
-        <p className="tls-muted">{t('import.intro')}</p>
-
         <label className="tls-label" htmlFor="tls-cert">
           {t('import.certificate')}
         </label>
@@ -270,19 +272,21 @@ export function TlsSettingsPage() {
       </Card>
 
       <Card title={t('regenerate.heading')}>
-        <p className="tls-muted">{t('regenerate.intro')}</p>
-        <label className="tls-label" htmlFor="tls-names">
-          {t('regenerate.names')}
-        </label>
-        <TextArea
-          id="tls-names"
-          className="mono"
-          rows={3}
-          value={names}
-          placeholder={t('regenerate.namesPlaceholder')}
-          onChange={(e) => setNames(e.target.value)}
-        />
-        <FieldHint>{t('regenerate.namesHint')}</FieldHint>
+        {/* What an empty list means changes what to type, so it is behind the label's ⓘ. */}
+        <Field
+          label={t('regenerate.names')}
+          htmlFor="tls-names"
+          infoKey="settings-tls:regenerate.info"
+        >
+          <TextArea
+            id="tls-names"
+            className="mono"
+            rows={3}
+            value={names}
+            placeholder={t('regenerate.namesPlaceholder')}
+            onChange={(e) => setNames(e.target.value)}
+          />
+        </Field>
         <div className="tls-actions">
           <Button onClick={() => setConfirmingRegenerate(true)} disabled={busy}>
             {busy ? t('regenerate.submitting') : t('regenerate.submit')}

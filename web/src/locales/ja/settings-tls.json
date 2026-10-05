@@ -1,9 +1,12 @@
 {
   "title": "TLS 証明書",
-  "subtitle": "WebUI が配信する証明書です。変更は数秒で反映され、再起動は不要です。",
   "loading": "読み込み中…",
-  "none": "証明書がまだありません",
-  "noneHint": "Yagra は初回起動時に自己署名証明書を生成します。この表示が続く場合はコアのログを確認してください。",
+  "none": "証明書がまだありません。続く場合はコアのログを確認してください。",
+  "live": "反映済み",
+  "notMaterialized": {
+    "label": "反映待ち",
+    "info": "保存した証明書を Web サーバーがまだ読み込んでいません。通常は数秒で終わり、続く場合はコアのログに理由が出ます。"
+  },
 
   "source": {
     "self_signed": "自己署名",
@@ -11,9 +14,9 @@
     "unknown": "不明"
   },
   "sourceHint": {
-    "self_signed": "Yagra が生成し、自動更新します。自分の証明書を取り込むまでブラウザは警告を出します。",
-    "imported": "オペレーターが取り込んだ証明書です。Yagra が独断で差し替えることはありません。",
-    "unknown": "新しいバージョンの Yagra が書き込んだ値です。取り込み済みと同じ扱いになり、自動では差し替えません。"
+    "self_signed": "自動で更新され、自前の証明書を取り込むまでブラウザは警告を出します。",
+    "imported": "Yagra が自分で差し替えることはありません。",
+    "unknown": "新しい Yagra が書いたもので、自動では差し替えません。"
   },
 
   "current": {
@@ -27,34 +30,30 @@
     "keyAlgorithm": "鍵",
     "importedAt": "適用日時",
     "importedBy": "実行者: {{user}}",
-    "download": "証明書をダウンロード",
-    "downloadHint": "自己署名で運用している間、トラストストアへの登録や Prometheus・curl の参照先として使えます。"
+    "download": "証明書をダウンロード"
   },
 
   "expiry": {
     "ok": "残り {{days}} 日",
     "soon": "残り {{days}} 日",
     "critical": "残り {{days}} 日",
-    "expired": "{{days}} 日前に期限切れ",
-    "renewNote": "自己署名証明書は期限が来る前に自動で更新されます。"
+    "expired": "{{days}} 日前に期限切れ"
   },
 
   "warning": {
-    "notMaterialized": "保存はできましたが、Web サーバーがまだ読み込んでいません。通常は数秒で解消します。解消しない場合は、コアのログに理由が出ています。",
-    "keyUnreadable": "秘密鍵を復号できなくなっています（暗号鍵が変わったか失われました）。取り込み直すまで、この証明書の更新も再配信もできません。KEK ファイルが残っていれば復元してください。",
-    "apiPortPublic": "Yagra の API ポートが平文 HTTP でネットワークから到達可能なままです。ブラウザは使いませんが、Prometheus・webhook 送信元・スクリプトが使っている可能性があります。それらをすべて、信頼できる証明書のあるこの HTTPS アドレスへ移し終えたら、YAGRA_API_BIND=127.0.0.1 で閉じてください。",
+    "keyUnreadable": "秘密鍵を復号できないため、この証明書は更新も再配信もできません。KEK ファイルを復元するか、証明書を取り込み直してください。",
+    "apiPortPublic": "Prometheus・webhook 送信元・スクリプトをこの HTTPS アドレスへ移したら、YAGRA_API_BIND=127.0.0.1 で平文 HTTP のポートを閉じてください。",
     "apiPortPublicTitle": "暗号化されたアドレスだけが入口ではありません"
   },
 
   "import": {
     "heading": "証明書を取り込む",
-    "intro": "証明書チェーンと秘密鍵を PEM 形式で貼り付けるか、ファイルを選択してください。組み合わせが正しいかを確認してから適用します。",
     "certificate": "証明書チェーン",
     "certificatePlaceholder": "-----BEGIN CERTIFICATE-----",
-    "certificateHint": "サーバー証明書を先頭に、続けて中間証明書を並べます。",
+    "certificateHint": "サーバー証明書、続けて中間証明書",
     "privateKey": "秘密鍵",
     "privateKeyPlaceholder": "-----BEGIN PRIVATE KEY-----",
-    "privateKeyHint": "パスフレーズ無しの鍵が必要です。暗号化して保存し、二度と表示しません。",
+    "privateKeyHint": "暗号化して保存し、二度と表示しません。",
     "submit": "取り込んで適用",
     "submitting": "取り込み中…",
     "success": "証明書を取り込みました。すでに有効です。",
@@ -70,10 +69,9 @@
 
   "regenerate": {
     "heading": "自己署名証明書を再生成",
-    "intro": "発行者ではなく「名前が違う」という警告が出るときに使います。Yagra はアクセスに使うアドレスを知り得ないため、ここに指定しない限り生成される証明書はループバックとサーバー自身のホスト名しか含みません。",
     "names": "ホスト名と IP アドレス",
     "namesPlaceholder": "yagra.example.net, 10.0.0.5",
-    "namesHint": "改行またはカンマ区切り。空欄なら既定値を使います。",
+    "info": "アクセスに使う名前とアドレスをすべて並べてください。空欄なら、ループバックとサーバー自身のホスト名だけを含みます。",
     "submit": "再生成",
     "submitting": "生成中…",
     "success": "新しい自己署名証明書を生成して適用しました。",

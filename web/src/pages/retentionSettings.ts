@@ -162,3 +162,17 @@ export function formFromValues(values: RetentionValues): RetentionForm {
 export function isDirty(form: RetentionForm, saved: RetentionValues): boolean {
   return RETENTION_FIELDS.some((f) => Number(form[f].trim()) !== saved[f]);
 }
+
+/**
+ * The windows a save would shorten. Non-empty means the save deletes data older than the new
+ * window on the next sweep, which cannot be undone, so the card asks before sending (ADR-200).
+ * Lengthening a window or leaving it alone deletes nothing and is not asked about. A window one side
+ * does not carry (an older core reports no `diagnostic_days`) has nothing to compare and is skipped.
+ */
+export function shortenedFields(next: RetentionValues, saved: RetentionValues): RetentionField[] {
+  return RETENTION_FIELDS.filter((f) => {
+    const was = saved[f];
+    const now = next[f];
+    return was != null && now != null && now < was;
+  });
+}

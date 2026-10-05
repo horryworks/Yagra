@@ -32,7 +32,7 @@
   },
   "about": {
     "title": "バージョン情報",
-    "tagline": "ネットワーク監視システム — ICMP / SNMP / URL 監視、ディスカバリ、アラート、ダッシュボードを備え、数万ノード規模まで拡張できるよう設計されています。",
+    "tagline": "ネットワーク監視 — ICMP・SNMP・URL、数万ノード規模に対応",
     "coreVersion": "コア / API バージョン",
     "webuiVersion": "WebUI バージョン",
     "repository": "リポジトリ",

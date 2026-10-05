@@ -3,7 +3,8 @@
 // deployment to another. Admin-only on both sides.
 //
 // This is deliberately not the backup screen. A bundle carries no secrets and no history; disaster
-// recovery is a database dump (DEPLOYMENT.md "Backup & restore"), and the page says so rather than
+// recovery is a database dump (DEPLOYMENT.md "Backup & restore"), and the page says so — one sentence
+// and a link to the relocation screen, which is what moves a whole deployment (ADR-200) — rather than
 // letting an operator infer that downloading this is enough.
 //
 // The import flow is pick → check → apply, and the check is not cosmetic: it runs the real import
@@ -12,7 +13,7 @@
 // `configBundle.ts` where tests can reach it — a test in this file would never run (testing.md).
 
 import { useCallback, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { saveBlob } from '../lib/download';
 import { useCan } from '../store';
@@ -20,6 +21,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import type { ConfigBundle, ImportReport } from '../types/api';
 import {
   bundleFilename,
@@ -44,8 +46,13 @@ export function ConfigBundlePage() {
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.configBundle') }]}
       />
       <Card title={t('bundle.export.title')}>
-        <p className="cb-help muted">{t('bundle.export.help')}</p>
-        <p className="cb-help muted">{t('bundle.notBackup')}</p>
+        <p className="cb-help muted">
+          <Trans
+            t={t}
+            i18nKey="bundle.notBackup"
+            components={{ lnk: <ScreenLink to="/settings/relocation" /> }}
+          />
+        </p>
         {canSystem ? (
           <ExportPanel />
         ) : (
@@ -53,7 +60,6 @@ export function ConfigBundlePage() {
         )}
       </Card>
       <Card title={t('bundle.import.title')}>
-        <p className="cb-help muted">{t('bundle.import.help')}</p>
         {canSystem ? (
           <ImportPanel />
         ) : (
