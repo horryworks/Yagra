@@ -1,0 +1,226 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Nodes ▸ Missing IP prefixes (ADR-170 Inc.2). The table is DataTable's; these are the kind tiles
+   above it, the cells that carry a label, and the row's expanded detail. The shapes follow
+   Subnet overlaps (`SubnetOverlapsPage.css`) so the two screens read as one family. */
+
+.mp-coverage {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  margin: 0 0 var(--space-3);
+}
+
+/* The kind is said in words as well as colour (ui-conventions: never colour alone). Each kind sets
+   one variable; the tile number, the dot and the chip read it. */
+.mp-kind-unregistered {
+  --mp-kind: var(--status-critical);
+}
+.mp-kind-partial {
+  --mp-kind: var(--status-warning);
+}
+.mp-kind-other_folder {
+  --mp-kind: var(--severity-info);
+}
+.mp-kind-parent_only {
+  --mp-kind: var(--status-unknown);
+}
+
+/* ── Kind tiles: a count per kind, and a filter when pressed ── */
+.mp-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.mp-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: var(--space-3);
+  align-items: center;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.mp-tile:hover {
+  background: var(--bg-secondary);
+}
+
+.mp-tile:focus-visible,
+.mp-tile[aria-pressed='true'] {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.mp-tile-n {
+  grid-row: span 2;
+  font-size: var(--font-5xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  min-width: 1.4em;
+  color: var(--mp-kind);
+}
+
+.mp-tile-t {
+  font-weight: var(--weight-semibold);
+  font-size: var(--font-sm);
+}
+
+.mp-tile-d {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+@media (max-width: 980px) {
+  .mp-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.mp-search {
+  width: 240px;
+}
+
+/* ── Cells ── */
+.mp-caret {
+  color: var(--text-tertiary);
+}
+
+.mp-site {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mp-path {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mp-tag {
+  margin-left: var(--space-2);
+  font-size: var(--font-2xs);
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mp-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-sm);
+}
+
+.mp-kind::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mp-kind);
+  flex: none;
+}
+
+.mp-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-xs);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mp-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mp-kind);
+}
+
+.mp-clean {
+  color: var(--status-ok);
+}
+
+/* ── The expanded row ── */
+.mp-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-5);
+  border-left: 3px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.mp-detail p {
+  margin: 0;
+}
+
+.mp-gaps-wrap {
+  overflow-x: auto;
+}
+
+.mp-gaps {
+  border-collapse: collapse;
+  font-size: var(--font-sm);
+}
+
+.mp-gaps th {
+  text-align: left;
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  padding: 2px var(--space-3) 2px 0;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.mp-gaps td {
+  padding: 4px var(--space-3) 4px 0;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.mp-gaps .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mp-seen {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mp-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  white-space: nowrap;
+}

@@ -873,49 +873,26 @@ pub(crate) async fn prefix_gap_report(
 
     let names: std::collections::HashMap<Uuid, &str> =
         groups.iter().map(|g| (g.id, g.name.as_str())).collect();
-    for gap in &mut gaps {
-        match gap.range_group {
-            Some(g) if scope.allows_group(Some(g)) => {
-                gap.range_group_name = names.get(&g).map(|n| (*n).to_owned());
-            }
-            Some(_) => {
-                gap.range = None;
-                gap.range_group = None;
-            }
-            None => {}
-        }
-    }
+    super::prefix_gaps::withhold_ranges(gaps.iter_mut(), &names, scope);
+    super::prefix_gaps::fill_port_names(admin, gaps.iter_mut().collect()).await?;
 
-    let listed: Vec<Uuid> = {
-        let set: std::collections::BTreeSet<Uuid> = gaps
-            .iter()
-            .flat_map(|g| g.seen_on.iter().map(|s| s.node_id))
-            .collect();
-        set.into_iter().collect()
-    };
-    let idents = admin
-        .repo
-        .interface_idents_for(&listed)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "read interface names",
-                "failed to read interfaces",
-            )
-        })?;
-    for seen in gaps.iter_mut().flat_map(|g| g.seen_on.iter_mut()) {
-        let key = (
-            seen.node_id,
-            i32::try_from(seen.ifindex).unwrap_or(i32::MAX),
-        );
-        seen.if_name = idents.get(&key).and_then(|i| i.if_name.clone());
-    }
+    // Devices only (ADR-170 decision 16): a URL, DNS, Meraki or wireless-AP node reports no
+    // interface addresses, so counting one keeps "read N of N" from ever being reached — and
+    // Missing IP prefixes counts the same way, so the two screens agree about a site.
+    let kinds = super::nodes::node_kinds(admin, &nodes).await;
+    let devices = nodes
+        .iter()
+        .filter(|id| {
+            kinds
+                .get(id)
+                .is_none_or(|k| *k == yagra_common::NodeKind::Device)
+        })
+        .count();
 
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     Ok(crate::prefix_gaps::PrefixGapReport {
         group_id: id,
-        nodes_total: count(nodes.len()),
+        nodes_total: count(devices),
         nodes_with_addresses: count(snapshots.len()),
         nodes_truncated: count(snapshots.iter().filter(|(_, s)| s.truncated).count()),
         subnets_checked: count(checked),

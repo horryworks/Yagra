@@ -1460,6 +1460,13 @@ mod tests {
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&gaps).unwrap(), "PrefixGapReport");
 
+        // Served straight through from the REST handler (ADR-170 Inc.2).
+        let site_gaps = crate::api::prefix_gaps::PrefixGapSitesView::sample();
+        assert_inventory_dto_is_clean(
+            &serde_json::to_value(&site_gaps).unwrap(),
+            "PrefixGapSitesView",
+        );
+
         // Served straight through from the REST handler (ADR-187).
         let overlaps = crate::api::subnet_overlaps::SubnetOverlapsView::sample();
         assert_inventory_dto_is_clean(
@@ -1645,6 +1652,7 @@ mod tests {
         ("list_node_groups", "NodeGroup"),
         ("get_prefix_gaps", "PrefixGapReport"),
         ("get_subnet_overlaps", "SubnetOverlapsView"),
+        ("get_site_prefix_gaps", "PrefixGapSitesView"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("search_events", "Event"),

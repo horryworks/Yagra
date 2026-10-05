@@ -17840,6 +17840,56 @@
         }
       }
     },
+    "/api/v1/prefix-gaps": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "get_site_prefix_gaps",
+        "responses": {
+          "200": {
+            "description": "For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrefixGapSitesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles": {
       "get": {
         "tags": [
@@ -38367,6 +38417,63 @@
           }
         }
       },
+      "PrefixGapSitesView": {
+        "type": "object",
+        "description": "What Nodes ▸ Missing IP prefixes shows.",
+        "required": [
+          "sites",
+          "nodes_total",
+          "nodes_with_addresses",
+          "nodes_truncated",
+          "subnets_checked",
+          "gaps_total",
+          "gaps_listed"
+        ],
+        "properties": {
+          "gaps_listed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Gaps listed in `sites`. Less than `gaps_total` when the answer was cut at 2,000.",
+            "minimum": 0
+          },
+          "gaps_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Gaps across every site.",
+            "minimum": 0
+          },
+          "nodes_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices across those sites.",
+            "minimum": 0
+          },
+          "nodes_truncated": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "nodes_with_addresses": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many have reported their addresses at all. No gaps is complete only when\nthis equals `nodes_total`.",
+            "minimum": 0
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SitePrefixGaps"
+            },
+            "description": "Every site holding a device this caller may see. Most gaps first, then by name."
+          },
+          "subnets_checked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Subnets compared, summed over sites — one carried at two sites counts twice.",
+            "minimum": 0
+          }
+        }
+      },
       "PrefixMoveDestination": {
         "type": "object",
         "description": "One destination of an IP-range move: a folder, and the nodes the preview proposed for it.",
@@ -41379,6 +41486,15 @@
           }
         }
       },
+      "SiteGapStatus": {
+        "type": "string",
+        "description": "Where one site stands — the screen's three tabs, in their order.",
+        "enum": [
+          "gaps",
+          "clean",
+          "no_data"
+        ]
+      },
       "SiteIdBuiltIn": {
         "type": "string",
         "description": "A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.\n\n🚨 **This type exists so the set reaches TypeScript.** `web/src/types/api.ts` pins its own\npicker list to `components['schemas']['SiteIdBuiltIn']` with `satisfies`, which turns \"the\nform offers exactly what the parser accepts\" into a compile error instead of a convention. The\nestablished pattern next door (`LINK_SOURCES` and friends) is a bare `as const` with no link\nback to Rust; that is a duplicated constant list of the kind `extensibility.md` §3 warns about,\nand one line of `satisfies` avoids inheriting it.\n\nThe fourth form, `cf:<key>`, is not a member: its key belongs to the NetBox being read, so it\ncannot be a compile-time set anywhere.",
@@ -41431,6 +41547,96 @@
           "custom_fields_readable": {
             "type": "boolean",
             "description": "🚨 `false` means the token **may not read** `/api/extras/custom-fields/` — not that this\nNetBox has none. The form offers a type-it-in box in that case, and collapsing the two\nwould leave the operator reading \"there are no custom fields here\" and never finding it.\nThis is the same distinction, for the same reason, that [`TestNetboxResult`] draws between\n`reachable` and `authenticated`."
+          }
+        }
+      },
+      "SitePrefixGaps": {
+        "type": "object",
+        "description": "One site's answer.",
+        "required": [
+          "path",
+          "is_site",
+          "status",
+          "nodes_total",
+          "nodes_with_addresses",
+          "nodes_truncated",
+          "prefixes",
+          "subnets_checked",
+          "gap_count",
+          "gaps"
+        ],
+        "properties": {
+          "gap_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many gaps the site has. `gaps` may list fewer when the answer was cut.",
+            "minimum": 0
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrefixGap"
+            },
+            "description": "Ordered by kind, then subnet — the folder pane's order."
+          },
+          "is_site": {
+            "type": "boolean",
+            "description": "Whether the folder is of type Site. A device with no Site folder above it is compared\nagainst its own folder, which is then listed as a site with this `false`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The folder's name; `null` for the root."
+          },
+          "nodes_total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Devices in the site. URL, DNS, Meraki and wireless-AP nodes report no interface addresses\nand are not counted.",
+            "minimum": 0
+          },
+          "nodes_truncated": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many address lists were cut at the per-device cap.",
+            "minimum": 0
+          },
+          "nodes_with_addresses": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Of those, how many have reported their addresses at all.",
+            "minimum": 0
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The folders above it, outermost first — only those this caller may see. The site's own\n`name` is given even to a caller scoped below it: naming the folder above yours is the\nbreadcrumb ADR-014 allows (`groups::group_ancestors`), and says nothing of what is in it."
+          },
+          "prefixes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "IP prefixes filed in the site's folder or beneath it — only in folders this caller may see.",
+            "minimum": 0
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The site's folder. `null` is the root: every device filed in no folder, taken as one site."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SiteGapStatus"
+          },
+          "subnets_checked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Distinct subnets compared, covered ones included.",
+            "minimum": 0
           }
         }
       },

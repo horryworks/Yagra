@@ -1966,6 +1966,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("GET", "/api/v1/stream/report-runs", REPORT, PENDING_STREAM),
     (
         "GET",
+        "/api/v1/prefix-gaps",
+        // `GroupFiltered` (ADR-170 Inc.2): only the sites of devices the caller can see, and a
+        // range filed in a folder outside its scope is withheld — the folder pane's line.
+        GroupFiltered,
+        Tool("get_site_prefix_gaps"),
+    ),
+    (
+        "GET",
         "/api/v1/subnet-overlaps",
         // `GroupFiltered` (ADR-187): computed across every site, then narrowed to the places a
         // caller may see; another site is counted, never named — ADR-170's line.

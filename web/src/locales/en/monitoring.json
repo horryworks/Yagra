@@ -237,6 +237,59 @@
     "emptyNoEvidence": "No duplicates by address or name. None of the {{count}} nodes has a serial number or an address list yet; the poller reads both over SNMP once an hour, so look again later.",
     "hint": "A likely duplicate shares an address, a serial number, a MAC address or an LLDP chassis ID, or each node lists the other's address. A group to check shares only weaker signs, or has something that disagrees. Two routers sharing a VRRP or HSRP address can show up as one device: keep both."
   },
+  "missingPrefixes": {
+    "note": "For every site, the subnets its devices carry that none of the site's IP prefixes covers: the folder pane's “Subnets missing from the IP prefixes” for the whole fleet. A site is the nearest folder of type Site above a device. Read from the interface addresses devices report.",
+    "unavailable": "Missing IP prefixes needs the live inventory, which this deployment does not have.",
+    "coverage": "Sites compared: {{sites}}. Devices that reported their addresses: {{read}} of {{total}}. Subnets compared: {{subnets}}.",
+    "notCompared": "Sites not compared yet, because none of their devices has reported an address: {{n}}.",
+    "truncatedNodes": "Devices whose address list was cut at the stored limit: {{n}}.",
+    "cut": "Showing the first {{shown}} of {{total}} gaps.",
+    "siteCut": "This site has {{total}} gaps; the first {{shown}} are listed.",
+    "tilesLabel": "Narrow by reason",
+    "kindHelp": {
+      "unregistered": "No IP prefix anywhere covers it. This is the one to add",
+      "partial": "The device's subnet is wider than the registered prefix, such as /23 against /24",
+      "other_folder": "Another folder's prefix holds it: filed under the wrong site, or reused",
+      "parent_only": "Only a folder above has it: the site's own prefix is missing"
+    },
+    "viewsLabel": "Layout",
+    "views": {
+      "site": "By site",
+      "subnet": "Subnets"
+    },
+    "tabs": {
+      "gaps": "Gaps",
+      "clean": "Complete",
+      "no_data": "Not compared"
+    },
+    "empty": {
+      "gaps": "No site has a subnet missing from its IP prefixes.",
+      "clean": "No site is complete yet.",
+      "no_data": "Every site has been compared."
+    },
+    "emptyFiltered": "Nothing matches the filter.",
+    "search": "Subnet, site or device",
+    "csv": "Export CSV",
+    "root": "(root)",
+    "notSite": "Not a Site folder",
+    "readCell": "{{read}} / {{total}} devices",
+    "clean": "No gaps ({{subnets}} subnets compared)",
+    "noData": "No device here has reported its addresses yet",
+    "nothingHere": "Nothing to list for this site.",
+    "moreDevices": "{{n}} more devices",
+    "openFolder": "Open folder {{name}}",
+    "seeOverlaps": "See in Subnet overlaps",
+    "cols": {
+      "site": "Site",
+      "gaps": "Gaps",
+      "read": "Addresses read",
+      "prefixes": "IP prefixes",
+      "subnet": "Subnet",
+      "reason": "Reason",
+      "devices": "Devices",
+      "seenOn": "Seen on"
+    }
+  },
   "subnetOverlaps": {
     "note": "Address ranges that devices at more than one site carry, read from the interface addresses they report. A site is the nearest folder of type Site above a device.",
     "unavailable": "Subnet overlaps need the live inventory, which this deployment does not have.",

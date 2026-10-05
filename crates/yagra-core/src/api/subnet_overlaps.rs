@@ -26,7 +26,7 @@ use super::util::CreatedId;
 use super::{AdminState, ApiState};
 use crate::repo::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 use crate::subnet_overlaps::{
-    self, Ack, ExclusionReason, Input, Overlap, OverlapStatus, Port, Rule, SiteId,
+    self, Ack, ExclusionReason, Input, Overlap, OverlapStatus, Port, Rule,
 };
 use yagra_common::{SubnetKey, MAX_ADDRESSES_PER_NODE};
 
@@ -157,56 +157,6 @@ pub(crate) struct OverlapAckQuery {
     key: String,
 }
 
-/// The site of every node: the nearest folder of type Site above it, else its own folder.
-fn sites_by_node(
-    groups: &[crate::groups::GroupSummary],
-    nodes: &[(Uuid, String, Option<Uuid>)],
-) -> HashMap<Uuid, SiteId> {
-    let folders: HashMap<Uuid, Folder> = groups
-        .iter()
-        .map(|g| {
-            (
-                g.id,
-                Folder {
-                    is_site: g.group_type == "site",
-                    parent: g.parent_id,
-                },
-            )
-        })
-        .collect();
-    sites_from(&folders, nodes)
-}
-
-/// What deciding a site needs to know about one folder.
-struct Folder {
-    is_site: bool,
-    parent: Option<Uuid>,
-}
-
-/// [`sites_by_node`]'s rule, over just the folder tree's shape.
-fn sites_from(
-    folders: &HashMap<Uuid, Folder>,
-    nodes: &[(Uuid, String, Option<Uuid>)],
-) -> HashMap<Uuid, SiteId> {
-    let site_of_folder = |folder: Option<Uuid>| -> SiteId {
-        let mut at = folder;
-        // Bounded by the number of folders, so a cycle a bad import left cannot spin forever.
-        for _ in 0..=folders.len() {
-            let Some(id) = at else { break };
-            let Some(f) = folders.get(&id) else { break };
-            if f.is_site {
-                return Some(id);
-            }
-            at = f.parent;
-        }
-        folder
-    };
-    nodes
-        .iter()
-        .map(|(id, _, folder)| (*id, site_of_folder(*folder)))
-        .collect()
-}
-
 fn internal(e: &anyhow::Error, what: &'static str) -> ApiError {
     ApiError::from_internal(e.as_ref(), what, "failed to read subnet overlaps")
 }
@@ -236,7 +186,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
     )
     .map_err(|e| internal(&e, "read subnet overlap inputs"))?;
 
-    let site_of = sites_by_node(&groups, &nodes);
+    let site_of = crate::sites::sites_by_node(&groups, &nodes);
     let folder_of: HashMap<Uuid, Option<Uuid>> = nodes.iter().map(|(id, _, g)| (*id, *g)).collect();
     let visible: Option<HashSet<Uuid>> = (!scope.is_all()).then(|| {
         nodes
@@ -918,45 +868,6 @@ mod tests {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
-
-    fn folder(is_site: bool, parent: Option<Uuid>) -> Folder {
-        Folder { is_site, parent }
-    }
-
-    /// A device's site is the nearest Site folder above it, its own folder when there is none, and
-    /// nothing at the root — and a cycle a bad import left ends rather than spinning.
-    #[test]
-    fn a_site_is_the_nearest_site_folder_above_else_the_devices_own_folder() {
-        let (site, sub, plain, loop_a, loop_b) = (
-            Uuid::from_u128(1),
-            Uuid::from_u128(2),
-            Uuid::from_u128(3),
-            Uuid::from_u128(4),
-            Uuid::from_u128(5),
-        );
-        let folders: HashMap<Uuid, Folder> = [
-            (site, folder(true, None)),
-            (sub, folder(false, Some(site))),
-            (plain, folder(false, None)),
-            (loop_a, folder(false, Some(loop_b))),
-            (loop_b, folder(false, Some(loop_a))),
-        ]
-        .into();
-        let node = |n: u128, f: Option<Uuid>| (Uuid::from_u128(100 + n), String::new(), f);
-        let nodes = vec![
-            node(1, Some(sub)),
-            node(2, Some(site)),
-            node(3, Some(plain)),
-            node(4, None),
-            node(5, Some(loop_a)),
-        ];
-        let got = sites_from(&folders, &nodes);
-        assert_eq!(got[&Uuid::from_u128(101)], Some(site), "under a site");
-        assert_eq!(got[&Uuid::from_u128(102)], Some(site), "in the site itself");
-        assert_eq!(got[&Uuid::from_u128(103)], Some(plain), "no site above");
-        assert_eq!(got[&Uuid::from_u128(104)], None, "the root is one site");
-        assert_eq!(got[&Uuid::from_u128(105)], Some(loop_a), "a cycle ends");
-    }
 
     fn body(range: Option<&str>, port_text: Option<&str>, note: &str) -> OverlapRuleBody {
         OverlapRuleBody {

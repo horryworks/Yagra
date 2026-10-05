@@ -3696,6 +3696,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prefix-gaps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_site_prefix_gaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles": {
         parameters: {
             query?: never;
@@ -11869,6 +11885,39 @@ export interface components {
              */
             subnets_checked: number;
         };
+        /** @description What Nodes ▸ Missing IP prefixes shows. */
+        PrefixGapSitesView: {
+            /**
+             * Format: int32
+             * @description Gaps listed in `sites`. Less than `gaps_total` when the answer was cut at 2,000.
+             */
+            gaps_listed: number;
+            /**
+             * Format: int32
+             * @description Gaps across every site.
+             */
+            gaps_total: number;
+            /**
+             * Format: int32
+             * @description Devices across those sites.
+             */
+            nodes_total: number;
+            /** Format: int32 */
+            nodes_truncated: number;
+            /**
+             * Format: int32
+             * @description Of those, how many have reported their addresses at all. No gaps is complete only when
+             *     this equals `nodes_total`.
+             */
+            nodes_with_addresses: number;
+            /** @description Every site holding a device this caller may see. Most gaps first, then by name. */
+            sites: components["schemas"]["SitePrefixGaps"][];
+            /**
+             * Format: int32
+             * @description Subnets compared, summed over sites — one carried at two sites counts twice.
+             */
+            subnets_checked: number;
+        };
         /** @description One destination of an IP-range move: a folder, and the nodes the preview proposed for it. */
         PrefixMoveDestination: {
             /** Format: uuid */
@@ -13189,6 +13238,11 @@ export interface components {
             parent: string;
         };
         /**
+         * @description Where one site stands — the screen's three tabs, in their order.
+         * @enum {string}
+         */
+        SiteGapStatus: "gaps" | "clean" | "no_data";
+        /**
          * @description A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.
          *
          *     🚨 **This type exists so the set reaches TypeScript.** `web/src/types/api.ts` pins its own
@@ -13237,6 +13291,61 @@ export interface components {
              *     `reachable` and `authenticated`.
              */
             custom_fields_readable: boolean;
+        };
+        /** @description One site's answer. */
+        SitePrefixGaps: {
+            /**
+             * Format: int32
+             * @description How many gaps the site has. `gaps` may list fewer when the answer was cut.
+             */
+            gap_count: number;
+            /** @description Ordered by kind, then subnet — the folder pane's order. */
+            gaps: components["schemas"]["PrefixGap"][];
+            /**
+             * @description Whether the folder is of type Site. A device with no Site folder above it is compared
+             *     against its own folder, which is then listed as a site with this `false`.
+             */
+            is_site: boolean;
+            /** @description The folder's name; `null` for the root. */
+            name?: string | null;
+            /**
+             * Format: int32
+             * @description Devices in the site. URL, DNS, Meraki and wireless-AP nodes report no interface addresses
+             *     and are not counted.
+             */
+            nodes_total: number;
+            /**
+             * Format: int32
+             * @description Of those, how many address lists were cut at the per-device cap.
+             */
+            nodes_truncated: number;
+            /**
+             * Format: int32
+             * @description Of those, how many have reported their addresses at all.
+             */
+            nodes_with_addresses: number;
+            /**
+             * @description The folders above it, outermost first — only those this caller may see. The site's own
+             *     `name` is given even to a caller scoped below it: naming the folder above yours is the
+             *     breadcrumb ADR-014 allows (`groups::group_ancestors`), and says nothing of what is in it.
+             */
+            path: string[];
+            /**
+             * Format: int32
+             * @description IP prefixes filed in the site's folder or beneath it — only in folders this caller may see.
+             */
+            prefixes: number;
+            /**
+             * Format: uuid
+             * @description The site's folder. `null` is the root: every device filed in no folder, taken as one site.
+             */
+            site_id?: string | null;
+            status: components["schemas"]["SiteGapStatus"];
+            /**
+             * Format: int32
+             * @description Distinct subnets compared, covered ones included.
+             */
+            subnets_checked: number;
         };
         /** @description Which way to order this folder's children (ADR-130). */
         SortChildren: {
@@ -28525,6 +28634,53 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_site_prefix_gaps: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrefixGapSitesView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

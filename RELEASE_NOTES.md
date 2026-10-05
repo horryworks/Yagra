@@ -10,8 +10,13 @@
 
 ## Unreleased
 
+### New Features
+
+- **Nodes ▸ Missing IP prefixes lists, for every site at once, the subnets its devices carry that none of the site's IP prefixes covers.** It is the folder pane's "Subnets missing from the IP prefixes" for the whole fleet, so you no longer open sites one by one, and a region or the root is no longer refused for holding too many devices. It opens by site: each row shows how many gaps of each kind the site has, how many of its devices reported their addresses, and how many IP prefixes it holds, and opening a row lists the subnets with the devices, ports and addresses they were seen on. Tabs separate sites with gaps, complete sites, and sites not compared yet (none of their devices has reported an address). **Subnets** lists every gap as one line instead, and **Export CSV** saves that list. A site is the nearest folder of type Site above a device, the same rule as Subnet overlaps. `GET /api/v1/prefix-gaps` and the MCP tool `get_site_prefix_gaps` return the same answer; at most 2,000 gaps are listed, with the total beside them. (ADR-170)
+
 ### Improvements
 
+- **A folder's "Subnets missing from the IP prefixes" counts devices only.** The "read N of M" line used to count URL, DNS, Meraki and wireless-AP nodes in M, which report no interface addresses, so it could never reach M of M. `nodes_total` on `GET /api/v1/node-groups/{id}/prefix-gaps` and MCP `get_prefix_gaps` is smaller on a folder that holds such nodes. (ADR-170)
 - **Discovery ▸ Unregistered devices and Node ▸ Neighbors now warn before you add a device that is already monitored at another address.** Once Detect gets an SNMP answer, the setup cell says "Maybe the same device", names the node it looks like (with its address and why: same name and model), and Monitor stops being the highlighted button. You can still add it, because sites that reuse one address plan can produce a false match. This is the same check the Scan tab has had since v0.3.36. Nothing is shown before Detect, or when SNMP does not answer.
 
 ## v0.3.45 — Alerts have names a person can read, a per-port alert names its port, and the template editor shows the built-in text

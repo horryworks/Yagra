@@ -120,6 +120,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/subnet-overlaps',
             implemented: true,
           },
+          // Where Subnet overlaps compares sites with each other, this compares each site with its
+          // own IP prefixes — the folder pane's missing-subnet list for every site at once (ADR-170).
+          {
+            labelKey: 'nodes.missingPrefixes',
+            descKey: 'descriptions.nodesMissingPrefixes',
+            path: '/nodes/missing-prefixes',
+            implemented: true,
+          },
         ],
       },
       {

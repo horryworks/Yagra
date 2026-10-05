@@ -138,6 +138,7 @@ import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { PREFIX_GAP_KINDS } from './components/NodeDetail/prefixGaps';
+import { MISSING_PREFIX_VIEWS, SITE_GAP_STATUSES } from './pages/missingPrefixes';
 import { FAULT_SERIES, OPTICAL_SERIES } from './components/NodeDetail/interfaceMetrics';
 import { DUPLEX_STATES, SPEED_TIERS } from './components/NodeDetail/linkMode';
 import { MONITOR_KINDS } from './pages/monitorKinds';
@@ -1360,6 +1361,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('duplicate evidence kind', locales, 'duplicates.kind.', DUPLICATE_EVIDENCE_KINDS);
     expectKeys('duplicate confidence', locales, 'duplicates.confidence.', DUPLICATE_CONFIDENCES);
     expectKeys('duplicate contradiction', locales, 'duplicates.contradiction.', DUPLICATE_CONTRADICTIONS);
+  });
+  it('every site status, layout and gap kind has strings (monitoring:missingPrefixes.*)', () => {
+    // Nodes ▸ Missing IP prefixes names its tabs from a token the server sent (ADR-170 Inc.2).
+    const locales = { en: enMonitoring, ja: jaMonitoring };
+    expectKeys('site gap status', locales, 'missingPrefixes.tabs.', SITE_GAP_STATUSES);
+    expectKeys('site gap empty state', locales, 'missingPrefixes.empty.', SITE_GAP_STATUSES);
+    expectKeys('missing-prefix layout', locales, 'missingPrefixes.views.', MISSING_PREFIX_VIEWS);
+    expectKeys('gap kind help', locales, 'missingPrefixes.kindHelp.', PREFIX_GAP_KINDS);
   });
   it('every overlap kind, status, hint and rule reason has strings (monitoring:subnetOverlaps.*)', () => {
     // Nodes ▸ Subnet overlaps names each of these from a token the server sent (ADR-187).

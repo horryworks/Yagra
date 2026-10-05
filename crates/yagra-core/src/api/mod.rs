@@ -70,6 +70,7 @@ mod pins;
 pub(crate) mod pollers;
 pub(crate) mod pools;
 mod preferences;
+pub(crate) mod prefix_gaps;
 mod profiles;
 /// The public board an anonymous visitor sees, and the switch that serves it (ADR-123). Apart from
 /// `dashboard` on purpose: this board is an access-control list, not presentation state.
@@ -416,6 +417,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(duplicates::routes())
         // Nodes ▸ Subnet overlaps (ADR-187): ranges two sites both use, and the rules that excuse them.
         .merge(subnet_overlaps::routes())
+        // Nodes ▸ Missing IP prefixes (ADR-170 Inc.2): every site's subnets its IP prefixes miss.
+        .merge(prefix_gaps::routes())
         // Which pool the node effectively belongs to, and which poller currently holds it. Stays
         // with the Pollers view below, whose resolution helpers it shares.
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.

@@ -348,6 +348,15 @@ export type PrefixGapReport = components['schemas']['PrefixGapReport'];
 /** One such subnet, with why it is reported. */
 export type PrefixGap = components['schemas']['PrefixGap'];
 
+/** Nodes ▸ Missing IP prefixes (ADR-170 Inc.2): every site's subnets its IP prefixes miss. */
+export type PrefixGapSitesView = components['schemas']['PrefixGapSitesView'];
+
+/** One site's answer on that screen. */
+export type SitePrefixGaps = components['schemas']['SitePrefixGaps'];
+
+/** Where one site stands — the screen's tabs. The runtime list is `pages/missingPrefixes.ts`. */
+export type SiteGapStatus = components['schemas']['SiteGapStatus'];
+
 /** Which folder's IP range would claim each candidate address
  *  (`POST /api/v1/discovery/import-preview`). A proposal — nothing is imported when this
  *  arrives (ADR-131 decision 7). */

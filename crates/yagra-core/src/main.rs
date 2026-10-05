@@ -139,6 +139,8 @@ mod seed_ids;
 // configurations for outbound peers — see that module's doc.
 mod server_cert;
 mod sink;
+/// Which site a node belongs to — one rule for Subnet overlaps and Missing IP prefixes.
+mod sites;
 // The table vocabulary the placement guards scan against, derived from `migrations/` (ADR-095).
 // Apart from `module_source`, which answers what a module's own text is rather than what the
 // schema declares.

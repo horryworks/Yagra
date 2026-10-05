@@ -120,6 +120,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/reclassify': MARKER,
   '/nodes/duplicates': MARKER,
   '/nodes/subnet-overlaps': MARKER,
+  '/nodes/missing-prefixes': MARKER,
   '/nodes/collection-templates': MARKER,
   '/nodes/mib': MARKER,
   // An SVG box has no text a query reaches reliably (labels are cut to fit), so the box itself.

@@ -17,7 +17,7 @@
 //! [`tests::the_containment_rule_agrees_with_postgresql`].
 
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use uuid::Uuid;
 use yagra_common::{L3Snapshot, SubnetKey};
 
@@ -211,6 +211,90 @@ fn judge<'r>(subnet: &SubnetKey, ranges: &'r [Range]) -> Option<(GapKind, Option
     }
 }
 
+/// One site's comparison, before names and scope are applied (ADR-170 decision 12).
+#[derive(Debug, Clone, Default)]
+pub struct SiteComparison {
+    pub gaps: Vec<PrefixGap>,
+    /// Distinct subnets compared, covered ones included.
+    pub subnets_checked: usize,
+    /// Ranges filed in the site's folder or beneath it.
+    pub prefixes: usize,
+}
+
+/// Compare each site's devices against the ranges, the site's folder standing where [`classify`]'s
+/// folder stands: ranges in its subtree cover, a folder above is `parent_only`, any other folder is
+/// `other_folder`. Every site in `sites` gets an answer, an empty one when none of its devices
+/// reported an address.
+///
+/// `None` is the root site — every root-level node together (ADR-187 decision 1). No folder is
+/// above or beneath it, so every range there is another folder's.
+///
+/// A node `site_of` does not place in one of `sites` is not compared: the caller decides which
+/// sites exist, and a node placed nowhere would otherwise be counted against the wrong one.
+///
+/// `counted` decides which folders' ranges are counted in [`SiteComparison::prefixes`]. Every range
+/// still takes part in the comparison — a sibling floor's range covers its site's subnet whoever is
+/// asking — but a scoped caller is not told how many ranges a folder it cannot see holds (ADR-014).
+#[must_use]
+pub fn by_site(
+    observed: &[(Uuid, &L3Snapshot)],
+    site_of: &HashMap<Uuid, Option<Uuid>>,
+    sites: &BTreeSet<Option<Uuid>>,
+    edges: &[(Uuid, Option<Uuid>)],
+    prefixes: &[(Uuid, SubnetKey)],
+    counted: impl Fn(Uuid) -> bool,
+) -> BTreeMap<Option<Uuid>, SiteComparison> {
+    use crate::groups::{group_ancestors, group_subtree};
+
+    let mut members: BTreeMap<Option<Uuid>, Vec<(Uuid, &L3Snapshot)>> = BTreeMap::new();
+    for (node, snapshot) in observed {
+        if let Some(site) = site_of.get(node).filter(|s| sites.contains(s)) {
+            members.entry(*site).or_default().push((*node, *snapshot));
+        }
+    }
+    sites
+        .iter()
+        .map(|site| {
+            let (subtree, ancestors): (BTreeSet<Uuid>, BTreeSet<Uuid>) = match site {
+                Some(id) => (
+                    group_subtree(edges, *id).into_iter().collect(),
+                    group_ancestors(edges, *id).into_iter().collect(),
+                ),
+                None => (BTreeSet::new(), BTreeSet::new()),
+            };
+            let ranges: Vec<Range> = prefixes
+                .iter()
+                .map(|(group, prefix)| Range {
+                    group: *group,
+                    prefix: *prefix,
+                    relation: if subtree.contains(group) {
+                        Relation::Subtree
+                    } else if ancestors.contains(group) {
+                        Relation::Ancestor
+                    } else {
+                        Relation::Other
+                    },
+                })
+                .collect();
+            let own = ranges
+                .iter()
+                .filter(|r| r.relation == Relation::Subtree && counted(r.group))
+                .count();
+            let (gaps, checked) = members
+                .get(site)
+                .map_or_else(|| (Vec::new(), 0), |m| classify(m, &ranges));
+            (
+                *site,
+                SiteComparison {
+                    gaps,
+                    subnets_checked: checked,
+                    prefixes: own,
+                },
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +478,104 @@ mod tests {
             "ordered by device then port"
         );
         assert_eq!(gaps[0].seen_on[1].ip, "10.8.0.2");
+    }
+
+    /// Two sites under one region: each is compared against its own subtree, so the same range is
+    /// covered at the site that owns it and `other_folder` at the one that only carries it — and a
+    /// site whose devices reported nothing still answers, with its own ranges counted.
+    #[test]
+    fn each_site_is_compared_against_its_own_folder() {
+        const SITE_B: Uuid = Uuid::from_u128(5);
+        const QUIET: Uuid = Uuid::from_u128(6);
+        const N3: Uuid = Uuid::from_u128(13);
+        let edges = [
+            (REGION, None),
+            (SITE, Some(REGION)),
+            (SUB, Some(SITE)),
+            (SITE_B, Some(REGION)),
+            (QUIET, Some(REGION)),
+        ];
+        let p = |g: Uuid, s: &str| (g, s.parse::<SubnetKey>().unwrap());
+        let prefixes = [
+            p(REGION, "10.0.0.0/8"),
+            p(SUB, "10.1.1.0/24"),
+            p(SITE_B, "192.168.10.0/24"),
+            p(QUIET, "10.3.0.0/24"),
+        ];
+        let a = snap(&[
+            (1, "10.1.1.1", 24),
+            (2, "192.168.10.1", 24),
+            (3, "10.1.9.1", 24),
+        ]);
+        let b = snap(&[(1, "192.168.10.2", 24)]);
+        let root = snap(&[(1, "10.3.0.9", 24)]);
+        let site_of: HashMap<Uuid, Option<Uuid>> =
+            [(N1, Some(SITE)), (N2, Some(SITE_B)), (N3, None)].into();
+        let sites: BTreeSet<Option<Uuid>> = [Some(SITE), Some(SITE_B), Some(QUIET), None].into();
+        let got = by_site(
+            &[(N1, &a), (N2, &b), (N3, &root)],
+            &site_of,
+            &sites,
+            &edges,
+            &prefixes,
+            |_| true,
+        );
+
+        let site = &got[&Some(SITE)];
+        assert_eq!(
+            kinds(&site.gaps),
+            vec![
+                ("192.168.10.0/24".to_owned(), GapKind::OtherFolder),
+                ("10.1.9.0/24".to_owned(), GapKind::ParentOnly),
+            ],
+            "a subfolder's range is the site's own"
+        );
+        assert_eq!(site.gaps[0].range_group, Some(SITE_B));
+        assert_eq!((site.subnets_checked, site.prefixes), (3, 1));
+
+        let b = &got[&Some(SITE_B)];
+        assert!(b.gaps.is_empty(), "{:?}", kinds(&b.gaps));
+        assert_eq!((b.subnets_checked, b.prefixes), (1, 1));
+
+        let quiet = &got[&Some(QUIET)];
+        assert!(quiet.gaps.is_empty());
+        assert_eq!((quiet.subnets_checked, quiet.prefixes), (0, 1));
+
+        // The root has no folder of its own: QUIET's range is another folder's.
+        let root = &got[&None];
+        assert_eq!(
+            kinds(&root.gaps),
+            vec![("10.3.0.0/24".to_owned(), GapKind::OtherFolder)]
+        );
+        assert_eq!(root.prefixes, 0);
+
+        // A caller who cannot see SUB is not told it holds a range — and SUB's range still covers.
+        let narrowed = by_site(
+            &[(N1, &a)],
+            &site_of,
+            &[Some(SITE)].into(),
+            &edges,
+            &prefixes,
+            |g| g != SUB,
+        );
+        let site = &narrowed[&Some(SITE)];
+        assert_eq!(site.prefixes, 0);
+        assert_eq!(site.gaps.len(), 2, "{:?}", kinds(&site.gaps));
+    }
+
+    /// A node placed in a site the caller did not ask about is compared nowhere — never against a
+    /// site it is not in.
+    #[test]
+    fn a_node_outside_the_asked_sites_is_not_compared() {
+        let s = snap(&[(1, "10.9.9.1", 24)]);
+        let site_of: HashMap<Uuid, Option<Uuid>> = [(N1, Some(ELSEWHERE))].into();
+        let sites: BTreeSet<Option<Uuid>> = [Some(SITE)].into();
+        let got = by_site(&[(N1, &s)], &site_of, &sites, &[(SITE, None)], &[], |_| {
+            true
+        });
+        assert_eq!(got.len(), 1);
+        assert!(got[&Some(SITE)].gaps.is_empty());
+        assert_eq!(got[&Some(SITE)].subnets_checked, 0);
     }
 
     #[test]

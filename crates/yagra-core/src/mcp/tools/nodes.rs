@@ -734,6 +734,45 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "For every site, the subnets its devices carry that none of the IP prefixes \
+                       filed in the site's folder (or beneath it) contains: get_prefix_gaps for \
+                       the whole fleet at once. A site is the nearest folder of type Site above a \
+                       device, else the device's own folder (is_site false); devices filed in no \
+                       folder are one site with a null site_id. Each site has a status: gaps, \
+                       clean, or no_data (none of its devices reported an address, so nothing was \
+                       compared; never read that as complete). Each gap carries the same kind as \
+                       get_prefix_gaps (unregistered, partial, other_folder, parent_only). Sites \
+                       are ordered most gaps first; at most 2,000 gaps are listed in all \
+                       (gaps_total says how many there are, each site's gap_count is uncapped). A \
+                       range filed in a folder outside your scope is omitted. Requires live mode."
+    )]
+    async fn get_site_prefix_gaps(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_site_prefix_gaps";
+        match self.scope_for(identity_of(&ctx)).await {
+            Ok(scope) => self.site_prefix_gaps_in(&scope).await,
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    pub(super) async fn site_prefix_gaps_in(
+        &self,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_site_prefix_gaps";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "prefix gaps require live mode");
+        };
+        // The REST handler's own function, so the two surfaces disclose the same things.
+        match crate::api::prefix_gaps::site_gaps_view(admin, scope).await {
+            Ok(view) => ok_json(TOOL, &view),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
         description = "Address ranges that more than one site carries, from the interface addresses \
                        devices report: the same range at two sites (same_address when one address \
                        is configured at both, which is almost certainly a reuse; same_range when \

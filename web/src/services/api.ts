@@ -93,6 +93,7 @@ import type {
   NodeDetail,
   NodeGroup,
   PrefixGapReport,
+  PrefixGapSitesView,
   Pins,
   MovePreview,
   SubtreeMovePreview,
@@ -1969,6 +1970,10 @@ export const api = {
    *  grouped with the evidence for each group. Computed on the server on every read; the cleanup is
    *  `deleteNodes`. */
   getDuplicateNodes: (): Promise<DuplicateNodesView> => apiGet('/api/v1/nodes/duplicates'),
+
+  /** Nodes ▸ Missing IP prefixes (ADR-170 Inc.2): for every site, the subnets its devices carry
+   *  that its IP prefixes do not cover. Computed on the server on every read. */
+  getSitePrefixGaps: (): Promise<PrefixGapSitesView> => apiGet('/api/v1/prefix-gaps'),
 
   /** Nodes ▸ Subnet overlaps (ADR-187): address ranges more than one site carries. Computed on the
    *  server on every read; only the rules and the acknowledgements are stored. */
