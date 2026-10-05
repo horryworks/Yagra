@@ -12,6 +12,7 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { DataTable, type Column } from '../components/ui/DataTable';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { useEnumParam } from '../lib/useEnumParam';
@@ -402,7 +403,16 @@ export function ReportsPage() {
                 : defF.anyFiltered
                   ? t('common:filter.noMatch')
                   : canConfig
-                  ? t('defs.emptyAdmin')
+                  ? (
+                      <EmptyState
+                        text={t('defs.empty')}
+                        action={
+                          <Button type="button" onClick={() => setBuilderFor('new')}>
+                            {t('defs.newReport')}
+                          </Button>
+                        }
+                      />
+                    )
                   : t('defs.empty')
             }
             loading={defs.loading && definitions.length === 0}

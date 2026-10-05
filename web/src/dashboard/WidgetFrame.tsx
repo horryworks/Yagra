@@ -170,7 +170,11 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         }
         actions={actions}
       >
-        <Body instance={instance} setSettings={setSettings} />
+        <Body
+          instance={instance}
+          setSettings={setSettings}
+          openSettings={editing && Settings ? () => setSettingsOpen(true) : undefined}
+        />
       </Card>
 
       {editing && !isDragging && resizable && (

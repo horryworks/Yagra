@@ -36,6 +36,7 @@ import {
 } from '../../lib/metricInventoryCache';
 import { api } from '../../services/api';
 import type { NodeMetricEntry } from '../../types/api';
+import { NothingChosen } from '../primitives/NothingChosen';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
@@ -142,7 +143,7 @@ export function MetricChartSettings({ instance, setSettings }: WidgetProps) {
 }
 
 /** The chart for one selected node metric, or the reason there isn't one. */
-export function MetricChartWidget({ instance }: WidgetProps) {
+export function MetricChartWidget({ instance, openSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const sel = readSelection(instance.settings);
   const entries = useNodeInventory(sel.nodeId);
@@ -162,10 +163,23 @@ export function MetricChartWidget({ instance }: WidgetProps) {
     [armed?.nodeId, armed?.metric, armed?.query.agg, armed?.query.rate],
   );
 
-  if (plan.kind === 'pick-node') return <p className="muted">{t('widgets.metricChart.pickNode')}</p>;
+  if (plan.kind === 'pick-node')
+    return (
+      <NothingChosen
+        text={t('widgets.metricChart.pickNode')}
+        choose={t('widgets.metricChart.chooseNode')}
+        openSettings={openSettings}
+      />
+    );
   if (plan.kind === 'loading') return <p className="muted">{t('common:loading')}</p>;
   if (plan.kind === 'pick-metric')
-    return <p className="muted">{t('widgets.metricChart.pickMetric')}</p>;
+    return (
+      <NothingChosen
+        text={t('widgets.metricChart.pickMetric')}
+        choose={t('widgets.metricChart.chooseMetric')}
+        openSettings={openSettings}
+      />
+    );
   if (plan.kind === 'unavailable')
     return (
       <p className="muted">{t('widgets.metricChart.unavailable', { metric: plan.metric })}</p>
@@ -244,7 +258,7 @@ export function MetricTopSettings({ instance, setSettings }: WidgetProps) {
 }
 
 /** The fleet ranked by one metric, or the reason there is no ranking. */
-export function MetricTopWidget({ instance }: WidgetProps) {
+export function MetricTopWidget({ instance, openSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const known = useKnownMetricKinds();
   const plan = metricTopPlan(readTopSelection(instance.settings), known);
@@ -261,7 +275,13 @@ export function MetricTopWidget({ instance }: WidgetProps) {
   );
 
   if (plan.kind === 'pick-metric')
-    return <p className="muted">{t('widgets.metricTop.pickMetric')}</p>;
+    return (
+      <NothingChosen
+        text={t('widgets.metricTop.pickMetric')}
+        choose={t('widgets.metricTop.choose')}
+        openSettings={openSettings}
+      />
+    );
   if (plan.kind === 'counter')
     return <p className="muted">{t('widgets.metricTop.counter', { metric: plan.metric })}</p>;
 
@@ -444,7 +464,7 @@ export function VpnSessionsSettings({ instance, setSettings }: WidgetProps) {
 }
 
 /** The current session count per device and its history, or the reason there isn't one. */
-export function VpnSessionsWidget({ instance }: WidgetProps) {
+export function VpnSessionsWidget({ instance, openSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const sel = readVpnSettings(instance.settings);
   const inventory = useNodeInventories(sel.nodes.map((n) => n.nodeId));
@@ -476,7 +496,14 @@ export function VpnSessionsWidget({ instance }: WidgetProps) {
     refreshMsFor(sel.rangeSecs),
   );
 
-  if (plan.kind === 'empty') return <p className="muted">{t('widgets.vpnSessions.pickSome')}</p>;
+  if (plan.kind === 'empty')
+    return (
+      <NothingChosen
+        text={t('widgets.vpnSessions.pickSome')}
+        choose={t('widgets.vpnSessions.choose')}
+        openSettings={openSettings}
+      />
+    );
   if (plan.kind === 'loading') return <p className="muted">{t('common:loading')}</p>;
 
   // Two separate sentences, because they are two separate claims. "Reports no VPN metric" is a fact

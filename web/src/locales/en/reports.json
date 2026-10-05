@@ -57,8 +57,7 @@
     "empty": "No report templates yet.",
     "err": {
       "runFailed": "The report could not be started."
-    },
-    "emptyAdmin": "No report templates yet. Click \"New report\" to build one."
+    }
   },
   "scheds": {
     "cols": {

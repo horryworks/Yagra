@@ -74,6 +74,28 @@ describe('widget registry', () => {
     }
   });
 
+  it('keeps each catalog line to one short line, and no two widgets share a title', () => {
+    // ADR-200 kind 6: the line under an item in a picking list is at most 80 English / 45 Japanese
+    // characters. And a title is how the picker and a placed card tell widgets apart, so two with
+    // the same one ("Top talkers" for interfaces and for flow hosts) cannot be told apart at all.
+    const strings = (bundle: Record<string, unknown>, key: string): string =>
+      String(key.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], bundle));
+    for (const [lang, bundle, max] of [
+      ['en', enDashboard, 80],
+      ['ja', jaDashboard, 45],
+    ] as const) {
+      const titles = REGISTRY.map((d) => strings(bundle, d.title));
+      expect(new Set(titles).size, `${lang}: duplicate titles`).toBe(titles.length);
+      for (const d of REGISTRY) {
+        const blurb = strings(bundle, d.blurb);
+        expect(blurb.length, `${lang}: ${d.blurb} = ${blurb}`).toBeLessThanOrEqual(max);
+      }
+    }
+    // That each key resolves is the test above's job; this one only measures, so it must have
+    // measured the whole catalog rather than an empty one.
+    expect(REGISTRY.length).toBeGreaterThan(40);
+  });
+
   // ── The Customize / view split (ADR-072) ────────────────────────────────────────────────
   // A control that chooses what a card is *about* belongs behind the ⚙ the frame draws while the
   // board is being customized; a time window or a display lens stays in the header. The type

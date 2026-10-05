@@ -3,8 +3,9 @@
 // recent-changes feed off the audit log (admin-only — non-admins see a friendly gate). Both are
 // straight reads of existing endpoints.
 
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Badge } from '../../components/ui/Badge';
+import { ScreenLink } from '../../components/ui/ScreenLink';
 import {
   formatCount,
   httpStatusLabel,
@@ -114,20 +115,20 @@ export function PollerHealthWidget() {
       {/* ADR-020: a pool served in *legacy* mode has no live registered poller, so core is falling
           back to per-job publish. That is the one number here an operator must act on, so it turns
           warning-coloured the moment it is non-zero rather than reading as just another counter. */}
-      <div className="statstrip-item" title={t('widgets.pollerHealth.poolsHint')}>
+      <div className="statstrip-item">
         <span className={`statstrip-val${(data?.pools_legacy ?? 0) > 0 ? ' warn' : ''}`}>
           {formatCount(data?.pools_working_set ?? 0)} / {formatCount(data?.pools_legacy ?? 0)}
         </span>
         <span className="statstrip-cap">{t('widgets.pollerHealth.pools')}</span>
       </div>
-      <div className="statstrip-item" title={t('widgets.pollerHealth.workingSetHint')}>
+      <div className="statstrip-item">
         <span className="statstrip-val">
           {formatCount(data?.snapshots_published_total ?? 0)} /{' '}
           {formatCount(data?.deltas_published_total ?? 0)}
         </span>
         <span className="statstrip-cap">{t('widgets.pollerHealth.workingSet')}</span>
       </div>
-      <div className="statstrip-item" title={t('widgets.pollerHealth.mirrorWritesHint')}>
+      <div className="statstrip-item">
         <span className="statstrip-val">
           {formatCount(data?.assignment_mirror_writes_total ?? 0)}
         </span>
@@ -144,7 +145,15 @@ export function DiscoveryQueueWidget() {
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   const candidates = data ?? [];
   if (candidates.length === 0) {
-    return <p className="muted">{t('widgets.discovery.empty')}</p>;
+    return (
+      <p className="muted">
+        <Trans
+          t={t}
+          i18nKey="widgets.discovery.empty"
+          components={{ lnk: <ScreenLink to="/nodes/discovery" /> }}
+        />
+      </p>
+    );
   }
   return (
     <ul className="dwl">

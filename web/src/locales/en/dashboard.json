@@ -64,7 +64,8 @@
     "sizeAnnounce": "Width {{w}} of 12 columns, height {{h}} rows",
     "nameAria": "Rename this {{name}} card",
     "namePlaceholder": "Name this card…",
-    "settings": "{{name}} settings"
+    "settings": "{{name}} settings",
+    "setUpInCustomize": "Set it up in Customize."
   },
   "catalog": {
     "title": "Add a widget",
@@ -159,7 +160,7 @@
         "blurb": "Links dropping the most frames/sec (in+out) — congestion, not damage."
       },
       "top-talkers": {
-        "title": "Top talkers",
+        "title": "Top talkers (interfaces)",
         "blurb": "Interfaces moving the most bits now (in+out)."
       },
       "aggregate-throughput": {
@@ -251,7 +252,7 @@
         "blurb": "Share of events matched by a rule."
       },
       "flow-top-talkers": {
-        "title": "Top talkers",
+        "title": "Top talkers (hosts)",
         "blurb": "Source hosts by traffic (all exporters)."
       },
       "flow-top-as": {
@@ -276,15 +277,15 @@
       },
       "metric-chart": {
         "title": "Metric chart",
-        "blurb": "Any one metric of any one node, over 6h — including metrics no other card covers."
+        "blurb": "Any one metric of one node over 6h, including ones no other card shows."
       },
       "metric-top": {
         "title": "Top nodes by metric",
-        "blurb": "The highest-value nodes for any metric name you type — including metrics no other card covers."
+        "blurb": "Ranks nodes by any metric name you type, even ones no other card shows."
       },
       "vpn-sessions": {
         "title": "VPN sessions",
-        "blurb": "Up to six VPN concentrators you pick, with the connections on each right now and over time."
+        "blurb": "Up to six VPN devices you pick: connections now and over time."
       }
     }
   },
@@ -363,7 +364,7 @@
     },
     "ifTraffic": {
       "pickCount": "Interfaces ({{n}}/{{max}})",
-      "pickSome": "Pick one or more interfaces to plot — press Customize, then the ⚙ on this card.",
+      "pickSome": "No interfaces chosen.",
       "noneYet": "Nothing plotted yet. Choose a node, then one of its interfaces.",
       "seriesFailed": "Couldn’t read traffic for any of these interfaces",
       "removeAria": "Stop plotting this interface",
@@ -375,16 +376,16 @@
       "rosterFailed": "Couldn’t read this node’s interfaces",
       "unavailable": "No longer reported by the node: {{links}}",
       "unitAria": "Unit",
-      "unitTitle": "Bits per second, or unicast packets per second (multicast and broadcast are not counted)",
       "unitBps": "bps",
-      "unitPps": "pps",
+      "unitPps": "unicast pps",
       "axisIn": "IN",
       "axisOut": "OUT",
-      "rangeAria": "Time window"
+      "rangeAria": "Time window",
+      "choose": "Choose interfaces"
     },
     "vpnSessions": {
       "pickCount": "Devices ({{n}}/{{max}})",
-      "pickSome": "Pick one or more VPN devices to plot — press Customize, then the ⚙ on this card.",
+      "pickSome": "No VPN devices chosen.",
       "noneYet": "Nothing plotted yet. Choose a device that terminates VPN connections.",
       "pickNodePlaceholder": "Node…",
       "already": "Already on this card.",
@@ -394,7 +395,8 @@
       "unsupported": "Reports no VPN session count: {{nodes}}",
       "unreadable": "Couldn’t read what these devices collect: {{nodes}}",
       "seriesFailed": "Couldn’t read VPN sessions for any of these devices",
-      "empty": "No sessions recorded in this window"
+      "empty": "No sessions recorded in this window",
+      "choose": "Choose devices"
     },
     "mostErrors": {
       "empty": "No interface errors. 🎉"
@@ -447,15 +449,12 @@
       "lastRun": "last poll run",
       "jobsPerRun": "jobs per run",
       "results": "results collected",
-      "pools": "pools: working-set / legacy",
-      "poolsHint": "Pools whose nodes are pushed to a live poller as a working set, versus pools falling back to per-job publish because no poller is registered and alive for them.",
-      "workingSet": "snapshots / deltas",
-      "workingSetHint": "Working-set pushes since core started: full snapshots and incremental deltas. A rising snapshot count means pollers keep resyncing.",
-      "mirrorWrites": "assignment mirror writes",
-      "mirrorWritesHint": "Rewrites of the Redis poller-assignment mirror since core started. Redis is rebuildable, so this is a churn signal, not a durability one."
+      "pools": "pools: live poller / no poller",
+      "workingSet": "full pushes / deltas since start",
+      "mirrorWrites": "Redis assignment writes since start"
     },
     "discovery": {
-      "empty": "No pending discoveries. Run a scan from Nodes → Discovery.",
+      "empty": "No pending discoveries. Run a scan in <lnk/>.",
       "unclassified": "unclassified"
     },
     "audit": {
@@ -521,20 +520,23 @@
       "src": "Source"
     },
     "metricChart": {
-      "pickNode": "Pick a node and one of its metrics — press Customize, then the ⚙ on this card.",
+      "pickNode": "No node chosen.",
       "pickNodePlaceholder": "Node…",
-      "pickMetric": "Pick a metric to chart — press Customize, then the ⚙ on this card.",
+      "pickMetric": "No metric chosen.",
       "metricAria": "Metric to chart",
       "metricPlaceholder": "Metric…",
       "unavailable": "{{metric}} is not available on this node.",
-      "empty": "No data in the last 6 hours…"
+      "empty": "No data in the last 6 hours…",
+      "chooseNode": "Choose a node",
+      "chooseMetric": "Choose a metric"
     },
     "metricTop": {
-      "pickMetric": "Type a metric name to rank the fleet by — press Customize, then the ⚙ on this card.",
+      "pickMetric": "No metric chosen.",
       "metricAria": "Metric to rank by",
       "metricPlaceholder": "Metric…",
       "counter": "{{metric}} is a counter. Ranking its stored value would rank how long each node has been up, not how busy it is.",
-      "empty": "No node is reporting {{metric}}. The name has to match exactly — a node's Collection tab lists the ones it has."
+      "empty": "No node is reporting {{metric}}. The name has to match exactly — a node's Collection tab lists the ones it has.",
+      "choose": "Choose a metric"
     }
   },
   "primitives": {
@@ -556,17 +558,15 @@
     "requestFailed": "request failed"
   },
   "public": {
-    "pageNote": "The one board people can see without signing in. It is what they can see — nothing else on this deployment is reachable without an account.",
-    "banner": "This board is visible from outside. Every widget you place here also opens the API it reads to anonymous visitors.",
-    "bannerLive_one": "Live: anonymous visitors can see this board right now, and the {{count}} API route it reads.",
-    "bannerLive_other": "Live: anonymous visitors can see this board right now, and the {{count}} API routes it reads.",
-    "bannerOff": "Not published. Compose the board here, then turn it on under Settings ▸ Sign-in methods.",
+    "bannerLive_one": "Published: anonymous visitors can see this board and the {{count}} API route it reads, nothing else.",
+    "bannerLive_other": "Published: anonymous visitors can see this board and the {{count}} API routes it reads, nothing else.",
+    "bannerOff": "Not published. Turn it on in <lnk/>.",
     "loading": "Loading the public dashboard…",
-    "empty": "The public dashboard is empty. Nothing is served to anonymous visitors until you add a widget.",
+    "empty": "The public dashboard is empty.",
     "emptyViewer": "Nothing has been published here yet.",
     "preview": "View as anonymous",
     "previewExit": "Stop previewing",
-    "previewBanner": "Previewing as an anonymous visitor — requests are being sent without your session. A widget that shows nothing here shows nothing to them.",
+    "previewBanner": "Previewing as an anonymous visitor: a widget empty here is empty for them.",
     "viewerUnavailable": "This dashboard is not available right now.",
     "signIn": "Sign in"
   }

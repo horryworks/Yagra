@@ -227,8 +227,8 @@ async function probeMirror(cell: import('@playwright/test').Locator) {
 // mounts into a state it can reach without real hardware. The rest of each item's homework (a USG's
 // `huawei_*` metrics appearing, a counter being refused a ranking) still needs a device.
 const PRIOR_WIDGETS = [
-  { title: 'Metric chart', section: /performance/i, placed: 'press Customize, then the ⚙ on this card' },
-  { title: 'Top nodes by metric', section: /performance/i, placed: 'press Customize, then the ⚙ on this card' },
+  { title: 'Metric chart', section: /performance/i, placed: 'Choose a node' },
+  { title: 'Top nodes by metric', section: /performance/i, placed: 'Choose a metric' },
   { title: 'Most interface discards', section: /performance/i, placed: null },
 ];
 
@@ -280,16 +280,20 @@ test('placing it mounts a widget that says what it needs', async ({ page, errors
   await expect(cell).toBeVisible({ timeout: 15_000 });
 
   // The body mounted and is in its no-selection state. Asserting the prompt rather than merely
-  // "a card exists" is what separates a mounted widget from an empty box — and since ADR-072 the
-  // prompt has to name where the control it asks for actually lives, because it is not on this
-  // screen (ADR-055 R6).
-  await expect(cell).toContainText('Pick one or more interfaces to plot');
-  await expect(cell).toContainText('press Customize, then the ⚙ on this card');
+  // "a card exists" is what separates a mounted widget from an empty box. While customizing, the
+  // choice is a button on the card (ADR-200), and it opens the same ⚙ panel the header's gear does.
+  await expect(cell).toContainText('No interfaces chosen.');
+  await cell.getByRole('button', { name: 'Choose interfaces' }).click();
+  await expect(page.locator('.widgetframe-settings-pop')).toBeVisible();
 
   // Header actions only render in view mode, so leave customize first. Exactly the two view
-  // controls must be there — the unit and the window.
+  // controls must be there — the unit and the window. Outside Customize the ⚙ does not exist, so
+  // the card names where the choice is made instead of offering a button that cannot open it.
   await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('.widgetframe-settings-pop')).toHaveCount(0);
   await expect(cell.locator('.iftraffic-actions select')).toHaveCount(2);
+  await expect(cell).toContainText('No interfaces chosen. Set it up in Customize.');
+  await expect(cell.getByRole('button', { name: 'Choose interfaces' })).toHaveCount(0);
 
   expect(errors.uncaught, 'the widget threw while rendering').toEqual([]);
 });
@@ -998,10 +1002,10 @@ test('the VPN-sessions widget is in the catalogue and mounts when placed', async
   const cell = page.locator('.mydash-cell').first();
   await expect(cell).toBeVisible({ timeout: 15_000 });
 
-  // Mounted and in its no-selection state, naming where the control it asks for lives — it is not
-  // on this screen (ADR-055 R6).
-  await expect(cell).toContainText('Pick one or more VPN devices to plot');
-  await expect(cell).toContainText('press Customize, then the ⚙ on this card');
+  // Mounted and in its no-selection state, with the choice offered as a button while customizing
+  // (ADR-200).
+  await expect(cell).toContainText('No VPN devices chosen.');
+  await expect(cell.getByRole('button', { name: 'Choose devices' })).toHaveCount(1);
 
   // The ⚙ is offered while customizing: the device list is the subject, so that is where it goes.
   await expect(cell.locator('.widgetframe-gear')).toHaveCount(1);

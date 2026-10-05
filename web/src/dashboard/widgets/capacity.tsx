@@ -15,6 +15,7 @@ import { api } from '../../services/api';
 import type { InterfaceRow } from '../../types/api';
 import { DeltaBars } from '../primitives/DeltaBars';
 import { Heatmap } from '../primitives/Heatmap';
+import { NothingChosen } from '../primitives/NothingChosen';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 import {
@@ -192,7 +193,7 @@ export function InterfaceTrafficActions({ instance, setSettings }: ViewActionPro
         value={sel.unit}
         onChange={(e) => setSettings({ unit: e.target.value })}
         aria-label={t('widgets.ifTraffic.unitAria')}
-        title={t('widgets.ifTraffic.unitTitle')}
+        title={t('widgets.ifTraffic.unitAria')}
       >
         <option value="bps">{t('widgets.ifTraffic.unitBps')}</option>
         <option value="pps">{t('widgets.ifTraffic.unitPps')}</option>
@@ -384,7 +385,7 @@ function LinkEditor({
 }
 
 /** The mirrored traffic chart for the picked links, or the reason there isn't one. */
-export function InterfaceTrafficWidget({ instance }: WidgetProps) {
+export function InterfaceTrafficWidget({ instance, openSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const sel = readTrafficSettings(instance.settings);
   const rosters = useInterfaceRosters(selectedNodeIds(sel.links));
@@ -418,7 +419,14 @@ export function InterfaceTrafficWidget({ instance }: WidgetProps) {
     refreshMsFor(sel.rangeSecs),
   );
 
-  if (plan.kind === 'empty') return <p className="muted">{t('widgets.ifTraffic.pickSome')}</p>;
+  if (plan.kind === 'empty')
+    return (
+      <NothingChosen
+        text={t('widgets.ifTraffic.pickSome')}
+        choose={t('widgets.ifTraffic.choose')}
+        openSettings={openSettings}
+      />
+    );
   if (plan.kind === 'loading') return <p className="muted">{t('common:loading')}</p>;
 
   const gone = plan.unavailable.length > 0 && (

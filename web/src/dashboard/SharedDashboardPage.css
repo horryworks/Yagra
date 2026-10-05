@@ -9,6 +9,13 @@
   font-size: var(--font-sm);
 }
 
+/* The public board's "not published" line (ADR-200): the same place as the banner, without the
+   warning's weight, because nothing is exposed while it shows. */
+p.public-dash-state {
+  margin: 0 0 16px;
+  font-size: var(--font-sm);
+}
+
 /* The anonymous public shell (ADR-123). Deliberately minimal chrome: one bar carrying the way in
    for the operator, and nothing else — a visitor has no other page to navigate to. */
 .public-shell {

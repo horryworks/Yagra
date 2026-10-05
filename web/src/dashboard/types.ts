@@ -36,6 +36,11 @@ export interface WidgetProps {
   instance: WidgetInstance;
   /** Merge a patch into this instance's settings (persisted). */
   setSettings: (patch: WidgetSettings) => void;
+  /** Open this card's ⚙ panel. Present only while the board is being customized and the widget
+   *  has a panel, so a body's "nothing chosen" state can offer the choice as a button (ADR-200)
+   *  instead of a sentence telling the operator where the ⚙ is. Absent in view mode: the panel
+   *  lives behind Customize (ADR-072), and entering it is the page's decision, not the card's. */
+  openSettings?: () => void;
 }
 
 /** The settings a **view-mode** control is allowed to write: how the already-chosen subject is

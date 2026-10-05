@@ -64,14 +64,14 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   alertsConfig: [8407, 4476],
   auth: [79, 43],
   common: [717, 385],
-  dashboard: [7503, 4079],
+  dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11335, 6683],
   nav: [2907, 1367],
   nodes: [15779, 8875],
   rca: [1022, 528],
-  reports: [700, 445],
+  reports: [643, 402],
   'settings-ai': [736, 410],
   'settings-auth': [3540, 2095],
   'settings-forwarding': [1695, 900],
@@ -111,10 +111,6 @@ const HOVER_LEGACY: string[] = [
   'alerts:active.muteHint',
   'alertsConfig:routing.template.status.confirmTitle',
   'alertsConfig:thresholds.meaningUnknown',
-  'dashboard:widgets.ifTraffic.unitTitle',
-  'dashboard:widgets.pollerHealth.mirrorWritesHint',
-  'dashboard:widgets.pollerHealth.poolsHint',
-  'dashboard:widgets.pollerHealth.workingSetHint',
   'monitoring:discovery.seen.detect.hint',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
@@ -139,11 +135,6 @@ interface PageNote {
 }
 
 const PAGE_NOTES: Record<string, PageNote> = {
-  'dashboard/PublicDashboardPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.21',
-    why: 'nothing else on the deployment is reachable without an account',
-  },
   'pages/CollectionTemplatesPage.tsx': {
     kind: 'fact',
     // Not Inc.13's to remove: "used by N profiles" in the set needs a profile count the
@@ -210,8 +201,6 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 
 /** Strings that spell a menu path with `▸` and predate ADR-200 (G9). Remove; never add. */
 const POINTER_LEGACY: string[] = [
-  'dashboard:public.bannerOff',
-  'dashboard:widgets.discovery.empty',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];

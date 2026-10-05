@@ -6,8 +6,10 @@
 //
 //  - editing takes `manage_system` (Admin), not the `manage_config` the shared board takes;
 //  - the catalog offers only widgets an anonymous visitor can actually load;
-//  - a banner says, permanently, that this is visible from outside — ADR-055 R6, a deliberate
-//    property stated where the person doing the work is looking;
+//  - while the board is published, a banner says so and how many API routes that opens — ADR-055
+//    R6, a deliberate property stated where the person doing the work is looking. Unpublished, one
+//    quiet line says so and links to where it is turned on (ADR-200: the warning only while it
+//    is true);
 //  - and there is a **view as anonymous** toggle, which is the only way to find a widget whose
 //    `reads` declaration is wrong. An admin's own session answers every call, so a missing
 //    declaration is invisible from here until a stranger hits it.
@@ -16,7 +18,7 @@
 // `PublicShell` renders it with `viewerOnly`.
 
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   DndContext,
   KeyboardSensor,
@@ -35,6 +37,7 @@ import {
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import { useAlertStream } from '../hooks/useAlertStream';
 import { api, setAnonymousPreview } from '../services/api';
 import { useCan } from '../store';
@@ -201,21 +204,30 @@ export function PublicDashboardPage({ viewerOnly = false }: PublicDashboardPageP
         <PageHeader
           title={t('nav:dashboard.public')}
           trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.public') }]}
-          note={t('public.pageNote')}
           actions={actions}
         />
 
-        {/* ADR-055 R6: a deliberate property, said where the person acting on it is looking, and
-            not in a parenthetical somewhere else. It stays on screen the whole time. */}
-        <div className={`shared-dash-warning${preview ? ' is-preview' : ''}`} role="status">
-          {preview
-            ? t('public.previewBanner')
-            : switchState == null
-              ? t('public.banner')
-              : switchState.enabled
-                ? t('public.bannerLive', { count: switchState.routes })
-                : t('public.bannerOff')}
-        </div>
+        {/* ADR-055 R6: a deliberate property, said where the person acting on it is looking. The
+            warning is drawn only while it is true — published, or previewing as a stranger — and
+            an unpublished board gets one quiet line instead (ADR-200). `public-dash-state` marks
+            whichever of the three is up; nothing is drawn until the switch has answered. */}
+        {preview ? (
+          <div className="shared-dash-warning public-dash-state is-preview" role="status">
+            {t('public.previewBanner')}
+          </div>
+        ) : switchState?.enabled ? (
+          <div className="shared-dash-warning public-dash-state" role="status">
+            {t('public.bannerLive', { count: switchState.routes })}
+          </div>
+        ) : switchState ? (
+          <p className="muted public-dash-state" role="status">
+            <Trans
+              t={t}
+              i18nKey="public.bannerOff"
+              components={{ lnk: <ScreenLink to="/settings/auth" /> }}
+            />
+          </p>
+        ) : null}
 
         {board}
 

@@ -94,7 +94,6 @@ export const NOTE_MAX = 80;
  * row cannot outlive its reason.
  */
 export const LONG_NOTE: Record<string, string> = {
-  '/dashboard/public': 'Inc.21 — nothing else is reachable without an account',
   '/topology/dependency': 'Inc.23 — the upstream decides suppression',
   '/topology/map': 'Inc.23 — off the menu, so it has no nav description',
   [`/troubleshoot/report/${REPORT_TOOL}`]: 'Inc.22 — each analysis explains its own scoring',
@@ -110,7 +109,6 @@ export const LONG_NOTE: Record<string, string> = {
  * Blind spots: dialogs, tabs other than the default, Japanese, and phone width.
  */
 export const PROSE_CEILING: Record<string, number> = {
-  '/dashboard/public': 182,
   '/events': 93,
   '/events/forwarding': 97,
   '/nodes': 41,
@@ -153,14 +151,14 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/dashboard': MARKER,
   '/dashboard/my': MARKER,
   // The public board starts empty and the Tier1 mock has no saved layout, so there is no widget
-  // marker to find — what renders is the empty state and the warning banner. The banner rather than
-  // `NONE`: it is the one thing on this screen that must never silently disappear (ADR-055 R6), and
-  // an empty board is exactly when a missing warning would go unnoticed.
-  // ⚠️ **The banner element, not one of its texts.** It says three things: "visible from outside"
-  // until the switch has answered, then "live" or "Not published". The mock answers "not
-  // published", so asserting the first text passed only when the check happened to look before
-  // that request landed — green alone, red in a full run.
-  '/dashboard/public': { kind: 'locator', sel: '.shared-dash-warning' },
+  // marker to find — what renders is the empty state and the publication line. That line rather
+  // than `NONE`: whether strangers can see this board is the one thing on this screen that must
+  // never silently disappear (ADR-055 R6), and an empty board is when a missing one goes unnoticed.
+  // ⚠️ **The publication line, not one of its texts.** `.public-dash-state` is whichever of three
+  // is up once the switch has answered: the "published" warning, the preview warning, or the quiet
+  // "Not published" line the mock's answer produces (ADR-200 drew the warning only while it is
+  // true). Asserting one text passed only when the check happened to look at the right moment.
+  '/dashboard/public': { kind: 'locator', sel: '.public-dash-state' },
   '/dashboard/reports': MARKER,
   '/nodes': MARKER,
   '/nodes/discovery': MARKER,
