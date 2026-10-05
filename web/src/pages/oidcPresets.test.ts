@@ -5,6 +5,7 @@ import {
   OIDC_PRESETS,
   effectiveIssuer,
   issuerFor,
+  issuerParamInvalid,
   paramFromIssuer,
   presetOf,
   providerFormReady,
@@ -185,6 +186,35 @@ describe('roleMapToSend', () => {
   it('stores the map for every product that can', () => {
     for (const kind of ['entra', 'okta', 'generic'] as const) {
       expect(roleMapToSend(kind, map), kind).toEqual(map);
+    }
+  });
+});
+
+describe('the product field', () => {
+  // The field lost its sentence ("without https:// and without a path"), so the rule must be said
+  // when it is broken — and only then.
+  it('is wrong only when it holds something that cannot build an issuer', () => {
+    expect(issuerParamInvalid('okta', 'https://acme.okta.com')).toBe(true);
+    expect(issuerParamInvalid('okta', 'acme.okta.com/oauth2')).toBe(true);
+    expect(issuerParamInvalid('entra', 'contoso onmicrosoft')).toBe(true);
+    expect(issuerParamInvalid('okta', 'acme.okta.com')).toBe(false);
+    expect(issuerParamInvalid('entra', 'contoso.onmicrosoft.com')).toBe(false);
+  });
+
+  it('is not wrong while empty, and products without one never are', () => {
+    expect(issuerParamInvalid('okta', '')).toBe(false);
+    expect(issuerParamInvalid('okta', '   ')).toBe(false);
+    expect(issuerParamInvalid('google', 'https://x')).toBe(false);
+    expect(issuerParamInvalid('generic', 'https://x/y')).toBe(false);
+  });
+});
+
+describe('setup steps', () => {
+  it('every product has at least one, each a settings-auth idpSteps key of its own', () => {
+    for (const k of OIDC_PROVIDER_KINDS) {
+      const steps = OIDC_PRESETS[k].setupSteps;
+      expect(steps.length, k).toBeGreaterThan(0);
+      for (const key of steps) expect(key.startsWith(`idpSteps.${k}.`), key).toBe(true);
     }
   });
 });

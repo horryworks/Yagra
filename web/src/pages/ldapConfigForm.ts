@@ -15,7 +15,7 @@
  *  would be a mirror with nothing keeping it honest. */
 
 import type { LdapConfigInput, LdapConfigView, LdapSecurity, Role } from '../types/api';
-import { fromRoleMapRows, type RoleMapRow } from './roleMapForm';
+import { fromRoleMapRows, toRoleMapRows, type RoleMapRow } from './roleMapForm';
 
 export const DEFAULT_LDAPS_PORT = 636;
 export const DEFAULT_STARTTLS_PORT = 389;
@@ -27,8 +27,8 @@ export interface LdapFormState {
   security: LdapSecurity;
   caCert: string;
   bindDn: string;
+  /** A new bind password, or `''` for "keep the stored one" (`SecretInput`, ADR-200). */
   bindPassword: string;
-  replacePassword: boolean;
   userBaseDn: string;
   userFilter: string;
   usernameAttribute: string;
@@ -51,7 +51,6 @@ export function emptyLdapForm(): LdapFormState {
     caCert: '',
     bindDn: '',
     bindPassword: '',
-    replacePassword: false,
     userBaseDn: '',
     userFilter: '(&(objectClass=user)(sAMAccountName={username}))',
     usernameAttribute: 'sAMAccountName',
@@ -66,7 +65,7 @@ export function emptyLdapForm(): LdapFormState {
 }
 
 /** Load a saved configuration into the form. The bind password is never returned, so the field
- *  starts empty and hidden behind the replace checkbox. */
+ *  starts empty, which means "keep the stored one". */
 export function toLdapForm(view: LdapConfigView): LdapFormState {
   return {
     host: view.host,
@@ -75,7 +74,6 @@ export function toLdapForm(view: LdapConfigView): LdapFormState {
     caCert: view.ca_cert ?? '',
     bindDn: view.bind_dn,
     bindPassword: '',
-    replacePassword: false,
     userBaseDn: view.user_base_dn,
     userFilter: view.user_filter,
     usernameAttribute: view.username_attribute,
@@ -95,10 +93,13 @@ export function defaultPortFor(security: LdapSecurity): number {
   return security === 'starttls' ? DEFAULT_STARTTLS_PORT : DEFAULT_LDAPS_PORT;
 }
 
-/** Whether the password field should be shown at all: always before the first save, and afterwards
- *  only when the operator ticks "replace". Same shape as `keyIsEditable` in `aiConfigForm.ts`. */
-export function passwordIsEditable(stored: LdapConfigView | null, form: LdapFormState): boolean {
-  return !stored?.has_bind_password || form.replacePassword;
+/** The bind password a save sends: the typed one, or `undefined` to keep what is stored.
+ *
+ *  An empty (or blank) box is "keep", exactly as `SecretInput` shows it. It is never sent as `''`:
+ *  a blank bind password is an anonymous search, and on a first save `validateLdapForm` refuses it
+ *  before this is asked. */
+export function bindPasswordToSend(form: LdapFormState): string | undefined {
+  return form.bindPassword.trim() === '' ? undefined : form.bindPassword;
 }
 
 /** The URL the server will dial, for the form to show. Derived exactly as `LdapConfig::url` does —
@@ -139,9 +140,9 @@ export function validateLdapForm(
   const port = Number(form.port.trim());
   if (!Number.isInteger(port) || port < 1 || port > 65535) return 'port';
   if (!form.bindDn.trim()) return 'bindDn';
-  // Required on a first save, and required again whenever "replace" is ticked. Never optional-blank:
-  // a blank bind password is an anonymous search, not an absent credential.
-  if (passwordIsEditable(stored, form) && !form.bindPassword.trim()) return 'bindPassword';
+  // Required on a first save. Never optional-blank: a blank bind password is an anonymous search,
+  // not an absent credential. Once one is stored, an empty box keeps it.
+  if (!stored?.has_bind_password && !form.bindPassword.trim()) return 'bindPassword';
   if (!form.userBaseDn.trim()) return 'userBaseDn';
   if (!form.userFilter.includes('{username}')) return 'userFilter';
 
@@ -165,22 +166,19 @@ export function validateLdapForm(
 
 /** Build the save payload.
  *
- *  `bind_password` is **omitted entirely** when it is not being replaced — that omission is what
- *  makes the server's "keep the stored one" branch fire, so sending `''` instead would be rejected
- *  rather than ignored. */
-export function toLdapInput(
-  form: LdapFormState,
-  rows: readonly RoleMapRow[],
-  stored: LdapConfigView | null,
-): LdapConfigInput {
+ *  `bind_password` is **omitted entirely** when none was typed — that omission is what makes the
+ *  server's "keep the stored one" branch fire, so sending `''` instead would be rejected rather
+ *  than ignored. */
+export function toLdapInput(form: LdapFormState, rows: readonly RoleMapRow[]): LdapConfigInput {
   const optional = (s: string): string | null => (s.trim() ? s.trim() : null);
+  const password = bindPasswordToSend(form);
   return {
     host: form.host.trim(),
     port: Number(form.port.trim()),
     security: form.security,
     ca_cert: optional(form.caCert),
     bind_dn: form.bindDn.trim(),
-    ...(passwordIsEditable(stored, form) ? { bind_password: form.bindPassword } : {}),
+    ...(password !== undefined ? { bind_password: password } : {}),
     user_base_dn: form.userBaseDn.trim(),
     user_filter: form.userFilter.trim(),
     username_attribute: form.usernameAttribute.trim(),
@@ -193,4 +191,44 @@ export function toLdapInput(
     default_role: form.defaultRole || null,
     enabled: form.enabled,
   };
+}
+
+/** Whether the form holds anything a save would change.
+ *
+ *  Asked of the payload rather than of each field, so it cannot disagree with what Save sends: a
+ *  blank mapping row, trailing space and an untouched password box are not changes, because the
+ *  save would not send them either. `true` when nothing is stored yet. */
+export function ldapFormChanged(
+  stored: LdapConfigView | null,
+  form: LdapFormState,
+  rows: readonly RoleMapRow[],
+): boolean {
+  if (stored == null) return true;
+  const now = toLdapInput(form, rows);
+  const saved = toLdapInput(toLdapForm(stored), toRoleMapRows(stored.role_map));
+  return canonical(now) !== canonical(saved);
+}
+
+/** A payload as text with its role map in a fixed order, so two equal maps compare equal. */
+function canonical(input: LdapConfigInput): string {
+  const roleMap = Object.entries(input.role_map ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify({ ...input, role_map: roleMap });
+}
+
+/** Whether Test may be pressed. The check exercises the **stored** configuration, so it waits for a
+ *  first save and for every later edit to be saved — a result would otherwise appear to describe
+ *  what is on screen. This replaced the sentence "Save the directory before testing it" (ADR-200). */
+export function canTestLdap(
+  stored: LdapConfigView | null,
+  form: LdapFormState,
+  rows: readonly RoleMapRow[],
+): boolean {
+  return stored != null && !ldapFormChanged(stored, form, rows);
+}
+
+/** Whether saving this form switches off a directory that is on now — which revokes every directory
+ *  account's sessions, a result nothing else on the screen shows. The warning is drawn only then
+ *  (ADR-200 kind 3: a sentence shown when the dangerous choice is made). */
+export function savingRevokesSessions(stored: LdapConfigView | null, form: LdapFormState): boolean {
+  return stored?.enabled === true && !form.enabled;
 }

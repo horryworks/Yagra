@@ -2,10 +2,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bindPasswordToSend,
+  canTestLdap,
   connectionUrl,
   defaultPortFor,
   emptyLdapForm,
-  passwordIsEditable,
+  ldapFormChanged,
+  savingRevokesSessions,
   toLdapForm,
   toLdapInput,
   validateLdapForm,
@@ -58,25 +61,22 @@ describe('the bind password', () => {
     expect(validateLdapForm(filled(), [], null)).toBeNull();
   });
 
-  it('is not asked for again once one is stored', () => {
+  it('is kept when the box is left empty once one is stored', () => {
     const form = filled({ bindPassword: '' });
-    expect(passwordIsEditable(stored(), form)).toBe(false);
+    expect(bindPasswordToSend(form)).toBeUndefined();
     expect(validateLdapForm(form, [], stored())).toBeNull();
-  });
-
-  it('is required again the moment "replace" is ticked', () => {
-    const form = filled({ bindPassword: '', replacePassword: true });
-    expect(passwordIsEditable(stored(), form)).toBe(true);
-    expect(validateLdapForm(form, [], stored())).toBe('bindPassword');
+    // A blank box after "Replace" is still "keep", the way `SecretInput` shows it — never an
+    // anonymous bind.
+    expect(bindPasswordToSend(filled({ bindPassword: '   ' }))).toBeUndefined();
   });
 
   // The omission is what makes the server keep the stored credential — sending '' would be
   // *rejected*, not ignored, so this is the difference between "edit the base DN" working and
   // failing with a confusing 400.
-  it('is omitted from the payload entirely when it is not being replaced', () => {
-    const payload = toLdapInput(filled({ bindPassword: '' }), [], stored());
+  it('is omitted from the payload entirely when none was typed', () => {
+    const payload = toLdapInput(filled({ bindPassword: '' }), []);
     expect('bind_password' in payload).toBe(false);
-    const replacing = toLdapInput(filled({ replacePassword: true }), [], stored());
+    const replacing = toLdapInput(filled(), []);
     expect(replacing.bind_password).toBe('s3cret');
   });
 });
@@ -174,10 +174,9 @@ describe('the port', () => {
 });
 
 describe('loading a saved configuration', () => {
-  it('never carries a password into the form and keeps replace off', () => {
+  it('never carries a password into the form', () => {
     const form = toLdapForm(stored());
     expect(form.bindPassword).toBe('');
-    expect(form.replacePassword).toBe(false);
   });
 
   it('turns absent optional fields into empty strings, not "null"', () => {
@@ -188,9 +187,58 @@ describe('loading a saved configuration', () => {
   });
 
   it('sends absent optional fields back as null rather than empty strings', () => {
-    const payload = toLdapInput(toLdapForm(stored()), [], stored());
+    const payload = toLdapInput(toLdapForm(stored()), []);
     expect(payload.ca_cert).toBeNull();
     expect(payload.group_base_dn).toBeNull();
     expect(payload.default_role).toBeNull();
+  });
+});
+
+describe('the Test button', () => {
+  // Test exercises what is STORED. While the screen holds an unsaved edit, a result would appear to
+  // describe what is on screen, so the button waits (ADR-200 replaced the "save first" sentence).
+  const saved = () => toLdapForm(stored());
+  const savedRows = () => rows([['NetOps', 'admin']]);
+
+  it('waits for a first save', () => {
+    expect(canTestLdap(null, filled(), [])).toBe(false);
+    expect(ldapFormChanged(null, filled(), [])).toBe(true);
+  });
+
+  it('may be pressed while the form matches what is stored', () => {
+    expect(ldapFormChanged(stored(), saved(), savedRows())).toBe(false);
+    expect(canTestLdap(stored(), saved(), savedRows())).toBe(true);
+  });
+
+  it('waits again after any edit', () => {
+    expect(canTestLdap(stored(), { ...saved(), host: 'dc2.corp.example.com' }, savedRows())).toBe(
+      false,
+    );
+    expect(canTestLdap(stored(), { ...saved(), bindPassword: 'new' }, savedRows())).toBe(false);
+    expect(canTestLdap(stored(), saved(), rows([['NetOps', 'viewer']]))).toBe(false);
+    expect(canTestLdap(stored(), saved(), [])).toBe(false);
+  });
+
+  // What a save would not send is not an edit: an empty mapping row, trailing space on a group, or
+  // the order the rows are in.
+  it('does not count what a save would not change', () => {
+    const extra = [...savedRows(), { key: 9, group: '  ', role: 'viewer' as const }];
+    expect(canTestLdap(stored(), saved(), extra)).toBe(true);
+    expect(canTestLdap(stored(), saved(), rows([['NetOps ', 'admin']]))).toBe(true);
+    const two = stored({ role_map: { A: 'viewer', B: 'admin' } });
+    expect(canTestLdap(two, toLdapForm(two), rows([['B', 'admin'], ['A', 'viewer']]))).toBe(true);
+  });
+});
+
+describe('switching the directory off', () => {
+  // Saving it off revokes every directory account's sessions, which nothing else on the screen
+  // shows — so the warning appears exactly then, and not for a directory that was already off.
+  it('warns only when a directory that is on is saved off', () => {
+    expect(savingRevokesSessions(stored({ enabled: true }), filled({ enabled: false }))).toBe(true);
+    expect(savingRevokesSessions(stored({ enabled: true }), filled({ enabled: true }))).toBe(false);
+    expect(savingRevokesSessions(stored({ enabled: false }), filled({ enabled: false }))).toBe(
+      false,
+    );
+    expect(savingRevokesSessions(null, filled({ enabled: false }))).toBe(false);
   });
 });

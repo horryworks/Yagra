@@ -43,11 +43,18 @@ export type OidcPreset = {
    * and says so rather than offering a control that cannot work.
    */
   readonly supportsGroups: boolean;
+  /**
+   * What to do in the product's own console, as `settings-auth` keys — one numbered step each, in
+   * the dialog's step frame (ADR-200 kind d). Written out whole rather than built from the product
+   * name so every key a screen asks for is spelled once in the source, where the orphan check and
+   * `i18nEnumKeys.test.ts` can both find it.
+   */
+  readonly setupSteps: readonly string[];
 };
 
 /**
  * Keyed by the union so the compiler demands an entry for every product (extensibility §1).
- * Adding a product is this table plus its `idp.` / `idpHint.` strings in both locales.
+ * Adding a product is this table plus its `idp.` name and its `setupSteps` strings in both locales.
  */
 export const OIDC_PRESETS: Record<OidcProviderKind, OidcPreset> = {
   entra: {
@@ -59,6 +66,12 @@ export const OIDC_PRESETS: Record<OidcProviderKind, OidcPreset> = {
     scopes: 'openid profile email',
     groupsClaim: 'groups',
     supportsGroups: true,
+    setupSteps: [
+      'idpSteps.entra.s1',
+      'idpSteps.entra.s2',
+      'idpSteps.entra.s3',
+      'idpSteps.entra.s4',
+    ],
   },
   okta: {
     issuerParam: 'domain',
@@ -69,6 +82,7 @@ export const OIDC_PRESETS: Record<OidcProviderKind, OidcPreset> = {
     scopes: 'openid profile email groups',
     groupsClaim: 'groups',
     supportsGroups: true,
+    setupSteps: ['idpSteps.okta.s1', 'idpSteps.okta.s2', 'idpSteps.okta.s3'],
   },
   google: {
     issuerParam: null,
@@ -76,6 +90,9 @@ export const OIDC_PRESETS: Record<OidcProviderKind, OidcPreset> = {
     scopes: 'openid profile email',
     groupsClaim: 'groups',
     supportsGroups: false,
+    // That Google sends no groups is said where it bites: the default role becomes required, and
+    // the field says why (`field.defaultRoleRequired`).
+    setupSteps: ['idpSteps.google.s1', 'idpSteps.google.s2'],
   },
   generic: {
     issuerParam: null,
@@ -85,6 +102,7 @@ export const OIDC_PRESETS: Record<OidcProviderKind, OidcPreset> = {
     scopes: 'openid profile email groups',
     groupsClaim: 'groups',
     supportsGroups: true,
+    setupSteps: ['idpSteps.generic.s1', 'idpSteps.generic.s2'],
   },
 };
 
@@ -142,6 +160,18 @@ export function paramFromIssuer(kind: OidcProviderKind, issuer: string): string 
     case 'generic':
       return null;
   }
+}
+
+/**
+ * Whether the product's one field holds something that cannot build an issuer — a scheme, a path or
+ * a space typed into "Okta domain". An empty field is not wrong yet, only unfinished.
+ *
+ * The field used to carry a sentence underneath ("without https:// and without a path"); the rule
+ * is said only when it is broken now (ADR-200 §4.2 row 4).
+ */
+export function issuerParamInvalid(kind: OidcProviderKind, param: string): boolean {
+  if (presetOf(kind).issuerParam === null || param.trim() === '') return false;
+  return issuerFor(kind, param) === null;
 }
 
 /**

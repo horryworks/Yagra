@@ -161,8 +161,21 @@ html[data-viewport='mobile'] .auth-grid {
   gap: 4px;
 }
 
-/* ADR-044: the stored OIDC redirect URI no longer matches the address this browser is on. */
-.auth-redirect-warning {
+/* A state with a consequence the screen cannot otherwise show: the stored OIDC redirect URI no
+   longer matches this address (ADR-044), or saving switches a live directory off. */
+.auth-warning {
   margin: 0;
   color: var(--status-warning);
+}
+
+/* The step frames (ADR-200 kind d): under the IdP picker, and under the redirect warning. */
+.auth-steps {
+  margin: 8px 0 12px;
+}
+
+/* Where the public board's contents are edited: a link, not a sentence. */
+.auth-compose {
+  margin: 8px 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
 }

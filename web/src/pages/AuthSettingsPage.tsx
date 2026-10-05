@@ -4,7 +4,7 @@
 // ManageUsers-gated. Local accounts (Settings ▸ Users) keep working alongside SSO.
 
 import { useCallback, useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import { useLoad } from '../lib/useLoad';
@@ -22,16 +22,18 @@ import {
 import {
   OIDC_PICKER_ORDER,
   effectiveIssuer,
+  issuerParamInvalid,
   paramFromIssuer,
   presetOf,
   providerFormReady,
   roleMapToSend,
 } from './oidcPresets';
 import {
+  canTestLdap,
   connectionUrl,
   defaultPortFor,
   emptyLdapForm,
-  passwordIsEditable,
+  savingRevokesSessions,
   toLdapForm,
   toLdapInput,
   validateLdapForm,
@@ -44,7 +46,13 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { InfoTip } from '../components/ui/InfoTip';
+import { SecretInput } from '../components/ui/SecretInput';
+import { secretToSend } from '../components/ui/secretField';
+import { StepFrame } from '../components/ui/StepFrame';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import { EmptyState } from '../components/ui/EmptyState';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './AuthSettingsPage.css';
@@ -60,7 +68,7 @@ interface MapRow {
   role: Role;
 }
 
-/** Add or edit an OIDC provider. On edit the client_secret is left intact unless "replace" is set. */
+/** Add or edit an OIDC provider. On edit the client_secret is kept unless a new one is typed. */
 function ProviderModal({
   provider,
   onClose,
@@ -91,7 +99,7 @@ function ProviderModal({
       paramFromIssuer(initialKind, provider.issuer) === null,
   );
   const [clientId, setClientId] = useState(provider?.client_id ?? '');
-  const [replaceSecret, setReplaceSecret] = useState(!editing);
+  // Empty = keep the stored secret (`SecretInput`); a new provider has none to keep.
   const [clientSecret, setClientSecret] = useState('');
   const [redirectUri, setRedirectUri] = useState(
     provider?.redirect_uri ??
@@ -123,7 +131,8 @@ function ProviderModal({
     },
   });
 
-  const secretReady = !replaceSecret ? true : clientSecret !== '';
+  const sentSecret = secretToSend(clientSecret);
+  const secretReady = editing || sentSecret !== undefined;
   const sentIssuer = effectiveIssuer(kind, issuerParam, issuer);
   const ready = providerFormReady({
     kind,
@@ -160,7 +169,7 @@ function ProviderModal({
         kind,
         issuer: sentIssuer,
         client_id: clientId.trim(),
-        ...(replaceSecret ? { client_secret: clientSecret } : {}),
+        ...(sentSecret !== undefined ? { client_secret: sentSecret } : {}),
         redirect_uri: redirectUri.trim(),
         scopes: scopes.trim(),
         groups_claim: groupsClaim.trim() || 'groups',
@@ -198,8 +207,14 @@ function ProviderModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t(`idpHint.${kind}`)}</span>
       </div>
+      {/* What to do in the product's own console, closed until wanted (ADR-200 kind d). It used to
+          be a paragraph under the picker, up to 334 characters, read once and then in the way. */}
+      <StepFrame
+        className="auth-steps"
+        summary={t('idpSteps.title')}
+        steps={preset.setupSteps.map((key) => t(key))}
+      />
       <div className="modal-field">
         <label className="modal-field-label">{t('field.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
@@ -213,16 +228,19 @@ function ProviderModal({
           <TextInput className="mono" value={preset.fixedIssuer} readOnly disabled />
         </div>
       ) : preset.issuerParam !== null && !rawIssuer ? (
-        <div className="modal-field">
-          <label className="modal-field-label">{t(`field.${preset.issuerParam}`)}</label>
+        <Field
+          label={t(`field.${preset.issuerParam}`)}
+          htmlFor="oidc-issuer-param"
+          error={issuerParamInvalid(kind, issuerParam) ? t('field.issuerParamInvalid') : null}
+        >
           <TextInput
+            id="oidc-issuer-param"
             className="mono"
             placeholder={t(`field.${preset.issuerParam}Placeholder`)}
             value={issuerParam}
             onChange={(e) => setIssuerParam(e.target.value)}
           />
-          <span className="modal-hint">{t(`field.${preset.issuerParam}Hint`)}</span>
-        </div>
+        </Field>
       ) : (
         <div className="modal-field">
           <label className="modal-field-label">{t('field.issuer')}</label>
@@ -232,9 +250,7 @@ function ProviderModal({
             value={issuer}
             onChange={(e) => setIssuer(e.target.value)}
           />
-          <span className="modal-hint">
-            {rawIssuer ? t('field.issuerUnrecognized') : t('field.issuerHint')}
-          </span>
+          {rawIssuer && <span className="modal-hint">{t('field.issuerUnrecognized')}</span>}
         </div>
       )}
       <div className="modal-field">
@@ -245,29 +261,17 @@ function ProviderModal({
           onChange={(e) => setClientId(e.target.value)}
         />
       </div>
-      {editing && (
-        <label className="auth-replace">
-          <input
-            type="checkbox"
-            checked={replaceSecret}
-            onChange={(e) => setReplaceSecret(e.target.checked)}
-          />
-          <span>{t('field.replaceSecret')}</span>
+      <div className="modal-field">
+        <label className="modal-field-label" htmlFor="oidc-client-secret">
+          {t('field.clientSecret')}
         </label>
-      )}
-      {replaceSecret && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('field.clientSecret')}</label>
-          <TextInput
-            className="mono"
-            type="password"
-            value={clientSecret}
-            onChange={(e) => setClientSecret(e.target.value)}
-            autoComplete="new-password"
-          />
-          <span className="modal-hint">{t('field.clientSecretHint')}</span>
-        </div>
-      )}
+        <SecretInput
+          id="oidc-client-secret"
+          stored={editing}
+          value={clientSecret}
+          onChange={setClientSecret}
+        />
+      </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('field.redirectUri')}</label>
         <TextInput
@@ -275,7 +279,6 @@ function ProviderModal({
           value={redirectUri}
           onChange={(e) => setRedirectUri(e.target.value)}
         />
-        <span className="modal-hint">{t('field.redirectUriHint')}</span>
       </div>
       {/* For a product these two are decided by the product, but they are still shown rather than
           hidden: what gets requested at the IdP is the thing an operator has to reason about when a
@@ -292,12 +295,13 @@ function ProviderModal({
           </div>
           <div className="modal-field">
             <label className="modal-field-label">{t('field.groupsClaim')}</label>
+            {/* Empty sends `groups` (see `submit`), so the placeholder is the real default. */}
             <TextInput
               className="mono"
+              placeholder="groups"
               value={groupsClaim}
               onChange={(e) => setGroupsClaim(e.target.value)}
             />
-            <span className="modal-hint">{t('field.groupsClaimHint')}</span>
           </div>
         </>
       ) : (
@@ -317,16 +321,14 @@ function ProviderModal({
       )}
 
       {/* A product that does not put groups in the ID token has no working map — offering one
-          would let an operator write rules that quietly never match. Say so instead. */}
-      {!preset.supportsGroups ? (
+          would let an operator write rules that quietly never match. The default role below
+          becomes required instead, and says why. */}
+      {preset.supportsGroups && (
         <div className="modal-field">
-          <label className="modal-field-label">{t('field.roleMap')}</label>
-          <span className="modal-hint">{t('field.noGroups')}</span>
-        </div>
-      ) : (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('field.roleMap')}</label>
-          <span className="modal-hint">{t('field.roleMapHint')}</span>
+          <div className="field-head">
+            <span className="modal-field-label">{t('field.roleMap.label')}</span>
+            <InfoTip infoKey="settings-auth:field.roleMap.info" label={t('field.roleMap.label')} />
+          </div>
           <div className="auth-rolemap">
             {rows.map((r, i) => (
               <div className="auth-rolemap-row" key={i}>
@@ -381,9 +383,9 @@ function ProviderModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">
-          {preset.supportsGroups ? t('field.defaultRoleHint') : t('field.defaultRoleRequired')}
-        </span>
+        {!preset.supportsGroups && (
+          <span className="modal-hint">{t('field.defaultRoleRequired')}</span>
+        )}
       </div>
 
       <label className="auth-replace">
@@ -423,9 +425,9 @@ function DeleteProviderModal({
 /** Settings ▸ Auth ▸ Directory (LDAP/AD) — ADR-041.
  *
  *  One saved configuration, so this is a form rather than a list. The Test button exercises what is
- *  **stored**, which is why it is disabled until the first save: validating a directory before
- *  switching it on is the whole point of it, but there is nothing to validate until something has
- *  been written. The result is rendered stage by stage rather than as a tick, because the check
+ *  **stored**, which is why it waits for a save — the first one, and every edit after it
+ *  (`canTestLdap`): validating a directory before switching it on is the whole point of it, and a
+ *  result taken while the screen holds an unsaved edit would describe something else. The result is rendered stage by stage rather than as a tick, because the check
  *  deliberately never binds as the user — an `ok` alone would be read as "login works". */
 function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   const { t } = useTranslation('settings-auth');
@@ -439,12 +441,15 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   const [testing, setTesting] = useState(false);
   const [probeUser, setProbeUser] = useState('');
   const [result, setResult] = useState<LdapTestResult | null>(null);
+  // Bumped on every load, so the password field forgets a "Replace" that a save has answered.
+  const [loadGen, setLoadGen] = useState(0);
 
   const load = useCallback(() => {
     api
       .getLdapConfig()
       .then((res) => {
         setStored(res.config ?? null);
+        setLoadGen((g) => g + 1);
         if (res.config) {
           setForm(toLdapForm(res.config));
           setRows(toRoleMapRows(res.config.role_map));
@@ -485,10 +490,10 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      await api.saveLdapConfig(toLdapInput(form, rows, stored));
+      await api.saveLdapConfig(toLdapInput(form, rows));
       setSaved(true);
-      // Reload rather than trusting the local state: this clears the password field and the replace
-      // checkbox, which is what makes the next edit ask for the credential correctly.
+      // Reload rather than trusting the local state: this clears the password field back to
+      // "stored", and makes the form match what Test will exercise.
       load();
     } catch (e: unknown) {
       setError(errMsg(e, t('ldap.err.save')));
@@ -513,8 +518,6 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
 
   return (
     <Card title={t('ldap.title')}>
-      <p className="modal-hint">{t('ldap.note')}</p>
-
       <div className="auth-grid">
         <label className="modal-field-label">{t('ldap.field.host')}</label>
         <TextInput
@@ -568,31 +571,16 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
           onChange={(e) => set({ bindDn: e.target.value })}
         />
 
-        {stored?.has_bind_password && (
-          <>
-            <label className="modal-field-label">{t('ldap.field.replacePassword')}</label>
-            <label className="modal-check">
-              <input
-                type="checkbox"
-                checked={form.replacePassword}
-                onChange={(e) => set({ replacePassword: e.target.checked, bindPassword: '' })}
-              />
-              <span className="modal-hint">{t('ldap.field.replacePasswordHint')}</span>
-            </label>
-          </>
-        )}
-
-        {passwordIsEditable(stored, form) && (
-          <>
-            <label className="modal-field-label">{t('ldap.field.bindPassword')}</label>
-            <TextInput
-              type="password"
-              autoComplete="new-password"
-              value={form.bindPassword}
-              onChange={(e) => set({ bindPassword: e.target.value })}
-            />
-          </>
-        )}
+        <label className="modal-field-label" htmlFor="ldap-bind-password">
+          {t('ldap.field.bindPassword')}
+        </label>
+        <SecretInput
+          key={loadGen}
+          id="ldap-bind-password"
+          stored={stored?.has_bind_password === true}
+          value={form.bindPassword}
+          onChange={(bindPassword) => set({ bindPassword })}
+        />
 
         <label className="modal-field-label">{t('ldap.field.userBaseDn')}</label>
         <TextInput
@@ -636,17 +624,24 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
           onChange={(e) => set({ groupBaseDn: e.target.value })}
         />
 
-        <label className="modal-field-label">{t('ldap.field.groupFilter')}</label>
+        <div className="field-head">
+          <label className="modal-field-label">{t('ldap.field.groupFilter')}</label>
+          <InfoTip
+            infoKey="settings-auth:ldap.groupSearch.info"
+            label={t('ldap.field.groupFilter')}
+          />
+        </div>
         <TextInput
           className="mono"
           value={form.groupFilter}
           onChange={(e) => set({ groupFilter: e.target.value })}
         />
       </div>
-      <span className="modal-hint">{t('ldap.field.groupSearchHint')}</span>
 
-      <label className="modal-field-label">{t('field.roleMap')}</label>
-      <span className="modal-hint">{t('ldap.field.roleMapHint')}</span>
+      <div className="field-head">
+        <span className="modal-field-label">{t('field.roleMap.label')}</span>
+        <InfoTip infoKey="settings-auth:ldap.roleMap.info" label={t('field.roleMap.label')} />
+      </div>
       {rows.map((row, i) => (
         <div className="auth-rolemap-row" key={row.key}>
           <TextInput
@@ -707,9 +702,14 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
             checked={form.enabled}
             onChange={(e) => set({ enabled: e.target.checked })}
           />
-          <span className="modal-hint">{t('ldap.field.enabledHint')}</span>
+          <span>{t('ldap.field.signInAllowed')}</span>
         </label>
       </div>
+      {/* Said when the choice is made, not under the box all the time (ADR-200 kind 3): switching
+          a live directory off revokes sessions, and nothing else on this card shows that. */}
+      {savingRevokesSessions(stored, form) && (
+        <p className="auth-warning">{t('ldap.revokeWarning')}</p>
+      )}
 
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="auth-saved">{t('ldap.saved')}</p>}
@@ -727,12 +727,11 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
         <Button
           variant="outline"
           onClick={() => void test()}
-          disabled={stored == null || testing || busy}
+          disabled={!canTestLdap(stored, form, rows) || testing || busy}
         >
           {t('ldap.test.run')}
         </Button>
       </div>
-      {stored == null && <span className="modal-hint">{t('ldap.test.saveFirst')}</span>}
 
       {result && (
         <div className="auth-test">
@@ -815,7 +814,6 @@ function PublicDashboardCard() {
 
   return (
     <Card title={t('publicDashboard.title')}>
-      <p className="form-hint">{t('publicDashboard.hint')}</p>
       {err && (
         <p className="form-error" role="alert">
           {err}
@@ -829,6 +827,13 @@ function PublicDashboardCard() {
             {state.enabled
               ? t('publicDashboard.stateOn', { count: state.routes })
               : t('publicDashboard.stateOff')}
+          </p>
+          <p className="auth-compose">
+            <Trans
+              t={t}
+              i18nKey="publicDashboard.compose"
+              components={{ lnk: <ScreenLink to="/dashboard/public" /> }}
+            />
           </p>
           {/* ADR-056: the control is drawn only for someone who may use it — never disabled with a
               tooltip, which is invisible on touch and reads as broken rather than as forbidden. */}
@@ -865,7 +870,13 @@ function PublicDashboardCard() {
           </p>
           {/* The cost, stated before the click rather than discovered after it. */}
           {confirm && state.routes === 0 && (
-            <p className="form-hint">{t('publicDashboard.confirmOnEmpty')}</p>
+            <p className="form-hint">
+              <Trans
+                t={t}
+                i18nKey="publicDashboard.confirmOnEmpty"
+                components={{ lnk: <ScreenLink to="/dashboard/public" /> }}
+              />
+            </p>
           )}
         </Modal>
       )}
@@ -890,7 +901,6 @@ export function AuthSettingsPage() {
       <PageHeader
         title={t('nav:settings.auth')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.auth') }]}
-        note={t('note')}
       />
 
       {/* ADR-044 moved the WebUI to HTTPS on a new port, and a stored redirect URI is an absolute
@@ -900,11 +910,25 @@ export function AuthSettingsPage() {
           upgrade should do on somebody's behalf — so it says so instead. */}
       {rows.some((r) => redirectUriMismatch(window.location.origin, r.redirect_uri)) && (
         <Card>
-          <p className="auth-redirect-warning">{t('redirectUriMismatch')}</p>
+          <p className="auth-warning">{t('redirectUriMismatch')}</p>
+          <StepFrame
+            className="auth-steps"
+            summary={t('redirectFix.title')}
+            steps={[
+              <Trans
+                key="s1"
+                t={t}
+                i18nKey="redirectFix.s1"
+                values={{ uri: `${window.location.origin}/auth/callback` }}
+                components={{ c: <span className="mono" /> }}
+              />,
+              t('redirectFix.s2'),
+            ]}
+          />
         </Card>
       )}
 
-      <LoadGate load={providers} unavailable={t('unavailable')} permission="manage_users">
+      <LoadGate load={providers} permission="manage_users">
         <div className="auth-toolbar">
           {canUsers && (
             <Button variant="primary" onClick={() => setAdding(true)}>
@@ -915,7 +939,22 @@ export function AuthSettingsPage() {
 
         {rows.length === 0 ? (
           <Card>
-            <p className="muted">{loading ? t('common:loading') : t('empty')}</p>
+            {loading ? (
+              <p className="muted">{t('common:loading')}</p>
+            ) : (
+              // Where "local accounts keep working" is said now: the state in which an operator
+              // wonders about it, rather than the page note on every visit (ADR-200).
+              <EmptyState
+                text={t('empty')}
+                action={
+                  canUsers && (
+                    <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                      + {t('add.title')}
+                    </Button>
+                  )
+                }
+              />
+            )}
           </Card>
         ) : (
           <div className="auth-list">

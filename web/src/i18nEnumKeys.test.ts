@@ -158,7 +158,7 @@ import {
 } from './components/NodeDetail/checkConfigForm';
 import { EXPIRY_CHOICES, TOKEN_STATE_INFO, TOKEN_STATES } from './pages/tokenForm';
 import { EXPIRY_LEVELS } from './pages/tlsSettingsForm';
-import { OIDC_ISSUER_PARAMS, OIDC_PICKER_ORDER } from './pages/oidcPresets';
+import { OIDC_ISSUER_PARAMS, OIDC_PICKER_ORDER, OIDC_PRESETS } from './pages/oidcPresets';
 
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
@@ -703,19 +703,25 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
   });
 
-  it('every IdP product has a name and setup guidance (settings-auth:idp.*)', () => {
-    // The hint is the whole increment: it is where "Entra refuses a non-standard scope" and
-    // "Google puts no groups in the ID token" are told to the operator. A product added without one
-    // is a picker entry that offers no more help than the free-text form it replaced.
+  it('every IdP product has a name and setup steps (settings-auth:idp.* / idpSteps.*)', () => {
+    // The steps are the whole increment: they are where "turn on the groups claim in Entra" and
+    // "a custom Okta authorization server is Other" are told to the operator. A product added
+    // without them is a picker entry that offers no more help than the free-text form it replaced.
     const locales = { en: enSettingsAuth, ja: jaSettingsAuth };
     expectKeys('IdP product', locales, 'idp.', OIDC_PICKER_ORDER);
-    expectKeys('IdP product hint', locales, 'idpHint.', OIDC_PICKER_ORDER);
+    expectKeys(
+      'IdP setup step',
+      locales,
+      '',
+      OIDC_PICKER_ORDER.flatMap((k) => [...OIDC_PRESETS[k].setupSteps]),
+    );
   });
 
   it('every product-specific issuer field is labelled (settings-auth:field.*)', () => {
-    // A product whose issuer is built from one field needs a label, a placeholder and a hint for
-    // it — the operator is being asked for a tenant id or an Okta domain, not for a URL.
-    const keys = OIDC_ISSUER_PARAMS.flatMap((p) => [p, `${p}Placeholder`, `${p}Hint`]);
+    // A product whose issuer is built from one field needs a label and a placeholder for it — the
+    // operator is being asked for a tenant id or an Okta domain, not for a URL. The rule for what
+    // goes in it is said by the error line, only when broken (ADR-200).
+    const keys = OIDC_ISSUER_PARAMS.flatMap((p) => [p, `${p}Placeholder`]);
     expectKeys(
       'issuer field',
       { en: enSettingsAuth, ja: jaSettingsAuth },

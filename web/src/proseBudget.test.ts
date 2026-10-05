@@ -71,7 +71,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   rca: [1038, 532],
   reports: [700, 445],
   'settings-ai': [1947, 1033],
-  'settings-auth': [5756, 3314],
+  'settings-auth': [3540, 2095],
   'settings-forwarding': [3454, 1893],
   'settings-relocation': [4933, 2515],
   'settings-tls': [1619, 872],
@@ -119,13 +119,6 @@ const LONG_LEGACY: string[] = [
   'nodes:rediscover.applyHint',
   'settings-ai:field.maxTokensHint',
   'settings-ai:note',
-  'settings-auth:idpHint.entra',
-  'settings-auth:idpHint.google',
-  'settings-auth:idpHint.okta',
-  'settings-auth:ldap.field.groupSearchHint',
-  'settings-auth:ldap.note',
-  'settings-auth:publicDashboard.hint',
-  'settings-auth:redirectUriMismatch',
   'settings-forwarding:field.fidelityHint',
   'settings-forwarding:field.fidelityRowsOnly',
   'settings-forwarding:field.serviceAccountHint',
@@ -208,11 +201,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     why: 'nothing runs, and nothing leaves, until a provider is set',
   },
   'pages/AuditPage.tsx': { kind: 'fact', until: 'Inc.8', why: 'kept for 365 days' },
-  'pages/AuthSettingsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.7',
-    why: 'local accounts keep working beside the identity provider',
-  },
   'pages/CollectionTemplatesPage.tsx': {
     kind: 'fact',
     until: 'Inc.13',
@@ -293,7 +281,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 9, press: 6 };
+const INFO_COUNT = { tip: 12, press: 6 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -323,8 +311,6 @@ const POINTER_LEGACY: string[] = [
   'nodes:rediscover.err.noLivePoller',
   'nodes:rediscover.phase.waitingLong',
   'rca:err.notConfigured',
-  'settings-auth:publicDashboard.confirmOnEmpty',
-  'settings-auth:publicDashboard.hint',
   'settings-relocation:afterwards.item2',
   'settings-relocation:afterwards.item3',
   'settings-relocation:readiness.paused',
@@ -339,7 +325,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 33, formHint: 20, modalHint: 64 };
+const HINT_SITES = { fieldHint: 33, formHint: 19, modalHint: 51 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));
