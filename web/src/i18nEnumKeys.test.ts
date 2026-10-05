@@ -1364,13 +1364,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('duplicate confidence', locales, 'duplicates.confidence.', DUPLICATE_CONFIDENCES);
     expectKeys('duplicate contradiction', locales, 'duplicates.contradiction.', DUPLICATE_CONTRADICTIONS);
   });
-  it('every site status, layout and gap kind has strings (monitoring:missingPrefixes.*)', () => {
+  it('every site status and layout has strings (monitoring:missingPrefixes.*)', () => {
     // Nodes ▸ Missing IP prefixes names its tabs from a token the server sent (ADR-170 Inc.2).
     const locales = { en: enMonitoring, ja: jaMonitoring };
     expectKeys('site gap status', locales, 'missingPrefixes.tabs.', SITE_GAP_STATUSES);
     expectKeys('site gap empty state', locales, 'missingPrefixes.empty.', SITE_GAP_STATUSES);
     expectKeys('missing-prefix layout', locales, 'missingPrefixes.views.', MISSING_PREFIX_VIEWS);
-    expectKeys('gap kind help', locales, 'missingPrefixes.kindHelp.', PREFIX_GAP_KINDS);
   });
   it('every overlap kind, status, hint and rule reason has strings (monitoring:subnetOverlaps.*)', () => {
     // Nodes ▸ Subnet overlaps names each of these from a token the server sent (ADR-187).

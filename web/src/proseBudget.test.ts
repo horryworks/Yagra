@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [7503, 4079],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [12393, 7364],
+  monitoring: [11804, 7051],
   nav: [2907, 1367],
   nodes: [23833, 13291],
   rca: [1038, 532],
@@ -98,9 +98,6 @@ const LONG_LEGACY: string[] = [
   'alertsConfig:thresholds.addModal.boundsHint',
   'alertsConfig:thresholds.addModal.rowMatchHint',
   'alertsConfig:thresholds.explainer',
-  'monitoring:duplicates.hint',
-  'monitoring:missingPrefixes.note',
-  'monitoring:subnetOverlaps.rules.text',
   'nodes:bulkTag.note',
   'nodes:deleteNode.body',
   'nodes:deleteNodes.body',
@@ -216,19 +213,9 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'Inc.16',
     why: 'flow exports and BigQuery are destinations too',
   },
-  'pages/MissingPrefixesPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.12',
-    why: 'a site is the nearest Site folder; addresses are what devices report',
-  },
   'pages/NodesPage.tsx': {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',
-  },
-  'pages/SubnetOverlapsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.12',
-    why: 'a site is the nearest Site folder above a device',
   },
   'pages/ThresholdsPage.tsx': {
     kind: 'fact',
@@ -256,7 +243,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 15, press: 7 };
+const INFO_COUNT = { tip: 15, press: 8 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -295,7 +282,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 22, formHint: 19, modalHint: 49 };
+const HINT_SITES = { fieldHint: 21, formHint: 19, modalHint: 49 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

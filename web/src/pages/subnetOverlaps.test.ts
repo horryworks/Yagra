@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import type { TFunction } from 'i18next';
 import type { SubnetOverlap, SubnetOverlapsView } from '../types/api';
 import {
+  carriesWords,
   draftFrom,
   emptyKey,
   openKindCounts,
+  overlapFilters,
   overlapsOn,
+  portMatches,
   rangeBars,
   ruleBody,
   suggestedRule,
@@ -138,5 +142,56 @@ describe('subnet overlaps', () => {
     });
     expect(emptyKey(view([], { nodes_with_addresses: 0 }), 'open').key).toBe('empty.noAddresses');
     expect(emptyKey(view([]), 'excluded').key).toBe('empty.excluded');
+  });
+});
+
+describe('the add-rule preview', () => {
+  // The cases are the Rust tests' own (`subnet_overlaps.rs`), so the two copies are held to one list.
+  it('matches whole words, in order, ignoring case, with a trailing number allowed', () => {
+    expect(carriesWords('HA sync', 'ha')).toBe(true);
+    expect(carriesWords('ha-link2', 'ha')).toBe(true);
+    expect(carriesWords('Port-channel1', 'ha')).toBe(false);
+    expect(carriesWords('chassis mgmt', 'ha')).toBe(false);
+    expect(carriesWords('Dialer1', 'dialer')).toBe(true);
+    expect(carriesWords('to ISP-A', 'To ISP')).toBe(true);
+    expect(carriesWords('to isp a', 'To ISP')).toBe(true);
+    expect(carriesWords('isp to', 'To ISP')).toBe(false);
+    expect(carriesWords('display', 'To ISP')).toBe(false);
+  });
+
+  it('matches text with no ASCII word as plain text, and an empty needle as nothing', () => {
+    expect(carriesWords('本社 回線', '回線')).toBe(true);
+    expect(carriesWords('本社', '回線')).toBe(false);
+    expect(carriesWords('anything', '   ')).toBe(false);
+  });
+
+  it('counts each port once and names the first few', () => {
+    const p = (node: string, ifindex: number, if_name: string | null, if_alias: string | null) => ({
+      ...place('s1', 'site-a', node),
+      node_name: node === 'n1' ? 'rt-01' : null,
+      ifindex,
+      if_name,
+      if_alias,
+    });
+    const places = [
+      p('n1', 1, 'Dialer1', null),
+      p('n1', 1, 'Dialer1', null),
+      p('n2', 7, null, 'dialer backup'),
+      p('n2', 8, 'Gi0/1', 'LAN'),
+    ];
+    expect(portMatches(places, 'dialer')).toEqual({ count: 2, names: ['rt-01 Dialer1', '#7'] });
+    expect(portMatches(places, 'dialer', 1)).toEqual({ count: 2, names: ['rt-01 Dialer1'] });
+    expect(portMatches(places, 'wan')).toEqual({ count: 0, names: [] });
+    expect(portMatches(places, '  ')).toBeNull();
+  });
+});
+
+describe('the site filter', () => {
+  it('reads every visible site, the tree root by its label', () => {
+    const t = ((k: string) => (k === 'subnetOverlaps.root' ? '(root)' : k)) as unknown as TFunction;
+    const spec = overlapFilters(t).sites;
+    const o = overlap({ places: [place('s1', 'site-a'), place(null, null, 'n3')] });
+    expect(spec.kind === 'text' && spec.readText?.(o)).toEqual(['site-a', '(root)']);
+    expect(spec.hint).toBe('subnetOverlaps.sitesFilterHint');
   });
 });

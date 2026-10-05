@@ -8,6 +8,7 @@ import { api, errMsg } from '../services/api';
 import {
   EXCLUSION_REASONS,
   type ExclusionReason,
+  type OverlapPlace,
   type OverlapRule,
   type OverlapRuleBody,
   type SubnetOverlap,
@@ -19,7 +20,7 @@ import { Button } from '../components/ui/Button';
 import { FieldHint, Select, TextInput } from '../components/ui/Field';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
-import { draftFrom, ruleBody, toggled, type RuleDraft } from './subnetOverlaps';
+import { draftFrom, portMatches, ruleBody, toggled, type RuleDraft } from './subnetOverlaps';
 
 /** Every exclusion rule, with what each one excludes now. Read-only without `manage_config`. */
 export function OverlapRulesModal({
@@ -127,13 +128,16 @@ export function OverlapRulesModal({
   );
 }
 
-/** Add a rule — blank, or pre-filled from a hint. */
+/** Add a rule — blank, or pre-filled from a hint. `places` are every place on the loaded list, so
+ *  the port field can say which ports its words take before the rule is saved. */
 export function OverlapRuleModal({
   initial,
+  places,
   onClose,
   onDone,
 }: {
   initial: OverlapRuleBody | null;
+  places: readonly OverlapPlace[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -141,6 +145,7 @@ export function OverlapRuleModal({
   const [draft, setDraft] = useState<RuleDraft>(() => draftFrom(initial));
   const form = useSubmit({ errorFallback: t('subnetOverlaps.rules.form.err'), onDone });
   const set = (p: Partial<RuleDraft>) => setDraft((d) => ({ ...d, ...p }));
+  const matches = portMatches(places, draft.portText);
 
   const submit = () => {
     const r = ruleBody(draft);
@@ -167,8 +172,22 @@ export function OverlapRuleModal({
       <div className="form-stack">
         <label className="modal-field">
           <span className="modal-field-label">{t('subnetOverlaps.rules.form.portText')}</span>
-          <TextInput value={draft.portText} onChange={(e) => set({ portText: e.target.value })} maxLength={200} />
-          <FieldHint>{t('subnetOverlaps.rules.form.portHint')}</FieldHint>
+          <TextInput
+            value={draft.portText}
+            placeholder="dialer"
+            onChange={(e) => set({ portText: e.target.value })}
+            maxLength={200}
+          />
+          {matches && (
+            <span className="so-port-preview" aria-live="polite">
+              {matches.count === 0
+                ? t('subnetOverlaps.rules.form.portMatchesNone')
+                : t('subnetOverlaps.rules.form.portMatches', {
+                    count: matches.count,
+                    ports: matches.names.join(', ') + (matches.count > matches.names.length ? ', …' : ''),
+                  })}
+            </span>
+          )}
         </label>
         <label className="modal-field">
           <span className="modal-field-label">{t('subnetOverlaps.rules.form.range')}</span>

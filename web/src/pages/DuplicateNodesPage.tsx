@@ -17,6 +17,7 @@ import type { DuplicateNodesView } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
+import { InfoPress } from '../components/ui/InfoTip';
 import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TimeCell } from '../components/ui/tableCells';
@@ -26,6 +27,7 @@ import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
 import {
+  CONFIDENCE_INFO,
   confidenceCounts,
   deleteBlock,
   deleteTargets,
@@ -97,7 +99,11 @@ export function DuplicateNodesPage() {
           return (
             <span className="dup-group" title={`#${r.groupNumber} ${label}`}>
               <span className="dup-group-no">#{r.groupNumber}</span>
-              {r.first && <Badge>{label}</Badge>}
+              {r.first && (
+                <InfoPress infoKey={CONFIDENCE_INFO[r.group.confidence]} className="badge badge-neutral">
+                  {label}
+                </InfoPress>
+              )}
             </span>
           );
         },
@@ -266,7 +272,6 @@ export function DuplicateNodesPage() {
           loading={loading}
           empty={t(empty.key, { count: empty.count })}
         />
-        <p className="muted dup-hint">{t('duplicates.hint')}</p>
       </LoadGate>
 
       {deleting && (

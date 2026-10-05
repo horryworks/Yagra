@@ -25,14 +25,17 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
-import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useLoad } from '../lib/useLoad';
+import { useClientFilters } from '../lib/useClientFilters';
+import { columnLabels } from '../lib/listToolbar';
 import { LoadGate } from '../components/ui/LoadGate';
 import { nodeHref } from '../lib/entityHref';
 import {
   emptyKey,
   openKindCounts,
+  overlapFilters,
   overlapsOn,
   rangeBars,
   suggestedRule,
@@ -133,8 +136,8 @@ export function SubnetOverlapsPage() {
     );
   };
 
-  const columns = useMemo<Column<SubnetOverlap>[]>(
-    () => [
+  const columns = useMemo<Column<SubnetOverlap>[]>(() => {
+    const cols: Column<SubnetOverlap>[] = [
       {
         key: 'subnet',
         header: t('subnetOverlaps.cols.subnet'),
@@ -153,9 +156,7 @@ export function SubnetOverlapsPage() {
         header: t('subnetOverlaps.cols.kind'),
         width: '210px',
         render: (o) => (
-          <span className={`so-kind so-kind-${o.kind}`} title={t(`subnetOverlaps.kindHelp.${o.kind}`)}>
-            {t(`subnetOverlaps.kind.${o.kind}`)}
-          </span>
+          <span className={`so-kind so-kind-${o.kind}`}>{t(`subnetOverlaps.kind.${o.kind}`)}</span>
         ),
       },
       {
@@ -195,10 +196,14 @@ export function SubnetOverlapsPage() {
         width: '2fr',
         render: whyCell,
       },
-    ],
+    ];
+    const filters = overlapFilters(t);
+    for (const c of cols) c.filter = filters[c.key];
+    return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- whyCell reads `view` through ruleName
-    [t, openKey, tab, view],
-  );
+  }, [t, openKey, tab, view]);
+  const filtering = useClientFilters(columns, rows);
+  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
   const detail = (o: SubnetOverlap) => {
     const bars = rangeBars(o);
@@ -299,7 +304,6 @@ export function SubnetOverlapsPage() {
       <PageHeader
         title={t('nav:nodes.subnetOverlaps')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.subnetOverlaps') }]}
-        note={t('subnetOverlaps.note')}
       />
 
       <LoadGate load={load} permission="view">
@@ -331,29 +335,32 @@ export function SubnetOverlapsPage() {
             >
               <span className="so-tile-n">{kindCounts[k]}</span>
               <span className="so-tile-t">{t(`subnetOverlaps.kind.${k}`)}</span>
-              <span className="so-tile-d">{t(`subnetOverlaps.kindHelp.${k}`)}</span>
             </button>
           ))}
         </div>
 
-        <TableToolbar>
-          <Tabs
-            tabs={OVERLAP_STATUSES.map((s) => ({
-              key: s,
-              label: t(`subnetOverlaps.tabs.${s}`),
-              count: view ? view.counts[s] : undefined,
-            }))}
-            active={tab}
-            onChange={(s) => {
-              setTab(s);
-              setOpenKey(null);
-            }}
-          />
-          <TableSpacer />
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          leading={
+            <Tabs
+              tabs={OVERLAP_STATUSES.map((s) => ({
+                key: s,
+                label: t(`subnetOverlaps.tabs.${s}`),
+                count: view ? view.counts[s] : undefined,
+              }))}
+              active={tab}
+              onChange={(s) => {
+                setTab(s);
+                setOpenKey(null);
+              }}
+            />
+          }
+        >
           <Button variant="outline" onClick={() => setRulesOpen(true)}>
             {t('subnetOverlaps.rulesButton', { count: view?.rules.filter((r) => r.enabled).length ?? 0 })}
           </Button>
-        </TableToolbar>
+        </ListToolbar>
 
         {actionError && (
           <p className="form-error" role="alert">
@@ -371,14 +378,21 @@ export function SubnetOverlapsPage() {
 
         <DataTable
           tableId="nodes.subnetOverlaps"
-          rows={rows}
+          rows={shown}
           columns={columns}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
           rowKey={(o) => o.key}
           onRowClick={(o) => setOpenKey(openKey === o.key ? null : o.key)}
           expanded={(o) => (o.key === openKey ? detail(o) : null)}
           expandedKey={openKey}
           loading={loading}
-          empty={t(`subnetOverlaps.${empty.key}`, { missing: empty.missing })}
+          empty={
+            anyFiltered
+              ? t('common:filter.noMatch')
+              : t(`subnetOverlaps.${empty.key}`, { missing: empty.missing })
+          }
         />
       </LoadGate>
 
@@ -395,6 +409,7 @@ export function SubnetOverlapsPage() {
       {newRule !== undefined && (
         <OverlapRuleModal
           initial={newRule}
+          places={view?.overlaps.flatMap((o) => o.places) ?? []}
           onClose={() => setNewRule(undefined)}
           onDone={() => {
             setNewRule(undefined);

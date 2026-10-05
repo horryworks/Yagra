@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import type { TFunction } from 'i18next';
 import type { PrefixGap, PrefixGapSitesView, SitePrefixGaps } from '../types/api';
 import {
   gapsCsv,
   kindCounts,
   allGaps,
   siteKey,
+  siteRowFilters,
   sitesOn,
   statusCounts,
+  subnetRowFilters,
   subnetRows,
 } from './missingPrefixes';
 
@@ -112,5 +115,24 @@ describe('missing IP prefixes', () => {
     expect(lines).toHaveLength(4);
     expect(lines[1]).toContain(`"'=HYPERLINK(""x"")"`);
     expect(lines[1]).toContain('"rt-01 Vlan1 10.0.0.1"');
+  });
+});
+
+describe('the site filter', () => {
+  const t = ((k: string) => (k === 'missingPrefixes.root' ? '(root)' : k)) as unknown as TFunction;
+
+  it('reads the site name and the folders above it, the root by its label', () => {
+    const spec = siteRowFilters(t).site;
+    const row = { site: site('a', 'hq', 'gaps'), gaps: [] };
+    expect(spec.kind === 'text' && spec.readText?.(row)).toEqual(['hq', 'east']);
+    const root = { site: site(null, null, 'no_data'), gaps: [] };
+    expect(spec.kind === 'text' && spec.readText?.(root)).toEqual(['(root)', 'east']);
+    expect(spec.hint).toBe('missingPrefixes.siteFilterHint');
+  });
+
+  it('reads the same in the subnet view', () => {
+    const spec = subnetRowFilters(t).site;
+    const row = { key: 'k', site: site('b', 'branch-a', 'gaps'), gap: gap('192.0.2.0/24', 'unregistered') };
+    expect(spec.kind === 'text' && spec.readText?.(row)).toEqual(['branch-a', 'east']);
   });
 });

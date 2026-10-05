@@ -55,6 +55,8 @@ import {
   profileFilters,
 } from '../pages/monitoringConfigFilters';
 import { pollerFilters } from '../pages/pollerFilters';
+import { siteRowFilters, SUBNET_FILTER_PREFIX, subnetRowFilters } from '../pages/missingPrefixes';
+import { overlapFilters } from '../pages/subnetOverlaps';
 import { channelFilters, routingRuleFilters } from '../pages/routingFilters';
 import { DELIVERY_FILTER_PREFIX, deliveryFilters } from '../pages/deliveryLogQuery';
 import { muteFilters, windowFilters } from '../pages/suppressionFilters';
@@ -220,6 +222,21 @@ const REGISTRY: readonly Entry[] = [
     module: 'pages/monitoringConfigFilters.ts',
     name: 'profileCategoryFilter',
     build: () => specColumns(profileCategoryFilter(t, [])),
+  },
+  {
+    module: 'pages/missingPrefixes.ts',
+    name: 'siteRowFilters',
+    build: () => specColumns(siteRowFilters(t)),
+  },
+  {
+    module: 'pages/missingPrefixes.ts',
+    name: 'subnetRowFilters',
+    build: () => specColumns(subnetRowFilters(t)),
+  },
+  {
+    module: 'pages/subnetOverlaps.ts',
+    name: 'overlapFilters',
+    build: () => specColumns(overlapFilters(t)),
   },
   {
     module: 'pages/pollerFilters.ts',
@@ -447,6 +464,20 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['dependencyFilters', 'dependencyFilters (comparing)'], prefix: '' }],
   },
   { path: '/settings/pollers', own: [], tables: [{ entries: ['pollerFilters'], prefix: '' }] },
+  { path: '/nodes/subnet-overlaps', own: [], tables: [{ entries: ['overlapFilters'], prefix: '' }] },
+  {
+    // Two layouts of one answer; only one table is drawn at a time, but both keep their filter.
+    path: '/nodes/missing-prefixes',
+    own: [],
+    tables: [
+      { entries: ['siteRowFilters'], prefix: '' },
+      {
+        entries: ['subnetRowFilters'],
+        prefix: SUBNET_FILTER_PREFIX,
+        wiredIn: { file: 'pages/MissingPrefixesPage.tsx', spelling: 'SUBNET_FILTER_PREFIX' },
+      },
+    ],
+  },
   {
     path: '/settings/integrations/meraki/:orgId',
     own: [],

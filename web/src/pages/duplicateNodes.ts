@@ -8,12 +8,21 @@
 // second-guesses it.
 
 import type {
+  DuplicateConfidence,
   DuplicateEvidenceKind,
   DuplicateGroup,
   DuplicateIgnoredValue,
   DuplicateMember,
   DuplicateNodesView,
 } from '../types/api';
+
+/** What each group badge opens: what put the group at that confidence. The likely-duplicate one
+ *  also carries the case where deleting is wrong — two routers sharing a VRRP/HSRP address join on
+ *  strong evidence. A `Record`, so a new confidence cannot be added without deciding this. */
+export const CONFIDENCE_INFO: Record<DuplicateConfidence, string> = {
+  confident: 'monitoring:duplicates.confidenceInfo.confident.info',
+  possible: 'monitoring:duplicates.confidenceInfo.possible.info',
+};
 
 /** The most nodes one delete may name. The server refuses more rather than cutting the list
  *  (`NODE_MOVE_BATCH_MAX` in `api/nodes.rs`), so the screen says so before it is pressed. */

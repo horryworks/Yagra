@@ -36,7 +36,6 @@
   white-space: nowrap;
 }
 
-.dup-ignored,
-.dup-hint {
+.dup-ignored {
   margin-top: 8px;
 }

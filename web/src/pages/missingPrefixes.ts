@@ -7,6 +7,8 @@
 // keep, how the subnet list is ordered, and what the CSV carries. Why one gap is reported is the
 // folder pane's sentence (`components/NodeDetail/prefixGaps.ts::gapReason`), reused as it is.
 
+import type { TFunction } from 'i18next';
+import type { ColumnFilterSpec } from '../lib/columnFilter';
 import type { PrefixGap, PrefixGapSitesView, SiteGapStatus, SitePrefixGaps } from '../types/api';
 import { PREFIX_GAP_KINDS, type PrefixGapKind } from '../components/NodeDetail/prefixGaps';
 import { csvField } from '../lib/csv';
@@ -107,6 +109,39 @@ export function subnetRows(
       a.gap.subnet.localeCompare(b.gap.subnet) ||
       (a.site.name ?? '').localeCompare(b.site.name ?? ''),
   );
+}
+
+/** The subnet view's filter keys carry this prefix: both tables live on one route, and the URL is
+ *  where a filter is kept (`filterSpecRegistry.test.ts`'s route ledger). */
+export const SUBNET_FILTER_PREFIX = 'subnets.';
+
+/** A site's name and the folders above it — what the Site column filters on. */
+function siteText(site: SitePrefixGaps, t: TFunction): string[] {
+  return [site.name ?? t('missingPrefixes.root'), ...site.path];
+}
+
+/** The Site column's filter, the same in both views. Its hint is where "what a site is" and where
+ *  the subnets come from are said (it used to be the page note, ADR-200 Inc.12). */
+function siteFilter<T>(t: TFunction, site: (row: T) => SitePrefixGaps): ColumnFilterSpec<T> {
+  return {
+    kind: 'text',
+    modes: ['contains', 'regex'],
+    not: true,
+    readText: (r) => siteText(site(r), t),
+    containsSemantics: 'substring',
+    placeholder: t('missingPrefixes.cols.site'),
+    hint: t('missingPrefixes.siteFilterHint'),
+  };
+}
+
+/** The by-site view's filter row, keyed by `Column.key`. */
+export function siteRowFilters(t: TFunction): Record<string, ColumnFilterSpec<SiteRow>> {
+  return { site: siteFilter<SiteRow>(t, (r) => r.site) };
+}
+
+/** The subnet view's filter row, keyed by `Column.key` (under `SUBNET_FILTER_PREFIX`). */
+export function subnetRowFilters(t: TFunction): Record<string, ColumnFilterSpec<SubnetRow>> {
+  return { site: siteFilter<SubnetRow>(t, (r) => r.site) };
 }
 
 /** How many listed gaps there are of each kind — the four tiles. */

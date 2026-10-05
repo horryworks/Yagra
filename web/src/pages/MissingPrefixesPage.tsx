@@ -14,11 +14,13 @@ import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
 import { Segmented } from '../components/ui/Segmented';
 import { SearchField } from '../components/ui/SearchField';
-import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
+import { ListToolbar } from '../components/ui/ListToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { LoadGate } from '../components/ui/LoadGate';
 import { useEntityNames } from '../components/ui/entityNames';
 import { useLoad } from '../lib/useLoad';
+import { useClientFilters } from '../lib/useClientFilters';
+import { columnLabels } from '../lib/listToolbar';
 import { saveBlob } from '../lib/download';
 import { nodeHref, nodesPageHref } from '../lib/entityHref';
 import {
@@ -34,8 +36,11 @@ import {
   MISSING_PREFIX_VIEWS,
   SITE_GAP_STATUSES,
   siteKey,
+  siteRowFilters,
   sitesOn,
   statusCounts,
+  SUBNET_FILTER_PREFIX,
+  subnetRowFilters,
   subnetRows,
   type MissingPrefixView,
   type SiteRow,
@@ -106,8 +111,8 @@ export function MissingPrefixesPage() {
     </span>
   );
 
-  const siteColumns = useMemo<Column<SiteRow>[]>(
-    () => [
+  const siteColumns = useMemo<Column<SiteRow>[]>(() => {
+    const cols: Column<SiteRow>[] = [
       {
         key: 'site',
         header: t('missingPrefixes.cols.site'),
@@ -171,13 +176,15 @@ export function MissingPrefixesPage() {
         align: 'right',
         render: ({ site }) => site.prefixes,
       },
-    ],
+    ];
+    const filters = siteRowFilters(t);
+    for (const c of cols) c.filter = filters[c.key];
+    return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- siteLabel reads only `t`
-    [t, openKey],
-  );
+  }, [t, openKey]);
 
-  const subnetColumns = useMemo<Column<SubnetRow>[]>(
-    () => [
+  const subnetColumns = useMemo<Column<SubnetRow>[]>(() => {
+    const cols: Column<SubnetRow>[] = [
       {
         key: 'subnet',
         header: t('missingPrefixes.cols.subnet'),
@@ -205,10 +212,15 @@ export function MissingPrefixesPage() {
         align: 'right',
         render: (r) => r.gap.node_count,
       },
-    ],
+    ];
+    const filters = subnetRowFilters(t);
+    for (const c of cols) c.filter = filters[c.key];
+    return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- kindCell and siteLabel read only `t`
-    [t, openKey],
-  );
+  }, [t, openKey]);
+  const siteFiltering = useClientFilters(siteColumns, siteRows);
+  const subnetFiltering = useClientFilters(subnetColumns, gapRows, { prefix: SUBNET_FILTER_PREFIX });
+  const anyFiltered = view === 'site' ? siteFiltering.anyFiltered : subnetFiltering.anyFiltered;
 
   const siteDetail = ({ site, gaps }: SiteRow) => (
     <div className="mp-detail">
@@ -265,18 +277,63 @@ export function MissingPrefixesPage() {
     );
 
   const emptyText =
-    q || kind
+    q || kind || anyFiltered
       ? t('missingPrefixes.emptyFiltered')
       : view === 'site'
         ? t(`missingPrefixes.empty.${tab}`)
         : t('missingPrefixes.empty.gaps');
+
+  // One toolbar, two filter states: each layout keeps its own (the subnet one under a prefix).
+  const toolbarLeading = (
+    <>
+      <Segmented
+        options={MISSING_PREFIX_VIEWS.map((v) => ({ value: v, label: t(`missingPrefixes.views.${v}`) }))}
+        value={view}
+        onChange={(v) => {
+          setView(v as MissingPrefixView);
+          reset();
+        }}
+        ariaLabel={t('missingPrefixes.viewsLabel')}
+      />
+      {view === 'site' && (
+        <Tabs
+          tabs={SITE_GAP_STATUSES.map((s) => ({
+            key: s,
+            label: t(`missingPrefixes.tabs.${s}`),
+            count: data ? tabs[s] : undefined,
+          }))}
+          active={tab}
+          onChange={(s) => {
+            setTab(s);
+            reset();
+          }}
+        />
+      )}
+    </>
+  );
+  const toolbarTools = (
+    <>
+      <SearchField
+        boxClassName="mp-search"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          reset();
+        }}
+        onClear={() => setQ('')}
+        placeholder={t('missingPrefixes.search')}
+      />
+      <Button variant="outline" onClick={exportCsv} disabled={gapRows.length === 0}>
+        {t('missingPrefixes.csv')}
+      </Button>
+    </>
+  );
 
   return (
     <div>
       <PageHeader
         title={t('nav:nodes.missingPrefixes')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.missingPrefixes') }]}
-        note={t('missingPrefixes.note')}
       />
 
       <LoadGate load={load} permission="view">
@@ -314,56 +371,28 @@ export function MissingPrefixesPage() {
             >
               <span className="mp-tile-n">{tiles[k]}</span>
               <span className="mp-tile-t">{t(`nodes:prefixGaps.kind.${k}`)}</span>
-              <span className="mp-tile-d">{t(`missingPrefixes.kindHelp.${k}`)}</span>
             </button>
           ))}
         </div>
 
-        <TableToolbar>
-          <Segmented
-            options={MISSING_PREFIX_VIEWS.map((v) => ({ value: v, label: t(`missingPrefixes.views.${v}`) }))}
-            value={view}
-            onChange={(v) => {
-              setView(v as MissingPrefixView);
-              reset();
-            }}
-            ariaLabel={t('missingPrefixes.viewsLabel')}
-          />
-          {view === 'site' && (
-            <Tabs
-              tabs={SITE_GAP_STATUSES.map((s) => ({
-                key: s,
-                label: t(`missingPrefixes.tabs.${s}`),
-                count: data ? tabs[s] : undefined,
-              }))}
-              active={tab}
-              onChange={(s) => {
-                setTab(s);
-                reset();
-              }}
-            />
-          )}
-          <TableSpacer />
-          <SearchField
-            boxClassName="mp-search"
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              reset();
-            }}
-            onClear={() => setQ('')}
-            placeholder={t('missingPrefixes.search')}
-          />
-          <Button variant="outline" onClick={exportCsv} disabled={gapRows.length === 0}>
-            {t('missingPrefixes.csv')}
-          </Button>
-        </TableToolbar>
+        {view === 'site' ? (
+          <ListToolbar list={siteFiltering} labels={columnLabels(siteColumns)} leading={toolbarLeading}>
+            {toolbarTools}
+          </ListToolbar>
+        ) : (
+          <ListToolbar list={subnetFiltering} labels={columnLabels(subnetColumns)} leading={toolbarLeading}>
+            {toolbarTools}
+          </ListToolbar>
+        )}
 
         {view === 'site' ? (
           <DataTable
             tableId="nodes.missingPrefixes"
-            rows={siteRows}
+            rows={siteFiltering.shown}
             columns={siteColumns}
+            filters={siteFiltering.filters}
+            onFiltersChange={siteFiltering.setFilters}
+            filterCounts={siteFiltering.counts}
             rowKey={(r) => siteKey(r.site)}
             onRowClick={(r) => setOpenKey(openKey === siteKey(r.site) ? null : siteKey(r.site))}
             expanded={(r) => (siteKey(r.site) === openKey ? siteDetail(r) : null)}
@@ -374,8 +403,11 @@ export function MissingPrefixesPage() {
         ) : (
           <DataTable
             tableId="nodes.missingPrefixesSubnets"
-            rows={gapRows}
+            rows={subnetFiltering.shown}
             columns={subnetColumns}
+            filters={subnetFiltering.filters}
+            onFiltersChange={subnetFiltering.setFilters}
+            filterCounts={subnetFiltering.counts}
             rowKey={(r) => r.key}
             onRowClick={(r) => setOpenKey(openKey === r.key ? null : r.key)}
             expanded={(r) => (r.key === openKey ? subnetDetail(r) : null)}

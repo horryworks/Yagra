@@ -19,7 +19,6 @@
 .so-tile {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto auto;
   column-gap: var(--space-3);
   align-items: center;
   text-align: left;
@@ -44,7 +43,6 @@
 }
 
 .so-tile-n {
-  grid-row: span 2;
   font-size: var(--font-5xl);
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
@@ -64,11 +62,6 @@
 .so-tile-t {
   font-weight: var(--weight-semibold);
   font-size: var(--font-sm);
-}
-
-.so-tile-d {
-  color: var(--text-tertiary);
-  font-size: var(--font-xs);
 }
 
 /* ── Cells ── */
@@ -289,6 +282,12 @@
 .so-rule-actions {
   display: flex;
   gap: var(--space-1);
+}
+
+/* What the add dialog's port words take on the loaded list — a result, not an instruction. */
+.so-port-preview {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
 }
 
 html[data-viewport='mobile'] .so-tiles {

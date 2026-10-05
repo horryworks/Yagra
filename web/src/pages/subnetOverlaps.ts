@@ -6,6 +6,8 @@
 // decided here is only how the answer is shown: which tab an overlap sits on, what a hint suggests
 // as a rule, where each range sits on the bar, and what an empty table means.
 
+import type { TFunction } from 'i18next';
+import type { ColumnFilterSpec } from '../lib/columnFilter';
 import type {
   ExclusionReason,
   OverlapKind,
@@ -43,6 +45,83 @@ export function visibleSites(o: SubnetOverlap): { key: string; name: string | nu
   const seen = new Map<string, string | null>();
   for (const p of o.places) if (!seen.has(siteKey(p))) seen.set(siteKey(p), p.site_name ?? null);
   return [...seen].map(([key, name]) => ({ key, name }));
+}
+
+/**
+ * The Subnet overlaps filter row, keyed by `Column.key`. Only the site column filters: the range,
+ * kind and count columns already have the tiles and the tabs. The column's hint is where "what a
+ * site is" is said (it used to be the page note, ADR-200 Inc.12).
+ */
+export function overlapFilters(t: TFunction): Record<string, ColumnFilterSpec<SubnetOverlap>> {
+  return {
+    sites: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (o) => visibleSites(o).map((s) => s.name ?? t('subnetOverlaps.root')),
+      containsSemantics: 'substring',
+      placeholder: t('subnetOverlaps.cols.sites'),
+      hint: t('subnetOverlaps.sitesFilterHint'),
+    },
+  };
+}
+
+/** A port name or description split into lowercase words — `subnet_overlaps.rs::words_of`. */
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w !== '');
+}
+
+/** Whether one word of a port's text is `word`, optionally followed by digits (`dialer1`). */
+function wordIs(token: string, word: string): boolean {
+  return token === word || token.replace(/[0-9]+$/, '') === word;
+}
+
+/**
+ * Whether a rule's port text appears in `text` as whole words, in order, ignoring case.
+ *
+ * ⚠️ A mirror of `crates/yagra-core/src/subnet_overlaps.rs::carries_words`, which decides what a
+ * rule actually excludes. This copy only previews it in the add dialog; nothing compares the two,
+ * so a change there must be made here too (the cases below are the Rust tests' own).
+ */
+export function carriesWords(text: string, needle: string): boolean {
+  const wanted = wordsOf(needle);
+  if (wanted.length === 0) {
+    const plain = needle.trim().toLowerCase();
+    return plain !== '' && text.toLowerCase().includes(plain);
+  }
+  const words = wordsOf(text);
+  for (let i = 0; i + wanted.length <= words.length; i++) {
+    if (wanted.every((w, j) => wordIs(words[i + j], w))) return true;
+  }
+  return false;
+}
+
+/** How many ports on the loaded list a rule's port text would take, and the first few by name.
+ *  `null` while the text is empty — the field then says nothing. One port is one (node, ifindex),
+ *  however many of its addresses the list carries. */
+export function portMatches(
+  places: readonly OverlapPlace[],
+  portText: string,
+  shown = 3,
+): { count: number; names: string[] } | null {
+  if (portText.trim() === '') return null;
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const p of places) {
+    const key = `${p.node_id}/${p.ifindex}`;
+    if (seen.has(key)) continue;
+    const on = (s: string | null | undefined) => !!s && carriesWords(s, portText);
+    if (!on(p.if_name) && !on(p.if_alias)) continue;
+    seen.add(key);
+    if (names.length < shown) {
+      const port = p.if_name ?? `#${p.ifindex}`;
+      names.push(p.node_name ? `${p.node_name} ${port}` : port);
+    }
+  }
+  return { count: seen.size, names };
 }
 
 /** The rule a hint suggests, pre-filled for the add dialog, or `null` when the hint names no word

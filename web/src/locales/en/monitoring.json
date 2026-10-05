@@ -198,6 +198,14 @@
       "confident": "Likely duplicate",
       "possible": "To check"
     },
+    "confidenceInfo": {
+      "confident": {
+        "info": "Joined by an address, a serial number, a MAC address or an LLDP chassis ID, or each lists the other's address. Two routers sharing a VRRP or HSRP address land here too: keep both."
+      },
+      "possible": {
+        "info": "Joined only by weaker signs, such as the same name, or something in the group disagrees. Compare the nodes before deleting one."
+      }
+    },
     "kind": {
       "address": "Same address",
       "serial": "Same serial number",
@@ -221,23 +229,16 @@
     },
     "empty": "No duplicates among the nodes you can see.",
     "emptyNothingToCompare": "There are fewer than two device nodes to compare.",
-    "emptyNoEvidence": "No duplicates by address or name. None of the {{count}} nodes has a serial number or an address list yet; the poller reads both over SNMP once an hour, so look again later.",
-    "hint": "A likely duplicate shares an address, a serial number, a MAC address or an LLDP chassis ID, or each node lists the other's address. A group to check shares only weaker signs, or has something that disagrees. Two routers sharing a VRRP or HSRP address can show up as one device: keep both."
+    "emptyNoEvidence": "No duplicates by address or name. None of the {{count}} nodes has a serial number or an address list yet; the poller reads both over SNMP once an hour, so look again later."
   },
   "missingPrefixes": {
-    "note": "For every site, the subnets its devices carry that none of the site's IP prefixes covers: the folder pane's “Subnets missing from the IP prefixes” for the whole fleet. A site is the nearest folder of type Site above a device. Read from the interface addresses devices report.",
     "coverage": "Sites compared: {{sites}}. Devices that reported their addresses: {{read}} of {{total}}. Subnets compared: {{subnets}}.",
     "notCompared": "Sites not compared yet, because none of their devices has reported an address: {{n}}.",
     "truncatedNodes": "Devices whose address list was cut at the stored limit: {{n}}.",
     "cut": "Showing the first {{shown}} of {{total}} gaps.",
     "siteCut": "This site has {{total}} gaps; the first {{shown}} are listed.",
     "tilesLabel": "Narrow by reason",
-    "kindHelp": {
-      "unregistered": "No IP prefix anywhere covers it. This is the one to add",
-      "partial": "The device's subnet is wider than the registered prefix, such as /23 against /24",
-      "other_folder": "Another folder's prefix holds it: filed under the wrong site, or reused",
-      "parent_only": "Only a folder above has it: the site's own prefix is missing"
-    },
+    "siteFilterHint": "A site is the nearest folder of type Site above a device. Subnets are read from the interface addresses devices report.",
     "viewsLabel": "Layout",
     "views": {
       "site": "By site",
@@ -277,11 +278,11 @@
     }
   },
   "subnetOverlaps": {
-    "note": "Address ranges that devices at more than one site carry, read from the interface addresses they report. A site is the nearest folder of type Site above a device.",
     "coverage": "Compared {{withAddresses}} of {{total}} devices ({{subnets}} ranges). A device that has not reported its interface addresses is not included.",
     "coverageTruncated": "{{count}} address lists were cut short at the per-device limit.",
     "scopedReadOnly": "Your account is limited to some folders, so rules and intentional marks can only be changed by an account that sees every site.",
     "tilesLabel": "Show one kind of overlap",
+    "sitesFilterHint": "A site is the nearest folder of type Site above a device. Ranges are read from the interface addresses devices report.",
     "rulesButton": "Exclusion rules ({{count}})",
     "truncated": "Showing the first {{shown}} of {{total}}.",
     "reopenErr": "Could not move it back.",
@@ -367,7 +368,7 @@
     },
     "rules": {
       "title": "Exclusion rules",
-      "text": "A place that matches a rule is left out before ranges are compared, and an overlap left with one site moves to Excluded. A link between two sites — a /30 or /31 carried by two devices — is always excluded.",
+      "text": "A link between two sites (a /30 or /31 on two devices) is always excluded, with or without a rule.",
       "range": "Range {{range}}",
       "port": "Port name or description has the words “{{text}}”",
       "both": "Range {{range}} and a port containing “{{text}}”",
@@ -393,7 +394,9 @@
       "form": {
         "title": "Add an exclusion rule",
         "portText": "Words in the port name or description",
-        "portHint": "Whole words, in order, not case-sensitive; a word may end in digits (dialer matches Dialer1, ha does not match Port-channel1). Leave empty to match any port.",
+        "portMatches_one": "Matches {{count}} port on this list: {{ports}}",
+        "portMatches_other": "Matches {{count}} ports on this list: {{ports}}",
+        "portMatchesNone": "Matches no port on this list.",
         "range": "Range",
         "rangeHint": "Only places inside this range match. Leave empty to match any range.",
         "reason": "Why it repeats",
