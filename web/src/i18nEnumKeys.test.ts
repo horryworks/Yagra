@@ -807,14 +807,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
   });
 
-  it('every certificate source has a label and a hint (settings-tls:source*.*)', () => {
-    // The TLS page badges the certificate by where it came from, and the hint beside it is what
-    // says whether Yagra may replace it on its own — the difference between "this renews itself"
-    // and "nothing will touch this but you". Both keys are built from the value at runtime, so a
-    // source added later would render raw in BOTH locales and parity would still pass.
+  it('every certificate source has a label (settings-tls:source.*)', () => {
+    // The TLS page badges the certificate by where it came from. The label key is built from the
+    // value at runtime, so a source added later would render raw in BOTH locales and parity would
+    // still pass. (What the badge opens to is `TLS_SOURCE_INFO`, a `Record` over the same union,
+    // so the compiler asks for it and G8 checks its keys exist.)
     const locales = { en: enSettingsTls, ja: jaSettingsTls };
     expectKeys('certificate source', locales, 'source.', TLS_CERT_SOURCES);
-    expectKeys('certificate source hint', locales, 'sourceHint.', TLS_CERT_SOURCES);
   });
 
   it('every upgrade run state has a label (settings-upgrade:runState.*)', () => {

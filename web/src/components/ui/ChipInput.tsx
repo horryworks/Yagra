@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { KeyboardEvent, ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { TextInput, FieldHint } from './Field';
+import { TextInput, FieldError } from './Field';
 import { IconButton } from './IconButton';
 import {
   LABELS_MAX,
@@ -136,7 +136,7 @@ export function ChipInput({
           if (draft.trim() !== '' && draftProblem === null) commit(draft);
         }}
       />
-      {draftProblem && <FieldHint error>{t(`field.tagErr.${draftProblem}`)}</FieldHint>}
+      {draftProblem && <FieldError>{t(`field.tagErr.${draftProblem}`)}</FieldError>}
     </div>
   );
 }

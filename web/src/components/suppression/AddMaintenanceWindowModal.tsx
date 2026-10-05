@@ -147,7 +147,7 @@ export function AddMaintenanceWindowModal({
       {batch ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
-          <p className="modal-hint">{t('maintenanceForm.lockedNodes', { count: names.length })}</p>
+          <p className="form-status">{t('maintenanceForm.lockedNodes', { count: names.length })}</p>
           <ul className="form-targets scroll-y">
             {names.map((n, i) => (
               <li key={`${n}-${i}`}>{n}</li>
@@ -157,7 +157,7 @@ export function AddMaintenanceWindowModal({
       ) : locked ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
-          <p className="modal-hint">
+          <p className="form-status">
             {initialScope?.kind === 'group'
               ? t('maintenanceForm.lockedGroup')
               : t('maintenanceForm.lockedNode')}
@@ -179,7 +179,9 @@ export function AddMaintenanceWindowModal({
               }}
             >
               <option value="node">{t('maintenanceForm.level.node')}</option>
-              <option value="group_id">{t('maintenanceForm.level.groupId')}</option>
+              <option value="group_id">
+                {`${t('maintenanceForm.level.groupId')}${t('maintenanceForm.inclSubgroups')}`}
+              </option>
               {profiles.length > 0 && (
                 <option value="profile">{t('maintenanceForm.level.profile')}</option>
               )}
@@ -214,9 +216,6 @@ export function AddMaintenanceWindowModal({
                 onChange={setScopeId}
                 emptyOption={t('maintenanceForm.pickGroup')}
               />
-            )}
-            {scope === 'group_id' && (
-              <span className="modal-hint">{t('maintenanceForm.groupHint')}</span>
             )}
           </div>
         </>

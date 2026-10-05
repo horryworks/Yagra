@@ -12,7 +12,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { Button } from '../ui/Button';
-import { FieldHint, RequiredMark, Select, TextInput } from '../ui/Field';
+import { FieldError, RequiredMark, Select, TextInput } from '../ui/Field';
 import { isHttpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary } from '../../types/api';
 import {
@@ -53,7 +53,7 @@ export function Row({
         {sub && <span className="nd-field-sub">{sub}</span>}
       </span>
       {children}
-      {hint && <FieldHint>{hint}</FieldHint>}
+      {hint && <span className="form-status">{hint}</span>}
     </label>
   );
 }
@@ -157,7 +157,7 @@ export function UrlCheckFields({
         />
         <span>{t('checkEdit.verifyTls')}</span>
       </label>
-      {!d.verifyTls && <FieldHint error>{t('checkEdit.verifyTlsWarning')}</FieldHint>}
+      {!d.verifyTls && <FieldError>{t('checkEdit.verifyTlsWarning')}</FieldError>}
       <label className="nd-check-toggle">
         <input
           type="checkbox"
@@ -179,7 +179,7 @@ export function UrlCheckFields({
       {/* The server refuses this pair (400 credential_needs_tls); saying so here avoids a round
           trip, and says *why* rather than just refusing. */}
       {d.credentialId !== '' && !d.verifyTls && (
-        <FieldHint error>{t('checkEdit.credentialNeedsTls')}</FieldHint>
+        <FieldError>{t('checkEdit.credentialNeedsTls')}</FieldError>
       )}
       <label className="nd-check-toggle">
         <input
@@ -256,7 +256,7 @@ export function UrlCheckFields({
             />
           </Row>
           {/* Refused server-side too; saying it here says why before a round trip. */}
-          {d.method === 'HEAD' && <FieldHint error>{t('checkEdit.bodyMatchNeedsBody')}</FieldHint>}
+          {d.method === 'HEAD' && <FieldError>{t('checkEdit.bodyMatchNeedsBody')}</FieldError>}
         </>
       )}
     </>

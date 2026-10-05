@@ -154,7 +154,7 @@ test('keeping the stored secret sends only the name', async ({ page, errors }) =
 
 // The ranges under the cadence dialog's intervals come from `merakiCadence.ts`, which a Rust test
 // holds to the server's bounds. They were four literals in the `.tsx`; what is wiring is that each
-// interval is drawn with ITS band, as the hint and as the input's own min and max.
+// interval is drawn with ITS band, as the box's suffix and as the input's own min and max.
 test('each cadence interval is drawn with its own band', async ({ page }) => {
   await page.goto('/settings/integrations/meraki');
   await page.getByRole('button', { name: 'Cadence' }).first().click();
@@ -169,6 +169,6 @@ test('each cadence interval is drawn with its own band', async ({ page }) => {
     const input = field(label).locator('input[type="number"]');
     await expect(input, label).toHaveAttribute('min', min);
     await expect(input, label).toHaveAttribute('max', max);
-    await expect(field(label).locator('.modal-hint'), label).toHaveText(`${min}–${max}`);
+    await expect(field(label).locator('.field-suffix'), label).toHaveText(`${min}–${max}`);
   }
 });

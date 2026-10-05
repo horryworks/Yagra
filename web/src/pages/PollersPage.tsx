@@ -27,7 +27,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { Field, TextInput, FieldHint } from '../components/ui/Field';
+import { Field, TextInput } from '../components/ui/Field';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { StepFrame } from '../components/ui/StepFrame';
@@ -386,7 +386,7 @@ function CoverPoolModal({
             ))}
           </select>
         </label>
-        {targets.length === 0 && <FieldHint>{t('pollers.pool.coverNoTarget')}</FieldHint>}
+        {targets.length === 0 && <p className="form-status">{t('pollers.pool.coverNoTarget')}</p>}
         <FormError form={form} />
       </div>
     </Modal>
@@ -533,9 +533,10 @@ function RenamePoolModal({
                 onChange={(e) => setName(e.target.value)}
               />
             </Field>
-            <FieldHint>
+            {/* What the rename carries, counted — the result shown before the click. */}
+            <p className="form-status">
               {t('pollers.pool.renameHint', { nodes: pool.nodes, pollers: passengers.length })}
-            </FieldHint>
+            </p>
             <FormError form={form} />
           </>
         )}
@@ -878,7 +879,7 @@ function SetAnchorModal({
           />
         </Field>
         {poller.mgmt_addrs.length > 0 && (
-          <p className="form-hint mono">
+          <p className="form-status mono">
             {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
           </p>
         )}
@@ -966,10 +967,9 @@ function PollerTokenModal({
           <TextInput
             value={host}
             onChange={(e) => setHost(e.target.value)}
-            placeholder="yagra.example.net"
+            placeholder={t('pollers.token.host.placeholder')}
           />
         </label>
-        <FieldHint>{t('pollers.token.host.hint')}</FieldHint>
         {/* What the site is being asked to run is said here, before the download — not in the
             README alone, which is read at the site by whoever unpacks it and not by whoever
             decided. The label names the container; the ⓘ names the Docker socket it holds and
@@ -991,8 +991,12 @@ function PollerTokenModal({
           />
         </div>
         {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
-        {poller.has_token && <p className="form-hint">{t('pollers.token.reissueWarning')}</p>}
-        {issued && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
+        {poller.has_token && <p className="form-warning">{t('pollers.token.reissueWarning')}</p>}
+        {issued && (
+          <p className="form-status" role="status">
+            {t('pollers.token.downloaded')}
+          </p>
+        )}
         <FormError form={form} />
       </div>
     </Modal>
@@ -1109,7 +1113,11 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
               {t('pollers.register.issue')}
             </Button>
           </div>
-          {issued && <p className="form-hint">{t('pollers.register.issued')}</p>}
+          {issued && (
+            <p className="form-status" role="status">
+              {t('pollers.register.issued')}
+            </p>
+          )}
           {issueError && <p className="form-error">{issueError}</p>}
         </div>
       )}
@@ -1125,7 +1133,6 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
           onChange={(e) => setBusUrl(e.target.value)}
           placeholder="tls://poller:<password>@yagra.example.com:4222"
         />
-        <FieldHint>{t('pollers.register.fields.busUrl.hint')}</FieldHint>
       </div>
 
       <div className="modal-field">
@@ -1135,7 +1142,6 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
           onChange={(e) => setCaFile(e.target.value)}
           placeholder="/certs/ca.pem"
         />
-        <FieldHint>{t('pollers.register.fields.caFile.hint')}</FieldHint>
       </div>
 
       <div className="modal-field">

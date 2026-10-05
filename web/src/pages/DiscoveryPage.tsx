@@ -64,7 +64,8 @@ import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { Button } from '../components/ui/Button';
-import { TextInput, TextArea, Select, FieldHint } from '../components/ui/Field';
+import { TextInput, TextArea, Select, FieldError } from '../components/ui/Field';
+import { InfoTip } from '../components/ui/InfoTip';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EndpointSetupCell } from '../components/discovery/EndpointSetupCell';
@@ -930,13 +931,13 @@ export function DiscoveryPage() {
                       but answers `null` past the limit, so the ticked sum stands in there: a
                       number that simply disappeared would make an over-large selection look like
                       an empty one. */}
-                  <FieldHint error={overLimit}>
+                  <span className={overLimit ? 'field-error' : 'form-status'}>
                     {shownCount === null
                       ? t('discovery.site.noneTicked')
                       : overLimit
                         ? t('discovery.site.overLimit', { count: shownCount, max: SWEEP_LIMIT })
                         : t('discovery.site.addresses', { count: shownCount, max: SWEEP_LIMIT })}
-                  </FieldHint>
+                  </span>
                 </div>
               ) : (
                 <label className="form-label disco-f-targets">
@@ -955,12 +956,12 @@ export function DiscoveryPage() {
                       moment it does not, nothing while it is empty. The error is the one Scan
                       would have shown, so it is not repeated there (`startScan`). */}
                   {typed.kind === 'count' && (
-                    <FieldHint>
+                    <span className="form-status">
                       {t('discovery.site.addresses', { count: typed.count, max: SWEEP_LIMIT })}
-                    </FieldHint>
+                    </span>
                   )}
                   {typed.kind === 'invalid' && (
-                    <FieldHint error>{t('discovery.err.badTargets')}</FieldHint>
+                    <FieldError>{t('discovery.err.badTargets')}</FieldError>
                   )}
                 </label>
               )}
@@ -973,13 +974,9 @@ export function DiscoveryPage() {
                   onChange={setSelectedCredIds}
                   disabled={inFlight}
                 />
-                <FieldHint>
-                  <Trans
-                    t={t}
-                    i18nKey="discovery.credsLink"
-                    components={{ lnk: <Link to="/nodes/credentials" /> }}
-                  />
-                </FieldHint>
+                <Link className="field-link" to="/nodes/credentials">
+                  {t('discovery.manageCreds')}
+                </Link>
               </label>
 
               {/* Which site the sweep runs from (ADR-068). Before this, the job went to a subject
@@ -1004,9 +1001,9 @@ export function DiscoveryPage() {
                     away the reason to come back to it. A live pool says nothing — it does what
                     the label says. */}
                 {unroutedPool && (
-                  <FieldHint error>
+                  <FieldError>
                     {!pool ? t('discovery.pool.anyHint') : t('discovery.pool.deadHint')}
-                  </FieldHint>
+                  </FieldError>
                 )}
               </label>
 
@@ -1438,17 +1435,21 @@ function SeenOnNetworkCard({
       {/* What Detect tries, in order — the Scan tab's picker, over the same list. Drawn only with
           the permission Detect needs (ADR-056): without it there is nothing to try them with. */}
       {canConfig && (
-        <label className="form-label disco-seen-creds">
-          {t('discovery.credsLabel')}
-          <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
-          <FieldHint>
-            <Trans
-              t={t}
-              i18nKey="discovery.seen.detect.credsHint"
-              components={{ lnk: <Link to="/nodes/credentials" /> }}
+        <div className="form-label disco-seen-creds">
+          {/* Not a <label>: the info tip beside the name is a button, and a button inside a label
+              becomes the label's control. The picker is a list of checkboxes with their own. */}
+          <div className="field-head">
+            <span>{t('discovery.credsLabel')}</span>
+            <InfoTip
+              infoKey="monitoring:discovery.seen.detect.credsOrder.info"
+              label={t('discovery.credsLabel')}
             />
-          </FieldHint>
-        </label>
+          </div>
+          <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
+          <Link className="field-link" to="/nodes/credentials">
+            {t('discovery.manageCreds')}
+          </Link>
+        </div>
       )}
       {canConfig && (
         <EndpointDestination

@@ -98,3 +98,10 @@ select.field {
   line-height: 1.4;
   resize: vertical;
 }
+
+/* A link out of a field to the screen that manages what it lists ("Manage credentials →"). Sized
+   to its text, so a field laid out as a column does not stretch it into a full-width target. */
+.field-link {
+  align-self: flex-start;
+  font-size: var(--font-xs);
+}

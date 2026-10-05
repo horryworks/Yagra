@@ -3,15 +3,17 @@
 //
 // The WebUI had about 100,000 characters of explanation on its screens (2026-10-05), written one
 // feature at a time under ADR-055's "the text on screen is the manual". Nothing stopped the next
-// paragraph, so deleting prose did not last. These four tables are that stop:
+// paragraph, so deleting prose did not last. These tables are that stop. Since Inc.24 the shapes
+// ADR-200 removed are forbidden outright: G4, G5, G9 and G10 each hold an allow-list of reasoned
+// exceptions — no legacy list is left to shrink — and an entry that stops being needed fails too.
 //
 // - G3 `PROSE_CEILING` — per namespace, the characters in strings of five or more English words.
 //   Fails above the ceiling, and also far below it (a ceiling left high is a ceiling that lets the
 //   next paragraph back in): lower the number in the same change that removed the prose.
-// - G4 `LONG_LEGACY` — every string over 200 English / 120 Japanese characters. Only shrinks.
-//   A new long string needs a row in `LONG_ALLOWED` with the reason.
-// - G5 `HOVER_LEGACY` — every `title={t('…')}` over 60 English characters. Hover-only text cannot
-//   be read on touch (ADR-055 R4). Only shrinks.
+// - G4 `LONG_ALLOWED` — no string over 200 English / 120 Japanese characters, unless listed here
+//   with the reason.
+// - G5 `HOVER_ALLOWED` — no `title={t('…')}` over 60 English characters, unless listed with the
+//   reason. Hover-only text cannot be read on touch (ADR-055 R4).
 // - G7 `PAGE_NOTES` — every screen that passes its own `note` to `PageHeader` instead of taking
 //   the nav description, with the reason. Only shrinks; an entry with `until` is a fact still
 //   waiting for its place in the screen, and leaves in that increment.
@@ -20,10 +22,12 @@
 //   file draws more than three ⓘ. The count only moves with a reason: an ⓘ is the last resort.
 //   `INFO_TEXT_SITES` names the files whose press shows a text that is not a `.info` key (a
 //   metric's generated meaning), with the reason; those presses are not in the count.
-// - G9 `POINTER_LEGACY` — strings that spell a menu path with `▸`. A pointer to a screen is a
-//   `ScreenLink`, which takes the names from the menu itself. Only shrinks.
-// - G10 `HINT_SITES` — static hints under fields and at the head of dialogs (`<FieldHint>` with no
-//   `error`, `form-hint`, `modal-hint`). Only shrinks.
+// - G9 `POINTER_ALLOWED` — no string spells a menu path with `▸`, unless listed with the reason. A
+//   pointer to a screen is a `ScreenLink`, which takes the names from the menu itself.
+// - G10 `HINT_ALLOWED` — no static hint under a field or at the head of a dialog (`form-hint`,
+//   `modal-hint`, a muted `FieldHint`), unless the file is listed with the reason. A validation
+//   message is `FieldError` (or `Field`'s `error`); a line shown because of the form's state or
+//   input is `form-status`; a cost stated before a click is `form-warning`.
 //
 // Raising a ceiling needs a reason in the commit message — a new screen's state message, say.
 // What prose may stay at all is in `.claude/rules/ui-conventions.md` (the ADR-200 section).
@@ -56,57 +60,52 @@ import {
 } from './testSupport/prose';
 import { readSources, SRC } from './testSupport/sources';
 
-/** `[en, ja]` characters of prose per namespace. Measured 2026-10-06; lower as prose goes. */
+/** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
-  alerts: [1077, 626],
-  alertsConfig: [8407, 4476],
+  alerts: [942, 557],
+  alertsConfig: [8344, 4430],
   auth: [79, 43],
   common: [717, 385],
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11335, 6683],
+  monitoring: [11132, 6567],
   nav: [2907, 1367],
-  nodes: [15779, 8875],
+  nodes: [15378, 8693],
   rca: [1022, 528],
   reports: [643, 402],
+  settings: [217, 101],
   'settings-ai': [736, 410],
   'settings-auth': [3540, 2095],
   'settings-forwarding': [1695, 900],
   'settings-relocation': [3661, 1808],
-  'settings-tls': [1619, 872],
+  'settings-tls': [1592, 857],
   'settings-tokens': [801, 433],
   'settings-upgrade': [3291, 1796],
-  settings: [217, 101],
-  suppression: [959, 626],
-  system: [13290, 7315],
+  suppression: [866, 571],
+  system: [12980, 7143],
   topology: [3104, 1757],
-  troubleshoot: [3416, 1791],
+  troubleshoot: [3370, 1766],
 };
 
 /** How far below its ceiling a namespace may sit before the ceiling must come down. */
 const SLACK: [number, number] = [300, 200];
 
-/** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
-const LONG_LEGACY: string[] = [
-  'nodes:deleteNode.body',
-];
-
-/** Long strings allowed on purpose, with the reason. */
+/** Strings over 200 EN / 120 JA characters allowed on purpose, with the reason (G4). Checked both
+ *  ways: a listed key that got shorter, or went away, has to leave. Empty since Inc.24 — the last
+ *  one (the delete-node confirmation) said in 246 characters what fits in 150. */
 const LONG_ALLOWED: Record<string, string> = {};
 
-/** `title={t('…')}` strings over 60 EN characters that predate ADR-200. Remove; never add. */
-const HOVER_LEGACY: string[] = [
-  'alerts:acked.title',
-  'alerts:active.muteHint',
-  'alertsConfig:routing.template.status.confirmTitle',
-  'alertsConfig:thresholds.meaningUnknown',
-  'monitoring:discovery.seen.detect.hint',
-  'system:pollers.selfUpgradeHint',
-  'system:pollers.skewHint',
-];
+/** `title={t('…')}` strings over 60 EN characters allowed on purpose, with the reason (G5). Checked
+ *  both ways. The detector reads every `title={t(` in a `.tsx`, and a component's `title` prop is
+ *  not always a hover. */
+const HOVER_ALLOWED: Record<string, string> = {
+  'alertsConfig:routing.template.status.confirmTitle':
+    "not a hover: the `title` prop of ConfirmDeleteModal is the dialog's heading, and it names " +
+    'both halves of what the click does (templateEditor.spec.ts reads the dialog by it)',
+};
 
 /**
  * Why a screen passes its own `note` rather than taking its nav description (ADR-200 G7).
@@ -160,7 +159,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 23, press: 18 };
+const INFO_COUNT = { tip: 26, press: 19 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked
@@ -186,16 +185,15 @@ const INFO_NOT_A_TIP: Record<string, string> = {
   'troubleshoot:findings.severity.info': 'the label of the `info` finding severity',
 };
 
-/** Strings that spell a menu path with `▸` and predate ADR-200 (G9). Remove; never add. */
-const POINTER_LEGACY: string[] = [];
-
-/** `▸` allowed on purpose, with the reason. */
+/** `▸` allowed on purpose, with the reason (G9). Checked both ways. */
 const POINTER_ALLOWED: Record<string, string> = {
   'system:meraki.devices.underNetwork': 'a breadcrumb format, {{folder}} ▸ {{network}}',
 };
 
-/** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 18, formHint: 16, modalHint: 23 };
+/** Files allowed a static hint, with the reason (G10). Checked both ways. Empty since Inc.24: the
+ *  57 hints left then became a suffix or placeholder in the box, a label, an ⓘ, a link, a
+ *  `FieldError`, a `form-warning` before a click, or a `form-status` line drawn from state. */
+const HINT_ALLOWED: Record<string, string> = {};
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));
@@ -241,11 +239,17 @@ describe('G4: no new string longer than 200 EN / 120 JA characters', () => {
     expect(longKeys(fake)).toEqual(['x:a', 'x:b']);
   });
 
-  it('the long strings are exactly the legacy list and the allowed ones', () => {
-    const found = longKeys(locales);
-    expect(found.length).toBeGreaterThan(0);
-    const listed = [...LONG_LEGACY, ...Object.keys(LONG_ALLOWED)].sort();
-    expect(found).toEqual(listed);
+  it('inspected every measured string', () => {
+    const inspected = measured.reduce(
+      (n, ns) => n + Object.keys(flattenStrings(locales[ns].en)).length,
+      0,
+    );
+    // Thousands on 2026-10-06; the floor only proves the walk was not empty.
+    expect(inspected).toBeGreaterThan(3000);
+  });
+
+  it('the long strings are exactly the allowed ones', () => {
+    expect(longKeys(locales)).toEqual(Object.keys(LONG_ALLOWED).sort());
   });
 });
 
@@ -267,7 +271,7 @@ describe('G5: no new sentence that only a hover can read', () => {
     ).toEqual(['a.b', 'c:d']);
   });
 
-  it('the long hover strings are exactly the legacy list', () => {
+  it('the long hover strings are exactly the allowed ones', () => {
     const long = new Set<string>();
     for (const { key } of sites) {
       if (!key) continue;
@@ -275,7 +279,7 @@ describe('G5: no new sentence that only a hover can read', () => {
       const v = flattenStrings(locales[key.slice(0, cut)].en)[key.slice(cut + 1)] ?? '';
       if (v.length > 60) long.add(key);
     }
-    expect([...long].sort()).toEqual([...HOVER_LEGACY].sort());
+    expect([...long].sort()).toEqual(Object.keys(HOVER_ALLOWED).sort());
   });
 });
 
@@ -448,10 +452,11 @@ describe('G9: a pointer to another screen is a link, not a spelled-out menu path
     expect(pointerKeys(fake)).toEqual(['x:a', 'x:b']);
   });
 
-  it('the strings with ▸ are exactly the legacy list and the allowed ones', () => {
+  it('the strings with ▸ are exactly the allowed ones', () => {
     const found = pointerKeys(locales);
+    // The allowed breadcrumb is itself a hit, so an empty answer means the walk read nothing.
     expect(found.length).toBeGreaterThan(0);
-    expect(found).toEqual([...POINTER_LEGACY, ...Object.keys(POINTER_ALLOWED)].sort());
+    expect(found).toEqual(Object.keys(POINTER_ALLOWED).sort());
   });
 });
 
@@ -470,15 +475,21 @@ describe('G10: no new static hint under a field or at the head of a dialog', () 
     expect(hintSites(src)).toEqual({ fieldHint: 1, formHint: 1, modalHint: 1 });
   });
 
-  it('the count of static hints is the counted one', () => {
-    const total = { fieldHint: 0, formHint: 0, modalHint: 0 };
-    for (const [, src] of files) {
-      const n = hintSites(src);
-      total.fieldHint += n.fieldHint;
-      total.formHint += n.formHint;
-      total.modalHint += n.modalHint;
-    }
-    expect(total.fieldHint + total.formHint + total.modalHint).toBeGreaterThan(50);
-    expect(total).toEqual(HINT_SITES);
+  it('inspected the tree it is supposed to be reading', () => {
+    // 234 `.tsx` files on 2026-10-06.
+    expect(files.length).toBeGreaterThan(200);
+    // The shapes that replaced the hints are there to be read, so the walk is not over nothing.
+    const replaced = files.filter(([, src]) => /\b(form-status|FieldError)\b/.test(src)).length;
+    expect(replaced).toBeGreaterThan(20);
+  });
+
+  it('the files with a static hint are exactly the allowed ones', () => {
+    const withHint = files
+      .filter(([, src]) => {
+        const n = hintSites(src);
+        return n.fieldHint + n.formHint + n.modalHint > 0;
+      })
+      .map(([file]) => file);
+    expect(withHint.sort()).toEqual(Object.keys(HINT_ALLOWED).sort());
   });
 });

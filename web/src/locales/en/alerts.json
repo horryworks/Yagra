@@ -13,7 +13,7 @@
     "ackedHint": "Acked arrives from your on-call tool (PagerDuty / JSM). Yagra shows it and never sets it.",
     "searchLabel": "Node or metric",
     "mute": "Mute",
-    "muteHint": "Silence notifications for this check on this node until a time you choose"
+    "muteHint": "Mute this check on this node"
   },
   "row": {
     "flapping": "flapping",
@@ -29,7 +29,7 @@
     }
   },
   "acked": {
-    "title": "Acknowledged in {{source}} by {{by}}{{note}} (read-only, mirrored from your external tool)",
+    "title": "Acknowledged in {{source}} by {{by}}{{note}}",
     "note": " — {{note}}"
   },
   "history": {

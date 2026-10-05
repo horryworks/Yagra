@@ -20,7 +20,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, FieldHint } from '../components/ui/Field';
+import { TextInput, Select, FieldError } from '../components/ui/Field';
 import { SecretInput } from '../components/ui/SecretInput';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -169,7 +169,7 @@ function HttpAuthFields({
               onChange={(e) => set({ headerName: e.target.value })}
             />
             {headerNameRefused(value.headerName) && (
-              <FieldHint error>{t('cred.http.headerNameRefused')}</FieldHint>
+              <FieldError>{t('cred.http.headerNameRefused')}</FieldError>
             )}
           </div>
           <div className="modal-field">

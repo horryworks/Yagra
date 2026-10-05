@@ -47,7 +47,7 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
-import { Field, TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select, FieldError } from '../components/ui/Field';
 import { InfoPress } from '../components/ui/InfoTip';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -340,7 +340,7 @@ function CreateTokenModal({
             </label>
           ))}
         </div>
-        {!surfaces.length && <span className="modal-hint">{t('err.noSurface')}</span>}
+        {!surfaces.length && <FieldError>{t('err.noSurface')}</FieldError>}
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('field.role')}</label>

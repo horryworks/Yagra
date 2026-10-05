@@ -13,10 +13,10 @@
     "imported": "取り込み済み",
     "unknown": "不明"
   },
-  "sourceHint": {
-    "self_signed": "自動で更新され、自前の証明書を取り込むまでブラウザは警告を出します。",
-    "imported": "Yagra が自分で差し替えることはありません。",
-    "unknown": "新しい Yagra が書いたもので、自動では差し替えません。"
+  "sourceInfo": {
+    "self_signed": { "info": "自動で更新されます。自前の証明書を取り込むまで、ブラウザは警告を出します。" },
+    "imported": { "info": "Yagra が自分で差し替えることはありません。" },
+    "unknown": { "info": "新しい Yagra が書いたものです。自動では差し替えません。" }
   },
 
   "current": {
@@ -48,12 +48,10 @@
 
   "import": {
     "heading": "証明書を取り込む",
-    "certificate": "証明書チェーン",
+    "certificate": "証明書チェーン（サーバー証明書が先頭）",
     "certificatePlaceholder": "-----BEGIN CERTIFICATE-----",
-    "certificateHint": "サーバー証明書、続けて中間証明書",
     "privateKey": "秘密鍵",
     "privateKeyPlaceholder": "-----BEGIN PRIVATE KEY-----",
-    "privateKeyHint": "暗号化して保存し、二度と表示しません。",
     "submit": "取り込んで適用",
     "submitting": "取り込み中…",
     "success": "証明書を取り込みました。すでに有効です。",

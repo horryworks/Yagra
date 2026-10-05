@@ -13,7 +13,7 @@
     "ackedHint": "ACK はオンコールツール（PagerDuty / JSM）から届きます。Yagra は表示するだけで、自分では付けません。",
     "searchLabel": "ノード / メトリクス",
     "mute": "ミュート",
-    "muteHint": "このノードのこのチェックについて、指定した時刻まで通知を停止します"
+    "muteHint": "このノードのこのチェックをミュート"
   },
   "row": {
     "flapping": "フラッピング",
@@ -29,7 +29,7 @@
     }
   },
   "acked": {
-    "title": "{{source}} で {{by}} が確認済み{{note}}（読み取り専用 · 外部ツールから反映）",
+    "title": "{{source}} で {{by}} が確認済み{{note}}",
     "note": " — {{note}}"
   },
   "history": {

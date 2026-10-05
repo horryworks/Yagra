@@ -250,7 +250,7 @@ function ProviderModal({
             value={issuer}
             onChange={(e) => setIssuer(e.target.value)}
           />
-          {rawIssuer && <span className="modal-hint">{t('field.issuerUnrecognized')}</span>}
+          {rawIssuer && <span className="form-status">{t('field.issuerUnrecognized')}</span>}
         </div>
       )}
       <div className="modal-field">
@@ -384,7 +384,7 @@ function ProviderModal({
           ))}
         </Select>
         {!preset.supportsGroups && (
-          <span className="modal-hint">{t('field.defaultRoleRequired')}</span>
+          <span className="form-status">{t('field.defaultRoleRequired')}</span>
         )}
       </div>
 
@@ -766,7 +766,7 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
               ? t('ldap.test.role', { role: t(`common:role.${result.role}`) })
               : t('ldap.test.denied')}
           </p>
-          <p className="modal-hint">{result.note}</p>
+          <p className="form-status">{result.note}</p>
         </div>
       )}
     </Card>
@@ -823,7 +823,7 @@ function PublicDashboardCard() {
         <p className="muted">{t('common:loading')}</p>
       ) : (
         <>
-          <p className={state.enabled ? 'form-hint is-live' : 'form-hint'}>
+          <p className={state.enabled ? 'form-status is-live' : 'form-status'}>
             {state.enabled
               ? t('publicDashboard.stateOn', { count: state.routes })
               : t('publicDashboard.stateOff')}
@@ -870,7 +870,7 @@ function PublicDashboardCard() {
           </p>
           {/* The cost, stated before the click rather than discovered after it. */}
           {confirm && state.routes === 0 && (
-            <p className="form-hint">
+            <p className="form-warning">
               <Trans
                 t={t}
                 i18nKey="publicDashboard.confirmOnEmpty"

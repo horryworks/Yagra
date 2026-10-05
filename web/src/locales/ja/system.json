@@ -63,9 +63,9 @@
       "offline": "オフライン"
     },
     "skew": "版ずれ",
-    "skewHint": "このポーラーは core の版（{{core}}）と違います。遠隔拠点のポーラーは拠点側のホストで上げます。",
+    "skewHint": "core の版（{{core}}）と違います。拠点側で上げます",
     "selfUpgrade": "自己更新可",
-    "selfUpgradeHint": "このポーラーの隣に拠点アップデーターがあるため、このデプロイのアップグレードで一緒に入れ替わります。",
+    "selfUpgradeHint": "このデプロイと一緒にアップグレードされます",
     "upgradeStep": {
       "prefetch": "取得中",
       "apply": "導入中",
@@ -144,12 +144,10 @@
           "label": "プール"
         },
         "busUrl": {
-          "label": "バス URL",
-          "hint": "ポーラーの認証情報を含めます。拠点外から接続する場合は TLS の URL が必須です。"
+          "label": "バス URL"
         },
         "caFile": {
-          "label": "CA ファイルパス（任意）",
-          "hint": "バス証明書がプライベート CA で署名されている場合のみ。"
+          "label": "CA ファイルパス（プライベート CA のときだけ）"
         },
         "env": {
           "label": "docker-compose.poller.yml 用の .env"
@@ -261,7 +259,7 @@
       "revokeFailed": "トークンの失効に失敗しました",
       "host": {
         "label": "この拠点が接続する宛先",
-        "hint": "空欄ならバス証明書のアドレスを使います。ほかの宛先は証明書に含まれている必要があります。"
+        "placeholder": "バス証明書のアドレス"
       },
       "selfUpgrade": {
         "label": "拠点アップデーターを入れて、ここでのアップグレードに拠点も合わせる",
@@ -749,13 +747,12 @@
       "tokenNewAddressHint": "アドレスが別のホストを指しています。API トークンをもう一度入力してください。保存済みのトークンを新しい宛先へ送ることはありません。",
       "caCert": "CA 証明書 (任意)",
       "caCertIsKey": "これは秘密鍵です。代わりに CA 証明書を貼り付けてください。",
-      "siteIdField": "サイト ID の取得元",
-      "siteIdFieldHint": "値が各 Site のフォルダー名の頭に付きます（例:「SITE-A Example」）。",
-      "siteIdFieldKeyHint": "NetBox でのフィールドのキーです（ラベルではありません）。",
+      "siteIdField": "サイト ID の取得元（Site のフォルダー名の頭に付く）",
       "siteIdFieldKeyInvalid": "カスタムフィールドの名前に使えるのは英数字とアンダースコアだけです。",
       "siteIdFieldUnreadable": "このトークンではこの NetBox のカスタムフィールドの定義を読めないため、一覧に出ていません。使うには「その他」を選び、フィールド名を入力してください。",
       "interval": "同期の間隔 (秒)",
-      "test": "接続テスト"
+      "test": "接続テスト",
+      "siteIdFieldKeyPlaceholder": "ラベルでなくキー（site_id）"
     },
     "siteIdField": {
       "none": "サイト ID を付けない",

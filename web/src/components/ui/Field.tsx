@@ -73,7 +73,7 @@ export function Field({
       </div>
       {children}
       {error && (
-        <p className="form-hint form-hint-error" role="alert">
+        <p className="field-error" role="alert">
           {error}
         </p>
       )}
@@ -104,12 +104,16 @@ export function RequiredMark() {
   );
 }
 
-/** Small, muted helper text under a form field (format hints, validation messages). Pass
- *  `error` to render it in the critical color. */
-export function FieldHint({ children, error }: { children: ReactNode; error?: boolean }) {
-  return (
-    <span className={error ? 'form-hint form-hint-error' : 'form-hint'}>{children}</span>
-  );
+/** A validation message under a field, in the critical colour — for a field that is not on
+ *  {@link Field}, whose `error` prop draws the same line.
+ *
+ *  There is deliberately no muted variant: a standing sentence under a field is what ADR-200
+ *  removed (a format goes in the box as a suffix or a placeholder, a pointer becomes a
+ *  `ScreenLink`, an explanation that changes a decision becomes an ⓘ). A line that appears because
+ *  of the form's state or input — a count, the value in force — is `<p className="form-status">`,
+ *  and `proseBudget.test.ts` (G10) refuses the old hint classes. */
+export function FieldError({ children }: { children: ReactNode }) {
+  return <span className="field-error">{children}</span>;
 }
 
 export function Select({

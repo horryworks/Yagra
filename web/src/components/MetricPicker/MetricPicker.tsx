@@ -167,7 +167,7 @@ export function MetricPicker({ value, onChange, id, onlyPerInterface }: Props) {
       </button>
       {/* The sentence for what is already chosen, outside the popover: an operator who opened this
           dialog to change a bound never opens the list, and would otherwise never see it. */}
-      {selected?.meaning && <span className="modal-hint">{selected.meaning}</span>}
+      {selected?.meaning && <span className="form-status">{selected.meaning}</span>}
       <AnchoredPopover
         open={open}
         anchorRef={wrapRef}

@@ -30,7 +30,7 @@ import type {
 } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { TextInput, Select, RequiredMark } from '../ui/Field';
+import { TextInput, Select, RequiredMark, FieldError } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import {
   createRequest,
@@ -392,9 +392,7 @@ export function AddNodeModal({
             onChange={(e) => set('pool', e.target.value)}
             placeholder={poolPlaceholder(fallbackPool(groups, group || null), t)}
           />
-          {!poolValid && (
-            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
-          )}
+          {!poolValid && <FieldError>{t('field.poolInvalid')}</FieldError>}
         </label>
         {sameAddress && (
           <div className="form-warning" role="alert">

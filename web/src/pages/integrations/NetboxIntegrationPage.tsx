@@ -24,7 +24,7 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
-import { TextInput, TextArea, Select } from '../../components/ui/Field';
+import { TextInput, TextArea, Select, FieldError } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { InfoTip } from '../../components/ui/InfoTip';
@@ -223,9 +223,7 @@ function ServerModal({
           placeholder="https://netbox.example.com"
           onChange={(e) => setBaseUrl(e.target.value)}
         />
-        {urlRefused && (
-          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.baseUrlRefused')}</span>
-        )}
+        {urlRefused && <FieldError>{t('netbox.form.baseUrlRefused')}</FieldError>}
       </label>
       {/* Not a wrapping <label>: the stored state draws a Replace button, and a button inside a
           label becomes the label's control. */}
@@ -239,7 +237,7 @@ function ServerModal({
           onChange={setToken}
         />
         {existing && tokenNeeded && (
-          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.tokenNewAddressHint')}</span>
+          <p className="form-warning">{t('netbox.form.tokenNewAddressHint')}</p>
         )}
       </div>
       <label className="netbox-field">
@@ -251,9 +249,7 @@ function ServerModal({
           placeholder="-----BEGIN CERTIFICATE-----"
           onChange={(e) => setCaPem(e.target.value)}
         />
-        {caIsKey && (
-          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.caCertIsKey')}</span>
-        )}
+        {caIsKey && <FieldError>{t('netbox.form.caCertIsKey')}</FieldError>}
       </label>
       <label className="netbox-field">
         <span>{t('netbox.form.siteIdField')}</span>
@@ -294,29 +290,20 @@ function ServerModal({
         {siteIdSelected === SITE_ID_OTHER && (
           <TextInput
             value={customKeyInput}
-            placeholder="site_id"
+            placeholder={t('netbox.form.siteIdFieldKeyPlaceholder')}
             autoComplete="off"
             onChange={(e) => setCustomKeyInput(e.target.value)}
           />
         )}
-        <span className="netbox-hint">
-          {siteIdSelected === SITE_ID_OTHER
-            ? t('netbox.form.siteIdFieldKeyHint')
-            : t('netbox.form.siteIdFieldHint')}
-        </span>
         {/* 🚨 Said out loud, because otherwise an empty picker looks like "this NetBox has no
             custom fields" and the operator never finds the row above. */}
         {fields && !fields.custom_fields_readable && (
-          <span className="netbox-hint netbox-hint-warn">
-            {t('netbox.form.siteIdFieldUnreadable')}
-          </span>
+          <p className="form-warning">{t('netbox.form.siteIdFieldUnreadable')}</p>
         )}
         {siteIdSelected === SITE_ID_OTHER &&
           customKeyInput.trim() !== '' &&
           !customKeyLooksValid(customKeyInput) && (
-            <span className="netbox-hint netbox-hint-warn">
-              {t('netbox.form.siteIdFieldKeyInvalid')}
-            </span>
+            <FieldError>{t('netbox.form.siteIdFieldKeyInvalid')}</FieldError>
           )}
       </label>
       <label className="netbox-field">

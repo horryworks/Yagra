@@ -28,7 +28,7 @@ import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { TextInput, Select, RequiredMark } from '../ui/Field';
+import { TextInput, Select, RequiredMark, FieldError } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
 import { InfoTip } from '../ui/InfoTip';
 import './GroupModal.css';
@@ -205,9 +205,7 @@ export function GroupModal({
             onChange={(e) => setPool(e.target.value)}
             placeholder={poolPlaceholder(inherited, t)}
           />
-          {poolInvalid && (
-            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
-          )}
+          {poolInvalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
         </label>
         {/* Not wrapped in a `<label>`: that gives every control inside it the same accessible name
             and sends a click on the text to whichever came first. The chip input carries its own
@@ -279,7 +277,7 @@ export function GroupModal({
                   <span className="gm-prefix-badge">{t('group.prefixSource.sync')}</span>
                 </div>
               ))}
-              <span className="form-hint">{t('group.prefixSyncHint')}</span>
+              <p className="form-status">{t('group.prefixSyncHint')}</p>
             </>
           )}
           {prefixRows.map((r, i) => (
@@ -351,7 +349,7 @@ export function GroupModal({
             caller's scope — naming a folder they cannot see would be worse than saying nothing. A
             half-entered pin is refused on save with its own error (`geoFields.ts`). */}
         {pinnedAt && (
-          <span className="form-hint">{t('group.geoInherited', { name: pinnedAt.name })}</span>
+          <p className="form-status">{t('group.geoInherited', { name: pinnedAt.name })}</p>
         )}
         <FormError form={form} />
       </div>

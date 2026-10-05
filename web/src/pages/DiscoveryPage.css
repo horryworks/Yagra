@@ -54,15 +54,6 @@
   margin-top: 12px;
 }
 
-/* Indented to start under the label's text rather than under the checkbox, so the sentence reads as
-   belonging to it. 21px is the checkbox's own box plus `.form-check`'s 8px gap — a literal because
-   the browser draws that box and there is no token for its width. */
-.disco-opt > .form-hint {
-  display: block;
-  margin-top: 2px;
-  margin-left: 21px;
-}
-
 .disco-actions {
   display: flex;
   gap: 8px;

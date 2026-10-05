@@ -452,7 +452,7 @@ test('the metric is picked from a searchable list that explains each choice', as
   await dialog.locator('.metricpick-trigger').click();
   await page.locator('.metricpick-search input').fill('if_oper_status');
   await page.locator('.metricpick-list .metricpick-row').first().click();
-  await expect(dialog.locator('.metricpick .modal-hint')).toContainText('1 = up');
+  await expect(dialog.locator('.metricpick .form-status')).toContainText('1 = up');
 });
 
 test('Escape closes the metric list without throwing away the rule behind it', async ({ page }) => {

@@ -14,7 +14,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
+import { Field, TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -368,18 +368,20 @@ function RuleModal({
           </Select>
         </div>
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('eventRules.modal.pattern')} <RequiredMark />
-        </label>
+      <Field
+        label={t('eventRules.modal.pattern')}
+        htmlFor="event-rule-pattern"
+        required
+        infoKey="alertsConfig:eventRules.modal.patternCase.info"
+      >
         <TextInput
+          id="event-rule-pattern"
           className="mono"
           placeholder={matchKind === 'regex' ? '(?i)link down|%LINK-3' : 'link down'}
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
         />
-        <FieldHint>{t('eventRules.modal.patternHint')}</FieldHint>
-      </div>
+      </Field>
       <div className="modal-field">
         <label className="modal-field-label">{t('eventRules.modal.clearPattern')}</label>
         <TextInput

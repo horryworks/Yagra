@@ -147,7 +147,7 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
       )}
 
       {rows === null ? (
-        <p className="modal-hint">{t('common:loading')}</p>
+        <p className="form-status">{t('common:loading')}</p>
       ) : rows.length === 0 ? (
         <p className="ifrules-empty">{t('interfaces.rules.empty')}</p>
       ) : (
@@ -179,7 +179,7 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
               ))}
               {/* Not a footnote: without it the read-only rows read as broken rather than as
                   deliberately edited elsewhere (ADR-055 R6). */}
-              <p className="modal-hint">
+              <p className="form-status">
                 <Trans
                   t={t}
                   i18nKey="interfaces.rules.inheritedHint"
@@ -342,7 +342,7 @@ function PortRuleFormView({
               </label>
             ))}
           </div>
-          {speedMissing && <span className="modal-hint warn">{t('interfaces.rules.noSpeed')}</span>}
+          {speedMissing && <p className="form-warning">{t('interfaces.rules.noSpeed')}</p>}
         </div>
       )}
 
@@ -388,22 +388,22 @@ function PortRuleFormView({
             )}
           </div>
           {/* What the percentage actually means on this port. Without it, "90%" is a number the
-              operator has to do arithmetic on against a speed shown on another surface. */}
-          {unitLabel === '%' && (
-            <span className="modal-hint">
-              {(() => {
-                const crit = Number(form.critical);
-                const bps = Number.isFinite(crit) ? bpsOfPercent(crit, speedBps) : null;
-                return bps == null
-                  ? t('interfaces.rules.percentOfUnknown')
-                  : t('interfaces.rules.percentOf', {
-                      pct: crit,
-                      speed: formatBps(speedBps),
-                      value: formatBps(bps),
-                    });
-              })()}
-            </span>
-          )}
+              operator has to do arithmetic on against a speed shown on another surface. A port
+              that reports no speed has nothing to convert, and the warning above says so. */}
+          {unitLabel === '%' &&
+            (() => {
+              const crit = Number(form.critical);
+              const bps = Number.isFinite(crit) ? bpsOfPercent(crit, speedBps) : null;
+              return bps == null ? null : (
+                <p className="form-status">
+                  {t('interfaces.rules.percentOf', {
+                    pct: crit,
+                    speed: formatBps(speedBps),
+                    value: formatBps(bps),
+                  })}
+                </p>
+              );
+            })()}
         </div>
       )}
 

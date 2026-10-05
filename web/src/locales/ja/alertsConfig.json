@@ -528,7 +528,7 @@
       "allScopes": "すべての種類",
       "allDirections": "上振れ・下振れの両方"
     },
-    "meaningUnknown": "このメトリクスの説明は Yagra が持っていません。収集項目を定義した Metric set を見てください。",
+    "meaningUnknown": "このメトリクスの説明はありません",
     "scopeIdNone": "このルールは全ノードが対象なので、スコープはありません。",
     "scopeMore_other": "ほか {{count}} 件",
     "livenessMetric": "到達性に境界値はありません。効くのは連続回数だけです。",
@@ -572,7 +572,6 @@
       "severity": "重大度",
       "severityInfo": "{{label}}（記録のみ）",
       "pattern": "パターン",
-      "patternHint": "照合は大文字小文字を区別します。区別せずに照合するには、正規表現で (?i) を使ってください。",
       "clearPattern": "解消パターン（任意）",
       "sourceKind": "ソース種別",
       "webhookSource": "Webhook ソース",
@@ -584,7 +583,10 @@
       "test": "サンプルでテスト",
       "samplePlaceholder": "サンプルのイベントメッセージを貼り付け…",
       "testBtn": "テスト",
-      "add": "ルールを追加"
+      "add": "ルールを追加",
+      "patternCase": {
+        "info": "照合は大文字と小文字を区別します。正規表現なら先頭に (?i) を付けると区別しません。"
+      }
     },
     "test": {
       "error": "エラー: {{msg}}",

@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
-import { Select, FieldHint } from '../components/ui/Field';
+import { Select } from '../components/ui/Field';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -102,7 +102,7 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-          {!flowEnabled && <FieldHint>{t('schedule.flowHidden')}</FieldHint>}
+          {!flowEnabled && <span className="form-status">{t('schedule.flowHidden')}</span>}
         </label>
 
         <div className="rb-field">

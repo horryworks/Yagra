@@ -461,8 +461,8 @@ function CadenceModal({
         max={bounds?.max}
         value={value}
         onChange={(e) => set(e.target.value)}
+        suffix={hint}
       />
-      <span className="modal-hint">{hint}</span>
       {!ok && <span className="form-error">{t('meraki.cadence.outOfRange', { range })}</span>}
     </div>
   );

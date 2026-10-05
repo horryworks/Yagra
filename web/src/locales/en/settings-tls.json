@@ -13,10 +13,10 @@
     "imported": "Imported",
     "unknown": "Unrecognised"
   },
-  "sourceHint": {
-    "self_signed": "Renews itself; browsers warn until you import your own.",
-    "imported": "Yagra never replaces it on its own.",
-    "unknown": "From a newer Yagra; never replaced automatically."
+  "sourceInfo": {
+    "self_signed": { "info": "Renews itself. Browsers warn until you import your own." },
+    "imported": { "info": "Yagra never replaces it on its own." },
+    "unknown": { "info": "Written by a newer Yagra. It is never replaced automatically." }
   },
 
   "current": {
@@ -48,12 +48,10 @@
 
   "import": {
     "heading": "Import a certificate",
-    "certificate": "Certificate chain",
+    "certificate": "Certificate chain, leaf first",
     "certificatePlaceholder": "-----BEGIN CERTIFICATE-----",
-    "certificateHint": "Leaf first, then intermediates",
     "privateKey": "Private key",
     "privateKeyPlaceholder": "-----BEGIN PRIVATE KEY-----",
-    "privateKeyHint": "Stored encrypted and never shown again.",
     "submit": "Import and apply",
     "submitting": "Importing…",
     "success": "Certificate imported. It is live now.",

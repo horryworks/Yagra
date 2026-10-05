@@ -92,7 +92,7 @@ export function BulkTagModal({
         </div>
 
         <div className="modal-field nd-tags">
-          <span className="modal-field-label">{t('bulkTag.remove')}</span>
+          <span className="modal-field-label">{t('bulkTag.removeDirect')}</span>
           <ChipInput
             value={remove}
             onChange={setRemove}
@@ -100,7 +100,6 @@ export function BulkTagModal({
             inputLabel={t('bulkTag.remove')}
             lenient
           />
-          <span className="form-hint">{t('bulkTag.removeHint')}</span>
         </div>
 
         <FormError form={form} />

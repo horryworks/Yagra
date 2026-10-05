@@ -561,12 +561,12 @@ function ChangeScopeModal({
             ))}
           </div>
         )}
-        <span className="modal-hint">
+        <p className="form-status">
           {selected.length === 0
             ? t('users.scopeModal.hintAll')
-            : t('users.scopeModal.hintGroups', { count: selected.length })}{' '}
-          {t('users.scopeModal.revokes')}
-        </span>
+            : t('users.scopeModal.hintGroups', { count: selected.length })}
+        </p>
+        <p className="form-warning">{t('users.scopeModal.revokes')}</p>
       </div>
       <FormError form={form} />
     </Modal>

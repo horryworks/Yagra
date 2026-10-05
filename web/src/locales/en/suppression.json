@@ -68,7 +68,6 @@
     "pickNode": "(pick a node)",
     "pickProfile": "(pick a profile)",
     "pickGroup": "(pick a group)",
-    "groupHint": "Covers the group and all its subgroups.",
     "err": {
       "add": "failed to add window"
     },
@@ -126,7 +125,6 @@
     "entityGroup": "Group",
     "pickNode": "(pick a node)",
     "pickGroup": "(pick a group)",
-    "groupHint": "Silences every node under the group and its subgroups.",
     "metric": "Metric",
     "until": "Until",
     "reason": "Reason",

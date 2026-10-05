@@ -66,9 +66,9 @@
       "offline": "Offline"
     },
     "skew": "behind",
-    "skewHint": "This poller is not on core's version ({{core}}). A remote-site poller is upgraded on its own host.",
+    "skewHint": "Not core's version ({{core}}); upgrade it at its site",
     "selfUpgrade": "self-upgrades",
-    "selfUpgradeHint": "A site updater is deployed beside this poller, so an upgrade of this deployment replaces it too.",
+    "selfUpgradeHint": "Upgraded together with this deployment",
     "upgradeStep": {
       "prefetch": "fetching",
       "apply": "installing",
@@ -149,12 +149,10 @@
           "label": "Pool"
         },
         "busUrl": {
-          "label": "Bus URL",
-          "hint": "Include the poller credentials; a TLS URL is required off-site."
+          "label": "Bus URL"
         },
         "caFile": {
-          "label": "CA file path (optional)",
-          "hint": "Only when the bus cert is signed by a private CA."
+          "label": "CA file path (private CA only)"
         },
         "env": {
           "label": ".env for docker-compose.poller.yml"
@@ -266,7 +264,7 @@
       "revokeFailed": "failed to revoke the token",
       "host": {
         "label": "Address this site will dial",
-        "hint": "Leave empty for the bus certificate's address; any other must be one the certificate covers."
+        "placeholder": "The bus certificate's address"
       },
       "selfUpgrade": {
         "label": "Install the site updater, so upgrading here upgrades this site too",
@@ -774,13 +772,12 @@
       "tokenNewAddressHint": "The address now points at a different host. Enter the API token again — the stored token is never sent to a new address.",
       "caCert": "CA certificate (optional)",
       "caCertIsKey": "This is a private key. Paste the CA certificate instead.",
-      "siteIdField": "Site ID field",
-      "siteIdFieldHint": "Goes in front of each Site folder’s name, e.g. “SITE-A Example”.",
-      "siteIdFieldKeyHint": "The field’s key in NetBox, not its label.",
+      "siteIdField": "Site ID field (prefixes Site folder names)",
       "siteIdFieldKeyInvalid": "A custom field name can only contain letters, digits and underscores.",
       "siteIdFieldUnreadable": "This token cannot read this NetBox's custom field definitions, so they are not listed. Choose “Other” and type the field's name to use one.",
       "interval": "Sync every (seconds)",
-      "test": "Test connection"
+      "test": "Test connection",
+      "siteIdFieldKeyPlaceholder": "Field key, not label (site_id)"
     },
     "siteIdField": {
       "none": "Do not add a Site ID",

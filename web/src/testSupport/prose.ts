@@ -152,7 +152,9 @@ export function pointerKeys(locales: Record<string, { en: Json; ja: Json }>): st
 }
 
 /** Static hints in one file: a `<FieldHint` without `error`, a `form-hint` class on a line with no
- *  `form-hint-error`, and every `modal-hint` class. */
+ *  `form-hint-error`, and every `modal-hint` class. Since ADR-200 Inc.24 none of the three has a
+ *  component or a stylesheet left (`FieldError` and `form-status` replaced them), so a hit is a
+ *  copy from old code — which is exactly what the check is for. */
 export function hintSites(src: string): { fieldHint: number; formHint: number; modalHint: number } {
   const code = codeOnly(src);
   const fieldHint = openingTags(src, 'FieldHint').filter((tag) => !/\berror\b/.test(tag)).length;

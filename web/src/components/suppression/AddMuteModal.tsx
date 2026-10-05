@@ -128,7 +128,7 @@ export function AddMuteModal({
       {batch ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('muteForm.scope')}</label>
-          <p className="modal-hint">{t('muteForm.lockedNodes', { count: names.length })}</p>
+          <p className="form-status">{t('muteForm.lockedNodes', { count: names.length })}</p>
           <ul className="form-targets scroll-y">
             {names.map((n, i) => (
               <li key={`${n}-${i}`}>{n}</li>
@@ -138,7 +138,7 @@ export function AddMuteModal({
       ) : locked ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('muteForm.scope')}</label>
-          <p className="modal-hint">
+          <p className="form-status">
             {initialScope?.kind === 'group'
               ? t('muteForm.lockedGroup')
               : t('muteForm.lockedNode')}
@@ -160,7 +160,7 @@ export function AddMuteModal({
               }}
             >
               <option value="node">{t('muteForm.kind.node')}</option>
-              <option value="group">{t('muteForm.kind.group')}</option>
+              <option value="group">{`${t('muteForm.kind.group')}${t('muteForm.inclSubgroups')}`}</option>
             </Select>
           </div>
           <div className="modal-field">
@@ -187,9 +187,6 @@ export function AddMuteModal({
                 autoFocus
               />
             )}
-            {scopeKind === 'group' && (
-              <span className="modal-hint">{t('muteForm.groupHint')}</span>
-            )}
           </div>
         </>
       )}
@@ -199,7 +196,7 @@ export function AddMuteModal({
         <div className="modal-field">
           <label className="modal-field-label">{t('muteForm.metric')}</label>
           {livenessCheck ? (
-            <p className="modal-hint">
+            <p className="form-status">
               <strong>{t('format:liveness')}</strong>
             </p>
           ) : (

@@ -20,7 +20,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, FieldHint } from '../components/ui/Field';
+import { TextInput, FieldError } from '../components/ui/Field';
 import { StepFrame } from '../components/ui/StepFrame';
 import { busCertState, namesNotCovered, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
@@ -140,11 +140,11 @@ function SwitchModal({
                 autoFocus
               />
             </label>
-            {!ready && <FieldHint error>{t('pollers.bus.names.required')}</FieldHint>}
+            {!ready && <FieldError>{t('pollers.bus.names.required')}</FieldError>}
           </>
         )}
         {/* The cost, stated before the click rather than discovered after it. */}
-        <p className="form-hint">{t('pollers.bus.outage')}</p>
+        <p className="form-warning">{t('pollers.bus.outage')}</p>
         <FormError form={form} />
       </div>
     </Modal>
@@ -182,7 +182,7 @@ function HandoffModal({
                 {copied === 'secret' ? t('common:copy.copied') : t('pollers.register.copy')}
               </Button>
             </div>
-            <FieldHint error>{t('pollers.bus.handoff.onceOnly')}</FieldHint>
+            <FieldError>{t('pollers.bus.handoff.onceOnly')}</FieldError>
           </div>
         )}
         {accepted.ca_certificate && (
@@ -199,7 +199,9 @@ function HandoffModal({
             </div>
           </div>
         )}
-        <p className="form-hint">{t('pollers.bus.handoff.restarting')}</p>
+        <p className="form-status" role="status">
+          {t('pollers.bus.handoff.restarting')}
+        </p>
       </div>
     </Modal>
   );
@@ -289,7 +291,7 @@ export function BusPanel() {
       </p>
 
       {status && !status.can_switch && (
-        <p className="form-hint">{t('pollers.bus.noSwitch')}</p>
+        <p className="form-status">{t('pollers.bus.noSwitch')}</p>
       )}
 
       {cert ? (
@@ -313,7 +315,7 @@ export function BusPanel() {
           </p>
           {/* One line, worst first — see `busCertState`. "Pending restart" is the badge above. */}
           {state !== 'ok' && state !== 'not_materialized' && (
-            <p className={state === 'expiring' ? 'form-hint' : 'form-error'}>
+            <p className={state === 'expiring' ? 'form-warning' : 'form-error'}>
               {t(`pollers.bus.cert.warn.${state}`)}
             </p>
           )}

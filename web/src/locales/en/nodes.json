@@ -180,7 +180,7 @@
       "manual": "Typed here",
       "sync": "From sync"
     },
-    "prefixSyncHint": "These ranges come from a NetBox sync and are kept in step with it. Edit them in NetBox.",
+    "prefixSyncHint": "Kept in step with NetBox; edit them there.",
     "tagsInherit": {
       "info": "Every folder and node inside this one carries these tags, including nodes discovered later. A node can refuse one in its Edit node dialog."
     },
@@ -358,8 +358,7 @@
     "profileLock": "Keep this profile when classification rules change",
     "err": {
       "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
-    },
-    "profileLockSkipped": "Locked nodes are left out of <lnk/>."
+    }
   },
   "deleteNodes": {
     "title_one": "Delete {{count}} node",
@@ -370,7 +369,7 @@
   },
   "deleteNode": {
     "title": "Delete node",
-    "body": "Delete node <b>{{name}}</b>? This removes its inventory entry and its discovered interfaces. Collected metrics age out of the TSDB. If this node is a parent in a dependency chain, its dependents will no longer be suppressed by it. This cannot be undone."
+    "body": "Delete node <b>{{name}}</b>? Its inventory entry and interfaces go, and nodes that depend on it are no longer suppressed by it. This cannot be undone."
   },
   "overview": {
     "collectionFault": "The Meraki API is not answering for {{org}} ({{reason}}). The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
@@ -602,14 +601,13 @@
       "basis": "Measured as",
       "basis_percent": "% of the port's bandwidth",
       "basis_absolute": "An absolute rate",
-      "noSpeed": "This port does not report its speed, so a percentage cannot be evaluated on it and the rule would never fire. Use an absolute rate.",
+      "noSpeed": "This port reports no speed, so a percentage rule would never fire. Use an absolute rate.",
       "above": "Alert when it goes above",
       "below": "Alert when it drops below",
       "when": "When it fires",
       "warnPlaceholder": "warn",
       "critPlaceholder": "critical",
       "percentOf": "{{pct}}% of {{speed}} = {{value}}",
-      "percentOfUnknown": "The absolute rate this means depends on the port's speed, which this device does not report.",
       "linkNotUp": "Alert when the port is not up",
       "dwell": "How long before it fires",
       "dwellMinutes": "consecutive minutes (or polls, if slower)",
@@ -746,10 +744,10 @@
     "add": "Add",
     "remove": "Remove",
     "removePlaceholder": "owner",
-    "removeHint": "A tag inherited from a folder is not removed here.",
     "apply": "Apply to selected",
     "partial": "Tagged {{applied}} of {{requested}} nodes. The rest were deleted, or are outside the folders you can act on.",
-    "err": "failed to tag the selected nodes"
+    "err": "failed to tag the selected nodes",
+    "removeDirect": "Remove (direct tags only)"
   },
   "tree": {
     "suppression": {
@@ -1106,7 +1104,6 @@
       },
       "open": "Set up monitoring",
       "title": "Monitoring setup",
-      "credsHint": "Detect tries these in this order; a change here is not saved. <lnk>Manage credentials →</lnk>",
       "controller": "{{controller}} manages this access point. Add it as that controller’s AP, so it stays one node.",
       "controllerImported": "{{controller}} manages this access point, and it is already a node at another address.",
       "addFromController": "Add as {{controller}}’s AP",
@@ -1117,7 +1114,10 @@
       "done": "Now monitored as {{name}}.",
       "doneBare": "Now monitored.",
       "openNode": "Open node →",
-      "errAp": "Could not add the access point."
+      "errAp": "Could not add the access point.",
+      "credsOrder": {
+        "info": "Detect tries these in this order. A change here is not saved."
+      }
     },
     "matchedOn": {
       "address": "Management address",

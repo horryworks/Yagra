@@ -98,7 +98,7 @@ export function SetParentModal({
             placeholder={t('setParent.noUpstream')}
           />
         </label>
-        <p className="form-hint">{t('setParent.hint', { name: nodeName })}</p>
+        <p className="form-status">{t('setParent.hint', { name: nodeName })}</p>
         {loadFailed && <p className="form-error">{t('setParent.loadFailed')}</p>}
         <FormError form={form} />
       </div>

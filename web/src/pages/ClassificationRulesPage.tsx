@@ -19,7 +19,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { Field, TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
+import { Field, TextInput, Select, RequiredMark, FieldError } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
@@ -332,9 +332,9 @@ function RuleModal({
         />
         {/* Said only when it applies: with both filled, a device has to match both. */}
         {!hasMatcher ? (
-          <FieldHint error>{t('rules.modal.matcherRequired')}</FieldHint>
+          <FieldError>{t('rules.modal.matcherRequired')}</FieldError>
         ) : prefix.trim() !== '' && regex.trim() !== '' ? (
-          <FieldHint>{t('rules.modal.descrRegexHintBoth')}</FieldHint>
+          <span className="form-status">{t('rules.modal.descrRegexHintBoth')}</span>
         ) : null}
       </div>
       <div className="modal-field-row">

@@ -505,7 +505,7 @@ function DestinationModal({
           </Button>
         </div>
         {draft.conditions.length === 0 ? (
-          <span className="modal-hint">{t('filter.emptyHint')}</span>
+          <span className="form-status">{t('filter.emptyHint')}</span>
         ) : (
           draft.conditions.map((c, i) => (
             <ConditionRow
@@ -536,7 +536,7 @@ function DestinationModal({
         </Select>
       </div>
 
-      <p className="modal-hint fwd-warn">{t('securityNote')}</p>
+      <p className="form-warning">{t('securityNote')}</p>
       <FormError form={form} />
     </Modal>
   );

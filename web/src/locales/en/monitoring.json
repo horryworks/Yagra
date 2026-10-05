@@ -404,13 +404,13 @@
         "portMatches_other": "Matches {{count}} ports on this list: {{ports}}",
         "portMatchesNone": "Matches no port on this list.",
         "range": "Range",
-        "rangeHint": "Only places inside this range match. Leave empty to match any range.",
         "reason": "Why it repeats",
         "note": "Note",
         "save": "Add rule",
         "err": "Could not add the rule.",
         "needSomething": "Enter a port text, a range, or both.",
-        "badRange": "Write the range as address/length, e.g. 192.168.1.0/24."
+        "badRange": "Write the range as address/length, e.g. 192.168.1.0/24.",
+        "rangeAny": "Any range"
       }
     }
   },
@@ -583,7 +583,7 @@
       "monitor": "Monitor",
       "detect": {
         "button": "Detect",
-        "hint": "Try your SNMP credentials on this device and pick a profile from what it answers",
+        "hint": "Try your SNMP credentials on this device",
         "running": "Detecting…",
         "found": "{{device}} · answered with {{credential}}",
         "foundBare": "Answered with {{credential}}",
@@ -597,7 +597,9 @@
         "credentialAnswered": "Credential · answered",
         "noProfile": "(none — ping only)",
         "noCreds": "No credential chosen above — Detect would only ping.",
-        "credsHint": "Detect tries these in this order — the same list as Scan a range, so a change here is a change there. <lnk>Manage credentials →</lnk>"
+        "credsOrder": {
+          "info": "Detect tries these in this order. It is the same list as Scan a range, so a change here changes it there too."
+        }
       },
       "imported": "{{addr}} is now a monitored node.",
       "err": {
@@ -640,7 +642,6 @@
     "targetPlaceholder": "192.0.2.0/24\n198.51.100.5\n192.0.2.10-20",
     "scan": "Scan",
     "scanning": "Scanning…",
-    "credsLink": "Discovery uses your stored credentials. <lnk>Manage credentials →</lnk>",
     "none": "(none)",
     "noSnmp": "no SNMP",
     "sysObjectIdTitle": "sysObjectID",
@@ -726,6 +727,7 @@
     "tabs": {
       "scan": "Scan a range",
       "unregistered": "Unregistered devices"
-    }
+    },
+    "manageCreds": "Manage credentials →"
   }
 }

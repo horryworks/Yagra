@@ -18,7 +18,7 @@ import { done, partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { TextInput } from '../ui/Field';
+import { TextInput, FieldError } from '../ui/Field';
 
 export function SetPoolModal({
   target,
@@ -100,9 +100,7 @@ export function SetPoolModal({
             placeholder={poolPlaceholder(inheritedPool, t)}
             autoFocus
           />
-          {invalid && (
-            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
-          )}
+          {invalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
         </label>
         <FormError form={form} />
       </div>

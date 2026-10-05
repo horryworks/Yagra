@@ -37,7 +37,7 @@ import { initialCredentialIds } from '../../pages/discoveryScans';
 import { useEndpointSetup, type SetupTarget } from '../../lib/useEndpointSetup';
 import { EndpointSetupCell } from '../discovery/EndpointSetupCell';
 import { CredentialPicker } from '../ui/CredentialPicker';
-import { FieldHint } from '../ui/Field';
+import { InfoTip } from '../ui/InfoTip';
 import { EndpointDestination } from '../discovery/EndpointDestination';
 import {
   DEFAULT_SETUP_DESTINATION,
@@ -775,17 +775,18 @@ function SetupPanel({
       body = (
         <>
           {ap && <p className="nd-muted">{t('neighbors.setup.apHint')}</p>}
-          <label className="form-label nd-nb-setup-creds">
-            {tm('discovery.credsLabel')}
+          {/* Not a <label>: the info tip is a button, and a button inside a label becomes the
+              label's control. The picker is a list of checkboxes with their own labels. */}
+          <div className="form-label nd-nb-setup-creds">
+            <div className="field-head">
+              <span>{tm('discovery.credsLabel')}</span>
+              <InfoTip infoKey="nodes:neighbors.setup.credsOrder.info" label={tm('discovery.credsLabel')} />
+            </div>
             <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
-            <FieldHint>
-              <Trans
-                t={t}
-                i18nKey="neighbors.setup.credsHint"
-                components={{ lnk: <Link to="/nodes/credentials" /> }}
-              />
-            </FieldHint>
-          </label>
+            <Link className="field-link" to="/nodes/credentials">
+              {tm('discovery.manageCreds')}
+            </Link>
+          </div>
           <EndpointDestination
             groups={groups}
             value={destination}

@@ -131,10 +131,6 @@
   color: var(--text-tertiary);
 }
 
-.modal-hint.warn {
-  color: var(--status-warning);
-}
-
 /* Touch: the row's actions are always visible here (they are not hover-revealed), but the targets
    still have to be reachable by a finger. */
 @media (hover: none) {

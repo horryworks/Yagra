@@ -17,7 +17,7 @@ import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
-import { FieldHint, Select, TextInput } from '../components/ui/Field';
+import { Select, TextInput } from '../components/ui/Field';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { draftFrom, portMatches, ruleBody, toggled, type RuleDraft } from './subnetOverlaps';
@@ -194,10 +194,9 @@ export function OverlapRuleModal({
           <TextInput
             className="mono"
             value={draft.range}
-            placeholder="192.168.1.0/24"
+            placeholder={t('subnetOverlaps.rules.form.rangeAny')}
             onChange={(e) => set({ range: e.target.value })}
           />
-          <FieldHint>{t('subnetOverlaps.rules.form.rangeHint')}</FieldHint>
         </label>
         <label className="modal-field">
           <span className="modal-field-label">{t('subnetOverlaps.rules.form.reason')}</span>

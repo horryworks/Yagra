@@ -21,6 +21,7 @@ import {
   expiryLevel,
   importBlock,
   parseNames,
+  TLS_SOURCE_INFO,
   type ImportBlock,
 } from './tlsSettingsForm';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -28,7 +29,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge, type Tone } from '../components/ui/Badge';
-import { Field, TextArea, FieldHint } from '../components/ui/Field';
+import { Field, TextArea, FieldError } from '../components/ui/Field';
 import { InfoPress } from '../components/ui/InfoTip';
 import './TlsSettingsPage.css';
 
@@ -160,9 +161,14 @@ export function TlsSettingsPage() {
         {view && (
           <>
             <div className="tls-headline">
-              <Badge tone={view.source === 'imported' ? 'info' : 'neutral'}>
+              {/* The source says whether Yagra may replace the certificate on its own — the
+                  difference between "this renews itself" and "nothing touches this but you". */}
+              <InfoPress
+                infoKey={TLS_SOURCE_INFO[view.source]}
+                className={`badge badge-${view.source === 'imported' ? 'info' : 'neutral'}`}
+              >
                 {t(`source.${view.source}`)}
-              </Badge>
+              </InfoPress>
               <Badge tone={EXPIRY_TONE[level]}>
                 {t(`expiry.${level}`, { days: Math.abs(view.expires_in_days) })}
               </Badge>
@@ -181,8 +187,6 @@ export function TlsSettingsPage() {
                   </InfoPress>
                 ))}
             </div>
-            <FieldHint>{t(`sourceHint.${view.source}`)}</FieldHint>
-
             {view.key_unreadable && (
               <div className="tls-alert tls-alert-error">{t('warning.keyUnreadable')}</div>
             )}
@@ -237,7 +241,6 @@ export function TlsSettingsPage() {
             accept=".crt,.pem,.cer,.cert,application/x-pem-file"
             onChange={(e) => void onPickFile(e, setCertificate)}
           />
-          <FieldHint>{t('import.certificateHint')}</FieldHint>
         </div>
 
         <label className="tls-label" htmlFor="tls-key">
@@ -257,10 +260,9 @@ export function TlsSettingsPage() {
             accept=".key,.pem"
             onChange={(e) => void onPickFile(e, setPrivateKey)}
           />
-          <FieldHint>{t('import.privateKeyHint')}</FieldHint>
         </div>
 
-        {attempted && block && <FieldHint error>{t(`import.block.${block}`)}</FieldHint>}
+        {attempted && block && <FieldError>{t(`import.block.${block}`)}</FieldError>}
         {saveError && <div className="tls-alert tls-alert-error">{saveError}</div>}
         {notice && <div className="tls-alert tls-alert-ok">{notice}</div>}
 

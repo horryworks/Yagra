@@ -13,16 +13,15 @@
 // the form: no fields exist until the node does.
 
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
-import { ScreenLink } from '../ui/ScreenLink';
 import { isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/api';
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
 import { Modal } from '../ui/Modal';
-import { FieldHint, Select, TextArea, TextInput } from '../ui/Field';
+import { FieldError, Select, TextArea, TextInput } from '../ui/Field';
 import { DnsCheckFields, Row, UrlCheckFields } from './CheckFields';
 import {
   nodeEditDraftFrom,
@@ -137,7 +136,7 @@ export function EditNodeModal({
     name: (
       <Row label={t('field.name')} required>
         <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
-        {nameInvalid && <FieldHint error>{t('field.nameRequired')}</FieldHint>}
+        {nameInvalid && <FieldError>{t('field.nameRequired')}</FieldError>}
       </Row>
     ),
     urlCheck: d.url ? (
@@ -171,7 +170,9 @@ export function EditNodeModal({
         </Select>
       </Row>
     ),
-    // Not a `Row`: its `<label>` would wrap the link too. The checkbox carries its own label.
+    // Not a `Row`: the checkbox carries its own label, and that label says what the lock does
+    // ("keep this profile when classification rules change") — which is also why Reclassify
+    // leaves the node out, so that is not said again under it (ADR-200 Inc.24).
     profileLock: (
       <div className="modal-field nd-profile-lock">
         <label className="nd-profile-lock-check">
@@ -182,13 +183,6 @@ export function EditNodeModal({
           />
           <span>{t('editNode.profileLock')}</span>
         </label>
-        <FieldHint>
-          <Trans
-            t={t}
-            i18nKey="editNode.profileLockSkipped"
-            components={{ lnk: <ScreenLink to="/nodes/reclassify" /> }}
-          />
-        </FieldHint>
       </div>
     ),
     snmpCredential: (
@@ -230,7 +224,7 @@ export function EditNodeModal({
           onChange={(e) => set('pool', e.target.value)}
           placeholder={poolPlaceholder(inheritedPool, t)}
         />
-        {poolInvalid && <FieldHint error>{t('field.poolInvalid')}</FieldHint>}
+        {poolInvalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
       </Row>
     ),
     // ⚠️ Not wrapped in `Row`: that renders a `<label>`, and a label holding several inputs and a
@@ -298,7 +292,7 @@ export function EditNodeModal({
         {/* A stored tag the rules now refuse (migration 0109) is marked on its chip; this line
             says why Save is held, since a chip's reason is otherwise a hover. */}
         {tagsInvalid && (
-          <FieldHint error>{t(`field.tagErr.${firstLabelProblem(d.tags)}`)}</FieldHint>
+          <FieldError>{t(`field.tagErr.${firstLabelProblem(d.tags)}`)}</FieldError>
         )}
       </div>
     ),
@@ -311,7 +305,7 @@ export function EditNodeModal({
           placeholder={t('field.notesPlaceholder')}
         />
         {notesTooLong && (
-          <FieldHint error>{t('field.notesTooLong', { max: NOTES_MAX })}</FieldHint>
+          <FieldError>{t('field.notesTooLong', { max: NOTES_MAX })}</FieldError>
         )}
       </Row>
     ),

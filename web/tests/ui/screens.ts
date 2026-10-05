@@ -120,7 +120,6 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/integrations/netbox': 58,
   '/settings/pollers': 113,
   '/settings/relocation': 1393,
-  '/settings/tls': 55,
   '/settings/upgrade': 300,
   '/topology/dependency': 62,
   '/topology/map': 103,

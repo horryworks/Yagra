@@ -530,7 +530,7 @@
       "allScopes": "All scopes",
       "allDirections": "Both directions"
     },
-    "meaningUnknown": "Yagra has no description for this metric — see the Metric set that defines its collection item.",
+    "meaningUnknown": "No description for this metric",
     "scopeIdNone": "This rule targets every node, so it has no scope.",
     "scopeMore_one": "and 1 more",
     "scopeMore_other": "and {{count}} more",
@@ -577,7 +577,6 @@
       "severity": "Severity",
       "severityInfo": "{{label}} (record only)",
       "pattern": "Pattern",
-      "patternHint": "Matching is case-sensitive; use (?i) in a regex for case-insensitive.",
       "clearPattern": "Clear pattern (optional)",
       "sourceKind": "Source kind",
       "webhookSource": "Webhook source",
@@ -589,7 +588,10 @@
       "test": "Test against a sample",
       "samplePlaceholder": "paste a sample event message…",
       "testBtn": "Test",
-      "add": "Add rule"
+      "add": "Add rule",
+      "patternCase": {
+        "info": "Matching is case-sensitive. In a regex, start with (?i) to ignore case."
+      }
     },
     "test": {
       "error": "error: {{msg}}",

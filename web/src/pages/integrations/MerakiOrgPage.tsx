@@ -165,8 +165,8 @@ function ImportSettingsCard({
             setEdited(true);
             setMaxText(e.target.value);
           }}
+          suffix={MAX_DEVICES_RANGE}
         />
-        <span className="form-hint">{MAX_DEVICES_RANGE}</span>
       </label>
 
       {edited && max === null && (

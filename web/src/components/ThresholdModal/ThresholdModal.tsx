@@ -100,7 +100,7 @@ function ScopeIdField({
   if (kind === 'none') {
     return (
       <div className="modal-field">
-        <span className="modal-hint">{t('thresholds.addModal.globalScope')}</span>
+        <p className="form-status">{t('thresholds.addModal.globalScope')}</p>
       </div>
     );
   }
@@ -185,7 +185,7 @@ function ScopeIdField({
           onChange={(e) => onChange(e.target.value ? [e.target.value] : [])}
         />
       )}
-      {hint && <span className="modal-hint">{hint}</span>}
+      {hint && <span className="form-status">{hint}</span>}
     </div>
   );
 }
@@ -391,7 +391,7 @@ export function ThresholdModal({
             onChange={(e) => set('dwell', e.target.value)}
           />
         </div>
-        {noBounds && <span className="modal-hint">{t('thresholds.livenessMetric')}</span>}
+        {noBounds && <span className="form-status">{t('thresholds.livenessMetric')}</span>}
       </Field>
       <FormError form={save} />
     </Modal>

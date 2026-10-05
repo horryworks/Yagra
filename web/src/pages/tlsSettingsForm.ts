@@ -5,7 +5,7 @@
 // beside the component would never execute. Everything here decides something; the page decides
 // only layout.
 
-import type { WebTlsView } from '../types/api';
+import type { TlsCertSource, WebTlsView } from '../types/api';
 
 /** How urgently the operator should care about the expiry date. */
 export const EXPIRY_LEVELS = ['ok', 'soon', 'critical', 'expired'] as const;
@@ -101,3 +101,12 @@ export function certificateFilename(view: Pick<WebTlsView, 'sans'>): string {
   const name = view.sans[0]?.replace(/[^a-zA-Z0-9._-]/g, '_') ?? 'yagra';
   return `${name || 'yagra'}.crt`;
 }
+
+/** What the source badge opens to: whether Yagra may replace the certificate on its own (ADR-200 —
+ *  a badge's explanation is pressed, not hovered). A `Record` over the union, so a new source asks
+ *  for its sentence at compile time. */
+export const TLS_SOURCE_INFO: Record<TlsCertSource, string> = {
+  self_signed: 'settings-tls:sourceInfo.self_signed.info',
+  imported: 'settings-tls:sourceInfo.imported.info',
+  unknown: 'settings-tls:sourceInfo.unknown.info',
+};
