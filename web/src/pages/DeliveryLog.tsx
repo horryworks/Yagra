@@ -261,7 +261,6 @@ export function DeliveryLog({
           {t('routing.log.refresh')}
         </Button>
       </ListToolbar>
-      <p className="modal-hint routing-log-note">{t('routing.log.note')}</p>
       {error && <p className="form-error">{error}</p>}
       <div className="routing-log-table">
         <DataTable

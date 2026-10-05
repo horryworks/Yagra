@@ -366,10 +366,11 @@ function TestChannelModal({
         />
       }
     >
-      <p className="routing-test-intro">{t('routing.test.intro')}</p>
+      {/* Only what the test will do that the operator cannot see from here: it pages someone, the
+          payload is not marked as a test, the channel is off. Each is one sentence (ADR-200). */}
       {warn.pages && <p className="routing-test-warn">{t('routing.test.pages')}</p>}
       {warn.unmarkedBody && <p className="routing-test-warn">{t('routing.test.unmarkedBody')}</p>}
-      {warn.disabled && <p className="modal-hint">{t('routing.test.disabled')}</p>}
+      {warn.disabled && <p className="routing-test-warn">{t('routing.test.disabled')}</p>}
       {verdict && (
         <p
           className={verdictOk(verdict) ? 'routing-test-result' : 'routing-test-result form-error'}
@@ -484,7 +485,6 @@ function AddChannelModal({
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
-          <span className="modal-hint">{t('routing.channelModal.webhookSealed')}</span>
         </div>
       )}
       {kind === 'email' && (
@@ -513,7 +513,6 @@ function AddChannelModal({
               value={routingKey}
               onChange={(e) => setRoutingKey(e.target.value)}
             />
-            <span className="modal-hint">{t('routing.channelModal.routingKeyHint')}</span>
           </div>
           <div className="modal-field">
             <label className="modal-field-label">{t('routing.channelModal.region')}</label>
@@ -533,7 +532,6 @@ function AddChannelModal({
               value={jsmUrl}
               onChange={(e) => setJsmUrl(e.target.value)}
             />
-            <span className="modal-hint">{t('routing.channelModal.jsmUrlHint')}</span>
           </div>
           <div className="modal-field">
             <label className="modal-field-label">{t('routing.channelModal.apiKey')}</label>
@@ -542,7 +540,6 @@ function AddChannelModal({
               value={jsmKey}
               onChange={(e) => setJsmKey(e.target.value)}
             />
-            <span className="modal-hint">{t('routing.channelModal.sealed')}</span>
           </div>
         </>
       )}

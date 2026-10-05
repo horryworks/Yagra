@@ -366,15 +366,6 @@ export function ChannelTemplateModal({
       : shape.body === 'customDetails'
         ? t('routing.template.pdBody')
         : t('routing.template.body');
-  const hintOf = (field: 'subject' | 'body'): string | null => {
-    if (isJsm || channel.kind === 'email') {
-      return t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, { max: JSM_MESSAGE_MAX_CHARS });
-    }
-    if (channel.kind === 'pagerduty') {
-      return field === 'subject' ? t('routing.template.pdSubjectHint') : t('routing.template.pdBodyHint');
-    }
-    return field === 'body' ? t('routing.template.webhookBodyHint') : null;
-  };
   // A webhook sends no subject (Inc.2 decision 8): its field is drawn only to show and remove one
   // that was saved before this was known.
   const showCodeSubject = shape.subject !== null || code.subject.trim() !== '';
@@ -419,7 +410,6 @@ export function ChannelTemplateModal({
               {!own ? (
                 <>
                   <strong>{t('routing.template.status.builtinTitle')}</strong>
-                  <p>{t('routing.template.status.builtinNote')}</p>
                 </>
               ) : (
                 <>
@@ -472,7 +462,6 @@ export function ChannelTemplateModal({
                       <div className="tpl-field-wrap">
                         <div className="tpl-field-head">
                           <span className="tpl-field-name">{subjectLabel}</span>
-                          {hintOf('subject') && <span className="tpl-field-hint">{hintOf('subject')}</span>}
                         </div>
                         <BuiltinTemplateText
                           id="tpl-builtin-subject"
@@ -485,7 +474,6 @@ export function ChannelTemplateModal({
                     <div className="tpl-field-wrap">
                       <div className="tpl-field-head">
                         <span className="tpl-field-name">{bodyLabel}</span>
-                        {hintOf('body') && <span className="tpl-field-hint">{hintOf('body')}</span>}
                       </div>
                       {shape.json ? (
                         <>
@@ -541,7 +529,7 @@ export function ChannelTemplateModal({
                   </Button>
                 </div>
                 <p className="tpl-hint">
-                  {shape.json ? t('routing.template.builtinView.jsonNote') : t('routing.template.builtinView.condNote', { field: subjectLabel })}
+                  {shape.json ? t('routing.template.builtinView.jsonNote') : t('routing.template.builtinView.condNote')}
                 </p>
               </>
             ) : (
@@ -622,7 +610,6 @@ export function ChannelTemplateModal({
                             <label className="tpl-field-name" htmlFor={`tpl-${field}`}>
                               {field === 'subject' ? subjectLabel : bodyLabel}
                             </label>
-                            {hintOf(field) && <span className="tpl-field-hint">{hintOf(field)}</span>}
                             <span
                               className="tpl-insert"
                               ref={(el) => {
@@ -786,11 +773,11 @@ export function ChannelTemplateModal({
                     <span>{t('routing.template.freeLayout.label')}</span>
                   </label>
                   {code.freeLayout && <p className="tpl-hint">{t('routing.template.freeLayout.hint')}</p>}
-                  <p className="tpl-hint">
-                    {request.subject === null && request.body === null
-                      ? t('routing.template.builtinHint')
-                      : t('routing.template.blankHint')}
-                  </p>
+                  {/* Blanking a field is the "Use built-in for this field" link above it, so only the
+                      state that both are blank is said. */}
+                  {request.subject === null && request.body === null && (
+                    <p className="tpl-hint">{t('routing.template.builtinHint')}</p>
+                  )}
                   <div className="tpl-vars">
                     <h3 className="tpl-vars-title">{t('routing.template.variables')}</h3>
                     <div className="tpl-vars-list">

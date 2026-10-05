@@ -58,19 +58,15 @@
       "kind": "Kind",
       "add": "Add channel",
       "webhookUrl": "Webhook URL",
-      "webhookSealed": "The URL is sealed server-side and never returned.",
       "smtpHost": "SMTP host",
       "from": "From",
       "to": "To",
-      "routingKey": "Integration routing key",
-      "routingKeyHint": "Events API v2 key — sealed server-side and never returned. Fires trigger/resolve correlated by a stable dedup key.",
+      "routingKey": "Integration routing key (Events API v2)",
       "region": "Region",
       "regionUs": "US (events.pagerduty.com)",
       "regionEu": "EU (events.eu.pagerduty.com)",
       "apiUrl": "API URL",
-      "jsmUrlHint": "JSM Alerts / Opsgenie integration base (api.atlassian.com or api.opsgenie.com).",
-      "apiKey": "API key (GenieKey)",
-      "sealed": "Sealed server-side and never returned."
+      "apiKey": "API key (GenieKey)"
     },
     "ruleModal": {
       "title": "Add routing rule",
@@ -94,26 +90,17 @@
     },
     "template": {
       "title": "Notification template — {{name}}",
-      "intro": "Edit what this channel sends, in the shape it arrives. Each grey tag is replaced with the alert’s own value. If a template cannot be rendered when an alert fires, the built-in text is sent instead, so a notification is never dropped.",
+      "intro": "Each grey tag becomes the alert’s own value when it is sent.",
       "subject": "Subject",
       "body": "Body",
       "builtinPlaceholder": "Built-in wording",
       "builtinHint": "Both fields are blank, so this channel sends Yagra's built-in wording.",
-      "blankHint": "Blank a field to go back to the built-in wording for it.",
       "variables": "Variables",
       "previewTitle": "What this channel would send",
       "notJson": "Not valid JSON",
       "fellBack": "These fields could not be rendered, so the built-in wording is shown — that is what would actually be sent:",
       "save": "Save template",
       "jsmSubject": "Title",
-      "subjectHint": {
-        "jsm": "JSM message. Cut off past {{max}} characters",
-        "email": "The email’s subject line"
-      },
-      "bodyHint": {
-        "jsm": "JSM description",
-        "email": "The email’s body"
-      },
       "modeLabel": "How to edit",
       "mode": {
         "visual": "Visual",
@@ -148,9 +135,9 @@
       "writeOwn": "Write separate text for this case",
       "backToFire": "Use the “When it fires” text",
       "insert": "+ Insert",
-      "insertHint": "Typing “{” inserts too. Click a tag to choose what happens when its value is missing.",
-      "builtinDraftNote": "This is Yagra’s built-in subject. Saving it unchanged keeps the built-in text, which also covers poller pool and Meraki organization alerts.",
-      "poolNote": "Your subject is also used for poller pool and Meraki organization alerts. Use “Subject name” for the name so it reads right for both.",
+      "insertHint": "Click a tag to choose what shows when its value is missing.",
+      "builtinDraftNote": "Saved unchanged, this stays the built-in subject, which also covers poller pool and Meraki organization alerts.",
+      "poolNote": "This subject is also sent for poller pool and Meraki organization alerts, so name them with “Subject name”.",
       "builtinBodyEmpty": "Leave the body empty to send the whole alert as JSON, Yagra’s built-in body.",
       "search": "Search (e.g. name, threshold)",
       "noMatch": "Nothing matches",
@@ -310,13 +297,12 @@
       "fieldBuiltin": "Built-in",
       "savedAs": "Template that will be saved",
       "savedEmpty": "(empty = built-in text)",
-      "fieldFollowsFire": "Sends the same as “When it fires”. Writing here gives this case its own.",
+      "fieldFollowsFire": "Sends the same as “When it fires” until you write here.",
       "fieldBackToFire": "Use the “When it fires” text for this field",
       "status": {
         "builtinTitle": "Sending Yagra’s built-in text",
-        "builtinNote": "This channel has no template saved. Below is exactly what it sends today.",
         "ownTitle": "Sending this channel’s own template",
-        "ownNote": "Saved on this channel. Alerts it cannot render fall back to the built-in text.",
+        "ownNote": "Alerts it cannot render get the built-in text.",
         "reset": "Go back to built-in text…",
         "confirmTitle": "Delete this channel’s template and send the built-in text again?",
         "confirmNote": "Title and body go back together, at every point in the alert’s life. The deleted template cannot be restored.",
@@ -327,7 +313,7 @@
         "copy": "Edit a copy of this text",
         "blank": "Start from empty fields",
         "asTags": "Edit the {{field}} as tags",
-        "condNote": "An underlined part is sent only when its numbered condition holds. The body has such parts the Visual editor cannot hold, so the copy opens in Code; the {{field}} alone can be edited as tags. Nothing changes until you save.",
+        "condNote": "The copy opens in Code, because the Visual editor cannot hold the numbered parts.",
         "when": "only when {{cond}}",
         "otherwiseWhen": "only when {{prev}} is not sent and {{cond}}",
         "otherwise": "only when {{prev}} is not sent",
@@ -339,7 +325,7 @@
         "jsonSample": "The built-in body is the alert itself as JSON, shown here for the sample alert on the right.",
         "keysTitle": "What each key means",
         "skeleton": "Start from a JSON skeleton",
-        "jsonNote": "The built-in JSON is the alert written out, not a template, so it cannot be copied. The skeleton lists the facts a receiver usually wants, as variables; it is not the same as the built-in JSON. Nothing changes until you save.",
+        "jsonNote": "The skeleton lists common facts as variables; it is not the built-in JSON.",
         "sameAsTitle": "Same sentence as the title",
         "closeOnly": {
           "resolve": "When it recovers, PagerDuty is sent only a close signal (the dedup key). This template is not used.",
@@ -349,7 +335,7 @@
       "wrap": "Wrap long lines",
       "freeLayout": {
         "label": "Free layout: line breaks and indentation are for reading, not sent",
-        "hint": "With this on, the spaces at the start of a line are not sent, a line holding only {% … %} tags or {# … #} comments is not sent, and the subject sends no line break. Put the spaces between words on the same line as the words."
+        "hint": "With this on, the spaces at the start of a line are not sent, nor is a line of only {% … %} or {# … #}."
       },
       "resetField": "Use built-in for this field",
       "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body.",
@@ -363,9 +349,6 @@
       "pdSubject": "summary",
       "pdBody": "custom_details",
       "jsonBodyLabel": "JSON body",
-      "pdSubjectHint": "The line PagerDuty shows. Cut off past 1024 characters",
-      "pdBodyHint": "JSON attached to the PagerDuty alert",
-      "webhookBodyHint": "POSTed as it is",
       "webhookSubject": {
         "title": "Saved but not sent",
         "note": "This channel has a subject saved, but a webhook sends only its JSON body, so no one receives it."
@@ -391,10 +374,9 @@
     },
     "test": {
       "title": "Send a test notification — {{name}}",
-      "intro": "Sends one sample alert through this channel now, the way a real alert would go: through its template, with [TEST] at the start of the subject and \"test\": true in the built-in body. It is sent once, without retries.",
-      "pages": "This opens a real incident, so the on-call is notified once. Yagra closes it again a few seconds later.",
-      "unmarkedBody": "This channel's body comes from its template, so the payload carries no \"test\" flag. Make sure nothing on the receiving side acts on the sample alert.",
-      "disabled": "This channel is disabled. The test is sent anyway; real alerts will not use it until it is enabled.",
+      "pages": "This opens a real incident and pages the on-call once; Yagra closes it a few seconds later.",
+      "unmarkedBody": "This channel’s template leaves the \"test\" flag out of the body, so the receiver may act on it as real.",
+      "disabled": "This channel is disabled; the test is sent anyway.",
       "send": "Send test",
       "again": "Send again",
       "sending": "Sending…",
@@ -407,11 +389,10 @@
     },
     "log": {
       "title": "Delivery log",
-      "note": "One row per notification sent to a channel. A failed row says on whose side it failed; open it to see every attempt and what the receiving service answered.",
       "refresh": "Refresh",
       "noun_one": "delivery",
       "noun_other": "deliveries",
-      "empty": "Nothing has been sent yet. Send a test notification from a channel to see a row here.",
+      "empty": "Nothing sent yet — a channel’s test notification adds the first row.",
       "defaultRoute": "Default route (environment)",
       "deletedChannel": "Deleted channel",
       "deletedChannelOfKind": "Deleted {{kind}} channel",

@@ -59,7 +59,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
   alerts: [1470, 875],
-  alertsConfig: [10123, 5392],
+  alertsConfig: [8407, 4476],
   auth: [79, 43],
   common: [717, 385],
   dashboard: [7503, 4079],
@@ -90,11 +90,6 @@ const SLACK: [number, number] = [300, 200];
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
   'alerts:row.merakiOrgSubjectHint',
-  'alertsConfig:routing.template.builtinView.condNote',
-  'alertsConfig:routing.template.builtinView.jsonNote',
-  'alertsConfig:routing.template.freeLayout.hint',
-  'alertsConfig:routing.template.intro',
-  'alertsConfig:routing.test.intro',
   'nodes:bulkTag.note',
   'nodes:deleteNode.body',
   'nodes:deleteNodes.body',
@@ -260,7 +255,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 19, formHint: 19, modalHint: 38 };
+const HINT_SITES = { fieldHint: 19, formHint: 19, modalHint: 32 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

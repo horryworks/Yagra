@@ -1398,7 +1398,6 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('template preset', locales, `${p}preset.`, TEMPLATE_PRESETS);
     expectKeys('unsupported template', locales, `${p}unsupported.`, UNSUPPORTED_REASONS);
     expectKeys('edit mode', locales, `${p}mode.`, ['visual', 'code']);
-    expectKeys('field hint', locales, p, ['subjectHint.jsm', 'subjectHint.email', 'bodyHint.jsm', 'bodyHint.email']);
     // ADR-197 Inc.2: what each kind sends, each key of the built-in JSON, and the note on a tab
     // whose event the kind never renders — all built from a runtime value.
     expectKeys('what a channel sends', locales, `${p}sends.`, CHANNEL_KINDS);

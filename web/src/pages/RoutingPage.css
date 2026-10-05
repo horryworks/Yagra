@@ -36,10 +36,6 @@
 /* Send-a-test dialog (ADR-192). The warnings say what the test will do before it is sent; the
    result line says what it did. No --status-* colour here: those mean network state (tokens.css),
    and a delivered test is not a healthy device. A failure uses the shared .form-error instead. */
-.routing-test-intro {
-  margin: 0 0 10px;
-}
-
 .routing-test-warn {
   margin: 0 0 10px;
   font-weight: var(--weight-medium);
@@ -54,10 +50,6 @@
    virtualized table needs a bounded box to scroll inside. */
 .routing-log-section {
   margin-top: 24px;
-}
-
-.routing-log-note {
-  margin: 0 0 8px;
 }
 
 .routing-log-table {
