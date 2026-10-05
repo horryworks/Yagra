@@ -945,6 +945,7 @@
     "credentialNeedsTls": "認証情報を提示する監視では、TLS 検証が必須です。",
     "bodyMatch": "応答本文をキーワードで照合する",
     "bodyMatchHint": "200 を返しておきながら、本文では障害を伝えているエンドポイントを捕まえます。",
+    "bodyModeLabel": "条件",
     "bodyMode": {
       "contains": "本文に含まれること",
       "not_contains": "本文に含まれないこと"

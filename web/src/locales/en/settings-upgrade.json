@@ -97,7 +97,6 @@
   "apply": {
     "confirmBackup": "A backup is taken first. It lands on this host, so it is a rollback aid, not disaster recovery.",
     "confirmFloor": "This database cannot be taken back past {{minCore}}.",
-    "cancel": "Cancel",
     "failed": "The upgrade could not be started."
   },
   "run": {
@@ -129,8 +128,6 @@
   "components": {
     "heading": "Components",
     "core": "core + web",
-    "behind": "running · {{count}} poller is not on it",
-    "behind_other": "running · {{count}} pollers are not on it",
     "hint": "A remote-site poller upgrades itself only when a site updater is deployed beside it. Until then, upgrade it on its own host.",
     "behindHint": "{{count}} poller is not on {{version}}.",
     "behindHint_other": "{{count}} pollers are not on {{version}}.",

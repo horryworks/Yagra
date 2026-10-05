@@ -949,6 +949,7 @@
     "credentialNeedsTls": "A monitor that presents credentials must verify TLS.",
     "bodyMatch": "Check the response body for a keyword",
     "bodyMatchHint": "Catches an endpoint that answers 200 while its body says the service is broken.",
+    "bodyModeLabel": "Condition",
     "bodyMode": {
       "contains": "The body must contain",
       "not_contains": "The body must not contain"

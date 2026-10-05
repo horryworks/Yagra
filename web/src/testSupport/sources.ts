@@ -11,7 +11,7 @@
 // Still listing a directory themselves, on purpose — `sources.test.ts` holds this list:
 // `tsxJudgement.test.ts` (it resolves imports between the files it walks), `RangeControl.test.ts`
 // (one directory, not a tree), `nodeKind.test.ts` (Rust sources), and the one-directory listings
-// in `i18nPrefixes.test.ts` (the locale files) and `testIds.test.ts` (`tests/ui`).
+// in `testSupport/locales.ts` (the locale files) and `testIds.test.ts` (`tests/ui`).
 //
 // Imported only by `*.test.ts`. It uses `node:fs`, so a component importing it would not build.
 

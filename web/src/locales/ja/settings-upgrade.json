@@ -97,7 +97,6 @@
   "apply": {
     "confirmBackup": "先にバックアップを取得します。同じホスト上に置かれるため、切り戻し用の控えであって災害復旧用ではありません。",
     "confirmFloor": "このデータベースは {{minCore}} より古い版には戻せません。",
-    "cancel": "キャンセル",
     "failed": "アップグレードを開始できませんでした。"
   },
   "run": {
@@ -129,8 +128,6 @@
   "components": {
     "heading": "構成",
     "core": "core + web",
-    "behind": "稼働中 · {{count}} 台のポーラーが未適用",
-    "behind_other": "稼働中 · {{count}} 台のポーラーが未適用",
     "hint": "遠隔拠点のポーラーは、拠点にサイト updater が配備されているときだけ自分を入れ替えます。それまでは拠点のホストで上げてください。",
     "behindHint": "{{count}} 台のポーラーが {{version}} ではありません。",
     "behindHint_other": "{{count}} 台のポーラーが {{version}} ではありません。",

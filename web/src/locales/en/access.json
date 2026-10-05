@@ -7,14 +7,8 @@
   "cred": {
     "note": "Encrypted at rest. Secret values are never displayed or returned by the API.",
     "unavailable": "Credential management is unavailable in skeleton mode (no secret store).",
-    "searchPlaceholder": "Search name or id…",
-    "searchAria": "Search credentials",
-    "filterAria": "Filter by type",
     "filter": {
-      "allTypes": "All types",
-      "snmp_v2c": "SNMP v2c",
-      "snmp_v3": "SNMP v3",
-      "api_token": "API token"
+      "allTypes": "All types"
     },
     "kind": {
       "snmp_v2c": "SNMP v2c (community)",
@@ -58,9 +52,7 @@
     },
     "empty": {
       "none": "No credentials yet",
-      "filtered": "No credentials match",
-      "noneSub": "Add an SNMP community, SNMPv3 USM, or API token.",
-      "filteredSub": "Try a different search or filter."
+      "filtered": "No credentials match"
     },
     "field": {
       "name": "Name",
@@ -111,15 +103,10 @@
     "unavailable": "User management is unavailable in skeleton mode (no database).",
     "forbidden": "Managing users requires an admin account.",
     "searchPlaceholder": "Search username…",
-    "searchAria": "Search users",
-    "filterAria": "Filter by role",
     "filter": {
       "all": "All roles",
       "allStatuses": "Active and disabled",
-      "allKinds": "All account types",
-      "admin": "Admins",
-      "operator": "Operators",
-      "viewer": "Viewers"
+      "allKinds": "All account types"
     },
     "cols": {
       "username": "Username",
@@ -230,10 +217,6 @@
   "audit": {
     "note": "Every configuration change and login event: who, what, when. Read-only · immutable · 365-day retention.",
     "signInPrompt": "Sign in as an admin to view the audit log.",
-    "searchPlaceholder": "Search user or path…",
-    "searchAria": "Search audit log",
-    "filterActionAria": "Filter by action",
-    "filterStatusAria": "Filter by status",
     "signIn": "SIGN IN",
     "filter": {
       "allActions": "All actions",

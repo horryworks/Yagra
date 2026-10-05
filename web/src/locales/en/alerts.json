@@ -1,11 +1,9 @@
 {
   "active": {
-    "card": "Active",
     "note": "{{count}} active · triage view",
     "empty": "No active alerts.",
     "emptyFiltered": "No active alerts match these filters.",
     "searchPlaceholder": "Search node or metric…",
-    "searchAria": "Search active alerts",
     "ack": {
       "all": "Acked and not",
       "aria": "Filter by acknowledgement",
@@ -53,11 +51,8 @@
     "emptyFiltered": "No transitions match these filters.",
     "filter": {
       "allSeverities": "All severities",
-      "severityAria": "Filter by severity",
       "allPhases": "Fires and clears",
-      "phaseAria": "Filter by fire or clear",
       "allStates": "All states",
-      "stateAria": "Filter by state",
       "allAcked": "Acknowledged or not",
       "acked": "Acknowledged",
       "unacked": "Not acknowledged"

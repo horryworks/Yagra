@@ -148,11 +148,7 @@
     "mode": {
       "all": "すべて一致",
       "any": "いずれか一致"
-    },
-    "searchPlaceholder": "名前または宛先を検索…",
-    "searchAria": "転送先を検索",
-    "allDestKinds": "すべての宛先種別",
-    "destKindAria": "宛先種別で絞り込む"
+    }
   },
   "health": {
     "counts": "送信 {{sent}} / 欠落 {{dropped}}",

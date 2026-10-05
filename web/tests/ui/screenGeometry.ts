@@ -10,7 +10,8 @@
 // over real boxes and not an assertion about DOM shape.
 //
 // It rides the visit the route walk already makes, so covering every screen costs no navigation.
-// The two checks here are the ones that need no interaction at all; the ones that need a hover or a
+// The checks here (and ADR-200's prose count, which rides the same sweep) are the ones that need
+// no interaction at all; the ones that need a hover or a
 // different viewport width live in their own specs (`rowActions.spec.ts`, `overflowMenu.spec.ts`),
 // the way `filterGeometry.spec.ts` holds the parts of ADR-053 that the walk cannot carry.
 //
@@ -25,6 +26,7 @@
 // stops finding anything fails instead of going green.
 
 import type { Page } from '@playwright/test';
+import { MOCK_PREFIX } from '../support/openapi';
 
 /** One thing wrong on one screen. `where` locates it for a human; `why` is the invariant.
  *  Same shape as `FilterFinding` deliberately — the walk reports both the same way. */
@@ -37,6 +39,8 @@ export interface GeometryReport {
   findings: GeometryFinding[];
   /** How many text-rendering elements the sweep actually looked at. See the floor note above. */
   inspected: number;
+  /** The screen's own explanatory text (ADR-200): see `PROSE_MIN_CHARS`. */
+  prose: { chars: number; samples: string[] };
 }
 
 /** Sub-pixel rounding on a scaled or bordered box lands within a pixel. Real truncation is a word
@@ -70,11 +74,21 @@ const LEGIBLE_PX = 8;
  *  failure this exists for — cannot clear it. */
 export const MIN_TEXT_ELEMENTS = 5;
 
+/** ADR-200's tenth walk check counts a screen's own prose: an element whose own text is at least
+ *  this long. Shorter is a label, a value or a button. 40 characters is about seven English words,
+ *  so a five-word sentence with its punctuation is the shortest thing that counts. */
+const PROSE_MIN_CHARS = 40;
+
+/** Where a long string is not the screen explaining itself: the app shell, the one-line page note
+ *  (ADR-055 R2, held to its own cap), an error or state message, and the table body (data). */
+const NOT_PROSE = '.sidebar, .topbar, .pageheader-note, [role="alert"], .dt-body';
+
 export async function inspectScreenGeometry(page: Page): Promise<GeometryReport> {
   return page.evaluate(
-    ({ slop, quote, legible, cutPx }) => {
+    ({ slop, quote, legible, cutPx, proseMin, notProse, mockPrefix }) => {
       const findings: { where: string; why: string }[] = [];
       let inspected = 0;
+      const prose = { chars: 0, samples: [] as string[] };
 
       // ── 1. Nothing is laid out off the side of the page ───────────────────────────────────────
       // The only visible symptom the portalled-popover bug ever produced. `AnchoredPopover` exists
@@ -147,6 +161,20 @@ export async function inspectScreenGeometry(page: Page): Promise<GeometryReport>
 
         inspected++;
 
+        // ── 3. The screen's own prose (ADR-200) ────────────────────────────────────────────────
+        // Every string the mock serves carries `ymock-`, so what is left is text the screen wrote
+        // about itself. Own text only: a container is counted through its children, once each.
+        const own = Array.from(el.childNodes)
+          .filter((n) => n.nodeType === Node.TEXT_NODE)
+          .map((n) => n.textContent || '')
+          .join('')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (own.length >= proseMin && !own.includes(mockPrefix) && !el.closest(notProse)) {
+          prose.chars += own.length;
+          if (prose.samples.length < 8) prose.samples.push(own.slice(0, quote));
+        }
+
         // Two ways a line gets cut, and this app produces both. `DataTable.css` gives `.dt-cell > *`
         // its own `overflow: hidden`, so a table cell's text element IS the clipping box — that is
         // the self-clipped case, and all fifteen findings on the first run were it. The other is a
@@ -184,8 +212,16 @@ export async function inspectScreenGeometry(page: Page): Promise<GeometryReport>
         });
       }
 
-      return { findings, inspected };
+      return { findings, inspected, prose };
     },
-    { slop: SLOP, quote: QUOTE, legible: LEGIBLE_PX, cutPx: CUT_PX },
+    {
+      slop: SLOP,
+      quote: QUOTE,
+      legible: LEGIBLE_PX,
+      cutPx: CUT_PX,
+      proseMin: PROSE_MIN_CHARS,
+      notProse: NOT_PROSE,
+      mockPrefix: MOCK_PREFIX,
+    },
   );
 }

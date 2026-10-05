@@ -19,6 +19,10 @@
 - **A folder's "Subnets missing from the IP prefixes" counts devices only.** The "read N of M" line used to count URL, DNS, Meraki and wireless-AP nodes in M, which report no interface addresses, so it could never reach M of M. `nodes_total` on `GET /api/v1/node-groups/{id}/prefix-gaps` and MCP `get_prefix_gaps` is smaller on a folder that holds such nodes. (ADR-170)
 - **Discovery ▸ Unregistered devices and Node ▸ Neighbors now warn before you add a device that is already monitored at another address.** Once Detect gets an SNMP answer, the setup cell says "Maybe the same device", names the node it looks like (with its address and why: same name and model), and Monitor stops being the highlighted button. You can still add it, because sites that reuse one address plan can produce a false match. This is the same check the Scan tab has had since v0.3.36. Nothing is shown before Detect, or when SNMP does not answer.
 
+### Bug Fixes
+
+- **Four labels no longer show their internal key name.** The loading line in the interface-rules dialog, the "all statuses" choice on the Audit log's Status filter, the "Never suppress" column on Dependencies and the match-mode label on a URL check's body match showed text like `dependency.optOut` instead of words. (ADR-200)
+
 ## v0.3.45 — Alerts have names a person can read, a per-port alert names its port, and the template editor shows the built-in text
 
 ### Breaking changes

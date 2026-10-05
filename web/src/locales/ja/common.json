@@ -30,7 +30,6 @@
     "loading": "ノードを読み込み中…",
     "noMatch": "一致するノードがありません。",
     "listAria": "ノード",
-    "more": "ほか {{count}} 件 — 入力を続けると絞り込めます",
     "capped": "先頭 {{count}} 件を表示中 — 入力を続けると絞り込めます"
   },
   "range": {
@@ -58,9 +57,7 @@
     "clearSearch": "検索語をクリア",
     "apply": "適用",
     "reset": "リセット",
-    "confirm": "確認",
     "retry": "再試行",
-    "refresh": "更新",
     "more": "その他の操作"
   },
   "role": {
@@ -73,18 +70,13 @@
   "noun": {
     "node_other": "ノード",
     "alert_other": "アラート",
-    "event_other": "イベント",
     "rule_other": "ルール",
     "user_other": "ユーザー",
-    "role_other": "ロール",
     "profile_other": "プロファイル",
     "template_other": "テンプレート",
     "credential_other": "認証情報",
     "poller_other": "ポーラー",
-    "window_other": "ウィンドウ",
-    "mute_other": "ミュート",
-    "result_other": "結果",
-    "item_other": "項目"
+    "window_other": "ウィンドウ"
   },
   "modalResize": {
     "width": "ダイアログの幅を変える",
@@ -99,10 +91,8 @@
   },
   "filter": {
     "allEnabled": "有効・無効の両方",
-    "enabledAria": "有効・無効で絞り込む",
     "enabled": "有効",
     "disabled": "無効",
-    "searchAria": "この一覧を検索",
     "noMatch": "この絞り込みに一致するものがありません。",
     "row": "列フィルタ",
     "open": "{{column}}で絞り込む",

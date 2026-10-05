@@ -7,14 +7,8 @@
   "cred": {
     "note": "保存時に暗号化します。シークレットの値を画面に出すことも、API から返すこともありません。",
     "unavailable": "認証情報の管理はスケルトンモードでは利用できません（シークレットストアがありません）。",
-    "searchPlaceholder": "名前または ID を検索…",
-    "searchAria": "認証情報を検索",
-    "filterAria": "種類で絞り込み",
     "filter": {
-      "allTypes": "すべての種類",
-      "snmp_v2c": "SNMP v2c",
-      "snmp_v3": "SNMP v3",
-      "api_token": "API トークン"
+      "allTypes": "すべての種類"
     },
     "kind": {
       "snmp_v2c": "SNMP v2c（コミュニティ）",
@@ -55,9 +49,7 @@
     },
     "empty": {
       "none": "認証情報はまだありません",
-      "filtered": "一致する認証情報がありません",
-      "noneSub": "SNMP コミュニティ、SNMPv3 USM、API トークンのいずれかを追加してください。",
-      "filteredSub": "検索条件やフィルタを変えてみてください。"
+      "filtered": "一致する認証情報がありません"
     },
     "field": {
       "name": "名前",
@@ -108,8 +100,6 @@
     "unavailable": "ユーザー管理はスケルトンモードでは利用できません（データベースがありません）。",
     "forbidden": "ユーザー管理には管理者アカウントが必要です。",
     "searchPlaceholder": "ユーザー名を検索…",
-    "searchAria": "ユーザーを検索",
-    "filterAria": "ロールで絞り込み",
     "cols": {
       "username": "ユーザー名",
       "role": "ロール",
@@ -119,10 +109,7 @@
     "filter": {
       "allStatuses": "有効・無効を問わない",
       "allKinds": "すべてのアカウント種別",
-      "all": "すべてのロール",
-      "admin": "管理者",
-      "operator": "オペレーター",
-      "viewer": "閲覧者"
+      "all": "すべてのロール"
     },
     "you": "あなた",
     "status": {
@@ -225,10 +212,6 @@
   "audit": {
     "note": "すべての設定変更とログインイベントを、誰が・何を・いつ の形で記録します。読み取り専用 · 変更不可 · 保持期間 365 日。",
     "signInPrompt": "監査ログを表示するには管理者としてサインインしてください。",
-    "searchPlaceholder": "ユーザーまたはパスを検索…",
-    "searchAria": "監査ログを検索",
-    "filterActionAria": "操作で絞り込み",
-    "filterStatusAria": "ステータスで絞り込み",
     "signIn": "サインイン",
     "filter": {
       "allActions": "すべての操作",

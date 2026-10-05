@@ -20,7 +20,6 @@
         "actions": "操作"
       },
       "empty": "チャネルはまだありません",
-      "emptySub": "webhook かメールの送信先を追加してください。",
       "enable": "チャネルを有効化",
       "disable": "チャネルを無効化",
       "delete": "チャネルを削除",
@@ -28,10 +27,7 @@
       "template": "通知テンプレートを編集",
       "templated": "カスタム文面",
       "templatedHint": "このチャネルは Yagra の組み込みの件名または本文を上書きしています。",
-      "searchPlaceholder": "チャネルを検索…",
-      "searchAria": "通知チャネルを検索",
       "allKinds": "すべての種別",
-      "kindAria": "チャネル種別で絞り込む",
       "test": "テスト通知を送る",
       "showLog": "配信ログを見る"
     },
@@ -46,7 +42,6 @@
         "actions": "操作"
       },
       "empty": "ルーティングルールがありません",
-      "emptySub": "ルールが 1 つも無いと、アラートは環境変数で指定した既定ルートにしか流れません。",
       "any": "すべて",
       "noChannels": "（チャネルなし）",
       "enable": "ルールを有効化",
@@ -54,10 +49,7 @@
       "delete": "ルールを削除",
       "deleteTitle": "ルーティングルールを削除",
       "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？一致していたアラートは、環境変数で指定した既定ルートに戻ります。",
-      "searchPlaceholder": "ルールを検索…",
-      "searchAria": "ルーティングルールを検索",
       "allSeverities": "すべての重大度",
-      "severityAria": "重大度で絞り込む",
       "edit": "ルールを編集"
     },
     "channelModal": {
@@ -501,7 +493,6 @@
     "warnShort": "W",
     "critShort": "C",
     "dwellValue": "連続 {{n}} 回検出",
-    "delete": "削除",
     "scopeLevel": {
       "global": "全ノード",
       "profile": "プロファイル",
@@ -523,8 +514,7 @@
         "profile": "デバイスプロファイルを選択",
         "group": "ノードのタグ（例: サイト名）",
         "node": "ノードを選択",
-        "group_id": "フォルダグループを選択",
-        "interface": "インタフェースを選ぶ"
+        "group_id": "フォルダグループを選択"
       },
       "scopeIdNoun": {
         "global": "このルールは全ノードに効きます。プロファイル・グループ・ノードのいずれかで設定した値が、これを上書きします。",
@@ -538,8 +528,6 @@
       "scopeIdHintMany": "このルールが対象とする{{noun}}。当てはまるものをいくつでも選べます。1 つずつルールを作る必要はありません。",
       "removeTarget": "{{name}} を対象から外す",
       "metric": "メトリクス",
-      "metricPlaceholder": "メトリクス（例: icmp_rtt_ms）",
-      "direction": "方向",
       "boundsDwell": "境界値と連続検出回数",
       "belowSide": "この値以下で発報",
       "aboveSide": "この値以上で発報",
@@ -568,12 +556,8 @@
     },
     "emptyFiltered": "この絞り込みに一致するルールがありません。",
     "filter": {
-      "searchPlaceholder": "メトリクスを検索…",
-      "searchAria": "しきい値ルールをメトリクスで検索",
       "allScopes": "すべての種類",
-      "scopeAria": "スコープの種類で絞り込む",
-      "allDirections": "上振れ・下振れの両方",
-      "directionAria": "方向で絞り込む"
+      "allDirections": "上振れ・下振れの両方"
     },
     "meaningUnknown": "このメトリクスの説明は Yagra が持っていません。収集項目を定義した Metric set を見てください。",
     "scopeIdNone": "このルールは全ノードが対象なので、スコープはありません。",
@@ -586,8 +570,6 @@
   "eventRules": {
     "note": "受信した syslog / SNMP トラップ / webhook のイベントを部分一致または正規表現で照合し、アラートを出します。重大度が info のルールは、アラートを出さずに一致だけを記録します。",
     "unavailable": "イベントルールはこのモードでは利用できません（メタデータストアなし）。",
-    "searchPlaceholder": "名前・パターン・重大度で検索…",
-    "searchAria": "イベントルールを検索",
     "add": "+ ルールを追加",
     "cols": {
       "name": "名前",
@@ -599,8 +581,6 @@
     },
     "empty": "イベントルールがありません",
     "emptyMatch": "一致するルールがありません",
-    "emptySub": "ルールを追加すると、一致したイベントをアラートに変えられます。",
-    "emptyMatchSub": "別のキーワードで検索してください。",
     "any": "すべて",
     "clear": "解消",
     "matchKind": {
@@ -659,8 +639,6 @@
   "eventSources": {
     "note": "Yagra へイベントを POST してくる webhook の送信元です。ソースごとにベアラートークンを発行し、作成時とローテーション時に一度だけ表示します。送信元側の設定に控えておいてください。",
     "unavailable": "イベントソースはこのモードでは利用できません（メタデータストアなし）。",
-    "searchPlaceholder": "ソースを検索…",
-    "searchAria": "イベントソースを検索",
     "add": "+ ソースを追加",
     "cols": {
       "name": "名前",
@@ -670,7 +648,6 @@
     },
     "empty": "イベントソースがありません",
     "emptyMatch": "一致するソースがありません",
-    "emptySub": "webhook ソースを追加すると、HTTP でイベントを受け取れます。",
     "rotate": "トークンをローテーション",
     "enable": "ソースを有効化",
     "disable": "ソースを無効化",

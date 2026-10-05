@@ -8,7 +8,6 @@
     "empty": "Nothing matches. Type a metric name to use it anyway.",
     "perInterface": "per port",
     "scopeNote": "A rule only fires on nodes whose metric set actually collects this metric.",
-    "current": "Current value",
     "derived": "Computed by Yagra"
   }
 }

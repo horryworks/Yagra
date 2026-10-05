@@ -1,11 +1,9 @@
 {
   "active": {
-    "card": "アクティブ",
     "note": "{{count}} 件がアクティブ · 振り分け用の一覧です",
     "empty": "アクティブなアラートはありません。",
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
     "searchPlaceholder": "ノードまたはメトリクスを検索…",
-    "searchAria": "アクティブなアラートを検索",
     "ack": {
       "all": "ACK の有無を問わない",
       "aria": "ACK の有無で絞り込む",
@@ -53,11 +51,8 @@
     "emptyFiltered": "この絞り込みに一致する遷移がありません。",
     "filter": {
       "allSeverities": "すべての重大度",
-      "severityAria": "重大度で絞り込む",
       "allPhases": "発生と解消",
-      "phaseAria": "発生・解消で絞り込む",
       "allStates": "すべての状態",
-      "stateAria": "状態で絞り込む",
       "allAcked": "確認の有無を問わない",
       "acked": "確認済み",
       "unacked": "未確認"

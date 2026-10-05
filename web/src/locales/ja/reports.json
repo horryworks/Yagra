@@ -43,11 +43,7 @@
     },
     "filter": {
       "searchPlaceholder": "レポートを検索…",
-      "searchAria": "保存済みレポートを検索",
-      "allReports": "すべてのレポート",
-      "reportAria": "レポートで絞り込み",
-      "allStates": "すべての状態",
-      "stateAria": "状態で絞り込み"
+      "allStates": "すべての状態"
     }
   },
   "defs": {
@@ -63,11 +59,7 @@
     "err": {
       "runFailed": "レポートを開始できませんでした。"
     },
-    "emptyAdmin": "レポートテンプレートはまだありません。「新規レポート」をクリックして作成してください。",
-    "filter": {
-      "searchPlaceholder": "テンプレートを検索…",
-      "searchAria": "レポートテンプレートを検索"
-    }
+    "emptyAdmin": "レポートテンプレートはまだありません。「新規レポート」をクリックして作成してください。"
   },
   "scheds": {
     "cols": {
@@ -80,11 +72,7 @@
     "paused": "一時停止",
     "newSchedule": "新規スケジュール",
     "empty": "スケジュールはまだありません。",
-    "emptyNoDefs": "先にレポートテンプレートを作成してから、スケジュールを設定してください。",
-    "filter": {
-      "searchPlaceholder": "レポート名で検索…",
-      "searchAria": "レポートのスケジュールを検索"
-    }
+    "emptyNoDefs": "先にレポートテンプレートを作成してから、スケジュールを設定してください。"
   },
   "confirm": {
     "deleteTemplate": "レポートテンプレート「{{name}}」を削除しますか？保存済みの実行結果は保持されます。",

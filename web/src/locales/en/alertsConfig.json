@@ -22,7 +22,6 @@
         "actions": "Actions"
       },
       "empty": "No channels yet",
-      "emptySub": "Add a webhook or email destination.",
       "enable": "Enable channel",
       "disable": "Disable channel",
       "delete": "Delete channel",
@@ -30,10 +29,7 @@
       "template": "Edit notification template",
       "templated": "Custom text",
       "templatedHint": "This channel overrides Yagra's built-in subject or body.",
-      "searchPlaceholder": "Search channels…",
-      "searchAria": "Search notification channels",
       "allKinds": "All kinds",
-      "kindAria": "Filter by channel kind",
       "test": "Send test notification",
       "showLog": "Show delivery log"
     },
@@ -48,7 +44,6 @@
         "actions": "Actions"
       },
       "empty": "No routing rules",
-      "emptySub": "Without a rule, alerts only use the env default route.",
       "any": "any",
       "noChannels": "(no channels)",
       "enable": "Enable rule",
@@ -56,10 +51,7 @@
       "delete": "Delete rule",
       "deleteTitle": "Delete routing rule",
       "deleteBody": "Delete rule <strong>{{name}}</strong>? Matching alerts will fall back to the env default route.",
-      "searchPlaceholder": "Search rules…",
-      "searchAria": "Search routing rules",
       "allSeverities": "All severities",
-      "severityAria": "Filter by severity",
       "edit": "Edit rule"
     },
     "channelModal": {
@@ -503,7 +495,6 @@
     "warnShort": "W",
     "critShort": "C",
     "dwellValue": "{{n}} breaches",
-    "delete": "Delete",
     "scopeLevel": {
       "global": "every node",
       "profile": "profile",
@@ -525,8 +516,7 @@
         "profile": "Pick a device profile",
         "group": "node tag (e.g. a site name)",
         "node": "Pick a node",
-        "group_id": "Pick a folder group",
-        "interface": "Pick an interface"
+        "group_id": "Pick a folder group"
       },
       "scopeIdNoun": {
         "global": "This rule applies to every node. Anything you set at a profile, group or node scope overrides it.",
@@ -540,8 +530,6 @@
       "scopeIdHintMany": "Every {{noun}} this rule targets. Pick as many as apply — one rule, not one each.",
       "removeTarget": "Remove {{name}}",
       "metric": "Metric",
-      "metricPlaceholder": "metric (e.g. icmp_rtt_ms)",
-      "direction": "Direction",
       "boundsDwell": "Bounds & breaches",
       "belowSide": "Alert at or below",
       "aboveSide": "Alert at or above",
@@ -570,12 +558,8 @@
     },
     "emptyFiltered": "No rules match these filters.",
     "filter": {
-      "searchPlaceholder": "Search metric…",
-      "searchAria": "Search threshold rules by metric",
       "allScopes": "All scopes",
-      "scopeAria": "Filter by scope type",
-      "allDirections": "Both directions",
-      "directionAria": "Filter by direction"
+      "allDirections": "Both directions"
     },
     "meaningUnknown": "Yagra has no description for this metric — see the Metric set that defines its collection item.",
     "scopeIdNone": "This rule targets every node, so it has no scope.",
@@ -589,8 +573,6 @@
   "eventRules": {
     "note": "Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting.",
     "unavailable": "Event rules are unavailable in this mode (no metadata store).",
-    "searchPlaceholder": "Search name, pattern, severity…",
-    "searchAria": "Search event rules",
     "add": "+ Add rule",
     "cols": {
       "name": "Name",
@@ -602,8 +584,6 @@
     },
     "empty": "No event rules",
     "emptyMatch": "No rules match",
-    "emptySub": "Add a rule to turn matching events into alerts.",
-    "emptyMatchSub": "Try a different search.",
     "any": "any",
     "clear": "clear",
     "matchKind": {
@@ -662,8 +642,6 @@
   "eventSources": {
     "note": "Webhook senders that POST events to Yagra. Each carries a bearer token, shown once at create/rotate; store it in the sender's config.",
     "unavailable": "Event sources are unavailable in this mode (no metadata store).",
-    "searchPlaceholder": "Search sources…",
-    "searchAria": "Search event sources",
     "add": "+ Add source",
     "cols": {
       "name": "Name",
@@ -673,7 +651,6 @@
     },
     "empty": "No event sources",
     "emptyMatch": "No sources match",
-    "emptySub": "Add a webhook source to receive events over HTTP.",
     "rotate": "Rotate token",
     "enable": "Enable source",
     "disable": "Disable source",

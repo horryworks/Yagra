@@ -21,13 +21,15 @@
 //   8. **Nothing is laid out off the page, and no text is cut off with no way to read it**
 //      (ADR-088) — see the note at the assertion.
 //   9. **Its row actions appear when the row is hovered** (ADR-088) — see `rowActions.ts`.
+//  10. **It does not explain itself in paragraphs** (ADR-200): its own prose stays under
+//      `PROSE_CEILING` — see `screenGeometry.ts`.
 
 import { expect, test } from '../support/app';
 import { MOCK_PREFIX } from '../support/openapi';
 import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
 import { inspectRowActions } from './rowActions';
 import { inspectScreenGeometry, MIN_TEXT_ELEMENTS } from './screenGeometry';
-import { ALL_SCREENS, NOTE_EXEMPT, SCREEN_EXPECT, type Expect } from './screens';
+import { ALL_SCREENS, NOTE_EXEMPT, PROSE_CEILING, SCREEN_EXPECT, type Expect } from './screens';
 
 /** How long a screen gets to show its data. Generous: the settings group lazy-loads a chunk. */
 const RENDER_TIMEOUT = 15_000;
@@ -165,5 +167,12 @@ for (const screen of ALL_SCREENS) {
     //    would have had to be right about all ten. `rowActions.ts` carries the reasoning, including
     //    why `isVisible()` is not allowed to answer this.
     expect((await inspectRowActions(page)).findings, `${screen.path}: row actions`).toEqual([]);
+
+    // 10. **Its own prose stays under its ceiling** (ADR-200). Measured by the same sweep as
+    //     check 8. The samples name what to cut; the ceiling only moves down.
+    expect(
+      geometry.prose.chars,
+      `${screen.path}: ${geometry.prose.chars} characters of the screen's own prose — ${JSON.stringify(geometry.prose.samples)}`,
+    ).toBeLessThanOrEqual(PROSE_CEILING[screen.path] ?? 0);
   });
 }

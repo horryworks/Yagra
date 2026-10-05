@@ -148,11 +148,7 @@
     "mode": {
       "all": "all must match",
       "any": "any may match"
-    },
-    "searchPlaceholder": "Search name or target…",
-    "searchAria": "Search forwarding destinations",
-    "allDestKinds": "All destination kinds",
-    "destKindAria": "Filter by destination kind"
+    }
   },
   "health": {
     "counts": "{{sent}} sent / {{dropped}} lost",

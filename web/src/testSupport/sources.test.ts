@@ -49,7 +49,7 @@ describe('no test walks the source tree itself', () => {
     'tsxJudgement.test.ts': 'resolves imports between the files it walks',
     'components/NodeDetail/RangeControl.test.ts': 'one directory — the panes beside it — not a tree',
     'lib/nodeKind.test.ts': 'Rust sources in yagra-common',
-    'i18nPrefixes.test.ts': 'the locale files of one directory',
+    'testSupport/locales.ts': 'the locale files of one directory',
     'testIds.test.ts': 'the Playwright specs in tests/ui',
   };
   const NEEDLE = `${'readdir'}Sync(`;

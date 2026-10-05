@@ -56,10 +56,6 @@
     "groups_other": "グループ {{count}} 件",
     "none": "グループなし"
   },
-  "status": {
-    "active": "有効",
-    "revoked": "失効"
-  },
   "state": {
     "active": "有効",
     "revoked": "失効",
@@ -104,11 +100,5 @@
     "revoke": "トークンの失効に失敗しました",
     "duplicate": "同じ名前のトークンが既に存在します",
     "noSurface": "トークンを使用できる面を 1 つ以上選択してください"
-  },
-  "filter": {
-    "searchPlaceholder": "名前または所有者を検索…",
-    "searchAria": "API トークンを検索",
-    "allStates": "すべての状態",
-    "stateAria": "トークンの状態で絞り込む"
   }
 }

@@ -46,9 +46,7 @@
     },
     "filter": {
       "searchPlaceholder": "Search scope or summary…",
-      "searchAria": "Search analysis runs",
-      "allStates": "All states",
-      "stateAria": "Filter by run state"
+      "allStates": "All states"
     }
   },
   "schedule": {
@@ -90,10 +88,7 @@
       "missing_scope": "Choose what this analysis should run over."
     },
     "filter": {
-      "searchPlaceholder": "Search tool or scope…",
-      "searchAria": "Search scheduled analyses",
-      "allTools": "All analyses",
-      "toolAria": "Filter by analysis"
+      "allTools": "All analyses"
     }
   },
   "findings": {
@@ -119,8 +114,6 @@
       "allTools": "All analyses",
       "allSeverities": "All severities"
     },
-    "filterToolAria": "Filter by analysis",
-    "filterSeverityAria": "Filter by severity",
     "empty": {
       "none": "No findings yet — run an analysis to produce some.",
       "filtered": "No findings match these filters."

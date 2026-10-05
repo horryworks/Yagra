@@ -202,7 +202,7 @@ export function DependencyPage() {
                       void toggleOptOut(r.id, e.target.checked);
                     }}
                   />
-                  <span>{t('dependency.optOut')}</span>
+                  <span>{t('dependency.cols2.optOut')}</span>
                 </label>
               ),
             },

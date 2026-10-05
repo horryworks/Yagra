@@ -34,8 +34,6 @@
   "profiles": {
     "note": "Device-class buckets (role × vendor). Attach Metric sets here; nodes inherit them via their profile.",
     "unavailable": "Profile management is unavailable in skeleton mode (no metadata store).",
-    "searchPlaceholder": "Search name, vendor or role…",
-    "searchAria": "Search profiles",
     "addProfile": "Add profile",
     "otherGroup": "Other",
     "defaultInterval": "default",
@@ -95,8 +93,6 @@
   "rules": {
     "note": "Map a discovered device's sysObjectID / sysDescr to a Device profile. Discovery pre-selects the match on import.",
     "unavailable": "Classification-rule management is unavailable in skeleton mode (no metadata store).",
-    "searchPlaceholder": "Search signature, profile, maker…",
-    "searchAria": "Search classification rules",
     "addRule": "Add rule",
     "enabled": "enabled",
     "disabled": "disabled",
@@ -112,8 +108,7 @@
     },
     "empty": {
       "none": "No classification rules",
-      "noMatch": "No rules match",
-      "noneSub": "Add a rule mapping a sysObjectID prefix or sysDescr pattern to a profile."
+      "noMatch": "No rules match"
     },
     "modal": {
       "addTitle": "Add classification rule",
@@ -423,8 +418,6 @@
   "sets": {
     "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
     "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",
-    "searchPlaceholder": "Search name or description…",
-    "searchAria": "Search metric sets",
     "addSet": "Add metric set",
     "deleteSet": "Delete metric set",
     "noun_one": "set",
@@ -481,8 +474,6 @@
   "mib": {
     "note": "A curated OID catalog. Pick metrics by name in the collection editor instead of typing OIDs.",
     "unavailable": "The MIB catalog is unavailable in skeleton mode.",
-    "searchPlaceholder": "Search metric / OID / vendor…",
-    "searchAria": "Search MIB catalog",
     "addEntry": "Add entry",
     "addTitle": "Add catalog entry",
     "deleteTitle": "Delete catalog entry",
@@ -522,7 +513,6 @@
     "scans": {
       "title": "Recent sweeps",
       "note": "Sweeps this core is holding. Pick one to see its progress or its results.",
-      "empty": "No sweeps yet.",
       "resumed": "Showing a sweep that was already running.",
       "resumedDone": "Showing the most recent sweep.",
       "unknownScan": "This core does not know that sweep — it restarted, or the sweep aged out. A poller may still be running it.",
@@ -540,7 +530,6 @@
       },
       "queuedNote": "Waiting for a poller to pick this sweep up. Nothing has been probed yet.",
       "stop": "Stop sweep",
-      "stopping": "Stopping the sweep…",
       "stopRequested": "Stop requested. The poller finishes what it is already probing, so this takes a few seconds.",
       "stopUnsupported": "Stop requested, but a poller that could be running this sweep is too old to act on it — the sweep may run to completion.",
       "stoppedNote": "Sweep stopped. The devices found before it stopped are below and can be imported.",

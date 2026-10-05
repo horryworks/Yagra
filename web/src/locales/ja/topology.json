@@ -110,13 +110,7 @@
   },
   "dependency": {
     "note": "依存関係グラフを管理します。各ノードの上流が、親のダウン時にアラートを抑制するか、根本原因としてまとめるかを決めます。ネットワークマップは同じ辺を図にしたものです。",
-    "searchPlaceholder": "ノードを名前で検索…",
-    "searchAria": "ノードを検索",
-    "filterAria": "依存関係を絞り込み",
     "filter": {
-      "all": "すべてのノード",
-      "upstream": "上流あり",
-      "suppressed": "現在抑制中",
       "upstreamRef": {
         "set": "上流あり",
         "none": "上流なし"

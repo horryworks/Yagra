@@ -118,13 +118,7 @@
   },
   "dependency": {
     "note": "Manage the dependency graph: each node's upstream drives parent-down alert suppression and root-cause roll-up. The Network map visualizes the same edges.",
-    "searchPlaceholder": "Search nodes by name…",
-    "searchAria": "Search nodes",
-    "filterAria": "Filter dependencies",
     "filter": {
-      "all": "All nodes",
-      "upstream": "With upstream",
-      "suppressed": "Currently suppressed",
       "upstreamRef": {
         "set": "Has an upstream",
         "none": "No upstream"

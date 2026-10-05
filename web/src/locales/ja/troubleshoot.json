@@ -45,9 +45,7 @@
     },
     "filter": {
       "searchPlaceholder": "対象または要約を検索…",
-      "searchAria": "分析の実行を検索",
-      "allStates": "すべての状態",
-      "stateAria": "実行状態で絞り込む"
+      "allStates": "すべての状態"
     }
   },
   "schedule": {
@@ -88,10 +86,7 @@
       "missing_scope": "分析の対象を選択してください。"
     },
     "filter": {
-      "searchPlaceholder": "分析または対象を検索…",
-      "searchAria": "スケジュール済みの分析を検索",
-      "allTools": "すべての分析",
-      "toolAria": "分析で絞り込む"
+      "allTools": "すべての分析"
     }
   },
   "findings": {
@@ -116,8 +111,6 @@
       "allTools": "すべての分析",
       "allSeverities": "すべての重大度"
     },
-    "filterToolAria": "分析で絞り込む",
-    "filterSeverityAria": "重大度で絞り込む",
     "empty": {
       "none": "検出結果はまだありません。分析を実行してください。",
       "filtered": "この条件に一致する検出結果はありません。"

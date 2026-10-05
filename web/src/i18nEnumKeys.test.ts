@@ -292,7 +292,8 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // is not rendered for `global` (a fleet-wide rule has nothing to point at), so demanding a
     // string there would demand one nobody can ever see — and an unread string is what drifts.
     // The *noun* is still checked over every level: it doubles as the `global` explanation.
-    const WITH_SCOPE_ID = SCOPE_LEVELS.filter((l) => l !== 'global');
+    // `interface` has no input either: its target is shown, not edited (ThresholdModal).
+    const WITH_SCOPE_ID = SCOPE_LEVELS.filter((l) => l !== 'global' && l !== 'interface');
     expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', WITH_SCOPE_ID);
     expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
@@ -1217,17 +1218,6 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every widget backing tag has a label (dashboard:catalog.backing.*)', () => {
     // Badged on every card in the "add widget" picker, from the registry's own field.
     expectKeys('widget backing', { en: enDashboard, ja: jaDashboard }, 'catalog.backing.', BACKINGS);
-  });
-
-  it('every user-list filter segment has a label (access:users.filter.*)', () => {
-    // The segmented control is `['all', ...ROLES]`, built in `UsersPage.tsx`. Rebuilt here from the
-    // same union rather than imported, because the page is a `.tsx` and Vitest never loads one —
-    // the list is one expression long, so restating it beats moving the control's layout into a
-    // module for the test's sake. A fourth role reaches this test through `ROLES`.
-    expectKeys('user filter segment', { en: enAccess, ja: jaAccess }, 'users.filter.', [
-      'all',
-      ...ROLES,
-    ]);
   });
 
   it('every maintenance-window status has a label (suppression:maintenance.status.*)', () => {

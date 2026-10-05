@@ -19,14 +19,12 @@
 // Loose on purpose: it says a prefix *exists*, not that every member under it does — that is the
 // enum test's job. What it catches is the spelling class, which is the one that had no gate.
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { sourceFiles as walkSources } from './testSupport/sources';
+import { loadLocales, prefixesIn, prefixExists } from './testSupport/locales';
 
 const SRC = __dirname;
-const LOCALES = join(SRC, 'locales');
-
-type Json = Record<string, unknown>;
 
 /** Every `.ts`/`.tsx` under `src/` that is production code: not a test, not the generated `api/`. */
 function sourceFiles(dir: string): string[] {
@@ -34,88 +32,6 @@ function sourceFiles(dir: string): string[] {
 }
 
 const rel = (p: string) => relative(SRC, p).split('\\').join('/');
-
-/** Every namespace, loaded from disk so a new locale file is covered without editing this test. */
-function loadLocales(): Record<string, { en: Json; ja: Json }> {
-  const out: Record<string, { en: Json; ja: Json }> = {};
-  for (const f of readdirSync(join(LOCALES, 'en'))) {
-    if (!f.endsWith('.json')) continue;
-    const ns = f.slice(0, -'.json'.length);
-    out[ns] = {
-      en: JSON.parse(readFileSync(join(LOCALES, 'en', f), 'utf8')) as Json,
-      ja: JSON.parse(readFileSync(join(LOCALES, 'ja', f), 'utf8')) as Json,
-    };
-  }
-  return out;
-}
-
-export interface CallSite {
-  file: string;
-  line: number;
-  prefix: string;
-}
-
-/**
- * The literal prefix of every runtime-built key in one source text: `t(`PREFIX${…` and
- * `i18n.t(`PREFIX${…`. A key that starts with `${` has no literal prefix and is not a call site
- * here — nothing can be said about it without evaluating the program.
- */
-export function prefixesIn(src: string, file: string): CallSite[] {
-  const out: CallSite[] = [];
-  const re = /\bt\(`([A-Za-z0-9_:.-]+)\$\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(src))) {
-    const before = src.slice(0, m.index);
-    // A call site quoted in a comment is prose about code, not code: `password.ts` explains the
-    // key it deliberately does NOT build, and that explanation must not be held to the locale.
-    const lineText = before.slice(before.lastIndexOf('\n') + 1).trimStart();
-    if (lineText.startsWith('//') || lineText.startsWith('*') || lineText.startsWith('/*')) continue;
-    const line = before.split('\n').length;
-    out.push({ file, line, prefix: m[1] });
-  }
-  return out;
-}
-
-/** Resolve a dotted key path against a namespace object; undefined when any hop is missing. */
-function lookup(ns: Json, path: string): unknown {
-  return path.split('.').reduce<unknown>((cur, part) => {
-    if (cur && typeof cur === 'object' && part in (cur as Json)) return (cur as Json)[part];
-    return undefined;
-  }, ns);
-}
-
-/**
- * Does `rest` (the prefix with any namespace stripped) point at something in this namespace?
- *
- * The prefix is cut at its last dot: everything before it must resolve to an object, and when
- * something follows the dot — `afterwards.item` for `item1`/`item2` — at least one key under that
- * object must start with it.
- */
-function existsIn(ns: Json, rest: string): boolean {
-  const cut = rest.lastIndexOf('.');
-  const parent = cut < 0 ? '' : rest.slice(0, cut);
-  const stem = cut < 0 ? rest : rest.slice(cut + 1);
-  const obj = parent === '' ? ns : lookup(ns, parent);
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-  if (stem === '') return true;
-  return Object.keys(obj as Json).some((k) => k.startsWith(stem));
-}
-
-/**
- * Whether a prefix exists in BOTH locales — in the namespace it names, or in any one namespace when
- * it names none. The same namespace must satisfy both locales: EN having it under `nodes` and JA
- * under `common` is two different bugs, not a match.
- */
-export function prefixExists(
-  prefix: string,
-  locales: Record<string, { en: Json; ja: Json }>,
-): boolean {
-  const colon = prefix.indexOf(':');
-  const candidates =
-    colon < 0 ? Object.values(locales) : [locales[prefix.slice(0, colon)]].filter(Boolean);
-  const rest = colon < 0 ? prefix : prefix.slice(colon + 1);
-  return candidates.some(({ en, ja }) => existsIn(en, rest) && existsIn(ja, rest));
-}
 
 describe('every runtime-built t() prefix names something in both locales', () => {
   const locales = loadLocales();

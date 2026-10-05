@@ -84,6 +84,48 @@ export const NOTE_EXEMPT: Record<string, string> = {
     'Node detail carries its own identity header (name, address, kind badges) instead of the shared one — the subject IS the explanation.',
 };
 
+/**
+ * The walk's tenth check (ADR-200): the characters of a screen's own prose — every element whose own
+ * text is 40 characters or more, outside the shell, the page note, alerts and table rows, and not
+ * served by the mock (`screenGeometry.ts`). Measured on the first run; lower a number in the change
+ * that removed the prose, and raise one only with the reason in the commit message.
+ *
+ * A screen with no entry has a ceiling of 0, so a new screen starts with no prose at all.
+ * Blind spots: dialogs, tabs other than the default, Japanese, and phone width.
+ */
+export const PROSE_CEILING: Record<string, number> = {
+  '/alerts/routing': 156,
+  '/alerts/rules': 734,
+  '/dashboard/public': 182,
+  '/events': 159,
+  '/events/forwarding': 97,
+  '/nodes': 41,
+  '/nodes/discovery': 856,
+  '/nodes/duplicates': 338,
+  '/nodes/missing-prefixes': 411,
+  '/nodes/reclassify': 263,
+  '/nodes/subnet-overlaps': 284,
+  '/settings/about': 139,
+  '/settings/ai': 581,
+  '/settings/auth': 1024,
+  '/settings/config-bundle': 564,
+  '/settings/integrations': 210,
+  '/settings/integrations/meraki': 250,
+  [MERAKI_ORG_SCREEN]: 470,
+  '/settings/integrations/netbox': 251,
+  '/settings/pollers': 891,
+  '/settings/relocation': 1851,
+  '/settings/roles': 149,
+  '/settings/support-bundle': 321,
+  '/settings/system': 2035,
+  '/settings/system-health': 269,
+  '/settings/tls': 940,
+  '/settings/upgrade': 813,
+  '/topology/dependency': 151,
+  '/topology/map': 239,
+  '/troubleshoot': 2076,
+};
+
 export type Expect =
   /** A generated `ymock-` string is visible: the data reached the screen. The default. */
   | { kind: 'marker' }

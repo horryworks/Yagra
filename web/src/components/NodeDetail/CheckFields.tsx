@@ -187,7 +187,7 @@ export function UrlCheckFields({
       <FieldHint>{t('checkEdit.bodyMatchHint')}</FieldHint>
       {d.bodyMatchEnabled && (
         <>
-          <Row label={t('checkEdit.bodyMode')}>
+          <Row label={t('checkEdit.bodyModeLabel')}>
             <Select
               value={d.bodyMode}
               onChange={(e) => set('bodyMode', e.target.value as UrlCheckDraft['bodyMode'])}

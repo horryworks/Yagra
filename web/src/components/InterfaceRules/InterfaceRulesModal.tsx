@@ -146,7 +146,7 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
       </p>
 
       {rows === null ? (
-        <p className="modal-hint">{t('common:status.loading')}</p>
+        <p className="modal-hint">{t('common:loading')}</p>
       ) : rows.length === 0 ? (
         <p className="ifrules-empty">{t('interfaces.rules.empty')}</p>
       ) : (

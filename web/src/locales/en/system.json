@@ -105,8 +105,7 @@
       "token": "Token"
     },
     "empty": {
-      "title": "No pollers yet",
-      "sub": "Pollers appear here once they connect to the bus and send a heartbeat. Use <b>Register poller</b> for the remote-site setup snippet."
+      "title": "No pollers yet"
     },
     "gaps": {
       "title": "Recent monitoring gaps",
@@ -187,12 +186,8 @@
       "anchor": "failed to set the anchor node"
     },
     "filter": {
-      "searchPlaceholder": "Search id, pool or version…",
-      "searchAria": "Search pollers",
       "allStatuses": "Online and offline",
-      "statusAria": "Filter by status",
-      "allPools": "All pools",
-      "poolAria": "Filter by pool"
+      "allPools": "All pools"
     },
     "bus": {
       "title": "Remote pollers",
@@ -418,7 +413,6 @@
         "seconds_other": "every {{n}} seconds"
       },
       "err": {
-        "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
         "rangeFor": "{{walk}}: enter a whole number of seconds between {{min}} and {{max}}.",
         "save": "failed to save discovery walk settings"
       }
