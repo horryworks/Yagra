@@ -180,6 +180,7 @@ function ServerModal({
   return (
     <Modal
       title={existing ? t('netbox.form.editTitle') : t('netbox.form.addTitle')}
+      resizeId="netboxIntegration"
       onClose={onClose}
       footer={
         <FormFooter

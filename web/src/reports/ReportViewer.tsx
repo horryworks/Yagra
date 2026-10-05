@@ -111,7 +111,7 @@ export function ReportViewer({ runId, onClose }: Props) {
   ) : undefined;
 
   return (
-    <Modal title={title} onClose={onClose} footer={footer} size="wide">
+    <Modal title={title} onClose={onClose} footer={footer} size="wide" resizeId="reportViewer">
       {error && <div className="rp-viewer-error">{error}</div>}
       <div className="rp-viewer-body">
         {!detail && !error && <div className="rp-viewer-state">{t('common:loading')}</div>}

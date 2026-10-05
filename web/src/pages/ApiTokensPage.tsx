@@ -412,6 +412,7 @@ function RevealTokenModal({ created, onClose }: { created: CreatedApiToken; onCl
   return (
     <Modal
       title={t('token.title')}
+      resizeId="apiToken"
       size="wide"
       onClose={onClose}
       footer={

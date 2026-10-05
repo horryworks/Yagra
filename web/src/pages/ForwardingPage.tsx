@@ -297,6 +297,7 @@ function DestinationModal({
   return (
     <Modal
       title={t(existing ? 'edit.title' : 'add.title')}
+      resizeId="forwardingDest"
       size="wide"
       onClose={onClose}
       footer={

@@ -100,6 +100,11 @@
     "item_one": "item",
     "item_other": "items"
   },
+  "modalResize": {
+    "width": "Resize the dialog's width",
+    "height": "Resize the dialog's height",
+    "hint": "Drag to resize. Double-click to go back to the default size."
+  },
   "column": {
     "resize": "Resize the {{column}} column",
     "resizeHint": "Drag to resize. Double-click to reset.",

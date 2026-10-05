@@ -21,12 +21,121 @@
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   animation: modal-rise var(--transition);
+  /* The resize handles (ADR-198) are positioned against the dialog. */
+  position: relative;
 }
 
 /* Wide variant for content-heavy dialogs (e.g. the report viewer). Mobile keeps the full-width
    bottom-sheet width from the mobile block below (this only widens the desktop centered dialog). */
 .modal.modal-wide {
   width: min(960px, calc(100vw - 48px));
+}
+
+/* A size the operator dragged (ADR-198). `Modal.tsx` sets these classes only on the desktop and has
+   already clamped the value to the window; the `min()` is a second guard for the frame between a
+   window shrinking and the re-clamp. Given a height, the body takes whatever the head and footer
+   leave. */
+.modal.has-width {
+  width: min(var(--modal-w), calc(100vw - 48px));
+}
+
+.modal.has-height {
+  height: min(var(--modal-h), calc(100dvh - 96px));
+}
+
+.modal.has-height > .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The resize handles: the right edge (width), the bottom edge (height) and the corner (both). The
+   same shape as every other handle (ADR-074): a colour change on hover and focus, never an outline,
+   `touch-action: none` so a drag is not a scroll, and a wider hit area for fingers. */
+.modal-resize {
+  position: absolute;
+  z-index: 1;
+  touch-action: none;
+}
+
+.modal-resize:focus {
+  outline: none;
+}
+
+.modal-resize-right {
+  top: 12px;
+  bottom: 12px;
+  right: -5px;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.modal-resize-bottom {
+  left: 12px;
+  right: 12px;
+  bottom: -5px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.modal-resize-corner {
+  right: -6px;
+  bottom: -6px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+/* The grip: a short bar centred on the edge, drawn in the border colour and turned accent while it
+   is hovered or focused. */
+.modal-resize-right::after,
+.modal-resize-bottom::after {
+  content: '';
+  position: absolute;
+  background: var(--border-color);
+  border-radius: 2px;
+  transition: background var(--transition);
+}
+
+.modal-resize-right::after {
+  top: 50%;
+  left: 3px;
+  width: 4px;
+  height: 36px;
+  transform: translateY(-50%);
+}
+
+.modal-resize-bottom::after {
+  left: 50%;
+  top: 3px;
+  width: 36px;
+  height: 4px;
+  transform: translateX(-50%);
+}
+
+.modal-resize-right:hover::after,
+.modal-resize-right:focus-visible::after,
+.modal-resize-bottom:hover::after,
+.modal-resize-bottom:focus-visible::after {
+  background: var(--accent-color);
+}
+
+@media (hover: none) {
+  .modal-resize-right {
+    right: -11px;
+    width: 22px;
+  }
+
+  .modal-resize-bottom {
+    bottom: -11px;
+    height: 22px;
+  }
+
+  .modal-resize-corner {
+    right: -11px;
+    bottom: -11px;
+    width: 26px;
+    height: 26px;
+  }
 }
 
 .modal-head {

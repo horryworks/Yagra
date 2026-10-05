@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { ColumnWidthDoc } from './lib/columnWidths';
 import type { DiscoveryScanMemory } from './pages/discoveryScans';
+import { withModalSize, type ModalResizeId, type ModalSize } from './lib/modalSize';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no localStorage) without a persist warning. localStorage (not sessionStorage) so UI
@@ -158,6 +159,13 @@ interface PrefsStore {
    *  rather than `true` so a machine that never pressed the button does not overwrite the account's
    *  "off" with the default. Nothing should call the setter directly. */
   geoMapDayNight: boolean | null;
+  /** How big the operator dragged each resizable dialog (ADR-198), keyed by its `resizeId`. A
+   *  dialog with no entry keeps its CSS size. Local-only, like every other size here but the
+   *  Interfaces dock (ADR-074 decision: sync only with a reason, and a dialog's size has none). */
+  modalSizes: Readonly<Partial<Record<ModalResizeId, ModalSize>>>;
+  /** Whether the notification-template dialog wraps long lines (ADR-198 decision 4). `true` by
+   *  default — wrapping is how the dialog always drew them. */
+  templateWrap: boolean;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -202,6 +210,10 @@ interface PrefsStore {
   /** Record the Geo map day/night switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapDayNight`]). */
   setGeoMapDayNight: (on: boolean | null) => void;
+  /** Record one dialog's size. `{ w: null, h: null }` forgets it. Call it on gesture *end*. */
+  setModalSize: (id: ModalResizeId, size: ModalSize) => void;
+  /** Wrap or stop wrapping long lines in the notification-template dialog. */
+  setTemplateWrap: (on: boolean) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -243,6 +255,9 @@ export const usePrefsStore = create<PrefsStore>()(
       nodeTreeWithNodesOnly: null,
       // Same again: absent before ADR-189, read as `null` (on), no migration owed.
       geoMapDayNight: null,
+      // Same again: absent before ADR-198, read as `{}` / `true`, no migration owed.
+      modalSizes: {},
+      templateWrap: true,
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -280,6 +295,8 @@ export const usePrefsStore = create<PrefsStore>()(
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
       setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),
+      setModalSize: (id, size) => set((s) => ({ modalSizes: withModalSize(s.modalSizes, id, size) })),
+      setTemplateWrap: (templateWrap) => set({ templateWrap }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

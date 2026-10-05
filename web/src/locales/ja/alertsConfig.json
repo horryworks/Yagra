@@ -343,6 +343,7 @@
           "suppress": "上流の障害にまとめたときは、PagerDuty に閉じる合図（重複判定キー）だけを送ります。このテンプレートは使いません。"
         }
       },
+      "wrap": "長い行を折り返す",
       "resetField": "この欄だけ組み込みに戻す",
       "builtinBodyEmptyText": "本文を空にすると、Yagra の組み込みの本文が届きます。",
       "sends": {

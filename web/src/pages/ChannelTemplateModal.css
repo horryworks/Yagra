@@ -33,11 +33,43 @@
   min-width: 0;
 }
 
-/* Under the width at which two columns are readable, the preview goes below the editor. */
-@media (max-width: 860px) {
+/* Under the width at which two columns are readable, the preview goes below the editor. Asked of
+   the dialog's body, not of the window, since the dialog can be resized (ADR-198). */
+.modal-body:has(> .tpl-layout) {
+  container-type: inline-size;
+}
+
+@container (max-width: 760px) {
   .tpl-layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* "Wrap long lines", above the two columns. */
+.tpl-wrap {
+  justify-content: flex-end;
+  margin: -6px 0 10px;
+  font-size: var(--font-xs);
+}
+
+/* Not wrapping (ADR-198 decision 4): each line is drawn whole and the box scrolls sideways, so the
+   line breaks on screen are the template's own. */
+.tpl-layout.is-nowrap .tpl-field,
+.tpl-layout.is-nowrap .tpl-card-body,
+.tpl-layout.is-nowrap .tpl-saved pre {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+/* A dialog the operator made taller gives the extra height to the code field and the preview's
+   body, the two places a long template is read. */
+.modal.has-height .tpl-layout #tpl-body {
+  min-height: max(160px, calc(var(--modal-h) - 560px));
+}
+
+.modal.has-height .tpl-card-body {
+  max-height: max(220px, calc(var(--modal-h) - 440px));
 }
 
 .btn.tpl-small {

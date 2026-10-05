@@ -169,6 +169,7 @@ export function RcaModal({ node, check, onClose }: Props) {
   return (
     <Modal
       title={t('title')}
+      resizeId="rca"
       size="wide"
       onClose={onClose}
       footer={

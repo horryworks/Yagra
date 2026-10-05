@@ -1001,6 +1001,7 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal
       title={t('pollers.register.title')}
+      resizeId="pollerRegister"
       onClose={onClose}
       footer={
         <Button variant="primary" onClick={onClose}>

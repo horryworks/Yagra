@@ -269,3 +269,123 @@ test('in the code view a variable goes where the caret is, and hovering one says
 
   expect(errors.uncaught).toEqual([]);
 });
+
+// --- Resizing the dialog (ADR-198) -------------------------------------------------------------
+// The arithmetic is `lib/modalSize.ts`'s, under Vitest. What only a browser shows: the edge staying
+// under the pointer while the centred dialog grows on both sides, the size coming back on the next
+// open, the two columns folding when the DIALOG (not the window) gets narrow, and the handles going
+// away on a phone.
+
+const widthHandle = (dialog: import('@playwright/test').Locator) =>
+  dialog.getByRole('slider', { name: "Resize the dialog's width" });
+const heightHandle = (dialog: import('@playwright/test').Locator) =>
+  dialog.getByRole('slider', { name: "Resize the dialog's height" });
+
+async function dragBy(page: Page, handle: import('@playwright/test').Locator, dx: number, dy: number) {
+  const box = await handle.boundingBox();
+  if (!box) throw new Error('the handle has no box');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 6 });
+  await page.mouse.up();
+  return { x: x + dx, y: y + dy };
+}
+
+/** Open the dialog again WITHOUT navigating: a `goto` reloads the page, and the fixture's init
+ *  script re-seeds `yagra_prefs`, which would erase the very size this asks to be remembered. */
+async function reopenTemplate(page: Page, channel: string) {
+  const row = page.locator('.dt-row').filter({ hasText: channel });
+  await row.hover();
+  await row.getByRole('button', { name: 'Edit notification template' }).click();
+  return page.getByRole('dialog');
+}
+
+async function widthOf(dialog: import('@playwright/test').Locator) {
+  return (await dialog.boundingBox())?.width ?? 0;
+}
+
+test('the template dialog widens from its right edge, keeps the edge under the pointer, and remembers it', async ({
+  page,
+  errors,
+}) => {
+  let dialog = await openTemplate(page, 'ymock-jsm');
+  const before = await widthOf(dialog);
+  const at = await dragBy(page, widthHandle(dialog), 100, 0);
+  // Centred, so the dialog grows by twice the travel and its edge follows the pointer.
+  expect(Math.abs((await widthOf(dialog)) - (before + 200))).toBeLessThanOrEqual(2);
+  const edge = await widthHandle(dialog).boundingBox();
+  expect(Math.abs((edge?.x ?? 0) + (edge?.width ?? 0) / 2 - at.x)).toBeLessThanOrEqual(3);
+
+  // Closed and opened again, it comes back at the width it was left at.
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  dialog = await reopenTemplate(page, 'ymock-jsm');
+  expect(Math.abs((await widthOf(dialog)) - (before + 200))).toBeLessThanOrEqual(2);
+
+  // Double-click goes back to the default; an arrow key moves it one step.
+  await widthHandle(dialog).dblclick();
+  await expect.poll(() => widthOf(dialog)).toBeCloseTo(before, 0);
+  await widthHandle(dialog).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => widthOf(dialog)).toBeCloseTo(before - 40, 0);
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('a narrow dialog puts the preview under the editor, and a tall one gives the preview the height', async ({
+  page,
+  errors,
+}) => {
+  const dialog = await openTemplate(page, 'ymock-jsm');
+  const tracks = () =>
+    dialog.locator('.tpl-layout').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+  expect(await tracks()).toBe(2);
+  // The window stays 1280 wide: what folds the columns is the dialog's own width.
+  await dragBy(page, widthHandle(dialog), -160, 0);
+  await expect.poll(tracks).toBe(1);
+
+  const cap = () =>
+    dialog.locator('.tpl-card-body').evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
+  expect(await cap()).toBe(220);
+  // Dragged far past what the window allows, so the press ends on the backdrop: it does not close.
+  await dragBy(page, heightHandle(dialog), 0, 300);
+  await expect(dialog).toBeVisible();
+  const taller = await dialog.boundingBox();
+  await page.setViewportSize({ width: 1280, height: 1200 });
+  await dragBy(page, heightHandle(dialog), 0, 150);
+  expect((await dialog.boundingBox())?.height ?? 0).toBeGreaterThan(taller?.height ?? 0);
+  await expect.poll(cap).toBeGreaterThan(220);
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('long lines can stay unwrapped, and the choice is remembered', async ({ page, errors }) => {
+  let dialog = await openTemplate(page, 'ymock-jsm');
+  const wrap = dialog.getByRole('checkbox', { name: 'Wrap long lines' });
+  await expect(wrap).toBeChecked();
+  await wrap.uncheck();
+  await dialog.getByRole('button', { name: 'Edit a copy of this text' }).click();
+  await expect(dialog.locator('#tpl-body')).toHaveAttribute('wrap', 'off');
+  await expect(dialog.locator('.tpl-card-body').first()).toHaveCSS('white-space', 'pre');
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  dialog = await reopenTemplate(page, 'ymock-jsm');
+  await expect(dialog.getByRole('checkbox', { name: 'Wrap long lines' })).not.toBeChecked();
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('on a phone the dialog is a sheet with no resize handles', async ({ page, errors }) => {
+  // `tests/support/app.ts` seeds `uiMode: 'desktop'`, which pins the desktop shell however narrow
+  // the window is; this later init script follows the window instead (as `columnResize.spec.ts`).
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'yagra_prefs',
+      JSON.stringify({ state: { theme: 'dark', language: 'en', uiMode: 'auto' }, version: 0 }),
+    );
+  });
+  const dialog = await openTemplate(page, 'ymock-jsm');
+  await expect(widthHandle(dialog)).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 780 });
+  await expect(page.locator('html')).toHaveAttribute('data-viewport', 'mobile');
+  await expect(dialog.getByRole('slider')).toHaveCount(0);
+  expect(errors.uncaught).toEqual([]);
+});

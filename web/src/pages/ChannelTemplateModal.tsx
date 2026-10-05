@@ -66,6 +66,7 @@ import { ChipSettings, TemplateField, VariablePicker, VariableTooltip, type Fiel
 import { bodyAfterTitle, builtinSource, hasOwnTemplate } from './templateDisplay';
 import { BuiltinTemplateText, JsonText } from './BuiltinTemplateText';
 import { BUILTIN_JSON_KEYS, JSON_SKELETON, TEMPLATE_FORMS } from './templateForm';
+import { usePrefsStore } from '../prefs';
 import './ChannelTemplateModal.css';
 
 /** What the dialog learns before it can draw: the built-in draft, the variables, and whether the
@@ -306,6 +307,12 @@ export function ChannelTemplateModal({
     setShowBuiltin(false);
   };
 
+  // Whether long lines wrap (ADR-198 decision 4): one switch for the code field, the built-in text
+  // and the preview, remembered in this browser. Off, a line is drawn whole and scrolls sideways,
+  // so where the template really breaks a line is what you see.
+  const wrapLines = usePrefsStore((s) => s.templateWrap);
+  const setWrapLines = usePrefsStore((s) => s.setTemplateWrap);
+
   const isJsm = channel.kind === 'jsm';
   const shape = TEMPLATE_FORMS[channel.kind];
   const subjectLabel =
@@ -338,6 +345,7 @@ export function ChannelTemplateModal({
   return (
     <Modal
       title={t('routing.template.title', { name: channel.name })}
+      resizeId="channelTemplate"
       onClose={onClose}
       size="wide"
       footer={
@@ -354,7 +362,12 @@ export function ChannelTemplateModal({
       {!boot ? (
         <p className="tpl-hint">{t('routing.template.updating')}</p>
       ) : (
-        <div className="tpl-layout">
+        <>
+        <label className="form-label form-check tpl-wrap">
+          <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+          <span>{t('routing.template.wrap')}</span>
+        </label>
+        <div className={wrapLines ? 'tpl-layout' : 'tpl-layout is-nowrap'}>
           <div className="tpl-edit">
             <p className="tpl-sends">
               <span className="tpl-label-sm">{t('routing.template.sends.label')}</span>{' '}
@@ -711,6 +724,7 @@ export function ChannelTemplateModal({
                     id="tpl-body"
                     className="mono"
                     rows={8}
+                    wrap={wrapLines ? 'soft' : 'off'}
                     value={code.body}
                     spellCheck={false}
                     placeholder={t('routing.template.builtinPlaceholder')}
@@ -837,6 +851,7 @@ export function ChannelTemplateModal({
             </details>
           </div>
         </div>
+        </>
       )}
 
       <FormError form={form} />

@@ -165,6 +165,7 @@ function HandoffModal({
   return (
     <Modal
       title={t('pollers.bus.handoff.title')}
+      resizeId="busHandoff"
       onClose={onClose}
       footer={
         <Button variant="primary" onClick={onClose}>

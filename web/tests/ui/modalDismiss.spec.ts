@@ -46,3 +46,8 @@ test('a click that starts and ends on the backdrop still closes it', async ({ pa
 
   await expect(dialog).toBeHidden();
 });
+
+test('a dialog that was not made resizable has no resize handles (ADR-198)', async ({ page }) => {
+  const dialog = await openAddRule(page);
+  await expect(dialog.locator('.modal-resize')).toHaveCount(0);
+});

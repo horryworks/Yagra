@@ -345,6 +345,7 @@
           "suppress": "When it is rolled up under upstream, PagerDuty is sent only a close signal (the dedup key). This template is not used."
         }
       },
+      "wrap": "Wrap long lines",
       "resetField": "Use built-in for this field",
       "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body.",
       "sends": {

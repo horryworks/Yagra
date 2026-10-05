@@ -182,6 +182,18 @@
   gap: 10px;
   padding: 24px;
 }
+/* A viewer the operator made taller (ADR-198) gives the frame all of it rather than 62% of the
+   window: the body becomes a column and the frame takes what the error line leaves. */
+.modal.has-height .modal-body:has(> .rp-viewer-body) {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal.has-height .rp-viewer-body {
+  height: auto;
+  flex: 1 1 auto;
+}
+
 .rp-frame {
   flex: 1;
   width: 100%;
