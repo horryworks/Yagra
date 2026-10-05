@@ -9,10 +9,6 @@
 
 /* Scope dialog: a bounded, scrollable list of node groups. Bounded because the group tree is the
    one list here that grows with the customer's estate rather than with what an admin typed in. */
-.users-scope-intro {
-  margin: 0 0 14px;
-}
-
 .users-scope-list {
   display: flex;
   flex-direction: column;
@@ -41,4 +37,35 @@
 
 .users-scope-name {
   color: var(--text-primary);
+}
+
+/* An account's kind pill, pressable since it explains itself (ADR-200): the pill's own look rather
+   than the dotted underline a pressable word gets, plus the ▾ every pressable badge carries. */
+.il-line1 button.infopress.you-pill {
+  padding: 0 6px;
+  border: var(--border-width) solid var(--brand);
+  background: none;
+  color: var(--brand);
+  font-family: inherit;
+  font-size: var(--font-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.il-line1 button.infopress.you-pill::after {
+  content: '▾';
+  margin-left: 4px;
+  opacity: 0.8;
+}
+
+.il-line1 button.infopress.you-pill:hover,
+.il-line1 button.infopress.you-pill[aria-expanded='true'] {
+  background: var(--bg-tertiary);
+}
+
+.il-line1 button.infopress.you-pill:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
 }

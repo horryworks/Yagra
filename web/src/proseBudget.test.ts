@@ -56,7 +56,7 @@ import { readSources, SRC } from './testSupport/sources';
 
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06; lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
-  access: [2542, 1419],
+  access: [1731, 948],
   alertNames: [166, 97],
   alerts: [1470, 875],
   alertsConfig: [12397, 6669],
@@ -70,14 +70,14 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   nodes: [23833, 13291],
   rca: [1038, 532],
   reports: [700, 445],
-  'settings-ai': [1947, 1033],
+  'settings-ai': [736, 410],
   'settings-auth': [3540, 2095],
   'settings-forwarding': [3454, 1893],
   'settings-relocation': [4933, 2515],
   'settings-tls': [1619, 872],
   'settings-tokens': [801, 433],
   'settings-upgrade': [5335, 3023],
-  settings: [587, 310],
+  settings: [217, 101],
   suppression: [1091, 712],
   system: [13290, 7315],
   topology: [4304, 2334],
@@ -89,7 +89,6 @@ const SLACK: [number, number] = [300, 200];
 
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
-  'access:users.scopeModal.intro',
   'alerts:row.merakiOrgSubjectHint',
   'alertsConfig:routing.template.builtinView.condNote',
   'alertsConfig:routing.template.builtinView.jsonNote',
@@ -117,8 +116,6 @@ const LONG_LEGACY: string[] = [
   'nodes:neighbors.detail.note',
   'nodes:neighbors.peer.hint',
   'nodes:rediscover.applyHint',
-  'settings-ai:field.maxTokensHint',
-  'settings-ai:note',
   'settings-forwarding:field.fidelityHint',
   'settings-forwarding:field.fidelityRowsOnly',
   'settings-forwarding:field.serviceAccountHint',
@@ -145,7 +142,6 @@ const LONG_ALLOWED: Record<string, string> = {};
 
 /** `title={t('…')}` strings over 60 EN characters that predate ADR-200. Remove; never add. */
 const HOVER_LEGACY: string[] = [
-  'access:audit.exportHint',
   'alerts:acked.title',
   'alerts:active.muteHint',
   'alerts:row.merakiOrgSubjectHint',
@@ -165,7 +161,6 @@ const HOVER_LEGACY: string[] = [
   'nodes:interfaces.rulesButtonTitle',
   'nodes:inventory.needAttentionOnlyHint',
   'rca:meta.cachedHint',
-  'settings-ai:test.hint',
   'settings-forwarding:health.degradedHint',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
@@ -195,12 +190,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'Inc.21',
     why: 'nothing else on the deployment is reachable without an account',
   },
-  'pages/AiSettingsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.8',
-    why: 'nothing runs, and nothing leaves, until a provider is set',
-  },
-  'pages/AuditPage.tsx': { kind: 'fact', until: 'Inc.8', why: 'kept for 365 days' },
   'pages/CollectionTemplatesPage.tsx': {
     kind: 'fact',
     until: 'Inc.13',
@@ -256,11 +245,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     why: 'the most specific scope wins',
   },
   'pages/TopologyMapPage.tsx': { kind: 'offNav', until: 'Inc.23', why: 'opened from the tree' },
-  'pages/UsersPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.8',
-    why: 'what each of the three roles may do',
-  },
   'pages/integrations/MerakiIntegrationPage.tsx': {
     kind: 'offNav',
     why: 'a page under Settings > Integrations',
@@ -281,7 +265,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 12, press: 6 };
+const INFO_COUNT = { tip: 13, press: 7 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -325,7 +309,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 33, formHint: 19, modalHint: 51 };
+const HINT_SITES = { fieldHint: 27, formHint: 19, modalHint: 49 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

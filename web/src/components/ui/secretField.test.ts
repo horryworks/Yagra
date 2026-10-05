@@ -25,6 +25,10 @@ describe('secretToSend', () => {
     expect(secretToSend('  abc \n')).toBe('abc');
   });
 
+  it('keeps the line breaks inside a multi-line secret (a pasted key file)', () => {
+    expect(secretToSend('{\n  "k": 1\n}\n')).toBe('{\n  "k": 1\n}');
+  });
+
   it('sends nothing for an empty or blank box, so the stored value is kept', () => {
     expect(secretToSend('')).toBeUndefined();
     expect(secretToSend('   ')).toBeUndefined();

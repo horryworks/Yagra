@@ -93,6 +93,7 @@ import {
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
+import { CREATABLE_USER_KINDS } from './pages/userKinds';
 import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
 import { IMPORT_BLOCKS } from './pages/tlsSettingsForm';
@@ -931,11 +932,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('user kind', { en: enAccess, ja: jaAccess }, 'users.kind.', USER_KINDS);
   });
 
-  it('every account kind has a hint (access:users.kindHint.*)', () => {
-    // The badge's tooltip is what tells an admin why an account has no password and who decides its
-    // role — the question a `Directory` or `SSO` pill immediately raises. Same runtime-key exposure
-    // as the label above, so it needs the same guard rather than relying on EN/JA parity.
-    expectKeys('user kind hint', { en: enAccess, ja: jaAccess }, 'users.kindHint.', USER_KINDS);
+  // The badge's explanation (`access:users.kindInfo.<kind>.info`) is not a runtime key: the
+  // `Record<UserKind, …>` in `pages/userKinds.ts` names each one, so a new kind is a compile error
+  // there and ADR-200 G8 checks each named key exists (ADR-200 Inc.8 replaced the hover hint).
+
+  it('every creatable account kind has a sub-label (access:users.kindSub.*)', () => {
+    // The add-user dialog writes what the kind is for beside its name, in the option itself.
+    expectKeys('user kind sub-label', { en: enAccess, ja: jaAccess }, 'users.kindSub.', CREATABLE_USER_KINDS);
+  });
+
+  it('every role has a sub-label in the add-user dialog (access:users.roleSub.*)', () => {
+    expectKeys('role sub-label', { en: enAccess, ja: jaAccess }, 'users.roleSub.', ROLES);
   });
 
   it('every config-bundle section and note has strings (system:bundle.*)', () => {

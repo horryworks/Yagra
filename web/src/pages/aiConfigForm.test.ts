@@ -7,10 +7,13 @@
 import { describe, expect, it } from 'vitest';
 import type { LlmConfigView, LlmProviderChoice } from '../types/api';
 import {
+  aiFormChanged,
+  canTestAi,
   DEFAULT_TOKENS,
+  formFromStored,
   hasUsableStoredKey,
-  keyIsEditable,
   keyIsRequired,
+  needsEgressConfirm,
   toConfigInput,
   validateAiForm,
   type AiFormState,
@@ -42,8 +45,8 @@ function form(over: Partial<AiFormState> = {}): AiFormState {
     location: '',
     maxTokens: String(DEFAULT_TOKENS),
     enabled: true,
-    replaceKey: false,
     apiKey: '',
+    clearKey: false,
     ...over,
   };
 }
@@ -87,21 +90,33 @@ describe('what the save sends for api_key', () => {
     expect(body.model).toBe('a-newer-model');
   });
 
-  it('sends the new value once "replace" is ticked', () => {
-    const body = toConfigInput(storedConfig(), form({ replaceKey: true, apiKey: 'sk-new' }));
+  it('sends the new value once one is typed over a stored credential', () => {
+    const body = toConfigInput(storedConfig(), form({ apiKey: 'sk-new' }));
     expect(body.api_key).toBe('sk-new');
   });
 
-  it('sends an empty value to clear — how Vertex moves onto Workload Identity', () => {
+  it('keeps the stored credential when the replace box is left empty or blank', () => {
+    // The SecretInput rule: an empty box is "keep", never "clear".
+    expect('api_key' in toConfigInput(storedConfig(), form({ apiKey: '' }))).toBe(false);
+    expect('api_key' in toConfigInput(storedConfig(), form({ apiKey: '   ' }))).toBe(false);
+  });
+
+  it('sends an empty value only when asked to clear — how Vertex moves onto Workload Identity', () => {
     const stored = storedConfig({ provider: 'vertex', has_api_key: true });
     const body = toConfigInput(
       stored,
-      form({ provider: 'vertex', project: 'p', location: 'global', replaceKey: true, apiKey: '' }),
+      form({ provider: 'vertex', project: 'p', location: 'global', clearKey: true, apiKey: 'x' }),
     );
     expect(body.api_key).toBe('');
   });
 
-  it('sends the field on a vendor switch even though "replace" was never ticked', () => {
+  it('sends a multi-line key file as it was pasted', () => {
+    const json = '{\n  "type": "service_account"\n}\n';
+    const body = toConfigInput(null, form({ provider: 'vertex', apiKey: json }));
+    expect(body.api_key).toBe(json);
+  });
+
+  it('sends the field on a vendor switch even with nothing typed', () => {
     // Otherwise the omission would mean "keep", and the previous vendor's key would ride along.
     const body = toConfigInput(
       storedConfig({ provider: 'gemini' }),
@@ -159,16 +174,68 @@ describe('validation', () => {
   });
 });
 
-describe('credential field visibility', () => {
-  it('stays hidden while a same-vendor credential is kept, and opens on replace', () => {
-    expect(keyIsEditable(storedConfig(), form())).toBe(false);
-    expect(keyIsEditable(storedConfig(), form({ replaceKey: true }))).toBe(true);
+describe('clearing a stored credential', () => {
+  it('is refused for a provider that needs one', () => {
+    expect(validateAiForm(storedConfig(), CLAUDE, form({ clearKey: true }))).toBe('keyRequired');
   });
 
-  it('is always open when there is nothing stored for the selected vendor', () => {
-    expect(keyIsEditable(null, form())).toBe(true);
-    expect(keyIsEditable(storedConfig({ provider: 'gemini' }), form({ provider: 'claude' }))).toBe(
-      true,
-    );
+  it('is accepted where the credential is optional', () => {
+    const stored = storedConfig({ provider: 'vertex' });
+    const f = form({ provider: 'vertex', project: 'p', location: 'global', clearKey: true });
+    expect(validateAiForm(stored, VERTEX, f)).toBeNull();
+  });
+});
+
+describe('Test waits for a save', () => {
+  it('is not offered before anything is stored', () => {
+    expect(canTestAi(null, form())).toBe(false);
+  });
+
+  it('is offered while the form matches what is stored', () => {
+    const stored = storedConfig();
+    expect(aiFormChanged(stored, formFromStored(stored))).toBe(false);
+    expect(canTestAi(stored, formFromStored(stored))).toBe(true);
+    // Whitespace the save would trim is not a change.
+    expect(canTestAi(stored, { ...formFromStored(stored), model: ' a-model ' })).toBe(true);
+  });
+
+  it('is withdrawn by any edit a save would send', () => {
+    const stored = storedConfig();
+    const base = formFromStored(stored);
+    for (const edit of [
+      { model: 'another' },
+      { maxTokens: '4096' },
+      { enabled: false },
+      { provider: 'gemini' },
+      { apiKey: 'sk-new' },
+    ] satisfies Partial<AiFormState>[]) {
+      expect(canTestAi(stored, { ...base, ...edit }), JSON.stringify(edit)).toBe(false);
+    }
+  });
+
+  it('treats a stored configuration with no credential as unchanged when nothing is typed', () => {
+    const stored = storedConfig({ provider: 'vertex', has_api_key: false, project: 'p' });
+    expect(canTestAi(stored, formFromStored(stored))).toBe(true);
+  });
+});
+
+describe('confirming that incident data leaves the boundary', () => {
+  it('asks when sending is switched on for a vendor outside the boundary', () => {
+    expect(needsEgressConfirm(null, CLAUDE, form())).toBe(true);
+    expect(needsEgressConfirm(storedConfig({ enabled: false }), CLAUDE, form())).toBe(true);
+    // An enabled configuration moved onto such a vendor is a new decision too.
+    expect(
+      needsEgressConfirm(storedConfig({ provider: 'vertex' }), CLAUDE, form({ provider: 'claude' })),
+    ).toBe(true);
+  });
+
+  it('does not ask again for a configuration already sending to that vendor', () => {
+    expect(needsEgressConfirm(storedConfig(), CLAUDE, form({ model: 'another' }))).toBe(false);
+  });
+
+  it('does not ask when nothing will be sent, or nothing leaves', () => {
+    expect(needsEgressConfirm(null, CLAUDE, form({ enabled: false }))).toBe(false);
+    expect(needsEgressConfirm(null, VERTEX, form({ provider: 'vertex' }))).toBe(false);
+    expect(needsEgressConfirm(null, undefined, form())).toBe(false);
   });
 });

@@ -12,11 +12,6 @@
   font-weight: var(--weight-medium);
 }
 
-.pref-help {
-  font-size: var(--font-sm);
-  margin-top: 2px;
-}
-
 .pref-seg {
   display: inline-flex;
   border: var(--border-width) solid var(--border-color);
@@ -46,13 +41,14 @@
   box-shadow: inset 0 -2px 0 var(--accent-color);
 }
 
-/* Dialog-only rhythm. As a page these rows sat in a `Card` whose body is a flex column with no
-   gap, so they were flush; inside a dialog the three choices need to read as three. */
+/* The one sentence at the head of the change-password dialog (`ChangeMyPasswordModal`). */
 .pref-note {
   margin: 0 0 var(--space-4);
   font-size: var(--font-sm);
 }
 
+/* Dialog-only rhythm. As a page these rows sat in a `Card` whose body is a flex column with no
+   gap, so they were flush; inside a dialog the three choices need to read as three. */
 .pref-row + .pref-row {
   margin-top: var(--space-4);
 }

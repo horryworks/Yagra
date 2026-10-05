@@ -98,7 +98,6 @@
     }
   },
   "users": {
-    "note": "Local accounts for the northbound API. Roles: viewer (read-only), operator (ack/maintenance), admin (full control).",
     "forbidden": "Managing users requires an admin account.",
     "searchPlaceholder": "Search username…",
     "filter": {
@@ -142,7 +141,6 @@
     },
     "scopeModal": {
       "title": "Visibility scope — {{name}}",
-      "intro": "Choose which node groups this account can see. Everything beneath a chosen group is included. A node in no group is visible only to accounts that can see the whole fleet. This limits what the account sees, not what its role lets it do.",
       "groups": "Node groups",
       "noGroups": "No node groups exist yet, so there is nothing to limit this account to.",
       "hintAll": "Nothing selected — this account sees the whole fleet.",
@@ -154,20 +152,13 @@
       "username": "Username",
       "password": "Password (min {{min}} chars)",
       "role": "Role",
-      "kind": "Account type",
-      "kindHint": "A service account has no password and cannot sign in. It exists to own API tokens, so an integration keeps working when the person who set it up moves on."
+      "kind": "Account type"
     },
     "kind": {
       "local": "Local",
       "oidc": "SSO",
       "ldap": "Directory",
       "service": "Service account"
-    },
-    "kindHint": {
-      "local": "A local account: the password is held by Yagra.",
-      "oidc": "Provisioned by signing in through the identity provider. It has no local password, and the provider decides its role.",
-      "ldap": "Provisioned by signing in against the LDAP/AD directory. It has no local password, and the directory's groups decide its role.",
-      "service": "A service account has no password and cannot sign in. It exists to own API tokens, so an integration keeps working when the person who set it up moves on."
     },
     "changePw": {
       "title": "Change password — {{name}}",
@@ -187,6 +178,26 @@
       "changePw": "failed to change password",
       "changeScope": "failed to change scope",
       "loadGroups": "failed to load node groups"
+    },
+    "kindInfo": {
+      "oidc": {
+        "info": "Provisioned by signing in through the identity provider. It has no local password, and the provider decides its role."
+      },
+      "ldap": {
+        "info": "Provisioned by signing in against the LDAP/AD directory. It has no local password, and the directory's groups decide its role."
+      },
+      "service": {
+        "info": "A service account has no password and cannot sign in. It exists to own API tokens, so an integration keeps working when the person who set it up moves on."
+      }
+    },
+    "kindSub": {
+      "local": "signs in with a password",
+      "service": "owns API tokens, cannot sign in"
+    },
+    "roleSub": {
+      "viewer": "read only",
+      "operator": "runs the monitoring",
+      "admin": "owns the deployment"
     }
   },
   "roles": {
@@ -206,14 +217,11 @@
       "granted": "granted",
       "notGranted": "not granted"
     },
-    "customNote": "Built-in roles are fixed. Custom roles (operator-defined privilege sets) are planned — they will appear here as additional columns once configurable.",
     "err": {
       "load": "failed to load roles"
     }
   },
   "audit": {
-    "note": "Every configuration change and login event: who, what, when. Read-only · immutable · 365-day retention.",
-    "signInPrompt": "Sign in as an admin to view the audit log.",
     "signIn": "SIGN IN",
     "filter": {
       "allActions": "All actions",
@@ -241,7 +249,7 @@
     "entry_one": "entry",
     "entry_other": "entries",
     "export": "Export",
-    "exportHint": "Exports every entry matching the current filter, newest first (up to 50,000).",
+    "exportHint": "Up to 50,000 entries that match the filter, newest first",
     "empty": {
       "none": "No audit entries yet",
       "filtered": "No matching entries — adjust the filters or time range."

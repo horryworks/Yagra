@@ -1,17 +1,13 @@
 {
   "prefs": {
     "title": "Preferences",
-    "note": "Theme, language and layout — this account only. Every choice applies at once; there is nothing to save.",
     "theme": "Theme",
-    "themeHelp": "Light and dark both use the Yagra token palette.",
     "themes": {
       "light": "Light",
       "dark": "Dark"
     },
     "language": "Language",
-    "languageHelp": "Choose the interface language. Changes apply immediately.",
     "layout": "Layout",
-    "layoutHelp": "Auto follows your screen size (mobile under 768px wide). Desktop keeps the full desktop layout on any screen.",
     "layouts": {
       "auto": "Auto",
       "desktop": "Desktop"
@@ -19,7 +15,7 @@
   },
   "password": {
     "title": "Change my password",
-    "note": "Changing your password signs you out everywhere, including here. You will be asked to sign in again with the new one.",
+    "note": "Changing your password signs you out everywhere, including here.",
     "current": "Current password",
     "next": "New password (min {{min}} chars)",
     "confirm": "Confirm new password",

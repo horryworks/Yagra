@@ -6,7 +6,8 @@
 //
 // It is a dialog rather than a screen because these are changed *during* other work — sending the
 // operator to a page would lose the node or list they were looking at. There is no Save: every
-// choice applies the moment it is made, which is why the dialog carries no footer.
+// choice applies the moment it is made, which is why the dialog carries no footer — and no
+// sentence saying so (ADR-200): the segmented controls change the screen as they are pressed.
 
 import { useTranslation } from 'react-i18next';
 import { usePrefsStore, type Language, type Theme, type UiMode } from '../../prefs';
@@ -46,11 +47,9 @@ export function PreferencesModal({ onClose }: Props) {
 
   return (
     <Modal title={t('prefs.title')} onClose={onClose}>
-      <p className="pref-note muted">{t('prefs.note')}</p>
       <div className="pref-row">
         <div className="pref-label">
           <div className="pref-name">{t('prefs.theme')}</div>
-          <div className="pref-help muted">{t('prefs.themeHelp')}</div>
         </div>
         <div className="pref-seg" role="radiogroup" aria-label={t('prefs.theme')}>
           {THEMES.map((o) => (
@@ -69,7 +68,6 @@ export function PreferencesModal({ onClose }: Props) {
       <div className="pref-row">
         <div className="pref-label">
           <div className="pref-name">{t('prefs.language')}</div>
-          <div className="pref-help muted">{t('prefs.languageHelp')}</div>
         </div>
         <div className="pref-seg" role="radiogroup" aria-label={t('prefs.language')}>
           {LANGUAGES.map((o) => (
@@ -88,7 +86,6 @@ export function PreferencesModal({ onClose }: Props) {
       <div className="pref-row">
         <div className="pref-label">
           <div className="pref-name">{t('prefs.layout')}</div>
-          <div className="pref-help muted">{t('prefs.layoutHelp')}</div>
         </div>
         <div className="pref-seg" role="radiogroup" aria-label={t('prefs.layout')}>
           {UI_MODES.map((o) => (

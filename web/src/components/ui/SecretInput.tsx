@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
-import { TextInput } from './Field';
+import { TextArea, TextInput } from './Field';
 import { secretMode } from './secretField';
 import './SecretInput.css';
 
@@ -25,6 +25,7 @@ export function SecretInput({
   disabled,
   placeholder,
   autoFocus,
+  rows,
 }: {
   id?: string;
   /** Whether the server holds a value for this field already. */
@@ -36,6 +37,10 @@ export function SecretInput({
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
+  /** A multi-line secret (a service-account key file): the box is a text area of this many rows.
+   *  It is not masked — a browser has no masked text area — which is why it starts closed whenever
+   *  a value is stored, like every other secret here. */
+  rows?: number;
 }) {
   const { t } = useTranslation();
   const [replacing, setReplacing] = useState(false);
@@ -64,23 +69,38 @@ export function SecretInput({
     );
   }
 
-  const box = (
-    <TextInput
-      id={id}
-      className="mono"
-      type="password"
-      autoComplete="new-password"
-      value={value}
-      disabled={disabled}
-      placeholder={placeholder}
-      // Replace is the press that asked for the box, so the box takes the focus it was asked for.
-      autoFocus={autoFocus || mode.kind === 'replace'}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
+  // Replace is the press that asked for the box, so the box takes the focus it was asked for.
+  const focus = autoFocus || mode.kind === 'replace';
+  const box =
+    rows === undefined ? (
+      <TextInput
+        id={id}
+        className="mono"
+        type="password"
+        autoComplete="new-password"
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        autoFocus={focus}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    ) : (
+      <TextArea
+        id={id}
+        className="mono"
+        rows={rows}
+        autoComplete="off"
+        spellCheck={false}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        autoFocus={focus}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
   if (mode.kind === 'new' || !mode.canKeep) return box;
   return (
-    <span className="secret-input">
+    <span className={rows === undefined ? 'secret-input' : 'secret-input secret-input-multi'}>
       {box}
       <Button
         type="button"

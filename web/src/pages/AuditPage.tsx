@@ -179,12 +179,11 @@ export function AuditPage() {
       <PageHeader
         title={t('nav:settings.audit')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.audit') }]}
-        note={t('audit.note')}
       />
 
       {!authed ? (
         <Card>
-          <p className="muted">{t('audit.signInPrompt')}</p>
+          <p className="muted">{t('common:loadBlock.signIn')}</p>
         </Card>
       ) : block ? (
         <LoadBlockNotice

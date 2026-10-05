@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
-import { ROLES, type NodeGroup, type Role, type Scope, type UserKind, type UserSummary } from '../types/api';
+import { ROLES, type NodeGroup, type Role, type Scope, type UserSummary } from '../types/api';
 import {
   canHoldScope,
   sameScope,
@@ -18,15 +18,7 @@ import {
   scopeGroupIds,
   scopeLabelKey,
 } from './userScope';
-
-/** The account kinds an admin can create here.
- *
- *  A deliberate subset of `USER_KINDS`, the way `monitorKinds.ts` is a subset of `NodeKind`: an
- *  `oidc` account is provisioned by someone signing in through the identity provider, and the API
- *  refuses to create one directly. Offering it would be a choice that always fails. */
-const CREATABLE_USER_KINDS = ['local', 'service'] as const satisfies readonly UserKind[];
-
-type CreatableUserKind = (typeof CREATABLE_USER_KINDS)[number];
+import { CREATABLE_USER_KINDS, kindInfoKey, type CreatableUserKind } from './userKinds';
 import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -43,6 +35,7 @@ import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { userColumns, userFilterLabels } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
+import { InfoPress } from '../components/ui/InfoTip';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
 import { useLoad } from '../lib/useLoad';
 // The floor is shared with the account badge's own change-password dialog — one literal, not
@@ -119,7 +112,6 @@ export function UsersPage() {
       <PageHeader
         title={t('nav:settings.users')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.users') }]}
-        note={t('users.note')}
       />
 
       <LoadGate
@@ -178,15 +170,11 @@ export function UsersPage() {
                       <span className="il-name">{u.username}</span>
                       {me === u.username && <span className="you-pill">{t('users.you')}</span>}
                       {/* One badge driven by the kind, not a branch per kind: LDAP was the third
-                          member and would have been the third `===` comparison. Both strings are
-                          runtime keys, so `i18nEnumKeys.test.ts` demands EN and JA for any kind
-                          added later — which EN/JA parity alone would not (a new kind is missing
-                          from both locales, so parity passes and the badge shows a raw key). */}
-                      {u.auth_source !== 'local' && (
-                        <span className="you-pill" title={t(`users.kindHint.${u.auth_source}`)}>
-                          {t(`users.kind.${u.auth_source}`)}
-                        </span>
-                      )}
+                          member and would have been the third `===` comparison. The label is a
+                          runtime key, so `i18nEnumKeys.test.ts` demands EN and JA for any kind added
+                          later. Pressing the badge says who holds the password and who decides
+                          the role (`USER_KIND_INFO`) — a hover could not be read on touch. */}
+                      <KindBadge kind={u.auth_source} />
                       <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
                         <span className="yt-status-dot" />
                         {u.enabled ? t('users.status.active') : t('users.status.disabled')}
@@ -302,6 +290,22 @@ export function UsersPage() {
   );
 }
 
+/** An account's kind, when it is not a plain local account: a badge that explains itself when
+ *  pressed. */
+function KindBadge({ kind }: { kind: string }) {
+  const { t } = useTranslation('access');
+  if (kind === 'local') return null;
+  const info = kindInfoKey(kind);
+  const label = t(`users.kind.${kind}`);
+  return info ? (
+    <InfoPress infoKey={info} className="you-pill">
+      {label}
+    </InfoPress>
+  ) : (
+    <span className="you-pill">{label}</span>
+  );
+}
+
 /** One account's visibility, as a single meta line. Reads its wording off `scopeLabelKey`, so the
  *  list, the modal and the account menu cannot describe the same scope differently. */
 function ScopeSummary({ scope }: { scope: Scope }) {
@@ -371,13 +375,13 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
           value={kind}
           onChange={(e) => setKind(e.target.value as CreatableUserKind)}
         >
+          {/* The sub-label says what the kind is for, in the option itself (ADR-200 kind 5). */}
           {CREATABLE_USER_KINDS.map((k) => (
             <option key={k} value={k}>
-              {t(`users.kind.${k}`)}
+              {t(`users.kind.${k}`)} — {t(`users.kindSub.${k}`)}
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t('users.field.kindHint')}</span>
       </div>
       {kind !== 'service' && (
         <div className="modal-field">
@@ -395,9 +399,10 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
       <div className="modal-field">
         <label className="modal-field-label">{t('users.field.role')}</label>
         <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+          {/* What each role may do, in a word beside its name; Settings > Roles has the matrix. */}
           {ROLES.map((r) => (
             <option key={r} value={r}>
-              {t(`role.${r}`)}
+              {t(`role.${r}`)} — {t(`users.roleSub.${r}`)}
             </option>
           ))}
         </Select>
@@ -532,7 +537,6 @@ function ChangeScopeModal({
         />
       }
     >
-      <p className="modal-hint users-scope-intro">{t('users.scopeModal.intro')}</p>
       <div className="modal-field">
         <label className="modal-field-label">{t('users.scopeModal.groups')}</label>
         {groups === null ? (

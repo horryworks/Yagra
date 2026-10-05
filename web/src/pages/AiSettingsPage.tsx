@@ -7,6 +7,11 @@
 //
 // There is deliberately no second provider and no failover: where an incident's details are sent
 // is a decision, not something to retry elsewhere.
+//
+// The screen explains itself through its controls (ADR-200): the credential is a `SecretInput`,
+// the output limit carries its unit and range, Test waits for a save, and sending incident data
+// outside the boundary is confirmed at the moment it is switched on. Each of those judgements is
+// in `aiConfigForm.ts`, where a test reaches it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,9 +25,10 @@ import {
   DEFAULT_TOKENS,
   MAX_TOKENS,
   MIN_TOKENS,
+  canTestAi,
   hasUsableStoredKey,
-  keyIsEditable,
   keyIsRequired,
+  needsEgressConfirm,
   toConfigInput,
   validateAiForm,
   type AiFormState,
@@ -30,7 +36,10 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { TextInput, TextArea, Select, FieldHint, RequiredMark } from '../components/ui/Field';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
+import { InfoTip } from '../components/ui/InfoTip';
+import { SecretInput } from '../components/ui/SecretInput';
+import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import './AiSettingsPage.css';
 
 export function AiSettingsPage() {
@@ -50,12 +59,13 @@ export function AiSettingsPage() {
   const [location, setLocation] = useState('');
   const [maxTokens, setMaxTokens] = useState(String(DEFAULT_TOKENS));
   const [enabled, setEnabled] = useState(false);
-  const [replaceKey, setReplaceKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [clearKey, setClearKey] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -76,8 +86,8 @@ export function AiSettingsPage() {
         } else if (res.providers.length > 0) {
           setProvider(res.providers[0].key);
         }
-        setReplaceKey(false);
         setApiKey('');
+        setClearKey(false);
       })
       .catch((e: unknown) => {
         const b = classifyLoadError(e);
@@ -107,11 +117,10 @@ export function AiSettingsPage() {
     location,
     maxTokens,
     enabled,
-    replaceKey,
     apiKey,
+    clearKey,
   };
   const keyStored = hasUsableStoredKey(stored, provider);
-  const keyEditable = keyIsEditable(stored, form);
   const keyRequired = keyIsRequired(stored, choice, provider);
 
   const dirty = () => {
@@ -119,13 +128,7 @@ export function AiSettingsPage() {
     setTestResult(null);
   };
 
-  const save = () => {
-    const problem = validateAiForm(stored, choice, form);
-    if (problem) {
-      setError(t(`err.${problem}`, { min: MIN_TOKENS, max: MAX_TOKENS }));
-      setSaved(false);
-      return;
-    }
+  const send = () => {
     setBusy(true);
     setError(null);
     setSaved(false);
@@ -138,6 +141,21 @@ export function AiSettingsPage() {
       })
       .catch((e: unknown) => setError(errMsg(e, t('err.save'))))
       .finally(() => setBusy(false));
+  };
+
+  const save = () => {
+    const problem = validateAiForm(stored, choice, form);
+    if (problem) {
+      setError(t(`err.${problem}`, { min: MIN_TOKENS, max: MAX_TOKENS }));
+      setSaved(false);
+      return;
+    }
+    if (needsEgressConfirm(stored, choice, form)) {
+      setError(null);
+      setConfirming(true);
+      return;
+    }
+    send();
   };
 
   const runTest = () => {
@@ -163,9 +181,8 @@ export function AiSettingsPage() {
         <PageHeader
           title={t('nav:settings.ai')}
           trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
-          note={t('note')}
         />
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_system" />
+        <LoadBlockNotice block={block} permission="manage_system" />
       </div>
     );
   }
@@ -175,7 +192,6 @@ export function AiSettingsPage() {
       <PageHeader
         title={t('nav:settings.ai')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
-        note={t('note')}
       />
 
       <Card title={t('card.provider')}>
@@ -189,8 +205,8 @@ export function AiSettingsPage() {
             disabled={!canSystem || loading || busy}
             onChange={(e) => {
               setProvider(e.target.value);
-              setReplaceKey(false);
               setApiKey('');
+              setClearKey(false);
               dirty();
             }}
           >
@@ -200,14 +216,7 @@ export function AiSettingsPage() {
               </option>
             ))}
           </Select>
-          <FieldHint>{t('provider.hint')}</FieldHint>
         </div>
-
-        {choice && (
-          <p className={choice.leaves_operator_boundary ? 'ai-egress leaves' : 'ai-egress stays'}>
-            {choice.leaves_operator_boundary ? t('egress.leaves') : t('egress.stays')}
-          </p>
-        )}
 
         <div className="ai-field">
           <label className="ai-label" htmlFor="ai-model">
@@ -224,7 +233,6 @@ export function AiSettingsPage() {
               dirty();
             }}
           />
-          <FieldHint>{t('field.modelHint')}</FieldHint>
         </div>
 
         {choice?.needs_project && (
@@ -259,7 +267,6 @@ export function AiSettingsPage() {
                   dirty();
                 }}
               />
-              <FieldHint>{t('field.locationHint')}</FieldHint>
             </div>
           </>
         )}
@@ -269,79 +276,71 @@ export function AiSettingsPage() {
             {choice?.needs_project ? t('field.serviceAccount') : t('field.apiKey')}
             {keyRequired && <RequiredMark />}
           </label>
-          {keyStored && (
+          {!clearKey && (
+            <SecretInput
+              // A new provider, or a fresh read after a save, starts from the stored mark again.
+              key={`${provider}:${stored?.updated_at ?? ''}`}
+              id="ai-key"
+              stored={keyStored}
+              value={apiKey}
+              rows={choice?.needs_project ? 5 : undefined}
+              // Only where an empty box means something other than "keep": with nothing stored,
+              // Vertex runs on the instance's own identity.
+              placeholder={
+                choice?.credential_optional && !keyStored
+                  ? t('field.serviceAccountPlaceholder')
+                  : undefined
+              }
+              disabled={!canSystem || loading || busy}
+              onChange={(v) => {
+                setApiKey(v);
+                dirty();
+              }}
+            />
+          )}
+          {keyStored && choice?.credential_optional && (
             <label className="ai-check">
               <input
                 type="checkbox"
-                checked={replaceKey}
+                checked={clearKey}
                 disabled={!canSystem || busy}
                 onChange={(e) => {
-                  setReplaceKey(e.target.checked);
+                  setClearKey(e.target.checked);
                   setApiKey('');
                   dirty();
                 }}
               />
-              <span>{t('field.replaceKey')}</span>
+              <span>{t('field.useWorkloadIdentity')}</span>
             </label>
           )}
-          {keyEditable &&
-            (choice?.needs_project ? (
-              <TextArea
-                id="ai-key"
-                className="mono"
-                rows={5}
-                value={apiKey}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={!canSystem || loading || busy}
-                onChange={(e) => {
-                  setApiKey(e.target.value);
-                  dirty();
-                }}
-              />
-            ) : (
-              <TextInput
-                id="ai-key"
-                className="mono"
-                type="password"
-                value={apiKey}
-                autoComplete="new-password"
-                disabled={!canSystem || loading || busy}
-                onChange={(e) => {
-                  setApiKey(e.target.value);
-                  dirty();
-                }}
-              />
-            ))}
-          <FieldHint>
-            {keyStored && !replaceKey
-              ? t('field.keyStored')
-              : choice?.credential_optional
-                ? t('field.serviceAccountHint')
-                : keyStored
-                  ? t('field.clearHint')
-                  : t('field.keyMissing')}
-          </FieldHint>
         </div>
       </Card>
 
       <Card title={t('card.limits')}>
         <div className="ai-field">
-          <label className="ai-label" htmlFor="ai-tokens">
-            {t('field.maxTokens')}
-          </label>
-          <TextInput
-            id="ai-tokens"
-            className="ai-tokens mono"
-            value={maxTokens}
-            inputMode="numeric"
-            disabled={!canSystem || loading || busy}
-            onChange={(e) => {
-              setMaxTokens(e.target.value);
-              dirty();
-            }}
-          />
-          <FieldHint>{t('field.maxTokensHint', { min: MIN_TOKENS, max: MAX_TOKENS })}</FieldHint>
+          <div className="field-head">
+            <label className="ai-label" htmlFor="ai-tokens">
+              {t('field.maxTokens')}
+            </label>
+            <InfoTip infoKey="settings-ai:tokens.info" label={t('field.maxTokens')} />
+          </div>
+          <span className="ai-tokens-row">
+            <TextInput
+              id="ai-tokens"
+              className="ai-tokens mono"
+              value={maxTokens}
+              inputMode="numeric"
+              suffix={t('field.tokensUnit')}
+              disabled={!canSystem || loading || busy}
+              onChange={(e) => {
+                setMaxTokens(e.target.value);
+                dirty();
+              }}
+            />
+            <span className="muted">
+              {t('field.maxTokensBand', { min: MIN_TOKENS, max: MAX_TOKENS })}
+            </span>
+          </span>
         </div>
 
         <label className="ai-check">
@@ -356,7 +355,6 @@ export function AiSettingsPage() {
           />
           <span>{t('field.enabled')}</span>
         </label>
-        <FieldHint>{t('field.enabledHint')}</FieldHint>
       </Card>
 
       <div className="ai-actions">
@@ -366,10 +364,10 @@ export function AiSettingsPage() {
               {t('common:actions.save')}
             </Button>
             <Button
+              type="button"
               variant="outline"
               onClick={runTest}
-              disabled={stored == null || testing || busy}
-              title={t('test.hint')}
+              disabled={!canTestAi(stored, form) || testing || busy}
             >
               {testing ? t('test.running') : t('test.button')}
             </Button>
@@ -382,11 +380,29 @@ export function AiSettingsPage() {
         </span>
       </div>
 
-      {!authed && <p className="muted">{t('signInHint')}</p>}
+      {!authed && <p className="muted">{t('common:loadBlock.signIn')}</p>}
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="ai-saved">{t('state.saved')}</p>}
       {testResult && (
         <p className={testResult.ok ? 'ai-saved' : 'form-error'}>{testResult.text}</p>
+      )}
+
+      {confirming && (
+        <ConfirmDeleteModal
+          title={t('egress.confirmTitle')}
+          confirmLabel={t('egress.confirm')}
+          onConfirm={() => api.saveLlmConfig(toConfigInput(stored, form))}
+          errorFallback={t('err.save')}
+          onClose={() => setConfirming(false)}
+          onDone={() => {
+            setConfirming(false);
+            setSaved(true);
+            setTestResult(null);
+            load();
+          }}
+        >
+          {t('egress.leaves')}
+        </ConfirmDeleteModal>
       )}
     </div>
   );

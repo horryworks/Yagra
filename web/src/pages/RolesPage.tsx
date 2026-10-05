@@ -91,7 +91,6 @@ export function RolesPage() {
                 ))}
               </div>
             </div>
-            <p className="muted roles-note">{t('roles.customNote')}</p>
           </Card>
         </>
       )}
