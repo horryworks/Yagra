@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   backToFire,
   builtinDraft,
+  clearField,
   builtinTemplate,
   effective,
+  fieldHasText,
   followsFire,
   isBlank,
   jsmTitle,
@@ -181,6 +183,16 @@ describe('points in the alert life', () => {
     const edited = withField(model, 'suppress', 'subject', [text('x')]);
     expect(edited.suppress).toEqual({ subject: [text('x')], body: null });
     expect(model.suppress).toEqual({ subject: null, body: null });
+  });
+
+  it('using the built-in for one field empties it everywhere and saves it as null (ADR-197)', () => {
+    const own = withField(writeOwn(model, 'resolve'), 'resolve', 'subject', [text('R own')]);
+    expect(fieldHasText(own, 'subject')).toBe(true);
+    const cleared = clearField(own, 'subject');
+    expect(fieldHasText(cleared, 'subject')).toBe(false);
+    expect(serializeField(cleared, 'subject')).toBeNull();
+    // The other field is left exactly as it was.
+    expect(serializeField(cleared, 'body')).toBe(serializeField(own, 'body'));
   });
 });
 

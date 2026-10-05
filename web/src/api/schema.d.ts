@@ -3141,12 +3141,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
-         * @description The template editor opens a channel that has no template on this text, so an operator starts
-         *     from what is sent today. Rendering it produces exactly the built-in subject for that channel
-         *     kind. A poller pool's and a Meraki organization's alerts have built-in wording of their own,
-         *     which is not described here. There is no built-in body template: the built-in body is the whole
-         *     alert as JSON for webhook and PagerDuty, and one fact per line for JSM and email.
+         * Yagra's built-in subject and body for a node alert, written as templates, once per lifecycle
+         *     point.
+         * @description The template editor shows a channel that has no template this text, so an operator sees what
+         *     is sent today and can start from it. Rendering it produces exactly the built-in subject and
+         *     body for that channel kind. A poller pool's and a Meraki organization's alerts have built-in
+         *     wording of their own, which is not described here. Webhook and PagerDuty have no body template:
+         *     their built-in body is the whole alert as JSON.
          */
         get: operations["get_builtin_template"];
         put?: never;
@@ -5904,6 +5905,12 @@ export interface components {
         };
         /** @description One lifecycle point's built-in subject, written as a template. */
         BuiltinSubjectTemplate: {
+            /**
+             * @description The template that renders Yagra's built-in body for a node alert at this point (ADR-197).
+             *     `null` for webhook and PagerDuty, whose built-in body is the whole alert as JSON and is
+             *     not a template.
+             */
+            body?: string | null;
             /** @description `fire`, `resolve`, or `suppress`. */
             event: components["schemas"]["NotifyEvent"];
             /** @description The template that renders Yagra's built-in subject for a node alert at this point. */
@@ -26814,7 +26821,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress` */
+            /** @description The built-in subject and body of a node alert as templates, for `fire`, `resolve` and `suppress` */
             200: {
                 headers: {
                     [name: string]: unknown;

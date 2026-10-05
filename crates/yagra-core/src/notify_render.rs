@@ -143,6 +143,10 @@ fn environment() -> Environment<'static> {
     // typo like `{{ node.name }}` is caught rather than silently blank.
     env.set_undefined_behavior(UndefinedBehavior::Lenient);
     env.set_fuel(Some(RENDER_FUEL));
+    // `{{ threshold | number }}` prints `90`, not `90.0` — the rule the built-in text uses
+    // (ADR-197 decision 1). The built-in body template needs it to render byte for byte what the
+    // code writes, and an operator who copies that template keeps it.
+    env.add_filter("number", crate::notify_text::fmt_num);
     env
 }
 

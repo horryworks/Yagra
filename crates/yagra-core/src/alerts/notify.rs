@@ -1712,6 +1712,19 @@ pub(crate) const fn builtin_subject_template_for(
     }
 }
 
+/// The editor's draft body for a channel of this kind (ADR-197 decision 2): the text body for
+/// JSM and email, and `None` for webhook and PagerDuty, whose built-in body is the whole alert as
+/// JSON and has no template.
+#[must_use]
+pub(crate) fn builtin_body_template_for(kind: ChannelKind, event: NotifyEvent) -> Option<String> {
+    match kind {
+        ChannelKind::Webhook | ChannelKind::PagerDuty => None,
+        ChannelKind::Jsm | ChannelKind::Email => {
+            Some(crate::notify_text::node_body_template(event))
+        }
+    }
+}
+
 /// The built-in notification with no facts resolved — a node is named by its id. See
 /// [`json_notification`]. Test vocabulary: every production path passes the facts it has.
 #[cfg(test)]
@@ -1905,6 +1918,68 @@ mod template_tests {
         assert_eq!(
             compared, 48,
             "4 kinds x 2 samples x resolved or not x 3 points"
+        );
+    }
+
+    /// The built-in body as a template renders the built-in body, byte for byte (ADR-197
+    /// decision 1) — at every point in the alert's life, for both samples, with and without the
+    /// node's facts resolved, and for an alert about a table row. Webhook and PagerDuty have no
+    /// body template, and say so.
+    #[test]
+    fn every_builtin_body_template_renders_the_builtin_body() {
+        let mut compared = 0;
+        for kind in [ChannelKind::Webhook, ChannelKind::PagerDuty] {
+            for event in NotifyEvent::ALL {
+                assert_eq!(builtin_body_template_for(kind, event), None);
+            }
+        }
+        for kind in [ChannelKind::Email, ChannelKind::Jsm] {
+            for sample in yagra_common::PreviewSample::ALL {
+                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                for resolved in [resolved, HashMap::new()] {
+                    for event in NotifyEvent::ALL {
+                        let mut base = context_for(&alert, event, &resolved);
+                        base.if_name = crate::notify_facts::preview_port_name(sample);
+                        // Every optional line, on and off: no port name beside an index, a row
+                        // name, a flapping node, no labels.
+                        let mut no_name = base.clone();
+                        no_name.if_name = None;
+                        let mut row = base.clone();
+                        row.ifindex = None;
+                        row.if_name = None;
+                        row.row_name = Some("I/O".to_owned());
+                        row.flapping = true;
+                        row.tags = Vec::new();
+                        row.threshold = Some(0.25);
+                        for facts in [base, no_name, row] {
+                            let template = ChannelTemplate {
+                                subject: None,
+                                body: builtin_body_template_for(kind, event),
+                            };
+                            let rendered = render_with_fallback(
+                                Some(&template),
+                                &facts,
+                                false,
+                                "",
+                                "FELL BACK",
+                            );
+                            assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
+                            assert_eq!(
+                                rendered.body,
+                                builtin_for_kind(kind, &alert, event, Some(&facts)).payload,
+                                "the {kind:?} {} {} body draft does not render the built-in body",
+                                sample.as_str(),
+                                event.as_str()
+                            );
+                            compared += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            compared, 72,
+            "2 kinds x 2 samples x resolved or not x 3 points x 3 shapes"
         );
     }
 

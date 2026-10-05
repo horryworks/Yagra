@@ -144,9 +144,9 @@
       "presets": "Start from:",
       "preset": {
         "detailed": "Detailed",
-        "short": "Short"
+        "short": "Short",
+        "builtin": "Built-in"
       },
-      "restoreBuiltin": "Restore built-in text",
       "tabs": {
         "fire": "When it fires",
         "resolve": "When it recovers",
@@ -161,7 +161,6 @@
       "builtinDraftNote": "This is Yagra’s built-in subject. Saving it unchanged keeps the built-in text, which also covers poller pool and Meraki organization alerts.",
       "poolNote": "Your subject is also used for poller pool and Meraki organization alerts. Use “Subject name” for the name so it reads right for both.",
       "builtinBodyEmpty": "Leave the body empty to send the whole alert as JSON, Yagra’s built-in body.",
-      "builtinUnavailable": "The built-in text could not be read, so the editor starts empty. An empty field still sends the built-in text.",
       "search": "Search (e.g. name, threshold)",
       "noMatch": "Nothing matches",
       "pickerLabel": "Variables",
@@ -311,7 +310,33 @@
       "savedAs": "Template that will be saved",
       "savedEmpty": "(empty = built-in text)",
       "fieldFollowsFire": "Sends the same as “When it fires”. Writing here gives this case its own.",
-      "fieldBackToFire": "Use the “When it fires” text for this field"
+      "fieldBackToFire": "Use the “When it fires” text for this field",
+      "status": {
+        "builtinTitle": "Sending Yagra’s built-in text",
+        "builtinNote": "This channel has no template saved. Below is exactly what it sends today.",
+        "ownTitle": "Sending this channel’s own template",
+        "ownNote": "Saved on this channel. Alerts it cannot render fall back to the built-in text.",
+        "reset": "Go back to built-in text…",
+        "confirmTitle": "Delete this channel’s template and send the built-in text again?",
+        "confirmNote": "Title and body go back together, at every point in the alert’s life. The deleted template cannot be restored.",
+        "confirm": "Delete and use built-in",
+        "cancel": "Keep it"
+      },
+      "builtinView": {
+        "readOnly": "Built-in · read only",
+        "copy": "Edit a copy of this text",
+        "blank": "Start from empty fields",
+        "condNote": "A dashed box is sent only when its condition holds. The Visual editor cannot hold those parts, so the copy opens in Code. Nothing changes until you save.",
+        "jsonBody": "The built-in body is the whole alert as JSON, not a template. The preview on the right shows it.",
+        "when": "when {{cond}}",
+        "otherwiseWhen": "otherwise, when {{cond}}",
+        "otherwise": "otherwise",
+        "present": "{{name}} is known",
+        "differs": "{{name}} differs from {{other}}",
+        "and": " and "
+      },
+      "resetField": "Use built-in for this field",
+      "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body."
     },
     "test": {
       "title": "Send a test notification — {{name}}",

@@ -243,6 +243,61 @@ pub(crate) const fn node_subject_template(event: NotifyEvent) -> &'static str {
     }
 }
 
+/// [`body`] for a node alert, written as a template (ADR-197 decision 1): the draft the template
+/// editor shows a JSM or email channel that has none, and what "edit a copy" puts in the code
+/// editor. `alerts/notify.rs::every_builtin_body_template_renders_the_builtin_body` pins the two
+/// together, so a line added to [`body`] and not here fails a test rather than an inbox.
+///
+/// Built with the same `{:<10}` padding [`body`] uses, so the column cannot drift by a space.
+#[must_use]
+pub(crate) fn node_body_template(event: NotifyEvent) -> String {
+    fn line(label: &str, value: &str) -> String {
+        format!("{:<10} {value}\n", format!("{label}:"))
+    }
+    fn when(cond: &str, label: &str, value: &str) -> String {
+        format!("{{% if {cond} %}}{}{{% endif %}}", line(label, value))
+    }
+    let mut out = String::from(node_subject_template(event));
+    out.push_str("\n\n");
+    out.push_str(&line(
+        "Node",
+        "{{ node_name }}{% if node_address and node_address != node_name %} \
+         ({{ node_address }}){% endif %}",
+    ));
+    out.push_str(&when("group is defined", "Folder", "{{ group }}"));
+    out.push_str(&when("profile is defined", "Profile", "{{ profile }}"));
+    out.push_str(&when("title is defined", "Alert", "{{ title }}"));
+    out.push_str(&when(
+        "metric is defined",
+        "Metric",
+        "{{ metric }}{% if value is defined %} = {{ value | number }}{% endif %}\
+         {% if direction is defined and threshold is defined %} \
+         (threshold: {{ direction }} {{ threshold | number }}){% endif %}",
+    ));
+    out.push_str(&when(
+        "ifindex is defined",
+        "Port",
+        "{% if if_name is defined %}{{ if_name }} (ifIndex {{ ifindex }})\
+         {% else %}ifIndex {{ ifindex }}{% endif %}",
+    ));
+    out.push_str(&when("row_name is defined", "Row", "{{ row_name }}"));
+    out.push_str(&line("Severity", "{{ severity }}"));
+    out.push_str(&line("State", "{{ state }}"));
+    out.push_str(&line("Since", "{{ at }}"));
+    out.push_str(&when("tags", "Tags", "{{ tags | join(\", \") }}"));
+    out.push_str(&when(
+        "root_cause_name is defined",
+        "Rolled up under",
+        "{{ root_cause_name }}",
+    ));
+    out.push_str(&when("flapping", "Flapping", "yes"));
+    out.push_str(&line("Alert key", "{{ dedup_key }}"));
+    out.push_str(&line("Node ID", "{{ node_id }}"));
+    // minijinja drops one trailing newline from what it renders, and [`body`] ends in one.
+    out.push('\n');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

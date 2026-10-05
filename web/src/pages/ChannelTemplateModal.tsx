@@ -15,7 +15,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
-import type { NotificationChannel, NotifyEvent, TemplatePreview, TemplateVariable } from '../types/api';
+import type {
+  BuiltinSubjectTemplate,
+  NotificationChannel,
+  NotifyEvent,
+  TemplatePreview,
+  TemplateVariable,
+} from '../types/api';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea } from '../components/ui/Field';
@@ -30,10 +36,11 @@ import type { TemplateDraft } from './channelTemplate';
 import {
   backToFire,
   builtinDraft,
+  clearField,
   effective,
   fieldFollowsFire,
+  fieldHasText,
   followsFire,
-  builtinTemplate,
   isBlank,
   jsmTitle,
   JSM_MESSAGE_MAX_CHARS,
@@ -56,6 +63,8 @@ import {
 import { presetLanguage, presetTemplate, TEMPLATE_PRESETS } from './templatePresets';
 import type { ChipLook } from './templateDom';
 import { ChipSettings, TemplateField, VariablePicker, VariableTooltip, type FieldHandle } from './TemplateEditor';
+import { builtinSource, hasOwnTemplate } from './templateDisplay';
+import { BuiltinTemplateText } from './BuiltinTemplateText';
 import './ChannelTemplateModal.css';
 
 /** What the dialog learns before it can draw: the built-in draft, the variables, and whether the
@@ -65,6 +74,9 @@ interface Boot {
   variables: TemplateVariable[];
   /** `null` when the first preview failed, so the answer is unknown and the safe editor is used. */
   jsonBody: boolean | null;
+  /** The built-in text as templates, per point in the alert's life (ADR-197); `null` when the
+   *  server could not say. */
+  builtin: BuiltinSubjectTemplate[] | null;
 }
 
 type Mode = 'visual' | 'code';
@@ -102,6 +114,10 @@ export function ChannelTemplateModal({
   const [preview, setPreview] = useState<TemplatePreview | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [pending, setPending] = useState(false);
+  // A channel with no template opens on the built-in text, read-only, until the operator chooses a
+  // way to start writing (ADR-197 decision 3).
+  const [showBuiltin, setShowBuiltin] = useState(true);
+  const [confirmReset, setConfirmReset] = useState(false);
   const handles = { subject: useRef<FieldHandle | null>(null), body: useRef<FieldHandle | null>(null) };
   const insertButtons = { subject: useRef<HTMLElement | null>(null), body: useRef<HTMLElement | null>(null) };
   const form = useSubmit({ errorFallback: t('routing.err.template'), onDone });
@@ -124,7 +140,7 @@ export function ChannelTemplateModal({
         { subject: channel.subject_template ?? null, body: channel.body_template ?? null },
         draft,
       );
-      setBoot({ draft, variables, jsonBody });
+      setBoot({ draft, variables, jsonBody, builtin });
       if (jsonBody === false && opened.ok) {
         setModel(opened.model);
         setMode('visual');
@@ -258,6 +274,26 @@ export function ChannelTemplateModal({
   const save = () =>
     form.submit(() => api.setNotificationTemplate(channel.id, request).then(() => done()));
 
+  const own = hasOwnTemplate(channel);
+  const copy = boot?.builtin ? builtinSource(boot.builtin) : null;
+  const viewingBuiltin = boot !== null && !own && showBuiltin && boot.builtin !== null;
+  const builtinAt = (e: NotifyEvent) => boot?.builtin?.find((b) => b.event === e) ?? null;
+
+  // "Edit a copy of this text": the built-in, in the code editor, because the visual one cannot
+  // hold its conditional parts (decision 4). Nothing is sent differently until it is saved.
+  const editCopy = () => {
+    if (!copy) return;
+    closePopovers();
+    setCode(copy);
+    codeCaret.current = null;
+    setUnsupported(null);
+    setMode('code');
+    setShowBuiltin(false);
+  };
+  // Both fields empty is the built-in text, at every point in the alert's life (decision 5).
+  const resetToBuiltin = () =>
+    form.submit(() => api.setNotificationTemplate(channel.id, { subject: null, body: null }).then(() => done()));
+
   const isJsm = channel.kind === 'jsm';
   const subjectLabel = isJsm ? t('routing.template.jsmSubject') : t('routing.template.subject');
   const view = preview ? previewView(preview) : null;
@@ -283,219 +319,347 @@ export function ChannelTemplateModal({
       ) : (
         <div className="tpl-layout">
           <div className="tpl-edit">
-            {boot.jsonBody === true ? (
-              <p className="tpl-note">{t('routing.template.jsonCodeOnly')}</p>
-            ) : (
-              <div className="tpl-mode" role="group" aria-label={t('routing.template.modeLabel')}>
-                {(['visual', 'code'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={mode === m ? 'tpl-mode-btn is-on' : 'tpl-mode-btn'}
-                    aria-pressed={mode === m}
-                    onClick={m === 'visual' ? toVisual : toCode}
-                    disabled={mode === m}
-                  >
-                    {t(`routing.template.mode.${m}`)}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {unsupported && (
-              <div className="form-warning tpl-unsupported" role="status">
-                <p>{t('routing.template.unsupportedLead')}</p>
-                <p>
-                  {t(`routing.template.unsupported.${unsupported.reason}`)} <code>{unsupported.snippet}</code>
-                </p>
-              </div>
-            )}
-
-            {mode === 'visual' && model ? (
-              <>
-                <div className="tpl-presets">
-                  <span className="tpl-label-sm">{t('routing.template.presets')}</span>
-                  {TEMPLATE_PRESETS.map((p) => (
-                    <Button
-                      key={p}
-                      variant="outline"
-                      className="tpl-small"
-                      onClick={() => replaceModel(presetTemplate(p, presetLanguage(i18n.language)))}
-                    >
-                      {t(`routing.template.preset.${p}`)}
+            <div
+              className={`tpl-status ${!own ? 'is-builtin' : confirmReset ? 'is-confirm' : 'is-own'}`}
+              role="status"
+            >
+              {!own ? (
+                <>
+                  <strong>{t('routing.template.status.builtinTitle')}</strong>
+                  <p>{t('routing.template.status.builtinNote')}</p>
+                </>
+              ) : confirmReset ? (
+                <>
+                  <strong>{t('routing.template.status.confirmTitle')}</strong>
+                  <p>{t('routing.template.status.confirmNote')}</p>
+                  <div className="tpl-status-acts">
+                    <Button variant="danger" className="tpl-small" onClick={resetToBuiltin} disabled={form.busy}>
+                      {t('routing.template.status.confirm')}
                     </Button>
-                  ))}
-                  <Button
-                    variant="ghost"
-                    className="tpl-small"
-                    onClick={() => replaceModel(builtinTemplate(boot.draft))}
-                  >
-                    {t('routing.template.restoreBuiltin')}
-                  </Button>
-                </div>
+                    <Button className="tpl-small" onClick={() => setConfirmReset(false)} disabled={form.busy}>
+                      {t('routing.template.status.cancel')}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong>{t('routing.template.status.ownTitle')}</strong>
+                  <p>{t('routing.template.status.ownNote')}</p>
+                  <div className="tpl-status-acts">
+                    <Button variant="danger" className="tpl-small" onClick={() => setConfirmReset(true)}>
+                      {t('routing.template.status.reset')}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
 
+            {viewingBuiltin ? (
+              <>
+                {boot.jsonBody === false && (
+                  <div className="tpl-presets">
+                    <span className="tpl-label-sm">{t('routing.template.presets')}</span>
+                    {copy && (
+                      <Button variant="outline" className="tpl-small" onClick={editCopy}>
+                        {t('routing.template.preset.builtin')}
+                      </Button>
+                    )}
+                    {TEMPLATE_PRESETS.map((p) => (
+                      <Button
+                        key={p}
+                        variant="outline"
+                        className="tpl-small"
+                        onClick={() => {
+                          setShowBuiltin(false);
+                          replaceModel(presetTemplate(p, presetLanguage(i18n.language)));
+                        }}
+                      >
+                        {t(`routing.template.preset.${p}`)}
+                      </Button>
+                    ))}
+                  </div>
+                )}
                 <Tabs
-                  tabs={TEMPLATE_EVENTS.map((e) => ({
-                    key: e,
-                    label:
-                      !followsFire(model, e)
-                        ? t(`routing.template.tabs.${e}`)
-                        : t('routing.template.tabSame', { label: t(`routing.template.tabs.${e}`) }),
-                  }))}
+                  tabs={TEMPLATE_EVENTS.map((e) => ({ key: e, label: t(`routing.template.tabs.${e}`) }))}
                   active={tab}
                   onChange={chooseTab}
                 />
-
-                {tab !== 'fire' && followsFire(model, tab) ? (
-                  <div className="tpl-same">
-                    <p>{t('routing.template.sameAsFire')}</p>
-                    <Button variant="outline" className="tpl-small" onClick={() => replaceModel(writeOwn(model, tab))}>
-                      {t('routing.template.writeOwn')}
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    {(['subject', 'body'] as const).map((field) => (
-                      <div className="tpl-field-wrap" key={field}>
-                        <div className="tpl-field-head">
-                          <label className="tpl-field-name" htmlFor={`tpl-${field}`}>
-                            {field === 'subject' ? subjectLabel : t('routing.template.body')}
-                          </label>
-                          {(isJsm || channel.kind === 'email') && (
-                            <span className="tpl-field-hint">
-                              {t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, {
-                                max: JSM_MESSAGE_MAX_CHARS,
-                              })}
-                            </span>
-                          )}
-                          <span
-                            className="tpl-insert"
-                            ref={(el) => {
-                              insertButtons[field].current = el;
-                            }}
-                          >
-                            <Button
-                              variant="outline"
-                              className="tpl-small"
-                              aria-haspopup="listbox"
-                              onClick={() =>
-                                setPicker((p) => (p && p.field === field && !p.at ? null : { field, at: null }))
-                              }
-                            >
-                              {t('routing.template.insert')}
-                            </Button>
+                {(['subject', 'body'] as const).map((field) => {
+                  const label = field === 'subject' ? subjectLabel : t('routing.template.body');
+                  const source = field === 'subject' ? builtinAt(tab)?.subject : builtinAt(tab)?.body;
+                  return (
+                    <div className="tpl-field-wrap" key={field}>
+                      <div className="tpl-field-head">
+                        <span className="tpl-field-name">{label}</span>
+                        {(isJsm || channel.kind === 'email') && (
+                          <span className="tpl-field-hint">
+                            {t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, {
+                              max: JSM_MESSAGE_MAX_CHARS,
+                            })}
                           </span>
-                        </div>
-                        {tab !== 'fire' && (
-                          <p className="tpl-hint">
-                            {fieldFollowsFire(model, tab, field) ? (
-                              t('routing.template.fieldFollowsFire')
-                            ) : (
-                              <button
-                                type="button"
-                                className="tpl-link"
-                                onClick={() => replaceModel(backToFire(model, tab, field))}
-                              >
-                                {t('routing.template.fieldBackToFire')}
-                              </button>
-                            )}
-                          </p>
                         )}
-                        <TemplateField
-                          key={`${tab}-${field}-${fieldKey}-${i18n.language}`}
-                          id={`tpl-${field}`}
-                          segments={effective(model, tab, field)}
-                          multiline={field === 'body'}
-                          label={field === 'subject' ? subjectLabel : t('routing.template.body')}
-                          placeholder={t('routing.template.builtinPlaceholder')}
-                          look={look}
-                          handleRef={handles[field]}
-                          onChange={(segs) => setModel((m) => (m ? withField(m, tab, field, segs) : m))}
-                          onOpenPicker={(at) => setPicker({ field, at })}
-                          onChipClick={(el) => {
-                            const r = el.getBoundingClientRect();
-                            setPicker(null);
-                            setChip({ field, el, at: { x: r.left, y: r.bottom + 4 } });
-                          }}
-                        />
                       </div>
-                    ))}
-                    <p className="tpl-hint">{t('routing.template.insertHint')}</p>
-                    {boot.draft === null ? (
-                      <p className="tpl-hint">{t('routing.template.builtinUnavailable')}</p>
-                    ) : subjectIsBuiltin(model, boot.draft) ? (
-                      <p className="tpl-hint">{t('routing.template.builtinDraftNote')}</p>
-                    ) : (
-                      <p className="tpl-hint">{t('routing.template.poolNote')}</p>
-                    )}
-                    {isBlank(effective(model, tab, 'body')) && (
-                      <p className="tpl-hint">{t('routing.template.builtinBodyEmpty')}</p>
-                    )}
-                    {tab !== 'fire' && (
-                      <Button variant="ghost" className="tpl-small" onClick={() => replaceModel(backToFire(model, tab))}>
-                        {t('routing.template.backToFire')}
-                      </Button>
-                    )}
-                  </>
-                )}
+                      {source != null ? (
+                        <BuiltinTemplateText
+                          id={`tpl-builtin-${field}`}
+                          source={source}
+                          label={label}
+                          multiline={field === 'body'}
+                        />
+                      ) : (
+                        <p className="tpl-note">{t('routing.template.builtinView.jsonBody')}</p>
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="tpl-builtin-acts">
+                  {copy && <Button onClick={editCopy}>{t('routing.template.builtinView.copy')}</Button>}
+                  <Button variant="ghost" onClick={() => setShowBuiltin(false)}>
+                    {t('routing.template.builtinView.blank')}
+                  </Button>
+                </div>
+                <p className="tpl-hint">{t('routing.template.builtinView.condNote')}</p>
               </>
             ) : (
               <>
-                <label className="form-label" htmlFor="tpl-subject">
-                  {subjectLabel}
-                </label>
-                <TextInput
-                  id="tpl-subject"
-                  className="mono"
-                  value={code.subject}
-                  spellCheck={false}
-                  placeholder={t('routing.template.builtinPlaceholder')}
-                  inputRef={codeSubjectRef}
-                  onChange={(e) => setCode({ ...code, subject: e.target.value })}
-                  onSelect={(e) => rememberCaret('subject', e.currentTarget)}
-                />
-                <label className="form-label" htmlFor="tpl-body">
-                  {t('routing.template.body')}
-                </label>
-                <TextArea
-                  id="tpl-body"
-                  className="mono"
-                  rows={8}
-                  value={code.body}
-                  spellCheck={false}
-                  placeholder={t('routing.template.builtinPlaceholder')}
-                  inputRef={codeBodyRef}
-                  onChange={(e) => setCode({ ...code, body: e.target.value })}
-                  onSelect={(e) => rememberCaret('body', e.currentTarget)}
-                />
-                <p className="tpl-hint">
-                  {request.subject === null && request.body === null
-                    ? t('routing.template.builtinHint')
-                    : t('routing.template.blankHint')}
-                </p>
-                <div className="tpl-vars">
-                  <h3 className="tpl-vars-title">{t('routing.template.variables')}</h3>
-                  <div className="tpl-vars-list">
-                    {boot.variables.map((v) => (
-                      <button
-                        key={v.name}
-                        type="button"
-                        className="tpl-var"
-                        aria-describedby={varTip?.v.name === v.name ? 'tpl-var-tip' : undefined}
-                        // Keep focus (and the caret) in the field, so typing carries on after the insert.
-                        onMouseDown={(e) => e.preventDefault()}
-                        onMouseEnter={(e) => setVarTip({ v, el: e.currentTarget })}
-                        onMouseLeave={() => setVarTip(null)}
-                        onFocus={(e) => setVarTip({ v, el: e.currentTarget })}
-                        onBlur={() => setVarTip(null)}
-                        onClick={() => insertCodeVariable(v)}
+              {boot.jsonBody === true ? (
+                <p className="tpl-note">{t('routing.template.jsonCodeOnly')}</p>
+              ) : (
+                <div className="tpl-mode" role="group" aria-label={t('routing.template.modeLabel')}>
+                  {(['visual', 'code'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={mode === m ? 'tpl-mode-btn is-on' : 'tpl-mode-btn'}
+                      aria-pressed={mode === m}
+                      onClick={m === 'visual' ? toVisual : toCode}
+                      disabled={mode === m}
+                    >
+                      {t(`routing.template.mode.${m}`)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {unsupported && (
+                <div className="form-warning tpl-unsupported" role="status">
+                  <p>{t('routing.template.unsupportedLead')}</p>
+                  <p>
+                    {t(`routing.template.unsupported.${unsupported.reason}`)} <code>{unsupported.snippet}</code>
+                  </p>
+                </div>
+              )}
+
+              {mode === 'visual' && model ? (
+                <>
+                  <div className="tpl-presets">
+                    <span className="tpl-label-sm">{t('routing.template.presets')}</span>
+                    {copy && (
+                      <Button variant="outline" className="tpl-small" onClick={editCopy}>
+                        {t('routing.template.preset.builtin')}
+                      </Button>
+                    )}
+                    {TEMPLATE_PRESETS.map((p) => (
+                      <Button
+                        key={p}
+                        variant="outline"
+                        className="tpl-small"
+                        onClick={() => replaceModel(presetTemplate(p, presetLanguage(i18n.language)))}
                       >
-                        {v.name}
-                        {!v.always_present && <span className="tpl-var-opt">?</span>}
-                      </button>
+                        {t(`routing.template.preset.${p}`)}
+                      </Button>
                     ))}
                   </div>
-                </div>
+
+                  <Tabs
+                    tabs={TEMPLATE_EVENTS.map((e) => ({
+                      key: e,
+                      label:
+                        !followsFire(model, e)
+                          ? t(`routing.template.tabs.${e}`)
+                          : t('routing.template.tabSame', { label: t(`routing.template.tabs.${e}`) }),
+                    }))}
+                    active={tab}
+                    onChange={chooseTab}
+                  />
+
+                  {tab !== 'fire' && followsFire(model, tab) ? (
+                    <div className="tpl-same">
+                      <p>{t('routing.template.sameAsFire')}</p>
+                      <Button variant="outline" className="tpl-small" onClick={() => replaceModel(writeOwn(model, tab))}>
+                        {t('routing.template.writeOwn')}
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      {(['subject', 'body'] as const).map((field) => (
+                        <div className="tpl-field-wrap" key={field}>
+                          <div className="tpl-field-head">
+                            <label className="tpl-field-name" htmlFor={`tpl-${field}`}>
+                              {field === 'subject' ? subjectLabel : t('routing.template.body')}
+                            </label>
+                            {(isJsm || channel.kind === 'email') && (
+                              <span className="tpl-field-hint">
+                                {t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, {
+                                  max: JSM_MESSAGE_MAX_CHARS,
+                                })}
+                              </span>
+                            )}
+                            <span
+                              className="tpl-insert"
+                              ref={(el) => {
+                                insertButtons[field].current = el;
+                              }}
+                            >
+                              {fieldHasText(model, field) && (
+                                <button
+                                  type="button"
+                                  className="tpl-link"
+                                  onClick={() => replaceModel(clearField(model, field))}
+                                >
+                                  {t('routing.template.resetField')}
+                                </button>
+                              )}
+                              <Button
+                                variant="outline"
+                                className="tpl-small"
+                                aria-haspopup="listbox"
+                                onClick={() =>
+                                  setPicker((p) => (p && p.field === field && !p.at ? null : { field, at: null }))
+                                }
+                              >
+                                {t('routing.template.insert')}
+                              </Button>
+                            </span>
+                          </div>
+                          {tab !== 'fire' && (
+                            <p className="tpl-hint">
+                              {fieldFollowsFire(model, tab, field) ? (
+                                t('routing.template.fieldFollowsFire')
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="tpl-link"
+                                  onClick={() => replaceModel(backToFire(model, tab, field))}
+                                >
+                                  {t('routing.template.fieldBackToFire')}
+                                </button>
+                              )}
+                            </p>
+                          )}
+                          <TemplateField
+                            key={`${tab}-${field}-${fieldKey}-${i18n.language}`}
+                            id={`tpl-${field}`}
+                            segments={effective(model, tab, field)}
+                            multiline={field === 'body'}
+                            label={field === 'subject' ? subjectLabel : t('routing.template.body')}
+                            placeholder={t('routing.template.builtinPlaceholder')}
+                            look={look}
+                            handleRef={handles[field]}
+                            onChange={(segs) => setModel((m) => (m ? withField(m, tab, field, segs) : m))}
+                            onOpenPicker={(at) => setPicker({ field, at })}
+                            onChipClick={(el) => {
+                              const r = el.getBoundingClientRect();
+                              setPicker(null);
+                              setChip({ field, el, at: { x: r.left, y: r.bottom + 4 } });
+                            }}
+                          />
+                        </div>
+                      ))}
+                      <p className="tpl-hint">{t('routing.template.insertHint')}</p>
+                      {boot.draft !== null && subjectIsBuiltin(model, boot.draft) ? (
+                        <p className="tpl-hint">{t('routing.template.builtinDraftNote')}</p>
+                      ) : (
+                        fieldHasText(model, 'subject') && <p className="tpl-hint">{t('routing.template.poolNote')}</p>
+                      )}
+                      {isBlank(effective(model, tab, 'body')) && (
+                        <p className="tpl-hint">
+                          {boot.jsonBody === false
+                            ? t('routing.template.builtinBodyEmptyText')
+                            : t('routing.template.builtinBodyEmpty')}
+                        </p>
+                      )}
+                      {tab !== 'fire' && (
+                        <Button variant="ghost" className="tpl-small" onClick={() => replaceModel(backToFire(model, tab))}>
+                          {t('routing.template.backToFire')}
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="tpl-code-head">
+                    <label className="form-label" htmlFor="tpl-subject">
+                      {subjectLabel}
+                    </label>
+                    {code.subject.trim() !== '' && (
+                      <button type="button" className="tpl-link" onClick={() => setCode({ ...code, subject: '' })}>
+                        {t('routing.template.resetField')}
+                      </button>
+                    )}
+                  </div>
+                  <TextInput
+                    id="tpl-subject"
+                    className="mono"
+                    value={code.subject}
+                    spellCheck={false}
+                    placeholder={t('routing.template.builtinPlaceholder')}
+                    inputRef={codeSubjectRef}
+                    onChange={(e) => setCode({ ...code, subject: e.target.value })}
+                    onSelect={(e) => rememberCaret('subject', e.currentTarget)}
+                  />
+                  <div className="tpl-code-head">
+                    <label className="form-label" htmlFor="tpl-body">
+                      {t('routing.template.body')}
+                    </label>
+                    {code.body.trim() !== '' && (
+                      <button type="button" className="tpl-link" onClick={() => setCode({ ...code, body: '' })}>
+                        {t('routing.template.resetField')}
+                      </button>
+                    )}
+                  </div>
+                  <TextArea
+                    id="tpl-body"
+                    className="mono"
+                    rows={8}
+                    value={code.body}
+                    spellCheck={false}
+                    placeholder={t('routing.template.builtinPlaceholder')}
+                    inputRef={codeBodyRef}
+                    onChange={(e) => setCode({ ...code, body: e.target.value })}
+                    onSelect={(e) => rememberCaret('body', e.currentTarget)}
+                  />
+                  <p className="tpl-hint">
+                    {request.subject === null && request.body === null
+                      ? t('routing.template.builtinHint')
+                      : t('routing.template.blankHint')}
+                  </p>
+                  <div className="tpl-vars">
+                    <h3 className="tpl-vars-title">{t('routing.template.variables')}</h3>
+                    <div className="tpl-vars-list">
+                      {boot.variables.map((v) => (
+                        <button
+                          key={v.name}
+                          type="button"
+                          className="tpl-var"
+                          aria-describedby={varTip?.v.name === v.name ? 'tpl-var-tip' : undefined}
+                          // Keep focus (and the caret) in the field, so typing carries on after the insert.
+                          onMouseDown={(e) => e.preventDefault()}
+                          onMouseEnter={(e) => setVarTip({ v, el: e.currentTarget })}
+                          onMouseLeave={() => setVarTip(null)}
+                          onFocus={(e) => setVarTip({ v, el: e.currentTarget })}
+                          onBlur={() => setVarTip(null)}
+                          onClick={() => insertCodeVariable(v)}
+                        >
+                          {v.name}
+                          {!v.always_present && <span className="tpl-var-opt">?</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
               </>
             )}
           </div>

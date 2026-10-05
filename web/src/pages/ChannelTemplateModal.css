@@ -558,3 +558,115 @@
   box-shadow: 0 8px 24px var(--overlay);
   pointer-events: none;
 }
+
+/* Which text this channel sends, at the top of the editor (ADR-197 decision 5). The colour says
+   which one, and the words say it too. */
+.tpl-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+}
+
+.tpl-status p {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.tpl-status.is-builtin {
+  border-color: color-mix(in srgb, var(--status-ok) 45%, transparent);
+  background: color-mix(in srgb, var(--status-ok) 8%, transparent);
+}
+
+.tpl-status.is-own {
+  border-color: color-mix(in srgb, var(--accent-color) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+
+.tpl-status.is-confirm {
+  border-color: color-mix(in srgb, var(--status-critical) 55%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 8%, transparent);
+}
+
+.tpl-status-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* The built-in text, read-only (decision 3): an inset, dashed box, labelled as such. */
+.tpl-field.tpl-builtin {
+  position: relative;
+  padding-top: 20px;
+  border-style: dashed;
+  background: var(--bg-tertiary);
+  cursor: default;
+}
+
+.tpl-field.tpl-builtin::before {
+  content: attr(data-readonly);
+  position: absolute;
+  top: 2px;
+  left: 10px;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.tpl-chip.is-static {
+  cursor: default;
+}
+
+.tpl-chip.is-static:hover {
+  border-color: var(--border-color);
+}
+
+/* A part sent only when its condition holds: a dashed box with the condition in small type. */
+.tpl-cond {
+  padding: 1px 3px;
+  border: var(--border-width) dashed var(--text-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.tpl-cond + .tpl-cond {
+  margin-left: 2px;
+}
+
+.tpl-cond-cap {
+  margin-right: 4px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.tpl-raw {
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.tpl-builtin-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tpl-code-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tpl-insert .tpl-link {
+  margin-right: 10px;
+  font-size: var(--font-xs);
+}
+
+.tpl-code-head .tpl-link {
+  font-size: var(--font-xs);
+}

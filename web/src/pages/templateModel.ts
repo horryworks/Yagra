@@ -505,6 +505,21 @@ export function backToFire(model: VisualTemplate, event: BranchEvent, field?: Te
   return { ...model, [event]: { subject: null, body: null } };
 }
 
+/** One field emptied at every point in the alert's life: "use built-in for this field"
+ *  (ADR-197 decision 5). An empty field saves as `null`, which is what sends the built-in text. */
+export function clearField(model: VisualTemplate, field: TemplateField): VisualTemplate {
+  return {
+    fire: { ...model.fire, [field]: [] },
+    resolve: { ...model.resolve, [field]: null },
+    suppress: { ...model.suppress, [field]: null },
+  };
+}
+
+/** Whether a field sends any text of its own at some point in the alert's life. */
+export function fieldHasText(model: VisualTemplate, field: TemplateField): boolean {
+  return TEMPLATE_EVENTS.some((e) => !isBlank(effective(model, e, field)));
+}
+
 // ── Preview samples ───────────────────────────────────────────────────────────────────────
 
 /** The sample alerts the preview offers. Each pairs a point in the alert's life with one of the

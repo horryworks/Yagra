@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The visual notification-template editor (ADR-039 Inc.2).
+// The visual notification-template editor (ADR-039 Inc.2), and what it shows a channel that has
+// no template of its own: the built-in text, read-only, with a way to edit a copy, and a way back
+// to the built-in for one that has (ADR-197).
 //
 // Why Tier1: every decision is in a `.ts` with tests - the model (`templateModel.ts`), the field's
 // DOM (`templateDom.ts`, under jsdom). What only a browser shows is the pieces handed to each other:
@@ -12,6 +14,7 @@
 // (testing.md). The preview is patched to carry no `json_valid`, which is how the server says a
 // channel's body is plain text; the generated body names it, which would read as a JSON channel.
 
+import type { Page } from '@playwright/test';
 import type { components } from '../../src/api/schema';
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
@@ -20,6 +23,8 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 type Schemas = components['schemas'];
 
 const CHANNEL_ID = '00000000-0000-4000-8000-0000000000c1';
+/** A channel that already sends a template of its own. */
+const OWN_ID = '00000000-0000-4000-8000-0000000000c2';
 
 const channels = (() => {
   const [first] = defaultBodyFor('/api/v1/notification-channels') as unknown as Schemas['ChannelSummary'][];
@@ -33,15 +38,36 @@ const channels = (() => {
       subject_template: null,
       body_template: null,
     },
+    {
+      ...first,
+      id: OWN_ID,
+      name: 'ymock-mail',
+      kind: 'email',
+      enabled: true,
+      subject_template: '{{ subject_name }} is {{ state }}',
+      body_template: null,
+    },
   ] as unknown as Json;
 })();
 
-/** What the server answers today: the built-in node subject, per point in the alert's life. */
+/** The shape the server answers for JSM: per point in the alert's life, a subject with a part
+ *  sent only under a condition, and a body that starts with the same sentence. Shortened from
+ *  `notify_text.rs`, keeping the shapes the visual editor cannot read. */
+const WHO = '{{ node_name }}{% if node_address and node_address != node_name %} ({{ node_address }}){% endif %}';
+const LINES = '\n\nSeverity:  {{ severity }}\n{% if group is defined %}Folder:    {{ group }}\n{% endif %}\n';
 const builtin: Schemas['BuiltinSubjectTemplate'][] = [
-  { event: 'fire', subject: 'node {{ node_id }} is {{ state }}' },
-  { event: 'resolve', subject: 'resolved: node {{ node_id }} recovered' },
-  { event: 'suppress', subject: 'rolled up: node {{ node_id }} suppressed under upstream' },
+  { event: 'fire', subject: `${WHO} is {{ state }}`, body: `${WHO} is {{ state }}${LINES}` },
+  { event: 'resolve', subject: `resolved: ${WHO} recovered`, body: `resolved: ${WHO} recovered${LINES}` },
+  { event: 'suppress', subject: `rolled up: ${WHO}`, body: `rolled up: ${WHO}${LINES}` },
 ];
+
+async function openTemplate(page: Page, channel: string) {
+  await page.goto('/alerts/routing');
+  const row = page.locator('.dt-row').filter({ hasText: channel });
+  await row.hover();
+  await row.getByRole('button', { name: 'Edit notification template' }).click();
+  return page.getByRole('dialog');
+}
 
 /** Two real names, so the tooltip reads the locale strings a real list would. */
 const variables: Schemas['TemplateVariable'][] = [
@@ -67,22 +93,72 @@ test.use({
   },
 });
 
-test('the built-in subject opens as tags, "{" inserts a variable, and the save carries what was shown', async ({
+test('a channel with no template shows the built-in text, and editing a copy saves exactly that text', async ({
   page,
   errors,
 }) => {
-  await page.goto('/alerts/routing');
-  const row = page.locator('.dt-row').filter({ hasText: 'ymock-jsm' });
-  await row.hover();
-  await row.getByRole('button', { name: 'Edit notification template' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = await openTemplate(page, 'ymock-jsm');
+  await expect(dialog.getByRole('status').first()).toContainText('Sending Yagra’s built-in text');
 
-  // The built-in subject is the draft, drawn as tags in the operator's language.
-  const subject = dialog.locator('#tpl-subject');
-  await expect(subject.locator('.tpl-chip')).toHaveText(['Node ID', 'State']);
-  await expect(subject).toContainText('node');
+  // Variables as tags; the part sent only when the address is not the name, in a box that says so.
+  const shown = dialog.locator('#tpl-builtin-subject');
+  await expect(shown.locator('.tpl-chip')).toHaveText(['Node name', 'Address', 'State']);
+  await expect(shown.locator('.tpl-cond-cap')).toHaveText(['when Address differs from Node name']);
+  const shownBody = dialog.locator('#tpl-builtin-body');
+  await expect(shownBody).toContainText('Severity:');
+  await expect(shownBody.locator('.tpl-cond-cap')).toContainText(['when Folder is known']);
+
+  // Each tab shows its own point in the alert's life.
+  await dialog.getByRole('tab', { name: 'When it recovers' }).click();
+  await expect(dialog.locator('#tpl-builtin-subject')).toContainText('resolved:');
+
+  // The copy opens in the code editor, one template branching on the event.
+  await dialog.getByRole('button', { name: 'Edit a copy of this text' }).click();
+  await expect(dialog.getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
+  const copied = await dialog.locator('#tpl-subject').inputValue();
+  expect(copied).toContain('{% if event == "resolve" %}resolved: ');
+  expect(copied).toContain('{% else %}{{ node_name }}');
+  // The body's lines are not repeated per event: only its first line branches.
+  const copiedBody = await dialog.locator('#tpl-body').inputValue();
+  expect(copiedBody.match(/Severity:/g)).toHaveLength(1);
+
+  const put = page.waitForRequest(
+    (r) => r.method() === 'PUT' && new URL(r.url()).pathname === `/api/v1/notification-channels/${CHANNEL_ID}/template`,
+  );
+  await dialog.getByRole('button', { name: 'Save template' }).click();
+  expect((await put).postDataJSON()).toEqual({ subject: copied, body: copiedBody });
+
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('a channel with its own template can go back to the built-in text, after saying so', async ({ page, errors }) => {
+  const dialog = await openTemplate(page, 'ymock-mail');
+  const status = dialog.getByRole('status').first();
+  await expect(status).toContainText('Sending this channel’s own template');
+  await dialog.getByRole('button', { name: 'Go back to built-in text…' }).click();
+  await expect(status).toContainText('Delete this channel’s template');
+
+  // "Keep it" changes nothing.
+  await dialog.getByRole('button', { name: 'Keep it' }).click();
+  await expect(status).toContainText('Sending this channel’s own template');
+
+  await dialog.getByRole('button', { name: 'Go back to built-in text…' }).click();
+  const put = page.waitForRequest(
+    (r) => r.method() === 'PUT' && new URL(r.url()).pathname === `/api/v1/notification-channels/${OWN_ID}/template`,
+  );
+  await dialog.getByRole('button', { name: 'Delete and use built-in' }).click();
+  expect((await put).postDataJSON()).toEqual({ subject: null, body: null });
+
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('starting from empty fields, "{" inserts a variable, and the save carries what was shown', async ({
+  page,
+  errors,
+}) => {
+  const dialog = await openTemplate(page, 'ymock-jsm');
+  await dialog.getByRole('button', { name: 'Start from empty fields' }).click();
   await expect(dialog.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(dialog).toContainText('This is Yagra’s built-in subject');
 
   // Typing "{" in the body opens the list at the caret; Enter picks the first match.
   const body = dialog.locator('#tpl-body');
@@ -124,11 +200,8 @@ test('the built-in subject opens as tags, "{" inserts a variable, and the save c
 });
 
 test('in the code view a variable goes where the caret is, and hovering one says what it is', async ({ page, errors }) => {
-  await page.goto('/alerts/routing');
-  const row = page.locator('.dt-row').filter({ hasText: 'ymock-jsm' });
-  await row.hover();
-  await row.getByRole('button', { name: 'Edit notification template' }).click();
-  const dialog = page.getByRole('dialog');
+  const dialog = await openTemplate(page, 'ymock-jsm');
+  await dialog.getByRole('button', { name: 'Start from empty fields' }).click();
   await dialog.getByRole('button', { name: 'Code' }).click();
 
   const subject = dialog.locator('#tpl-subject');

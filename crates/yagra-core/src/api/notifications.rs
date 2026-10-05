@@ -906,6 +906,10 @@ pub(super) struct BuiltinSubjectTemplate {
     event: NotifyEvent,
     /// The template that renders Yagra's built-in subject for a node alert at this point.
     subject: String,
+    /// The template that renders Yagra's built-in body for a node alert at this point (ADR-197).
+    /// `null` for webhook and PagerDuty, whose built-in body is the whole alert as JSON and is
+    /// not a template.
+    body: Option<String>,
 }
 
 /// Which channel kind's built-in subject to describe.
@@ -918,18 +922,19 @@ pub(super) struct BuiltinTemplateQuery {
     kind: Option<ChannelKind>,
 }
 
-/// Yagra's built-in subject for a node alert, written as a template, once per lifecycle point.
+/// Yagra's built-in subject and body for a node alert, written as templates, once per lifecycle
+/// point.
 ///
-/// The template editor opens a channel that has no template on this text, so an operator starts
-/// from what is sent today. Rendering it produces exactly the built-in subject for that channel
-/// kind. A poller pool's and a Meraki organization's alerts have built-in wording of their own,
-/// which is not described here. There is no built-in body template: the built-in body is the whole
-/// alert as JSON for webhook and PagerDuty, and one fact per line for JSM and email.
+/// The template editor shows a channel that has no template this text, so an operator sees what
+/// is sent today and can start from it. Rendering it produces exactly the built-in subject and
+/// body for that channel kind. A poller pool's and a Meraki organization's alerts have built-in
+/// wording of their own, which is not described here. Webhook and PagerDuty have no body template:
+/// their built-in body is the whole alert as JSON.
 #[utoipa::path(
     get, path = "/api/v1/notification-channels/builtin-template", tag = "notifications",
     params(BuiltinTemplateQuery),
     responses(
-        (status = 200, description = "The built-in subject of a node alert as a template, for `fire`, `resolve` and `suppress`", body = Vec<BuiltinSubjectTemplate>),
+        (status = 200, description = "The built-in subject and body of a node alert as templates, for `fire`, `resolve` and `suppress`", body = Vec<BuiltinSubjectTemplate>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
     ),
@@ -945,6 +950,7 @@ async fn get_builtin_template(
             .map(|event| BuiltinSubjectTemplate {
                 event,
                 subject: crate::alerts::builtin_subject_template_for(kind, event).to_owned(),
+                body: crate::alerts::builtin_body_template_for(kind, event),
             })
             .collect(),
     )
@@ -1383,6 +1389,8 @@ at 2026-08-04T09:41:07+00:00"
         // Since ADR-196 the webhook and PagerDuty summary is the same sentence JSM and email use.
         let fire = out[0]["subject"].as_str().expect("subject");
         assert!(fire.starts_with("{{ node_name }}"), "{fire}");
+        // The webhook's built-in body is the alert as JSON, which is no template (ADR-197).
+        assert!(out[0]["body"].is_null(), "{}", out[0]);
 
         // JSM and email name the node in their built-in title, so their draft does too (ADR-194).
         let (status, out) = admin_json(
@@ -1394,6 +1402,9 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(status, StatusCode::OK);
         let fire = out[0]["subject"].as_str().expect("subject");
         assert!(fire.starts_with("{{ node_name }}"), "{fire}");
+        // Their built-in body is text, and it is a template too (ADR-197).
+        let body = out[0]["body"].as_str().expect("body");
+        assert!(body.contains("Severity:  {{ severity }}"), "{body}");
     }
 
     /// The contract the editor branches on: a template that does not compile is a **typed 400**
