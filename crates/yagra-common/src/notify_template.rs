@@ -178,6 +178,11 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: false,
     },
     TemplateVariable {
+        name: "title",
+        description: "What the alert is called, in plain English — SNMP not responding rather                       than snmp_up, Node not responding for an up/down alert (ADR-196). The                       metric itself when Yagra has no name for it.",
+        always_present: false,
+    },
+    TemplateVariable {
         name: "value",
         description: "The observed sample that committed the transition. A number, so it can be \
                       compared and formatted. Absent unless a threshold was crossed.",
@@ -200,6 +205,11 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         description: "The SNMP ifIndex of the port that breached, for a metric collected once per \
                       interface. Absent when the alert is about the node as a whole. It is the \
                       index the device files the row under, not a front-panel position.",
+        always_present: false,
+    },
+    TemplateVariable {
+        name: "if_name",
+        description: "The name of the port that breached, such as GigabitEthernet0/7, as the                       interface inventory calls it when the notification is sent. Absent when the                       alert is about no port or the port's name is not known.",
         always_present: false,
     },
     TemplateVariable {
@@ -283,6 +293,10 @@ pub struct AlertFacts {
     /// The metric that breached; `None` for a liveness alert.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric: Option<String>,
+    /// What the alert is called, in English (ADR-196) — the name a person reads instead of
+    /// `metric`. Present for a liveness alert too ("Node not responding"), where `metric` is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// The observed sample that committed the transition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
@@ -300,6 +314,10 @@ pub struct AlertFacts {
     // wants to read like an operator does should print both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ifindex: Option<u32>,
+    /// That port's name (`ifName`), as the interface inventory calls it at **send** time
+    /// (ADR-196 decision 6) — see `ifindex` above for why the number is kept beside it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_name: Option<String>,
     /// The name of the table row that breached — a memory pool, a CPU, a sensor — for a metric
     /// collected once per row (ADR-143). The name the row had when the alert fired.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,10 +385,12 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
         // `icmp_rtt_ms above 200`, which cannot carry a port — leaving `ifindex` unrendered in
         // every preview, i.e. invisible to the operator writing the template that needs it.
         metric: Some("if_in_util_pct".to_owned()),
+        title: Some("Inbound utilization".to_owned()),
         value: Some(94.2),
         threshold: Some(90.0),
         direction: Some("above".to_owned()),
         ifindex: Some(7),
+        if_name: Some("GigabitEthernet0/7".to_owned()),
         // Absent, and necessarily: a port alert is not a table-row alert, and the two are never
         // both set on one alert. A template that wants either reads both.
         row_name: None,
@@ -434,10 +454,13 @@ pub fn liveness_sample_facts(event: NotifyEvent) -> AlertFacts {
     AlertFacts {
         state: "unreachable".to_owned(),
         metric: None,
+        // An up/down alert has no metric but does have a name.
+        title: Some("Node not responding".to_owned()),
         value: None,
         threshold: None,
         direction: None,
         ifindex: None,
+        if_name: None,
         row_name: None,
         ..sample_facts(event)
     }
@@ -461,10 +484,12 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         group: None,
         profile: None,
         metric: None,
+        title: None,
         value: None,
         threshold: None,
         direction: None,
         ifindex: None,
+        if_name: None,
         row_name: None,
         root_cause_id: None,
         root_cause_name: None,
@@ -492,10 +517,12 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
 pub fn sample_row_facts(event: NotifyEvent) -> AlertFacts {
     AlertFacts {
         metric: Some("cisco_mem_pool_used_pct".to_owned()),
+        title: Some("Memory pool usage".to_owned()),
         value: Some(83.9),
         threshold: Some(80.0),
         direction: Some("above".to_owned()),
         ifindex: None,
+        if_name: None,
         row_name: Some("I/O".to_owned()),
         ..sample_facts(event)
     }
@@ -552,7 +579,14 @@ mod tests {
         let missing: BTreeSet<&str> = full.difference(&live).map(String::as_str).collect();
         assert_eq!(
             missing,
-            BTreeSet::from(["direction", "ifindex", "metric", "threshold", "value"])
+            BTreeSet::from([
+                "direction",
+                "if_name",
+                "ifindex",
+                "metric",
+                "threshold",
+                "value"
+            ])
         );
         assert_eq!(
             liveness_sample_facts(NotifyEvent::Fire).state,

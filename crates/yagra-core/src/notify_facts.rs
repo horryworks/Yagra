@@ -42,6 +42,13 @@ pub trait AlertFactsSource: Send + Sync {
     async fn meraki_org_name(&self, _org: Uuid) -> Option<String> {
         None
     }
+
+    /// What a node's port is called (`ifName`), for an alert about one port (ADR-196 decision 6).
+    /// Defaulted to "unknown", which leaves the port named by its ifIndex — what every notification
+    /// said before.
+    async fn port_name(&self, _node: Uuid, _ifindex: u32) -> Option<String> {
+        None
+    }
 }
 
 /// [`NodeRepo`]-backed source with a short TTL cache.
@@ -123,6 +130,21 @@ impl CachedNodeFacts {
 impl AlertFactsSource for CachedNodeFacts {
     // Not cached: an organization's collect alert fires a handful of times a year, and a failed
     // read degrades to the id like every other fact here — the notification goes out regardless.
+    // Not cached either: only a per-port alert asks, and a failed read degrades to the ifIndex.
+    async fn port_name(&self, node: Uuid, ifindex: u32) -> Option<String> {
+        let want = i32::try_from(ifindex).ok()?;
+        self.repo
+            .interface_idents_for(&[node])
+            .await
+            .map_err(
+                |e| tracing::warn!(error = %e, "failed to read a port name for a notification"),
+            )
+            .ok()?
+            .remove(&(node, want))?
+            .if_name
+            .filter(|n| !n.trim().is_empty())
+    }
+
     async fn meraki_org_name(&self, org: Uuid) -> Option<String> {
         crate::meraki::MerakiOrgRepo::new(self.repo.pool())
             .get(org)
@@ -227,6 +249,8 @@ pub fn context_for(
         state: alert.state.as_str().to_owned(),
         metric: (alert.metric != crate::alerts::LIVENESS && !alert.metric.is_empty())
             .then(|| alert.metric.clone()),
+        // Unlike `metric`, the liveness alert has a title: "Node not responding" (ADR-196).
+        title: crate::api::alerts::alert_title_of(&alert.metric),
         value: alert.breach.as_ref().map(|b| b.value),
         threshold: alert.breach.as_ref().and_then(|b| b.threshold),
         direction: alert
@@ -234,6 +258,8 @@ pub fn context_for(
             .as_ref()
             .map(|b| b.direction.as_str().to_owned()),
         ifindex: alert.ifindex.map(|i| i.0),
+        // Pure, so it cannot read the inventory: the caller fills it (`AlertFactsSource::port_name`).
+        if_name: None,
         row_name: alert.row_name.clone(),
         at: unix_ms_to_rfc3339(alert.at_unix_ms),
         at_unix_ms: alert.at_unix_ms,
@@ -329,6 +355,14 @@ pub fn preview_sample(sample: PreviewSample) -> (Alert, HashMap<Uuid, NodeFacts>
         },
     );
     (alert, resolved)
+}
+
+/// The port name the preview sample's port carries — what [`AlertFactsSource::port_name`] answers
+/// for a real one. Kept beside [`preview_sample`] because `context_for` is pure and cannot look it
+/// up, so every preview path sets it the way the delivery path does.
+#[must_use]
+pub fn preview_port_name(sample: PreviewSample) -> Option<String> {
+    yagra_common::preview_facts(NotifyEvent::Fire, sample).if_name
 }
 
 /// Every node id one alert's context needs resolved — itself, plus its root cause when rolled up.
@@ -456,8 +490,10 @@ pub(crate) mod tests {
         for sample in PreviewSample::ALL {
             let (alert, resolved) = preview_sample(sample);
             for event in NotifyEvent::ALL {
+                let mut facts = context_for(&alert, event, &resolved);
+                facts.if_name = preview_port_name(sample);
                 assert_eq!(
-                    context_for(&alert, event, &resolved),
+                    facts,
                     yagra_common::preview_facts(event, sample),
                     "the {} preview's alert no longer reproduces its declared facts",
                     sample.as_str()

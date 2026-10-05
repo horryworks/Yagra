@@ -5306,10 +5306,22 @@ export interface components {
          */
         ActiveAlertView: components["schemas"]["Alert"] & {
             acked?: null | components["schemas"]["AckView"];
+            /**
+             * @description The name of the port a per-port alert is about (`ifName`), read from the interface inventory
+             *     when the alert is read rather than stored with it (ADR-196 decision 6). Absent for an alert
+             *     about no port, and for a port whose name is not known.
+             */
+            if_name?: string | null;
             /** @description What this alert is about: a monitored node, or Yagra's own polling coverage for a pool. */
             subject_kind: components["schemas"]["SubjectKind"];
             /** @description The subject's name, for a subject identified by name rather than by id (a poller pool). */
             subject_name?: string | null;
+            /**
+             * @description What the alert is called, in English — `SNMP not responding` rather than `snmp_up`
+             *     (ADR-196). The metric's own name when Yagra has none for it; absent for an alert with no
+             *     metric at all.
+             */
+            title?: string | null;
         };
         /** @description One address claimed equally well by two or more folders. Never resolved automatically. */
         AddressAmbiguity: {
@@ -5462,6 +5474,13 @@ export interface components {
          */
         AlertHistoryView: components["schemas"]["AlertHistoryRow"] & {
             acked?: null | components["schemas"]["AckView"];
+            /**
+             * @description The port's name, as it is called **now** (ADR-196 decision 6) — not necessarily what it was
+             *     called when this row was written. See [`ActiveAlertView::if_name`].
+             */
+            if_name?: string | null;
+            /** @description What the alert is called, in English (ADR-196). See [`ActiveAlertView::title`]. */
+            title?: string | null;
         };
         /** @description One chronic-offender row. */
         AlertNodeCount: {
@@ -10049,6 +10068,17 @@ export interface components {
         MetricKind: "gauge" | "counter";
         /** @description One metric and what it measures, in one sentence. */
         MetricMeaning: {
+            /**
+             * @description What an alert on this metric is called, in English — `SNMP not responding` rather than
+             *     `snmp_up` (ADR-196). Every alert response carries the same words as its `title`.
+             */
+            alert_name: string;
+            /**
+             * @description `true` when the metric is a 0/1 answer, so `alert_name` names the fault itself and the
+             *     threshold and observed value say nothing a reader needs; `false` when the name is a noun
+             *     the condition and value follow.
+             */
+            alert_name_is_flag: boolean;
             /**
              * @description Which of Yagra's own probes emits a `check` metric — `icmp`, `snmp`, `url`, `dns` or
              *     `meraki` — and `null` for every other source (ADR-046 Inc.8). `snmp` here means the SNMP

@@ -2,7 +2,8 @@
 //! The built-in notification a **person** reads: JSM's alert and an email (ADR-194).
 //!
 //! Webhook and PagerDuty are read by programs, so their built-in body is the alert as JSON
-//! (`alerts::builtin_notification`) and stays byte-identical. JSM shows its `description` as plain
+//! (`alerts/notify.rs::json_notification`) and stays byte-identical; since ADR-196 their one-line
+//! summary is this module's [`subject`]. JSM shows its `description` as plain
 //! text and an email body is plain text, so for those two the JSON reached the reader verbatim.
 //! This module writes what they get instead: a title naming the device, a body of one fact per
 //! line, and JSM's `details` (its "extra properties" table).
@@ -17,8 +18,8 @@ use yagra_alert::{Alert, Subject};
 use yagra_common::{AlertFacts, NotifyEvent};
 
 /// The longest value put into one JSM `details` entry. JSM caps the whole map at 8,000 characters;
-/// fourteen keys at this length stay inside it.
-pub(crate) const DETAIL_VALUE_MAX_CHARS: usize = 500;
+/// sixteen keys at this length, with their names, stay inside it.
+pub(crate) const DETAIL_VALUE_MAX_CHARS: usize = 450;
 
 /// Prefix of the test notification's text body (ADR-192 decision 1 / ADR-194 decision 5).
 pub(crate) const TEST_BODY_LINE: &str = "This is a test notification from Yagra.";
@@ -44,11 +45,24 @@ pub(crate) fn fmt_num(v: f64) -> String {
     }
 }
 
-/// `cpu_util_pct`, `if_in_util_pct on ifIndex 3`, `mem_util_pct [I/O]`.
-fn metric_where(metric: &str, facts: &AlertFacts) -> String {
-    let mut out = metric.to_owned();
-    if let Some(i) = facts.ifindex {
-        out.push_str(&format!(" on ifIndex {i}"));
+/// The port as a person finds it: its name with the index beside it, or the index alone when the
+/// name is not known (ADR-196 decision 6).
+fn port(facts: &AlertFacts) -> Option<String> {
+    let i = facts.ifindex?;
+    Some(match facts.if_name.as_deref() {
+        Some(name) => format!("{name} (ifIndex {i})"),
+        None => format!("ifIndex {i}"),
+    })
+}
+
+/// `CPU usage (5 min)`, `Inbound utilization on Gi0/3`, `Memory pool usage [I/O]` — the alert's
+/// name (ADR-196) and where on the device it is.
+fn title_where(title: &str, facts: &AlertFacts) -> String {
+    let mut out = title.to_owned();
+    match (facts.if_name.as_deref(), facts.ifindex) {
+        (Some(name), Some(_)) => out.push_str(&format!(" on {name}")),
+        (None, Some(i)) => out.push_str(&format!(" on ifIndex {i}")),
+        (_, None) => {}
     }
     if let Some(row) = facts.row_name.as_deref() {
         out.push_str(&format!(" [{row}]"));
@@ -56,15 +70,15 @@ fn metric_where(metric: &str, facts: &AlertFacts) -> String {
     out
 }
 
-/// `: cpu_util_pct on ifIndex 3`, or nothing for an up/down alert.
+/// `: SNMP not responding`, `: Inbound utilization on Gi0/3`, or nothing for an alert with no name.
 ///
 /// The numbers stay in the body and the details. Here they would not survive the editor's draft:
 /// a template prints `97.0` where a person writes `97`, and the draft has to render this exactly.
 fn breach_clause(facts: &AlertFacts) -> String {
     facts
-        .metric
+        .title
         .as_deref()
-        .map(|m| format!(": {}", metric_where(m, facts)))
+        .map(|t| format!(": {}", title_where(t, facts)))
         .unwrap_or_default()
 }
 
@@ -120,6 +134,11 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
     if let Some(p) = &facts.profile {
         lines.push(("Profile", p.clone()));
     }
+    if let Some(t) = &facts.title {
+        lines.push(("Alert", t.clone()));
+    }
+    // The raw metric stays: it is what a rule names and what a mail filter written before ADR-196
+    // matched in the title.
     if let Some(m) = &facts.metric {
         let mut v = m.clone();
         if let Some(value) = facts.value {
@@ -130,8 +149,8 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
         }
         lines.push(("Metric", v));
     }
-    if let Some(i) = facts.ifindex {
-        lines.push(("Port", format!("ifIndex {i}")));
+    if let Some(p) = port(facts) {
+        lines.push(("Port", p));
     }
     if let Some(r) = &facts.row_name {
         lines.push(("Row", r.clone()));
@@ -166,15 +185,17 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
 #[must_use]
 pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
     let num = |v: Option<f64>| v.map(fmt_num);
-    let pairs: [(&str, Option<String>); 14] = [
+    let pairs: [(&str, Option<String>); 16] = [
         ("node", Some(facts.subject_name.clone())),
         ("address", facts.node_address.clone()),
         ("folder", facts.group.clone()),
         ("profile", facts.profile.clone()),
+        ("alert", facts.title.clone()),
         ("metric", facts.metric.clone()),
         ("value", num(facts.value)),
         ("threshold", num(facts.threshold)),
         ("direction", facts.direction.clone()),
+        ("port", facts.if_name.clone()),
         ("ifindex", facts.ifindex.map(|i| i.to_string())),
         ("row", facts.row_name.clone()),
         ("severity", Some(facts.severity.clone())),
@@ -204,8 +225,9 @@ pub(crate) const fn node_subject_template(event: NotifyEvent) -> &'static str {
         NotifyEvent::Fire => concat!(
             "{{ node_name }}{% if node_address and node_address != node_name %} ",
             "({{ node_address }}){% endif %} is {{ state }}",
-            "{% if metric %}: {{ metric }}",
-            "{% if ifindex is defined %} on ifIndex {{ ifindex }}{% endif %}",
+            "{% if title %}: {{ title }}",
+            "{% if if_name and ifindex is defined %} on {{ if_name }}",
+            "{% elif ifindex is defined %} on ifIndex {{ ifindex }}{% endif %}",
             "{% if row_name %} [{{ row_name }}]{% endif %}",
             "{% endif %}"
         ),
@@ -243,7 +265,16 @@ mod tests {
         let facts = context_for(&alert, NotifyEvent::Fire, &resolved);
         let s = subject(&alert, &facts);
         assert!(s.starts_with(&format!("{} (", facts.node_name)), "{s}");
-        assert!(s.contains(facts.metric.as_deref().unwrap()), "{s}");
+        // The alert's name and the port's, never the raw metric (ADR-196).
+        assert_eq!(
+            s,
+            "core-sw-01 (192.0.2.11) is critical: Inbound utilization on ifIndex 7"
+        );
+        assert!(!s.contains(facts.metric.as_deref().unwrap()), "{s}");
+        let mut named = facts.clone();
+        named.if_name = Some("Gi0/7".to_owned());
+        assert!(subject(&alert, &named).ends_with("Inbound utilization on Gi0/7"));
+        assert!(body(&alert, &named).contains("Port:      Gi0/7 (ifIndex 7)"));
         assert!(
             !s.contains(&facts.node_id),
             "the title names, never the uuid: {s}"
@@ -255,7 +286,10 @@ mod tests {
         let (alert, _) = preview_sample(PreviewSample::Liveness);
         let facts = context_for(&alert, NotifyEvent::Fire, &HashMap::new());
         let s = subject(&alert, &facts);
-        assert_eq!(s, format!("{} is {}", facts.node_id, facts.state));
+        assert_eq!(
+            s,
+            format!("{} is {}: Node not responding", facts.node_id, facts.state)
+        );
         let b = body(&alert, &facts);
         assert!(!b.contains("Folder:") && !b.contains("Profile:"), "{b}");
     }

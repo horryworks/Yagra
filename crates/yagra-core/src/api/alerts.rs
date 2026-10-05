@@ -83,6 +83,16 @@ pub(crate) struct ActiveAlertView {
     /// The subject's name, for a subject identified by name rather than by id (a poller pool).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject_name: Option<String>,
+    /// What the alert is called, in English — `SNMP not responding` rather than `snmp_up`
+    /// (ADR-196). The metric's own name when Yagra has none for it; absent for an alert with no
+    /// metric at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The name of the port a per-port alert is about (`ifName`), read from the interface inventory
+    /// when the alert is read rather than stored with it (ADR-196 decision 6). Absent for an alert
+    /// about no port, and for a port whose name is not known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acked: Option<AckView>,
 }
@@ -93,8 +103,57 @@ pub(crate) struct ActiveAlertView {
 pub(crate) struct AlertHistoryView {
     #[serde(flatten)]
     pub row: AlertHistoryRow,
+    /// What the alert is called, in English (ADR-196). See [`ActiveAlertView::title`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The port's name, as it is called **now** (ADR-196 decision 6) — not necessarily what it was
+    /// called when this row was written. See [`ActiveAlertView::if_name`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acked: Option<AckView>,
+}
+
+/// An alert's English title, or `None` for an alert that recorded no metric (ADR-196).
+pub(crate) fn alert_title_of(metric: &str) -> Option<String> {
+    (!metric.is_empty()).then(|| crate::metric_meaning::alert_title(metric))
+}
+
+/// The names of the ports a page of alerts is about, keyed by `(node, ifindex)` (ADR-196
+/// decision 6).
+///
+/// One query for the nodes that have a per-port alert on the page, and none when no alert is about
+/// a port — the ordinary case. A port name is decorative, so a failed read (or skeleton mode, with no
+/// inventory to read) answers an empty map and the alerts are served with their ifIndex alone.
+pub(crate) async fn port_names(
+    st: &ApiState,
+    ports: impl IntoIterator<Item = (Uuid, u32)>,
+) -> HashMap<(Uuid, u32), String> {
+    let wanted: std::collections::BTreeSet<(Uuid, u32)> = ports.into_iter().collect();
+    let Some(admin) = st.admin.as_ref() else {
+        return HashMap::new();
+    };
+    if wanted.is_empty() {
+        return HashMap::new();
+    }
+    let mut nodes: Vec<Uuid> = wanted.iter().map(|(n, _)| *n).collect();
+    nodes.dedup();
+    let idents = admin
+        .repo
+        .interface_idents_for(&nodes)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to read port names for alerts; serving ifIndex only");
+            HashMap::new()
+        });
+    idents
+        .into_iter()
+        .filter_map(|((node, ifindex), ident)| {
+            let key = (node, u32::try_from(ifindex).ok()?);
+            let name = ident.if_name.filter(|n| !n.trim().is_empty())?;
+            wanted.contains(&key).then_some((key, name))
+        })
+        .collect()
 }
 
 /// The ack map key for one alert identity.
@@ -121,6 +180,8 @@ fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<A
             ActiveAlertView {
                 subject_kind: alert.subject.kind(),
                 subject_name: alert.subject.name().map(str::to_owned),
+                title: alert_title_of(&alert.metric),
+                if_name: None,
                 alert,
                 acked,
             }
@@ -138,7 +199,12 @@ fn decorate_history(
             let acked = row
                 .subject()
                 .and_then(|s| acks.get(&ack_key(&s, row.check, row.severity)).cloned());
-            AlertHistoryView { row, acked }
+            AlertHistoryView {
+                title: row.metric.as_deref().and_then(alert_title_of),
+                if_name: None,
+                row,
+                acked,
+            }
         })
         .collect()
 }
@@ -223,8 +289,20 @@ async fn list_alerts(
     // Filter before decorating: an out-of-scope alert must not reach the ack join either, or the
     // response would be shorter but the work — and the ack lookups — would still name those nodes.
     let mut views = decorate_alerts(visible_active_alerts(&st, &scope), &acks);
+    let ports = port_names(
+        &st,
+        views
+            .iter()
+            .filter_map(|v| Some((v.alert.node()?.as_uuid(), v.alert.ifindex?.0))),
+    )
+    .await;
     for view in &mut views {
         fill_subject_name(&st, &mut view.subject_name, &view.alert.subject);
+        view.if_name = view
+            .alert
+            .node()
+            .zip(view.alert.ifindex)
+            .and_then(|(n, i)| ports.get(&(n.as_uuid(), i.0)).cloned());
     }
     Json(views)
 }
@@ -345,8 +423,21 @@ async fn list_alert_history(
     .await?;
     let acks = ack_map(&st).await;
     let mut views = decorate_history(rows, &acks);
+    let ports = port_names(
+        &st,
+        views
+            .iter()
+            .filter_map(|v| Some((v.row.subject()?.node()?.as_uuid(), v.row.ifindex?))),
+    )
+    .await;
     // As above: a history row of a Meraki organization stores an id and no name.
     for view in &mut views {
+        view.if_name = view
+            .row
+            .subject()
+            .and_then(|s| s.node())
+            .zip(view.row.ifindex)
+            .and_then(|(n, i)| ports.get(&(n.as_uuid(), i)).cloned());
         if view.row.subject_name.is_none() {
             view.row.subject_name = view
                 .row

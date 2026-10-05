@@ -9,6 +9,7 @@
 import i18n from '../i18n';
 import { intlLocale } from './locale';
 import metricUnits from '../api/metricUnits.json';
+import { alertTitle } from './alertName';
 import type { Tone } from '../components/ui/Badge';
 import type { MetricPoint, NodeState, Severity } from '../types/api';
 
@@ -595,26 +596,34 @@ export function formatCount(n: number, locale: string = intlLocale(i18n.language
   return Math.round(n).toLocaleString(locale);
 }
 
-/** The liveness check sentinel (yagra-core `LIVENESS`), shown to humans as "Reachability". */
+/** The liveness check sentinel (yagra-core `LIVENESS`). A rule on it reads as "Reachability"; an
+ *  alert on it reads as "Node not responding" (ADR-196). */
 export const LIVENESS_METRIC = '__liveness__';
 
-/** What an alert-history row fired on, split into parts so the cell can style the metric (mono)
- *  apart from the condition. Pure so it's unit-testable without the DOM:
+/** What an alert-history row fired on, split into parts so the cell can style the name apart from
+ *  the condition. Pure so it's unit-testable without the DOM:
  *   - `none`     → no metric captured (legacy row) ⇒ render "—"
- *   - `liveness` → the reachability up/down check ⇒ render "Reachability"
- *   - `metric`   → a threshold metric, with an optional crossed condition + observed value. */
+ *   - `liveness` → the reachability up/down check ⇒ render "Node not responding"
+ *   - `metric`   → a threshold metric, with its name (ADR-196), an optional crossed condition and
+ *                  observed value. A 0/1 metric's name states the fault, so it carries neither. */
 export type AlertWhat =
   | { kind: 'none' }
   | { kind: 'liveness' }
   | {
       kind: 'metric';
       metric: string;
+      /** What the alert is called in the operator's language, or `null` for a metric Yagra has no
+       *  name for — that one is shown by its raw spelling, as before (ADR-196). */
+      name: string | null;
       condition: string | null;
       observed: string | null;
       /** SNMP ifIndex when the alert is about one port rather than the node (ADR-076).
        *  A number, not a name: the alert carries the index, and the name is resolved by the
        *  surface that has the node's interface roster. `null` is the ordinary node-level case. */
       ifindex: number | null;
+      /** The port's name (`ifName`) when the server could resolve it from the interface inventory
+       *  (ADR-196 decision 6). Read at the time the alert is read, not when it fired. */
+      ifName: string | null;
       /** The vendor-table row — a memory pool, a CPU, a sensor — when the alert is about one row
        *  (ADR-143). `row` is its key and `rowName` the name it had when the alert fired; a row with no
        *  name yet has only the key. Never set together with `ifindex`. */
@@ -628,11 +637,16 @@ export function alertWhat(row: {
   threshold_value?: number | null;
   observed_value?: number | null;
   ifindex?: number | null;
+  if_name?: string | null;
   row?: number | null;
   row_name?: string | null;
 }): AlertWhat {
   if (!row.metric) return { kind: 'none' };
   if (row.metric === LIVENESS_METRIC) return { kind: 'liveness' };
+  const title = alertTitle(row.metric);
+  // A 0/1 metric's name already says what is wrong ("SNMP not responding"); "below 0.5 (was 0)"
+  // beside it is the part an operator had to decode, so a flag carries no condition or value.
+  const flag = title?.flag ?? false;
   // Both numbers go through `formatSi`, and both used to be interpolated raw. A metric sample is a
   // double: the live PoC alert this was found on read `(was 83.86047908238002)`, seventeen
   // significant digits of a memory percentage, which on a phone crowds the metric name and the
@@ -645,7 +659,7 @@ export function alertWhat(row: {
   // ("above 80"), Japanese puts it last ("80", then "above"), so the two locales cannot share one
   // concatenation.
   const condition =
-    row.direction && row.threshold_value != null
+    !flag && row.direction && row.threshold_value != null
       ? i18n.t('format:alertCondition', {
           direction: i18n.t(`alertsConfig:thresholds.direction.${row.direction}`, {
             defaultValue: row.direction,
@@ -654,15 +668,17 @@ export function alertWhat(row: {
         })
       : null;
   const observed =
-    row.observed_value != null
+    !flag && row.observed_value != null
       ? i18n.t('format:alertObservedWas', { value: formatSi(row.observed_value) })
       : null;
   return {
     kind: 'metric',
     metric: row.metric,
+    name: title?.text ?? null,
     condition,
     observed,
     ifindex: row.ifindex ?? null,
+    ifName: row.if_name || null,
     row: row.row ?? null,
     rowName: row.row_name ?? null,
   };
@@ -676,6 +692,7 @@ export function alertWhatOf(alert: {
   metric?: string | null;
   breach?: { value?: number; threshold?: number | null; direction?: string } | null;
   ifindex?: number | null;
+  if_name?: string | null;
   row?: number | null;
   row_name?: string | null;
 }): AlertWhat {
@@ -685,9 +702,59 @@ export function alertWhatOf(alert: {
     threshold_value: alert.breach?.threshold,
     observed_value: alert.breach?.value,
     ifindex: alert.ifindex,
+    if_name: alert.if_name,
     row: alert.row,
     row_name: alert.row_name,
   });
+}
+
+/** One piece of "what fired", and how it is styled: `name` is the alert's name in plain text,
+ *  `mono` a token off the device (a port, a row key), `muted` the condition and the value, and
+ *  `metric` the raw metric name kept small at the end so the line can still be matched to a rule. */
+export interface AlertWhatPart {
+  text: string;
+  style: 'name' | 'mono' | 'muted' | 'metric';
+}
+
+/** The pieces `AlertWhatText` draws, in order, or `[]` for a row with nothing captured (ADR-196).
+ *
+ *  The name leads; the port and the row follow it because that is what the pair means ("this,
+ *  on this port"); the condition and the value come next; the raw metric closes the line. A metric
+ *  with no name leads with its raw spelling instead and is not repeated. */
+export function alertWhatParts(what: AlertWhat): AlertWhatPart[] {
+  if (what.kind === 'none') return [];
+  if (what.kind === 'liveness') {
+    return [{ text: i18n.t(`alertNames:${LIVENESS_METRIC}`), style: 'name' }];
+  }
+  const parts: AlertWhatPart[] = [
+    what.name ? { text: what.name, style: 'name' } : { text: what.metric, style: 'mono' },
+  ];
+  const port = alertPortPart(what);
+  if (port) parts.push({ text: port.text, style: 'mono' });
+  const rowPart = alertRowPart(what);
+  if (rowPart) parts.push({ text: rowPart.text, style: rowPart.mono ? 'mono' : 'muted' });
+  if (what.condition) parts.push({ text: what.condition, style: 'muted' });
+  if (what.observed) parts.push({ text: `(${what.observed})`, style: 'muted' });
+  if (what.name) parts.push({ text: what.metric, style: 'metric' });
+  return parts;
+}
+
+/** The port part of "what fired" (ADR-076), or `null` for an alert about no port.
+ *
+ *  The port's name when the server resolved one (ADR-196 decision 6), since `Gi0/1` is what an
+ *  operator can find on the device; the ifIndex otherwise, which is all the alert itself carries.
+ *  Both in mono: an interface name is a token off the device, not a word. */
+export function alertPortPart(what: {
+  ifindex: number | null;
+  ifName: string | null;
+}): { text: string; mono: boolean } | null {
+  if (what.ifName) {
+    return { text: i18n.t('format:alertOnPortName', { name: what.ifName }), mono: true };
+  }
+  if (what.ifindex != null) {
+    return { text: i18n.t('format:alertOnPort', { ifindex: what.ifindex }), mono: true };
+  }
+  return null;
 }
 
 /** The row part of "what fired" (ADR-143), or `null` for an alert about no row.

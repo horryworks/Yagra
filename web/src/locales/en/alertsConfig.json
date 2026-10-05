@@ -222,6 +222,10 @@
           "label": "Metric",
           "desc": "The metric that crossed its threshold. Absent for up/down alerts"
         },
+        "title": {
+          "label": "Alert name",
+          "desc": "What the alert is called, such as SNMP not responding"
+        },
         "value": {
           "label": "Measured value",
           "desc": "The value that crossed the threshold"
@@ -237,6 +241,10 @@
         "ifindex": {
           "label": "Port ifIndex",
           "desc": "Only for a metric collected per port"
+        },
+        "if_name": {
+          "label": "Port name",
+          "desc": "Only for a metric collected per port, when the port's name is known"
         },
         "row_name": {
           "label": "Row name",

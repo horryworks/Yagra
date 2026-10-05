@@ -745,7 +745,8 @@ pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -
     let (mut alert, resolved) =
         crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
     alert.check = CheckId::from(Uuid::new_v4());
-    let facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+    let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+    facts.if_name = crate::notify_facts::preview_port_name(yagra_common::PreviewSample::Threshold);
     let builtin = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&facts));
     let builtin = Notification {
         payload: mark_as_test(kind, &builtin.payload),
@@ -1372,6 +1373,10 @@ impl Notifier {
             None => HashMap::new(),
         };
         let mut facts = context_for(alert, event, &resolved);
+        // `context_for` is pure, so the port's name is asked for here (ADR-196 decision 6).
+        if let (Some(node), Some(ifindex), Some(src)) = (alert.node(), alert.ifindex, &source) {
+            facts.if_name = src.port_name(node.as_uuid(), ifindex.0).await;
+        }
         // A Meraki organization is identified by id and carries no name, so `context_for` — which
         // is pure — can only call it by its flat form. The page that wakes someone should say
         // which organization (ADR-164 decision 18).
@@ -1423,7 +1428,7 @@ impl Notifier {
                     return;
                 }
                 let notification = with_subject_facts(
-                    builtin_notification(&alert, NotifyEvent::Fire),
+                    json_notification(&alert, NotifyEvent::Fire, facts.as_ref()),
                     facts.as_ref(),
                 );
                 let text = (!routing.text.is_empty())
@@ -1513,7 +1518,7 @@ impl Notifier {
         message: &'static str,
     ) {
         let key = alert.dedup_key();
-        let notification = with_subject_facts(builtin_notification(alert, event), facts);
+        let notification = with_subject_facts(json_notification(alert, event, facts), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
         let matched = routing.matched(alert.severity);
         let done = Delivered {
@@ -1663,7 +1668,7 @@ pub(crate) fn builtin_for_kind(
     facts: Option<&AlertFacts>,
 ) -> Notification {
     if body_must_be_json(kind) {
-        with_subject_facts(builtin_notification(alert, event), facts)
+        with_subject_facts(json_notification(alert, event, facts), facts)
     } else {
         text_notification(alert, event, facts)
     }
@@ -1707,12 +1712,35 @@ pub(crate) const fn builtin_subject_template_for(
     }
 }
 
+/// The built-in notification with no facts resolved — a node is named by its id. See
+/// [`json_notification`]. Test vocabulary: every production path passes the facts it has.
+#[cfg(test)]
 pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notification {
+    json_notification(alert, event, None)
+}
+
+/// The built-in notification a program reads: the whole alert as JSON, and a one-line summary.
+///
+/// **The payload is unchanged by ADR-196; the summary is not.** A node's summary used to be
+/// `node <uuid> is critical`, which is what PagerDuty showed the person it paged. It is now the
+/// same title JSM and email carry (`notify_text::subject`): the node's name when the facts were
+/// resolved, its id when they were not, and the alert's name either way.
+fn json_notification(
+    alert: &Alert,
+    event: NotifyEvent,
+    facts: Option<&AlertFacts>,
+) -> Notification {
     let summary = match (&alert.subject, event) {
-        (Subject::Node(node), NotifyEvent::Fire) => format!("node {node} is {}", alert.state),
-        (Subject::Node(node), NotifyEvent::Resolve) => format!("resolved: node {node} recovered"),
-        (Subject::Node(node), NotifyEvent::Suppress) => {
-            format!("rolled up: node {node} suppressed under upstream")
+        (Subject::Node(_), _) => {
+            let fallback;
+            let facts = match facts {
+                Some(f) => f,
+                None => {
+                    fallback = context_for(alert, event, &HashMap::new());
+                    &fallback
+                }
+            };
+            crate::notify_text::subject(alert, facts)
         }
         (Subject::Pool(pool), NotifyEvent::Fire) => {
             format!("poller pool \"{pool}\" has no live poller — its nodes are not being monitored")
@@ -1756,13 +1784,12 @@ pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notific
 /// Node alerts only: a poller pool's and a Meraki organization's built-in wording are separate
 /// sentences, and they keep being sent as long as the operator saves the draft untouched — the
 /// editor stores no template in that case.
+///
+/// Since ADR-196 it is the same draft JSM and email open on, because the built-in summary is the
+/// same sentence.
 #[must_use]
 pub(crate) const fn builtin_node_subject_template(event: NotifyEvent) -> &'static str {
-    match event {
-        NotifyEvent::Fire => "node {{ node_id }} is {{ state }}",
-        NotifyEvent::Resolve => "resolved: node {{ node_id }} recovered",
-        NotifyEvent::Suppress => "rolled up: node {{ node_id }} suppressed under upstream",
-    }
+    crate::notify_text::node_subject_template(event)
 }
 
 /// Counter for a template that could not be used and fell back to the built-in format (ADR-039).
@@ -1854,7 +1881,8 @@ mod template_tests {
                 let (alert, resolved) = crate::notify_facts::preview_sample(sample);
                 for resolved in [resolved, HashMap::new()] {
                     for event in NotifyEvent::ALL {
-                        let facts = context_for(&alert, event, &resolved);
+                        let mut facts = context_for(&alert, event, &resolved);
+                        facts.if_name = crate::notify_facts::preview_port_name(sample);
                         let template = ChannelTemplate {
                             subject: Some(builtin_subject_template_for(kind, event).to_owned()),
                             body: None,
@@ -1938,19 +1966,23 @@ mod template_tests {
     /// The exact text every deployment receives today. **A change here is a change to every
     /// operator's inbox**, so it is pinned rather than described: the whole N-1 story of ADR-039
     /// is that a channel with no template sends what it sent before, byte for byte.
+    ///
+    /// ADR-196 changed it once, deliberately: the summary names the alert ("Ping response time")
+    /// instead of saying only the state, and drops the `node ` prefix to read like the JSM and
+    /// email title it now shares. The payload did not change.
     #[test]
     fn the_built_in_wording_is_unchanged_for_every_lifecycle_point() {
         let node = NodeId::new();
         let alert = threshold_alert(node);
         for (event, want) in [
-            (NotifyEvent::Fire, format!("node {node} is critical")),
             (
-                NotifyEvent::Resolve,
-                format!("resolved: node {node} recovered"),
+                NotifyEvent::Fire,
+                format!("{node} is critical: Ping response time"),
             ),
+            (NotifyEvent::Resolve, format!("resolved: {node} recovered")),
             (
                 NotifyEvent::Suppress,
-                format!("rolled up: node {node} suppressed under upstream"),
+                format!("rolled up: {node} suppressed under upstream"),
             ),
         ] {
             let n = builtin_notification(&alert, event);
@@ -2918,9 +2950,10 @@ mod delivery_tests {
             .await;
 
         let first = |l: &Log| l.lock().unwrap().0[0].1.clone();
-        assert_eq!(first(&json_log), format!("node {node} is critical"));
-        // No facts source is wired, so the text names the node by its id.
-        let want = format!("{node} is critical: icmp_rtt_ms");
+        // No facts source is wired, so both name the node by its id — and, since ADR-196, the
+        // program's summary and the person's title are the same sentence.
+        let want = format!("{node} is critical: Ping response time");
+        assert_eq!(first(&json_log), want);
         assert_eq!(first(&text_log), want);
         assert_eq!(first(&broken_log), want, "fell back to the text built-in");
     }

@@ -156,6 +156,11 @@ pub struct AlertDto {
     pub state: String,
     /// Metric the check measured (`icmp_rtt_ms`, or the liveness sentinel).
     pub metric: String,
+    /// What the alert is called, in plain English — `SNMP not responding` for `snmp_up`, `Node not
+    /// responding` for the liveness sentinel (ADR-196). Lead with this when telling a person about
+    /// the alert; `metric` is what to pass back to other tools. Falls back to `metric` itself when
+    /// Yagra has no name for it.
+    pub title: Option<String>,
     /// Fire time as an RFC 3339 UTC timestamp.
     pub fired_at: String,
     /// Upstream root-cause node id when this alert was attributed by dependency analysis.
@@ -169,6 +174,9 @@ pub struct AlertDto {
     /// alongside the port's name, alias and speed. Two alerts on one node with different values
     /// here are about different ports and are separate incidents, each with its own `check_id`.
     pub ifindex: Option<u32>,
+    /// That port's name (`ifName`, e.g. `GigabitEthernet0/1`) when the interface inventory knows
+    /// it; `null` for an alert about no port or a port whose name is not known (ADR-196).
+    pub if_name: Option<String>,
     /// The row of a vendor table this is about — a memory pool, a CPU, a sensor — for a metric
     /// collected once per table row, as the row key its samples carry. `null` for an alert about the
     /// node as a whole or about a port. Two alerts on one node with different values here are
@@ -198,9 +206,12 @@ impl AlertDto {
             severity: alert.severity.as_str().to_owned(),
             state: alert.state.as_str().to_owned(),
             metric: alert.metric.clone(),
+            title: crate::api::alerts::alert_title_of(&alert.metric),
             fired_at: unix_ms_to_rfc3339(alert.at_unix_ms),
             root_cause: alert.root_cause.map(|r| r.0),
             ifindex: alert.ifindex.map(|i| i.0),
+            // Filled by the caller, which can read the interface inventory; this builder cannot.
+            if_name: None,
             row: alert.row,
             row_name: alert.row_name.clone(),
             flapping: alert.flapping,
@@ -227,6 +238,8 @@ pub struct AlertHistoryDto {
     pub severity: String,
     pub state: String,
     pub metric: Option<String>,
+    /// What the alert is called, in plain English (ADR-196) — see `get_active_alerts`' `title`.
+    pub title: Option<String>,
     /// Whether this row is the resolution (clear) of a prior fire.
     pub resolved: bool,
     /// Event time as an RFC 3339 UTC timestamp.
@@ -247,6 +260,9 @@ pub struct AlertHistoryDto {
     /// Also `null` on every row recorded before Yagra could alert per port, so an old row is not
     /// evidence that the alert was node-wide.
     pub ifindex: Option<u32>,
+    /// That port's name as it is called **now** (ADR-196) — read from the interface inventory, so
+    /// not necessarily what it was called when this row was written. `null` when unknown.
+    pub if_name: Option<String>,
     /// The row of a vendor table this was about — a memory pool, a CPU, a sensor — as its row key.
     /// `null` for an alert about the node as a whole or about a port, and on every row recorded
     /// before a table row could alert on its own.
@@ -275,12 +291,17 @@ impl AlertHistoryDto {
             severity: row.severity.as_str().to_owned(),
             state: row.state.as_str().to_owned(),
             metric: row.metric.clone(),
+            title: row
+                .metric
+                .as_deref()
+                .and_then(crate::api::alerts::alert_title_of),
             resolved: row.resolved,
             at: unix_ms_to_rfc3339(row.at_unix_ms),
             observed_value: row.observed_value,
             threshold_value: row.threshold_value,
             direction: row.direction.map(|d| d.as_str().to_owned()),
             ifindex: row.ifindex,
+            if_name: None,
             row: row.row,
             row_name: row.row_name.clone(),
             // Without these the tool advertised `before` while returning nothing a caller could
@@ -1226,10 +1247,12 @@ mod tests {
             severity: "critical".to_owned(),
             state: "unreachable".to_owned(),
             metric: "icmp_rtt_ms".to_owned(),
+            title: Some("Ping response time".to_owned()),
             fired_at: unix_ms_to_rfc3339(0),
             root_cause: None,
             // Populated, not `None`: the canary only scans the fields an instance actually fills.
             ifindex: Some(7),
+            if_name: Some("Gi0/7".to_owned()),
             row: None,
             row_name: None,
             flapping: false,

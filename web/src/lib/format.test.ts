@@ -6,8 +6,10 @@ import metricUnits from '../api/metricUnits.json';
 import {
   agoSec,
   alertRowPart,
+  alertPortPart,
   alertWhat,
   alertWhatOf,
+  alertWhatParts,
   deriveMem,
   formatAsn,
   formatBps,
@@ -98,9 +100,11 @@ describe('format', () => {
     ).toEqual({
       kind: 'metric',
       metric: 'icmp_rtt_ms',
+      name: 'Ping response time',
       condition: 'above 100',
       observed: 'was 450',
       ifindex: null,
+      ifName: null,
       row: null,
       rowName: null,
     });
@@ -134,9 +138,11 @@ describe('format', () => {
     expect(alertWhat({ metric: 'http_up' })).toEqual({
       kind: 'metric',
       metric: 'http_up',
+      name: 'URL not responding as expected',
       condition: null,
       observed: null,
       ifindex: null,
+      ifName: null,
       row: null,
       rowName: null,
     });
@@ -154,9 +160,11 @@ describe('format', () => {
     ).toEqual({
       kind: 'metric',
       metric: 'if_in_util_pct',
+      name: 'Inbound utilization',
       condition: 'above 90',
       observed: 'was 94.2',
       ifindex: 7,
+      ifName: null,
       row: null,
       rowName: null,
     });
@@ -199,6 +207,73 @@ describe('format', () => {
         row_name: 'I/O',
       }),
     );
+  });
+
+  // ADR-196: the name an operator reads instead of the metric, and what a 0/1 name leaves off.
+  it('names an alert, and a 0/1 alert carries no condition or value (alertWhat, ADR-196)', () => {
+    // The case the ADR was opened for: "snmp_up below 0.5 (was 0)" on a device that still pings.
+    const snmp = alertWhat({
+      metric: 'snmp_up',
+      direction: 'below',
+      threshold_value: 0.5,
+      observed_value: 0,
+    });
+    expect(snmp).toMatchObject({
+      kind: 'metric',
+      name: 'SNMP not responding',
+      condition: null,
+      observed: null,
+    });
+    expect(alertWhatParts(snmp).map((p) => p.text)).toEqual(['SNMP not responding', 'snmp_up']);
+
+    // A numeric metric keeps its condition and value after the name, and the raw metric closes
+    // the line so it can still be matched to the rule that fired.
+    const cpu = alertWhat({
+      metric: 'cisco_cpu_5min',
+      direction: 'above',
+      threshold_value: 80,
+      observed_value: 92,
+    });
+    expect(alertWhatParts(cpu)).toEqual([
+      { text: 'CPU usage (5 min)', style: 'name' },
+      { text: 'above 80', style: 'muted' },
+      { text: '(was 92)', style: 'muted' },
+      { text: 'cisco_cpu_5min', style: 'metric' },
+    ]);
+
+    // A metric Yagra has no name for leads with its raw spelling and is not repeated.
+    const unknown = alertWhat({ metric: 'my_custom_gauge', direction: 'above', threshold_value: 1 });
+    expect(unknown).toMatchObject({ name: null, condition: 'above 1' });
+    expect(alertWhatParts(unknown).map((p) => p.text)).toEqual(['my_custom_gauge', 'above 1']);
+
+    // An event rule's alert is named after the rule.
+    expect(alertWhat({ metric: 'event:BGP flap' })).toMatchObject({ name: 'Event rule: BGP flap' });
+
+    // Liveness and an empty row.
+    expect(alertWhatParts(alertWhat({ metric: '__liveness__' }))).toEqual([
+      { text: 'Node not responding', style: 'name' },
+    ]);
+    expect(alertWhatParts(alertWhat({}))).toEqual([]);
+  });
+
+  // ADR-196 decision 6: the port by its name when the server resolved one.
+  it('names a port when it can, numbers it when it cannot (alertPortPart)', () => {
+    const named = alertWhat({ metric: 'if_in_util_pct', ifindex: 12, if_name: 'Gi0/12' });
+    expect(named).toMatchObject({ ifindex: 12, ifName: 'Gi0/12' });
+    expect(alertPortPart(named as { ifindex: number; ifName: string })).toEqual({
+      text: 'on Gi0/12',
+      mono: true,
+    });
+    expect(alertPortPart({ ifindex: 0, ifName: null })?.text).toBe('port 0');
+    // An empty name from the server is no name.
+    expect(alertWhat({ metric: 'if_in_util_pct', ifindex: 3, if_name: '' })).toMatchObject({
+      ifName: null,
+    });
+    expect(alertPortPart({ ifindex: null, ifName: null })).toBeNull();
+    // The live shape passes the name through too.
+    expect(alertWhatOf({ metric: 'if_out_util_pct', ifindex: 4, if_name: 'Te1/0/1' })).toMatchObject({
+      ifName: 'Te1/0/1',
+    });
   });
 
   // ADR-143 Inc.2: the name-or-key decision used to sit in AlertWhatText.tsx, where no test runs.
@@ -258,9 +333,11 @@ describe('format', () => {
     ).toEqual({
       kind: 'metric',
       metric: 'cpu_pct',
+      name: null,
       condition: null,
       observed: 'was 91',
       ifindex: null,
+      ifName: null,
       row: null,
       rowName: null,
     });

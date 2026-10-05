@@ -80,6 +80,13 @@ pub(crate) struct MetricMeaning {
     /// `kilobytes` are both strings, and appending one to a number is correct while appending the
     /// other is not.
     pub unit_kind: Option<String>,
+    /// What an alert on this metric is called, in English — `SNMP not responding` rather than
+    /// `snmp_up` (ADR-196). Every alert response carries the same words as its `title`.
+    pub alert_name: String,
+    /// `true` when the metric is a 0/1 answer, so `alert_name` names the fault itself and the
+    /// threshold and observed value say nothing a reader needs; `false` when the name is a noun
+    /// the condition and value follow.
+    pub alert_name_is_flag: bool,
 }
 
 #[utoipa::path(
@@ -111,13 +118,15 @@ async fn list_metric_meanings(_guard: RequireView) -> Json<Vec<MetricMeaning>> {
 pub(crate) fn metric_meanings() -> Vec<MetricMeaning> {
     crate::metric_meaning::METRIC_MEANINGS
         .iter()
-        .map(|(metric, meaning, unit)| MetricMeaning {
+        .map(|(metric, meaning, unit, name)| MetricMeaning {
             metric: (*metric).to_owned(),
             meaning: (*meaning).to_owned(),
             source: crate::metric_meaning::metric_source(metric).to_owned(),
             family: crate::metric_meaning::check_family(metric).map(|f| f.as_str().to_owned()),
             unit: unit.stored().map(str::to_owned),
             unit_kind: unit.kind().map(str::to_owned),
+            alert_name: name.text().to_owned(),
+            alert_name_is_flag: name.is_flag(),
         })
         .collect()
 }

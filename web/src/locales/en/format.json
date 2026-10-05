@@ -48,6 +48,8 @@
   "alertCondition": "{{direction}} {{value}}",
   "alertObservedWas": "was {{value}}",
   "alertOnPort": "port {{ifindex}}",
+  "alertOnPortName": "on {{name}}",
+  "alertEventRule": "Event rule: {{name}}",
   "alertOnRow": "on {{name}}",
   "alertOnRowKey": "row {{row}}",
   "scalar": {

@@ -849,7 +849,8 @@ async fn preview_notification_template(
     // The same sample alert, the same context builder and the same built-in wording the delivery
     // path uses — a preview that agreed only with a second copy of the rules would be worthless.
     let (alert, resolved) = crate::notify_facts::preview_sample(req.sample);
-    let facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
+    let mut facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
+    facts.if_name = crate::notify_facts::preview_port_name(req.sample);
     let builtin = crate::alerts::builtin_for_kind(req.kind, &alert, req.event, Some(&facts));
     let template = TemplateBody {
         subject: req.subject,
@@ -1330,7 +1331,7 @@ at 2026-08-04T09:41:07+00:00"
         );
         assert_eq!(
             out["subject"],
-            "core-sw-01 (192.0.2.11) is critical: if_in_util_pct on ifIndex 7"
+            "core-sw-01 (192.0.2.11) is critical: Inbound utilization on GigabitEthernet0/7"
         );
     }
 
@@ -1379,7 +1380,9 @@ at 2026-08-04T09:41:07+00:00"
             .map(|e| e["event"].as_str().expect("event"))
             .collect();
         assert_eq!(events, ["fire", "resolve", "suppress"]);
-        assert_eq!(out[0]["subject"], "node {{ node_id }} is {{ state }}");
+        // Since ADR-196 the webhook and PagerDuty summary is the same sentence JSM and email use.
+        let fire = out[0]["subject"].as_str().expect("subject");
+        assert!(fire.starts_with("{{ node_name }}"), "{fire}");
 
         // JSM and email name the node in their built-in title, so their draft does too (ADR-194).
         let (status, out) = admin_json(

@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **A notification's title names the alert instead of the metric, and PagerDuty's summary now names it too.** A JSM or email title that read `core-sw-01 (192.0.2.11) is critical: snmp_up` now reads `core-sw-01 (192.0.2.11) is critical: SNMP not responding`; an up/down alert gains `: Node not responding`; and a per-port alert names the port when its name is known (`… : Inbound utilization on GigabitEthernet0/7`, otherwise `on ifIndex 7` as before). Webhook and PagerDuty with no template used to send the summary `node <uuid> is critical`; they now send the same title — the node's name when a PagerDuty, JSM or email channel or a template makes Yagra look it up, its id otherwise (`<uuid> is critical: Ping response time`). The webhook and PagerDuty payload — the alert as JSON — is unchanged, and so are PagerDuty's `dedup_key` and JSM's alias, so open incidents still close. A JSM rule or mail filter that matched the metric name in the title, or `node ` at the start of a summary, has to change; the raw metric is still on the body's `Metric:` line and in JSM's `metric` property. (ADR-196)
+
+### Improvements
+
+- **Every alert has a name a person can read.** Active alerts, Alerts ▸ History, the dashboard alert widgets, a node's Overview and the RCA evidence show `SNMP not responding` rather than `snmp_up`, and `CPU usage (5 min) above 80 (was 92)` rather than `cisco_cpu_5min above 80 (was 92)`; the raw metric stays at the end of the line so it can be matched to its rule. All 154 metrics Yagra knows have a name, in English and Japanese. A 0/1 check (SNMP, a URL, a DNS name, a Meraki device or uplink, an AP) is named by its fault and no longer shows `below 0.5 (was 0)`. An up/down alert reads `Node not responding` instead of `Reachability`. (ADR-196)
+- **A per-port alert names its port.** The alert lists, `GET /api/v1/alerts`, `GET /api/v1/alerts/history` and the MCP alert tools carry the port's `if_name` beside its `ifindex`, read from the interface inventory when the alert is read — so a history row shows the port's current name. (ADR-196)
+- **Alert responses carry a `title`, and the template editor offers `{{ title }}` and `{{ if_name }}`.** `title` is the alert's English name on `GET /api/v1/alerts`, `GET /api/v1/alerts/history`, and MCP's `get_active_alerts`, `get_alert_history` and `get_node_status`; `GET /api/v1/metric-meanings` gains `alert_name` and `alert_name_is_flag`. JSM's extra properties gain `alert` and `port`, and each property is now cut at 450 characters rather than 500 to keep the sixteen within JSM's limit. The email and JSM body gains an `Alert:` line. (ADR-196)
+- **`snmp_up`'s description says what 0 also covers**: an agent that answers but implements none of the scalar OIDs assigned to the node. A node whose interface walk still returns rows has a live agent. (ADR-196)
+
 ## v0.3.44 — A notification delivery log says whether each delivery arrived, and JSM and email notifications read as text
 
 ### Breaking changes

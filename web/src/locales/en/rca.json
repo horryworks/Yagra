@@ -37,7 +37,7 @@
     "hopped": "You clicked {{symptom}}; this explains its upstream cause instead.",
     "alert": "Alert",
     "alertLine": "{{severity}} on {{metric}}, {{at}}",
-    "alertLineLiveness": "{{severity}} — node unreachable, {{at}}",
+    "alertLineLiveness": "{{severity}} — node not responding, {{at}}",
     "flapping": "flapping",
     "breach": "measured {{value}}, threshold {{threshold}} ({{direction}})",
     "dependents": "Dependent alerts",

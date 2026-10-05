@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
 import { api } from '../../services/api';
 import { formatExactTime, formatTimestamp, LIVENESS_METRIC } from '../../lib/format';
+import { alertTitle } from '../../lib/alertName';
 import type { RcaEvidence, RcaReport, RcaReportBody } from '../../types/api';
 import { formatWindow, nodeLine, refusalText } from './rcaText';
 import { Modal } from '../ui/Modal';
@@ -55,7 +56,8 @@ function Evidence({ ev }: { ev: RcaEvidence }) {
               })
             : t('evidence.alertLine', {
                 severity: alert.severity,
-                metric: alert.metric,
+                // The alert's name where Yagra has one (ADR-196); the raw metric otherwise.
+                metric: alertTitle(alert.metric)?.text ?? alert.metric,
                 at: formatTimestamp(alert.at_unix_ms),
               })}
           {alert.flapping && <span className="rca-flap">{t('evidence.flapping')}</span>}

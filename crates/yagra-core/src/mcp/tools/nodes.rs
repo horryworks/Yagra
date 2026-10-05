@@ -544,7 +544,18 @@ impl YagraMcp {
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
-                .map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
+                .map(|a| {
+                    let mut dto = AlertDto::from_alert(a, Some(node.name.clone()));
+                    // The node's own interface list is already in hand: name the port from it.
+                    dto.if_name = a.ifindex.and_then(|i| {
+                        interfaces
+                            .iter()
+                            .find(|m| u32::try_from(m.ifindex).ok() == Some(i.0))
+                            .and_then(|m| m.if_name.clone())
+                            .filter(|n| !n.trim().is_empty())
+                    });
+                    dto
+                })
                 .collect(),
             interfaces: interfaces
                 .iter()

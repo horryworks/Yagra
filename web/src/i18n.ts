@@ -43,6 +43,8 @@ import enMetrics from './locales/en/metrics.json';
 // this file is a build output (ADR-079 decision 4). Do not edit it; regenerate with
 // `UPDATE_METRIC_MEANINGS=1 cargo test -p yagra-core the_committed_en_metric_meanings_are_current`.
 import enMetricMeanings from './locales/en/metricMeanings.json';
+// Generated from the same table (ADR-196): what an alert on each metric is called.
+import enAlertNames from './locales/en/alertNames.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
 export const NAMESPACES = [
@@ -72,6 +74,7 @@ export const NAMESPACES = [
   'rca',
   'metrics',
   'metricMeanings',
+  'alertNames',
 ] as const;
 
 void i18n
@@ -119,6 +122,7 @@ void i18n
         rca: enRca,
         metrics: enMetrics,
         metricMeanings: enMetricMeanings,
+        alertNames: enAlertNames,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages

@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### 破壊的変更
+
+- **通知のタイトルがメトリクス名ではなくアラートの名前を出すようになり、PagerDuty の要約にも名前が入る。** JSM とメールのタイトルは `core-sw-01 (192.0.2.11) is critical: snmp_up` から `core-sw-01 (192.0.2.11) is critical: SNMP not responding` になる。死活のアラートには `: Node not responding` が付く。ポートごとのアラートは、ポートの名前が分かればそれを出す（`… : Inbound utilization on GigabitEthernet0/7`。分からなければ今どおり `on ifIndex 7`）。テンプレートの無い Webhook と PagerDuty の要約は `node <uuid> is critical` だったが、同じタイトルになる。ノード名を出すのは、PagerDuty・JSM・メールのチャネルかテンプレートがあって Yagra がノードを引くとき。そうでなければ ID のまま（`<uuid> is critical: Ping response time`）。Webhook と PagerDuty の本体（アラートの JSON）は変わらない。PagerDuty の `dedup_key` と JSM の alias も変わらないので、開いているインシデントは今までどおり閉じる。タイトルのメトリクス名や、要約の先頭の `node ` を条件にした JSM のルールやメールの振り分けは直す必要がある。生のメトリクス名は本文の `Metric:` の行と、JSM の `metric` プロパティに残る。(ADR-196)
+
+### 改善
+
+- **すべてのアラートに、人が読める名前が付く。** Active alerts・Alerts ▸ History・ダッシュボードのアラートのウィジェット・ノードの Overview・RCA の根拠が、`snmp_up` ではなく「SNMP が応答しない」、`cisco_cpu_5min 80 を上回る (実測 92)` ではなく「CPU 使用率（5 分） 80 を上回る (実測 92)」と出す。生のメトリクス名は行の最後に小さく残るので、ルールと突き合わせられる。Yagra が知っている 154 個のメトリクスすべてに、英語と日本語の名前がある。0/1 で答えるチェック（SNMP・URL・DNS・Meraki の機器とアップリンク・AP）は異常そのものを名前にし、「0.5 を下回る (実測 0)」はもう出さない。死活のアラートは「到達性」ではなく「ノードが応答しない」になる。(ADR-196)
+- **ポートごとのアラートがポートの名前を出す。** アラートの一覧・`GET /api/v1/alerts`・`GET /api/v1/alerts/history`・MCP のアラートのツールが、`ifindex` の横にポートの `if_name` を持つ。アラートを読むときに interfaces の在庫から引くので、履歴の行は今のポート名で出る。(ADR-196)
+- **アラートの応答に `title` が付き、テンプレートの編集画面で `{{ title }}` と `{{ if_name }}` が使える。** `title` はアラートの英語の名前で、`GET /api/v1/alerts`・`GET /api/v1/alerts/history`・MCP の `get_active_alerts`・`get_alert_history`・`get_node_status` に付く。`GET /api/v1/metric-meanings` に `alert_name` と `alert_name_is_flag` が増える。JSM の追加プロパティに `alert` と `port` が増え、16 個を JSM の上限に収めるため、1 個の長さを 500 文字から 450 文字に縮めた。メールと JSM の本文に `Alert:` の行が増える。(ADR-196)
+- **`snmp_up` の説明に、0 に含まれるもう 1 つの場合を書いた。** エージェントは答えるが、そのノードに割り当てたスカラー OID を 1 つも実装していない場合。インターフェースの取得で行が返っているノードは、エージェントが生きている。(ADR-196)
+
 ## v0.3.44 — 通知の配信ログで各配信が届いたかが分かり、JSM とメールの通知が人の読める文章になる
 
 ### 破壊的変更

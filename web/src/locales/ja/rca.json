@@ -37,7 +37,7 @@
     "hopped": "クリックしたのは {{symptom}} ですが、その上流の原因を説明しています。",
     "alert": "アラート",
     "alertLine": "{{severity}} / {{metric}}（{{at}}）",
-    "alertLineLiveness": "{{severity}} — ノード到達不能（{{at}}）",
+    "alertLineLiveness": "{{severity}} — ノードが応答しない（{{at}}）",
     "flapping": "フラッピング",
     "breach": "実測 {{value}}、しきい値 {{threshold}}（{{direction}}）",
     "dependents": "従属アラート",

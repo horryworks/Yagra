@@ -25008,6 +25008,13 @@
                   }
                 ]
               },
+              "if_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The name of the port a per-port alert is about (`ifName`), read from the interface inventory\nwhen the alert is read rather than stored with it (ADR-196 decision 6). Absent for an alert\nabout no port, and for a port whose name is not known."
+              },
               "subject_kind": {
                 "$ref": "#/components/schemas/SubjectKind",
                 "description": "What this alert is about: a monitored node, or Yagra's own polling coverage for a pool."
@@ -25018,6 +25025,13 @@
                   "null"
                 ],
                 "description": "The subject's name, for a subject identified by name rather than by id (a poller pool)."
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the alert is called, in English — `SNMP not responding` rather than `snmp_up`\n(ADR-196). The metric's own name when Yagra has none for it; absent for an alert with no\nmetric at all."
               }
             }
           }
@@ -25345,6 +25359,20 @@
                     "$ref": "#/components/schemas/AckView"
                   }
                 ]
+              },
+              "if_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The port's name, as it is called **now** (ADR-196 decision 6) — not necessarily what it was\ncalled when this row was written. See [`ActiveAlertView::if_name`]."
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the alert is called, in English (ADR-196). See [`ActiveAlertView::title`]."
               }
             }
           }
@@ -35019,9 +35047,19 @@
         "required": [
           "metric",
           "meaning",
-          "source"
+          "source",
+          "alert_name",
+          "alert_name_is_flag"
         ],
         "properties": {
+          "alert_name": {
+            "type": "string",
+            "description": "What an alert on this metric is called, in English — `SNMP not responding` rather than\n`snmp_up` (ADR-196). Every alert response carries the same words as its `title`."
+          },
+          "alert_name_is_flag": {
+            "type": "boolean",
+            "description": "`true` when the metric is a 0/1 answer, so `alert_name` names the fault itself and the\nthreshold and observed value say nothing a reader needs; `false` when the name is a noun\nthe condition and value follow."
+          },
           "family": {
             "type": [
               "string",

@@ -43,6 +43,8 @@
   "alertCondition": "{{value}} を{{direction}}",
   "alertObservedWas": "実測 {{value}}",
   "alertOnPort": "ポート {{ifindex}}",
+  "alertOnPortName": "ポート {{name}}",
+  "alertEventRule": "イベントルール: {{name}}",
   "alertOnRow": "「{{name}}」",
   "alertOnRowKey": "行 {{row}}",
   "scalar": {

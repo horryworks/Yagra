@@ -161,11 +161,22 @@ impl YagraMcp {
         let names = self
             .resolve_names(scope, alerts.iter().filter_map(|a| Some(a.node()?.0)))
             .await;
+        let ports = crate::api::alerts::port_names(
+            &self.state,
+            alerts
+                .iter()
+                .filter_map(|a| Some((a.node()?.0, a.ifindex?.0))),
+        )
+        .await;
         let out: Vec<AlertDto> = alerts
             .iter()
             .map(|a| {
                 let name = a.node().and_then(|n| names.get(&n.0).cloned());
                 let mut dto = AlertDto::from_alert(a, name);
+                dto.if_name = dto
+                    .node_id
+                    .zip(dto.ifindex)
+                    .and_then(|k| ports.get(&k).cloned());
                 // Read parity (ADR-042): the name the REST view gives the same subject.
                 crate::api::alerts::fill_subject_name(
                     &self.state,
@@ -238,11 +249,17 @@ impl YagraMcp {
         let names = self
             .resolve_names(scope, rows.iter().filter_map(|r| r.node))
             .await;
+        let ports = crate::api::alerts::port_names(
+            &self.state,
+            rows.iter().filter_map(|r| Some((r.node?, r.ifindex?))),
+        )
+        .await;
         let out: Vec<AlertHistoryDto> = rows
             .iter()
             .map(|r| {
                 let mut dto =
                     AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned()));
+                dto.if_name = r.node.zip(r.ifindex).and_then(|k| ports.get(&k).cloned());
                 if dto.subject_name.is_none() {
                     dto.subject_name = r
                         .subject()

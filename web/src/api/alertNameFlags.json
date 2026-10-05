@@ -1,0 +1,14 @@
+[
+  "__liveness__",
+  "dns_up",
+  "http_body_match",
+  "http_up",
+  "meraki_api_collect",
+  "meraki_device_up",
+  "meraki_uplink_failed",
+  "snmp_up",
+  "snmp_walk_complete",
+  "wlan_ap_up",
+  "wlan_ap_walk_complete",
+  "wlan_ssid_walk_complete"
+]
