@@ -95,6 +95,12 @@
   margin: var(--space-2) 0 0;
   font-size: var(--font-sm);
 }
+/* The rows of a tiered level, top first: the role names in order, numbered by the list. */
+.topomap-panel-rows {
+  margin: 0;
+  padding-left: 1.4em;
+  color: var(--text-secondary);
+}
 .topomap-panel-legend {
   display: flex;
   flex-direction: column;

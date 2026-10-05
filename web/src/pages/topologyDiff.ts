@@ -22,6 +22,16 @@ import type { TopologyShadow } from '../types/api';
 export const DIFF_VERDICTS = ['agree', 'only_manual', 'only_derived', 'unmodelled'] as const;
 export type DiffVerdict = (typeof DIFF_VERDICTS)[number];
 
+/** What a verdict's pill opens when pressed (ADR-200), or null when its label says it all. The two
+ *  that change something on switching to the derived graph explain what; `only_derived` is the
+ *  direction that can suppress a real outage, so its explanation must never go. */
+export const VERDICT_INFO: Record<DiffVerdict, string | null> = {
+  agree: null,
+  only_manual: 'topology:dependency.verdictInfo.only_manual.info',
+  only_derived: 'topology:dependency.verdictInfo.only_derived.info',
+  unmodelled: null,
+};
+
 /** One node's row in the comparison. */
 export interface DiffRow {
   nodeId: string;

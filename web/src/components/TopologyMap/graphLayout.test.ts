@@ -11,6 +11,7 @@ import {
   CELL_H,
   CELL_W,
   NODE_TALL,
+  ROW_ORDER,
   layoutGraph,
   type GraphLink,
   type GraphNode,
@@ -493,6 +494,11 @@ describe('layoutGraph — access points (ADR-191 Inc.5, Inc.9)', () => {
 });
 
 describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
+  it('names the rows top first, in the order the layout draws them', () => {
+    // The side panel lists these in place of the sentence that spelled the order out (ADR-200).
+    expect(ROW_ORDER).toEqual(['edge', 'l3_switch', 'l2_switch', 'other']);
+  });
+
   const as = (role: GraphNode['role']) => (id: string) => node(id, { role });
   const edge = as('edge');
   const l3 = as('l3_switch');

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { classifyNodes, canEnableDerived } from './topologyDiff';
+import { classifyNodes, canEnableDerived, VERDICT_INFO } from './topologyDiff';
 
 const edge = (child: string, parent: string) => ({ child, parent });
 
@@ -86,5 +86,15 @@ describe('canEnableDerived', () => {
     expect(canEnableDerived({ unresolved_pools: ['default'] })).toBe(false);
     expect(canEnableDerived({ unresolved_pools: [] })).toBe(true);
     expect(canEnableDerived({} as never)).toBe(true);
+  });
+});
+
+describe('VERDICT_INFO', () => {
+  it('keeps the warning on the direction that can suppress a real outage', () => {
+    // `only_derived` gains an upstream on switching, which can hide an outage; its explanation is
+    // the one that must never be dropped as "a restatement of the label" (ADR-200).
+    expect(VERDICT_INFO.only_derived).toMatch(/\.info$/);
+    expect(VERDICT_INFO.only_manual).toMatch(/\.info$/);
+    expect(VERDICT_INFO.agree).toBeNull();
   });
 });

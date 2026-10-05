@@ -4,8 +4,8 @@
     "emptyInventory": "No nodes in the inventory yet.",
     "legend": "Legend",
     "suppressed": "Suppressed (upstream cause)",
-    "unresolved_one": "{{count}} observation could not be resolved to a link (an unmatched neighbour, or a segment with no identifiable router).",
-    "unresolved_other": "{{count}} observations could not be resolved to links (unmatched neighbours, or segments with no identifiable router).",
+    "unresolved_one": "{{count}} observation could not be resolved to a link (an unmatched neighbour, or a segment with no known router).",
+    "unresolved_other": "{{count}} observations could not be resolved to links (unmatched neighbours, or segments with no known router).",
     "nodeTitle": "{{name}} — {{state}}",
     "nodeTitleSuppressed": "{{name}} — {{state}} · suppressed, root cause: {{cause}}",
     "control": {
@@ -25,10 +25,10 @@
     },
     "root": "Whole network",
     "note": {
-      "level": "Connectivity graph — links discovered from CDP/LLDP adjacency, shared IP subnets and routing. Each subfolder is drawn as one box; select a box to go into it."
+      "level": "Links discovered from CDP/LLDP, shared subnets and routing"
     },
     "empty": {
-      "level": "Nothing on this level has a discovered link yet. Links come from CDP/LLDP adjacency and from nodes sharing an IP subnet, so the map fills in as those walks run."
+      "level": "Nothing on this level has a discovered link yet."
     },
     "accessPoint": "Wi-Fi access point",
     "bundle": {
@@ -40,7 +40,6 @@
       "title_one": "{{count}} Wi-Fi access point under {{name}} — {{summary}}. Select to list it.",
       "title_other": "{{count}} Wi-Fi access points under {{name}} — {{summary}}. Select to list them."
     },
-    "tiers": "Top to bottom: the way out (routers, firewalls) → switches that route → switches that do not → access points and everything else.",
     "role": {
       "edge": "Router or firewall",
       "l3_switch": "Switch that routes (L3)",
@@ -70,7 +69,7 @@
     "edgeTitle": "{{count}} links ({{source}}). Select to list the ports.",
     "overflow": {
       "title": "Too many to draw on one level",
-      "body": "This level has {{count}} linked nodes directly in it, and one level draws at most {{max}}. Its subfolders are still shown below; moving nodes into subfolders makes the level drawable.",
+      "body": "{{count}} linked nodes sit directly on this level, and one level draws at most {{max}}. Move some into subfolders.",
       "openNodes": "Open this folder in the node list"
     },
     "panel": {
@@ -113,11 +112,11 @@
       "count_other": "{{count}} matches",
       "undrawn_one": "({{count}} not on the map: it has no line)",
       "undrawn_other": "({{count}} not on the map: they have no line)",
-      "stepHint": "Enter: bring the next match to the middle · Shift+Enter: the previous one"
-    }
+      "stepHint": "Enter: next match · Shift+Enter: previous match"
+    },
+    "rows": "Rows, top first"
   },
   "dependency": {
-    "note": "Manage the dependency graph: each node's upstream drives parent-down alert suppression and root-cause roll-up. The Network map visualizes the same edges.",
     "filter": {
       "upstreamRef": {
         "set": "Has an upstream",
@@ -148,44 +147,48 @@
       "only_derived": "Only derived",
       "unmodelled": "No upstream"
     },
-    "verdictHelp": {
-      "agree": "Both graphs give this node the same upstreams.",
-      "only_manual": "Set by hand but not discovered. Switching to the derived graph would drop this dependency, so this node's alert would stop rolling up.",
-      "only_derived": "Discovered but never set by hand. Switching to the derived graph would add this dependency — this is the direction that can suppress a real outage, so check it.",
-      "unmodelled": "Neither graph gives this node an upstream, so its alert always stands on its own."
-    },
     "mode": {
       "label": "Suppression follows",
       "manual": "The hand-authored graph",
       "shadow": "The hand-authored graph (comparing)",
       "derived": "The derived graph",
-      "manualNote": "Alert suppression follows each node's hand-authored upstream. Switch to Comparing to see what the discovered graph would do, without changing anything.",
-      "shadowNote": "Alerting is unchanged — this is a preview. The table below shows where the two graphs differ, and how many active alerts would change.",
-      "derivedNote": "Alert suppression follows the graph discovered from CDP/LLDP adjacency and shared subnets. Editing a node's upstream by hand no longer affects suppression.",
+      "manualNote": "Alert suppression follows each node's upstream as set by hand.",
+      "shadowNote": "A preview: alert suppression still follows the upstreams set by hand.",
+      "derivedNote": "Alert suppression follows the upstreams discovered from CDP/LLDP and shared subnets.",
       "compare": "Compare",
       "enable": "Use the derived graph",
       "revert": "Go back to the hand-authored graph",
-      "blocked": "Cannot use the derived graph yet: {{pools}} has nodes but no poller that could be placed in the graph. Set an anchor node for its poller under Settings ▸ Pollers first.",
+      "blocked": "Cannot use the derived graph yet: {{pools}} has nodes but no poller placed in the graph. Set its poller's anchor node in <lnk/>.",
       "wouldSuppress_one": "{{count}} active alert would newly be suppressed.",
       "wouldSuppress_other": "{{count}} active alerts would newly be suppressed.",
       "wouldUnsuppress_one": "{{count}} active alert would stop being suppressed.",
       "wouldUnsuppress_other": "{{count}} active alerts would stop being suppressed.",
       "edges": "{{manual}} hand-authored dependencies · {{derived}} discovered",
-      "reviewFirst": "Review the alerts that would newly be suppressed before switching — each of those is an alert that would stop being raised.",
       "noChange": "No active alert's suppression would change.",
       "changeFailed": "Could not change the mode.",
       "coverage": "{{covered}} of {{total}} nodes would get an upstream",
       "optedOut_one": "{{count}} node excluded by hand",
       "optedOut_other": "{{count}} nodes excluded by hand",
-      "since": "comparing since {{at}}"
+      "since": "comparing since {{at}}",
+      "confirm": "Upstreams found only by discovery will start suppressing alerts. That can hide a real outage, so check them under Compare first."
     },
-    "optOutHelp": "Excluded from derived suppression: this node's alert always stands on its own, whatever the discovered graph says. Only ever removes suppression, so it cannot hide an outage.",
     "optOutFailed": "Could not change the exclusion.",
-    "editHiddenInDerived": "The upstream is discovered in this mode, so it is not edited here. Correct a wrong link on the Network map instead."
+    "editHiddenInDerived": "Upstreams are discovered in this mode. Correct a wrong link on the Network map.",
+    "verdictInfo": {
+      "only_manual": {
+        "info": "Switching to the derived graph drops this upstream, so this node's alert stops rolling up under it."
+      },
+      "only_derived": {
+        "info": "Switching to the derived graph adds this upstream. This is the direction that can suppress a real outage, so check it first."
+      }
+    },
+    "optOut": {
+      "info": "The derived graph never suppresses this node's alert. It only removes suppression, so it cannot hide an outage."
+    }
   },
   "geo": {
     "title": "Geo map",
-    "empty": "No group has coordinates yet. Set latitude and longitude on a group under Nodes ▸ its Edit dialog, and it appears here.",
+    "empty": "No group has coordinates yet. Set latitude and longitude on a group in <lnk/>.",
     "error": "Could not load site health.",
     "aria": "World map with {{count}} placed site(s)",
     "pinTitle": "{{name}} — {{state}} · {{count}} node(s)",

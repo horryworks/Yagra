@@ -44,7 +44,7 @@
 // other: the guard stops the viewport being reset under the operator, determinism stops the content
 // moving underneath a preserved viewport. Removing either one brings the jumping back.
 
-import type { MapRole, NodeState } from '../../types/api';
+import { MAP_ROLES, type MapRole, type NodeState } from '../../types/api';
 import { SEVERITY_ORDER } from '../../lib/nodeState';
 
 /** What a box on the map stands for: a node, a subfolder drawn as one box, or a stub for links
@@ -164,6 +164,14 @@ const TIER_OF_ROLE: Record<MapRole, number> = {
   other: 3,
 };
 const UNTIERED = 3;
+
+/** The rows of a tiered level, top first, as the side panel names them (ADR-200 replaced the
+ *  sentence that spelled this out). An access point hangs under its parent rather than taking a
+ *  row, so it is not one of them. Derived from `TIER_OF_ROLE`, so the legend cannot disagree with
+ *  the layout. */
+export const ROW_ORDER: readonly MapRole[] = MAP_ROLES.filter((r) => r !== 'access_point').sort(
+  (a, b) => TIER_OF_ROLE[a] - TIER_OF_ROLE[b],
+);
 
 function tierOf(n: GraphNode): number {
   // An N-1 core sends no `role`; such a node takes the untiered row rather than no row at all.

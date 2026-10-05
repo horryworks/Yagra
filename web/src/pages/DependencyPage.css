@@ -55,6 +55,45 @@
   color: var(--text-tertiary);
 }
 
+/* A verdict that explains itself is pressable (ADR-200): the pill keeps its look and gains a ▾.
+   The selectors are doubled to outrank `InfoTip.css`'s reset of a pressable label, which would
+   otherwise strip the pill's border and colour. */
+button.infopress.dep-verdict.dep-verdict {
+  padding: 2px 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  text-decoration: none;
+  overflow: visible;
+}
+
+button.infopress.dep-verdict.dep-verdict-only_derived {
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
+button.infopress.dep-verdict.dep-verdict-only_manual {
+  border-color: var(--status-unknown);
+  color: var(--text-secondary);
+}
+
+button.infopress.dep-verdict::after {
+  content: '▾';
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  opacity: 0.8;
+}
+
+button.infopress.dep-verdict.dep-verdict:hover,
+button.infopress.dep-verdict.dep-verdict[aria-expanded='true'] {
+  background: var(--bg-tertiary);
+}
+
+button.infopress.dep-verdict.dep-verdict:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 /* Mode banner — which graph drives suppression, and what switching would do. */
 .dep-mode {
   display: flex;
@@ -93,17 +132,12 @@
   flex-wrap: wrap;
 }
 
-/* Per-node exclusion from derived suppression. In a table cell, so the label wraps rather than
-   forcing a wider column. */
+/* Per-node exclusion from derived suppression: the checkbox alone; the header names it and opens
+   what it does. */
 .dep-optout {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   cursor: pointer;
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
 }
 
-.dep-optout input:disabled {
+.dep-optout:disabled {
   cursor: not-allowed;
 }

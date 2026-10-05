@@ -93,10 +93,7 @@ export const NOTE_MAX = 80;
  * not show yet. Only shrinks: the walk fails an entry whose note has come down to the limit, so a
  * row cannot outlive its reason.
  */
-export const LONG_NOTE: Record<string, string> = {
-  '/topology/dependency': 'Inc.23 — the upstream decides suppression',
-  '/topology/map': 'Inc.23 — off the menu, so it has no nav description',
-};
+export const LONG_NOTE: Record<string, string> = {};
 
 /**
  * The walk's tenth check (ADR-200): the characters of a screen's own prose — every element whose own
@@ -125,8 +122,8 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/relocation': 1393,
   '/settings/tls': 55,
   '/settings/upgrade': 300,
-  '/topology/dependency': 151,
-  '/topology/map': 239,
+  '/topology/dependency': 62,
+  '/topology/map': 103,
   '/troubleshoot': 1319,
 };
 

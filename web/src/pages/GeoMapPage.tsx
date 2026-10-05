@@ -18,10 +18,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConfigChanges } from '../lib/configChanges';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
@@ -323,7 +324,11 @@ export function GeoMapPage() {
         <>
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}
-          {placed.length === 0 && <p className="geopage-empty muted">{t('geo.empty')}</p>}
+          {placed.length === 0 && (
+            <p className="geopage-empty muted">
+              <Trans t={t} i18nKey="geo.empty" components={{ lnk: <ScreenLink to="/nodes" /> }} />
+            </p>
+          )}
           {/* No wider than the world is at this height (ADR-188 Inc.2), so a wide monitor does
               not get a band of grey either side of the map. The aspect comes from the projection,
               not from the stylesheet — see `.geopage-frame`. */}

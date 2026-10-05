@@ -82,7 +82,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   settings: [217, 101],
   suppression: [959, 626],
   system: [13290, 7315],
-  topology: [4304, 2334],
+  topology: [3104, 1757],
   troubleshoot: [3416, 1791],
 };
 
@@ -106,8 +106,6 @@ const HOVER_LEGACY: string[] = [
   'monitoring:discovery.seen.detect.hint',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
-  'topology:dependency.optOutHelp',
-  'topology:map.search.stepHint',
 ];
 
 /**
@@ -137,16 +135,11 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'API',
     why: 'editing a set changes every profile that uses it',
   },
-  'pages/DependencyPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.23',
-    why: 'the upstream decides parent-down suppression',
-  },
   'pages/NodesPage.tsx': {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',
   },
-  'pages/TopologyMapPage.tsx': { kind: 'offNav', until: 'Inc.23', why: 'opened from the tree' },
+  'pages/TopologyMapPage.tsx': { kind: 'offNav', why: 'opened from the tree, a node and a Geo map pin' },
   'pages/integrations/MerakiIntegrationPage.tsx': {
     kind: 'offNav',
     why: 'a page under Settings > Integrations',
@@ -167,7 +160,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 23, press: 16 };
+const INFO_COUNT = { tip: 23, press: 18 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked
@@ -194,10 +187,7 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 };
 
 /** Strings that spell a menu path with `▸` and predate ADR-200 (G9). Remove; never add. */
-const POINTER_LEGACY: string[] = [
-  'topology:dependency.mode.blocked',
-  'topology:geo.empty',
-];
+const POINTER_LEGACY: string[] = [];
 
 /** `▸` allowed on purpose, with the reason. */
 const POINTER_ALLOWED: Record<string, string> = {

@@ -28,7 +28,7 @@ import { MapEdgeMembers } from './MapEdgeMembers';
 import { membersByPort, stateCounts } from './apBundle';
 import { Marked } from '../ui/Marked';
 import { compileCondition, type TextCondition } from '../../lib/filterCondition';
-import type { PlacedNode } from './graphLayout';
+import { ROW_ORDER, type PlacedNode } from './graphLayout';
 import './TopologyMapSidePanel.css';
 
 interface Props {
@@ -207,7 +207,16 @@ export function TopologyMapSidePanel({
           </div>
         ))}
       </dl>
-      {hasTiers(level) && <p className="topomap-panel-note muted">{t('map.tiers')}</p>}
+      {hasTiers(level) && (
+        <>
+          <h3 className="topomap-panel-sub">{t('map.rows')}</h3>
+          <ol className="topomap-panel-rows">
+            {ROW_ORDER.map((r) => (
+              <li key={r}>{t(`map.role.${r}`)}</li>
+            ))}
+          </ol>
+        </>
+      )}
       {unresolved > 0 && (
         <p className="topomap-panel-note muted">{t('map.unresolved', { count: unresolved })}</p>
       )}

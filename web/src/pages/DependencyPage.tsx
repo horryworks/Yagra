@@ -12,7 +12,7 @@
 // (`useNodeStates`, S14). All judgement lives in `topologyDiff.ts` — Vitest never runs a `.tsx`.
 
 import { useCallback, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
@@ -29,7 +29,16 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
 import { SetParentModal } from '../components/SetParentModal/SetParentModal';
-import { classifyNodes, canEnableDerived, type DiffRow, type DiffVerdict } from './topologyDiff';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
+import { InfoPress } from '../components/ui/InfoTip';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import {
+  classifyNodes,
+  canEnableDerived,
+  VERDICT_INFO,
+  type DiffRow,
+  type DiffVerdict,
+} from './topologyDiff';
 import { nodeHref } from '../lib/entityHref';
 import './DependencyPage.css';
 
@@ -43,13 +52,19 @@ function StatusTag({ state }: { state: NodeState }) {
   );
 }
 
-/** Verdict pill. Colour is a hint; the label carries the meaning (no colour-alone status). */
+/** Verdict pill. Colour is a hint; the label carries the meaning (no colour-alone status). A verdict
+ *  that changes something on switching opens what it changes when pressed (ADR-200); the other two
+ *  say all there is in their label. `VERDICT_INFO` decides which. */
 function VerdictTag({ verdict }: { verdict: DiffVerdict }) {
   const { t } = useTranslation('topology');
-  return (
-    <span className={`dep-verdict dep-verdict-${verdict}`} title={t(`dependency.verdictHelp.${verdict}`)}>
+  const className = `dep-verdict dep-verdict-${verdict}`;
+  const info = VERDICT_INFO[verdict];
+  return info ? (
+    <InfoPress infoKey={info} className={className}>
       {t(`dependency.verdict.${verdict}`)}
-    </span>
+    </InfoPress>
+  ) : (
+    <span className={className}>{t(`dependency.verdict.${verdict}`)}</span>
   );
 }
 
@@ -60,6 +75,9 @@ export function DependencyPage() {
   const [editing, setEditing] = useState<TopologyNode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  // Switching suppression onto the derived graph is confirmed: an upstream only discovery found can
+  // suppress a real outage, and that is the moment to say so.
+  const [confirmDerived, setConfirmDerived] = useState(false);
   // Bumped after a save to re-arm usePolled for an immediate refresh (it also reconciles slowly).
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -189,21 +207,25 @@ export function DependencyPage() {
             },
             {
               key: 'optout',
-              header: t('dependency.cols2.optOut'),
-              width: '120px',
+              // The header opens what excluding a node does; the cell is only the checkbox.
+              header: (
+                <InfoPress infoKey="topology:dependency.optOut.info">
+                  {t('dependency.cols2.optOut')}
+                </InfoPress>
+              ),
+              width: '140px',
               render: (r: TopologyNode) => (
-                <label className="dep-optout" title={t('dependency.optOutHelp')}>
-                  <input
-                    type="checkbox"
-                    checked={optedOut.has(r.id)}
-                    disabled={!canConfig}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      void toggleOptOut(r.id, e.target.checked);
-                    }}
-                  />
-                  <span>{t('dependency.cols2.optOut')}</span>
-                </label>
+                <input
+                  type="checkbox"
+                  className="dep-optout"
+                  aria-label={t('dependency.cols2.optOut')}
+                  checked={optedOut.has(r.id)}
+                  disabled={!canConfig}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
+                    void toggleOptOut(r.id, e.target.checked);
+                  }}
+                />
               ),
             },
             {
@@ -254,7 +276,6 @@ export function DependencyPage() {
       <PageHeader
         title={t('nav:topology.dependency')}
         trail={[{ label: t('nav:sections.topology') }, { label: t('nav:topology.dependency') }]}
-        note={t('dependency.note')}
       />
 
       {shadow && (
@@ -308,11 +329,13 @@ export function DependencyPage() {
                 contributes no roots, so switching would suppress nothing while looking enabled. */}
             {!canEnableDerived(shadow) && (
               <p className="dep-mode-blocked">
-                {t('dependency.mode.blocked', { pools: shadow.unresolved_pools.join(', ') })}
+                <Trans
+                  t={t}
+                  i18nKey="dependency.mode.blocked"
+                  values={{ pools: shadow.unresolved_pools.join(', ') }}
+                  components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
+                />
               </p>
-            )}
-            {mode === 'shadow' && shadow.would_suppress.length > 0 && (
-              <p className="dep-mode-blocked">{t('dependency.mode.reviewFirst')}</p>
             )}
             {modeError && <p className="dep-mode-blocked">{modeError}</p>}
 
@@ -326,7 +349,7 @@ export function DependencyPage() {
                 {mode !== 'derived' && (
                   <Button
                     disabled={modeBusy || !canEnableDerived(shadow)}
-                    onClick={() => changeMode('derived')}
+                    onClick={() => setConfirmDerived(true)}
                   >
                     {t('dependency.mode.enable')}
                   </Button>
@@ -382,6 +405,24 @@ export function DependencyPage() {
             }
           />
         </>
+      )}
+
+      {confirmDerived && shadow && (
+        <ConfirmDeleteModal
+          title={t('dependency.mode.enable')}
+          confirmLabel={t('dependency.mode.enable')}
+          onConfirm={() => api.setTopologyMode('derived')}
+          errorFallback={t('dependency.mode.changeFailed')}
+          onClose={() => setConfirmDerived(false)}
+          onDone={() => {
+            setConfirmDerived(false);
+            setRefreshNonce((v) => v + 1);
+          }}
+        >
+          {t('dependency.mode.confirm')}
+          {shadow.would_suppress.length > 0 &&
+            ` ${t('dependency.mode.wouldSuppress', { count: shadow.would_suppress.length })}`}
+        </ConfirmDeleteModal>
       )}
 
       {editing && (
