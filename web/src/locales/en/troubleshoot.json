@@ -1,13 +1,11 @@
 {
   "catalog": {
-    "note": "Deep diagnostics for problems normal metrics and thresholds can’t see. These analyses fetch long histories and run heavier models, so they run as background jobs — start one, keep working, review the report when it lands.",
     "stat": {
       "tools": "tools",
       "runningNow": "running now",
       "runsToday": "runs today",
       "avgRuntime": "avg runtime"
     },
-    "signInPrompt": "Sign in to run an analysis.",
     "toolsHeading": "Diagnostic tools",
     "toolsSub": "Pick a tool, set its scope, and run it as a job.",
     "group": {
@@ -18,7 +16,6 @@
     }
   },
   "runs": {
-    "pageNote": "{{n}} running · background diagnostic jobs with live progress and results",
     "card": "Runs",
     "empty": "No analysis runs yet.",
     "loadFailed": "The analysis runs could not be loaded.",
@@ -50,7 +47,6 @@
     }
   },
   "schedule": {
-    "pageNote": "Analyses that run on their own, on a preset cadence",
     "signInPrompt": "Sign in to manage scheduled analyses.",
     "add": "Schedule analysis",
     "empty": "No scheduled analyses yet.",
@@ -92,7 +88,6 @@
     }
   },
   "findings": {
-    "pageNote": "Everything the analyses have found, newest first — across every run",
     "signInPrompt": "Sign in to search findings.",
     "fleetWide": "Fleet-wide",
     "finding_one": "finding",

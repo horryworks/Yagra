@@ -13,8 +13,8 @@ import { LoadBlockNotice } from './LoadBlockNotice';
 
 interface Props {
   load: Pick<LoadState<unknown>, 'block'>;
-  /** What this screen calls itself in skeleton mode. See `LoadBlockNotice`. */
-  unavailable: string;
+  /** What to say in skeleton mode, when the shared sentence is not enough. See `LoadBlockNotice`. */
+  unavailable?: string;
   /** The privilege the screen's read needs, named in the refusal. See `LoadBlockNotice`. */
   permission?: Permission;
   /** A screen's own refusal sentence, where it already says something better. */

@@ -8,6 +8,7 @@
 // Imported only by `*.test.ts`.
 
 import { flattenStrings, lookup, type Json } from './locales';
+import { codeOnly } from './sources';
 
 /** Namespaces that are measured by nothing here: generated from Rust, and read as data. */
 export const NOT_MEASURED = ['metricMeanings'];
@@ -62,4 +63,28 @@ export function longKeys(
 /** Every literal key read straight into a `title` attribute: `title={t('k'…`. */
 export function hoverKeysIn(src: string): string[] {
   return [...src.matchAll(/\btitle=\{\s*t\(\s*(['"])([^'"]+)\1/g)].map((m) => m[2]);
+}
+
+/** Every `<PageHeader …>` opening tag in a source file, comment lines removed. Braces are tracked so
+ *  an arrow's `>` inside `note={…}` does not end the tag. */
+export function pageHeaderTags(src: string): string[] {
+  const code = codeOnly(src);
+  const out: string[] = [];
+  for (const m of code.matchAll(/<PageHeader\b/g)) {
+    let depth = 0;
+    let i = m.index;
+    for (; i < code.length; i++) {
+      const c = code[i];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0) break;
+    }
+    out.push(code.slice(m.index, i + 1));
+  }
+  return out;
+}
+
+/** The literal key a page header's `note={t('…')}` reads, or null for any other note. */
+export function noteKeyOf(tag: string): string | null {
+  return /\bnote=\{\s*t\(\s*(['"])([^'"]+)\1\s*\)\s*\}/.exec(tag)?.[2] ?? null;
 }

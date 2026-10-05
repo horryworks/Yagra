@@ -15,7 +15,6 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 import { useCan } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
@@ -193,16 +192,9 @@ export function MutesPage() {
       <PageHeader
         title={t('nav:alerts.mutes')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.mutes') }]}
-        note={
-          <Trans
-            t={t}
-            i18nKey="mutes.note"
-            components={{ maintenanceLink: <Link to="/alerts/maintenance" /> }}
-          />
-        }
       />
 
-      <LoadGate load={mutes} unavailable={t('mutes.unavailable')}>
+      <LoadGate load={mutes}>
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

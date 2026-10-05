@@ -125,7 +125,7 @@ export function SystemSettingsPage() {
           </div>
         </div>
         {!canConfig && (
-        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+        <PermissionHint permission="manage_config" />
       )}
         {error && <p className="form-error">{error}</p>}
         {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
@@ -271,7 +271,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
         </div>
       )}
       {!canConfig && (
-        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+        <PermissionHint permission="manage_config" />
       )}
       {error && <p className="form-error">{error}</p>}
       {ok && <p className="sys-setting-saved">{t('settings.saved')}</p>}
@@ -356,7 +356,7 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
         </div>
       )}
       {!canSystem && (
-        <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
+        <PermissionHint permission="manage_system" />
       )}
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}

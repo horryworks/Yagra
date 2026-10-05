@@ -16,8 +16,9 @@
 //   5. **No request the OpenAPI document does not describe.** A hand-rolled `fetch` that escaped
 //      the typed client, or a stale committed document, shows up here.
 //   6. **Its filter controls sit under their columns** (ADR-053) — see the note at the assertion.
-//   7. **It explains itself in one line, on screen** (ADR-055 R2). `NOTE_EXEMPT` in `screens.ts`
-//      holds the two screens that argue out of it, each with its reason.
+//   7. **It explains itself in one line, on screen** (ADR-055 R2), and in no more than 80
+//      characters (ADR-200). `NOTE_EXEMPT` in `screens.ts` holds the two screens that argue out of
+//      the line, `LONG_NOTE` the ones whose note is still waiting for its increment.
 //   8. **Nothing is laid out off the page, and no text is cut off with no way to read it**
 //      (ADR-088) — see the note at the assertion.
 //   9. **Its row actions appear when the row is hovered** (ADR-088) — see `rowActions.ts`.
@@ -29,7 +30,15 @@ import { MOCK_PREFIX } from '../support/openapi';
 import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
 import { inspectRowActions } from './rowActions';
 import { inspectScreenGeometry, MIN_TEXT_ELEMENTS } from './screenGeometry';
-import { ALL_SCREENS, NOTE_EXEMPT, PROSE_CEILING, SCREEN_EXPECT, type Expect } from './screens';
+import {
+  ALL_SCREENS,
+  LONG_NOTE,
+  NOTE_EXEMPT,
+  NOTE_MAX,
+  PROSE_CEILING,
+  SCREEN_EXPECT,
+  type Expect,
+} from './screens';
 
 /** How long a screen gets to show its data. Generous: the settings group lazy-loads a chunk. */
 const RENDER_TIMEOUT = 15_000;
@@ -141,10 +150,21 @@ for (const screen of ALL_SCREENS) {
       await expect(note, `${screen.path} has no one-line description under its title`).toHaveCount(
         1,
       );
-      expect(
-        (await note.innerText()).trim().length,
-        `${screen.path}: its description is empty`,
-      ).toBeGreaterThan(0);
+      const text = (await note.innerText()).trim();
+      expect(text.length, `${screen.path}: its description is empty`).toBeGreaterThan(0);
+      // ADR-200: the note is the nav description's one line. A screen still carrying a longer one
+      // is in `LONG_NOTE`, and leaves it as soon as its note fits.
+      if (LONG_NOTE[screen.path]) {
+        expect(
+          text.length,
+          `${screen.path}: its note now fits ${NOTE_MAX} characters — delete its LONG_NOTE entry`,
+        ).toBeGreaterThan(NOTE_MAX);
+      } else {
+        expect(
+          text.length,
+          `${screen.path}: a ${text.length}-character page note ("${text}") — the limit is ${NOTE_MAX}`,
+        ).toBeLessThanOrEqual(NOTE_MAX);
+      }
     }
 
     // 8. **It is readable and it fits** (ADR-088). Four of the last ten `fix(web)` commits were

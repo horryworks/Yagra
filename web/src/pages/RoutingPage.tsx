@@ -105,9 +105,8 @@ export function RoutingPage() {
       <PageHeader
         title={t('nav:alerts.routing')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
-        note={t('routing.note')}
       />
-      <LoadGate load={routing} permission="manage_system" unavailable={t('routing.unavailable')}>
+      <LoadGate load={routing} permission="manage_system">
         {error && <p className="form-error routing-error">{error}</p>}
         <ChannelsSection
           channels={channels}

@@ -277,7 +277,6 @@
     "overCap_one": "The controller reported {{count}} access point beyond the limit below. It is not listed and will not be monitored.",
     "overCap_other": "The controller reported {{count}} access points beyond the limit below. They are not listed and will not be monitored.",
     "morePages": "The controller reported more access points than one response can carry. This list is incomplete.",
-    "signIn": "Sign in to change which access points are monitored.",
     "state": {
       "associated": "Associated",
       "backup": "Backup",

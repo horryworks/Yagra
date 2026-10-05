@@ -42,7 +42,6 @@ export function ConfigBundlePage() {
       <PageHeader
         title={t('nav:settings.configBundle')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.configBundle') }]}
-        note={t('bundle.pageNote')}
       />
       <Card title={t('bundle.export.title')}>
         <p className="cb-help muted">{t('bundle.export.help')}</p>
@@ -50,7 +49,7 @@ export function ConfigBundlePage() {
         {canSystem ? (
           <ExportPanel />
         ) : (
-          <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
+          <PermissionHint permission="manage_system" />
         )}
       </Card>
       <Card title={t('bundle.import.title')}>
@@ -58,7 +57,7 @@ export function ConfigBundlePage() {
         {canSystem ? (
           <ImportPanel />
         ) : (
-          <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
+          <PermissionHint permission="manage_system" />
         )}
       </Card>
     </div>

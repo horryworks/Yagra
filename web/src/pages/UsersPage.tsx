@@ -124,7 +124,6 @@ export function UsersPage() {
 
       <LoadGate
         load={users}
-        unavailable={t('users.unavailable')}
         // Kept rather than falling back to the shared sentence: this one already names the role
         // that would let you in, which is what ADR-056 Increment 2 will give every screen.
         forbidden={t('users.forbidden')}

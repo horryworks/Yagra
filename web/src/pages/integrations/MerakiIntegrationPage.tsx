@@ -696,7 +696,7 @@ export function MerakiIntegrationPage() {
 
   const content = useMemo(() => {
     return (
-      <LoadGate load={list} unavailable={t('integrations.unavailable')}>
+      <LoadGate load={list}>
         {actionError && <p className="form-error meraki-page-note">{actionError}</p>}
         <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
           <label className="meraki-switch">

@@ -124,7 +124,7 @@ export function CollectionTemplatesPage() {
         note={t('sets.note')}
       />
 
-      <LoadGate load={sets} permission="manage_config" unavailable={t('sets.unavailable')}>
+      <LoadGate load={sets} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters })}
           labels={setFilterLabels(t)}

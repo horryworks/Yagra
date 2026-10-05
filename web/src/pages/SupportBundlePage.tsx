@@ -49,14 +49,13 @@ export function SupportBundlePage() {
       <PageHeader
         title={t('nav:settings.supportBundle')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.supportBundle') }]}
-        note={t('supportBundle.help')}
       />
       <Card title={t('supportBundle.title')} className="support-bundle-card">
         <p className="muted">{t('supportBundle.contents')}</p>
         {canSystem ? (
           <TakeBundlePanel />
         ) : (
-          <PermissionHint permission="manage_system" signInHint={t('supportBundle.signInHint')} />
+          <PermissionHint permission="manage_system" />
         )}
       </Card>
     </div>

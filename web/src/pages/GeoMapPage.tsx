@@ -312,7 +312,7 @@ export function GeoMapPage() {
 
   return (
     <div className="geopage">
-      <PageHeader title={t('geo.title')} note={t('geo.subtitle')} />
+      <PageHeader title={t('geo.title')} />
       {(error || groups.error) && (
         <Card>
           <p className="muted">{t('geo.error')}</p>

@@ -301,7 +301,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
         <Card>
           <div className="ts-empty-note">
             {!canRun ? (
-              <PermissionHint permission="ack_alerts" signInHint={t('catalog.signInPrompt')} />
+              <PermissionHint permission="ack_alerts" />
             ) : missing
               ? t('report.common.jobMissing')
               : running > 0

@@ -10,8 +10,6 @@
     "source_other": "sources"
   },
   "routing": {
-    "unavailable": "Notification delivery is unavailable in skeleton mode.",
-    "note": "Channels are where alerts go; rules pick which alerts (by severity) reach which channels; the delivery log shows what each delivery did.",
     "channels": {
       "title": "Notification channels",
       "add": "+ Add channel",
@@ -477,7 +475,6 @@
     "noLiveness": "No reachability rule exists, so a node going down raises no alert and sends no notification. Node state on the Nodes page still updates. Add a rule on Reachability to start paging again.",
     "portRulesHidden": "{{count}} port rules are hidden.",
     "showPortRules": "Show them",
-    "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {
       "scope": "Scope type",
@@ -572,7 +569,6 @@
   },
   "eventRules": {
     "note": "Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting.",
-    "unavailable": "Event rules are unavailable in this mode (no metadata store).",
     "add": "+ Add rule",
     "cols": {
       "name": "Name",
@@ -641,7 +637,6 @@
   },
   "eventSources": {
     "note": "Webhook senders that POST events to Yagra. Each carries a bearer token, shown once at create/rotate; store it in the sender's config.",
-    "unavailable": "Event sources are unavailable in this mode (no metadata store).",
     "add": "+ Add source",
     "cols": {
       "name": "Name",

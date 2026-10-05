@@ -457,7 +457,7 @@ export function NetboxIntegrationPage() {
 
   const content = useMemo(() => {
     return (
-      <LoadGate load={list} unavailable={t('integrations.unavailable')}>
+      <LoadGate load={list}>
         <Card
           title={t('netbox.servers.title')}
           actions={

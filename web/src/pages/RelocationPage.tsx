@@ -203,7 +203,6 @@ function Header() {
     <PageHeader
       title={t('title')}
       trail={[{ label: t('nav:sections.settings') }, { label: t('title') }]}
-      note={t('subtitle')}
     />
   );
 }

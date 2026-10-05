@@ -7,10 +7,12 @@
 // `+ Add credential` button on a Viewer's screen disappear without adding a permission check to
 // each button, which is the copy-per-button shape ADR-056 decision 2 refuses.
 //
-// `unavailable` text stays per-screen (it names the feature: "Credential management is unavailable
-// in skeleton mode…"). `forbidden` is one shared sentence, optionally naming the privilege the
-// screen needs — the `403` body does not say which one, so the name comes from the server's own
-// catalogue (`GET /api/v1/roles`) via `usePermissionLabel`, never from a list kept here. Telling
+// `unavailable` defaults to one shared sentence (`common:loadBlock.unavailable`, ADR-200): every
+// screen used to restate "<feature> is unavailable in skeleton mode", and the title above already
+// names the feature. A screen passes its own only when it says something else — a load error, or a
+// reason other than skeleton mode. `forbidden` is one shared sentence, optionally naming the
+// privilege the screen needs — the `403` body does not say which one, so the name comes from the
+// server's own catalogue (`GET /api/v1/roles`) via `usePermissionLabel`, never from a list kept here. Telling
 // the operator which privilege to ask for is the point: "no permission" leaves them and their
 // administrator guessing at which of seven.
 import { useTranslation } from 'react-i18next';
@@ -21,9 +23,9 @@ import { usePermissionLabel } from '../../store';
 
 interface Props {
   block: LoadBlock;
-  /** What this screen calls itself when the deployment has no admin state. Required: only the
-   *  screen knows which feature is missing. */
-  unavailable: string;
+  /** What to say when the deployment has no admin state. Defaults to the shared skeleton-mode
+   *  sentence; pass one only when it says more than that. */
+  unavailable?: string;
   /** The privilege this screen's read requires — the same one its `useCan` asks for. Named in the
    *  refusal so the operator knows what to request. Omit only where the screen genuinely cannot
    *  say which one the server wanted. */
@@ -40,7 +42,9 @@ export function LoadBlockNotice({ block, unavailable, permission, forbidden }: P
     (permission ? t('loadBlock.forbiddenPermission', { permission: label }) : t('loadBlock.forbidden'));
   return (
     <Card>
-      <p className="muted">{block === 'unavailable' ? unavailable : refused}</p>
+      <p className="muted">
+        {block === 'unavailable' ? (unavailable ?? t('loadBlock.unavailable')) : refused}
+      </p>
     </Card>
   );
 }

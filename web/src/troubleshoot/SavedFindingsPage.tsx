@@ -252,7 +252,6 @@ export function SavedFindingsPage() {
           { label: t('nav:sections.troubleshoot'), to: '/troubleshoot' },
           { label: t('nav:troubleshoot.findings') },
         ]}
-        note={t('findings.pageNote')}
       />
 
       {!authed ? (

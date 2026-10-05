@@ -163,10 +163,9 @@ export function ClassificationRulesPage() {
       <PageHeader
         title={t('nav:nodes.classificationRules')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.classificationRules') }]}
-        note={t('rules.note')}
       />
 
-      <LoadGate load={rules} permission="manage_config" unavailable={t('rules.unavailable')}>
+      <LoadGate load={rules} permission="manage_config">
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

@@ -50,7 +50,6 @@ export function AboutPage() {
       <PageHeader
         title={t('about.title')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('about.title') }]}
-        note={t('about.note')}
       />
       <Card title={t('nav:shell.wordmark')}>
         <p className="about-tagline muted">{t('about.tagline')}</p>

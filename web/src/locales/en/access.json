@@ -6,7 +6,6 @@
   },
   "cred": {
     "note": "Encrypted at rest. Secret values are never displayed or returned by the API.",
-    "unavailable": "Credential management is unavailable in skeleton mode (no secret store).",
     "filter": {
       "allTypes": "All types"
     },
@@ -100,7 +99,6 @@
   },
   "users": {
     "note": "Local accounts for the northbound API. Roles: viewer (read-only), operator (ack/maintenance), admin (full control).",
-    "unavailable": "User management is unavailable in skeleton mode (no database).",
     "forbidden": "Managing users requires an admin account.",
     "searchPlaceholder": "Search username…",
     "filter": {
@@ -192,7 +190,6 @@
     }
   },
   "roles": {
-    "note": "What each role can do. The matrix is derived from the privileges the API enforces.",
     "section": {
       "roles": "Roles"
     },

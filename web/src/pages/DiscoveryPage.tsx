@@ -800,7 +800,6 @@ export function DiscoveryPage() {
       <PageHeader
         title={t('nav:nodes.discovery')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.discovery') }]}
-        note={t('discovery.note')}
       />
 
       <Tabs
@@ -1068,7 +1067,7 @@ export function DiscoveryPage() {
             </div>
           </>
         ) : (
-          <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />
+          <PermissionHint permission="manage_config" />
         )}
         {error && <p className="form-error">{error}</p>}
         {/* The 404 case gets its own line, above the progress note. A core that restarted mid-sweep
@@ -1607,7 +1606,7 @@ function SeenOnNetworkCard({
         </div>
       )}
       {!canConfig && (
-        <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />
+        <PermissionHint permission="manage_config" />
       )}
       {setup.error && <p className="form-error">{setup.error}</p>}
       {note && <p className="disco-import-ok">✓ {note}</p>}

@@ -1,7 +1,5 @@
 {
   "maintenance": {
-    "note": "Planned work: covered nodes enter the maintenance state, raise no alerts, and are excluded from SLA. To silence notifications only (state and SLA unchanged), use <mutesLink>Mutes</mutesLink>.",
-    "unavailable": "Maintenance management is unavailable in skeleton mode.",
     "add": "+ Add window",
     "cols": {
       "status": "Status",
@@ -80,8 +78,6 @@
     "partial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   },
   "mutes": {
-    "note": "Silence notifications for a node (or one check) until a time — the alert still fires and node state / SLA are unaffected. For planned work, use <maintenanceLink>Maintenance windows</maintenanceLink>.",
-    "unavailable": "Mute management is unavailable in skeleton mode.",
     "add": "+ Add mute",
     "resultNoun": "active mutes",
     "cols": {

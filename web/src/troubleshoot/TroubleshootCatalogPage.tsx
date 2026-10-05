@@ -27,7 +27,6 @@ export function TroubleshootCatalogPage() {
       <PageHeader
         title={t('nav:sections.troubleshoot')}
         trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.all') }]}
-        note={t('catalog.note')}
       />
 
       <div className="ts-intro">
@@ -57,7 +56,7 @@ export function TroubleshootCatalogPage() {
         <span>{t('catalog.toolsSub')}</span>
       </div>
       {/* Fifteen cards with no button would read as a broken page; this says which privilege. */}
-      {!canRun && <PermissionHint permission="ack_alerts" signInHint={t('catalog.signInPrompt')} />}
+      {!canRun && <PermissionHint permission="ack_alerts" />}
       {/* Grouped by what each tool reads, not flat (ADR-055 Inc.5 / R7). Fifteen cards in one grid
           is a wall an operator has to read end to end to find the one for the question they have;
           four clusters of two to five is a decision they can make from the headings. The design

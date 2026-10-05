@@ -84,6 +84,39 @@ export const NOTE_EXEMPT: Record<string, string> = {
     'Node detail carries its own identity header (name, address, kind badges) instead of the shared one — the subject IS the explanation.',
 };
 
+/** The page-note limit (ADR-200): the nav description's 80 English characters. */
+export const NOTE_MAX = 80;
+
+/**
+ * Screens whose page note is still longer than `NOTE_MAX`, with the increment that shortens it.
+ * Each is a `PAGE_NOTES` entry with `until` in `src/proseBudget.test.ts` — a fact the screen does
+ * not show yet. Only shrinks: the walk fails an entry whose note has come down to the limit, so a
+ * row cannot outlive its reason.
+ */
+export const LONG_NOTE: Record<string, string> = {
+  '/dashboard/public': 'Inc.21 — nothing else is reachable without an account',
+  '/events': 'Inc.16 — unmatched events are kept for 24 hours',
+  '/events/forwarding': 'Inc.16 — flow and BigQuery destinations',
+  '/events/webhooks': 'Inc.14 — the token is shown once',
+  '/alerts/event-rules': 'Inc.14 — an info rule only records',
+  '/nodes/collection-templates': 'Inc.13 — editing a set changes every profile using it',
+  '/nodes/missing-prefixes': 'Inc.12 — what a site is, and where addresses come from',
+  '/nodes/subnet-overlaps': 'Inc.12 — what a site is',
+  '/settings/ai': 'Inc.8 — nothing runs until a provider is set',
+  '/settings/api-tokens': 'Inc.3 — a token acts as its owner and is shown once',
+  '/settings/audit': 'Inc.8 — kept for 365 days',
+  '/settings/auth': 'Inc.7 — local accounts keep working',
+  '/settings/integrations/netbox': 'Inc.6 — read-only, never writes to NetBox',
+  [MERAKI_ORG_SCREEN]: 'Inc.6 — what the organization page holds',
+  '/settings/pollers': 'Inc.4 — a pool with no live poller is not monitored',
+  '/settings/system': 'Inc.5 — per-profile settings take precedence',
+  '/settings/tls': 'Inc.5 — takes effect within seconds, no restart',
+  '/settings/users': 'Inc.8 — what the three roles mean',
+  '/topology/dependency': 'Inc.23 — the upstream decides suppression',
+  '/topology/map': 'Inc.23 — off the menu, so it has no nav description',
+  [`/troubleshoot/report/${REPORT_TOOL}`]: 'Inc.22 — each analysis explains its own scoring',
+};
+
 /**
  * The walk's tenth check (ADR-200): the characters of a screen's own prose — every element whose own
  * text is 40 characters or more, outside the shell, the page note, alerts and table rows, and not

@@ -302,7 +302,7 @@ export function SubnetOverlapsPage() {
         note={t('subnetOverlaps.note')}
       />
 
-      <LoadGate load={load} permission="view" unavailable={t('subnetOverlaps.unavailable')}>
+      <LoadGate load={load} permission="view">
         {view && (
           <p className="so-coverage">
             {t('subnetOverlaps.coverage', {

@@ -660,7 +660,7 @@ export function CredentialsPage() {
         note={t('cred.note')}
       />
 
-      <LoadGate load={creds} permission="manage_credentials" unavailable={t('cred.unavailable')}>
+      <LoadGate load={creds} permission="manage_credentials">
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

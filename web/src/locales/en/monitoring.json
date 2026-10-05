@@ -32,8 +32,6 @@
     "metricsCount_other": "{{count}} metrics"
   },
   "profiles": {
-    "note": "Device-class buckets (role × vendor). Attach Metric sets here; nodes inherit them via their profile.",
-    "unavailable": "Profile management is unavailable in skeleton mode (no metadata store).",
     "addProfile": "Add profile",
     "otherGroup": "Other",
     "defaultInterval": "default",
@@ -91,8 +89,6 @@
     }
   },
   "rules": {
-    "note": "Map a discovered device's sysObjectID / sysDescr to a Device profile. Discovery pre-selects the match on import.",
-    "unavailable": "Classification-rule management is unavailable in skeleton mode (no metadata store).",
     "addRule": "Add rule",
     "enabled": "enabled",
     "disabled": "disabled",
@@ -140,8 +136,6 @@
     }
   },
   "reclassify": {
-    "note": "Nodes whose profile differs from the one the current classification rules choose. Nothing changes until you apply it.",
-    "unavailable": "Reclassification is unavailable in skeleton mode (no metadata store).",
     "counts": "{{differ}} differ · {{locked}} locked · {{unidentified}} not identified yet",
     "truncated": "Showing the first {{shown}} of {{total}}.",
     "selectAll": "Select all",
@@ -180,8 +174,6 @@
     }
   },
   "duplicates": {
-    "note": "Device nodes that look like the same device added more than once — at one address, or at two. Nothing is deleted until you choose.",
-    "unavailable": "Duplicate detection is unavailable in skeleton mode (no metadata store).",
     "counts": "{{total}} groups ({{confident}} likely, {{possible}} to check) · {{scanned}} nodes compared",
     "truncated": "Showing the first {{shown}} of {{total}} groups. Delete some and reload to see the rest.",
     "selectKeepers": "Select all but the suggested keepers",
@@ -234,7 +226,6 @@
   },
   "missingPrefixes": {
     "note": "For every site, the subnets its devices carry that none of the site's IP prefixes covers: the folder pane's “Subnets missing from the IP prefixes” for the whole fleet. A site is the nearest folder of type Site above a device. Read from the interface addresses devices report.",
-    "unavailable": "Missing IP prefixes needs the live inventory, which this deployment does not have.",
     "coverage": "Sites compared: {{sites}}. Devices that reported their addresses: {{read}} of {{total}}. Subnets compared: {{subnets}}.",
     "notCompared": "Sites not compared yet, because none of their devices has reported an address: {{n}}.",
     "truncatedNodes": "Devices whose address list was cut at the stored limit: {{n}}.",
@@ -287,7 +278,6 @@
   },
   "subnetOverlaps": {
     "note": "Address ranges that devices at more than one site carry, read from the interface addresses they report. A site is the nearest folder of type Site above a device.",
-    "unavailable": "Subnet overlaps need the live inventory, which this deployment does not have.",
     "coverage": "Compared {{withAddresses}} of {{total}} devices ({{subnets}} ranges). A device that has not reported its interface addresses is not included.",
     "coverageTruncated": "{{count}} address lists were cut short at the per-device limit.",
     "scopedReadOnly": "Your account is limited to some folders, so rules and intentional marks can only be changed by an account that sees every site.",
@@ -417,7 +407,6 @@
   },
   "sets": {
     "note": "Reusable metric bundles. Attach them to device profiles; editing one updates every profile that uses it.",
-    "unavailable": "Metric sets are unavailable in skeleton mode (no metadata store).",
     "addSet": "Add metric set",
     "deleteSet": "Delete metric set",
     "noun_one": "set",
@@ -472,8 +461,6 @@
     }
   },
   "mib": {
-    "note": "A curated OID catalog. Pick metrics by name in the collection editor instead of typing OIDs.",
-    "unavailable": "The MIB catalog is unavailable in skeleton mode.",
     "addEntry": "Add entry",
     "addTitle": "Add catalog entry",
     "deleteTitle": "Delete catalog entry",
@@ -509,7 +496,6 @@
     }
   },
   "discovery": {
-    "note": "Find devices to monitor: sweep an address range, or review the devices your monitored equipment has already seen.",
     "scans": {
       "title": "Recent sweeps",
       "note": "Sweeps this core is holding. Pick one to see its progress or its results.",
@@ -650,7 +636,6 @@
       "hint": "Off: an address that does not answer ping is skipped instead of being tried with every credential, which is what keeps a large range quick. Turn it on to find devices that block ICMP but answer SNMP."
     },
     "resultsTitle": "Discovered devices",
-    "signIn": "Sign in as an admin to run discovery.",
     "targetPlaceholder": "192.168.1.0/24\n10.0.0.5\n192.168.1.10-20",
     "scan": "Scan",
     "scanning": "Scanning…",

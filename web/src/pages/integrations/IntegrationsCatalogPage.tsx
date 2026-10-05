@@ -61,7 +61,6 @@ export function IntegrationsCatalogPage() {
       <PageHeader
         title={t('nav:settings.integrations')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.integrations') }]}
-        note={t('integrations.note')}
       />
 
       <div className="integrations-grid">
@@ -79,7 +78,7 @@ export function IntegrationsCatalogPage() {
         })}
       </div>
 
-      {block && <LoadBlockNotice block={block} unavailable={t('integrations.unavailable')} />}
+      {block && <LoadBlockNotice block={block} />}
     </div>
   );
 }

@@ -1647,7 +1647,7 @@ export function PollersPage() {
         note={t('pollers.note')}
       />
 
-      <LoadGate load={fleet} unavailable={t('pollers.unavailable')}>
+      <LoadGate load={fleet}>
         {/* The bus itself, above the pools it carries (ADR-065). Renders nothing for a caller
             who may not manage the deployment, and nothing on a deployment with no bus
             certificate store — so a viewer's page is unchanged. */}

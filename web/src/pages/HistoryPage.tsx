@@ -229,13 +229,12 @@ export function HistoryPage() {
       <PageHeader
         title={t('nav:alerts.history')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
-        note={t('history.note')}
       />
       {/* Fixed toolbar order (design-system §4.1): search → filters → spacer → count → primary action.
           There is no search box: the only free-text column is `metric`, unindexed on a table that
           reaches millions of rows, so an ILIKE there would turn the keyset seek into a seq scan.
           "Which node" is what ScopePicker answers instead. */}
-      <LoadGate load={firstPage} unavailable={t('history.unavailable')}>
+      <LoadGate load={firstPage}>
         {/* The scope is counted and cleared with the columns: it is not a column filter, but it
             narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
             ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}

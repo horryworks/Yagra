@@ -127,7 +127,6 @@ export function SharedDashboardPage() {
         <PageHeader
           title={t('nav:dashboard.shared')}
           trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.shared') }]}
-          note={t('shared.pageNote')}
           actions={actions}
         />
 

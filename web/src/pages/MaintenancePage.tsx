@@ -10,7 +10,6 @@
 
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
@@ -244,16 +243,9 @@ export function MaintenancePage() {
       <PageHeader
         title={t('nav:alerts.maintenance')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.maintenance') }]}
-        note={
-          <Trans
-            t={t}
-            i18nKey="maintenance.note"
-            components={{ mutesLink: <Link to="/alerts/mutes" /> }}
-          />
-        }
       />
 
-      <LoadGate load={windows} unavailable={t('maintenance.unavailable')}>
+      <LoadGate load={windows}>
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

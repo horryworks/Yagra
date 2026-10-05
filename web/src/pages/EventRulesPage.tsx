@@ -167,7 +167,7 @@ export function EventRulesPage() {
   return (
     <div>
       <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
-      <LoadGate load={rules} permission="manage_config" unavailable={t('eventRules.unavailable')}>
+      <LoadGate load={rules} permission="manage_config">
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

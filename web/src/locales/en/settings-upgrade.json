@@ -1,6 +1,5 @@
 {
   "title": "Upgrade",
-  "subtitle": "What this deployment is running, and how far back it can be taken.",
   "loading": "Loading…",
   "error": "Could not read the upgrade status.",
   "build": {

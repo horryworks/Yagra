@@ -37,7 +37,6 @@ export function RolesPage() {
       <PageHeader
         title={t('nav:settings.roles')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.roles') }]}
-        note={t('roles.note')}
       />
 
       {error && (

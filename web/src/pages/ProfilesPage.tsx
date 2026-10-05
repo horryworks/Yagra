@@ -150,10 +150,9 @@ export function ProfilesPage() {
       <PageHeader
         title={t('nav:nodes.profiles')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.profiles') }]}
-        note={t('profiles.note')}
       />
 
-      <LoadGate load={profiles} permission="manage_config" unavailable={t('profiles.unavailable')}>
+      <LoadGate load={profiles} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(allFilterCols, { filters, setFilters }, undefined, filterCounts)}
           labels={filterLabels}

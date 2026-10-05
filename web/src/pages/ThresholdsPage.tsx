@@ -410,7 +410,7 @@ export function ThresholdsPage() {
         </p>
       )}
 
-      <LoadGate load={ruleset} permission="manage_config" unavailable={t('thresholds.unavailable')}>
+      <LoadGate load={ruleset} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters })}
           labels={{

@@ -1,6 +1,5 @@
 {
   "title": "Move to another server",
-  "subtitle": "Copy this whole deployment — keys, accounts and history included — onto a fresh Linux server.",
   "unavailable": "This deployment has no upgrade mechanism, so it cannot move itself.",
   "loadFailed": "Could not read the relocation status.",
   "warning": {

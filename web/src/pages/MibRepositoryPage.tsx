@@ -289,10 +289,9 @@ export function MibRepositoryPage() {
       <PageHeader
         title={t('nav:nodes.mib')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.mib') }]}
-        note={t('mib.note')}
       />
 
-      <LoadGate load={catalog} unavailable={t('mib.unavailable')}>
+      <LoadGate load={catalog}>
         <ListToolbar
           list={list}
           labels={columnLabels(columns)}

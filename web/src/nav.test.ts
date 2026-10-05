@@ -13,13 +13,14 @@ import {
   sidebarGroups,
 } from './nav';
 import enNav from './locales/en/nav.json';
+import jaNav from './locales/ja/nav.json';
 
-/** Resolve a dotted i18n key (e.g. 'nodes.metricSets') against the English nav bundle. */
-function resolveKey(key: string): unknown {
+/** Resolve a dotted key (e.g. 'nodes.metricSets') against a nav bundle, English by default. */
+function resolveKey(key: string, bundle: unknown = enNav): unknown {
   return key.split('.').reduce<unknown>((acc, part) => {
     if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[part];
     return undefined;
-  }, enNav);
+  }, bundle);
 }
 
 describe('nav IA', () => {
@@ -180,6 +181,30 @@ describe('nav i18n keys resolve', () => {
     // The SideBar synthesizes this group header, so it must resolve too.
     if (resolveKey('groups.comingSoon') === undefined) missing.push('groups.comingSoon');
     expect(missing).toEqual([]);
+  });
+});
+
+describe('nav descriptions are page notes (ADR-200 G7)', () => {
+  // `PageHeader` shows an item's description under the screen's title, so it obeys the page-note
+  // limit: one line, 80 English / 45 Japanese characters, and not a sentence (no full stop).
+  const items = NAV.flatMap(sectionItems);
+
+  it('fit the page-note limit in both languages', () => {
+    const over = items.flatMap((item) => {
+      const en = String(resolveKey(item.descKey) ?? '');
+      const ja = String(resolveKey(item.descKey, jaNav) ?? '');
+      const bad = [
+        en.length > 80 && `EN ${en.length}`,
+        ja.length > 45 && `JA ${ja.length}`,
+        /[.。]$/.test(en) && 'EN ends with a full stop',
+        /[.。]$/.test(ja) && 'JA ends with a full stop',
+        (!en || !ja) && 'missing',
+      ].filter(Boolean);
+      return bad.length ? [`${item.descKey}: ${bad.join(', ')}`] : [];
+    });
+    expect(over).toEqual([]);
+    // Counts what was inspected: 44 items on 2026-10-06.
+    expect(items.length).toBeGreaterThanOrEqual(34);
   });
 });
 

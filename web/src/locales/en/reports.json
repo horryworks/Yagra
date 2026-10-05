@@ -1,7 +1,4 @@
 {
-  "page": {
-    "note": "Build customizable reports, run them on a schedule, and save the results."
-  },
   "tabs": {
     "saved": "Saved reports",
     "templates": "Templates",

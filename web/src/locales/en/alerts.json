@@ -1,6 +1,5 @@
 {
   "active": {
-    "note": "{{count}} active · triage view",
     "empty": "No active alerts.",
     "emptyFiltered": "No active alerts match these filters.",
     "searchPlaceholder": "Search node or metric…",
@@ -30,8 +29,6 @@
     "note": " — {{note}}"
   },
   "history": {
-    "unavailable": "Alert history is unavailable in skeleton mode.",
-    "note": "Append-only alert lifecycle: each row is a fire or clear transition.",
     "empty": "No alert history yet.",
     "transitions": "transitions",
     "transitionsLoaded": "transitions loaded",

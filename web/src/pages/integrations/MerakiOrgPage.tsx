@@ -523,7 +523,7 @@ export function MerakiOrgPage() {
       />
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('integrations.unavailable')} />
+        <LoadBlockNotice block={block} />
       ) : !loaded ? (
         <p className="muted">{t('common:loading')}</p>
       ) : loadError ? (

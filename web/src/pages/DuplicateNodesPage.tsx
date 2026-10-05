@@ -191,13 +191,9 @@ export function DuplicateNodesPage() {
       <PageHeader
         title={t('nav:nodes.duplicates')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.duplicates') }]}
-        note={t('duplicates.note')}
       />
 
-      <LoadGate
-        load={duplicates}
-        permission="manage_config"
-        unavailable={t('duplicates.unavailable')}>
+      <LoadGate load={duplicates} permission="manage_config">
         <TableToolbar>
           {canConfig && rows.length > 0 && (
             <Button variant="outline" onClick={() => setSelected(selectAllButKeepers(view))}>

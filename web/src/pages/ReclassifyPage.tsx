@@ -179,13 +179,9 @@ export function ReclassifyPage() {
       <PageHeader
         title={t('nav:nodes.reclassify')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.reclassify') }]}
-        note={t('reclassify.note')}
       />
 
-      <LoadGate
-        load={proposals}
-        permission="manage_config"
-        unavailable={t('reclassify.unavailable')}>
+      <LoadGate load={proposals} permission="manage_config">
         <TableToolbar>
           {canConfig && rows.length > 0 && (
             <label className="reclassify-select-all">

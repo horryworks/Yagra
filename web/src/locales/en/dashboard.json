@@ -9,7 +9,6 @@
     "discard": "Discard changes"
   },
   "my": {
-    "pageNote": "Your own boards. Nobody else sees them.",
     "loadSlow": "Loading your dashboard is taking longer than expected.",
     "loadFailed": "Your dashboard could not be loaded. Nothing has been changed — your boards are still saved.",
     "refreshFailed": "Your dashboard could not be refreshed. This is what was loaded earlier.",
@@ -22,7 +21,6 @@
     "cancelBody": "Discard the changes you made in this editing session? The board returns to how it was when you opened Customize."
   },
   "shared": {
-    "pageNote": "The board every user sees. Only an admin can change it.",
     "editingWarning": "Editing the shared dashboard — changes are visible to all users.",
     "loadSlow": "Loading the shared dashboard is taking longer than expected.",
     "loadFailed": "The shared dashboard could not be loaded. Nothing has been changed — it is still saved.",

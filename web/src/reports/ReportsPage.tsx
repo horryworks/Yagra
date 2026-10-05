@@ -318,7 +318,6 @@ export function ReportsPage() {
       <PageHeader
         title={t('nav:dashboard.reports')}
         trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.reports') }]}
-        note={t('page.note')}
       />
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />

@@ -126,10 +126,7 @@ export function EventSourcesPage() {
   return (
     <div>
       <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
-      <LoadGate
-        load={sources}
-        permission="manage_config"
-        unavailable={t('eventSources.unavailable')}>
+      <LoadGate load={sources} permission="manage_config">
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}

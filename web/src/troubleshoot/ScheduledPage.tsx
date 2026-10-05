@@ -187,7 +187,6 @@ export function ScheduledPage() {
           { label: t('nav:sections.troubleshoot'), to: '/troubleshoot' },
           { label: t('nav:troubleshoot.scheduled') },
         ]}
-        note={t('schedule.pageNote')}
       />
 
       {!authed ? (

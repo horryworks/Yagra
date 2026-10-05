@@ -368,7 +368,6 @@ export function SystemHealthPage() {
       <PageHeader
         title={t('nav:settings.systemHealth')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.systemHealth') }]}
-        note={t('health.note')}
       />
       <div className="system-health-grid">
         <Card title={t('health.cards.pollLoop')}>

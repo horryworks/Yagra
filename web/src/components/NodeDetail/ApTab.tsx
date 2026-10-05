@@ -396,7 +396,7 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
           </div>
         </>
       ) : (
-        <PermissionHint permission="manage_config" signInHint={t('ap.signIn')} />
+        <PermissionHint permission="manage_config" />
       )}
     </Card>
   );

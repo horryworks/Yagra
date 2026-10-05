@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useAlertStore, useCan } from '../store';
+import { useCan } from '../store';
 import { api } from '../services/api';
 import { subjectNodeId } from '../lib/alertSubject';
 import { SEVERITY_ORDER } from '../lib/nodeState';
@@ -44,7 +44,6 @@ import { urlOnlyResolver } from './activeAlertFilters';
 
 export function ActiveAlertsPage() {
   const { t } = useTranslation('alerts');
-  const count = useAlertStore((s) => Object.keys(s.alerts).length);
   const [rcaEnabled, setRcaEnabled] = useState(false);
   const [explaining, setExplaining] = useState<{ node: string; check: string } | null>(null);
   const [muting, setMuting] = useState<AlertMuteSeed | null>(null);
@@ -112,7 +111,6 @@ export function ActiveAlertsPage() {
       <PageHeader
         title={t('nav:alerts.active')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.active') }]}
-        note={t('active.note', { count })}
       />
       {/* No `Card` around the list: the data-table standard is header → toolbar → rows, and this
           was the one list screen still wrapping its rows in a titled panel (§4.1). */}

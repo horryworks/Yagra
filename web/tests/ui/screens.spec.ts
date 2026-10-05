@@ -4,7 +4,13 @@
 // `src/**/*.test.ts`; putting it there would separate it from the file it pins.
 
 import { expect, test } from '@playwright/test';
-import { ALL_SCREENS, PROSE_CEILING, SCREEN_EXPECT } from './screens';
+import {
+  ALL_SCREENS,
+  LONG_NOTE,
+  NOTE_EXEMPT,
+  PROSE_CEILING,
+  SCREEN_EXPECT,
+} from './screens';
 import { auditFixtures, continuationProps, OPERATION_COUNT } from '../support/openapi';
 
 test('every walked screen declares what "rendered" means for it', () => {
@@ -31,6 +37,15 @@ test('every prose ceiling names a screen the walk visits', () => {
     'PROSE_CEILING entries for screens the walk no longer visits',
   ).toEqual([]);
   expect(Object.values(PROSE_CEILING).every((n) => n > 0)).toBe(true);
+});
+
+test('every long-note exemption names a screen the walk checks the note of', () => {
+  const walked = ALL_SCREENS.map((s) => s.path);
+  expect(
+    Object.keys(LONG_NOTE).filter((p) => !walked.includes(p) || NOTE_EXEMPT[p]),
+    'LONG_NOTE entries for screens whose note the walk does not read',
+  ).toEqual([]);
+  expect(Object.values(LONG_NOTE).every((why) => /^Inc\.\d+ — /.test(why))).toBe(true);
 });
 
 test('the walk covers every nav item', () => {

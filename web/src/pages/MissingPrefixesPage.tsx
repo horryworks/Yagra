@@ -279,7 +279,7 @@ export function MissingPrefixesPage() {
         note={t('missingPrefixes.note')}
       />
 
-      <LoadGate load={load} permission="view" unavailable={t('missingPrefixes.unavailable')}>
+      <LoadGate load={load} permission="view">
         {data && (
           <p className="mp-coverage">
             {t('missingPrefixes.coverage', {

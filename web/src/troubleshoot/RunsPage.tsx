@@ -6,20 +6,16 @@
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
-import { runningCount, useTroubleshootStore } from './store';
 import { AnalysisRuns } from './AnalysisRuns';
 import './troubleshoot.css';
 
 export function RunsPage() {
   const { t } = useTranslation('troubleshoot');
-  const running = useTroubleshootStore((s) => runningCount(s.jobs));
-
   return (
     <div>
       <PageHeader
         title={t('nav:troubleshoot.runs')}
         trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.runs') }]}
-        note={t('runs.pageNote', { n: running })}
       />
       <Card title={t('runs.card')}>
         <AnalysisRuns filterable />

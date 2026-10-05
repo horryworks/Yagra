@@ -7,7 +7,7 @@
 // import panels, System settings' three forms). An empty card reads as a broken screen, so it says
 // which of the two reasons applies instead:
 //
-//   - not signed in     → the screen's own "sign in to…" sentence, unchanged from before
+//   - not signed in     → "Sign in to continue." (`common:loadBlock.signIn`), or the screen's own
 //   - signed in, denied → the privilege it needs, named from the server's own catalogue
 //
 // Those two used to be one message. A signed-in Viewer was told to sign in — advice that cannot
@@ -19,8 +19,9 @@ import { useAuthStore, usePermissionLabel } from '../../store';
 interface Props {
   /** The privilege the hidden control needs. */
   permission: Permission;
-  /** What this screen says to someone who is not signed in at all. */
-  signInHint: string;
+  /** What this screen says to someone who is not signed in at all. Defaults to the shared
+   *  sentence; the panel's title already names what signing in is for. */
+  signInHint?: string;
 }
 
 export function PermissionHint({ permission, signInHint }: Props) {
@@ -29,7 +30,9 @@ export function PermissionHint({ permission, signInHint }: Props) {
   const label = usePermissionLabel(permission);
   return (
     <p className="muted">
-      {authed ? t('loadBlock.forbiddenPermission', { permission: label }) : signInHint}
+      {authed
+        ? t('loadBlock.forbiddenPermission', { permission: label })
+        : (signInHint ?? t('loadBlock.signIn'))}
     </p>
   );
 }
