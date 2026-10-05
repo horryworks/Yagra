@@ -3143,8 +3143,8 @@ export interface paths {
         /**
          * Yagra's built-in subject and body for a node alert, written as templates, once per lifecycle
          *     point.
-         * @description The template editor shows a channel that has no template this text, so an operator sees what
-         *     is sent today and can start from it. Rendering it produces exactly the built-in subject and
+         * @description The template editor shows this text for a channel that has no template, so an operator sees
+         *     what is sent today and can start from it. Rendering it produces exactly the built-in subject and
          *     body for that channel kind. A poller pool's and a Meraki organization's alerts have built-in
          *     wording of their own, which is not described here. Webhook and PagerDuty have no body template:
          *     their built-in body is the whole alert as JSON.

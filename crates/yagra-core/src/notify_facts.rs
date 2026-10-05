@@ -128,23 +128,21 @@ impl CachedNodeFacts {
 
 #[async_trait]
 impl AlertFactsSource for CachedNodeFacts {
-    // Not cached: an organization's collect alert fires a handful of times a year, and a failed
-    // read degrades to the id like every other fact here — the notification goes out regardless.
-    // Not cached either: only a per-port alert asks, and a failed read degrades to the ifIndex.
+    // Not cached: only a per-port alert asks, it reads one row by primary key, and a failed read
+    // degrades to the ifIndex.
     async fn port_name(&self, node: Uuid, ifindex: u32) -> Option<String> {
-        let want = i32::try_from(ifindex).ok()?;
         self.repo
-            .interface_idents_for(&[node])
+            .port_names_for(&[(node, ifindex)])
             .await
             .map_err(
                 |e| tracing::warn!(error = %e, "failed to read a port name for a notification"),
             )
             .ok()?
-            .remove(&(node, want))?
-            .if_name
-            .filter(|n| !n.trim().is_empty())
+            .remove(&(node, ifindex))
     }
 
+    // Not cached: an organization's collect alert fires a handful of times a year, and a failed
+    // read degrades to the id like every other fact here — the notification goes out regardless.
     async fn meraki_org_name(&self, org: Uuid) -> Option<String> {
         crate::meraki::MerakiOrgRepo::new(self.repo.pool())
             .get(org)
@@ -250,7 +248,7 @@ pub fn context_for(
         metric: (alert.metric != crate::alerts::LIVENESS && !alert.metric.is_empty())
             .then(|| alert.metric.clone()),
         // Unlike `metric`, the liveness alert has a title: "Node not responding" (ADR-196).
-        title: crate::api::alerts::alert_title_of(&alert.metric),
+        title: crate::metric_meaning::alert_title_of(&alert.metric),
         value: alert.breach.as_ref().map(|b| b.value),
         threshold: alert.breach.as_ref().and_then(|b| b.threshold),
         direction: alert

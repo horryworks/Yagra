@@ -1787,19 +1787,17 @@ fn json_notification(
 
 /// The built-in subject of a **node** alert, written as a notification template (ADR-039 Inc.2).
 ///
-/// The editor opens a webhook or PagerDuty channel that has no template on this text, as a draft
-/// the operator can edit (JSM and email open on `notify_text::node_subject_template`),
-/// so they start from what is sent today instead of an empty field. It is served rather than copied
-/// into the WebUI because the wording lives in [`builtin_notification`]'s `format!`s, and a second
-/// copy in another language would drift from it with nothing to notice.
+/// The editor opens a channel that has no template on this text, as a draft the operator can edit,
+/// so they start from what is sent today instead of an empty field. Since ADR-196 it is one draft
+/// for all four kinds, because every kind's built-in subject is the same sentence
+/// (`notify_text::subject`, which `notify_text::node_subject_template` writes as a template). It is
+/// served rather than copied into the WebUI because a second copy in another language would drift
+/// from the wording with nothing to notice.
 /// `every_builtin_subject_template_renders_the_builtin_subject` pins the two together.
 ///
 /// Node alerts only: a poller pool's and a Meraki organization's built-in wording are separate
 /// sentences, and they keep being sent as long as the operator saves the draft untouched — the
 /// editor stores no template in that case.
-///
-/// Since ADR-196 it is the same draft JSM and email open on, because the built-in summary is the
-/// same sentence.
 #[must_use]
 pub(crate) const fn builtin_node_subject_template(event: NotifyEvent) -> &'static str {
     crate::notify_text::node_subject_template(event)
@@ -1880,8 +1878,8 @@ mod template_tests {
     /// it sends exactly what no template sends. Rendered through the real renderer against every
     /// preview sample, so a reworded `format!` or a renamed variable fails here, not in an inbox.
     ///
-    /// Per channel kind since ADR-194: JSM and email name the node, so their draft is a different
-    /// template — and it is checked against unresolved facts too, where the name is the id.
+    /// Per channel kind since ADR-194, and against unresolved facts too, where the name is the id.
+    /// Since ADR-196 all four kinds share one draft, so this is what holds them to it.
     #[test]
     fn every_builtin_subject_template_renders_the_builtin_subject() {
         let mut compared = 0;
@@ -2072,17 +2070,22 @@ mod template_tests {
         assert_eq!(compared, 12, "2 kinds x 2 samples x 3 points");
     }
 
-    /// Webhook and PagerDuty are read by programs, and ADR-194 changes nothing they receive: the
-    /// built-in is still the whole alert as JSON with the id-based subject, byte for byte.
+    /// Webhook and PagerDuty are read by programs: the built-in payload is still the whole alert as
+    /// JSON, byte for byte (ADR-194, ADR-196). The summary is what ADR-196 changed — it is the same
+    /// title JSM and email carry, naming the node by id when no facts were resolved.
+    ///
+    /// Compared against `Alert`'s own serialization and `notify_text::subject`, not against
+    /// `builtin_notification`, which is now this same function and would pass whatever it sent.
     #[test]
     fn a_program_reads_the_same_json_it_always_did() {
         let alert = threshold_alert(NodeId::new());
+        let json = serde_json::to_string(&alert).expect("an alert serializes");
         for kind in [ChannelKind::Webhook, ChannelKind::PagerDuty] {
             for event in NotifyEvent::ALL {
                 let n = builtin_for_kind(kind, &alert, event, None);
-                let old = builtin_notification(&alert, event);
-                assert_eq!(n.summary, old.summary);
-                assert_eq!(n.payload, old.payload);
+                assert_eq!(n.payload, json, "{kind:?} {event:?}");
+                let facts = context_for(&alert, event, &HashMap::new());
+                assert_eq!(n.summary, crate::notify_text::subject(&alert, &facts));
             }
         }
     }

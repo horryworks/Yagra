@@ -322,6 +322,13 @@ pub fn alert_title(metric: &str) -> String {
     alert_name(metric).map_or_else(|| metric.to_owned(), |n| n.text().to_owned())
 }
 
+/// An alert's English title, or `None` for an alert that recorded no metric (ADR-196). What REST,
+/// MCP and the notification facts all put in `title`.
+#[must_use]
+pub fn alert_title_of(metric: &str) -> Option<String> {
+    (!metric.is_empty()).then(|| alert_title(metric))
+}
+
 /// One sentence per metric, and what its number is, sorted by metric name.
 ///
 /// Sorted, and pinned sorted by a test: the generated locale file is written in this order, so an

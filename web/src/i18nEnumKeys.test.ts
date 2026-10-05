@@ -69,6 +69,7 @@ import {
   EXCLUSION_REASONS,
   MERAKI_LISTINGS,
   CLAIM_PORT_STATES,
+  CHANNEL_KINDS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -110,6 +111,7 @@ import { SKIES } from './pages/geoDayNight';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { PREVIEW_SAMPLES, TEMPLATE_EVENTS, UNSUPPORTED_REASONS } from './pages/templateModel';
 import { TEMPLATE_PRESETS } from './pages/templatePresets';
+import { BUILTIN_JSON_KEYS, TEMPLATE_FORMS } from './pages/templateForm';
 import { TEMPLATE_VARIABLE_GROUPS, TEMPLATE_VARIABLE_NAMES } from './pages/templateVariables';
 import { MERAKI_UPLINK_STATES } from './components/NodeDetail/merakiCard';
 import { MERAKI_REGION_KEYS } from './pages/integrations/merakiRegions';
@@ -1388,6 +1390,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('unsupported template', locales, `${p}unsupported.`, UNSUPPORTED_REASONS);
     expectKeys('edit mode', locales, `${p}mode.`, ['visual', 'code']);
     expectKeys('field hint', locales, p, ['subjectHint.jsm', 'subjectHint.email', 'bodyHint.jsm', 'bodyHint.email']);
+    // ADR-197 Inc.2: what each kind sends, each key of the built-in JSON, and the note on a tab
+    // whose event the kind never renders — all built from a runtime value.
+    expectKeys('what a channel sends', locales, `${p}sends.`, CHANNEL_KINDS);
+    expectKeys('built-in JSON key', locales, `${p}jsonKeys.`, BUILTIN_JSON_KEYS);
+    expectKeys(
+      'close-only tab note',
+      locales,
+      `${p}builtinView.closeOnly.`,
+      [...new Set(Object.values(TEMPLATE_FORMS).flatMap((f) => f.unusedAt))],
+    );
   });
 
   it('every delivery-log kind, result and side has its words (alertsConfig:routing.log.*)', () => {

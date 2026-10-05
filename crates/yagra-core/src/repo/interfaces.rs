@@ -279,6 +279,42 @@ impl NodeRepo {
             .collect()
     }
 
+    /// The names of exactly these ports, keyed by `(node_id, ifindex)` (ADR-196 Inc.4).
+    ///
+    /// Reads one row per pair through the primary key, unlike [`Self::interface_idents_for`], which
+    /// reads every port of every node it is given. An alert names one port of a node that may have
+    /// hundreds, and this is asked once per per-port alert a page, a notification or a live frame
+    /// carries. A port with no name, or a blank one, is absent — the caller then shows the ifIndex.
+    pub async fn port_names_for(
+        &self,
+        pairs: &[(Uuid, u32)],
+    ) -> anyhow::Result<HashMap<(Uuid, u32), String>> {
+        // An ifIndex past `i32::MAX` cannot be stored, so it cannot have a name either.
+        let (nodes, ifindexes): (Vec<Uuid>, Vec<i32>) = pairs
+            .iter()
+            .filter_map(|&(node, ifindex)| Some((node, i32::try_from(ifindex).ok()?)))
+            .unzip();
+        if nodes.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT i.node_id, i.ifindex, i.if_name              FROM unnest($1::uuid[], $2::int4[]) AS w(node_id, ifindex)              JOIN interfaces i ON i.node_id = w.node_id AND i.ifindex = w.ifindex              WHERE btrim(coalesce(i.if_name, '')) <> ''",
+        )
+        .bind(&nodes)
+        .bind(&ifindexes)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let node: Uuid = row.try_get("node_id")?;
+                let ifindex: i32 = row.try_get("ifindex")?;
+                let name: String = row.try_get("if_name")?;
+                // Non-negative: it was bound from a `u32` above.
+                Ok(((node, ifindex.unsigned_abs()), name))
+            })
+            .collect()
+    }
+
     /// The slowest usable interface speed in bits/sec, over the whole fleet or over `node_ids`.
     ///
     /// This is the denominator of the interface-utilisation evaluator's query floor (ADR-076): the
@@ -529,6 +565,46 @@ mod tests {
         // reads fail rather than pass, but one that had stopped *updating* would satisfy the
         // equality above forever. The next test is the other half.
         assert_eq!(repo.list_interfaces(node).await.unwrap().len(), 2);
+    }
+
+    /// **Only the ports asked for come back, by name, and a port with no name does not** (ADR-196
+    /// Inc.4). The other port on the same node is the over-fetch `interface_idents_for` does and
+    /// this must not; the blank one is what the caller turns into "show the ifIndex".
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn port_names_for_answers_only_the_named_ports_asked_for(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let other = crate::pgtest::node(&pool, "sw2", 2, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        repo.upsert_interfaces_batch(&[
+            walk(node, 1, "Gi0/1", None),
+            walk(node, 2, "Gi0/2", None),
+            walk(node, 3, "  ", None),
+            walk(other, 1, "Te1/1", None),
+        ])
+        .await
+        .expect("seed");
+
+        let names = repo
+            .port_names_for(&[
+                (node, 1),
+                (node, 3),
+                (node, 9),
+                (other, 1),
+                (node, u32::MAX),
+            ])
+            .await
+            .expect("read");
+
+        let mut got: Vec<_> = names.into_iter().collect();
+        got.sort();
+        let mut want = vec![
+            ((node, 1), "Gi0/1".to_owned()),
+            ((other, 1), "Te1/1".to_owned()),
+        ];
+        want.sort();
+        assert_eq!(got, want);
+        assert!(repo.port_names_for(&[]).await.expect("empty").is_empty());
     }
 
     /// **A changed column is written, and only its own row is.**

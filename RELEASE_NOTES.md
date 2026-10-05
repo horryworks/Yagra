@@ -27,6 +27,7 @@
 
 ### Bug Fixes
 
+- **A per-port alert keeps its port when it changes on an open page.** The live alert stream (`GET /api/v1/stream/alerts`) sent each alert without its `ifindex`, `row` and `row_name`, so an acknowledgement or update arriving on an open page replaced the row and dropped the port or table row it named until the next reload. Each frame now carries the alert as `GET /api/v1/alerts` does, with its `title` and, for a port whose name is known, its `if_name`. Only fields were added. (ADR-196)
 - **The template editor no longer says the built-in text could not be read.** It said so on every JSM and email channel, and on webhook and PagerDuty channels too since the alert names above, and opened with empty fields. It also told JSM and email channels that an empty body sends the alert as JSON; they send the text body. (ADR-197)
 
 ## v0.3.44 — A notification delivery log says whether each delivery arrived, and JSM and email notifications read as text

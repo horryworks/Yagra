@@ -483,8 +483,9 @@ function draftBranches(draft: BuiltinDraft): FieldBranches {
 }
 
 /** The template a channel opens on, or why it has to open as code. A field with no stored template
- *  starts from the built-in: the subject as the draft, the body empty (the built-in body is the
- *  alert as JSON, which has no rows to show). */
+ *  starts from the built-in subject as the draft, and the body empty: for a JSON kind the built-in
+ *  body is the alert itself, which has no rows to show, and for JSM and email the dialog offers the
+ *  built-in body as a copy to edit instead (ADR-197). */
 export function openTemplate(
   stored: { subject: string | null; body: string | null; free_layout?: boolean },
   draft: BuiltinDraft,

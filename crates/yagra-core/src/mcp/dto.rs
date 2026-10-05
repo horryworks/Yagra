@@ -206,7 +206,7 @@ impl AlertDto {
             severity: alert.severity.as_str().to_owned(),
             state: alert.state.as_str().to_owned(),
             metric: alert.metric.clone(),
-            title: crate::api::alerts::alert_title_of(&alert.metric),
+            title: crate::metric_meaning::alert_title_of(&alert.metric),
             fired_at: unix_ms_to_rfc3339(alert.at_unix_ms),
             root_cause: alert.root_cause.map(|r| r.0),
             ifindex: alert.ifindex.map(|i| i.0),
@@ -294,7 +294,7 @@ impl AlertHistoryDto {
             title: row
                 .metric
                 .as_deref()
-                .and_then(crate::api::alerts::alert_title_of),
+                .and_then(crate::metric_meaning::alert_title_of),
             resolved: row.resolved,
             at: unix_ms_to_rfc3339(row.at_unix_ms),
             observed_value: row.observed_value,

@@ -618,8 +618,8 @@ export type AlertWhat =
       condition: string | null;
       observed: string | null;
       /** SNMP ifIndex when the alert is about one port rather than the node (ADR-076).
-       *  A number, not a name: the alert carries the index, and the name is resolved by the
-       *  surface that has the node's interface roster. `null` is the ordinary node-level case. */
+       *  A number, not a name: the alert carries the index, and the server sends the name beside
+       *  it as `ifName` when it knows one. `null` is the ordinary node-level case. */
       ifindex: number | null;
       /** The port's name (`ifName`) when the server could resolve it from the interface inventory
        *  (ADR-196 decision 6). Read at the time the alert is read, not when it fired. */

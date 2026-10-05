@@ -170,18 +170,21 @@ test('a channel with its own template can go back to the built-in text, after sa
   const dialog = await openTemplate(page, 'ymock-mail');
   const status = dialog.getByRole('status').first();
   await expect(status).toContainText('Sending this channel’s own template');
+  // The consent is the shared destructive-confirmation dialog, stacked over the editor.
   await dialog.getByRole('button', { name: 'Go back to built-in text…' }).click();
-  await expect(status).toContainText('Delete this channel’s template');
+  const confirm = page.getByRole('dialog', { name: 'Delete this channel’s template and send the built-in text again?' });
+  await expect(confirm).toBeVisible();
 
-  // "Keep it" changes nothing.
-  await dialog.getByRole('button', { name: 'Keep it' }).click();
+  // Cancel changes nothing.
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toBeHidden();
   await expect(status).toContainText('Sending this channel’s own template');
 
   await dialog.getByRole('button', { name: 'Go back to built-in text…' }).click();
   const put = page.waitForRequest(
     (r) => r.method() === 'PUT' && new URL(r.url()).pathname === `/api/v1/notification-channels/${OWN_ID}/template`,
   );
-  await dialog.getByRole('button', { name: 'Delete and use built-in' }).click();
+  await confirm.getByRole('button', { name: 'Delete and use built-in' }).click();
   expect((await put).postDataJSON()).toEqual({ subject: null, body: null });
 
   expect(errors.uncaught).toEqual([]);

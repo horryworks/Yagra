@@ -9,6 +9,7 @@
 // by an older core, or a malformed detail).
 
 import { csvField } from '../../lib/csv';
+import { EVENT_METRIC_PREFIX } from '../../lib/alertName';
 import type { AnalysisFinding, FindingSeverity } from '../../types/api';
 import type { SummaryStat } from './types';
 
@@ -224,7 +225,7 @@ export type Lane = (typeof TIMELINE_LANES)[number];
  * UUIDs in the UI).
  */
 export function eventRuleName(metric: string): string {
-  return metric.startsWith('event:') ? metric.slice('event:'.length) : metric;
+  return metric.startsWith(EVENT_METRIC_PREFIX) ? metric.slice(EVENT_METRIC_PREFIX.length) : metric;
 }
 
 /** One rule's churn rolled up across every node it fired on. */

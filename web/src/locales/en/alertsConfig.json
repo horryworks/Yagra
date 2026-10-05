@@ -330,8 +330,7 @@
         "reset": "Go back to built-in text…",
         "confirmTitle": "Delete this channel’s template and send the built-in text again?",
         "confirmNote": "Title and body go back together, at every point in the alert’s life. The deleted template cannot be restored.",
-        "confirm": "Delete and use built-in",
-        "cancel": "Keep it"
+        "confirm": "Delete and use built-in"
       },
       "builtinView": {
         "readOnly": "Built-in · read only",

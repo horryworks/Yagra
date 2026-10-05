@@ -10,7 +10,8 @@
 // server cannot tell which editor wrote it.
 //
 // Whether this channel's body must be JSON is the server's answer (`json_valid` is present on its
-// preview), not a list kept here - see `channelTemplate.ts`.
+// preview) - see `channelTemplate.ts`. Which fields a kind has and what each becomes on the wire is
+// `templateForm.ts`, a copy of `alerts/notify.rs` that a Rust test holds to it.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,6 +24,7 @@ import type {
   TemplateVariable,
 } from '../types/api';
 import { Modal } from '../components/ui/Modal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -329,8 +331,9 @@ export function ChannelTemplateModal({
     setShowBuiltin(false);
   };
   // Both fields empty is the built-in text, at every point in the alert's life (decision 5).
-  const resetToBuiltin = () =>
-    form.submit(() => api.setNotificationTemplate(channel.id, { subject: null, body: null }).then(() => done()));
+  // Going back to the built-in text deletes the saved template, so it asks through the shared
+  // destructive-consent dialog (ui-conventions), stacked over this one.
+  const resetToBuiltin = () => api.setNotificationTemplate(channel.id, { subject: null, body: null });
 
   // "Start from a JSON skeleton" (Inc.2 decision 11): the built-in JSON is no template, so a JSON
   // channel starts from a skeleton instead of a copy. PagerDuty's summary is still a copy.
@@ -410,26 +413,13 @@ export function ChannelTemplateModal({
               {t(`routing.template.sends.${channel.kind}`)}
             </p>
             <div
-              className={`tpl-status ${!own ? 'is-builtin' : confirmReset ? 'is-confirm' : 'is-own'}`}
+              className={`tpl-status ${own ? 'is-own' : 'is-builtin'}`}
               role="status"
             >
               {!own ? (
                 <>
                   <strong>{t('routing.template.status.builtinTitle')}</strong>
                   <p>{t('routing.template.status.builtinNote')}</p>
-                </>
-              ) : confirmReset ? (
-                <>
-                  <strong>{t('routing.template.status.confirmTitle')}</strong>
-                  <p>{t('routing.template.status.confirmNote')}</p>
-                  <div className="tpl-status-acts">
-                    <Button variant="danger" className="tpl-small" onClick={resetToBuiltin} disabled={form.busy}>
-                      {t('routing.template.status.confirm')}
-                    </Button>
-                    <Button className="tpl-small" onClick={() => setConfirmReset(false)} disabled={form.busy}>
-                      {t('routing.template.status.cancel')}
-                    </Button>
-                  </div>
                 </>
               ) : (
                 <>
@@ -952,6 +942,18 @@ export function ChannelTemplateModal({
           onChanged={() => handles[chip.field].current?.reread()}
           onClose={() => setChip(null)}
         />
+      )}
+      {confirmReset && (
+        <ConfirmDeleteModal
+          title={t('routing.template.status.confirmTitle')}
+          confirmLabel={t('routing.template.status.confirm')}
+          errorFallback={t('routing.err.template')}
+          onConfirm={resetToBuiltin}
+          onClose={() => setConfirmReset(false)}
+          onDone={onDone}
+        >
+          {t('routing.template.status.confirmNote')}
+        </ConfirmDeleteModal>
       )}
     </Modal>
   );

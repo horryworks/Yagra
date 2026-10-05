@@ -2563,22 +2563,26 @@ impl AlertManager {
     // in the lifecycle key, and the object is the contract the WebUI parses — so a field added to
     // one and not the other was a live-feed bug with nothing to compile against.
     fn send_frame(&self, alert: &Alert, lifecycle: &str, value: serde_json::Value) {
-        // Wire shape the WebUI consumes (Alert fields + the subject decomposition + one lifecycle
-        // key). Kept in step with `ActiveAlertView` in `api/alerts.rs` — the stream patches the
-        // list that endpoint seeded, so a client parses both with one reader.
-        let mut event = serde_json::json!({
-            "node": alert.subject,
-            "subject_kind": alert.subject.kind(),
-            "subject_name": self.subject_display_name(&alert.subject),
-            "check": alert.check,
-            "severity": alert.severity,
-            "state": alert.state,
-            "at_unix_ms": alert.at_unix_ms,
-            "root_cause": alert.root_cause,
-            "flapping": alert.flapping,
-            "metric": alert.metric,
-            "breach": alert.breach,
-        });
+        // Wire shape the WebUI consumes: the alert as `Alert` serializes it, the subject
+        // decomposition and the title beside it, and one lifecycle key — the same object
+        // `ActiveAlertView` in `api/alerts.rs` serves, because the stream patches the list that
+        // endpoint seeded and a client parses both with one reader. Serializing the `Alert` rather
+        // than listing its fields is what keeps the two in step: the hand-written list this replaced
+        // had dropped `ifindex`, `row` and `row_name`, so an ack arriving live erased the port a
+        // seeded row named (ADR-196 Inc.4). The port's *name* is added downstream, by the SSE
+        // edge, which can read the inventory (`api/alerts.rs::sse_with_resync`).
+        let mut event = match serde_json::to_value(alert) {
+            Ok(v @ serde_json::Value::Object(_)) => v,
+            Ok(_) | Err(_) => {
+                tracing::warn!(check = %alert.check, "an alert did not serialize as an object; frame dropped");
+                return;
+            }
+        };
+        event["subject_kind"] = serde_json::json!(alert.subject.kind());
+        event["subject_name"] = serde_json::json!(self.subject_display_name(&alert.subject));
+        if let Some(title) = crate::metric_meaning::alert_title_of(&alert.metric) {
+            event["title"] = serde_json::Value::String(title);
+        }
         event[lifecycle] = value;
         // Fire-and-forget: no subscribers is not an error.
         let _ = self
@@ -5280,6 +5284,72 @@ mod tests {
             serde_json::to_value(node_of_frame.as_uuid()).unwrap(),
             v["node_id"]
         );
+    }
+
+    /// **A live frame carries every field the seeded list does** (ADR-196 Inc.4). The stream
+    /// replaces a row whole, so a key the frame lacks is erased from the screen by the next ack:
+    /// the hand-written frame this replaced dropped `ifindex`, and a port alert's "on Gi0/7" went
+    /// with it. Pinned against `Alert`'s own serialization, so a field added to `Alert` is carried
+    /// without anyone remembering this builder.
+    #[test]
+    fn a_port_alert_frame_carries_the_alert_as_it_serializes_and_its_title() {
+        use yagra_bus::Sample;
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(
+            cfg(
+                vec![StoredThreshold::new(
+                    Uuid::nil(),
+                    ScopeLevel::Node,
+                    vec![node.to_string()],
+                    ThresholdRule::new(
+                        "if_oper_status",
+                        ThresholdBounds::above(None, Some(1.5)),
+                        1,
+                    ),
+                )],
+                meta,
+            )
+            .with_per_interface(["if_oper_status".to_owned()].into_iter().collect()),
+        );
+        let mut rx = mgr.subscribe();
+        let mut res = result(node, CheckOutcome::Reachable, 0);
+        res.samples = vec![Sample::interface(
+            "if_oper_status",
+            IfIndex(7),
+            2.0,
+            MetricKind::Gauge,
+        )];
+        let fired = mgr.observe(&res);
+        let Some(NotifyAction::Fire(alert)) = fired.first() else {
+            panic!("a one-sample dwell fires on the first breach: {fired:?}");
+        };
+
+        let (_, body) = rx.try_recv().expect("the fire is streamed");
+        let frame: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let serde_json::Value::Object(expected) = serde_json::to_value(alert).unwrap() else {
+            panic!("an alert serializes as an object");
+        };
+        for (key, value) in &expected {
+            assert_eq!(
+                &frame[key], value,
+                "the frame's `{key}` differs from the alert's"
+            );
+        }
+        assert_eq!(
+            frame["ifindex"], 7,
+            "the port a seeded row names survives a live update"
+        );
+        assert_eq!(
+            frame["title"],
+            serde_json::json!(crate::metric_meaning::alert_title("if_oper_status"))
+        );
+        assert_eq!(frame["subject_kind"], "node");
+        assert_eq!(frame["resolved"], false);
     }
 
     #[tokio::test]

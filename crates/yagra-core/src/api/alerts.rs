@@ -114,46 +114,35 @@ pub(crate) struct AlertHistoryView {
     pub acked: Option<AckView>,
 }
 
-/// An alert's English title, or `None` for an alert that recorded no metric (ADR-196).
-pub(crate) fn alert_title_of(metric: &str) -> Option<String> {
-    (!metric.is_empty()).then(|| crate::metric_meaning::alert_title(metric))
-}
-
 /// The names of the ports a page of alerts is about, keyed by `(node, ifindex)` (ADR-196
 /// decision 6).
 ///
-/// One query for the nodes that have a per-port alert on the page, and none when no alert is about
-/// a port — the ordinary case. A port name is decorative, so a failed read (or skeleton mode, with no
-/// inventory to read) answers an empty map and the alerts are served with their ifIndex alone.
+/// One primary-key read per port, and none when no alert is about a port — the ordinary case. A
+/// port name is decorative, so a failed read (or skeleton mode, with no inventory to read) answers
+/// an empty map and the alerts are served with their ifIndex alone.
 pub(crate) async fn port_names(
     st: &ApiState,
     ports: impl IntoIterator<Item = (Uuid, u32)>,
 ) -> HashMap<(Uuid, u32), String> {
-    let wanted: std::collections::BTreeSet<(Uuid, u32)> = ports.into_iter().collect();
+    let wanted: Vec<(Uuid, u32)> = ports
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let Some(admin) = st.admin.as_ref() else {
         return HashMap::new();
     };
     if wanted.is_empty() {
         return HashMap::new();
     }
-    let mut nodes: Vec<Uuid> = wanted.iter().map(|(n, _)| *n).collect();
-    nodes.dedup();
-    let idents = admin
+    admin
         .repo
-        .interface_idents_for(&nodes)
+        .port_names_for(&wanted)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, "failed to read port names for alerts; serving ifIndex only");
             HashMap::new()
-        });
-    idents
-        .into_iter()
-        .filter_map(|((node, ifindex), ident)| {
-            let key = (node, u32::try_from(ifindex).ok()?);
-            let name = ident.if_name.filter(|n| !n.trim().is_empty())?;
-            wanted.contains(&key).then_some((key, name))
         })
-        .collect()
 }
 
 /// The ack map key for one alert identity.
@@ -180,7 +169,7 @@ fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<A
             ActiveAlertView {
                 subject_kind: alert.subject.kind(),
                 subject_name: alert.subject.name().map(str::to_owned),
-                title: alert_title_of(&alert.metric),
+                title: crate::metric_meaning::alert_title_of(&alert.metric),
                 if_name: None,
                 alert,
                 acked,
@@ -200,7 +189,10 @@ fn decorate_history(
                 .subject()
                 .and_then(|s| acks.get(&ack_key(&s, row.check, row.severity)).cloned());
             AlertHistoryView {
-                title: row.metric.as_deref().and_then(alert_title_of),
+                title: row
+                    .metric
+                    .as_deref()
+                    .and_then(crate::metric_meaning::alert_title_of),
                 if_name: None,
                 row,
                 acked,
@@ -955,16 +947,21 @@ pub(crate) async fn recent_transitions(
 /// sender feeding this stream. A strong `Arc` here would keep that sender alive for as long as the
 /// stream lives and the stream alive for as long as the sender lives, so the body would never end.
 /// If the upgrade ever fails the whole state is gone, and the frame is dropped: fail-closed.
+///
+/// `ports` is the inventory to name a per-port alert's port from (ADR-196 Inc.4): `Some` on the
+/// alert stream with an inventory, `None` on the node-state stream and in skeleton mode. Only a
+/// visible frame is named, so a scoped subscriber never costs a read for an alert it is not sent.
 fn sse_with_resync(
     rx: tokio::sync::broadcast::Receiver<crate::alerts::StreamFrame>,
     alerts: std::sync::Weak<crate::alerts::AlertManager>,
     scope: super::scope::NodeScope,
     what: &'static str,
+    ports: Option<std::sync::Arc<crate::repo::NodeRepo>>,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
     tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(move |r| {
-        // Cloned per frame so the closure stays `FnMut` rather than consuming its captures; both
-        // are cheap (a `Weak` bump and an `Arc<ScopeSet>` clone).
-        let (alerts, scope) = (alerts.clone(), scope.clone());
+        // Cloned per frame so the closure stays `FnMut` rather than consuming its captures; all
+        // are cheap (a `Weak` bump and two `Arc` clones).
+        let (alerts, scope, ports) = (alerts.clone(), scope.clone(), ports.clone());
         async move {
             match r {
                 Ok((subject, json)) => {
@@ -972,7 +969,16 @@ fn sse_with_resync(
                         || alerts
                             .upgrade()
                             .is_some_and(|a| scope.allows_subject_in(&a, &subject));
-                    visible.then(|| Ok::<_, Infallible>(Event::default().data(&*json)))
+                    if !visible {
+                        return None;
+                    }
+                    let named = match ports {
+                        Some(repo) => with_live_port_name(&repo, &subject, &json).await,
+                        None => None,
+                    };
+                    Some(Ok::<_, Infallible>(
+                        Event::default().data(named.as_deref().unwrap_or(&json)),
+                    ))
                 }
                 Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
                     tracing::warn!(
@@ -984,6 +990,80 @@ fn sse_with_resync(
             }
         }
     })
+}
+
+/// How long a live frame's port name is reused before it is read again (ADR-196 Inc.4). A port is
+/// renamed rarely, and the REST list re-reads it on every resync anyway.
+const LIVE_PORT_NAME_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How many ports the live-frame cache holds before it starts over. A flapping chassis sends many
+/// frames for few ports; this bounds the cache without an eviction order to maintain.
+const LIVE_PORT_NAME_CAP: usize = 10_000;
+
+/// Port names already read for live frames, shared by every subscriber of this core, so an alert
+/// storm seen by ten open tabs reads each port once rather than ten times. A missing name is
+/// cached too, so a port with none is not re-read on every frame.
+type LivePortNames = HashMap<(Uuid, u32), (std::time::Instant, Option<String>)>;
+static LIVE_PORT_NAMES: std::sync::LazyLock<std::sync::Mutex<LivePortNames>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The `(node, ifindex)` a live alert frame is about, with the frame parsed, or `None` for a frame
+/// about no port or no node. The substring test spares the parse for the ordinary frame.
+fn frame_port(
+    subject: &yagra_alert::Subject,
+    json: &str,
+) -> Option<((Uuid, u32), serde_json::Map<String, serde_json::Value>)> {
+    let yagra_alert::Subject::Node(node) = subject else {
+        return None;
+    };
+    if !json.contains("\"ifindex\"") {
+        return None;
+    }
+    let serde_json::Value::Object(frame) = serde_json::from_str(json).ok()? else {
+        return None;
+    };
+    let ifindex = u32::try_from(frame.get("ifindex")?.as_u64()?).ok()?;
+    Some(((node.as_uuid(), ifindex), frame))
+}
+
+/// The frame with `if_name` added, the same field `ActiveAlertView` carries, or `None` to send it
+/// as it is: no port, no name, or the inventory could not be read (a name is decorative, so the
+/// frame goes out with its ifIndex rather than not at all).
+async fn with_live_port_name(
+    repo: &crate::repo::NodeRepo,
+    subject: &yagra_alert::Subject,
+    json: &str,
+) -> Option<String> {
+    let (key, mut frame) = frame_port(subject, json)?;
+    let cached = {
+        let cache = LIVE_PORT_NAMES
+            .lock()
+            .expect("live port-name cache poisoned");
+        cache
+            .get(&key)
+            .filter(|(at, _)| at.elapsed() < LIVE_PORT_NAME_TTL)
+            .map(|(_, name)| name.clone())
+    };
+    let name = match cached {
+        Some(name) => name,
+        None => {
+            let read = repo.port_names_for(&[key]).await.map_err(|e| {
+                tracing::warn!(error = %e, "failed to read a port name for a live alert; sending ifIndex only");
+            });
+            // Not cached on a failed read: the next frame tries again.
+            let name = read.ok()?.remove(&key);
+            let mut cache = LIVE_PORT_NAMES
+                .lock()
+                .expect("live port-name cache poisoned");
+            if cache.len() >= LIVE_PORT_NAME_CAP {
+                cache.clear();
+            }
+            cache.insert(key, (std::time::Instant::now(), name.clone()));
+            name
+        }
+    };
+    frame.insert("if_name".to_owned(), serde_json::Value::String(name?));
+    Some(serde_json::Value::Object(frame).to_string())
 }
 
 /// Live alert stream (SSE, ADR-019): fires and resolutions as they happen. Each event's `data` is
@@ -1003,7 +1083,11 @@ async fn stream_alerts(
 ) -> Response {
     let rx = st.alerts.subscribe();
     let alerts = std::sync::Arc::downgrade(&st.alerts);
-    Sse::new(sse_with_resync(rx, alerts, scope, "alert"))
+    let ports = st
+        .admin
+        .as_ref()
+        .map(|admin| std::sync::Arc::clone(&admin.repo));
+    Sse::new(sse_with_resync(rx, alerts, scope, "alert", ports))
         .keep_alive(KeepAlive::default())
         .into_response()
 }
@@ -1027,7 +1111,7 @@ async fn stream_node_states(
 ) -> Response {
     let rx = st.alerts.subscribe_node_states();
     let alerts = std::sync::Arc::downgrade(&st.alerts);
-    Sse::new(sse_with_resync(rx, alerts, scope, "node-state"))
+    Sse::new(sse_with_resync(rx, alerts, scope, "node-state", None))
         .keep_alive(KeepAlive::default())
         .into_response()
 }
@@ -1447,6 +1531,59 @@ mod tests {
         String::from_utf8(bytes.to_vec()).expect("sse text")
     }
 
+    /// Which live frames the SSE edge asks a port name for (ADR-196 Inc.4): a node's alert that
+    /// names a port, and nothing else — a pool or Meraki alert has no inventory, and a node-level
+    /// alert has no port.
+    #[test]
+    fn only_a_node_alert_about_a_port_asks_for_a_port_name() {
+        let node = Uuid::from_u128(1);
+        let subject = yagra_alert::Subject::Node(NodeId::from(node));
+        let (key, frame) = frame_port(
+            &subject,
+            r#"{"node":"x","ifindex":7,"severity":"critical"}"#,
+        )
+        .expect("a port alert");
+        assert_eq!(key, (node, 7));
+        assert_eq!(
+            frame["severity"], "critical",
+            "the rest of the frame is kept"
+        );
+
+        assert!(frame_port(&subject, r#"{"node":"x","severity":"critical"}"#).is_none());
+        assert!(frame_port(&subject, r#"{"node":"x","ifindex":null}"#).is_none());
+        let pool = yagra_alert::Subject::Pool("tokyo".to_owned());
+        assert!(frame_port(&pool, r#"{"node":"pool:tokyo","ifindex":7}"#).is_none());
+    }
+
+    /// **A live port alert reaches the screen with its port's name, and one with no known name goes
+    /// out unchanged** — never dropped, since the name is decorative (ADR-196 Inc.4).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_live_port_alert_is_named_from_the_inventory(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = crate::pgtest::repo(pool.clone());
+        sqlx::query("INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 7, 'Gi0/7')")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("seed a port");
+        let subject = yagra_alert::Subject::Node(NodeId::from(node));
+
+        let named = with_live_port_name(&repo, &subject, r#"{"node":"x","ifindex":7}"#)
+            .await
+            .expect("a known port is named");
+        let v: serde_json::Value = serde_json::from_str(&named).unwrap();
+        assert_eq!(v["if_name"], "Gi0/7");
+        assert_eq!(v["ifindex"], 7);
+
+        assert!(
+            with_live_port_name(&repo, &subject, r#"{"node":"x","ifindex":8}"#)
+                .await
+                .is_none(),
+            "a port with no name is sent as it was"
+        );
+    }
+
     #[tokio::test]
     async fn the_alert_stream_drops_out_of_scope_frames_without_calling_them_a_lag() {
         // A scoped subscriber must not see another group's alert — and must not be told to resync
@@ -1464,7 +1601,13 @@ mod tests {
         ));
 
         let rx = st.alerts.subscribe();
-        let stream = sse_with_resync(rx, std::sync::Arc::downgrade(&st.alerts), scope, "alert");
+        let stream = sse_with_resync(
+            rx,
+            std::sync::Arc::downgrade(&st.alerts),
+            scope,
+            "alert",
+            None,
+        );
 
         // One frame for the visible node, one for a node the engine has never heard of.
         st.alerts
@@ -1501,6 +1644,7 @@ mod tests {
             std::sync::Arc::downgrade(&st.alerts),
             crate::api::scope::NodeScope::All,
             "alert",
+            None,
         );
         st.alerts
             .broadcast_test_frame(yagra_alert::Subject::Node(NodeId::new()), "{\"a\":1}");
@@ -1528,6 +1672,7 @@ mod tests {
             std::sync::Arc::downgrade(&st.alerts),
             crate::api::scope::NodeScope::All,
             "alert",
+            None,
         );
         drop(st);
         // No `take_until` here — that is the whole point. If the stream held the engine strongly,

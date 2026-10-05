@@ -939,8 +939,8 @@ pub(super) struct BuiltinTemplateQuery {
 /// Yagra's built-in subject and body for a node alert, written as templates, once per lifecycle
 /// point.
 ///
-/// The template editor shows a channel that has no template this text, so an operator sees what
-/// is sent today and can start from it. Rendering it produces exactly the built-in subject and
+/// The template editor shows this text for a channel that has no template, so an operator sees
+/// what is sent today and can start from it. Rendering it produces exactly the built-in subject and
 /// body for that channel kind. A poller pool's and a Meraki organization's alerts have built-in
 /// wording of their own, which is not described here. Webhook and PagerDuty have no body template:
 /// their built-in body is the whole alert as JSON.
@@ -1380,6 +1380,90 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(
             listed, ours,
             "templateVariables.ts lists exactly the template variables"
+        );
+    }
+
+    /// `templateForm.ts` copies two delivery facts the editor needs before it has asked the server
+    /// anything (ADR-197 Inc.2): which kinds send a JSON body, and the keys of the built-in JSON,
+    /// each of which has a sentence in both locales. Both are held here to the Rust they copy, so a
+    /// fifth kind or a new `Alert` field fails the build instead of shipping a wrong editor.
+    #[test]
+    fn the_editors_template_forms_match_what_delivery_sends() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/pages/templateForm.ts"),
+        )
+        .expect("web/src/pages/templateForm.ts");
+
+        let forms = &ts[ts
+            .find("export const TEMPLATE_FORMS")
+            .expect("TEMPLATE_FORMS is declared")..];
+        let forms = &forms[..forms.find("};").expect("the record closes")];
+        for kind in [
+            ChannelKind::Jsm,
+            ChannelKind::Email,
+            ChannelKind::Webhook,
+            ChannelKind::PagerDuty,
+        ] {
+            let token = serde_json::to_value(kind).unwrap();
+            let token = token.as_str().expect("a kind is a string token");
+            let row = forms
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{token}: {{")))
+                .unwrap_or_else(|| panic!("TEMPLATE_FORMS has no row for {token}"));
+            let json = crate::notify_render::body_must_be_json(kind);
+            assert!(
+                row.contains(&format!("json: {json}")),
+                "{token}: delivery says json = {json}, the editor's row is `{}`",
+                row.trim()
+            );
+        }
+
+        let keys = &ts[ts
+            .find("export const BUILTIN_JSON_KEYS = [")
+            .expect("BUILTIN_JSON_KEYS is declared")..];
+        let keys = &keys[..keys.find("] as const").expect("the array closes")];
+        let listed: Vec<&str> = keys.split('\'').skip(1).step_by(2).collect();
+        // Every optional field filled, so a key `skip_serializing_if` would hide is still seen.
+        let alert = yagra_alert::Alert {
+            subject: yagra_alert::Subject::Node(yagra_common::NodeId::new()),
+            check: yagra_common::CheckId::from(Uuid::nil()),
+            severity: yagra_common::Severity::Critical,
+            state: yagra_common::NodeState::Critical,
+            at_unix_ms: 1,
+            root_cause: Some(yagra_common::NodeId::new()),
+            flapping: false,
+            metric: "cpu_util".to_owned(),
+            breach: Some(yagra_alert::Breach {
+                value: 1.0,
+                threshold: Some(0.5),
+                direction: yagra_common::Direction::Above,
+            }),
+            ifindex: Some(yagra_common::IfIndex(1)),
+            row: Some(1),
+            row_name: Some("r".to_owned()),
+        };
+        let written = serde_json::to_string(&alert).unwrap();
+        let mut order: Vec<(usize, &str)> = listed
+            .iter()
+            .map(|k| {
+                let at = written
+                    .find(&format!("\"{k}\":"))
+                    .unwrap_or_else(|| panic!("the built-in JSON has no `{k}`"));
+                (at, *k)
+            })
+            .collect();
+        order.sort_unstable();
+        let in_written_order: Vec<&str> = order.into_iter().map(|(_, k)| k).collect();
+        assert_eq!(
+            listed, in_written_order,
+            "BUILTIN_JSON_KEYS is in the order it is written"
+        );
+        let all = serde_json::to_value(&alert).unwrap();
+        assert_eq!(
+            all.as_object().unwrap().len(),
+            listed.len(),
+            "BUILTIN_JSON_KEYS names every key of the built-in JSON"
         );
     }
 

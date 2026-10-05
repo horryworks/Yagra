@@ -623,19 +623,15 @@
   color: var(--text-secondary);
 }
 
+/* Not a status colour: "the built-in text is in use" is no device state (tokens.css). */
 .tpl-status.is-builtin {
-  border-color: color-mix(in srgb, var(--status-ok) 45%, transparent);
-  background: color-mix(in srgb, var(--status-ok) 8%, transparent);
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
 }
 
 .tpl-status.is-own {
   border-color: color-mix(in srgb, var(--accent-color) 45%, transparent);
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
-}
-
-.tpl-status.is-confirm {
-  border-color: color-mix(in srgb, var(--status-critical) 55%, transparent);
-  background: color-mix(in srgb, var(--status-critical) 8%, transparent);
 }
 
 .tpl-status-acts {
