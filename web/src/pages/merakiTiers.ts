@@ -64,7 +64,7 @@ export const REQUIRED_MERAKI_TIER = 'availability' satisfies SelectableMerakiTie
 
 /** The tiers the cadence dialog draws a checkbox for: the selectable ones that may be switched off.
  *  A checkbox that can only be refused is a control the operator cannot use, so the required tier
- *  gets a sentence instead (`meraki.cadence.availabilityAlways`). */
+ *  is drawn as a word marked always on (`meraki.cadence.alwaysOn`), with no box. */
 export const OPTIONAL_MERAKI_TIERS = SELECTABLE_MERAKI_TIERS.filter(
   (tier) => tier !== REQUIRED_MERAKI_TIER,
 );

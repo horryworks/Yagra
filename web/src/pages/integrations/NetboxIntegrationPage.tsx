@@ -26,12 +26,17 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { InfoTip } from '../../components/ui/InfoTip';
+import { SecretInput } from '../../components/ui/SecretInput';
+import { secretToSend } from '../../components/ui/secretField';
 import { useLoad } from '../../lib/useLoad';
 import { formatTimestamp } from '../../lib/format';
 import { LoadGate } from '../../components/ui/LoadGate';
 import { anySyncInProgress, syncProgress, syncSummary } from './netboxStatus';
 import { useSyncWatch } from './useSyncWatch';
 import { addressChangeNeedsToken } from './netboxBaseUrl';
+import { baseUrlRefused, pemIsPrivateKey } from './netboxForm';
 import {
   SITE_ID_NONE,
   SITE_ID_OTHER,
@@ -62,7 +67,7 @@ function ServerModal({
   const [name, setName] = useState(existing?.name ?? '');
   const [baseUrl, setBaseUrl] = useState(existing?.base_url ?? '');
   // ⚠️ Never prefilled, and there is nothing to prefill it from: the API does not return the
-  // token. Empty on an edit means "keep the sealed one".
+  // token. Empty on an edit means "keep the sealed one" (`SecretInput`).
   const [token, setToken] = useState('');
   const [caPem, setCaPem] = useState(existing?.ca_cert_pem ?? '');
   const [intervalSecs, setIntervalSecs] = useState(String(existing?.sync_interval_secs ?? 3600));
@@ -102,7 +107,11 @@ function ServerModal({
     };
   }, [existing]);
 
-  const canTest = baseUrl.trim() !== '' && token.trim() !== '';
+  // Said on the field rather than under it: the backend refuses these addresses (`netboxForm.ts`).
+  const urlRefused = baseUrlRefused(baseUrl);
+  const caIsKey = pemIsPrivateKey(caPem);
+  const formOk = !urlRefused && !caIsKey;
+  const canTest = formOk && baseUrl.trim() !== '' && token.trim() !== '';
   // ADR-178 decision 3: the stored token never goes to a new address — the backend refuses the save,
   // so the form asks for the token before Save rather than after.
   const tokenNeeded =
@@ -132,13 +141,14 @@ function ServerModal({
     const secs = Number(intervalSecs);
     const ca = caPem.trim() === '' ? null : caPem;
     const siteIdField = siteIdFieldToSend(siteIdSelected, customKeyInput);
+    const typed = secretToSend(token);
     const request = () =>
       existing
         ? api.updateNetboxServer(existing.id, {
             name: name.trim(),
             base_url: baseUrl.trim(),
             // Omitted rather than sent empty, so the sealed token survives an unrelated edit.
-            ...(token.trim() === '' ? {} : { token: token.trim() }),
+            ...(typed === undefined ? {} : { token: typed }),
             ca_cert_pem: ca,
             enabled: existing.enabled,
             sync_interval_secs: secs,
@@ -189,10 +199,13 @@ function ServerModal({
           onSubmit={save}
           submitLabel={t('common:actions.save')}
           canSubmit={
-            name.trim() !== '' && baseUrl.trim() !== '' && !(tokenNeeded && token.trim() === '')
+            formOk &&
+            name.trim() !== '' &&
+            baseUrl.trim() !== '' &&
+            !(tokenNeeded && token.trim() === '')
           }
           extra={
-            <Button onClick={test} disabled={form.busy || !canTest}>
+            <Button type="button" onClick={test} disabled={form.busy || !canTest}>
               {t('netbox.form.test')}
             </Button>
           }
@@ -210,28 +223,37 @@ function ServerModal({
           placeholder="https://netbox.example.com"
           onChange={(e) => setBaseUrl(e.target.value)}
         />
-        <span className="netbox-hint">{t('netbox.form.baseUrlHint')}</span>
-      </label>
-      <label className="netbox-field">
-        <span>{t('netbox.form.token')}</span>
-        <TextInput
-          type="password"
-          value={token}
-          autoComplete="off"
-          onChange={(e) => setToken(e.target.value)}
-        />
-        {existing && tokenNeeded ? (
-          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.tokenNewAddressHint')}</span>
-        ) : (
-          <span className="netbox-hint">
-            {existing ? t('netbox.form.tokenKeepHint') : t('netbox.form.tokenHint')}
-          </span>
+        {urlRefused && (
+          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.baseUrlRefused')}</span>
         )}
       </label>
+      {/* Not a wrapping <label>: the stored state draws a Replace button, and a button inside a
+          label becomes the label's control. */}
+      <div className="netbox-field">
+        <label htmlFor="netbox-token">{t('netbox.form.token')}</label>
+        <SecretInput
+          id="netbox-token"
+          stored={existing !== null}
+          mustReplace={existing !== null && tokenNeeded}
+          value={token}
+          onChange={setToken}
+        />
+        {existing && tokenNeeded && (
+          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.tokenNewAddressHint')}</span>
+        )}
+      </div>
       <label className="netbox-field">
         <span>{t('netbox.form.caCert')}</span>
-        <TextArea rows={4} value={caPem} onChange={(e) => setCaPem(e.target.value)} />
-        <span className="netbox-hint">{t('netbox.form.caCertHint')}</span>
+        <TextArea
+          className="mono"
+          rows={4}
+          value={caPem}
+          placeholder="-----BEGIN CERTIFICATE-----"
+          onChange={(e) => setCaPem(e.target.value)}
+        />
+        {caIsKey && (
+          <span className="netbox-hint netbox-hint-warn">{t('netbox.form.caCertIsKey')}</span>
+        )}
       </label>
       <label className="netbox-field">
         <span>{t('netbox.form.siteIdField')}</span>
@@ -459,7 +481,13 @@ export function NetboxIntegrationPage() {
     return (
       <LoadGate load={list}>
         <Card
-          title={t('netbox.servers.title')}
+          title={
+            <>
+              {t('netbox.servers.title')}
+              {/* What a sync may overwrite decides whether an operator edits a synced folder. */}
+              <InfoTip infoKey="system:netbox.ownership.info" label={t('netbox.servers.title')} />
+            </>
+          }
           actions={
             canConfig ? (
               <Button variant="primary" onClick={() => setAdding(true)}>
@@ -469,9 +497,16 @@ export function NetboxIntegrationPage() {
           }
         >
           {servers.length === 0 ? (
-            // ADR-055 R6: say what this screen is for where someone comes looking for it, rather
-            // than showing an empty box.
-            <p className="muted">{t('netbox.servers.empty')}</p>
+            <EmptyState
+              text={t('netbox.servers.empty')}
+              action={
+                canConfig ? (
+                  <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                    {t('netbox.servers.add')}
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : (
             <div className="netbox-list">
               {servers.map((s) => (
@@ -486,7 +521,6 @@ export function NetboxIntegrationPage() {
               ))}
             </div>
           )}
-          <p className="muted netbox-ownership">{t('netbox.servers.ownership')}</p>
         </Card>
       </LoadGate>
     );

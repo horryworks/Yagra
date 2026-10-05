@@ -24,8 +24,10 @@
   cursor: pointer;
 }
 
-.meraki-killswitch-hint {
-  margin: 6px 0 0;
+.meraki-switch-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .meraki-org-list {
@@ -184,6 +186,11 @@
 .meraki-source-row {
   flex-wrap: wrap;
   margin-bottom: 10px;
+}
+
+/* Availability: on in every cadence, so it is a word with no box (decision 17). */
+.meraki-chip-fixed {
+  cursor: default;
 }
 
 .meraki-chip-check,

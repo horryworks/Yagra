@@ -79,7 +79,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-upgrade': [5335, 3023],
   settings: [587, 310],
   suppression: [1091, 712],
-  system: [14940, 8338],
+  system: [13290, 7315],
   topology: [4304, 2334],
   troubleshoot: [7347, 3814],
 };
@@ -137,7 +137,6 @@ const LONG_LEGACY: string[] = [
   'settings-upgrade:sitePrep.fix',
   'settings-upgrade:sitePrep.warning',
   'settings-upgrade:sitePrep.warning_other',
-  'system:netbox.form.baseUrlHint',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -280,12 +279,10 @@ const PAGE_NOTES: Record<string, PageNote> = {
   },
   'pages/integrations/MerakiOrgPage.tsx': {
     kind: 'offNav',
-    until: 'Inc.6',
     why: 'one organization, opened from the Meraki page',
   },
   'pages/integrations/NetboxIntegrationPage.tsx': {
     kind: 'offNav',
-    until: 'Inc.6',
     why: 'a page under Settings > Integrations',
   },
   'troubleshoot/report/ReportShell.tsx': {
@@ -296,7 +293,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 7, press: 6 };
+const INFO_COUNT = { tip: 9, press: 6 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -342,7 +339,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 33, formHint: 20, modalHint: 69 };
+const HINT_SITES = { fieldHint: 33, formHint: 20, modalHint: 64 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

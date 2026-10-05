@@ -93,7 +93,8 @@
   margin-bottom: var(--space-4);
 }
 
-.netbox-field > span:first-child {
+.netbox-field > span:first-child,
+.netbox-field > label:first-child {
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -121,12 +122,6 @@
 
 .netbox-probe.bad {
   color: var(--accent-color);
-}
-
-.netbox-ownership {
-  margin-top: var(--space-4);
-  margin-bottom: 0;
-  font-size: var(--font-xs);
 }
 
 /* Touch: the row's controls stack rather than crowding a 44px target row. */

@@ -463,10 +463,10 @@
       "connected_other": "Connected · {{count}} orgs"
     },
     "meraki": {
-      "desc": "Read-only Dashboard API monitoring — availability, uplinks, and traffic across your Meraki organizations."
+      "desc": "Read-only Dashboard API monitoring of your Meraki organizations"
     },
     "netbox": {
-      "desc": "Read-only import of your NetBox site hierarchy — Regions and Sites become the folder tree, with map pins."
+      "desc": "Read-only import of your NetBox Regions and Sites into the folder tree"
     }
   },
   "meraki": {
@@ -506,12 +506,12 @@
       "title": "Meraki polling",
       "enabled": "Polling enabled",
       "paused": "Polling paused (kill switch engaged)",
-      "hint": "Global safeguard — instantly halt all Meraki Dashboard API polling fleet-wide, without deleting any organization config."
+      "info": "Stops every Meraki Dashboard API call at once. Organization settings are kept."
     },
     "orgs": {
       "title": "Organizations",
       "add": "+ Add organization",
-      "empty": "No Meraki organizations yet. Add one to start monitoring.",
+      "empty": "No Meraki organizations yet.",
       "orgId": "org {{id}}",
       "stateEnabled": "enabled",
       "statePaused": "paused",
@@ -567,25 +567,22 @@
       "region": "Region",
       "apiKeyLabel": "API key (read-only)",
       "apiKeyPlaceholder": "Meraki Dashboard API key",
-      "apiKeyHint": "Use a <b>read-only</b> Dashboard API key. It is sealed (encrypted at rest) and never shown again. Yagra only ever issues read-only GET calls to Meraki.",
-      "selectHint": "Select the organizations to monitor. All share this one API key.",
       "noOrgs": "This key can't access any organizations.",
       "sourceTyped": "Enter a new key",
       "sourceSaved": "Use a saved key",
       "savedKeyLabel": "Saved key",
-      "savedKeyHint": "The organizations you add will share this key. No new credential is stored.",
       "alreadyAdded": "Already added",
       "allAdded": "Every organization this key can see is already added."
     },
     "networks": {
       "title": "Network scope — {{name}}",
-      "hint": "Only monitored networks are collected. Un-checking a network stops narrowing API calls to it (existing device nodes are untouched — remove them to stop monitoring a device).",
+      "collectFrom": "Collect from these networks",
       "empty": "No networks yet — they appear after the organization's first sync."
     },
     "cadence": {
       "title": "Cadence — {{name}}",
       "enabledTiers": "Enabled tiers",
-      "availabilityAlways": "Availability is always collected: it is what tells whether a device is up.",
+      "alwaysOn": "{{tier}} (always on)",
       "availabilityInterval": "Availability interval (s)",
       "uplinkInterval": "Uplink interval (s)",
       "wirelessInterval": "Wireless interval (s)",
@@ -593,7 +590,6 @@
       "trafficInterval": "Traffic interval (s)",
       "inventoryInterval": "Device sync interval (s)",
       "rateBudget": "Rate budget (req/s)",
-      "rateBudgetHint": "Conservative — kept well under the org API cap so the customer keeps headroom.",
       "outOfRange": "Enter a number in {{range}}."
     },
     "delete": {
@@ -601,16 +597,14 @@
       "confirmText": "Delete <b>{{name}}</b>? Its imported device nodes, network scope, and HostTree groups are removed. Metric history in the TSDB is left. This cannot be undone."
     },
     "orgPage": {
-      "note": "What Meraki lists for this organization, which of it is monitored, and how new devices are imported.",
+      "note": "The devices Meraki lists for this organization, and how new ones are imported",
       "notFound": "This organization does not exist.",
       "back": "Back to Cisco Meraki"
     },
     "settings": {
       "title": "Device import",
-      "importDevices": "Import new devices automatically",
-      "importDevicesHint": "Devices in watched networks that Meraki has seen online become nodes. New networks are watched automatically. A device you delete is not imported again.",
-      "fileByPrefix": "File by IP range",
-      "fileByPrefixHint": "A device whose address falls in a folder's IP range is filed there. Everything else goes under {{folder}}.",
+      "importDevices": "Automatically import devices seen online in watched networks",
+      "fileByPrefix": "File by IP range, the rest under {{folder}}",
       "maxDevices": "Most devices to import",
       "maxDevicesInvalid": "Enter a whole number from {{min}} to {{max}}.",
       "unwatched_one": "{{count}} network is not watched, so its devices are not imported.",
@@ -759,7 +753,7 @@
   },
   "netbox": {
     "name": "NetBox",
-    "note": "Read-only import of the site hierarchy from NetBox. Yagra never writes to NetBox.",
+    "note": "Read-only import of the site hierarchy from NetBox",
     "status": {
       "connected_one": "Connected · {{count}} server",
       "connected_other": "Connected · {{count}} servers",
@@ -768,24 +762,21 @@
     "servers": {
       "title": "NetBox deployments",
       "add": "+ Add NetBox",
-      "empty": "No NetBox deployment is configured. Add one to build the folder tree from its Regions and Sites.",
-      "ownership": "A sync owns each folder’s name, parent and map position. The poller pool you set on a folder is yours and is never overwritten, and a Site removed in NetBox is flagged here rather than deleted."
+      "empty": "No NetBox deployment yet."
     },
     "form": {
       "addTitle": "Add a NetBox deployment",
       "editTitle": "Edit NetBox deployment",
       "name": "Name",
       "baseUrl": "Base URL",
-      "baseUrlHint": "Including the port if it is not the default, e.g. http://netbox.example.com:8000, and the path when NetBox is served under one, e.g. https://example.com/netbox. Loopback and link-local addresses are refused; private addresses are fine.",
+      "baseUrlRefused": "Loopback, link-local and multicast addresses are refused.",
       "token": "API token",
-      "tokenHint": "Stored encrypted. It is never shown again and never returned by the API.",
-      "tokenKeepHint": "Leave empty to keep the stored token.",
       "tokenNewAddressHint": "The address now points at a different host. Enter the API token again — the stored token is never sent to a new address.",
       "caCert": "CA certificate (optional)",
-      "caCertHint": "Paste the PEM certificate of the private CA that signed this NetBox. Only this connection trusts it. Never paste a private key.",
+      "caCertIsKey": "This is a private key. Paste the CA certificate instead.",
       "siteIdField": "Site ID field",
-      "siteIdFieldHint": "Which NetBox field holds your site code. It is put in front of the Site's folder name, e.g. “JPMYJ01 Matsuyama Home”. Custom fields defined in this NetBox are listed here.",
-      "siteIdFieldKeyHint": "The custom field's name in NetBox — its key, not its label. Letters, digits and underscores.",
+      "siteIdFieldHint": "Goes in front of each Site folder’s name, e.g. “SITE-A Example”.",
+      "siteIdFieldKeyHint": "The field’s key in NetBox, not its label.",
       "siteIdFieldKeyInvalid": "A custom field name can only contain letters, digits and underscores.",
       "siteIdFieldUnreadable": "This token cannot read this NetBox's custom field definitions, so they are not listed. Choose “Other” and type the field's name to use one.",
       "interval": "Sync every (seconds)",
@@ -832,6 +823,9 @@
       "sync": "Could not request a sync",
       "toggle": "Could not change whether this server is enabled",
       "delete": "Could not remove the NetBox deployment"
+    },
+    "ownership": {
+      "info": "A sync owns each folder’s name, parent and map position. The poller pool you set on a folder is kept, and a Site removed in NetBox is flagged, not deleted."
     }
   }
 }

@@ -153,5 +153,10 @@
   "info": {
     "about": "{{label}} について",
     "title": "説明"
+  },
+  "secret": {
+    "stored": "保存済み",
+    "replace": "置き換える",
+    "keep": "保存済みを使う"
   }
 }

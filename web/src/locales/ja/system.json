@@ -451,10 +451,10 @@
       "connected_other": "接続済み · {{count}} 組織"
     },
     "meraki": {
-      "desc": "読み取り専用の Dashboard API 監視 — Meraki 組織全体の可用性・アップリンク・トラフィック。"
+      "desc": "Meraki 組織を Dashboard API で読み取り専用に監視"
     },
     "netbox": {
-      "desc": "NetBox の拠点階層を読み取り専用で取り込みます。Region と Site がフォルダーツリーになり、地図のピンも入ります。"
+      "desc": "NetBox の Region と Site をフォルダーツリーへ読み取り専用で取り込み"
     }
   },
   "meraki": {
@@ -494,12 +494,12 @@
       "title": "Meraki ポーリング",
       "enabled": "ポーリング有効",
       "paused": "ポーリング停止中（キルスイッチ作動）",
-      "hint": "全体の安全弁です。組織の設定を消さずに、フリート全体の Meraki Dashboard API ポーリングをすぐ止められます。"
+      "info": "Meraki Dashboard API の呼び出しをすべて一度に止めます。組織の設定は残ります。"
     },
     "orgs": {
       "title": "組織",
       "add": "+ 組織を追加",
-      "empty": "Meraki 組織がまだありません。監視を開始するには 1 つ追加してください。",
+      "empty": "Meraki 組織はまだありません。",
       "orgId": "組織 {{id}}",
       "stateEnabled": "有効",
       "statePaused": "停止中",
@@ -551,25 +551,22 @@
       "region": "リージョン",
       "apiKeyLabel": "API キー（読み取り専用）",
       "apiKeyPlaceholder": "Meraki Dashboard API キー",
-      "apiKeyHint": "<b>読み取り専用</b> の Dashboard API キーを使用してください。保存時に暗号化され、以後表示されません。Yagra は Meraki に対して読み取り専用の GET 呼び出ししか行いません。",
-      "selectHint": "監視する組織を選択してください。すべてこの API キーを共有します。",
       "noOrgs": "このキーではどの組織にもアクセスできません。",
       "sourceTyped": "新しいキーを入力",
       "sourceSaved": "保存済みのキーを使う",
       "savedKeyLabel": "保存済みのキー",
-      "savedKeyHint": "追加する組織はこのキーを共有します。新しい認証情報は保存されません。",
       "alreadyAdded": "追加済み",
       "allAdded": "このキーで見える組織はすべて追加済みです。"
     },
     "networks": {
       "title": "ネットワーク範囲 — {{name}}",
-      "hint": "収集の対象になるのは、監視対象にしたネットワークだけです。チェックを外すと、そのネットワークに絞った API 呼び出しを行わなくなります（既存のデバイスノードはそのまま残ります。デバイスの監視を止めるには、ノードを削除してください）。",
+      "collectFrom": "収集するネットワーク",
       "empty": "ネットワークがまだありません — 組織の最初の同期が終わると表示されます。"
     },
     "cadence": {
       "title": "取得間隔 — {{name}}",
       "enabledTiers": "有効なティア",
-      "availabilityAlways": "可用性は常に取得します。デバイスが動いているかどうかは、この値で判断します。",
+      "alwaysOn": "{{tier}}（常時）",
       "availabilityInterval": "可用性の取得間隔（秒）",
       "uplinkInterval": "アップリンクの取得間隔（秒）",
       "wirelessInterval": "無線の取得間隔（秒）",
@@ -577,24 +574,21 @@
       "trafficInterval": "トラフィックの取得間隔（秒）",
       "inventoryInterval": "デバイス一覧の同期間隔（秒）",
       "rateBudget": "レート予算（req/s）",
-      "outOfRange": "{{range}} の数を入れてください。",
-      "rateBudgetHint": "控えめな値 — 組織の API 上限に対して十分な余裕を残すよう抑えています。"
+      "outOfRange": "{{range}} の数を入れてください。"
     },
     "delete": {
       "title": "組織を削除",
       "confirmText": "<b>{{name}}</b> を削除しますか？インポートしたデバイスノード・ネットワーク範囲・HostTree グループが削除されます。TSDB 内のメトリクス履歴は残ります。この操作は取り消せません。"
     },
     "orgPage": {
-      "note": "Meraki がこの組織について返すデバイス、そのうち監視しているもの、新しいデバイスのインポート方法を扱います。",
+      "note": "この組織のデバイスと、新しいデバイスのインポート方法",
       "notFound": "この組織は存在しません。",
       "back": "Cisco Meraki へ戻る"
     },
     "settings": {
       "title": "デバイスのインポート",
-      "importDevices": "新しいデバイスを自動でインポートする",
-      "importDevicesHint": "監視対象のネットワークにあり、Meraki が一度でもオンラインと報告したデバイスがノードになります。新しいネットワークは自動で監視対象になります。削除したデバイスは自動では戻りません。",
-      "fileByPrefix": "IP レンジに合うフォルダへ入れる",
-      "fileByPrefixHint": "アドレスがフォルダの IP レンジに入るデバイスは、そのフォルダへ入れます。それ以外は {{folder}} の下へ入れます。",
+      "importDevices": "監視対象のネットワークでオンラインになったデバイスを自動でインポートする",
+      "fileByPrefix": "IP レンジに合うフォルダへ入れる（他は {{folder}} の下）",
       "maxDevices": "インポートする台数の上限",
       "maxDevicesInvalid": "{{min}} から {{max}} までの整数を入力してください。",
       "unwatched_other": "{{count}} 個のネットワークが監視対象外のため、そのデバイスはインポートされません。",
@@ -734,7 +728,7 @@
   },
   "netbox": {
     "name": "NetBox",
-    "note": "NetBox から拠点階層を読み取り専用で取り込みます。Yagra が NetBox に書き込むことはありません。",
+    "note": "NetBox から拠点階層を読み取り専用で取り込みます",
     "status": {
       "connected_one": "接続済み · {{count}} 台",
       "connected_other": "接続済み · {{count}} 台",
@@ -743,24 +737,21 @@
     "servers": {
       "title": "NetBox の登録",
       "add": "+ NetBox を追加",
-      "empty": "NetBox がまだ登録されていません。追加すると、その Region と Site からフォルダーツリーを作成します。",
-      "ownership": "フォルダーの名前・親・地図上の位置は同期が上書きします。フォルダーに設定したポーラープールはオペレーターのもので、上書きされません。NetBox 側で削除された Site は、消さずに印を付けて表示します。"
+      "empty": "NetBox はまだ登録されていません。"
     },
     "form": {
       "addTitle": "NetBox を追加",
       "editTitle": "NetBox の設定",
       "name": "名前",
       "baseUrl": "ベース URL",
-      "baseUrlHint": "既定以外のポートを使う場合は含めてください（例: http://netbox.example.com:8000）。NetBox をサブパスの下に置いている場合は、そのパスも含めてください（例: https://example.com/netbox）。ループバックとリンクローカルのアドレスは拒否します。プライベートアドレスは使えます。",
+      "baseUrlRefused": "ループバック・リンクローカル・マルチキャストのアドレスは使えません。",
       "token": "API トークン",
-      "tokenHint": "暗号化して保存します。再表示されず、API が返すこともありません。",
-      "tokenKeepHint": "空のままにすると、保存済みのトークンを使い続けます。",
       "tokenNewAddressHint": "アドレスが別のホストを指しています。API トークンをもう一度入力してください。保存済みのトークンを新しい宛先へ送ることはありません。",
       "caCert": "CA 証明書 (任意)",
-      "caCertHint": "この NetBox に証明書を発行したプライベート CA の PEM を貼り付けてください。信頼するのはこの接続だけです。秘密鍵は貼り付けないでください。",
+      "caCertIsKey": "これは秘密鍵です。代わりに CA 証明書を貼り付けてください。",
       "siteIdField": "サイト ID の取得元",
-      "siteIdFieldHint": "拠点コードが入っている NetBox のフィールドを選びます。Site のフォルダー名の頭に付きます（例:「JPMYJ01 Matsuyama Home」）。この NetBox に定義されているカスタムフィールドが一覧に出ます。",
-      "siteIdFieldKeyHint": "NetBox でのカスタムフィールドの名前（ラベルではなくキー）。英数字とアンダースコアが使えます。",
+      "siteIdFieldHint": "値が各 Site のフォルダー名の頭に付きます（例:「SITE-A Example」）。",
+      "siteIdFieldKeyHint": "NetBox でのフィールドのキーです（ラベルではありません）。",
       "siteIdFieldKeyInvalid": "カスタムフィールドの名前に使えるのは英数字とアンダースコアだけです。",
       "siteIdFieldUnreadable": "このトークンではこの NetBox のカスタムフィールドの定義を読めないため、一覧に出ていません。使うには「その他」を選び、フィールド名を入力してください。",
       "interval": "同期の間隔 (秒)",
@@ -807,6 +798,9 @@
       "sync": "同期を依頼できませんでした",
       "toggle": "このサーバーの有効／無効を変更できませんでした",
       "delete": "NetBox の登録を削除できませんでした"
+    },
+    "ownership": {
+      "info": "フォルダーの名前・親・地図上の位置は同期が上書きします。フォルダーに設定したポーラープールは残り、NetBox で消えた Site は削除せずに印を付けます。"
     }
   }
 }

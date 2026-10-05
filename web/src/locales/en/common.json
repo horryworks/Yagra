@@ -162,5 +162,10 @@
   "info": {
     "about": "About {{label}}",
     "title": "Explanation"
+  },
+  "secret": {
+    "stored": "Stored",
+    "replace": "Replace",
+    "keep": "Keep stored"
   }
 }

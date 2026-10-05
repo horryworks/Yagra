@@ -133,12 +133,7 @@ function ImportSettingsCard({
             setImportDevices(e.target.checked);
           }}
         />
-        <span className="meraki-orgpage-check-text">
-          <span className="meraki-orgpage-check-label">{t('meraki.settings.importDevices')}</span>
-          <span className="meraki-orgpage-check-hint">
-            {t('meraki.settings.importDevicesHint')}
-          </span>
-        </span>
+        <span className="meraki-orgpage-check-label">{t('meraki.settings.importDevices')}</span>
       </label>
 
       <label className="meraki-orgpage-check">
@@ -151,11 +146,9 @@ function ImportSettingsCard({
             setFileByPrefix(e.target.checked);
           }}
         />
-        <span className="meraki-orgpage-check-text">
-          <span className="meraki-orgpage-check-label">{t('meraki.settings.fileByPrefix')}</span>
-          <span className="meraki-orgpage-check-hint">
-            {t('meraki.settings.fileByPrefixHint', { folder: org.name })}
-          </span>
+        {/* The label names the folder everything else goes under: the organization's own. */}
+        <span className="meraki-orgpage-check-label">
+          {t('meraki.settings.fileByPrefix', { folder: org.name })}
         </span>
       </label>
 

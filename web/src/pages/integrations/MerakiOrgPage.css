@@ -42,21 +42,9 @@
   cursor: not-allowed;
 }
 
-.meraki-orgpage-check-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
 .meraki-orgpage-check-label {
   color: var(--text-primary);
   font-weight: var(--weight-medium);
-}
-
-.meraki-orgpage-check-hint {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
 }
 
 /* The cap is one short number; a full-width box would say it takes a sentence. */
