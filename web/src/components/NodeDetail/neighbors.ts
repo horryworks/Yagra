@@ -268,7 +268,7 @@ export function neighborCapabilities(
 }
 
 /** How a row was matched to what it is: by its management address, by its chassis MAC (a Meraki
- *  device with no address), or not at all. The badge's explanation says which. */
+ *  device with no address), or not at all. `peerMatch` turns it into the opened row's line. */
 export function peerMatchedBy(n: Neighbor, lookups: NeighborLookups): 'address' | 'mac' | null {
   if (judgedByAddress(n, lookups)) return 'address';
   return chassisPeerOf(n, lookups) ? 'mac' : null;
@@ -410,11 +410,26 @@ export function alsoClaimed(peer: NeighborPeer | null): AlsoClaimed | null {
   };
 }
 
-/** Whether the badge explains a pick made by name among several claimants (ADR-180 Inc.4) — only
+/** Whether the row was picked by name among several claimants (ADR-180 Inc.4) — only
  *  a pick of a node the caller can see. A name that picks a hidden node picks nothing (decision 6), so
  *  the server never sends it with another state; the check is here so a regression explains nothing. */
 export function pickedByName(peer: NeighborPeer | null): boolean {
   return !!peer?.matched_by_name && peer.state === 'node';
+}
+
+/** What a row was matched to its node on — the opened row's "Matched on" line, which replaced the
+ *  badge's hover sentence (ADR-200 Inc.20). `null` where nothing was matched: an address no node
+ *  has, or one several nodes have and no name picks, which the badge and the list already say. */
+export const PEER_MATCHES = ['address', 'mac', 'name'] as const;
+export type PeerMatch = (typeof PEER_MATCHES)[number];
+
+export function peerMatch(n: Neighbor, lookups: NeighborLookups): PeerMatch | null {
+  const by = peerMatchedBy(n, lookups);
+  if (by === 'mac') return 'mac';
+  if (by !== 'address') return null;
+  const peer = peerOf(n, lookups);
+  if (pickedByName(peer)) return 'name';
+  return peer?.state === 'node' || peer?.state === 'outside_scope' ? 'address' : null;
 }
 
 /** Where the peer's inventory entry is, when exactly one visible node owns its address. */

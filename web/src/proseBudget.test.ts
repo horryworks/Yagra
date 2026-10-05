@@ -69,7 +69,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11335, 6683],
   nav: [2907, 1367],
-  nodes: [17725, 9949],
+  nodes: [15779, 8875],
   rca: [1022, 528],
   reports: [700, 445],
   'settings-ai': [736, 410],
@@ -92,8 +92,6 @@ const SLACK: [number, number] = [300, 200];
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
   'nodes:deleteNode.body',
-  'nodes:neighbors.detail.note',
-  'nodes:neighbors.peer.hint',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -214,8 +212,6 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 const POINTER_LEGACY: string[] = [
   'dashboard:public.bannerOff',
   'dashboard:widgets.discovery.empty',
-  'nodes:neighbors.empty.disabled',
-  'nodes:neighbors.setup.credsHint',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];

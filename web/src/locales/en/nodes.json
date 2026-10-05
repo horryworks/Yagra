@@ -1009,21 +1009,6 @@
         "unregistered": "Not monitored",
         "none": "No address"
       },
-      "explain": {
-        "node": "A node Yagra monitors has this address.",
-        "outside_scope": "A node Yagra monitors has this address, in a folder you cannot see.",
-        "ambiguous": "More than one node has this address (a shared virtual address, a standby line or a duplicate), and the name the neighbor sent does not pick out one of them. Open the row to see which nodes have it.",
-        "unregistered": "No node Yagra monitors has this address.",
-        "none": "The neighbor did not advertise a management address."
-      },
-      "explainMac": {
-        "node": "A Meraki device Yagra monitors has this MAC address. The Dashboard sends no management address for it, so it is matched on the MAC its organization lists.",
-        "outside_scope": "A Meraki device Yagra monitors has this MAC address, in a folder you cannot see.",
-        "unregistered": "A Meraki organization lists a device with this MAC address, and it is not monitored yet."
-      },
-      "explainName": {
-        "node": "Several nodes have this address. This is the one whose name matches the name the neighbor sent; open the row to see the others."
-      },
       "also": {
         "chip_one": "+{{count}} with this address",
         "chip_other": "+{{count}} with this address",
@@ -1033,7 +1018,6 @@
         "chipAll_other": "{{count}} nodes with this address",
         "headingAll_one": "{{count}} node has this address",
         "headingAll_other": "{{count}} nodes have this address",
-        "hint": "The same address is on another node's interface or is its own address — a shared virtual address, a standby line, or a duplicate. A node whose port carrying it is down is still listed.",
         "more_one": "…and {{count}} more not listed here (in a folder you cannot see, or past the first ten).",
         "more_other": "…and {{count}} more not listed here (in folders you cannot see, or past the first ten).",
         "port": {
@@ -1042,7 +1026,7 @@
           "unknown": "link state unknown"
         }
       },
-      "hint": "Matched on the management address: a node's own address or any address on one of its interfaces. When several nodes have it, the one named like the neighbor is chosen if there is exactly one. A Meraki device that sends no address is matched on the MAC its organization lists.",
+      "hint": "Matched on the management address: the node's own, or one on its interfaces. A Meraki device that sends none is matched on the MAC its organization lists.",
       "badge": {
         "node": "Monitored",
         "outside_scope": "Monitored (hidden)",
@@ -1061,19 +1045,19 @@
       "platform": "Platform",
       "sysDesc": "Description",
       "localIfindex": "Local ifIndex",
-      "note": "Text from the device is stored without line breaks, up to 255 characters. The maker comes from the IEEE MAC-address registry and names who made the network interface, which may not be who made the device.",
       "show": "Details",
-      "hide": "Hide details"
+      "hide": "Hide details",
+      "matchedOn": "Matched on"
     },
     "summary_one": "{{count}} neighbor",
     "summary_other": "{{count}} neighbors",
     "lastConfirmed": "last confirmed {{when}}",
     "truncated": "Too many neighbors to record them all — some were dropped.",
     "historyTitle": "Changes",
-    "historyEmpty": "No changes recorded. Neighbors are only written down when they actually change, so a rack nobody is repatching stays empty here.",
+    "historyEmpty": "No changes recorded. A neighbor is written down only when it changes.",
     "empty": {
-      "disabled": "Neighbor discovery is switched off for this deployment. Turn it on in Settings ▸ System settings.",
-      "unrecorded": "Nothing recorded yet. Neighbors are read from SNMP devices and from Meraki switches, MX appliances and MR access points; a device that speaks neither LLDP nor CDP never reports any.",
+      "disabled": "Neighbor discovery is switched off for this deployment. Turn it on in <lnk/>.",
+      "unrecorded": "Nothing recorded yet. A device that speaks neither LLDP nor CDP never reports any.",
       "none": "This device was read and reports no neighbors."
     },
     "proto": {
@@ -1094,7 +1078,7 @@
       "other": "Other"
     },
     "respelled": {
-      "note": "Recorded differently after an upgrade — not a cabling change. Yagra now writes these neighbors differently (a port name, an id), so rows below can read as unplugged and plugged back in.",
+      "note": "Recorded differently after an upgrade — not a cabling change.",
       "show": "Show what was recorded ({{lines}} lines)"
     },
     "diff": {
@@ -1122,18 +1106,23 @@
       },
       "open": "Set up monitoring",
       "title": "Monitoring setup",
-      "credsHint": "Detect tries these in this order. The list starts from the one Discovery ▸ Scan a range last used; a change here lasts while this page is open. <lnk>Manage credentials →</lnk>",
+      "credsHint": "Detect tries these in this order; a change here is not saved. <lnk>Manage credentials →</lnk>",
       "controller": "{{controller}} manages this access point. Add it as that controller’s AP, so it stays one node.",
       "controllerImported": "{{controller}} manages this access point, and it is already a node at another address.",
       "addFromController": "Add as {{controller}}’s AP",
-      "meraki": "The Meraki organization {{org}} lists this device. Add it from the organization, where you also choose which networks to watch.",
+      "meraki": "The Meraki organization {{org}} lists this device.",
       "openOrg": "Open {{org}} →",
-      "apHint": "This neighbor says it is an access point. An AP a wireless controller or Meraki manages is added from there; only a standalone AP is added here, and only once it answers SNMP.",
-      "apNoAnswer": "No credential got an answer. An access point a controller manages is added from it: add the <ctl>wireless controller as a node</ctl>, or register the <mer>Meraki organization</mer>.",
+      "apHint": "A standalone access point is added here once it answers SNMP.",
+      "apNoAnswer": "No credential got an answer. Add its <ctl>wireless controller as a node</ctl>, or register its <mer>Meraki organization</mer>.",
       "done": "Now monitored as {{name}}.",
       "doneBare": "Now monitored.",
       "openNode": "Open node →",
       "errAp": "Could not add the access point."
+    },
+    "matchedOn": {
+      "address": "Management address",
+      "mac": "MAC listed by the Meraki organization",
+      "name": "Name the neighbor sent"
     }
   },
   "select": {

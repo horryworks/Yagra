@@ -88,6 +88,7 @@ import { AP_IMPORT_STATES } from './components/NodeDetail/tabFilters';
 import {
   NEIGHBOR_ADDRESS_STATES,
   NEIGHBOR_DETAIL_KEYS,
+  PEER_MATCHES,
   SETUP_BLOCKED_REASONS,
 } from './components/NodeDetail/neighbors';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
@@ -1071,18 +1072,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'none',
     ]);
     expectKeys('neighbor diff kind', locales, 'neighbors.diff.', ['added', 'removed', 'changed']);
-    // ADR-180: the address state is the chip, the filter option and its explanation.
+    // ADR-180: the address state is the chip and the filter option.
     expectKeys('neighbor address state', locales, 'neighbors.peer.state.', NEIGHBOR_ADDRESS_STATES);
-    expectKeys('neighbor address explain', locales, 'neighbors.peer.explain.', NEIGHBOR_ADDRESS_STATES);
-    // ADR-180 Inc.3: a row matched on its MAC is never ambiguous and always has a chassis.
-    expectKeys('neighbor explain by MAC', locales, 'neighbors.peer.explainMac.', [
-      'node',
-      'outside_scope',
-      'unregistered',
-    ]);
-    // ADR-180 Inc.4: a name picks one of several claimants only when it picks a node the caller
-    // can see (decision 6); the other claimants say whether their port has link.
-    expectKeys('neighbor explain by name', locales, 'neighbors.peer.explainName.', ['node']);
+    // What the opened row says a peer was matched on — its address, the MAC a Meraki organization
+    // lists (ADR-180 Inc.3), or the name that picked one of several claimants (Inc.4). It replaced
+    // the badge's per-state hover sentences (ADR-200 Inc.20).
+    expectKeys('neighbor matched on', locales, 'neighbors.matchedOn.', PEER_MATCHES);
+    // The other claimants say whether their port has link.
     expectKeys('neighbor claimant link', locales, 'neighbors.peer.also.port.', CLAIM_PORT_STATES);
     // ADR-179 Inc.9: why a "Not monitored" row has no setup button.
     expectKeys('neighbor setup blocked', locales, 'neighbors.setup.blocked.', SETUP_BLOCKED_REASONS);

@@ -17,6 +17,8 @@ import {
   peerLabelIsChassis,
   peerNodePath,
   peerMatchedBy,
+  peerMatch,
+  PEER_MATCHES,
   peerOf,
   peerSecondary,
   platformCell,
@@ -482,6 +484,11 @@ describe('a row with no address, matched on its chassis MAC (ADR-180 増分 3)',
     expect(peerOf(row(), lookups)?.node_id).toBe('n-9');
     expect(peerNodePath(peerOf(row(), lookups))).not.toBeNull();
     expect(peerMatchedBy(row(), lookups)).toBe('mac');
+    expect(peerMatch(row(), lookups)).toBe('mac');
+    // A listed device that is not imported was still matched on its MAC.
+    expect(peerMatch(row({ remote_chassis: '0c:8d:db:00:00:02' }), lookups)).toBe('mac');
+    // Neither an address nor a listed MAC: nothing to say it was matched on.
+    expect(peerMatch(row({ remote_chassis_kind: 'text' }), lookups)).toBeNull();
   });
 
   it('offers the organization for a listed device that is not imported', () => {
@@ -622,5 +629,35 @@ describe('the other nodes that claim a peer address', () => {
 
   it('links an address picked by name like any other node', () => {
     expect(peerNodePath(peer({ matched_by_name: true }))).not.toBeNull();
+  });
+});
+
+describe('what the opened row says a peer was matched on (ADR-200 Inc.20)', () => {
+  const lookups = neighborLookups({
+    peers: [
+      peer({ address: '192.0.2.1' }),
+      peer({ address: '192.0.2.2', matched_by_name: true }),
+      peer({ address: '192.0.2.3', state: 'outside_scope' }),
+      peer({ address: '192.0.2.4', state: 'unregistered', node_id: null, node_name: null }),
+      peer({ address: '192.0.2.5', state: 'ambiguous', node_id: null, node_name: null }),
+    ],
+    mac_vendors: [],
+  });
+  const at = (addr: string | null) => n({ remote_mgmt_addr: addr });
+
+  it('names the address, or the name that picked one of several', () => {
+    expect(peerMatch(at('192.0.2.1'), lookups)).toBe('address');
+    expect(peerMatch(at('192.0.2.2'), lookups)).toBe('name');
+    expect(peerMatch(at('192.0.2.3'), lookups)).toBe('address');
+  });
+
+  it('says nothing where no node was matched', () => {
+    expect(peerMatch(at('192.0.2.4'), lookups)).toBeNull();
+    expect(peerMatch(at('192.0.2.5'), lookups)).toBeNull();
+    expect(peerMatch(at(null), lookups)).toBeNull();
+  });
+
+  it('has a value for every match it can answer', () => {
+    expect([...PEER_MATCHES].sort()).toEqual(['address', 'mac', 'name']);
   });
 });

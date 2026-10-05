@@ -62,7 +62,7 @@ import {
   neighborLookups,
   peerLabel,
   peerNodePath,
-  peerMatchedBy,
+  peerMatch,
   peerOf,
   setupBlockedReason,
   peerSecondary,
@@ -72,10 +72,10 @@ import {
   type SetupBlockedReason,
   type NeighborSetupMode,
   alsoClaimed,
-  pickedByName,
   type AlsoClaimed,
 } from './neighbors';
 import { merakiOrgPath, nodeHref } from '../../lib/entityHref';
+import { ScreenLink } from '../ui/ScreenLink';
 import './NeighborsTab.css';
 
 /** How many history rows to load. Adjacency changes are rare, so one page is almost always all of
@@ -345,7 +345,13 @@ export function NeighborsTab({ node }: Props) {
       {error && <p className="form-error nd-tabpad">{error}</p>}
 
       {reason != null ? (
-        <p className="nd-muted nd-tabpad">{t(`neighbors.empty.${reason}`)}</p>
+        <p className="nd-muted nd-tabpad">
+          <Trans
+            t={t}
+            i18nKey={`neighbors.empty.${reason}`}
+            components={{ lnk: <ScreenLink to="/settings/system" /> }}
+          />
+        </p>
       ) : (
         <>
           <div className="nd-nb-summary nd-tabpad">
@@ -432,19 +438,12 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   const secondary = peerSecondary(n, lookups);
   // Whether this device is monitored, beside its name (ADR-179 Inc.3) — matched on the management
   // address, or for a Meraki device that sends none, on the MAC its organization lists (ADR-180
-  // Inc.3); the badge's explanation says which. No badge where neither matched.
+  // Inc.3). No badge where neither matched. What it was matched on is a line in the opened row
+  // (ADR-200 Inc.20): the hover sentence it replaced mostly restated the badge.
   const state = neighborAddressState(n, lookups);
-  const byMac = peerMatchedBy(n, lookups) === 'mac';
-  const explain = byMac
-    ? t(`neighbors.peer.explainMac.${state}`)
-    : pickedByName(peer)
-      ? t(`neighbors.peer.explainName.${state}`)
-      : t(`neighbors.peer.explain.${state}`);
   const badge =
     state && state !== 'none' ? (
-      <span className={`nd-nb-state ${state}`} title={explain}>
-        {t(`neighbors.peer.badge.${state}`)}
-      </span>
+      <span className={`nd-nb-state ${state}`}>{t(`neighbors.peer.badge.${state}`)}</span>
     ) : null;
   // The same address on other nodes (ADR-180 Inc.4): kept beside the name even when the name
   // picked the peer, because that is what says the address is duplicated. The list is in the
@@ -454,7 +453,6 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
     <span
       className="nd-nb-dup"
       title={[
-        t('neighbors.peer.also.hint'),
         ...also.listed.map(
           (a) => `${a.node_name} — ${t(`neighbors.peer.also.port.${a.port_state}`)}`,
         ),
@@ -555,11 +553,18 @@ function Details({
 }) {
   const { t } = useTranslation('nodes');
   const also = alsoClaimed(peerOf(n, lookups));
+  const matched = peerMatch(n, lookups);
   return (
     <div className="nd-nb-details">
       {setup}
       {also && <AlsoClaimedList also={also} />}
       <dl className="nd-nb-dl">
+        {matched && (
+          <div className="nd-nb-dl-row nd-nb-matched">
+            <dt>{t('neighbors.detail.matchedOn')}</dt>
+            <dd>{t(`neighbors.matchedOn.${matched}`)}</dd>
+          </div>
+        )}
         {neighborDetails(n, lookups).map((d) => (
           <div key={d.labelKey} className="nd-nb-dl-row">
             <dt>{t(`neighbors.detail.${d.labelKey}`)}</dt>
@@ -567,7 +572,6 @@ function Details({
           </div>
         ))}
       </dl>
-      <p className="nd-muted nd-nb-note">{t('neighbors.detail.note')}</p>
     </div>
   );
 }
@@ -580,7 +584,6 @@ function AlsoClaimedList({ also }: { also: AlsoClaimed }) {
       <div className="nd-nb-also-head">{t(also.excludesPeer ? 'neighbors.peer.also.heading' : 'neighbors.peer.also.headingAll', {
           count: also.total,
         })}</div>
-      <p className="nd-muted nd-nb-note">{t('neighbors.peer.also.hint')}</p>
       {also.listed.length > 0 && (
         <ul className="nd-nb-also-list">
           {also.listed.map((a) => (

@@ -143,7 +143,9 @@ test('a peer picked by name keeps the duplicate mark beside it', async ({ page }
   expect(title).toContain('wan-rtr-01 — link up');
   expect(title).toContain('wan-rtr-02 — link down');
   expect(title).toContain('1 more');
-  await expect(picked.locator('.nd-nb-state')).toHaveAttribute('title', /name the neighbor sent/);
+  // The badge carries no hover sentence any more (ADR-200 Inc.20): what the peer was matched on is
+  // a line in the opened row, checked below.
+  await expect(picked.locator('.nd-nb-state')).not.toHaveAttribute('title', /.+/);
 
   const ambiguous = row(page, 'Gi0/23');
   await expect(ambiguous.locator('.nd-nb-state')).toHaveText('Several nodes');
@@ -168,4 +170,13 @@ test('the opened row lists the other nodes, linked, with their link state', asyn
   await expect(items.nth(0).locator('.nd-nb-port')).toHaveText('link up');
   await expect(items.nth(1).locator('.nd-nb-port')).toHaveText('link down');
   await expect(also).toContainText('1 more not listed here');
+  // Picked among the claimants by its name, said where it can be read without a mouse.
+  await expect(page.locator('.nd-nb-matched dd')).toHaveText('Name the neighbor sent');
+});
+
+test('an address several nodes have and no name picks says nothing was matched', async ({ page }) => {
+  await openTab(page);
+  await row(page, 'Gi0/23').locator('.nd-nb-proto').click();
+  await expect(page.locator('.nd-nb-also')).toBeVisible();
+  await expect(page.locator('.nd-nb-matched')).toHaveCount(0);
 });
