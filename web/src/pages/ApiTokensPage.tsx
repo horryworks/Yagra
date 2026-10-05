@@ -36,6 +36,7 @@ import {
   ownerChoices,
   ownerIsScoped,
   toggleSurface,
+  TOKEN_STATE_INFO,
   tokenState,
   type ExpiryChoice,
   type TokenState,
@@ -46,7 +47,9 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { InfoPress } from '../components/ui/InfoTip';
+import { EmptyState } from '../components/ui/EmptyState';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { sortRows } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
@@ -124,9 +127,15 @@ function tokenColumns(
         r.owner ? (
           // The SSO note only appears for an owner that signs in through an IdP, because that is
           // the only case where going quiet ends the token. Showing it for a service account —
-          // which never signs in — would read as a warning about the normal state.
-          <span className="tok-owner" title={r.owner_last_login_at ? t('ssoIdle') : undefined}>
-            {r.owner}
+          // which never signs in — would read as a warning about the normal state. The name opens
+          // the note when pressed (ADR-200); `title` keeps the whole name readable when the
+          // column cuts it.
+          <span className="tok-owner" title={r.owner}>
+            {r.owner_last_login_at ? (
+              <InfoPress infoKey="settings-tokens:ssoIdle.info">{r.owner}</InfoPress>
+            ) : (
+              r.owner
+            )}
             {r.owner_last_login_at && <span className="tok-sso-dot" aria-hidden="true" />}
           </span>
         ) : (
@@ -153,13 +162,15 @@ function tokenColumns(
       sortable: true,
       render: (r) => {
         const state = tokenState(r, now);
-        return (
-          <Badge
-            tone={STATE_TONE[state]}
-            title={state === 'active' || state === 'revoked' ? undefined : t(`stateHint.${state}`)}
-          >
+        // A state whose badge does not say what it means opens the explanation when pressed —
+        // a hover cannot be read on touch (ADR-200). `TOKEN_STATE_INFO` decides which.
+        const info = TOKEN_STATE_INFO[state];
+        return info ? (
+          <InfoPress infoKey={info} className={`badge badge-${STATE_TONE[state]}`}>
             {t(`state.${state}`)}
-          </Badge>
+          </InfoPress>
+        ) : (
+          <Badge tone={STATE_TONE[state]}>{t(`state.${state}`)}</Badge>
         );
       },
     },
@@ -265,6 +276,8 @@ function CreateTokenModal({
   // A token owned by a group-scoped account inherits that scope, so the picker is not offered —
   // see `ownerIsScoped`. Recomputed when the owner changes, since that is what decides it.
   const inherits = ownerIsScoped(owners, owner, username ?? '');
+  const scopeLabel = scopeLabelKey(scopeFromSelection(scopeGroups));
+  const scopeSummary = t(`scope.${scopeLabel.key}`, { count: scopeLabel.n });
 
   useEffect(() => {
     api.listNodeGroups().then(setGroups).catch(() => setGroups([]));
@@ -338,11 +351,15 @@ function CreateTokenModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t('field.roleHint')}</span>
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.owner')}</label>
-        <Select value={owner} onChange={(e) => setOwner(e.target.value)}>
+      {/* Service accounts are listed first (`ownerChoices`): that order is the recommendation an
+          unattended token should belong to a machine identity. */}
+      <Field
+        label={t('field.owner.label')}
+        htmlFor="tok-owner"
+        infoKey="settings-tokens:field.owner.info"
+      >
+        <Select id="tok-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
           {choices.map((u) => (
             <option key={u.id} value={u.username === username ? '' : u.id}>
               {u.username === username
@@ -351,17 +368,20 @@ function CreateTokenModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t('field.ownerHint')}</span>
-      </div>
+      </Field>
       <div className="modal-field">
-        <label className="modal-field-label">{t('field.scope')}</label>
+        <label className="modal-field-label" htmlFor="tok-scope">
+          {t('field.scope')}
+        </label>
         {inherits ? (
           // Not a picker: a token owned by a scoped account inherits that account's scope, and the
-          // API refuses any other value (`400 owner_is_scoped`). Saying so beats a control whose
-          // every setting is rejected.
-          <span className="modal-hint">{t('field.scopeInherited')}</span>
+          // API refuses any other value (`400 owner_is_scoped`). A read-only field saying so beats a
+          // control whose every setting is rejected.
+          <TextInput id="tok-scope" readOnly value={t('field.scopeSameAsOwner')} />
         ) : groups.length === 0 ? (
-          <span className="modal-hint">{t('field.scopeNoGroups')}</span>
+          <span className="tok-scope-summary">
+            {t('scope.all')}
+          </span>
         ) : (
           <>
             <div className="users-scope-list">
@@ -380,9 +400,9 @@ function CreateTokenModal({
                 </label>
               ))}
             </div>
-            <span className="modal-hint">
-              {scopeGroups.length === 0 ? t('field.scopeAllHint') : t('field.scopeHint')}
-            </span>
+            {/* What the ticks add up to, in the list's own words: nothing ticked is the whole
+                fleet, which the box alone does not say. */}
+            <span className="tok-scope-summary">{scopeSummary}</span>
           </>
         )}
       </div>
@@ -395,7 +415,6 @@ function CreateTokenModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t('field.expiryHint')}</span>
       </div>
       <FormError form={form} />
     </Modal>
@@ -522,7 +541,6 @@ export function ApiTokensPage() {
       <PageHeader
         title={t('nav:settings.apiTokens')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.apiTokens') }]}
-        note={t('note')}
       />
 
       {!authed ? (
@@ -560,7 +578,22 @@ export function ApiTokensPage() {
             filterCounts={counts}
             rowKey={(r) => r.id}
             loading={loading}
-            empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
+            empty={
+              anyFiltered ? (
+                t('common:filter.noMatch')
+              ) : (
+                <EmptyState
+                  text={t('empty')}
+                  action={
+                    canUsers && (
+                      <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                        + {t('add.button')}
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
           />
         </LoadGate>
       )}

@@ -33,7 +33,10 @@ export function tokens(s: string): Map<string, number> {
   for (const m of s.match(/\{\{[^}]+\}\}/g) ?? []) add(m.trim());
   // `<lnk>` and `</lnk>` count as the same tag: what must survive translation is that the link
   // is still there, and a closing tag with no opening one is the Trans component's error to raise.
-  for (const m of s.match(/<\/?[A-Za-z][A-Za-z0-9]*>/g) ?? []) add(`<${m.replace(/[</>]/g, '')}>`);
+  // A self-closing `<lnk/>` counts too — it is how a sentence carries a `ScreenLink` (ADR-200), and
+  // a translation that dropped it would lose the link with every other check still green.
+  for (const m of s.match(/<\/?[A-Za-z][A-Za-z0-9]*\s*\/?>/g) ?? [])
+    add(`<${m.replace(/[</>\s]/g, '')}>`);
   return bag;
 }
 

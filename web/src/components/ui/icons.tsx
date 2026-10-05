@@ -162,6 +162,17 @@ export function WarningIcon(props: IconProps) {
   );
 }
 
+/** A circled "i" — the trigger of an explanation shown only when pressed (`InfoTip`, ADR-200). */
+export function InfoIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.8" strokeLinecap="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v6" />
+      <path d="M12 7.6v.2" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 /** Bell with a slash — a node/group is muted (notifications suppressed). */
 export function BellOffIcon(props: IconProps) {
   return (

@@ -156,7 +156,7 @@ import {
   BODY_MATCH_MODES,
   EXPECTED_STATUS_MODES,
 } from './components/NodeDetail/checkConfigForm';
-import { EXPIRY_CHOICES } from './pages/tokenForm';
+import { EXPIRY_CHOICES, TOKEN_STATE_INFO, TOKEN_STATES } from './pages/tokenForm';
 import { EXPIRY_LEVELS } from './pages/tlsSettingsForm';
 import { OIDC_ISSUER_PARAMS, OIDC_PICKER_ORDER } from './pages/oidcPresets';
 
@@ -682,9 +682,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   });
 
   it('every token surface has a label and a hint (settings-tokens:surface.*)', () => {
-    // The label names the surface in the list and the dialog; the hint is what tells an admin what
-    // they are handing out. A surface added without either would offer an operator a raw key at the
-    // exact moment they decide how much power a credential carries.
+    // The label names the surface in the list and the dialog; the hint — a few words beside the
+    // checkbox since ADR-200 — is what tells an admin what they are handing out. A surface added
+    // without either would offer an operator a raw key at the exact moment they decide how much
+    // power a credential carries.
     const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
     expectKeys('token surface', locales, 'surface.', TOKEN_SURFACES);
     expectKeys('token surface hint', locales, 'surfaceHint.', TOKEN_SURFACES);
@@ -723,25 +724,20 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
   });
 
-  it('every token state has an explanation (settings-tokens:state.* / stateHint.*)', () => {
+  it('every token state has a label, and its explanation (settings-tokens:state.* / stateInfo.*)', () => {
     // A token can be dead for four independent reasons and the operator needs the real one — "the
     // owner is disabled" and "this expired" call for different actions.
-    //
-    // `tokenForm.ts`'s `TokenState` is a plain union, so the members are listed here rather than
-    // iterated; both key families are derived from this one list so they cannot drift apart.
-    const states = ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'];
     const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
-    expectKeys('token state', locales, 'state.', states);
-    // The badge's tooltip, which is the only place the UI says *why* a token stopped
-    // authenticating. `active` and `revoked` deliberately have none (the label already says it),
-    // so the hint set is the rest — a sixth dead-state added without one would put a raw key in a
-    // `title` attribute, where even a reviewer would not see it.
-    expectKeys(
-      'token state hint',
-      locales,
-      'stateHint.',
-      states.filter((s) => s !== 'active' && s !== 'revoked'),
-    );
+    expectKeys('token state', locales, 'state.', TOKEN_STATES);
+    // What the badge opens when pressed (ADR-200), the only place the UI says *why* a token stopped
+    // authenticating. `TOKEN_STATE_INFO` is a `Record`, so a new state has to answer whether it has
+    // one; the states that do must have the strings, or the press opens a raw key.
+    const info = TOKEN_STATES.flatMap((s) => {
+      const key = TOKEN_STATE_INFO[s];
+      return key ? [key.replace(/^settings-tokens:/, '')] : [];
+    });
+    expect(info.length).toBeGreaterThan(0);
+    expectKeys('token state info', locales, '', info);
   });
 
   it('every expected-status mode has a label (nodes:checkEdit.statusMode.*)', () => {

@@ -1,8 +1,7 @@
 {
-  "note": "Long-lived API tokens for unattended clients — an AI/MCP client such as Claude Code, or a script or CI job calling the REST API. A token acts as the account that owns it: disabling or deleting that account stops the token, and its role is capped at the owner's current role. It is shown once at creation; only its hash is stored.",
   "unavailable": "Managing API tokens requires the admin role.",
   "signInPrompt": "Sign in as an admin to manage API tokens.",
-  "empty": "No API tokens yet. Create one to give an AI/MCP or API client access.",
+  "empty": "No API tokens yet.",
   "add": {
     "button": "New token",
     "title": "Create API token"
@@ -11,19 +10,15 @@
     "name": "Name",
     "namePlaceholder": "e.g. oncall-laptop",
     "role": "Role",
-    "roleHint": "Use Viewer for a read-only client. A token can never exceed its owner's role.",
     "surfaces": "Can be used for",
-    "surfacesHint": "A token reaches only the surfaces named here.",
     "expiry": "Expires",
-    "expiryHint": "A bounded life limits what a leaked token can do.",
-    "owner": "Owner",
-    "ownerHint": "Prefer a service account for anything unattended, so the token outlives whoever created it.",
+    "owner": {
+      "label": "Owner",
+      "info": "A token acts as its owner. Disabling or deleting the owner stops the token, and its role is capped at the owner's."
+    },
     "ownerSelf": "{{username}} (you)",
     "scope": "Can see",
-    "scopeHint": "The token sees only these groups and everything beneath them.",
-    "scopeAllHint": "Nothing selected — the token sees the whole fleet.",
-    "scopeNoGroups": "No node groups exist yet, so this token sees the whole fleet.",
-    "scopeInherited": "This owner is limited to node groups, and the token sees exactly what the owner sees. To give a token a narrower view, own it with a service account scoped to what it should see."
+    "scopeSameAsOwner": "Same as owner"
   },
   "expiry": {
     "30d": "In 30 days",
@@ -36,8 +31,8 @@
     "rest": "REST API"
   },
   "surfaceHint": {
-    "mcp": "The AI tool surface at /mcp — monitoring queries plus a few audited actions.",
-    "rest": "The northbound API, subject to the token's role. It cannot administer users."
+    "mcp": "AI tools at /mcp",
+    "rest": "Scripts and CI"
   },
   "cols": {
     "name": "Name",
@@ -64,10 +59,13 @@
     "no-owner": "No owner",
     "owner-disabled": "Owner disabled"
   },
-  "stateHint": {
-    "expired": "Past its expiry, so it no longer authenticates.",
-    "no-owner": "The account that owned this token is gone, so it no longer authenticates. Revoke it to tidy the list.",
-    "owner-disabled": "The owning account is disabled, so it no longer authenticates."
+  "stateInfo": {
+    "no-owner": {
+      "info": "The account that owned this token is gone, so it no longer authenticates. Revoke it to tidy the list."
+    },
+    "owner-disabled": {
+      "info": "The owning account is disabled, so it no longer authenticates."
+    }
   },
   "expires": {
     "never": "Never",
@@ -76,7 +74,9 @@
   "owner": {
     "none": "—"
   },
-  "ssoIdle": "This token's owner signs in through SSO. Yagra is never told when an identity provider disables an account, so an SSO-owned token stops working once its owner has been absent too long — the owner's silence is the only signal there is.",
+  "ssoIdle": {
+    "info": "Yagra is not told when an identity provider disables an account. An SSO-owned token stops once its owner has been absent too long."
+  },
   "lastUsed": {
     "never": "Never"
   },
@@ -84,7 +84,7 @@
     "title": "Token created",
     "intro": "Copy this token now — it is shown only once and cannot be recovered.",
     "label": "API token",
-    "usageHint": "Send it as a bearer token, for example:",
+    "usageHint": "Example:",
     "copy": "Copy",
     "done": "Done"
   },

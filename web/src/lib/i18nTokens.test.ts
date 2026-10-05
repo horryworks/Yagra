@@ -28,6 +28,14 @@ describe('tokenDiff', () => {
     expect(tokenDiff('{{count}} nodes', 'ノード')).toBe('{{count}} ×1 in en, ×0 in ja');
   });
 
+  // `<lnk/>` is how a sentence carries a `ScreenLink` (ADR-200). The first version of `tokens` did
+  // not match a self-closing tag at all, so a translation that dropped one passed.
+  it('counts a self-closing tag, and names one the translation dropped', () => {
+    expect([...tokens('Check <lnk/>.')]).toEqual([['<lnk>', 1]]);
+    expect(tokenDiff('Check <lnk/>.', '<lnk /> を確認してください。')).toBe('');
+    expect(tokenDiff('Check <lnk/>.', '確認してください。')).toBe('<lnk> ×1 in en, ×0 in ja');
+  });
+
   it('names a tag the translation invented', () => {
     expect(tokenDiff('Sign in', '<b>サインイン</b>')).toBe('<b> ×0 in en, ×2 in ja');
   });

@@ -158,5 +158,9 @@
     },
     "groupLabel": "group: {{name}} (incl. subgroups)",
     "nodeLabel": "node: {{name}}"
+  },
+  "info": {
+    "about": "About {{label}}",
+    "title": "Explanation"
   }
 }

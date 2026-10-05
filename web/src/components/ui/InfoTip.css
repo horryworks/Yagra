@@ -1,0 +1,109 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The two triggers of an explanation shown only when pressed (ADR-200) and the popover they share.
+   Focus is a colour change, never an outline (ui-conventions.md). */
+
+.infotip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The ⓘ: the icon alone, muted until hovered, focused or open. */
+.infotip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.infotip-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.infotip-btn:hover,
+.infotip-btn:focus-visible,
+.infotip-btn[aria-expanded='true'] {
+  outline: none;
+  color: var(--accent-color);
+}
+
+/* A finger needs more than 18px; the icon stays the same size. */
+@media (hover: none) {
+  .infotip-btn {
+    width: 32px;
+    height: 32px;
+    margin: -7px;
+  }
+}
+
+/* A pressable label: the text keeps its look and gains a dotted underline. */
+button.infopress:not(.badge) {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--text-tertiary);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+button.infopress:not(.badge):hover,
+button.infopress:not(.badge):focus-visible,
+button.infopress:not(.badge)[aria-expanded='true'] {
+  outline: none;
+  text-decoration-color: var(--accent-color);
+}
+
+/* A pressable badge: the badge's own tone, plus a ▾ that says it opens. */
+button.infopress.badge {
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+button.infopress.badge:not(.badge-neutral) {
+  background: transparent;
+}
+
+button.infopress.badge::after {
+  content: '▾';
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  opacity: 0.8;
+}
+
+button.infopress.badge:hover,
+button.infopress.badge[aria-expanded='true'] {
+  background: var(--bg-tertiary);
+}
+
+button.infopress.badge:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* The popover: a short paragraph that never runs past a phone's edge. */
+.infotip-pop {
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  white-space: normal;
+}

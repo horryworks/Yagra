@@ -165,7 +165,10 @@ export function Modal({ title, onClose, footer, size = 'default', resizeId, chil
       // Only the frontmost dialog traps. Two mounted at once (a confirmation raised from an
       // editing dialog) would otherwise each yank focus back into itself on every Tab, which is
       // worse than no trap at all — the keyboard stops working. Document order is mount order.
-      const dialogs = document.querySelectorAll('[role="dialog"]');
+      // `aria-modal`, not `role="dialog"`: a popover is a dialog too (an ⓘ's `InfoTip`, a column
+      // filter), is portalled after this one, and would otherwise read as the frontmost dialog and
+      // switch the trap off for as long as it is open (ADR-200).
+      const dialogs = document.querySelectorAll('[aria-modal="true"]');
       if (dialogs.length > 1 && dialogs[dialogs.length - 1] !== dialog) return;
       const focusables = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
       const active = document.activeElement;

@@ -117,6 +117,20 @@ export const TOKEN_STATES = ['revoked', 'expired', 'no-owner', 'owner-disabled',
 export type TokenState = (typeof TOKEN_STATES)[number];
 
 /**
+ * The explanation a state's badge opens when pressed (ADR-200), or `null` when the badge says it
+ * all. `expired` and `revoked` are their own explanation; `no-owner` and `owner-disabled` name a
+ * cause whose consequence — the token no longer authenticates — the badge does not. A `Record`, so
+ * a new state cannot be added without deciding this.
+ */
+export const TOKEN_STATE_INFO: Record<TokenState, string | null> = {
+  revoked: null,
+  expired: null,
+  'no-owner': 'settings-tokens:stateInfo.no-owner.info',
+  'owner-disabled': 'settings-tokens:stateInfo.owner-disabled.info',
+  active: null,
+};
+
+/**
  * Whether a listed token is usable right now, and if not, why.
  *
  * The listing shows several independent reasons a token can be dead, and an operator staring at one

@@ -149,5 +149,9 @@
     },
     "groupLabel": "グループ: {{name}}（サブグループを含む）",
     "nodeLabel": "ノード: {{name}}"
+  },
+  "info": {
+    "about": "{{label}} について",
+    "title": "説明"
   }
 }

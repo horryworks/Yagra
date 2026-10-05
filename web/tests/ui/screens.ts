@@ -103,7 +103,6 @@ export const LONG_NOTE: Record<string, string> = {
   '/nodes/missing-prefixes': 'Inc.12 — what a site is, and where addresses come from',
   '/nodes/subnet-overlaps': 'Inc.12 — what a site is',
   '/settings/ai': 'Inc.8 — nothing runs until a provider is set',
-  '/settings/api-tokens': 'Inc.3 — a token acts as its owner and is shown once',
   '/settings/audit': 'Inc.8 — kept for 365 days',
   '/settings/auth': 'Inc.7 — local accounts keep working',
   '/settings/integrations/netbox': 'Inc.6 — read-only, never writes to NetBox',

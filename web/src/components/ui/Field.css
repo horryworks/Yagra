@@ -32,6 +32,45 @@ select.field {
   cursor: pointer;
 }
 
+/* A unit written inside the box's right edge (`TextInput`'s `suffix`, ADR-200). The input keeps
+   its own border; the unit sits over its padding, so the box is one control to the eye. */
+.field-affix {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.field-affix .field {
+  padding-right: 4.5em;
+}
+
+.field-suffix {
+  position: absolute;
+  right: 10px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.modal-field .field-affix {
+  width: 100%;
+}
+
+/* A field's label row: the label, then its ⓘ (`Field`, ADR-200). */
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* `.form-stack` spaces its children with a gap; a `Field` there must not add its own margin. */
+.form-stack > .modal-field {
+  margin-bottom: 0;
+}
+
 /* Multi-line variant: the fixed input height would clip it, and pasted blocks (PEM, scripts) are
    monospace by nature. Resizing is vertical-only so it can't break a modal's column layout. */
 .field.field-area {

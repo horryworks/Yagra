@@ -14,6 +14,7 @@ import {
 } from './nav';
 import enNav from './locales/en/nav.json';
 import jaNav from './locales/ja/nav.json';
+import { codeOnly, readSources } from './testSupport/sources';
 
 /** Resolve a dotted key (e.g. 'nodes.metricSets') against a nav bundle, English by default. */
 function resolveKey(key: string, bundle: unknown = enNav): unknown {
@@ -421,5 +422,32 @@ describe('itemLandingPath (where a sidebar item goes back to, ADR-134 増分 3)'
     expect(wrong).toEqual([]);
     // Counts what was inspected, as the section round-trip above does (floor-must-count-what-was-checked).
     expect(inspected).toBeGreaterThanOrEqual(34);
+  });
+});
+
+describe('a ScreenLink names a screen the menu lists (ADR-200)', () => {
+  // `ScreenLink` reads both of its words from the menu, and renders nothing for a path it cannot
+  // find there — so a link to a path that is not in `NAV` would be a sentence with a hole in it.
+  const targetsIn = (src: string) =>
+    [...codeOnly(src).matchAll(/<ScreenLink\s+to=(?:\{\s*)?(['"`])([^'"`]+)\1/g)].map((m) => m[2]);
+
+  it('reads the route out of the tag', () => {
+    const src = [
+      '// <ScreenLink to="/nowhere" />',
+      'components={{ lnk: <ScreenLink to="/settings/pollers" /> }}',
+      "<ScreenLink to={'/nodes/credentials'} />",
+    ].join('\n');
+    expect(targetsIn(src)).toEqual(['/settings/pollers', '/nodes/credentials']);
+  });
+
+  it('every ScreenLink in the source points at a menu item', () => {
+    const files = readSources(undefined, { exts: ['.tsx'] });
+    expect(files.length).toBeGreaterThan(200);
+    const stray = files.flatMap(([file, src]) =>
+      targetsIn(src)
+        .filter((to) => navItemForPath(to) === null)
+        .map((to) => `${file}: ${to}`),
+    );
+    expect(stray).toEqual([]);
   });
 });

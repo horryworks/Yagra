@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// ADR-200 G3, G4, G5 and G7: the amount of explanatory prose only goes down.
+// ADR-200 G3, G4, G5, G7, G8, G9 and G10: the amount of explanatory prose only goes down.
 //
 // The WebUI had about 100,000 characters of explanation on its screens (2026-10-05), written one
 // feature at a time under ADR-055's "the text on screen is the manual". Nothing stopped the next
@@ -15,6 +15,13 @@
 // - G7 `PAGE_NOTES` — every screen that passes its own `note` to `PageHeader` instead of taking
 //   the nav description, with the reason. Only shrinks; an entry with `until` is a fact still
 //   waiting for its place in the screen, and leaves in that increment.
+// - G8 `INFO_COUNT` — every ⓘ (`InfoTip`) and pressable label (`InfoPress`). Its text is a `.info`
+//   key, quoted once in the code, two sentences and 200 EN / 120 JA characters at most, and no
+//   file draws more than three ⓘ. The count only moves with a reason: an ⓘ is the last resort.
+// - G9 `POINTER_LEGACY` — strings that spell a menu path with `▸`. A pointer to a screen is a
+//   `ScreenLink`, which takes the names from the menu itself. Only shrinks.
+// - G10 `HINT_SITES` — static hints under fields and at the head of dialogs (`<FieldHint>` with no
+//   `error`, `form-hint`, `modal-hint`). Only shrinks.
 //
 // Raising a ceiling needs a reason in the commit message — a new screen's state message, say.
 // What prose may stay at all is in `.claude/rules/ui-conventions.md` (the ADR-200 section).
@@ -28,13 +35,21 @@ import {
   resolveKey,
 } from './testSupport/locales';
 import {
+  hintSites,
   hoverKeysIn,
+  infoKeyAttrs,
+  infoKeyLiterals,
+  infoKeys,
+  infoSites,
   isProse,
+  jaFor,
   longKeys,
   noteKeyOf,
   NOT_MEASURED,
   pageHeaderTags,
+  pointerKeys,
   proseMass,
+  sentenceCount,
   wordCount,
 } from './testSupport/prose';
 import { readSources, SRC } from './testSupport/sources';
@@ -60,7 +75,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-forwarding': [3454, 1893],
   'settings-relocation': [4933, 2515],
   'settings-tls': [2614, 1345],
-  'settings-tokens': [2039, 1128],
+  'settings-tokens': [801, 433],
   'settings-upgrade': [5335, 3023],
   settings: [649, 359],
   suppression: [1091, 712],
@@ -120,8 +135,6 @@ const LONG_LEGACY: string[] = [
   'settings-tls:regenerate.intro',
   'settings-tls:warning.apiPortPublic',
   'settings-tls:warning.keyUnreadable',
-  'settings-tokens:note',
-  'settings-tokens:ssoIdle',
   'settings-upgrade:bundle.howTo',
   'settings-upgrade:mechanism.unsupportedHint',
   'settings-upgrade:sitePrep.fix',
@@ -210,11 +223,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     kind: 'fact',
     until: 'Inc.8',
     why: 'nothing runs, and nothing leaves, until a provider is set',
-  },
-  'pages/ApiTokensPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.3',
-    why: 'a token acts as its owner, is capped at the owner role, and is shown once',
   },
   'pages/AuditPage.tsx': { kind: 'fact', until: 'Inc.8', why: 'kept for 365 days' },
   'pages/AuthSettingsPage.tsx': {
@@ -317,6 +325,57 @@ const PAGE_NOTES: Record<string, PageNote> = {
     why: 'one report per analysis tool, keyed by the tool',
   },
 };
+
+/** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
+const INFO_COUNT = { tip: 1, press: 2 };
+
+/** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
+const INFO_PER_FILE = 3;
+
+/** The components that ARE the ⓘ, not screens that use one. */
+const INFO_PRIMITIVES = ['components/ui/Field.tsx', 'components/ui/InfoTip.tsx'];
+
+/** Keys that end in `.info` and are not an explanation: the `info` member of an enum, read with a
+ *  built key (`severity.${s}`). Checked both ways, so a listed key that goes away leaves the list. */
+const INFO_NOT_A_TIP: Record<string, string> = {
+  'alerts:eventLog.action.info': 'the label of the `info` event-rule action',
+  'dashboard:widgets.eventTriage.action.info': 'the label of the `info` event-rule action',
+  'format:severity.info': 'the label of the `info` severity',
+  'troubleshoot:findings.severity.info': 'the label of the `info` finding severity',
+};
+
+/** Strings that spell a menu path with `▸` and predate ADR-200 (G9). Remove; never add. */
+const POINTER_LEGACY: string[] = [
+  'access:cred.delete.held',
+  'dashboard:public.bannerOff',
+  'dashboard:widgets.discovery.empty',
+  'monitoring:discovery.seen.coverage.off',
+  'nodes:editNode.profileLockHint',
+  'nodes:interfaces.rules.inheritedHint',
+  'nodes:neighbors.empty.disabled',
+  'nodes:neighbors.setup.credsHint',
+  'nodes:rediscover.err.noLivePoller',
+  'nodes:rediscover.phase.waitingLong',
+  'rca:err.notConfigured',
+  'settings-auth:publicDashboard.confirmOnEmpty',
+  'settings-auth:publicDashboard.hint',
+  'settings-relocation:afterwards.item2',
+  'settings-relocation:afterwards.item3',
+  'settings-relocation:readiness.paused',
+  'settings-upgrade:sitePrep.fix',
+  'system:bundle.notBackup',
+  'system:settings.neighbors.walk.arp.help',
+  'topology:dependency.mode.blocked',
+  'topology:geo.empty',
+];
+
+/** `▸` allowed on purpose, with the reason. */
+const POINTER_ALLOWED: Record<string, string> = {
+  'system:meraki.devices.underNetwork': 'a breadcrumb format, {{folder}} ▸ {{network}}',
+};
+
+/** Static hints left on the screens (G10). Lower as they go; never raise. */
+const HINT_SITES = { fieldHint: 45, formHint: 24, modalHint: 69 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));
@@ -452,5 +511,122 @@ describe('G7: a page note is the nav description unless the screen says why', ()
       );
     expect(over).toEqual([]);
     expect(checked.length).toBeGreaterThan(0);
+  });
+});
+
+describe('G8: an explanation behind ⓘ is short, keyed, and counted', () => {
+  const files = readSources(SRC, { skipDirs: ['api', 'locales'] });
+
+  it('reads a source the way the components are written', () => {
+    const src = [
+      '// <InfoTip infoKey="a:x.info" label="x" />',
+      '<Field label={l} htmlFor="f" infoKey="a:f.info">',
+      "<InfoTip infoKey='a:y.info' label={t('y')} />",
+      '<InfoPress infoKey={k} className="badge">{n}</InfoPress>',
+      "const K = { s: 'a:z.info' };",
+    ].join('\n');
+    expect(infoSites(src)).toEqual({ tip: 2, press: 1 });
+    expect(infoKeyLiterals(src)).toEqual(['a:f.info', 'a:y.info', 'a:z.info']);
+    expect(infoKeyAttrs(src)).toEqual(['a:f.info', 'a:y.info']);
+    expect(infoKeys({ a: { en: { x: { info: 'i' }, info: 'j', infoText: 'k' } } })).toEqual([
+      'a:info',
+      'a:x.info',
+    ]);
+    expect(sentenceCount('One. Two, e.g. this. Three?')).toBe(4);
+    expect(sentenceCount('一つ。二つ。')).toBe(2);
+  });
+
+  it('inspected the tree it is supposed to be reading', () => {
+    expect(files.length).toBeGreaterThan(500);
+  });
+
+  const literals = files.flatMap(([, src]) => infoKeyLiterals(src));
+  const all = infoKeys(locales);
+  const tips = all.filter((k) => !(k in INFO_NOT_A_TIP));
+
+  it('every key it sets aside as not an explanation still exists', () => {
+    expect(Object.keys(INFO_NOT_A_TIP).filter((k) => !all.includes(k))).toEqual([]);
+  });
+
+  it('every .info key is named exactly once in the code, and every named one exists', () => {
+    expect([...new Set(literals)].sort()).toEqual(tips);
+    expect(literals.filter((k, i) => literals.indexOf(k) !== i)).toEqual([]);
+  });
+
+  it('an infoKey is written with its namespace', () => {
+    const bare = files.flatMap(([file, src]) =>
+      infoKeyAttrs(src)
+        .filter((k) => !/^[A-Za-z][\w-]*:/.test(k))
+        .map((k) => `${file}: ${k}`),
+    );
+    expect(bare).toEqual([]);
+  });
+
+  it('each explanation is at most two sentences and 200 EN / 120 JA characters', () => {
+    const over = tips.flatMap((nk) => {
+      const cut = nk.indexOf(':');
+      const { en, ja } = locales[nk.slice(0, cut)];
+      const key = nk.slice(cut + 1);
+      const e = flattenStrings(en)[key] ?? '';
+      const j = jaFor(ja, key);
+      const bad = e.length > 200 || j.length > 120 || sentenceCount(e) > 2 || sentenceCount(j) > 2;
+      return bad ? [`${nk}: ${e.length} / ${j.length} characters`] : [];
+    });
+    expect(over).toEqual([]);
+  });
+
+  it(`no file draws more than ${INFO_PER_FILE} ⓘ, and the total is the counted one`, () => {
+    const total = { tip: 0, press: 0 };
+    const crowded: string[] = [];
+    for (const [file, src] of files) {
+      if (INFO_PRIMITIVES.includes(file)) continue;
+      const n = infoSites(src);
+      total.tip += n.tip;
+      total.press += n.press;
+      if (n.tip > INFO_PER_FILE) crowded.push(`${file}: ${n.tip}`);
+    }
+    expect(crowded).toEqual([]);
+    expect(total).toEqual(INFO_COUNT);
+  });
+});
+
+describe('G9: a pointer to another screen is a link, not a spelled-out menu path', () => {
+  it('finds a ▸ in either language', () => {
+    const fake = { x: { en: { a: 'See Settings ▸ Pollers.', b: 'ok' }, ja: { a: '', b: 'A ▸ B' } } };
+    expect(pointerKeys(fake)).toEqual(['x:a', 'x:b']);
+  });
+
+  it('the strings with ▸ are exactly the legacy list and the allowed ones', () => {
+    const found = pointerKeys(locales);
+    expect(found.length).toBeGreaterThan(0);
+    expect(found).toEqual([...POINTER_LEGACY, ...Object.keys(POINTER_ALLOWED)].sort());
+  });
+});
+
+describe('G10: no new static hint under a field or at the head of a dialog', () => {
+  const files = readSources(SRC, { exts: ['.tsx'] });
+
+  it('tells a hint from an error', () => {
+    const src = [
+      '<FieldHint>a</FieldHint>',
+      '<FieldHint error>b</FieldHint>',
+      '<span className="form-hint">c</span>',
+      '<p className="form-hint form-hint-error">d</p>',
+      '<span className="modal-hint">e</span>',
+      '// <span className="modal-hint">f</span>',
+    ].join('\n');
+    expect(hintSites(src)).toEqual({ fieldHint: 1, formHint: 1, modalHint: 1 });
+  });
+
+  it('the count of static hints is the counted one', () => {
+    const total = { fieldHint: 0, formHint: 0, modalHint: 0 };
+    for (const [, src] of files) {
+      const n = hintSites(src);
+      total.fieldHint += n.fieldHint;
+      total.formHint += n.formHint;
+      total.modalHint += n.modalHint;
+    }
+    expect(total.fieldHint + total.formHint + total.modalHint).toBeGreaterThan(50);
+    expect(total).toEqual(HINT_SITES);
   });
 });
