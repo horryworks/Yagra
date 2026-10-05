@@ -79,7 +79,7 @@ export function BulkTagModal({
       }
     >
       <div className="form-stack">
-        <p className="nd-muted">{t('bulkTag.note', { count: targets.length })}</p>
+        <p className="nd-muted">{t('bulkTag.note')}</p>
 
         <div className="modal-field nd-tags">
           <span className="modal-field-label">{t('bulkTag.add')}</span>

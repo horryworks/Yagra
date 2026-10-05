@@ -11,7 +11,7 @@ import { GROUP_TYPES } from '../../types/api';
 import type { GroupType, NodeGroup } from '../../types/api';
 import { asGroupType, groupOptions, subtreeGroupIds } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
-import { inheritedGroupPool, isValidPoolName } from '../../lib/pool';
+import { fallbackPool, isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
 import { tagDraftFrom, tagsChanged } from './tagFields';
 import { ChipInput } from '../ui/ChipInput';
@@ -30,6 +30,7 @@ import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { TextInput, Select, RequiredMark } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
+import { InfoTip } from '../ui/InfoTip';
 import './GroupModal.css';
 
 /** Add/edit a group: name, type, and parent (parent doubles as 'move'). */
@@ -78,7 +79,7 @@ export function GroupModal({
   const poolInvalid = !isValidPoolName(pool);
   // What this folder would inherit if its own pool is cleared. Preview only — the authority on what
   // actually polls a node is the server (`getNodeAssignment`), never this walk.
-  const inherited = inheritedGroupPool(groups, parent || null);
+  const inherited = fallbackPool(groups, parent || null);
   // Whether this folder is already on the map through an ancestor. Unlike the pool preview above
   // there is no client-side walk here: the server resolved it, and a second answer is exactly what
   // would let the dialog and the map disagree.
@@ -202,24 +203,26 @@ export function GroupModal({
             className="mono"
             value={pool}
             onChange={(e) => setPool(e.target.value)}
-            placeholder={inherited ? t('field.poolInheritPlaceholder', { pool: inherited }) : ''}
+            placeholder={poolPlaceholder(inherited, t)}
           />
-          <span className={`form-hint${poolInvalid ? ' form-hint-error' : ''}`}>
-            {poolInvalid ? t('field.poolInvalid') : t('group.poolHint')}
-          </span>
+          {poolInvalid && (
+            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
+          )}
         </label>
         {/* Not wrapped in a `<label>`: that gives every control inside it the same accessible name
             and sends a click on the text to whichever came first. The chip input carries its own
             `aria-label`. */}
         <div className="modal-field">
-          <span className="modal-field-label">{t('group.tags')}</span>
+          <div className="field-head">
+            <span className="modal-field-label">{t('group.tags')}</span>
+            <InfoTip infoKey="nodes:group.tagsInherit.info" label={t('group.tags')} />
+          </div>
           <ChipInput
             value={tagDraft.tags}
             onChange={(next) => setTagDraft((prev) => ({ ...prev, tags: next }))}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('group.tags')}
           />
-          <span className="form-hint">{t('group.tagsHint')}</span>
           {/* What this folder itself inherits, and what it refuses. Server-resolved on the row
               (`effective_tags` minus `tags`), so there is no client-side walk of the tree here —
               the thing `web/src/lib/pool.ts` has to do for the pool, with a warning attached. */}
@@ -263,7 +266,10 @@ export function GroupModal({
             ones and are disabled rather than hidden: the value is worth reading, and only the
             action goes (`ui-conventions.md`). */}
         <div className="form-label gm-prefixes">
-          <span>{t('group.prefixes')}</span>
+          <div className="field-head">
+            <span>{t('group.prefixes')}</span>
+            <InfoTip infoKey="nodes:group.prefixesUse.info" label={t('group.prefixes')} />
+          </div>
           {syncRows.length > 0 && (
             <>
               {syncRows.map((r) => (
@@ -318,7 +324,6 @@ export function GroupModal({
               {t('group.prefixAdd')}
             </Button>
           </div>
-          <span className="form-hint">{t('group.prefixesHint')}</span>
         </div>
         <div className="form-row">
           <label className="form-label">
@@ -342,11 +347,12 @@ export function GroupModal({
             />
           </label>
         </div>
-        <span className="form-hint">
-          {/* Falls back to the plain hint when the supplying ancestor is outside the caller's
-              scope — naming a folder they cannot see would be worse than saying nothing. */}
-          {pinnedAt ? t('group.geoInherited', { name: pinnedAt.name }) : t('group.geoHint')}
-        </span>
+        {/* Said only when it is true. Nothing is said when the supplying ancestor is outside the
+            caller's scope — naming a folder they cannot see would be worse than saying nothing. A
+            half-entered pin is refused on save with its own error (`geoFields.ts`). */}
+        {pinnedAt && (
+          <span className="form-hint">{t('group.geoInherited', { name: pinnedAt.name })}</span>
+        )}
         <FormError form={form} />
       </div>
     </Modal>

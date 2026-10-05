@@ -76,7 +76,7 @@ import {
   type ReleaseAction,
   type SuppressionTarget,
 } from '../lib/suppression';
-import { inheritedGroupPool, sharedOwnPool } from '../lib/pool';
+import { fallbackPool, sharedFallbackPool, sharedOwnPool } from '../lib/pool';
 import { targetNodeIds, type ActionTarget } from '../lib/actionTarget';
 import { escapeTarget, parseSelection, selectionToParam } from '../lib/treeSelection';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
@@ -1371,6 +1371,7 @@ export function NodesPage() {
             pins={pins}
             pinnedOnly={pinnedOnly}
             withNodesOnly={withNodesOnly}
+            onShowEmptyFolders={() => setNodeTreeWithNodesOnly(false)}
             keepGroups={createdGroups}
             // Not permission-gated: pinning is the account's own navigation (ADR-146).
             onTogglePin={pinsReady ? togglePin : undefined}
@@ -1736,8 +1737,8 @@ export function NodesPage() {
         <SetPoolModal
           target={poolTarget}
           // ⚠️ A set has a shared pool only when every node in it agrees; the first node's is not
-          // the batch's. `inheritedPool` is left off for a set for the same reason — the members
-          // can sit under different folders, so there is no one value to show as the fallback.
+          // the batch's. Its fallback follows the same rule: the members can sit under different
+          // folders, so `sharedFallbackPool` answers `null` unless they all land on one pool.
           currentPool={
             poolTarget.kind === 'nodes'
               ? sharedOwnPool(poolTarget.nodes)
@@ -1747,8 +1748,8 @@ export function NodesPage() {
           }
           inheritedPool={
             poolTarget.kind === 'nodes'
-              ? undefined
-              : inheritedGroupPool(
+              ? sharedFallbackPool(groups, poolTarget.nodes)
+              : fallbackPool(
                   groups,
                   poolTarget.kind === 'group'
                     ? (groups.find((g) => g.id === poolTarget.id)?.parent_id ?? null)

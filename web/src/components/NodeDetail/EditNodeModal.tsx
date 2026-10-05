@@ -15,7 +15,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
-import { isValidPoolName } from '../../lib/pool';
+import { isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/api';
 import { Button } from '../ui/Button';
@@ -221,13 +221,9 @@ export function EditNodeModal({
           className="mono"
           value={d.pool}
           onChange={(e) => set('pool', e.target.value)}
-          placeholder={
-            inheritedPool ? t('field.poolInheritPlaceholder', { pool: inheritedPool }) : ''
-          }
+          placeholder={poolPlaceholder(inheritedPool, t)}
         />
-        <FieldHint error={poolInvalid}>
-          {poolInvalid ? t('field.poolInvalid') : t('field.poolHint')}
-        </FieldHint>
+        {poolInvalid && <FieldHint error>{t('field.poolInvalid')}</FieldHint>}
       </Row>
     ),
     // ⚠️ Not wrapped in `Row`: that renders a `<label>`, and a label holding several inputs and a

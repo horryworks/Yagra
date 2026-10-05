@@ -58,6 +58,7 @@ import {
 import { formatScheduleTime } from '../../lib/format';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
+import { EmptyState } from '../ui/EmptyState';
 import { ActionMenu } from '../ui/ActionMenu';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
 import { WrenchIcon, BellIcon, BellOffIcon, PinIcon } from '../ui/icons';
@@ -336,6 +337,9 @@ interface Props {
   pinnedOnly?: boolean;
   /** Hide folders with no node anywhere below them (ADR-159). */
   withNodesOnly?: boolean;
+  /** Turn `withNodesOnly` off — the button on the empty pane it leaves when every folder is empty.
+   *  Omit to show the sentence alone. */
+  onShowEmptyFolders?: () => void;
   /** Folders `withNodesOnly` keeps whatever their membership — the ones created on this screen
    *  since it was opened, which are empty by definition (ADR-159). Ignored while the switch is
    *  off; the tree never adds to it. */
@@ -411,6 +415,7 @@ export function NodeTree({
   pins,
   pinnedOnly,
   withNodesOnly,
+  onShowEmptyFolders,
   keepGroups,
   onPollNodes,
   onTogglePin,
@@ -2081,8 +2086,20 @@ export function NodeTree({
           pinnedFilter && nothingPinned(pinnedFilter) ? (
             <p className="muted ntree-empty">{t('tree.pinnedEmpty')}</p>
           ) : withNodesOnly && groups.length > 0 && !filtering && !loading ? (
-            // Folders exist; the switch is what is hiding them. Say so (ADR-055 R6).
-            <p className="muted ntree-empty">{t('tree.withNodesEmpty')}</p>
+            // Folders exist; the switch is what is hiding them. Say so, and offer the way back
+            // (ADR-055 R6, ADR-200).
+            <div className="muted ntree-empty">
+              <EmptyState
+                text={t('tree.withNodesEmpty')}
+                action={
+                  onShowEmptyFolders && (
+                    <Button type="button" variant="outline" onClick={onShowEmptyFolders}>
+                      {t('tree.showEmptyFolders')}
+                    </Button>
+                  )
+                }
+              />
+            </div>
           ) : filtering ? null : loading ? (
             <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (

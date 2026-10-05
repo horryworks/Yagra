@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import type { ActionTarget } from '../../lib/actionTarget';
 import { targetNodeIds, targetNodeNames } from '../../lib/actionTarget';
-import { isValidPoolName } from '../../lib/pool';
+import { isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { done, partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
@@ -32,8 +32,9 @@ export function SetPoolModal({
   /** Its own pool today; `null` ⇒ it currently inherits. For a set, `null` unless every node
    *  agrees — see `sharedOwnPool`. */
   currentPool: string | null;
-  /** What it would fall back to if cleared — shown as the placeholder. */
-  inheritedPool?: string;
+  /** What it would fall back to if cleared — shown as the placeholder. `null` ⇒ not one value
+   *  (a batch whose nodes sit under folders that disagree). */
+  inheritedPool: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -96,20 +97,12 @@ export function SetPoolModal({
             className="mono"
             value={pool}
             onChange={(e) => setPool(e.target.value)}
-            placeholder={
-              inheritedPool ? t('field.poolInheritPlaceholder', { pool: inheritedPool }) : ''
-            }
+            placeholder={poolPlaceholder(inheritedPool, t)}
             autoFocus
           />
-          <span className={`form-hint${invalid ? ' form-hint-error' : ''}`}>
-            {invalid
-              ? t('field.poolInvalid')
-              : target.kind === 'group'
-                ? t('setPool.groupHint')
-                : target.kind === 'nodes'
-                  ? t('setPool.manyHint')
-                  : t('field.poolHint')}
-          </span>
+          {invalid && (
+            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
+          )}
         </label>
         <FormError form={form} />
       </div>

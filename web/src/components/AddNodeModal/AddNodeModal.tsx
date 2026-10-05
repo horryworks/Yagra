@@ -11,7 +11,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
-import { isValidPoolName } from '../../lib/pool';
+import { fallbackPool, isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
@@ -390,11 +390,11 @@ export function AddNodeModal({
             className="mono"
             value={form.pool}
             onChange={(e) => set('pool', e.target.value)}
-            placeholder={t('add.poolPlaceholder')}
+            placeholder={poolPlaceholder(fallbackPool(groups, group || null), t)}
           />
-          <span className={`form-hint${poolValid ? '' : ' form-hint-error'}`}>
-            {poolValid ? t('add.poolHint') : t('field.poolInvalid')}
-          </span>
+          {!poolValid && (
+            <span className="form-hint form-hint-error">{t('field.poolInvalid')}</span>
+          )}
         </label>
         {sameAddress && (
           <div className="form-warning" role="alert">

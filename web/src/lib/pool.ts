@@ -127,6 +127,37 @@ export function inheritedGroupPool(
   return undefined;
 }
 
+/** The pool a node or folder with no pool of its own, and none above it, is polled by. Mirrors
+ *  `DEFAULT_POOL` in yagra-bus (`nats.rs`), which is a constant, not a setting. */
+export const DEFAULT_POOL = 'default';
+
+/** What a pool field left blank falls back to for something filed under `parentId`: the nearest
+ *  folder's pool, else the default pool. Preview only, like `inheritedGroupPool` — the field's
+ *  placeholder shows it, so blank reads as a value rather than as a sentence under the field
+ *  (ADR-200). */
+export function fallbackPool(groups: NodeGroup[], parentId: string | null | undefined): string {
+  return inheritedGroupPool(groups, parentId) ?? DEFAULT_POOL;
+}
+
+/** The fallback shared by every node in a batch, or `null` when their folders disagree. A batch
+ *  can span folders, so one node's answer is not the set's — the same rule as `sharedOwnPool`. */
+export function sharedFallbackPool(
+  groups: NodeGroup[],
+  nodes: readonly { group_id?: string | null }[],
+): string | null {
+  if (nodes.length === 0) return null;
+  const first = fallbackPool(groups, nodes[0].group_id);
+  return nodes.every((n) => fallbackPool(groups, n.group_id) === first) ? first : null;
+}
+
+/** The pool field's placeholder. `null` ⇒ the fallback is not one value (a batch across folders,
+ *  or a node whose folder chain the dialog cannot see). */
+export function poolPlaceholder(fallback: string | null, t: TFunction): string {
+  return fallback === null
+    ? t('nodes:field.poolInheritFolder')
+    : t('nodes:field.poolInheritPlaceholder', { pool: fallback });
+}
+
 /** The pool every one of these nodes is set to, or `null` when they disagree or none is set.
  *
  * 🚨 **A chip may only render as "current" when the answer is the same for every node in the

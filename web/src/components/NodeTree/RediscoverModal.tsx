@@ -6,13 +6,14 @@
 // `rediscoverState.ts`, where a test runs. This file starts the re-read, asks again every two
 // seconds while it is in flight, and draws the answer.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { ApiError, api, errMsg } from '../../services/api';
 import type { RediscoverView } from '../../types/api';
 import { pollWhileVisible } from '../../lib/sharedPoll';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
+import { ScreenLink } from '../ui/ScreenLink';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import {
   applicable,
@@ -41,7 +42,11 @@ export function RediscoverModal({
 }) {
   const { t } = useTranslation('nodes');
   const [scanId, setScanId] = useState<string | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
+  /** Why the re-read could not start: the dialog's own words (a key, which may point at a screen)
+   *  when it has some for the refusal, else the server's message. */
+  const [startError, setStartError] = useState<{ key: string | null; text: string } | null>(
+    null,
+  );
   const [view, setView] = useState<RediscoverView | null>(null);
   const [lost, setLost] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -63,7 +68,11 @@ export function RediscoverModal({
         startedAt.current = Date.now();
         setScanId(r.scan_id);
       },
-      (e: unknown) => setStartError(words(e) ?? errMsg(e, t('rediscover.err.start'))),
+      (e: unknown) =>
+        setStartError({
+          key: refusalKey(e instanceof ApiError ? e.code : undefined),
+          text: errMsg(e, t('rediscover.err.start')),
+        }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
@@ -145,7 +154,13 @@ export function RediscoverModal({
       case 'waiting':
         return t('rediscover.phase.waiting');
       case 'waitingLong':
-        return t('rediscover.phase.waitingLong');
+        return (
+          <Trans
+            t={t}
+            i18nKey="rediscover.phase.waitingLong"
+            components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
+          />
+        );
       case 'reading':
         return t('rediscover.phase.reading');
       case 'answered':
@@ -194,10 +209,17 @@ export function RediscoverModal({
       }
     >
       <div className="form-stack">
-        <p className="muted">{t('rediscover.intro')}</p>
         {startError && (
           <p className="form-error" role="alert">
-            {startError}
+            {startError.key ? (
+              <Trans
+                t={t}
+                i18nKey={startError.key}
+                components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
+              />
+            ) : (
+              startError.text
+            )}
           </p>
         )}
         {status && <p className={polling ? 'muted' : 'form-warning'}>{status}</p>}

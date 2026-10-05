@@ -3,14 +3,18 @@ import { describe, expect, it } from 'vitest';
 import type { NodeAssignment, NodeGroup, PolledBy, PoolOption } from '../types/api';
 import i18n from '../i18n';
 import {
+  DEFAULT_POOL,
   MAX_POOL_LEN,
+  fallbackPool,
   POOL_CHIP_LIMIT,
   inheritedGroupPool,
   isValidPoolName,
   poolChoices,
   poolFactLabel,
+  poolPlaceholder,
   polledByIsWarning,
   polledByLabel,
+  sharedFallbackPool,
   sharedOwnPool,
 } from './pool';
 
@@ -221,5 +225,33 @@ describe('sharedOwnPool', () => {
 
   it('answers null for an empty batch rather than throwing', () => {
     expect(sharedOwnPool([])).toBeNull();
+  });
+});
+
+describe('fallbackPool / sharedFallbackPool / poolPlaceholder', () => {
+  const groups = [
+    group({ id: 'tokyo', pool: 'tokyo' }),
+    group({ id: 'floor', parent_id: 'tokyo' }),
+    group({ id: 'osaka' }),
+  ];
+  const n = (group_id: string | null) => ({ group_id });
+
+  it('falls back to the default pool when no folder above sets one', () => {
+    expect(fallbackPool(groups, 'floor')).toBe('tokyo');
+    expect(fallbackPool(groups, 'osaka')).toBe(DEFAULT_POOL);
+    expect(fallbackPool(groups, null)).toBe(DEFAULT_POOL);
+  });
+
+  it('answers one value for a batch only when every node falls back to it', () => {
+    expect(sharedFallbackPool(groups, [n('tokyo'), n('floor')])).toBe('tokyo');
+    // Unfiled and in a folder with no pool both land on the default pool: the same answer.
+    expect(sharedFallbackPool(groups, [n(null), n('osaka')])).toBe(DEFAULT_POOL);
+    expect(sharedFallbackPool(groups, [n('floor'), n('osaka')])).toBeNull();
+    expect(sharedFallbackPool(groups, [])).toBeNull();
+  });
+
+  it('names the value in the placeholder, or says it comes from the folder', () => {
+    expect(poolPlaceholder('tokyo', t)).toBe('Inherited: tokyo');
+    expect(poolPlaceholder(null, t)).toBe('Inherited from the folder');
   });
 });

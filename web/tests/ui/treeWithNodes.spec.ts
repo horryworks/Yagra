@@ -139,3 +139,32 @@ test('"clear all filters" appears with it and switches it off', async ({ page })
   await expect(inventorySwitch(page, HIDE_EMPTY)).not.toBeChecked();
   await expect(row(page, 'nowhere')).toHaveCount(1);
 });
+
+test.describe('every folder empty', () => {
+  // No folder has a node anywhere below it, so the switch hides all of them.
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/node-groups': folders(),
+        '/api/v1/nodes/by-group': (url: URL) => {
+          const asked = (url.searchParams.get('groups') ?? '').split(',').filter(Boolean);
+          return { nodes: [], truncated: false, answered: asked } as unknown as Json;
+        },
+        '/api/v1/fleet/group-summary': { groups: {} } as unknown as Json,
+      },
+    },
+  });
+
+  test('the empty pane says why and its button switches the filter off', async ({ page }) => {
+    await page.goto('/nodes');
+    await expect(row(page, 'nowhere')).toHaveCount(1);
+    await pressInventorySwitch(page, HIDE_EMPTY);
+    await page.keyboard.press('Escape');
+    const body = page.locator('.ntree-body');
+    await expect(body.getByText('Every folder is empty', { exact: false })).toHaveCount(1);
+    await body.getByRole('button', { name: 'Show empty folders' }).click();
+    await expect(row(page, 'nowhere')).toHaveCount(1);
+    await expect(row(page, 'region')).toHaveCount(1);
+  });
+});
