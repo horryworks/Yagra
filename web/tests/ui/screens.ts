@@ -96,7 +96,6 @@ export const NOTE_MAX = 80;
 export const LONG_NOTE: Record<string, string> = {
   '/topology/dependency': 'Inc.23 — the upstream decides suppression',
   '/topology/map': 'Inc.23 — off the menu, so it has no nav description',
-  [`/troubleshoot/report/${REPORT_TOOL}`]: 'Inc.22 — each analysis explains its own scoring',
 };
 
 /**
@@ -128,7 +127,7 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/upgrade': 300,
   '/topology/dependency': 151,
   '/topology/map': 239,
-  '/troubleshoot': 2076,
+  '/troubleshoot': 1319,
 };
 
 export type Expect =

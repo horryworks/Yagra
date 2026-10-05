@@ -184,7 +184,6 @@ export function LaunchDrawer() {
               <div className="ts-fgroup">
                 <span className="ts-flabel">{t('fields.depth')}</span>
                 <Segmented options={DEPTHS} value={depth} onChange={setDepth} ariaLabel={t('fields.depth')} />
-                <span className="ts-fhint">{t('launch.depthHint')}</span>
               </div>
 
               {showSensitivity && (
@@ -215,7 +214,6 @@ export function LaunchDrawer() {
                   onChange={setNotify}
                   ariaLabel={t('fields.whenDone')}
                 />
-                <span className="ts-fhint">{t('launch.notify.hint')}</span>
               </div>
             </div>
 

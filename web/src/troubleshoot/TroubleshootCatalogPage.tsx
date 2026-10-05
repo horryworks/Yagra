@@ -53,7 +53,6 @@ export function TroubleshootCatalogPage() {
 
       <div className="ts-section-label">
         <h2>{t('catalog.toolsHeading')}</h2>
-        <span>{t('catalog.toolsSub')}</span>
       </div>
       {/* Fifteen cards with no button would read as a broken page; this says which privilege. */}
       {!canRun && <PermissionHint permission="ack_alerts" />}

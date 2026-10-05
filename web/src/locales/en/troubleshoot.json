@@ -7,7 +7,6 @@
       "avgRuntime": "avg runtime"
     },
     "toolsHeading": "Diagnostic tools",
-    "toolsSub": "Pick a tool, set its scope, and run it as a job.",
     "group": {
       "metrics": "Metrics",
       "passive": "Passive events",
@@ -151,7 +150,6 @@
       "configure": "Configure analysis"
     },
     "sub": "{{method}} · configure & run",
-    "depthHint": "Exhaustive scans more nodes and series — slower, more thorough.",
     "est": "est. {{est}}",
     "windows": {
       "h24": "24 h",
@@ -165,9 +163,8 @@
       "exhaustive": "Exhaustive"
     },
     "notify": {
-      "notify": "Notify me",
-      "silent": "Run silently",
-      "hint": "A notice appears when the run finishes, while Yagra is open in this browser."
+      "notify": "Notify in this browser",
+      "silent": "Run silently"
     },
     "sens": {
       "veryLoose": "very loose",
@@ -191,7 +188,7 @@
       "processing": "Running analysis…",
       "idle": {
         "ready": "Set the scope and window above, then run the analysis.",
-        "running": "An analysis is running — open it from Analysis runs, or start a new one above."
+        "running": "An analysis is running — open it from <lnk/>, or start a new one above."
       },
       "jobMissing": "That analysis run no longer exists. Run a new one above.",
       "findingsFailed": "The findings of this run could not be loaded.",
@@ -234,7 +231,6 @@
       }
     },
     "anomaly": {
-      "note": "Baseline-relative deviations across every collected series. Each finding is scored by how far and how unusually it left its learned envelope.",
       "phases": {
         "baseline": "Fetching baseline…",
         "fit": "Fitting per-metric models…",
@@ -243,7 +239,6 @@
       }
     },
     "correlation": {
-      "note": "Metric pairs that moved together inside the window. Each finding is a relationship between two series, scored by how tightly they track — what actually co-moved, not just what alarmed.",
       "strongest": "Strongest relationships",
       "samples_one": "{{count}} sample",
       "samples_other": "{{count}} samples",
@@ -268,7 +263,6 @@
       }
     },
     "capacity": {
-      "note": "Utilization projected forward by trend to estimate when each resource runs out. Sorted soonest-first — the runway shows the projection arriving at the 100% ceiling.",
       "soonest": "Running out soonest",
       "growth": "+{{rate}} pp/day",
       "nowAt": "{{pct}} now",
@@ -299,10 +293,14 @@
         "read": "Reading utilization history…",
         "project": "Projecting growth…",
         "rank": "Ranking by urgency…"
+      },
+      "legend": {
+        "trend": "Trend",
+        "ceiling": "100%",
+        "near": "Next 30 days"
       }
     },
     "flap": {
-      "note": "Nodes whose reachability keeps bouncing. Rate is what matters — a dozen flaps in an hour is an outage, a dozen over a week is noise — so findings rank by flaps per hour.",
       "worst": "Worst flap rate",
       "flaps_one": "{{count}} flap",
       "flaps_other": "{{count}} flaps",
@@ -328,7 +326,6 @@
       }
     },
     "event_storm": {
-      "note": "Nodes whose passive-event rate surged past their own learned baseline. What matters is the multiple, not the raw count — 400 events in 5 minutes is routine for a busy aggregation switch and alarming for an access port.",
       "noisiest": "Highest event peak",
       "peakInBucket_one": "{{count}} event in {{minutes}} min",
       "peakInBucket_other": "{{count}} events in {{minutes}} min",
@@ -354,7 +351,6 @@
       }
     },
     "severity_shift": {
-      "note": "Nodes whose syslog mix skewed toward error-or-worse against their own baseline — a quiet degradation signal. Volume is shown alongside: +40 pp out of 12 events is noise, out of 4,000 it is an incident.",
       "biggest": "Biggest severity shift",
       "delta": "+{{pp}} pp",
       "wasAt": "was {{pct}}%",
@@ -380,7 +376,6 @@
       }
     },
     "rule_gap": {
-      "note": "High-volume events that no rule matched, clustered by signature. This is a work queue rather than a diagnosis — each row is traffic you are receiving but not acting on, so the fix is to write a rule for it.",
       "mix": "Unmatched by source",
       "topSignatures": "Highest-volume signatures",
       "fleet": "fleet-wide",
@@ -413,7 +408,6 @@
       }
     },
     "auth_probe": {
-      "note": "Authentication failures clustered by the source doing the authenticating — brute force, or a misconfigured NMS hammering SNMP/SSH. The source is the subject here; the node is the target.",
       "worstSources": "Worst sources",
       "target": "target",
       "unknownSource": "unknown source",
@@ -445,7 +439,6 @@
       }
     },
     "event_flap": {
-      "note": "The same event rule raising and clearing over and over — linkDown/linkUp thrash and BGP session churn that reachability flap analysis can't see. Group by rule to find one rule thrashing fleet-wide.",
       "worstRules": "Worst rules fleet-wide",
       "groupBy": "Group by",
       "byFinding": "By node",
@@ -454,7 +447,7 @@
       "cycles_other": "{{count}} cycles",
       "perHour": "{{rate}}/h",
       "fireClear": "{{fires}} fired · {{clears}} cleared",
-      "balanceTitle": "{{fires}} fired vs {{clears}} cleared — a long fired side means raised and never resolved",
+      "balanceTitle": "{{fires}} fired (left) · {{clears}} cleared (right)",
       "acrossNodes_one": "on {{count}} node",
       "acrossNodes_other": "across {{count}} nodes",
       "worstNode": "worst {{rate}}/h",
@@ -479,7 +472,6 @@
       }
     },
     "traffic_anomaly": {
-      "note": "Nodes whose flow volume surged past their own baseline — DDoS, saturation, a runaway backup, or exfiltration. Ranked by the multiple over baseline, so a busy uplink and a quiet access port are comparable.",
       "biggestPeaks": "Biggest traffic peaks",
       "peak": "{{bytes}} peak",
       "baseline": "baseline {{bytes}}",
@@ -503,7 +495,6 @@
       }
     },
     "talker_shift": {
-      "note": "Addresses that became dominant talkers this window without appearing in the previous one — a new heavy source, a rogue device, or the start of an exfil. The rank it entered at is the signal.",
       "heaviest": "Heaviest new talkers",
       "seenOn": "on",
       "newAtRank": "new at rank",
@@ -527,7 +518,6 @@
       }
     },
     "new_destination": {
-      "note": "Traffic to a destination that wasn't there in the baseline window. A new external AS can mean C2 or exfiltration; a new port usually means a new service or a scan. The two are listed separately because they are different findings with different severity ceilings.",
       "showAria": "Which destinations to show",
       "show": {
         "both": "Both",
@@ -556,7 +546,6 @@
       }
     },
     "flow_scan": {
-      "note": "Sources contacting an abnormal number of distinct destinations or ports. The scatter separates the two attack shapes: far right and low is a horizontal sweep hunting one open service; high and left is a vertical probe mapping a few hosts.",
       "shape": "Scan shape",
       "noun": "sources",
       "searchPlaceholder": "Search source address…",
@@ -598,7 +587,6 @@
       }
     },
     "saturation": {
-      "note": "A single conversation dominating a busy node's traffic — a link hog. The meter shows that one src→dst pair against the node's total, and where the analysis could read the interface throughput, the capacity context is shown alongside.",
       "mostConcentrated": "Most concentrated traffic",
       "ofNode": "node total {{bytes}}",
       "filters": {
@@ -621,7 +609,6 @@
       }
     },
     "incident_correlate": {
-      "note": "Nodes where signals of more than one kind coincided — a metric anomaly, passive events, and the dominant flow. The timeline is the point: the ORDER in which they arrived is what points at a cause.",
       "mix": "Signal mix across incidents",
       "signals_one": "{{count}} signal",
       "signals_other": "{{count}} signals",
@@ -675,105 +662,105 @@
       "name": "Anomaly Detection",
       "est": "~2–4 min",
       "scope": "node group · metric families",
-      "desc": "Learns each metric’s own baseline and flags statistically significant deviations — slow drifts and odd shapes that fixed thresholds never trip.",
+      "desc": "Metrics that left their own learned baseline — drifts and odd shapes",
       "reveal": "spikes · level shifts · stuck counters · seasonality breaks"
     },
     "correlation": {
       "name": "Event Correlation",
       "est": "~1–3 min",
       "scope": "incident time window",
-      "desc": "Cross-correlates metrics inside a window to surface what actually moved together — not just what alarmed.",
+      "desc": "Metric pairs that moved together in a window, not just the ones that alarmed",
       "reveal": "co-moving series · lead/lag relationships"
     },
     "capacity": {
       "name": "Capacity Forecast",
       "est": "~2–5 min",
       "scope": "resources · utilization %",
-      "desc": "Projects resource utilization forward by trend to estimate when each will hit exhaustion.",
+      "desc": "When each resource reaches 100%, projected from its utilization trend",
       "reveal": "time-to-exhaustion · growth rate"
     },
     "flap": {
       "name": "Flap Analysis",
       "est": "~1–2 min",
       "scope": "reachability · 24h–7d",
-      "desc": "Scans reachability state churn to surface nodes that bounce up/down and quietly drop sessions.",
+      "desc": "Nodes whose reachability keeps bouncing, ranked by flaps per hour",
       "reveal": "flap rate · churn windows"
     },
     "event_storm": {
       "name": "Event Storm",
       "est": "~1–2 min",
       "scope": "syslog / traps · per node",
-      "desc": "Baselines each node's passive-event rate and flags a sudden surge — boot loops, interface churn, or a chatty misconfiguration.",
+      "desc": "Nodes whose event rate surged past their own baseline, ranked by the multiple",
       "reveal": "volume spikes · noisiest nodes"
     },
     "event_flap": {
       "name": "Event Flap",
       "est": "~1–2 min",
       "scope": "event rules · per node",
-      "desc": "Counts repeated fire↔clear cycles of the same event rule — linkDown/linkUp thrash and BGP session churn the reachability flap analysis can't see.",
+      "desc": "Event rules that fire and clear over and over — link and BGP session churn",
       "reveal": "fire/clear cycles · unstable links & peers"
     },
     "severity_shift": {
       "name": "Severity Shift",
       "est": "~1–2 min",
       "scope": "syslog severity · per node",
-      "desc": "Detects a node whose syslog severity mix skews toward error/critical versus its baseline — a quiet degradation signal.",
+      "desc": "Nodes whose syslog mix skewed toward error or worse against their baseline",
       "reveal": "error-rate rise · severity mix"
     },
     "rule_gap": {
       "name": "Rule Gap",
       "est": "~1 min",
       "scope": "unmatched events · fleet",
-      "desc": "Clusters high-volume unmatched events by signature so you can see which traps or messages deserve an event rule.",
+      "desc": "High-volume events no rule matched, by signature — each one a rule to write",
       "reveal": "top unmatched signatures · coverage gaps"
     },
     "auth_probe": {
       "name": "Auth Probe",
       "est": "~1 min",
       "scope": "auth failures · by source",
-      "desc": "Clusters authentication-failure traps and syslog by source to surface brute-force attempts or a misconfigured NMS.",
+      "desc": "Authentication failures by source — brute force or a misconfigured NMS",
       "reveal": "auth-failure bursts · offending sources"
     },
     "traffic_anomaly": {
       "name": "Traffic Anomaly",
       "est": "~1–3 min",
       "scope": "flow bytes · per node",
-      "desc": "Baselines each node's flow volume and flags a spike — DDoS, saturation, a runaway backup, or exfiltration.",
+      "desc": "Nodes whose flow volume surged past their own baseline, ranked by the multiple",
       "reveal": "byte/packet spikes · volume baseline"
     },
     "talker_shift": {
       "name": "Talker Shift",
       "est": "~1–3 min",
       "scope": "top talkers · window vs window",
-      "desc": "Compares the top talkers this window to the previous one to surface a newly dominant host — a new heavy source or rogue device.",
+      "desc": "Addresses that became top talkers this window but were absent from the last",
       "reveal": "new dominant talkers · rank changes"
     },
     "new_destination": {
       "name": "New Destination",
       "est": "~1–3 min",
       "scope": "dst AS / port · window vs window",
-      "desc": "Flags traffic to a destination AS or port absent from the baseline window — a new external destination, service, or scan target.",
+      "desc": "Traffic to an AS or port that was absent from the baseline window",
       "reveal": "new external AS · new ports"
     },
     "flow_scan": {
       "name": "Scan Detection",
       "est": "~1–3 min",
       "scope": "source fan-out · per node",
-      "desc": "Finds a source contacting an abnormal number of distinct destinations or ports — horizontal/vertical scans and worm spread.",
+      "desc": "Sources reaching an abnormal number of destinations or ports — scans and worms",
       "reveal": "scanning sources · fan-out"
     },
     "saturation": {
       "name": "Link Saturation",
       "est": "~1–3 min",
       "scope": "flow + interface · per node",
-      "desc": "Surfaces a single conversation dominating a busy node's traffic and attaches the node's current interface throughput as context.",
+      "desc": "One conversation taking most of a busy node's traffic, with its link throughput",
       "reveal": "link hogs · dominant conversation"
     },
     "incident_correlate": {
       "name": "Incident Correlate",
       "est": "~2–4 min",
       "scope": "metric + events + flow · per node",
-      "desc": "Assembles a cross-signal timeline for a node — a metric anomaly, passive events, and the dominant flow — when they coincide, for root-cause triage.",
+      "desc": "Metric, event and flow signals that coincided on a node, in arrival order",
       "reveal": "cross-signal timeline · likely root cause"
     }
   }

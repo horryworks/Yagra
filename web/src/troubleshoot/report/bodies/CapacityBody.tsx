@@ -116,6 +116,23 @@ export function CapacityBody({ findings }: ReportBodyProps) {
           { value: 'node', label: t('report.common.sort.byNode') },
         ]}
       />
+      {/* How to read each row's runway, as a legend rather than a sentence (ADR-200 Inc.22). */}
+      {list.length > 0 && (
+        <div className="tsr-runway-legend">
+          <span className="tsr-runway-legend-k">
+            <span className="tsr-runway-legend-sw trend" />
+            {t('report.capacity.legend.trend')}
+          </span>
+          <span className="tsr-runway-legend-k">
+            <span className="tsr-runway-legend-sw ceiling" />
+            {t('report.capacity.legend.ceiling')}
+          </span>
+          <span className="tsr-runway-legend-k">
+            <span className="tsr-runway-legend-sw near" />
+            {t('report.capacity.legend.near')}
+          </span>
+        </div>
+      )}
       <div className="ts-anoms">
         {list.length ? (
           list.map((f) => <CapacityRow key={f.id} finding={f} />)

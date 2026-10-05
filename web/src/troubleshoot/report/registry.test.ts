@@ -60,6 +60,9 @@ describe('troubleshoot report registry', () => {
     for (const tool of TOOLS) {
       expect(REPORTS[tool.id], tool.id).toBeDefined();
       expect(tool.reportPath, tool.id).toBe(`/troubleshoot/report/${tool.id}`);
+      // The card's one line is also the report's page note (ADR-200 Inc.22). `proseBudget.test.ts`
+      // holds every `tools.*.desc` to the page-note limit, so the key must keep that shape.
+      expect(tool.desc, tool.id).toBe(`tools.${tool.id}.desc`);
     }
     expect(Object.keys(REPORTS).sort()).toEqual(TOOLS.map((t) => t.id).sort());
   });

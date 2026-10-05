@@ -83,7 +83,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   suppression: [959, 626],
   system: [13290, 7315],
   topology: [4304, 2334],
-  troubleshoot: [7347, 3814],
+  troubleshoot: [3416, 1791],
 };
 
 /** How far below its ceiling a namespace may sit before the ceiling must come down. */
@@ -92,14 +92,6 @@ const SLACK: [number, number] = [300, 200];
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
   'nodes:deleteNode.body',
-  'troubleshoot:report.event_flap.note',
-  'troubleshoot:report.event_storm.note',
-  'troubleshoot:report.flow_scan.note',
-  'troubleshoot:report.new_destination.note',
-  'troubleshoot:report.rule_gap.note',
-  'troubleshoot:report.saturation.note',
-  'troubleshoot:report.severity_shift.note',
-  'troubleshoot:report.traffic_anomaly.note',
 ];
 
 /** Long strings allowed on purpose, with the reason. */
@@ -116,7 +108,6 @@ const HOVER_LEGACY: string[] = [
   'system:pollers.skewHint',
   'topology:dependency.optOutHelp',
   'topology:map.search.stepHint',
-  'troubleshoot:report.event_flap.balanceTitle',
 ];
 
 /**
@@ -131,6 +122,9 @@ const HOVER_LEGACY: string[] = [
 interface PageNote {
   kind: 'data' | 'offNav' | 'fact';
   until?: string;
+  /** For a note built from a key per subject rather than one literal key: the keys it can be, with
+   *  `*` for the subject. Each one is held to the page-note limit. */
+  noteKeys?: string;
   why: string;
 }
 
@@ -167,8 +161,8 @@ const PAGE_NOTES: Record<string, PageNote> = {
   },
   'troubleshoot/report/ReportShell.tsx': {
     kind: 'offNav',
-    until: 'Inc.22',
-    why: 'one report per analysis tool, keyed by the tool',
+    noteKeys: 'troubleshoot:tools.*.desc',
+    why: "one report per analysis tool; its note is the tool's line in the catalog",
   },
 };
 
@@ -326,25 +320,52 @@ describe('G7: a page note is the nav description unless the screen says why', ()
     expect(open.map(([f]) => f)).toEqual([]);
   });
 
+  /** `ns:a.*.c` → every `ns:a.<x>.c` the English locale has. */
+  const keysMatching = (pattern: string): string[] => {
+    const cut = pattern.indexOf(':');
+    const ns = pattern.slice(0, cut);
+    const re = new RegExp(
+      '^' + pattern.slice(cut + 1).split('*').map((p) => p.replace(/[.]/g, '\\.')).join('[^.]+') + '$',
+    );
+    return Object.keys(flattenStrings(locales[ns].en))
+      .filter((k) => re.test(k))
+      .map((k) => `${ns}:${k}`);
+  };
+
+  const overNoteLimit = (nk: string): string[] => {
+    const cut = nk.indexOf(':');
+    const { en, ja } = locales[nk.slice(0, cut)];
+    const e = String(lookup(en, nk.slice(cut + 1)) ?? '');
+    const j = String(lookup(ja, nk.slice(cut + 1)) ?? '');
+    return e.length > 80 || j.length > 45 ? [`${nk}: ${e.length} / ${j.length}`] : [];
+  };
+
+  it('expands a declared note pattern to the keys it names', () => {
+    expect(keysMatching('troubleshoot:tools.*.desc')).toContain('troubleshoot:tools.anomaly.desc');
+    expect(keysMatching('troubleshoot:tools.*.desc')).not.toContain('troubleshoot:tools.anomaly.name');
+  });
+
   it('an off-menu note with no end date already fits the page-note limit', () => {
     const checked: string[] = [];
     const over = Object.entries(PAGE_NOTES)
       .filter(([, n]) => n.kind === 'offNav' && !n.until)
-      .flatMap(([file]) =>
-        sites
+      .flatMap(([file, n]) => {
+        if (n.noteKeys) {
+          const keys = keysMatching(n.noteKeys);
+          if (keys.length === 0) return [`${file}: ${n.noteKeys} names no key`];
+          checked.push(...keys);
+          return keys.flatMap(overNoteLimit);
+        }
+        return sites
           .filter((s) => s.file === file)
           .flatMap(({ src, tag }) => {
             const key = noteKeyOf(tag);
             const nk = key ? resolveKey(key, namespacesOf(src), locales) : null;
             if (!nk) return [`${file}: its note is not a literal t('…') key`];
             checked.push(nk);
-            const cut = nk.indexOf(':');
-            const { en, ja } = locales[nk.slice(0, cut)];
-            const e = String(lookup(en, nk.slice(cut + 1)) ?? '');
-            const j = String(lookup(ja, nk.slice(cut + 1)) ?? '');
-            return e.length > 80 || j.length > 45 ? [`${nk}: ${e.length} / ${j.length}`] : [];
-          }),
-      );
+            return overNoteLimit(nk);
+          });
+      });
     expect(over).toEqual([]);
     expect(checked.length).toBeGreaterThan(0);
   });

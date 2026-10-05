@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -23,6 +23,7 @@ import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
 import { useCan } from '../../store';
 import { PermissionHint } from '../../components/ui/PermissionHint';
+import { ScreenLink } from '../../components/ui/ScreenLink';
 import { NoticeRow } from './kit';
 import { sigmaFor, splitNotices, toCsv } from './format';
 import { buildJobInput, initialControlState } from './jobInput';
@@ -215,7 +216,9 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
           { label: t('nav:sections.troubleshoot'), to: '/troubleshoot' },
           { label: toolName },
         ]}
-        note={t(`${descriptor.i18nKey}.note`)}
+        // The catalog card's one line, so a tool is described once (ADR-200 Inc.22). How to read
+        // the report is the report's own legends and axis names, not a paragraph here.
+        note={tool ? t(tool.desc) : undefined}
         actions={
           <>
             {canRun && <Button onClick={() => void run()}>{t('actions.rerun')}</Button>}
@@ -305,7 +308,13 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
             ) : missing
               ? t('report.common.jobMissing')
               : running > 0
-                ? t('report.common.idle.running')
+                ? (
+                    <Trans
+                      t={t}
+                      i18nKey="report.common.idle.running"
+                      components={{ lnk: <ScreenLink to="/troubleshoot/runs" /> }}
+                    />
+                  )
                 : t('report.common.idle.ready')}
           </div>
         </Card>
