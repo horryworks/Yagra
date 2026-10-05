@@ -27,13 +27,16 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { TextInput, FieldHint } from '../components/ui/Field';
+import { Field, TextInput, FieldHint } from '../components/ui/Field';
+import { InfoPress, InfoTip } from '../components/ui/InfoTip';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import { StepFrame } from '../components/ui/StepFrame';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
 import { pollerFilters } from './pollerFilters';
-import { TrashIcon, WarningIcon } from '../components/ui/icons';
+import { FunnelIcon, TrashIcon, WarningIcon } from '../components/ui/icons';
 import { ActionMenu } from '../components/ui/ActionMenu';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { EntityName } from '../components/ui/EntityName';
@@ -62,6 +65,7 @@ import {
   moveEmptiesSourcePool,
   poolCellTitle,
   poolIsRemovable,
+  poolNameShowsError,
   poolUsage,
   pollerCanMove,
   renamePassengers,
@@ -81,16 +85,23 @@ import { FormError, FormFooter } from '../components/ui/FormFooter';
 const REFRESH_MS = 10_000;
 
 /** One pool card in the summary strip: name + description + node/poller counts + mode, with a
- *  warning chip when the pool has nodes but no live poller (icon + text, never color alone — a11y).
+ *  warning badge when the pool has nodes but no live poller (words in the warning tone, never
+ *  colour alone — a11y).
  *
- *  **The card is a button, and pressing it narrows the table to that pool** (ADR-107 decision 8). It does
- *  that by writing the page's existing `pool` column filter rather than holding a selection of its
- *  own: two controls editing one state is how a filter forks, and this screen already had the
- *  column one. Pressing again clears it, which is the gesture that always works — the chip's ✕ and
+ *  **The funnel narrows the table to that pool** (ADR-107 decision 8). It does that by writing the
+ *  page's existing `pool` column filter rather than holding a selection of its own: two controls
+ *  editing one state is how a filter forks, and this screen already had the column one. Pressing it
+ *  again clears it, which is the gesture that always works — the chip's ✕ above the table and
  *  Escape are the other two (ADR-073).
  *
- *  ⚠️ The ⋮ is a **sibling** of that button, not a child: nesting an interactive element inside a
- *  `<button>` is invalid, and the browser would give the menu's click to the card. */
+ *  🚨 **The "No live poller" badge is what replaced the create dialog's warning** (ADR-200 Inc.4).
+ *  A pool with nodes and no live poller has its jobs published where nothing listens and discarded
+ *  — silently. The dialog used to say so up front, to someone who had not made the mistake yet;
+ *  the card now says it about the pool that has, and the badge opens the next step.
+ *
+ *  ⚠️ The card is a `<div>`, not a button, since ADR-200 Inc.4: the funnel, the badge and the ⋮
+ *  are all buttons, and a button inside a button is invalid markup whose clicks go to the outer
+ *  one. */
 function PoolCard({
   pool,
   selected,
@@ -112,20 +123,44 @@ function PoolCard({
   // created. Saying "no live poller" there would fire an alarm on every new pool the moment it is
   // named, and the operator has not done anything wrong yet.
   const idle = !warn && pool.nodes === 0 && pool.live_pollers === 0;
+  const filterLabel = selected
+    ? t('pollers.pool.clearFilter')
+    : t('pollers.pool.filterBy', { pool: pool.pool });
   return (
     <div ref={setNodeRef} className={`pool-slot${isOver ? ' is-over' : ''}`}>
-      <button
-        type="button"
-        className={`pool-card${warn ? ' has-warn' : ''}`}
-        aria-pressed={selected}
-        onClick={onSelect}
-        title={selected ? t('pollers.pool.clearFilter') : t('pollers.pool.filterBy', { pool: pool.pool })}
-      >
+      <div className={`pool-card${warn ? ' has-warn' : ''}${selected ? ' is-selected' : ''}`}>
         <div className="pool-card-head">
-          <span className="pool-card-name mono">{pool.pool}</span>
+          <span className="pool-card-name mono" title={pool.pool}>
+            {pool.pool}
+          </span>
           <Badge tone={pool.mode === 'working_set' ? 'up' : 'neutral'}>{poolModeLabel(pool.mode, t)}</Badge>
+          <span className="pool-card-tools">
+            <IconButton
+              title={filterLabel}
+              aria-pressed={selected}
+              className="pool-filter-btn"
+              onClick={onSelect}
+            >
+              <FunnelIcon />
+            </IconButton>
+            {actions.length > 0 && (
+              <ActionMenu
+                items={actions.map((a) => ({ key: a.label, label: a.label, onSelect: a.onSelect, danger: a.danger }))}
+                label={t('pollers.pool.menuLabel', { pool: pool.pool })}
+                className="pool-menu"
+                trigger={(props) => (
+                  <button type="button" className="pool-menu-btn" aria-label={t('pollers.pool.menuLabel', { pool: pool.pool })} {...props}>
+                    ⋮
+                  </button>
+                )}
+              />
+            )}
+          </span>
         </div>
-        <p className={`pool-card-desc${pool.description ? '' : ' empty'}`}>
+        <p
+          className={`pool-card-desc${pool.description ? '' : ' empty'}`}
+          title={pool.description || undefined}
+        >
           {pool.description || t('pollers.pool.noDescription')}
         </p>
         <div className="pool-card-stats">
@@ -140,8 +175,9 @@ function PoolCard({
         </div>
         {warn && (
           <span className="pool-warn">
-            <WarningIcon />
-            {t('pollers.noLivePoller')}
+            <InfoPress infoKey="system:pollers.pool.noPoller.info" className="badge badge-warning">
+              {t('pollers.noLivePoller')}
+            </InfoPress>
           </span>
         )}
         {idle && !pool.covered_by && <span className="pool-idle">{t('pollers.pool.idle')}</span>}
@@ -152,19 +188,7 @@ function PoolCard({
         {pool.covered_by && (
           <span className="pool-idle">{t('pollers.pool.coveredBadge', { pool: pool.covered_by })}</span>
         )}
-      </button>
-      {actions.length > 0 && (
-        <ActionMenu
-          items={actions.map((a) => ({ key: a.label, label: a.label, onSelect: a.onSelect, danger: a.danger }))}
-          label={t('pollers.pool.menuLabel', { pool: pool.pool })}
-          className="pool-menu"
-          trigger={(props) => (
-            <button type="button" className="pool-menu-btn" aria-label={t('pollers.pool.menuLabel', { pool: pool.pool })} {...props}>
-              ⋮
-            </button>
-          )}
-        />
-      )}
+      </div>
     </div>
   );
 }
@@ -206,11 +230,22 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
       }
     >
       <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.pool.nameLabel')}
-          <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="tokyo" />
-        </label>
-        <FieldHint>{t('pollers.pool.nameHint')}</FieldHint>
+        {/* The format is said only when it is broken (ADR-200). The sentence that used to warn
+            here — a pool with nodes and no poller drops its jobs silently — now lives on the pool
+            card as the "No live poller" badge, beside the pool it is true of. */}
+        <Field
+          label={t('pollers.pool.nameLabel')}
+          htmlFor="pool-create-name"
+          error={poolNameShowsError(name) ? t('pollers.pool.nameInvalid') : null}
+        >
+          <TextInput
+            id="pool-create-name"
+            className="mono"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="site-a"
+          />
+        </Field>
         <label className="form-label">
           {t('pollers.pool.descLabel')}
           <TextInput
@@ -219,11 +254,6 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
             placeholder={t('pollers.pool.descPlaceholder')}
           />
         </label>
-        {/* The load-bearing sentence. A pool needs BOTH halves to do anything, and the failure
-            modes of having one are silent: nodes with no poller have their jobs published to a
-            subject nobody subscribes to and discarded, a poller with no nodes simply idles. Said
-            here because this is where somebody is looking (ADR-055 R6). */}
-        <p className="form-hint">{t('pollers.pool.createNote')}</p>
         <FormError form={form} />
       </div>
     </Modal>
@@ -280,7 +310,6 @@ function EditPoolModal({
             placeholder={t('pollers.pool.descPlaceholder')}
           />
         </label>
-        <FieldHint>{t('pollers.pool.descHint')}</FieldHint>
         <FormError form={form} />
       </div>
     </Modal>
@@ -343,7 +372,8 @@ function CoverPoolModal({
       }
     >
       <div className="form-stack">
-        <p>{t('pollers.pool.coverBody', { pool: pool.pool, count: pool.nodes })}</p>
+        {/* The dialog's one sentence (ADR-200): the false outage this can cause. That "Put them
+            back" undoes it is shown, not said — the card's menu offers it once this is done. */}
         <p className="form-warning">{t('pollers.pool.coverWarning')}</p>
         <label className="form-label">
           {t('pollers.pool.coverToLabel')}
@@ -357,7 +387,6 @@ function CoverPoolModal({
           </select>
         </label>
         {targets.length === 0 && <FieldHint>{t('pollers.pool.coverNoTarget')}</FieldHint>}
-        <FieldHint>{t('pollers.pool.coverReversible')}</FieldHint>
         <FormError form={form} />
       </div>
     </Modal>
@@ -405,8 +434,9 @@ function RestorePoolModal({
       }
     >
       <div className="form-stack">
-        <p>{t('pollers.pool.restoreBody', { pool: pool.pool, to: pool.covered_by ?? '' })}</p>
-        <FieldHint>{t('pollers.pool.restoreHint')}</FieldHint>
+        {/* Who is polling them now is on the card ("Polled by …"); what is left to say is the one
+            way this goes wrong — putting them back before the site's own poller is. */}
+        <p className="modal-confirm-text">{t('pollers.pool.restoreHint', { pool: pool.pool })}</p>
         <FormError form={form} />
       </div>
     </Modal>
@@ -491,10 +521,18 @@ function RenamePoolModal({
           </>
         ) : (
           <>
-            <label className="form-label">
-              {t('pollers.pool.newNameLabel')}
-              <TextInput value={name} onChange={(e) => setName(e.target.value)} />
-            </label>
+            <Field
+              label={t('pollers.pool.newNameLabel')}
+              htmlFor="pool-rename-name"
+              error={poolNameShowsError(name) ? t('pollers.pool.nameInvalid') : null}
+            >
+              <TextInput
+                id="pool-rename-name"
+                className="mono"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </Field>
             <FieldHint>
               {t('pollers.pool.renameHint', { nodes: pool.nodes, pollers: passengers.length })}
             </FieldHint>
@@ -544,7 +582,13 @@ function DeletePoolModal({
               </li>
             ))}
           </ul>
-          <p className="modal-confirm-text">{t('pollers.pool.deleteBlockedWhy')}</p>
+          <p className="modal-confirm-text">
+            <Trans
+              t={t}
+              i18nKey="pollers.pool.deleteBlockedWhy"
+              components={{ lnk: <ScreenLink to="/nodes" /> }}
+            />
+          </p>
         </div>
       </Modal>
     );
@@ -644,7 +688,6 @@ function MovePollerModal({
               ))}
           </select>
         </label>
-        <FieldHint>{t('pollers.move.destHint', { pool: poller.pool })}</FieldHint>
       </div>
     </Modal>
   );
@@ -821,16 +864,19 @@ function SetAnchorModal({
       }
     >
       <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.anchor.field')}
+        <Field
+          label={t('pollers.anchor.field')}
+          htmlFor="poller-anchor-node"
+          infoKey="system:pollers.anchor.info"
+        >
           <NodePicker
+            id="poller-anchor-node"
             value={node?.id ?? null}
             valueLabel={node?.name}
             onChange={setNode}
             placeholder={t('pollers.anchor.none')}
           />
-        </label>
-        <p className="form-hint">{t('pollers.anchor.hint')}</p>
+        </Field>
         {poller.mgmt_addrs.length > 0 && (
           <p className="form-hint mono">
             {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
@@ -915,9 +961,6 @@ function PollerTokenModal({
       }
     >
       <div className="form-stack">
-        <p className="modal-confirm-text">
-          {poller.has_token ? t('pollers.token.introOwn') : t('pollers.token.introShared')}
-        </p>
         <label className="form-label">
           {t('pollers.token.host.label')}
           <TextInput
@@ -929,18 +972,24 @@ function PollerTokenModal({
         <FieldHint>{t('pollers.token.host.hint')}</FieldHint>
         {/* What the site is being asked to run is said here, before the download — not in the
             README alone, which is read at the site by whoever unpacks it and not by whoever
-            decided. Ticked by default; the hint names the Docker socket rather than only the
-            convenience, and says where the site can change its mind (ADR-055 R6). */}
-        <label className="poller-check">
-          <input
-            type="checkbox"
-            checked={selfUpgrade}
-            disabled={form.busy}
-            onChange={(e) => setSelfUpgrade(e.target.checked)}
+            decided. The label names the container; the ⓘ names the Docker socket it holds and
+            where the site can change its mind (ADR-055 R6, ADR-200). The ⓘ sits beside the
+            label, never inside it: a button in a <label> becomes the label's control. */}
+        <div className="poller-check-row">
+          <label className="poller-check">
+            <input
+              type="checkbox"
+              checked={selfUpgrade}
+              disabled={form.busy}
+              onChange={(e) => setSelfUpgrade(e.target.checked)}
+            />
+            <span>{t('pollers.token.selfUpgrade.label')}</span>
+          </label>
+          <InfoTip
+            infoKey="system:pollers.token.selfUpgrade.info"
+            label={t('pollers.token.selfUpgrade.label')}
           />
-          <span>{t('pollers.token.selfUpgrade.label')}</span>
-        </label>
-        <FieldHint>{t('pollers.token.selfUpgrade.hint')}</FieldHint>
+        </div>
         {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
         {poller.has_token && <p className="form-hint">{t('pollers.token.reissueWarning')}</p>}
         {issued && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
@@ -1009,34 +1058,46 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
         </Button>
       }
     >
-      <p className="modal-confirm-text">
-        <Trans
-          t={t}
-          i18nKey="pollers.register.intro"
-          components={{ env: <span className="mono" />, file: <span className="mono" /> }}
-        />
-      </p>
+      {/* The procedure, behind a closed frame (ADR-200 kind d). It used to be a 357-character
+          paragraph at the head of the dialog, read once and then in the way. */}
+      <StepFrame
+        className="poller-register-steps"
+        summary={t('pollers.register.steps.title')}
+        steps={[
+          t('pollers.register.steps.s1'),
+          t('pollers.register.steps.s2'),
+          t('pollers.register.steps.s3'),
+        ]}
+      />
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.id.label')}</label>
+      <Field
+        label={t('pollers.register.fields.id.label')}
+        htmlFor="poller-register-id"
+        error={idBad ? t('pollers.register.invalidToken') : null}
+      >
         <TextInput
+          id="poller-register-id"
+          className="mono"
           value={id}
           onChange={(e) => setId(e.target.value)}
-          placeholder="tokyo-edge-1"
+          placeholder="site-a-1"
           autoFocus
         />
-        <FieldHint error={idBad}>
-          {idBad ? t('pollers.register.invalidToken') : t('pollers.register.fields.id.hint')}
-        </FieldHint>
-      </div>
+      </Field>
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.pool.label')}</label>
-        <TextInput value={pool} onChange={(e) => setPool(e.target.value)} placeholder="tokyo" />
-        <FieldHint error={poolBad}>
-          {poolBad ? t('pollers.register.invalidToken') : t('pollers.register.fields.pool.hint')}
-        </FieldHint>
-      </div>
+      <Field
+        label={t('pollers.register.fields.pool.label')}
+        htmlFor="poller-register-pool"
+        error={poolBad ? t('pollers.register.invalidToken') : null}
+      >
+        <TextInput
+          id="poller-register-pool"
+          className="mono"
+          value={pool}
+          onChange={(e) => setPool(e.target.value)}
+          placeholder="site-a"
+        />
+      </Field>
 
       {/* The recommended path, so it sits above the manual one. `useCan` rather than `disabled`
           (ADR-056): a viewer is not shown a button they cannot press. */}
@@ -1048,11 +1109,14 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
               {t('pollers.register.issue')}
             </Button>
           </div>
-          <FieldHint>{t('pollers.register.fields.kit.hint')}</FieldHint>
           {issued && <p className="form-hint">{t('pollers.register.issued')}</p>}
           {issueError && <p className="form-error">{issueError}</p>}
         </div>
       )}
+
+      {/* The manual path, for a site whose composition is already there. A heading says that
+          now, where a sentence in the introduction used to. */}
+      <p className="pool-subhead poller-register-manual">{t('pollers.register.manual')}</p>
 
       <div className="modal-field">
         <label className="modal-field-label">{t('pollers.register.fields.busUrl.label')}</label>
@@ -1114,7 +1178,6 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
   return (
     <div className="poller-gaps">
       <h2 className="poller-gaps-title">{t('pollers.gaps.title')}</h2>
-      <p className="muted poller-gaps-note">{t('pollers.gaps.note')}</p>
       {/* Shared `.ytable` markup rather than `DataTable`, deliberately. This page's *fleet* table
           is a `DataTable` — it is the pane's content and can own a scroll viewport. This one is a
           stacked subsection under it, and `DataTable` is `flex: 1` (`DataTable.css`), so it would
@@ -1129,7 +1192,15 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
             <div className="ytable-h">{t('pollers.gaps.cols.poller')}</div>
             <div className="ytable-h">{t('pollers.gaps.cols.pool')}</div>
             <div className="ytable-h">{t('pollers.gaps.cols.window')}</div>
-            <div className="ytable-h">{t('pollers.gaps.cols.passive')}</div>
+            {/* Pressable rather than hovered (ADR-200): what "lost" means here — dropped, with
+                nothing to backfill from, informs excepted — decides whether to go looking for
+                the missing events at their source. Not sortable, so the header can be the
+                trigger. */}
+            <div className="ytable-h">
+              <InfoPress infoKey="system:pollers.gaps.passive.info">
+                {t('pollers.gaps.cols.passive')}
+              </InfoPress>
+            </div>
             <div className="ytable-h right">{t('pollers.gaps.cols.duration')}</div>
           </div>
           {gaps.map((g) => (
@@ -1151,7 +1222,7 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
                 {g.listeners.length === 0 ? (
                   <span className="muted">{t('pollers.gaps.passiveNone')}</span>
                 ) : (
-                  <span className="mono" title={t('pollers.gaps.passiveHint')}>
+                  <span className="mono" title={g.listeners.join(', ')}>
                     {g.listeners.join(', ')}
                   </span>
                 )}
@@ -1179,6 +1250,7 @@ function PollerNodesSection({
   onClose: () => void;
 }) {
   const { t } = useTranslation('system');
+  // A state line only (ADR-200): when the list is there, its title says what it is.
   const note =
     data.state === 'offline'
       ? t('pollers.nodes.offline')
@@ -1186,7 +1258,7 @@ function PollerNodesSection({
         ? t('pollers.nodes.unknown')
         : data.nodes.length === 0
           ? t('pollers.nodes.empty')
-          : t('pollers.nodes.note');
+          : null;
 
   return (
     <div className="poller-gaps">
@@ -1198,7 +1270,7 @@ function PollerNodesSection({
           {t('pollers.nodes.close')}
         </Button>
       </div>
-      <p className="muted poller-gaps-note">{note}</p>
+      {note && <p className="muted poller-gaps-note">{note}</p>}
       {data.truncated && (
         <p className="muted poller-gaps-note">
           {t('pollers.nodes.truncated', { shown: data.nodes.length, total: data.total })}
@@ -1329,8 +1401,10 @@ export function PollersPage() {
           const movable = canSystem && pollerCanMove(p);
           // Carries every string the cell draws, because a 63-character pool name will clip and
           // ADR-088 refuses clipped text with nothing to hover (it caught exactly that here).
+          // The grip and the Move button say how to move it, so a movable cell's title names the
+          // grip rather than repeating the instructions (ADR-200).
           const title = poolCellTitle(p, {
-            hint: movable ? t('pollers.move.cellHint') : t('pollers.move.cannot'),
+            hint: movable ? t('pollers.move.grip', { id: p.id }) : t('pollers.move.cannot'),
           });
           return (
             <span className="pool-cell-wrap" title={title}>
@@ -1644,7 +1718,6 @@ export function PollersPage() {
       <PageHeader
         title={t('nav:settings.pollers')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.pollers') }]}
-        note={t('pollers.note')}
       />
 
       <LoadGate load={fleet}>
@@ -1657,8 +1730,7 @@ export function PollersPage() {
             Paired with the toolbar's poller count below so the screen reads as two lists. */}
         <p className="section-label">
           <strong>{t('pollers.pool.stripTitle')}</strong>{' '}
-          {t('pollers.pool.count', { count: pools.length })}{' '}
-          <span className="section-label-sub">{t('pollers.pool.stripNote')}</span>
+          {t('pollers.pool.count', { count: pools.length })}
         </p>
         {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
             The likely one is the server declining a poller it considers offline — the row was
@@ -1706,6 +1778,27 @@ export function PollersPage() {
             </button>
           )}
         </div>
+
+        {/* What the funnels have narrowed the table to, each removable on its own. The same
+            `pool` column filter the cards write, so the column's own control and "clear all
+            filters" release these too (ADR-073). */}
+        {selectedPools.length > 0 && (
+          <div className="pool-filter-chips">
+            {selectedPools.map((name) => (
+              <span key={name} className="pool-filter-chip">
+                <FunnelIcon />
+                <span className="mono">{name}</span>
+                <IconButton
+                  title={t('pollers.pool.clearFilter')}
+                  className="pool-filter-chip-x"
+                  onClick={() => togglePool(name)}
+                >
+                  ×
+                </IconButton>
+              </span>
+            ))}
+          </div>
+        )}
 
         <ListToolbar
           list={filtering}

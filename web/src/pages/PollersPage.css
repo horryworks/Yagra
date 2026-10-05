@@ -31,11 +31,12 @@
 .pool-card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 
 .pool-card-name {
+  flex: 1;
+  min-width: 0;
   font-size: var(--font-md);
   font-weight: var(--weight-medium);
   color: var(--text-primary);
@@ -61,20 +62,10 @@
   color: var(--text-tertiary);
 }
 
-/* Warning chip: status-warning color PLUS an icon and text, so it never relies on color alone. */
+/* The "No live poller" badge: a pressable warning badge that opens what it means and what to do
+   (ADR-200). Words in the warning tone, so it never relies on colour alone. */
 .pool-warn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-xs);
-  font-weight: var(--weight-medium);
-  color: var(--status-warning);
-}
-
-.pool-warn svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
+  display: flex;
 }
 
 /* ============================================================ status cell (dot + label) */
@@ -191,6 +182,22 @@
   cursor: pointer;
 }
 
+/* The register dialog: its step frame, and the heading over the manual half (ADR-200). */
+.poller-register-steps {
+  margin-bottom: 14px;
+}
+
+.pool-subhead.poller-register-manual {
+  margin: 18px 0 8px;
+}
+
+/* The checkbox row and its ⓘ, which stays outside the <label> (ADR-200). */
+.poller-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 /* ============================================================ pool management (ADR-107) */
 
 /* The strip's own heading. Paired with the toolbar's poller count below, so the screen reads as
@@ -207,12 +214,8 @@
   font-weight: var(--weight-medium);
 }
 
-.section-label-sub {
-  color: var(--text-tertiary);
-}
-
-/* The card is a button and the ⋮ is its sibling: nesting an interactive element inside a <button>
-   is invalid markup, and the browser would hand the menu's clicks to the card. */
+/* The slot is the drop target; the card inside it is a plain surface holding three buttons (the
+   funnel, the ⋮ and, when warned, the badge) — a button cannot hold another (ADR-200 Inc.4). */
 .pool-slot {
   position: relative;
   flex: 1 1 200px;
@@ -225,26 +228,76 @@
   flex: 1;
   min-width: 0;
   max-width: none;
-  padding-right: 34px;
-  font-family: var(--ui-font-family);
-  font-size: var(--font-md);
-  cursor: pointer;
   transition: border-color var(--transition), background var(--transition);
-}
-
-.pool-slot .pool-card:hover {
-  border-color: var(--text-tertiary);
 }
 
 /* Selected = "the table below shows this pool". The accent channel, never a status colour: which
    pool you are looking at is not a network state (design-system §1.1/§1.3). */
-.pool-slot .pool-card[aria-pressed='true'] {
+.pool-slot .pool-card.is-selected {
   border-color: var(--accent-color);
   background: color-mix(in srgb, var(--accent-color) 9%, var(--bg-secondary));
 }
 
-.pool-slot .pool-card[aria-pressed='true'] .pool-card-name {
+.pool-slot .pool-card.is-selected .pool-card-name {
   color: var(--accent-color);
+}
+
+/* The funnel and the ⋮, at the head's right edge. */
+.pool-card-tools {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-right: -6px;
+}
+
+.pool-filter-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.pool-filter-btn[aria-pressed='true'] {
+  color: var(--accent-color);
+}
+
+/* The funnels' selection, above the table: one removable chip per pool. */
+.pool-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: -6px 0 10px;
+}
+
+.pool-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0 2px 0 8px;
+  border: var(--border-width) solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  color: var(--accent-color);
+  font-size: var(--font-sm);
+}
+
+.pool-filter-chip > svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.pool-filter-chip > .mono {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-filter-chip-x.icon-btn {
+  width: 22px;
+  height: 22px;
+  color: inherit;
+  font-size: var(--font-md);
+  line-height: 1;
 }
 
 .pool-card-desc {
@@ -269,10 +322,6 @@
 }
 
 .pool-menu-btn {
-  position: absolute;
-  top: 9px;
-  right: 7px;
-  z-index: 1;
   width: 22px;
   height: 22px;
   display: grid;

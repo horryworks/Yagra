@@ -31,6 +31,9 @@ export function pollerInPool(p: PollerInfo, pool: string): boolean {
   return poolValuesOf(p).includes(pool);
 }
 
+/** One subject token: letters, digits, `_` and `-`, at most 63 characters. */
+const POOL_NAME = /^[A-Za-z0-9_-]{1,63}$/;
+
 /**
  * Is `name` a legal pool name?
  *
@@ -43,8 +46,19 @@ export function pollerInPool(p: PollerInfo, pool: string): boolean {
  * There is no inheriting when you are naming a new pool.
  */
 export function isValidNewPoolName(name: string): boolean {
-  const t = name.trim();
-  return t.length > 0 && t.length <= 63 && /^[A-Za-z0-9_-]+$/.test(t);
+  return POOL_NAME.test(name.trim());
+}
+
+/**
+ * Does the name field show its error line?
+ *
+ * Only once something is typed and it is not a legal name. An empty field is unfinished, not wrong:
+ * the submit button already waits for it. This is what lets the dialog drop the format sentence
+ * that used to sit under the field permanently (ADR-200) — the rule is said at the moment it is
+ * broken, and not before.
+ */
+export function poolNameShowsError(name: string): boolean {
+  return name.trim() !== '' && !isValidNewPoolName(name);
 }
 
 /** What is still pointing at a pool, as the delete refusal reports it. */

@@ -7,6 +7,7 @@ import {
   newPoolIsIdle,
   poolCellTitle,
   poolIsRemovable,
+  poolNameShowsError,
   poolUsage,
   poolValuesOf,
   pollerCanMove,
@@ -110,6 +111,25 @@ describe('pool names are one subject token', () => {
   it('refuses blank — naming a new pool has no "inherit" case', () => {
     expect(isValidNewPoolName('')).toBe(false);
     expect(isValidNewPoolName('   ')).toBe(false);
+  });
+});
+
+describe('the pool-name error shows only when the rule is broken (ADR-200)', () => {
+  it('stays quiet on an empty or unfinished field', () => {
+    expect(poolNameShowsError('')).toBe(false);
+    expect(poolNameShowsError('   ')).toBe(false);
+  });
+
+  it('stays quiet on a legal name, padded or not', () => {
+    expect(poolNameShowsError('site-a')).toBe(false);
+    expect(poolNameShowsError(' site_a ')).toBe(false);
+    expect(poolNameShowsError('x'.repeat(63))).toBe(false);
+  });
+
+  it('speaks on a character the subject cannot carry, and past 63 characters', () => {
+    expect(poolNameShowsError('site a!')).toBe(true);
+    expect(poolNameShowsError('site.a')).toBe(true);
+    expect(poolNameShowsError('x'.repeat(64))).toBe(true);
   });
 });
 

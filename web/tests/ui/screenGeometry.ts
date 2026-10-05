@@ -170,7 +170,17 @@ export async function inspectScreenGeometry(page: Page): Promise<GeometryReport>
           .join('')
           .replace(/\s+/g, ' ')
           .trim();
-        if (own.length >= proseMin && !own.includes(mockPrefix) && !el.closest(notProse)) {
+        // ⚠️ A closed `<details>` (ADR-200's step frame) keeps a box for its content in Chromium,
+        // so its steps pass the size test above while nobody can see them. Only its summary is on
+        // screen until it is opened.
+        const shut = el.closest('details:not([open])');
+        const hidden = !!shut && !el.closest('summary');
+        if (
+          own.length >= proseMin &&
+          !own.includes(mockPrefix) &&
+          !el.closest(notProse) &&
+          !hidden
+        ) {
           prose.chars += own.length;
           if (prose.samples.length < 8) prose.samples.push(own.slice(0, quote));
         }

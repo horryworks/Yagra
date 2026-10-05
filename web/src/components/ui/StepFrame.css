@@ -1,0 +1,40 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The step frame (ADR-200 kind d): a closed disclosure holding numbered steps. Focus is a colour
+   change, never an outline (ui-conventions.md). */
+
+.step-frame {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.step-frame > summary {
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.step-frame > summary:hover,
+.step-frame > summary:focus-visible {
+  outline: none;
+  color: var(--accent-color);
+}
+
+.step-frame[open] > summary {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.step-frame > ol {
+  margin: 0;
+  padding: 10px 12px 10px 32px;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.step-frame > ol > li + li {
+  margin-top: 4px;
+}

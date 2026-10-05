@@ -1,6 +1,5 @@
 {
   "pollers": {
-    "note": "The distributed poller fleet. Each pool's nodes are polled by the pollers registered to it; a pool with no live poller goes unmonitored.",
     "registerButton": "Register poller",
     "noLivePoller": "No live poller",
     "mode": {
@@ -13,7 +12,6 @@
       "stripTitle": "Poller pools",
       "count_one": "{{count}} pool",
       "count_other": "{{count}} pools",
-      "stripNote": "— what ties nodes to pollers. Select one to show only its pollers.",
       "noDescription": "No description",
       "idle": "Nothing assigned yet",
       "filterBy": "Show only {{pool}} pollers",
@@ -23,11 +21,8 @@
       "createTitle": "Create poller pool",
       "createConfirm": "Create",
       "nameLabel": "Name",
-      "nameHint": "Letters, digits, _ and - only, up to 63 characters. Used verbatim as the bus subject name.",
       "descLabel": "Description (optional)",
-      "descPlaceholder": "Tokyo site",
-      "descHint": "Shown on the pool card and in the node assignment picker.",
-      "createNote": "Creating a pool starts nothing. Polling begins only once you assign nodes or a folder to it AND move a poller into it — with nodes but no poller, their jobs are published where nothing is listening and are discarded.",
+      "descPlaceholder": "Site A",
       "createFailed": "Failed to create the pool",
       "editTitle": "Edit description — {{pool}}",
       "editAction": "Edit description",
@@ -35,19 +30,16 @@
       "coverAction": "Poll these from another pool",
       "coverTitle": "Poll {{pool}}'s nodes from another pool",
       "coverConfirm": "Point them there",
-      "coverBody": "{{pool}} has no live poller, so its {{count}} node(s) are not being polled. Another pool's poller can stand in until the site is back.",
-      "coverWarning": "Only do this if that poller can actually reach these devices. A site has its own poller because this deployment usually cannot see its network — and every node it cannot reach will report as down, which looks exactly like a real outage.",
+      "coverWarning": "Only do this if that poller can reach these devices: every node it cannot reach will report as down, just like a real outage.",
       "coverToLabel": "Poll them from",
       "coverToPlaceholder": "Choose a pool…",
       "coverNoTarget": "No other pool has a live poller, so there is nothing to stand in.",
-      "coverReversible": "Recorded, so \"Put them back\" returns every node and folder to exactly where it is now.",
       "coverFailed": "Failed to re-point the pool",
       "coveredBadge": "Polled by {{pool}}",
       "restoreAction": "Put them back",
       "restoreTitle": "Put {{pool}}'s nodes back",
       "restoreConfirm": "Put them back",
-      "restoreBody": "{{pool}}'s nodes are being polled by {{to}}. This returns each of them to the assignment it had before.",
-      "restoreHint": "A node someone has since moved by hand keeps that change. Do this once the site's own poller is back.",
+      "restoreHint": "Do this once {{pool}}'s own poller is back; until then its nodes are not polled.",
       "restoreFailed": "Failed to put the nodes back",
       "renameAction": "Rename",
       "renameTitle": "Rename — {{pool}}",
@@ -55,15 +47,19 @@
       "newNameLabel": "New name",
       "renameHint": "Renaming moves {{nodes}} node assignment(s) and {{pollers}} poller(s) to the new name, in one step.",
       "renameBlocked": "Cannot rename: some pollers serving this pool cannot follow the change.",
-      "renameBlockedWhy": "These pollers are offline, or their build is older than this feature. Renaming would leave them listening for the old name, so poll-now and discovery would stop reaching them with no error shown. Upgrade or bring them back first.",
+      "renameBlockedWhy": "They are offline or on an older build; renamed now, they would keep the old name and poll-now and discovery would stop reaching them without an error. Upgrade or bring them back first.",
       "renameFailed": "Failed to rename the pool",
       "deleteTitle": "Delete pool — {{pool}}",
       "deleteBlocked": "Cannot delete: this pool is still in use.",
-      "deleteBlockedWhy": "Move them first — nodes and folders from the All nodes right-click menu, pollers from the Pool column on this page.",
+      "deleteBlockedWhy": "Move them first: nodes and folders by right-clicking them in <lnk/>, pollers from the Pool column on this page.",
       "deleteConfirm": "Delete <code>{{pool}}</code>. Nothing references it, so no monitoring stops.",
       "deleteFailed": "Failed to delete the pool",
       "usedByNodes_one": "{{count}} node",
-      "usedByNodes_other": "{{count}} nodes"
+      "usedByNodes_other": "{{count}} nodes",
+      "noPoller": {
+        "info": "This pool's nodes are not being polled. Move a poller here, or poll them from another pool."
+      },
+      "nameInvalid": "Letters, digits, _ and - only (max 63)"
     },
     "status": {
       "online": "Online",
@@ -108,7 +104,6 @@
     },
     "gaps": {
       "title": "Recent monitoring gaps",
-      "note": "Windows when core lost contact with a poller. A poller that stayed up but was cut off backfills its metrics for the window on reconnect; alerts are not backfilled (they resume from now).",
       "cols": {
         "poller": "Poller",
         "pool": "Pool",
@@ -117,11 +112,12 @@
         "duration": "Duration"
       },
       "passiveNone": "none bound",
-      "passiveHint": "Syslog, traps and flow exports arriving in this window were dropped — unlike polled metrics there is nothing to backfill from. SNMP informs are the exception: the sender retries until acknowledged."
+      "passive": {
+        "info": "Syslog, traps and flow exports that arrived in this window were dropped, with nothing to backfill them from. SNMP informs are the exception: the sender retries until acknowledged."
+      }
     },
     "nodes": {
       "title": "Nodes polled by {{id}}",
-      "note": "The working set core has published to this poller — what stops being monitored if it goes away.",
       "colName": "Node",
       "empty": "This poller holds no nodes right now.",
       "offline": "This poller is offline, so it holds no working set.",
@@ -136,7 +132,6 @@
     "register": {
       "title": "Register a poller",
       "done": "Done",
-      "intro": "Run a poller container at the remote site; it connects outbound to the central NATS bus. Give it an id and a pool, then download its kit — one archive holding the composition, the certificate and an <env>.env</env> that needs no editing. The fields further down are the manual alternative, for a site that already has <file>docker-compose.poller.yml</file>.",
       "issue": "Issue token & download kit",
       "issued": "Downloaded. The token exists only in that archive — Yagra kept a digest of it.",
       "issueFailed": "failed to issue the token",
@@ -145,16 +140,13 @@
       "snippetEmpty": "Enter a valid ID, pool and bus URL to generate the snippet.",
       "fields": {
         "kit": {
-          "label": "Site kit",
-          "hint": "The composition, the certificate to pin and a ready .env. Unpack it at the site and bring it up — there is nothing to edit. This also registers the poller, so it may be done before the site exists."
+          "label": "Site kit"
         },
         "id": {
-          "label": "Poller ID",
-          "hint": "Stable, unique per poller."
+          "label": "Poller ID"
         },
         "pool": {
-          "label": "Pool",
-          "hint": "Nodes assigned to this pool are polled here."
+          "label": "Pool"
         },
         "busUrl": {
           "label": "Bus URL",
@@ -170,15 +162,22 @@
         "bringUp": {
           "label": "Bring it up"
         }
-      }
+      },
+      "steps": {
+        "title": "Set up a site with the kit",
+        "s1": "Enter the poller ID and pool.",
+        "s2": "Issue the token and download the site kit.",
+        "s3": "At the site, unpack the kit and run the command under Bring it up."
+      },
+      "manual": "Without the kit"
     },
     "anchor": {
       "title": "Anchor node for {{id}}",
       "field": "This poller attaches behind",
       "none": "Work it out from the poller's own addresses",
       "set": "Set…",
-      "hint": "The derived dependency graph takes its direction from how far each node is from a poller, so core needs to know where this poller sits. It normally works that out from the addresses the poller reports — but a poller in a container reports a container-network address that matches no monitored node, and then it has to be named here. Until every pool that has nodes has a placed poller, the derived graph cannot drive alert suppression.",
-      "reported": "Reported by the poller: {{addrs}}"
+      "reported": "Reported by the poller: {{addrs}}",
+      "info": "Tells Yagra where this poller sits in the network. Needed when the poller runs in a container."
     },
     "err": {
       "remove": "failed to remove poller",
@@ -190,19 +189,16 @@
     },
     "bus": {
       "title": "Remote pollers",
-      "note": "Job messages carry the credentials Yagra uses to reach your devices, so the bus is encrypted and authenticated before a poller at another site may connect to it.",
       "state": {
         "internal": "Internal only",
-        "internalNote": "the bus stays on this host; only the poller running here can reach it.",
+        "internalNote": "only the poller on this host can connect",
         "encrypted": "Encrypted",
-        "encryptedNote": "pollers at other sites can connect over TLS with the certificate below."
+        "encryptedNote": "pollers at other sites connect over TLS"
       },
-      "noSwitch": "The component that turns this on is not deployed or is switched off, so the switch is unavailable. The certificate below is still the one a site must pin.",
+      "noSwitch": "This switch is unavailable: the component that applies it is not running.",
       "outage": "The bus, this server and the poller running here are all restarted, so monitoring stops for about a minute. A maintenance window is opened for you, and this page will disconnect while it happens.",
-      "siteHint": "At the site, put the certificate in a file, point <c>YAGRA_BUS_CA_FILE</c> at it, and use the bus URL from the dialog. The address the site dials must be one of the names below.",
       "names": {
         "label": "Addresses remote pollers will dial",
-        "hint": "Hostnames or IP addresses, separated by commas. A site cannot connect unless the exact address it dials is listed.",
         "required": "Give at least one address, or no site will be able to connect."
       },
       "cert": {
@@ -216,22 +212,21 @@
           "absent": "No certificate yet.",
           "unreadable": "The private key cannot be read — the encryption key has changed or been lost. Reissue the certificate, then give the new one to every site.",
           "expired": "This certificate has expired. Remote pollers are already refusing to connect. Reissue it, then give the new one to every site.",
-          "not_materialized": "A newer certificate is stored than the bus is serving. It takes effect the next time the bus restarts.",
           "expiring": "This certificate expires soon. Reissuing it means giving the new one to every site, so plan for it rather than waiting."
-        }
+        },
+        "pending": "Pending bus restart"
       },
       "reissue": {
         "action": "Reissue certificate…",
         "title": "Reissue the bus certificate",
-        "intro": "Generates a new certificate covering the addresses below, plus this host’s internal names.",
         "submit": "Reissue",
-        "afterward": "The new certificate is stored at once, but the bus keeps serving the old one until it restarts — and every site has to be given the new file before it can reconnect.",
+        "afterward": "Every site must be given the new certificate before it can reconnect.",
         "failed": "failed to reissue the bus certificate"
       },
       "enable": {
         "action": "Accept remote pollers",
         "title": "Accept remote pollers",
-        "intro": "Encrypts the bus, requires a password on it, and publishes its port. A poller at another site can then connect with the certificate and the secret shown afterwards.",
+        "intro": "Publishes the bus port with TLS and a password, so pollers at other sites can connect.",
         "submit": "Turn on"
       },
       "disable": {
@@ -242,14 +237,19 @@
       },
       "handoff": {
         "title": "Give this to the site",
-        "intro": "The site needs both of these. Copy them now.",
         "secret": "Poller secret",
         "onceOnly": "Shown once. It is not stored anywhere it can be read again.",
         "ca": "Certificate to pin (YAGRA_BUS_CA_FILE)",
         "done": "Done",
         "restarting": "The bus is being reconfigured now. This page will reconnect on its own once it comes back."
       },
-      "switchFailed": "failed to change remote-poller acceptance"
+      "switchFailed": "failed to change remote-poller acceptance",
+      "steps": {
+        "title": "Connect a site by hand",
+        "s1": "At the site, save the bus certificate to a file.",
+        "s2": "Point <c>YAGRA_BUS_CA_FILE</c> at that file.",
+        "s3": "Dial one of the addresses under Valid for, using the bus URL from the dialog."
+      }
     },
     "token": {
       "title": "Bus token — {{id}}",
@@ -257,8 +257,6 @@
       "shared": "Shared secret",
       "sharedHint": "This poller is admitted by the deployment-wide bootstrap secret, the same one every other poller without its own token uses.",
       "issuedAt": "Own token, issued {{when}}",
-      "introShared": "Issue this poller a token of its own. It downloads an archive holding the site`s .env, the bus certificate, the composition and a short README — everything the machine at the site needs.",
-      "introOwn": "This poller already has its own token. Issuing a new one downloads a fresh archive and invalidates the current one.",
       "issue": "Issue token & download",
       "reissue": "Issue a new token & download",
       "revoke": "Revoke token",
@@ -268,22 +266,20 @@
       "revokeFailed": "failed to revoke the token",
       "host": {
         "label": "Address this site will dial",
-        "hint": "Leave empty to use the address on the bus certificate. It must be one the certificate covers, or the site cannot connect."
+        "hint": "Leave empty for the bus certificate's address; any other must be one the certificate covers."
       },
       "selfUpgrade": {
-        "label": "Let this site upgrade with the deployment",
-        "hint": "Adds a second container at the site that holds its Docker socket, so pressing Upgrade here replaces this poller too. Without it the site stays on whatever version it last pulled and is listed as left behind. The site can change this later in its own .env — that file is the one an upgrade never replaces."
+        "label": "Install the site updater, so upgrading here upgrades this site too",
+        "info": "The updater is a second container at the site with access to its Docker socket. Without it the site stays on its current version, and the site's own .env can switch it later."
       }
     },
     "move": {
       "title": "Move {{id}}",
       "action": "Move",
       "grip": "Drag {{id}} onto a pool",
-      "cellHint": "Drag onto a pool above, or use Move.",
       "cannot": "This poller cannot be moved yet — it is offline, or its build is older than this feature. Upgrade it first.",
       "destLabel": "Move to",
       "destNone": "Choose a pool",
-      "destHint": "It starts polling that pool right away. Nothing at the site has to be touched, and nothing restarts. It is serving {{pool}} now.",
       "confirm": "Move",
       "confirmTitle": "Move {{id}} to {{pool}}",
       "emptyWarn": "This is the last poller serving {{pool}}.",

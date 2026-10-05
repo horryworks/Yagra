@@ -21,6 +21,7 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, FieldHint } from '../components/ui/Field';
+import { StepFrame } from '../components/ui/StepFrame';
 import { busCertState, namesNotCovered, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
 import { done } from '../lib/submitState';
@@ -68,7 +69,6 @@ function ReissueModal({
       }
     >
       <div className="form-stack">
-        <p className="modal-confirm-text">{t('pollers.bus.reissue.intro')}</p>
         <label className="form-label">
           {t('pollers.bus.names.label')}
           <TextInput
@@ -78,8 +78,9 @@ function ReissueModal({
             autoFocus
           />
         </label>
-        <FieldHint>{t('pollers.bus.names.hint')}</FieldHint>
-        <p className="form-hint">{t('pollers.bus.reissue.afterward')}</p>
+        {/* The dialog's one sentence (ADR-200): what the sites lose until they are handed the
+            new file. That the bus serves it only after a restart shows on the panel as a badge. */}
+        <p className="modal-confirm-text">{t('pollers.bus.reissue.afterward')}</p>
         <FormError form={form} />
       </div>
     </Modal>
@@ -139,9 +140,7 @@ function SwitchModal({
                 autoFocus
               />
             </label>
-            <FieldHint error={!ready}>
-              {ready ? t('pollers.bus.names.hint') : t('pollers.bus.names.required')}
-            </FieldHint>
+            {!ready && <FieldHint error>{t('pollers.bus.names.required')}</FieldHint>}
           </>
         )}
         {/* The cost, stated before the click rather than discovered after it. */}
@@ -174,7 +173,6 @@ function HandoffModal({
       }
     >
       <div className="form-stack">
-        <p className="modal-confirm-text">{t('pollers.bus.handoff.intro')}</p>
         {accepted.poller_secret && (
           <div className="modal-field">
             <label className="modal-field-label">{t('pollers.bus.handoff.secret')}</label>
@@ -272,8 +270,6 @@ export function BusPanel() {
         )
       }
     >
-      <p className="muted">{t('pollers.bus.note')}</p>
-
       <p>
         <Badge tone={enabled ? 'up' : 'neutral'}>
           {enabled ? t('pollers.bus.state.encrypted') : t('pollers.bus.state.internal')}
@@ -281,6 +277,15 @@ export function BusPanel() {
         <span className="muted">
           {enabled ? t('pollers.bus.state.encryptedNote') : t('pollers.bus.state.internalNote')}
         </span>
+        {/* A reissued certificate is stored at once and served from the next bus restart. That
+            is a state, so it is a badge beside the bus's other state rather than a sentence in
+            the dialog that made it (ADR-200). */}
+        {state === 'not_materialized' && (
+          <>
+            {' '}
+            <Badge tone="warning">{t('pollers.bus.cert.pending')}</Badge>
+          </>
+        )}
       </p>
 
       {status && !status.can_switch && (
@@ -306,8 +311,8 @@ export function BusPanel() {
           <p className="muted mono" title={cert.fingerprint_sha256}>
             {t('pollers.bus.cert.fingerprint')}: {cert.fingerprint_sha256.slice(0, 32)}…
           </p>
-          {/* One line, worst first — see `busCertState`. */}
-          {state !== 'ok' && (
+          {/* One line, worst first — see `busCertState`. "Pending restart" is the badge above. */}
+          {state !== 'ok' && state !== 'not_materialized' && (
             <p className={state === 'expiring' ? 'form-hint' : 'form-error'}>
               {t(`pollers.bus.cert.warn.${state}`)}
             </p>
@@ -322,9 +327,21 @@ export function BusPanel() {
         <p className="muted">{t('pollers.bus.cert.absent')}</p>
       )}
 
-      <p className="form-hint">
-        <Trans t={t} i18nKey="pollers.bus.siteHint" components={{ c: <span className="mono" /> }} />
-      </p>
+      {/* The manual procedure at a site, closed until wanted (ADR-200 kind d). The kit from
+          "Register poller" makes it unnecessary for most sites. */}
+      <StepFrame
+        summary={t('pollers.bus.steps.title')}
+        steps={[
+          t('pollers.bus.steps.s1'),
+          <Trans
+            key="s2"
+            t={t}
+            i18nKey="pollers.bus.steps.s2"
+            components={{ c: <span className="mono" /> }}
+          />,
+          t('pollers.bus.steps.s3'),
+        ]}
+      />
 
       {reissuing && (
         <ReissueModal

@@ -79,7 +79,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-upgrade': [5335, 3023],
   settings: [649, 359],
   suppression: [1091, 712],
-  system: [20257, 11104],
+  system: [16829, 9370],
   topology: [4304, 2334],
   troubleshoot: [7347, 3814],
 };
@@ -143,12 +143,6 @@ const LONG_LEGACY: string[] = [
   'system:bundle.notBackup',
   'system:health.netNote',
   'system:netbox.form.baseUrlHint',
-  'system:pollers.anchor.hint',
-  'system:pollers.pool.coverWarning',
-  'system:pollers.pool.createNote',
-  'system:pollers.pool.renameBlockedWhy',
-  'system:pollers.register.intro',
-  'system:pollers.token.selfUpgrade.hint',
   'system:settings.neighbors.walk.arp.help',
   'system:settings.neighbors.walk.media.help',
   'system:settings.neighbors.walk.routing.help',
@@ -190,7 +184,6 @@ const HOVER_LEGACY: string[] = [
   'rca:meta.cachedHint',
   'settings-ai:test.hint',
   'settings-forwarding:health.degradedHint',
-  'system:pollers.gaps.passiveHint',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
   'topology:dependency.optOutHelp',
@@ -274,11 +267,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',
   },
-  'pages/PollersPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.4',
-    why: 'a pool with no live poller is not monitored',
-  },
   'pages/SubnetOverlapsPage.tsx': {
     kind: 'fact',
     until: 'Inc.12',
@@ -327,7 +315,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 1, press: 2 };
+const INFO_COUNT = { tip: 3, press: 4 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -375,7 +363,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 45, formHint: 24, modalHint: 69 };
+const HINT_SITES = { fieldHint: 37, formHint: 20, modalHint: 69 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));
