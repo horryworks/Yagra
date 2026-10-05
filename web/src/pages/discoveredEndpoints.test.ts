@@ -13,6 +13,7 @@ import {
   isSenderOnly,
   isUnmonitored,
   pollDetect,
+  sameDeviceOf,
   withoutImported,
   MAX_DETECT_READS,
   sourcesOf,
@@ -176,6 +177,52 @@ describe('detectResultOf', () => {
 
   it('says a cancelled sweep proved nothing', () => {
     expect(detectResultOf(scan({ state: 'cancelled' }), '192.0.2.44')).toEqual({ kind: 'lost' });
+  });
+
+  // ADR-139 Inc.4: the probe's own scan already carries the same-device judgement.
+  const alike = {
+    address: '192.0.2.44',
+    nodes: [
+      {
+        id: 'n-sw07',
+        name: 'sw-07',
+        address: '198.51.100.7',
+        confidence: 'possible' as const,
+        evidence: ['name' as const],
+      },
+    ],
+  };
+
+  it('carries the same-device mark for its own address', () => {
+    const r = detectResultOf(scan({ candidates: [answered], same_device: [alike] }), '192.0.2.44');
+    expect(r).toMatchObject({ kind: 'found', sameDevice: alike });
+    expect(sameDeviceOf(r ?? undefined)).toEqual(alike);
+  });
+
+  it('does not take the mark meant for another address', () => {
+    const other = { ...alike, address: '192.0.2.45' };
+    const r = detectResultOf(scan({ candidates: [answered], same_device: [other] }), '192.0.2.44');
+    expect(r).toEqual({
+      kind: 'found',
+      profileId: 'p-cisco',
+      credentialId: 'c-corp',
+      vendor: 'Cisco',
+      model: 'C2960X',
+      sysname: 'sw-07',
+    });
+    expect(r && 'sameDevice' in r).toBe(false);
+  });
+
+  it('reads an older core that sends no same_device as unmarked', () => {
+    const s = scan({ candidates: [answered] });
+    delete (s as { same_device?: unknown }).same_device;
+    expect(sameDeviceOf(detectResultOf(s, '192.0.2.44') ?? undefined)).toBeUndefined();
+  });
+
+  it('has no mark before an answer or when nothing answered', () => {
+    expect(sameDeviceOf(undefined)).toBeUndefined();
+    expect(sameDeviceOf('running')).toBeUndefined();
+    expect(sameDeviceOf({ kind: 'silent' })).toBeUndefined();
   });
 });
 

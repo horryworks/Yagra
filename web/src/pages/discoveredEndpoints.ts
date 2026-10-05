@@ -4,7 +4,13 @@
 // In a .ts, not the .tsx, because Vitest only runs `src/**/*.test.ts` — a test written in a .tsx is
 // a file nothing runs (testing.md).
 
-import type { DiscoveredEndpoint, DiscoveredEndpointPage, DiscoveryScan } from '../types/api';
+import type {
+  DiscoveredEndpoint,
+  DiscoveredEndpointPage,
+  DiscoveryScan,
+  SameDeviceMatch,
+} from '../types/api';
+import { sameDeviceByAddress } from './discoveryExisting';
 import type { RowDestination } from './importFiling';
 
 /** How much of the fleet the endpoint list actually speaks for.
@@ -107,7 +113,9 @@ export function isSenderOnly(e: DiscoveredEndpoint): boolean {
  *  this reads the same `ScanView` the Scan tab polls.
  *
  *  - `found` — a stored credential answered SNMP. The profile is the classifier's suggestion (empty
- *    when it had none), and the maker, model and sysName travel with the import.
+ *    when it had none), and the maker, model and sysName travel with the import. `sameDevice` is
+ *    set when the server judged the device to look like a node monitored at another address
+ *    (ADR-139 Inc.4) — the same judgement the Scan tab marks, read off the probe's own scan.
  *  - `silent` — the sweep finished and no credential answered. Not an error: the device may drop
  *    SNMP from this poller, or not speak it. The operator can still pick by hand or monitor by ping.
  *  - `lost` — the sweep ended without finishing (cancelled), so nothing can be said either way. */
@@ -119,6 +127,7 @@ export type DetectResult =
       vendor?: string;
       model?: string;
       sysname?: string;
+      sameDevice?: SameDeviceMatch;
     }
   | { kind: 'silent' }
   | { kind: 'lost' };
@@ -132,12 +141,16 @@ const present = (s: string | null | undefined): string | undefined => {
  *
  *  Only a *matched credential* counts as found. A candidate can be `reachable` by ICMP alone, and the
  *  classifier needs SNMP to suggest anything, so a reachable host with no credential is `silent` —
- *  which is what the operator needs to hear before pressing Monitor. */
+ *  which is what the operator needs to hear before pressing Monitor.
+ *
+ *  The same-device mark is read only on `found`: the judgement needs the sysName and sysObjectID
+ *  SNMP returned, so a silent device never has one. A core that predates the field sends none. */
 export function detectResultOf(scan: DiscoveryScan, ip: string): DetectResult | null {
   if (!scan.done) return null;
   if (scan.state !== 'done') return { kind: 'lost' };
   const c = scan.candidates.find((x) => x.address === ip);
   if (!c?.matched_credential_id) return { kind: 'silent' };
+  const sameDevice = sameDeviceByAddress(scan.same_device).get(ip);
   return {
     kind: 'found',
     profileId: c.suggested_profile_id ?? '',
@@ -145,7 +158,13 @@ export function detectResultOf(scan: DiscoveryScan, ip: string): DetectResult | 
     vendor: present(c.vendor),
     model: present(c.model),
     sysname: present(c.sysname),
+    ...(sameDevice ? { sameDevice } : {}),
   };
+}
+
+/** The same-device mark a row's Detect produced, if any. */
+export function sameDeviceOf(d: 'running' | DetectResult | undefined): SameDeviceMatch | undefined {
+  return d !== undefined && d !== 'running' && d.kind === 'found' ? d.sameDevice : undefined;
 }
 
 /** How the result line names the device: maker and model when the classifier read them, else the

@@ -519,16 +519,6 @@ html[data-viewport='mobile'] .disco-scan {
   font-size: var(--font-xs);
 }
 
-/* "Monitored at another address as …" (ADR-139 Inc.3). Wraps instead of truncating: the evidence
-   and the "tick it anyway" hint are what the mark is for, and must be readable on touch (R4). */
-.disco-same {
-  overflow-wrap: anywhere;
-}
-
-.disco-same-hint {
-  display: block;
-}
-
 /* "Load more" under the unregistered list (ADR-179 Inc.6). */
 .disco-seen-more {
   display: flex;

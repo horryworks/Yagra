@@ -59,6 +59,11 @@
   color: var(--status-warning);
 }
 
+/* The same-device mark under what Detect found (ADR-139 Inc.4): the cell's small text size. */
+.ep-setup-same {
+  font-size: var(--font-xs);
+}
+
 /* Where Monitor will put the node (ADR-179 Inc.8). Muted when a range took it or no range was
    asked for; the warning colour, with its mark, when filing by range found no folder. */
 .ep-setup-dest {

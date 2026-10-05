@@ -592,6 +592,9 @@
         "trap": "Trap"
       },
       "senderOnly": "Only a syslog or trap sender vouches for this address, and a sender's address can be forged — so it is not detected or monitored from here. If it is yours, add it with Add node.",
+      "sameDevice": {
+        "hint": "Monitor adds it as another node. If it is the same device, do not add it."
+      },
       "more": {
         "button": "Load {{n}} more",
         "loaded": "{{loaded}} of {{total}} unregistered devices loaded. Filters search only the loaded rows."

@@ -9,10 +9,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CredentialSummary, ProfileSummary } from '../../types/api';
-import { detectPhase } from '../../pages/discoveredEndpoints';
+import { detectPhase, sameDeviceOf } from '../../pages/discoveredEndpoints';
 import type { EndpointSetup, SetupTarget } from '../../lib/useEndpointSetup';
 import { Button } from '../ui/Button';
 import { Select } from '../ui/Field';
+import { SameDeviceNote } from './SameDeviceNote';
 import './EndpointSetupCell.css';
 
 interface Props {
@@ -43,6 +44,9 @@ export function EndpointSetupCell({
   const { t } = useTranslation('monitoring');
   const phase = detectPhase(setup.detect[target.id]);
   const found = phase === 'found';
+  // Looks like a node monitored at another address (ADR-139 Inc.4). Monitor stays — the evidence
+  // can be wrong where sites reuse one address plan — but it no longer leads.
+  const alike = sameDeviceOf(setup.detect[target.id]);
   const busy = setup.busyId != null;
   const sel = setup.selection(target.id);
   const line = setup.detectLine(target.id);
@@ -109,6 +113,11 @@ export function EndpointSetupCell({
           {line}
         </span>
       )}
+      {alike && (
+        <span className="ep-setup-same">
+          <SameDeviceNote match={alike} hint={t('discovery.seen.sameDevice.hint')} badge />
+        </span>
+      )}
       {/* Where Monitor will put it, before it is pressed (ADR-179 Inc.8 decision 2) — with the mark
           when no range took it although filing by range was asked for. */}
       {dest != null && (
@@ -153,7 +162,7 @@ export function EndpointSetupCell({
             {t('discovery.seen.detect.retry')}
           </Button>
         )}
-        <Button variant={found ? 'primary' : 'outline'} disabled={busy} onClick={onMonitor}>
+        <Button variant={found && !alike ? 'primary' : 'outline'} disabled={busy} onClick={onMonitor}>
           {t('discovery.seen.monitor')}
         </Button>
       </div>

@@ -66,6 +66,7 @@ import { TextInput, TextArea, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EndpointSetupCell } from '../components/discovery/EndpointSetupCell';
+import { SameDeviceNote } from '../components/discovery/SameDeviceNote';
 import { useEndpointSetup } from '../lib/useEndpointSetup';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
@@ -89,7 +90,6 @@ import {
   importableCandidates,
   sameDeviceBadgeKey,
   sameDeviceByAddress,
-  sameDeviceReasonKey,
   selectedForImport,
 } from './discoveryExisting';
 import {
@@ -1282,31 +1282,8 @@ export function DiscoveryPage() {
                       </>
                     ) : (
                       <>
-                        {/* Wraps rather than truncating like `.disco-dest-to`: the evidence and the
-                            hint are the whole point of the mark, and a title= is unreadable on
-                            touch (ADR-055 R4). */}
                         {alike && (
-                          <span className="disco-same">
-                            <span className="muted">{t('discovery.sameDevice.as')}</span>{' '}
-                            {alike.nodes.map((n, i) => {
-                              const why = n.evidence
-                                .map(sameDeviceReasonKey)
-                                .filter((k): k is string => k !== null)
-                                .map((k) => t(k))
-                                .join(' · ');
-                              return (
-                                <span key={n.id}>
-                                  {i > 0 && ', '}
-                                  <Link to={nodeHref(n.id)}>{n.name}</Link>{' '}
-                                  <span className="mono muted">({n.address})</span>
-                                  {why && <span className="muted disco-dest-why"> {why}</span>}
-                                </span>
-                              );
-                            })}
-                            <span className="muted disco-dest-why disco-same-hint">
-                              {t('discovery.sameDevice.hint')}
-                            </span>
-                          </span>
+                          <SameDeviceNote match={alike} hint={t('discovery.sameDevice.hint')} />
                         )}
                         {destinationCell(c.address, r)}
                       </>
