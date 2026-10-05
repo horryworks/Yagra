@@ -21,7 +21,7 @@ import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
 import { InterfaceRulesModal } from '../InterfaceRules/InterfaceRulesModal';
 import { BellIcon } from '../ui/icons';
-import { usePrefsStore } from '../../prefs';
+import { usePrefsStore, type RateUnit, type ThroughputScale } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { resolveWidths } from '../../lib/columnWidths';
@@ -61,7 +61,12 @@ import {
 } from './interfaceDockHeight';
 import { ifStateCounts, interfaceColumns } from './tabFilters';
 import { utilHeat } from '../../lib/utilHeat';
-import { duplexState } from './linkMode';
+import {
+  duplexEmptyReason,
+  duplexState,
+  mediaEmptyReason,
+  type LinkBlankReason,
+} from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { FilterControls } from '../ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
@@ -72,8 +77,10 @@ import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
 import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
 import { operLabel } from './healthTone';
-import { duplexTitle, mediaTitle } from './linkMode';
+import { mediaTitle } from './linkMode';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
+import { InfoPress } from '../ui/InfoTip';
+import { Segmented } from '../ui/Segmented';
 import { focusPopoverTrigger } from '../ui/focusPopoverTrigger';
 import { Capabilities } from './NeighborsTab';
 import {
@@ -398,7 +405,14 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               {t('interfaces.unknownCount', { count: stateCounts.unknown })}
             </span>
           )}
-          <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
+        </span>
+        {/* What the In / Out shading means, said once above the table rather than in a hover on
+            each header (ADR-200 Inc.19). The ramp is the one `utilHeat.ts` paints: green to the
+            70% stop, then on to red. */}
+        <span className="nd-if-heat-legend">
+          0%
+          <i className="nd-if-heat-ramp" aria-hidden="true" />
+          100% {t('interfaces.heatLegend')}
         </span>
         <FilterControls
           list={serverToolbarFilters(columns, { filters, setFilters }, undefined, counts)}
@@ -432,21 +446,20 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <div className="nd-if-h" style={{ gridColumn: 2, gridRow: 1 }}>
             {t('interfaces.colDescription')}
           </div>
-          <div
-            className="nd-if-h"
-            style={{ gridColumn: 3, gridRow: 1 }}
-            title={t('interfaces.colAddressesTitle')}
-          >
-            {t('interfaces.colAddresses')}
+          {/* Three headers open their own meaning when pressed (ADR-200 Inc.19): these headers do
+              not sort, so the label itself can be the button. Only where the meaning changes what
+              an operator concludes from a cell; the rest name themselves. */}
+          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }}>
+            <InfoPress infoKey="nodes:interfaces.addressesCol.info">
+              {t('interfaces.colAddresses')}
+            </InfoPress>
           </div>
-          <div
-            className="nd-if-h"
-            style={{ gridColumn: 4, gridRow: 1 }}
-            title={t('interfaces.colNeighborsTitle')}
-          >
-            {t('interfaces.colNeighbors')}
+          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
+            <InfoPress infoKey="nodes:interfaces.neighborsCol.info">
+              {t('interfaces.colNeighbors')}
+            </InfoPress>
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }} title={t('interfaces.colOperTitle')}>
+          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
             {t('interfaces.colOper')}
           </div>
           <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }}>
@@ -455,24 +468,18 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <div className="nd-if-h right" style={{ gridColumn: 7, gridRow: 1 }}>
             {t('interfaces.colSpeed')}
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }} title={t('interfaces.duplexHint')}>
-            {t('interfaces.colDuplex')}
+          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }}>
+            <InfoPress infoKey="nodes:interfaces.duplexCol.info">
+              {t('interfaces.colDuplex')}
+            </InfoPress>
           </div>
           <div className="nd-if-h" style={{ gridColumn: 9, gridRow: 1 }}>
             {t('interfaces.colThroughput')}
           </div>
-          <div
-            className="nd-if-h right"
-            style={{ gridColumn: 10, gridRow: 1 }}
-            title={t('interfaces.colInOutTitle')}
-          >
+          <div className="nd-if-h right" style={{ gridColumn: 10, gridRow: 1 }}>
             {t('interfaces.colIn')}
           </div>
-          <div
-            className="nd-if-h right"
-            style={{ gridColumn: 11, gridRow: 1 }}
-            title={t('interfaces.colInOutTitle')}
-          >
+          <div className="nd-if-h right" style={{ gridColumn: 11, gridRow: 1 }}>
             {t('interfaces.colOut')}
           </div>
           <ColumnResizeHandles control={colResize} columns={INTERFACE_COLUMNS} labels={labels} />
@@ -538,15 +545,23 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                   whose medium could not be resolved — showing it in the cell would read as a
                   media type. Device-supplied, so it is rendered as text and never as markup. */}
               <span className="nd-if-media" title={mediaTitle(r, t)}>
-                {r.if_media ?? '—'}
+                <LinkCell
+                  value={r.if_media ?? null}
+                  blank={mediaEmptyReason(r.if_media, r.if_type)}
+                />
               </span>
               <span className="nd-if-speed">
                 {r.if_speed_bps && r.if_speed_bps > 0 ? formatBps(r.if_speed_bps) : '—'}
               </span>
-              <span className="nd-if-duplex" title={duplexTitle(r, t)}>
-                {duplexState(r.if_duplex) === 'unknown'
-                  ? '—'
-                  : t(`interfaces.duplex.${duplexState(r.if_duplex)}`)}
+              <span className="nd-if-duplex">
+                <LinkCell
+                  value={
+                    duplexState(r.if_duplex) === 'unknown'
+                      ? null
+                      : t(`interfaces.duplex.${duplexState(r.if_duplex)}`)
+                  }
+                  blank={duplexEmptyReason(r.if_duplex, r.if_type)}
+                />
               </span>
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
@@ -625,6 +640,15 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       )}
     </div>
   );
+}
+
+/** A media or duplex value, or, where there is none, the word for why: `n/a` when the question
+ *  does not apply to this port, `not reported` when it does and the device did not answer
+ *  (ADR-200 Inc.19). Muted, so a blank reads as a blank rather than as a value. */
+function LinkCell({ value, blank }: { value: string | null; blank: LinkBlankReason | null }) {
+  const { t } = useTranslation('nodes');
+  if (value != null || blank == null) return <>{value ?? '—'}</>;
+  return <span className="nd-if-blank">{t(`interfaces.blank.${blank}`)}</span>;
 }
 
 /** The IP addresses cell (ADR-157): the first address, `+N` as a button when the port carries
@@ -927,9 +951,9 @@ function InterfaceDock({
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
-  const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
+  const setThroughputScale = usePrefsStore((s) => s.setThroughputScale);
   const rateUnit = usePrefsStore((s) => s.rateUnit);
-  const toggleRateUnit = usePrefsStore((s) => s.toggleRateUnit);
+  const setRateUnit = usePrefsStore((s) => s.setRateUnit);
   const isPps = rateUnit === 'pps';
   // How the charts are sized, as ONE object used by both so the pair cannot drift.
   //
@@ -1194,7 +1218,7 @@ function InterfaceDock({
             type="button"
             className="nd-if-dock-rule"
             aria-label={t('interfaces.rulesButton')}
-            title={t('interfaces.rulesButtonTitle')}
+            title={t('interfaces.rulesButton')}
             onClick={() => setRulesOpen(true)}
           >
             <BellIcon />
@@ -1227,43 +1251,36 @@ function InterfaceDock({
       <div className="nd-if-dock-charts">
         <div className="nd-if-chart">
           <div className="nd-if-chart-t">
-            <span>
-              {t('interfaces.throughput')}{' '}
-              <span className="nd-unit">
-                {isPps ? t('interfaces.throughputUnitPps') : t('interfaces.throughputUnit')}
-              </span>
-            </span>
+            {/* No "(bps)" after the name: the pressed half of the unit choice beside it says it,
+                and the legend names In and Out (ADR-200 Inc.19). */}
+            <span>{t('interfaces.throughput')}</span>
             <span className="nd-if-chart-ctl">
               {/* Only this chart carries a unit toggle. Errors and discards below are packets/sec
                   with no other form (IF-MIB counts errored and discarded frames, never their
                   octets), so a dock-level control would promise more than it can do — ADR-060. */}
-              <button
-                type="button"
-                className="nd-if-scale-toggle"
-                onClick={toggleRateUnit}
-                title={
-                  isPps
-                    ? t('interfaces.rateUnitToggleTitlePps')
-                    : t('interfaces.rateUnitToggleTitleBps')
-                }
-              >
-                {isPps ? t('interfaces.rateUnitPps') : t('interfaces.rateUnitBps')}
-              </button>
+              {/* Both choices on screen at once (ADR-200 Inc.19): a single toggle showed only the
+                  current state and needed a hover sentence to say what a press would do. */}
+              <Segmented
+                size="sm"
+                ariaLabel={t('interfaces.unitAria')}
+                value={rateUnit}
+                onChange={(v) => setRateUnit(v as RateUnit)}
+                options={[
+                  { value: 'bps', label: t('interfaces.rateUnitBps') },
+                  { value: 'pps', label: t('interfaces.rateUnitPps') },
+                ]}
+              />
               {hasBandwidth && (
-                <button
-                  type="button"
-                  className="nd-if-scale-toggle"
-                  onClick={toggleThroughputScale}
-                  title={
-                    throughputScale === 'capacity'
-                      ? t('interfaces.scaleToggleTitleCapacity')
-                      : t('interfaces.scaleToggleTitleAuto')
-                  }
-                >
-                  {throughputScale === 'capacity'
-                    ? t('interfaces.bandwidth')
-                    : t('interfaces.auto')}
-                </button>
+                <Segmented
+                  size="sm"
+                  ariaLabel={t('interfaces.scaleAria')}
+                  value={throughputScale}
+                  onChange={(v) => setThroughputScale(v as ThroughputScale)}
+                  options={[
+                    { value: 'capacity', label: t('interfaces.bandwidth') },
+                    { value: 'fit', label: t('interfaces.auto') },
+                  ]}
+                />
               )}
               <ChartLegend bandwidth={hasBandwidth} />
             </span>

@@ -3,12 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   DUPLEX_STATES,
   IF_TYPE_ETHERNET_CSMACD,
+  LINK_BLANK_REASONS,
   SPEED_TIERS,
   duplexApplies,
   duplexEmptyReason,
   duplexState,
-  duplexTitle,
   mediaApplies,
+  mediaEmptyReason,
   mediaText,
   mediaTitle,
   speedTier,
@@ -148,29 +149,37 @@ describe('duplexEmptyReason', () => {
   });
 });
 
-describe('the two cell tooltips', () => {
+describe('mediaEmptyReason', () => {
+  it('is null when there is a medium to render', () => {
+    expect(mediaEmptyReason('1000BASE-T', IF_TYPE_ETHERNET_CSMACD)).toBeNull();
+    expect(mediaEmptyReason('1000BASE-T', 24)).toBeNull();
+  });
+
+  it('splits the empty media cell the same way the duplex cell splits', () => {
+    expect(mediaEmptyReason(null, IF_TYPE_ETHERNET_CSMACD)).toBe('unknown');
+    expect(mediaEmptyReason(null, 24)).toBe('notApplicable');
+    // Unknown ifType reads as "could not read", never as an excuse - see `duplexApplies`.
+    expect(mediaEmptyReason(null, null)).toBe('unknown');
+    expect(duplexEmptyReason(null, null)).toBe('unknown');
+  });
+
+  it('names only reasons the cell has words for', () => {
+    for (const media of [null, '']) {
+      for (const ifType of [null, IF_TYPE_ETHERNET_CSMACD, 24]) {
+        expect(LINK_BLANK_REASONS).toContain(mediaEmptyReason(media, ifType));
+        expect(LINK_BLANK_REASONS).toContain(duplexEmptyReason(media, ifType));
+      }
+    }
+  });
+});
+
+describe('the media cell tooltip', () => {
   const t = ((key: string, opts?: Record<string, unknown>) =>
     opts && 'model' in opts ? `${key}=${opts.model}` : key) as unknown as TFunction;
   const row = (over: Partial<InterfaceRow> = {}) =>
     ({ if_duplex: null, if_type: null, if_media: null, transceiver_model: null, ...over }) as InterfaceRow;
 
-  it('says nothing at all when the duplex cell has a value', () => {
-    // A populated cell carries no `title`, rather than a redundant one — a tooltip that repeats the
-    // cell is noise on every hover.
-    expect(duplexTitle(row({ if_duplex: 'full' }), t)).toBeUndefined();
-    expect(duplexTitle(row({ if_duplex: 'half' }), t)).toBeUndefined();
-  });
-
-  it('distinguishes "could not read it" from "the question does not apply"', () => {
-    expect(duplexTitle(row({ if_type: IF_TYPE_ETHERNET_CSMACD }), t)).toBe(
-      'interfaces.duplexEmpty.unknown',
-    );
-    expect(duplexTitle(row({ if_type: 24 }), t)).toBe('interfaces.duplexEmpty.notApplicable');
-    // Unknown ifType reads as "could not read", never as an excuse — see `duplexApplies`.
-    expect(duplexTitle(row(), t)).toBe('interfaces.duplexEmpty.unknown');
-  });
-
-  it('prefers the transceiver model over every empty-cell explanation', () => {
+  it('carries the transceiver model, with or without a resolved medium', () => {
     // A port with a resolved medium AND a known module shows the module: that is the extra fact.
     expect(mediaTitle(row({ transceiver_model: 'SFP-10G-LR', if_media: '10GBASE-LR' }), t)).toBe(
       'interfaces.transceiver=SFP-10G-LR',
@@ -180,14 +189,8 @@ describe('the two cell tooltips', () => {
     );
   });
 
-  it('says nothing when the media cell has a value and no module is known', () => {
+  it('says nothing without a module: the cell itself says why it is empty', () => {
     expect(mediaTitle(row({ if_media: '1000BASE-T' }), t)).toBeUndefined();
-  });
-
-  it('splits the empty media cell the same way the duplex cell splits', () => {
-    expect(mediaTitle(row({ if_type: IF_TYPE_ETHERNET_CSMACD }), t)).toBe(
-      'interfaces.mediaEmpty.unknown',
-    );
-    expect(mediaTitle(row({ if_type: 24 }), t)).toBe('interfaces.mediaEmpty.notApplicable');
+    expect(mediaTitle(row({ if_type: IF_TYPE_ETHERNET_CSMACD }), t)).toBeUndefined();
   });
 });

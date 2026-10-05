@@ -315,7 +315,6 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
             />
             <RangeControl value={range} onChange={setRange} />
           </div>
-          <p className="nd-muted nd-coll-editnote">{t('collection.allMetricsNote')}</p>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
               <div className="nd-coll-mh">{t('collection.colMetric')}</div>
@@ -351,7 +350,6 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
 
       <section>
         <div className="nd-section-t">{t('collection.nodeMetrics')}</div>
-        <p className="nd-muted nd-coll-editnote">{t('collection.editNote')}</p>
         <CollectionEditor scope="node" scopeId={node.id} canEdit={canEdit} />
       </section>
     </div>

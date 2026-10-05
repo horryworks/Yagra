@@ -215,18 +215,20 @@ test('the bps/pps toggle swaps the unit and takes the bandwidth overlay with it'
   await openDock(page);
   const head = page.locator('.nd-if-chart').first().locator('.nd-if-chart-t');
 
-  await expect(head).toContainText('(In / Out, bps)');
-  await expect(head.getByRole('button', { name: /auto|bandwidth/i })).toBeVisible();
+  // Both units are on screen as one segmented choice (ADR-200 Inc.19), the current one pressed.
+  const unit = head.getByRole('group', { name: 'Unit' });
+  await expect(unit.getByRole('button', { name: 'bps' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(head.getByRole('group', { name: 'Y-axis' })).toBeVisible();
   await expect(head.locator('.nd-if-legend-bw')).toHaveCount(1);
 
-  await head.getByRole('button', { name: 'bps' }).click();
+  await unit.getByRole('button', { name: 'pps' }).click();
 
-  await expect(head).toContainText('(In / Out, pps)');
+  await expect(unit.getByRole('button', { name: 'pps' })).toHaveAttribute('aria-pressed', 'true');
   // `ifSpeed` is a bit rate, so on a packet axis the reference line would draw a capacity the
   // operator is nowhere near. `throughputBandwidthOverlay` returns `{}` — which its unit test
   // proves — but that `{}` reaching the JSX that removes the control and the key is `.tsx`, and
   // this is the only thing that runs it.
-  await expect(head.getByRole('button', { name: /auto|bandwidth/i })).toHaveCount(0);
+  await expect(head.getByRole('group', { name: 'Y-axis' })).toHaveCount(0);
   await expect(head.locator('.nd-if-legend-bw')).toHaveCount(0);
 });
 

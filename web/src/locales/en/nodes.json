@@ -294,11 +294,10 @@
     },
     "settings": {
       "title": "Access point monitoring",
-      "importAps": "Monitor access points automatically",
+      "importAps": "Monitor access points automatically once they associate",
       "maxAps": "Limit",
-      "group": "Folder",
+      "group": "Folder for new nodes",
       "groupDefault": "— Same folder as this controller —",
-      "hint": "On by default. Only access points that have associated at least once are monitored automatically. A new node is created for each, in the folder chosen here.",
       "save": "Save"
     },
     "empty": {
@@ -347,7 +346,7 @@
     "none": "No flow data in this window.",
     "noTrend": "No traffic trend in this window.",
     "empty": "No flow data yet. Configure this device to export NetFlow v9 / IPFIX to the poller (default UDP :2055).",
-    "disabled": "Flow monitoring is not enabled. Configure a ClickHouse flow store (YAGRA_CLICKHOUSE_URL on core) and a flow listener (YAGRA_FLOW_BIND on the poller) to collect traffic flows.",
+    "disabled": "Flow monitoring is off — set YAGRA_CLICKHOUSE_URL on core and YAGRA_FLOW_BIND on a poller.",
     "loadError": "Failed to load flow data."
   },
   "editNode": {
@@ -496,42 +495,36 @@
     "partOfOutage": "part of this node’s outage"
   },
   "interfaces": {
-    "emptyDiscovered": "No interfaces discovered yet. They appear after an SNMP table walk runs — the node needs a bound SNMP credential and a table metric in its collection set.",
+    "emptyDiscovered": "No interfaces yet. They appear after an SNMP table walk, which needs a bound SNMP credential and a table metric.",
     "ofUp": "/ {{total}} up",
     "unknownCount": " · {{count}} unknown",
-    "sparklineHint": " · sparklines show last 1h",
     "filterPlaceholder": "Filter interfaces…",
     "colInterface": "Interface",
     "colDescription": "Description",
     "colNeighbors": "Neighbors",
-    "colNeighborsTitle": "What this port is connected to, as the device reports it over CDP or LLDP. Click a name to see every neighbor on the port. A CDP neighbor is placed by the port's index; an LLDP neighbor only when the device names the port the same way as this list does, so a port can show — here while the Neighbors tab lists a neighbor for it.",
     "neighborsMore": "+{{count}}",
     "neighborsOpen": "Show neighbors on {{port}}",
     "neighborsTitle": "Neighbors on {{port}}",
     "neighborsMgmt": "Management",
     "colAddresses": "IP addresses",
-    "colAddressesTitle": "The IP addresses configured on this port — every one of them, secondaries included — as the device lists them in its IP address tables, read once an hour. The first is shown; +N opens the full list, and hovering the cell shows them all. An address is written as ip/prefix length; one shown without a prefix is an address whose mask the device did not report in a readable form. — means the device lists no address on this port, or the address walk has not run yet.",
     "addressesMore": "+{{count}}",
     "addressesOpen": "Show all {{count}} IP addresses on {{port}}",
     "addressesTitle": "IP addresses on {{port}}",
     "addressesHint": "Matches any address on the port, in the ip/prefix spelling the column shows — so a secondary hidden behind +N still matches. 10.221. finds the ports carrying that range, /30 the point-to-point links.",
     "dockAddresses": "IP",
     "colOper": "Oper",
-    "colOperTitle": "Operational status — whether the interface is up or down",
     "colMedia": "Media",
     "colSpeed": "Speed",
     "colDuplex": "Duplex",
     "colThroughput": "Throughput (1h)",
     "colIn": "In",
     "colOut": "Out",
-    "colInOutTitle": "Traffic now. The background shades by utilization — how much of the link's own rate is in use — from green to red. A port that does not report its rate is left unshaded.",
     "utilOfSpeed": "{{pct}}% of {{speed}}",
     "operUp": "up",
     "operDown": "down",
     "operUnknown": "unknown",
     "allSpeeds": "All speeds",
     "allDuplex": "All duplex modes",
-    "duplexHint": "How the link negotiated: full duplex sends both ways at once, half duplex one way at a time. Mostly a copper diagnostic — one end forced to full against an auto-negotiating peer is a classic cause of a link that works but is slow. Fibre ports usually show nothing, and that is correct: no half duplex exists above 1 Gbps, so there is nothing to negotiate.",
     "speed": {
       "10m": "10 Mbps",
       "100m": "100 Mbps",
@@ -550,16 +543,8 @@
       "half": "half",
       "unknown": "Not reported"
     },
-    "duplexEmpty": {
-      "unknown": "This device did not report a duplex mode for this port. Normal on fibre — 802.3 defines no half duplex above 1 Gbps — and on ports that are down.",
-      "notApplicable": "Not an Ethernet port, so duplex does not apply."
-    },
-    "mediaHint": "The physical medium the port runs — 1000BASE-T for copper, 1000BASE-SX or -LX for fibre. Read from the device's MAU table, falling back to the transceiver's own part number. Many devices do not report it at all, and then this column stays empty: it is a gap in what the device will say, not a fault. Matching also searches the transceiver part number, so a search for SX still finds a module whose medium could not be resolved.",
+    "mediaHint": "Matching also searches the transceiver part number, so SX finds a module whose medium is not reported.",
     "transceiver": "Transceiver: {{model}}",
-    "mediaEmpty": {
-      "unknown": "This device did not report a medium for this port, and no transceiver part number was readable. Common — the MAU table is widely unimplemented.",
-      "notApplicable": "Not an Ethernet port, so it has no physical medium."
-    },
     "noMatch": "No interfaces match “{{filter}}”.",
     "dockHint": "Select an interface to dock its charts.",
     "in": "In",
@@ -570,16 +555,10 @@
     "closeDetailTitle": "Close detail (or click the row again)",
     "resizeDock": "Drag to resize the charts (double-click to reset)",
     "throughput": "Throughput",
-    "throughputUnit": "(In / Out, bps)",
-    "throughputUnitPps": "(In / Out, pps)",
     "rateUnitBps": "bps",
     "rateUnitPps": "pps",
-    "rateUnitToggleTitleBps": "Plotting bits per second — click for packets per second",
-    "rateUnitToggleTitlePps": "Plotting unicast packets per second (multicast and broadcast are not counted, and the bandwidth line does not apply) — click for bits per second",
     "bandwidth": "Bandwidth",
     "auto": "Auto",
-    "scaleToggleTitleCapacity": "Y-axis scaled to bandwidth — click for auto-fit",
-    "scaleToggleTitleAuto": "Y-axis auto-fits traffic — click to scale to bandwidth",
     "noData": "No data for this window yet…",
     "faults": "Errors / discards",
     "faultsUnit": "(pps)",
@@ -602,11 +581,10 @@
     },
     "rules": {
       "title": "Alert rules — {{port}}",
-      "subtitle": "This port reports {{speed}}. Percentages below are of that.",
       "subtitleNoSpeed": "This port does not report a speed, so only absolute rules can be evaluated on it.",
       "thisPort": "This port",
       "inherited": "Also applies",
-      "inheritedHint": "These reach this port from a wider scope. Edit them on Alerts ▸ {{screen}}.",
+      "inheritedHint": "Edit these on <lnk/>.",
       "empty": "No rule is watching this port.",
       "add": "Add rule",
       "addTitle": "Add a rule — {{port}}",
@@ -633,7 +611,6 @@
       "percentOf": "{{pct}}% of {{speed}} = {{value}}",
       "percentOfUnknown": "The absolute rate this means depends on the port's speed, which this device does not report.",
       "linkNotUp": "Alert when the port is not up",
-      "linkStateHint": "Fires on anything but up. ifOperStatus reports down as 2 and never 0, so the rule this looks like by hand — \"below 0.5\" — can never fire; this option writes the one that does.",
       "dwell": "How long before it fires",
       "dwellMinutes": "consecutive minutes (or polls, if slower)",
       "dwellPolls": "consecutive polls",
@@ -648,10 +625,28 @@
       "saveFailed": "Could not save the rule",
       "deleteTitle": "Delete rule",
       "deleteBody": "Delete this alert rule for {{port}}? The alerts it raised are resolved on the next evaluation.",
-      "deleteFailed": "Could not delete the rule"
+      "deleteFailed": "Could not delete the rule",
+      "linkState": {
+        "info": "Fires on anything but up. A hand-written \"below 0.5\" rule never fires, because ifOperStatus reports down as 2, not 0."
+      }
     },
     "rulesButton": "Alert rules for this port",
-    "rulesButtonTitle": "See and change what alerts on this port — bounds are a percentage of the speed shown above, or an absolute rate"
+    "addressesCol": {
+      "info": "Every address on the port, secondaries included, read hourly. +N opens the full list."
+    },
+    "neighborsCol": {
+      "info": "What the port is connected to, from CDP or LLDP. Click a name to see every neighbor on the port."
+    },
+    "duplexCol": {
+      "info": "How the link negotiated. Not reported is normal on fibre and on ports that are down."
+    },
+    "blank": {
+      "unknown": "not reported",
+      "notApplicable": "n/a"
+    },
+    "heatLegend": "of link speed",
+    "unitAria": "Unit",
+    "scaleAria": "Y-axis"
   },
   "collection": {
     "statusOk": "Collecting normally",
@@ -670,10 +665,8 @@
     "colMetric": "Metric",
     "colLastValue": "Last value",
     "nodeMetrics": "Node metrics",
-    "editNote": "SNMP metrics polled from this node. Node-level entries override the device profile; with none set, the profile / built-in defaults apply.",
     "metrics": "Metrics",
     "allMetrics": "Metrics",
-    "allMetricsNote": "Everything this node collects or has data for. Open a row to chart it.",
     "colShape": "Shape",
     "colStatus": "Status",
     "seriesCount_one": "{{count}} series",

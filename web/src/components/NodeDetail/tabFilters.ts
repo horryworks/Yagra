@@ -170,11 +170,9 @@ export function interfaceFilters(
       readValue: (r) => duplexState(r.if_duplex),
       allLabel: t('interfaces.allDuplex'),
       counts: 'client',
-      // The column's meaning goes on the filter, not under the page title (ADR-055 R4): an empty
-      // duplex column is the first thing an operator asks about, and the answer — it is a copper
-      // diagnostic, and 10G has no half duplex to negotiate — belongs beside the control they open
-      // looking for it.
-      hint: t('interfaces.duplexHint'),
+      // No `hint`: what the column means, and why "not reported" is normal on fibre, is said once
+      // by the column header itself, which opens it when pressed (ADR-200 Inc.19). The header is
+      // drawn on every screen; the filter row only when it is open.
     },
   };
 }

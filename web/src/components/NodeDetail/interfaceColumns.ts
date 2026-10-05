@@ -44,7 +44,7 @@ export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'oper', width: '94px' },
   { key: 'media', width: 'minmax(112px, 1fr)' },
   { key: 'speed', width: '84px' },
-  { key: 'duplex', width: '76px' },
+  { key: 'duplex', width: '104px' },
   { key: 'throughput', width: '132px' },
   { key: 'in', width: 'minmax(74px, 0.7fr)' },
   { key: 'out', width: 'minmax(74px, 0.7fr)' },

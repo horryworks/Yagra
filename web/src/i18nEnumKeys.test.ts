@@ -141,7 +141,7 @@ import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { PREFIX_GAP_KINDS } from './components/NodeDetail/prefixGaps';
 import { MISSING_PREFIX_VIEWS, SITE_GAP_STATUSES } from './pages/missingPrefixes';
 import { FAULT_SERIES, OPTICAL_SERIES } from './components/NodeDetail/interfaceMetrics';
-import { DUPLEX_STATES, SPEED_TIERS } from './components/NodeDetail/linkMode';
+import { DUPLEX_STATES, LINK_BLANK_REASONS, SPEED_TIERS } from './components/NodeDetail/linkMode';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
@@ -423,22 +423,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every speed tier and duplex bucket has a label (nodes:interfaces.*)', () => {
     // Three runtime-built families with no `defaultValue`, all rendered where a raw key would be
     // most confusing: `speed.*` and `duplex.*` name the options inside a filter dropdown, so a
-    // missing string offers the operator a choice spelled "interfaces.speed.2.5g"; `duplexEmpty.*`
-    // is the tooltip that explains why a cell is blank, where a raw key answers the question with
-    // another question.
+    // missing string offers the operator a choice spelled "interfaces.speed.2.5g"; `blank.*` is the
+    // word an empty duplex or media cell shows in place of a value (ADR-200 Inc.19), where a raw
+    // key answers "why is this empty" with another question.
     const locales = { en: enNodes, ja: jaNodes };
     expectKeys('speed tier', locales, 'interfaces.speed.', SPEED_TIERS);
     expectKeys('duplex bucket', locales, 'interfaces.duplex.', DUPLEX_STATES);
-    // Not a union — the two reasons `duplexEmptyReason` can return, listed because they are built
-    // into a key the same way and share the same failure.
-    expectKeys('duplex empty reason', locales, 'interfaces.duplexEmpty.', [
-      'unknown',
-      'notApplicable',
-    ]);
-    expectKeys('media empty reason', locales, 'interfaces.mediaEmpty.', [
-      'unknown',
-      'notApplicable',
-    ]);
+    expectKeys('empty link cell', locales, 'interfaces.blank.', LINK_BLANK_REASONS);
   });
 
   it('every discovery scan state has a badge label (monitoring:discovery.scans.state.*)', () => {

@@ -69,7 +69,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11335, 6683],
   nav: [2907, 1367],
-  nodes: [20606, 11557],
+  nodes: [17725, 9949],
   rca: [1022, 528],
   reports: [700, 445],
   'settings-ai': [736, 410],
@@ -92,10 +92,6 @@ const SLACK: [number, number] = [300, 200];
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
   'nodes:deleteNode.body',
-  'nodes:interfaces.colAddressesTitle',
-  'nodes:interfaces.colNeighborsTitle',
-  'nodes:interfaces.duplexHint',
-  'nodes:interfaces.mediaHint',
   'nodes:neighbors.detail.note',
   'nodes:neighbors.peer.hint',
   'troubleshoot:report.event_flap.note',
@@ -122,11 +118,6 @@ const HOVER_LEGACY: string[] = [
   'dashboard:widgets.pollerHealth.poolsHint',
   'dashboard:widgets.pollerHealth.workingSetHint',
   'monitoring:discovery.seen.detect.hint',
-  'nodes:interfaces.colAddressesTitle',
-  'nodes:interfaces.colInOutTitle',
-  'nodes:interfaces.colNeighborsTitle',
-  'nodes:interfaces.duplexHint',
-  'nodes:interfaces.rulesButtonTitle',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
   'topology:dependency.optOutHelp',
@@ -193,7 +184,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 22, press: 13 };
+const INFO_COUNT = { tip: 23, press: 16 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked
@@ -223,7 +214,6 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 const POINTER_LEGACY: string[] = [
   'dashboard:public.bannerOff',
   'dashboard:widgets.discovery.empty',
-  'nodes:interfaces.rules.inheritedHint',
   'nodes:neighbors.empty.disabled',
   'nodes:neighbors.setup.credsHint',
   'topology:dependency.mode.blocked',
@@ -236,7 +226,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 18, formHint: 17, modalHint: 24 };
+const HINT_SITES = { fieldHint: 18, formHint: 16, modalHint: 23 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

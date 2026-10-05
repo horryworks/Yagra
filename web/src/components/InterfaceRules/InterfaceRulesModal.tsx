@@ -12,7 +12,7 @@
 // (`testing.md`). This file owns the two layouts, the fetch, and nothing else.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import { formatBps } from '../../lib/format';
@@ -44,6 +44,8 @@ import { Select, TextInput } from '../ui/Field';
 import { IconButton } from '../ui/IconButton';
 import { EditIcon, TrashIcon } from '../ui/icons';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
+import { InfoTip } from '../ui/InfoTip';
+import { ScreenLink } from '../ui/ScreenLink';
 import './InterfaceRulesModal.css';
 
 interface Props {
@@ -58,7 +60,6 @@ interface Props {
 
 export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onClose }: Props) {
   const { t } = useTranslation('nodes');
-  const { t: ta } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<MatchingThreshold[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,11 +140,11 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
         </>
       }
     >
-      <p className="ifrules-sub">
-        {speedBps != null && speedBps > 0
-          ? t('interfaces.rules.subtitle', { speed: formatBps(speedBps) })
-          : t('interfaces.rules.subtitleNoSpeed')}
-      </p>
+      {/* Only the state that limits what can be added. With a speed, each percentage is spelled
+          out against it in the form itself (`percentOf`), which is where the number is typed. */}
+      {!(speedBps != null && speedBps > 0) && (
+        <p className="ifrules-sub">{t('interfaces.rules.subtitleNoSpeed')}</p>
+      )}
 
       {rows === null ? (
         <p className="modal-hint">{t('common:loading')}</p>
@@ -179,9 +180,11 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
               {/* Not a footnote: without it the read-only rows read as broken rather than as
                   deliberately edited elsewhere (ADR-055 R6). */}
               <p className="modal-hint">
-                {t('interfaces.rules.inheritedHint', {
-                  screen: ta('thresholds.title', { defaultValue: 'Metric alert rules' }),
-                })}
+                <Trans
+                  t={t}
+                  i18nKey="interfaces.rules.inheritedHint"
+                  components={{ lnk: <ScreenLink to="/alerts/rules" /> }}
+                />
               </p>
             </section>
           )}
@@ -346,8 +349,13 @@ function PortRuleFormView({
       {spec.fixedBounds ? (
         <div className="modal-field">
           <label className="modal-field-label">{t('interfaces.rules.when')}</label>
-          <p className="ifrules-fixed">{t('interfaces.rules.linkNotUp')}</p>
-          <span className="modal-hint">{t('interfaces.rules.linkStateHint')}</span>
+          <p className="ifrules-fixed">
+            {t('interfaces.rules.linkNotUp')}{' '}
+            <InfoTip
+              infoKey="nodes:interfaces.rules.linkState.info"
+              label={t('interfaces.rules.linkNotUp')}
+            />
+          </p>
         </div>
       ) : (
         <div className="modal-field">

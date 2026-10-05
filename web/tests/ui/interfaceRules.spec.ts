@@ -149,10 +149,16 @@ test('adding a rule asks what to watch, never for a metric name', async ({ page 
   await expect(dialog.locator('.ifrules-bounds select')).toHaveCount(1);
 
   // Link state has no bounds to type, and says the thing an operator cannot guess: the rule that
-  // looks right by hand (`below 0.5`) can never fire.
+  // looks right by hand (`below 0.5`) can never fire. Since ADR-200 Inc.19 that is behind the ⓘ
+  // beside the condition, so it is read by pressing it; the popover is portalled to the body.
   await subject.selectOption('link_state');
   await expect(dialog.locator('.ifrules-fixed')).toContainText('not up');
-  await expect(dialog).toContainText('below 0.5');
+  await dialog.locator('.ifrules-fixed .infotip-btn').click();
+  await expect(page.locator('.infotip-pop')).toContainText('below 0.5');
+  // Escape closes the explanation and leaves the dialog open.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.infotip-pop')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
   await expect(dialog.locator('.ifrules-num')).toHaveCount(1); // the breach count only
 });
 

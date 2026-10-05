@@ -384,7 +384,6 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
               />
             </label>
           </div>
-          <p className="form-hint">{t('ap.settings.hint')}</p>
           {!maxValid && (
             <p className="form-error">{t('ap.err.maxAps', { min: MAX_APS_MIN, max: MAX_APS_HARD })}</p>
           )}

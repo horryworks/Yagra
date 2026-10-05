@@ -797,6 +797,31 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--text-tertiary);
 }
 
+/* The In / Out shading's key (ADR-200 Inc.19). The ramp is `utilHeat.ts`'s: cool to the 70% stop,
+   then hot. Solid colours rather than the cells' washes, so the key reads at this size. */
+.nd-if-heat-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.nd-if-heat-ramp {
+  display: inline-block;
+  width: 64px;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    to right,
+    var(--util-cool),
+    var(--util-mid) 70%,
+    var(--util-hot)
+  );
+}
+
 .nd-if-filter {
   margin-left: auto;
   width: 200px;
@@ -844,7 +869,11 @@ html[data-viewport='mobile'] .nd-extract-row {
    IPv4 cell on the PoC recordings needs without ellipsizing — `10.204.29.254/24 +10`, a /24 with
    ten secondaries behind it. An IPv6 address is longer than any floor worth paying for on every
    row, so it ellipsizes and the cell's title (and the popover) carry it whole. The table's minimum
-   is now 1162px; past that it scrolls rather than dropping a column (ADR-054). */
+   is now 1190px; past that it scrolls rather than dropping a column (ADR-054).
+
+   DUPLEX went from 76px to 104px in ADR-200 Inc.19: an empty cell now says why in words
+   ("not reported", "n/a") instead of an em dash with the reason in a hover, and "not reported"
+   is the widest string the column renders. */
 .nd-if-head,
 .nd-if-filters,
 .nd-if-row {
@@ -863,7 +892,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   grid-template-columns: var(
     --nd-if-cols,
     minmax(140px, 1.4fr) minmax(88px, 1.3fr) minmax(168px, 1fr) minmax(120px, 1fr) 94px
-      minmax(112px, 1fr) 84px 76px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
+      minmax(112px, 1fr) 84px 104px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
   );
   align-items: center;
 }
@@ -1206,6 +1235,12 @@ html[data-viewport='mobile'] .nd-extract-row {
   text-overflow: ellipsis;
 }
 
+/* The word an empty duplex or media cell shows: "n/a" or "not reported" (ADR-200 Inc.19). One
+   step further back than a value, so a column of blanks does not read as a column of answers. */
+.nd-if-blank {
+  color: var(--text-tertiary);
+}
+
 /* In-row throughput sparkline cell (cheap, no axes/interaction). */
 .nd-if-spark {
   padding: 0 14px;
@@ -1493,33 +1528,11 @@ html[data-viewport='mobile'] .nd-extract-row {
   );
 }
 
-/* Right side of the throughput chart title: the Y-axis scale toggle + legend. */
+/* Right side of the throughput chart title: the unit and Y-axis choices + legend. */
 .nd-if-chart-ctl {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-}
-
-.nd-if-scale-toggle {
-  font-size: var(--font-xs);
-  font-weight: var(--weight-medium);
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 2px 8px;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    border-color 0.15s,
-    background 0.15s;
-}
-
-.nd-if-scale-toggle:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-color);
 }
 
 /* Slim hint shown in place of the dock when nothing is selected. */
@@ -1819,10 +1832,6 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-mchart {
   padding: 4px 14px 12px;
   background: var(--bg-secondary);
-}
-
-.nd-coll-editnote {
-  margin: 0 0 12px;
 }
 
 /* ---------------- group rollup pane ----------------

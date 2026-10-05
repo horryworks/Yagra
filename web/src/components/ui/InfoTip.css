@@ -52,6 +52,9 @@ button.infopress:not(.badge) {
   background: none;
   color: inherit;
   font: inherit;
+  /* A button does not inherit these by default; a label in an uppercase header must stay one. */
+  text-transform: inherit;
+  letter-spacing: inherit;
   text-align: inherit;
   min-width: 0;
   overflow: hidden;

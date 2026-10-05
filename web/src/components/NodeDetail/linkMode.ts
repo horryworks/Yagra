@@ -99,17 +99,24 @@ export function duplexApplies(ifType: number | null | undefined): boolean {
   return ifType == null || ifType === IF_TYPE_ETHERNET_CSMACD;
 }
 
-/** Why a duplex cell is empty, for the cell's `title`. `null` when there is a value to show.
+/** Why a duplex or media cell has no value, written in the cell itself (ADR-200 Inc.19): `n/a`
+ *  for a port the question does not apply to, `not reported` for one it does and the device did
+ *  not answer. It used to be an em dash with the reason in a hover sentence, which a touch screen
+ *  never shows. Built into `interfaces.blank.${reason}`, so `i18nEnumKeys.test.ts` iterates it. */
+export const LINK_BLANK_REASONS = ['unknown', 'notApplicable'] as const;
+export type LinkBlankReason = (typeof LINK_BLANK_REASONS)[number];
+
+/** Why a duplex cell is empty. `null` when there is a value to show.
  *
  *  ⚠️ An optical port reports `unknown`, not `notApplicable` — and that is right: an SFP port *is*
  *  `ethernetCsmacd`, so the question applies, we simply have no answer. The reason a 10G port
  *  usually has none is that IEEE 802.3 defines no half duplex above 1 Gbit/s, leaving nothing to
- *  negotiate. That belongs in the column's filter `hint`, said once, rather than in a per-row
- *  tooltip — a row claiming "optical" would be guessing, since the medium is itself often unknown. */
+ *  negotiate. That belongs in the column header's explanation, said once, rather than per row — a
+ *  row claiming "optical" would be guessing, since the medium is itself often unknown. */
 export function duplexEmptyReason(
   duplex: string | null | undefined,
   ifType: number | null | undefined,
-): 'notApplicable' | 'unknown' | null {
+): LinkBlankReason | null {
   if (duplexState(duplex) !== 'unknown') return null;
   return duplexApplies(ifType) ? 'unknown' : 'notApplicable';
 }
@@ -135,28 +142,24 @@ export function mediaText(media: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-/** Tooltip for an empty duplex cell — why there is nothing there (ADR-063).
+/** Why a media cell is empty. `null` when there is a medium to show.
  *
- *  `undefined` when the cell has a value, so a populated cell carries no `title` at all rather
- *  than a redundant one. */
-export function duplexTitle(r: InterfaceRow, t: TFunction): string | undefined {
-  const reason = duplexEmptyReason(r.if_duplex, r.if_type);
-  return reason ? t(`interfaces.duplexEmpty.${reason}`) : undefined;
+ *  The empty case splits in two on purpose: "this port type has no medium to report" and "it
+ *  should have one and we have not read it" send an operator to different places. */
+export function mediaEmptyReason(
+  media: string | null | undefined,
+  ifType: number | null | undefined,
+): LinkBlankReason | null {
+  if (media) return null;
+  return mediaApplies(ifType) ? 'unknown' : 'notApplicable';
 }
 
-/** Tooltip for the media cell: the transceiver's part string when there is one, otherwise why the
- *  cell is empty.
+/** Tooltip for the media cell: the transceiver's part string when there is one.
  *
- *  The two never collide — a port with a resolved medium AND a known module shows the module,
- *  which is the extra fact. The empty case splits in two on purpose: "this port type has no
- *  medium to report" and "it should have one and we have not read it" send an operator to
- *  different places. */
+ *  It is a different fact from the medium (a vendor part number), and present on plenty of ports
+ *  whose medium could not be resolved, so it stays out of the cell. `undefined` without one. */
 export function mediaTitle(r: InterfaceRow, t: TFunction): string | undefined {
-  if (r.transceiver_model) {
-    return t('interfaces.transceiver', { model: r.transceiver_model });
-  }
-  if (r.if_media) return undefined;
-  return mediaApplies(r.if_type)
-    ? t('interfaces.mediaEmpty.unknown')
-    : t('interfaces.mediaEmpty.notApplicable');
+  return r.transceiver_model
+    ? t('interfaces.transceiver', { model: r.transceiver_model })
+    : undefined;
 }
