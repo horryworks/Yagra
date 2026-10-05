@@ -175,6 +175,7 @@ import {
   CONVERGE_STATES,
   MECHANISM_KEYS,
   MECHANISMS,
+  UPGRADE_BUILD_KIND_HINTS,
   UPGRADE_BUILD_KINDS,
   UPGRADE_OFFER_BLOCKS,
   UPGRADE_OFFER_DIRECTIONS,
@@ -842,11 +843,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'buildKind.',
       UPGRADE_BUILD_KINDS,
     );
+    // Only the kinds that carry a hint: a release's label says all its hint did (ADR-200).
     expectKeys(
       'upgrade build kind hint',
       { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
       'buildKindHint.',
-      UPGRADE_BUILD_KINDS,
+      UPGRADE_BUILD_KIND_HINTS,
     );
     // Direction is the one this page got wrong in front of an operator: every button read
     // "upgrade to this" while offering versions older than the running one. Four key families are

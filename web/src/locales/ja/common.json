@@ -12,7 +12,8 @@
   },
   "copy": {
     "copied": "コピーしました",
-    "copyId": "ID をコピー"
+    "copyId": "ID をコピー",
+    "copyCommand": "コマンドをコピー"
   },
   "form": {
     "required": "必須"

@@ -50,6 +50,21 @@
   font-size: var(--font-sm);
 }
 
+/* The switch, its info tip and the "applying" badge on one line. The tip sits outside the label so
+   it does not become what the label names. */
+.upgrade-switch-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The repair steps under the unprepared-site warning in the dialog. */
+.upgrade-steps-frame {
+  margin-top: 8px;
+  max-width: 70ch;
+}
+
 .upgrade-switch input {
   width: 16px;
   height: 16px;

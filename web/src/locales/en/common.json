@@ -12,7 +12,8 @@
   },
   "copy": {
     "copied": "Copied",
-    "copyId": "Copy id"
+    "copyId": "Copy id",
+    "copyCommand": "Copy command"
   },
   "form": {
     "required": "Required"

@@ -443,6 +443,15 @@ export function buildKind(profile: string | null | undefined): BuildKind {
   return 'development';
 }
 
+/** The build kinds that carry a one-line hint under their label. A release carries none: its label
+ *  already says everything the hint did (ADR-200). Iterated by `i18nEnumKeys.test.ts`. */
+export const UPGRADE_BUILD_KIND_HINTS = ['development', 'unknown'] as const satisfies readonly BuildKind[];
+export type HintedBuildKind = (typeof UPGRADE_BUILD_KIND_HINTS)[number];
+
+export function hasBuildKindHint(kind: BuildKind): kind is HintedBuildKind {
+  return (UPGRADE_BUILD_KIND_HINTS as readonly BuildKind[]).includes(kind);
+}
+
 /**
  * May an image archive be uploaded from here (ADR-050 Increment 3)?
  *
@@ -479,6 +488,47 @@ export function looksLikeReleaseTag(tag: string): boolean {
  */
 export function bundleTagFromFilename(name: string): string | null {
   return /v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+)?/.exec(name)?.[0] ?? null;
+}
+
+/** The commands this page hands an operator, each copied whole (ADR-200). Here rather than in the
+ *  locale files: a command is not translated, and an EN and a JA copy are two places to fix.
+ *  `-p yagra` / `-p yagra-poller` match the `name:` of `docker-compose.deploy.yml` and
+ *  `docker-compose.poller.yml`, so they work from any directory. */
+export const UPDATER_PS_COMMAND = 'docker compose -p yagra ps yagra-updater';
+export const UPDATER_LOGS_COMMAND = 'docker compose -p yagra logs --tail 100 yagra-updater';
+/** The cheap repair for a site that has not said an upgrade is safe: a current composition with a
+ *  stale updater container, which recreating that one service fixes without touching a credential. */
+export const SITE_UPDATER_RECREATE_COMMAND =
+  'docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate yagra-poller-updater';
+/** The fallback, run after a re-issued bundle is unpacked at the site. */
+export const SITE_KIT_UP_COMMAND = 'docker compose -f docker-compose.poller.yml up -d';
+
+/** The repository a release's images live under when the updater has not reported one. It is the
+ *  same default `docker-compose.deploy.yml` falls back to (`${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}`);
+ *  the card that shows the command is drawn only while the updater is reporting, so this is a
+ *  fallback rather than the usual answer. */
+export const DEFAULT_IMAGE_REPO = 'ghcr.io/horryworks';
+
+/** What the command names when no release has been entered yet. Plainly a placeholder, never a
+ *  real version: the command used to carry a fixed `v0.2.2`, which read as an instruction to save
+ *  that release whatever was being installed. */
+export const BUNDLE_TAG_PLACEHOLDER = 'vX.Y.Z';
+
+/** The three images a release archive must hold, in the order the command names them. */
+export const BUNDLE_IMAGES = ['yagra-core', 'yagra-poller', 'yagra-web'] as const;
+
+/**
+ * The `docker save` command that produces an archive for the release in the tag field.
+ *
+ * Built from what the operator typed, so the file they make is the release they are about to
+ * install. A tag that does not yet look like one falls back to the placeholder rather than to a
+ * half-typed string, which would make a command that fails on the other machine.
+ */
+export function bundleSaveCommand(repo: string | null | undefined, typedTag: string): string {
+  const tag = looksLikeReleaseTag(typedTag) ? typedTag.trim() : BUNDLE_TAG_PLACEHOLDER;
+  const base = repo?.trim() ? repo.trim().replace(/\/+$/, '') : DEFAULT_IMAGE_REPO;
+  const images = BUNDLE_IMAGES.map((name) => `${base}/${name}:${tag}`).join(' ');
+  return `docker save -o yagra-${tag}.tar ${images}`;
 }
 
 /** Commit refs are displayed short; the full value stays in the DOM title. */

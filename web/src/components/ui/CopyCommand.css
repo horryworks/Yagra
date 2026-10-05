@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* A copyable shell command. Wraps anywhere instead of truncating, so the whole command can be read
+   before it is pasted, and so a long one never pushes the page sideways. */
+
+.copy-cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 4px 4px 4px 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  max-width: 100%;
+}
+
+.copy-cmd-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 4px;
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.copy-cmd-btn {
+  flex: none;
+}

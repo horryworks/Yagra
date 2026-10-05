@@ -15,7 +15,7 @@
 // (testing.md). What is left here is layout.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
@@ -25,12 +25,17 @@ import { Modal } from '../components/ui/Modal';
 import { FormFooter } from '../components/ui/FormFooter';
 import { Badge } from '../components/ui/Badge';
 import { ProgressBar } from '../components/ui/ProgressBar';
+import { InfoTip } from '../components/ui/InfoTip';
+import { StepFrame } from '../components/ui/StepFrame';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import { CopyCommand } from '../components/ui/CopyCommand';
 import { api, errMsg } from '../services/api';
 import { formatDuration, formatTimestamp, relativeTime } from '../lib/format';
 import type { UpgradeStatus } from '../types/api';
 import type { ComponentRow, ConvergePhase, Offer, RunPhase } from './upgradeStatus';
 import {
   buildKind,
+  bundleSaveCommand,
   bundleTagFromFilename,
   canOffer,
   canUploadBundle,
@@ -41,6 +46,7 @@ import {
   CORE_ID,
   darkPools,
   defaultSelection,
+  hasBuildKindHint,
   isRunning,
   lastChecked,
   looksLikeReleaseTag,
@@ -55,8 +61,12 @@ import {
   shortRef,
   shouldPoll,
   shouldPollConvergence,
+  SITE_KIT_UP_COMMAND,
+  SITE_UPDATER_RECREATE_COMMAND,
   stepProgress,
   switchPending,
+  UPDATER_LOGS_COMMAND,
+  UPDATER_PS_COMMAND,
   UPGRADE_PROGRESS_STEPS,
   upgrades,
 } from './upgradeStatus';
@@ -236,7 +246,6 @@ function ConvergeProgress({
           );
         })}
       </ul>
-      <p className="upgrade-hint muted">{t('converge.serial')}</p>
     </div>
   );
 }
@@ -630,7 +639,10 @@ export function UpgradePage() {
           </Row>
           <Row label={t('build.buildProfile')}>
             {t(`buildKind.${kind}`)}
-            <div className="upgrade-hint muted">{t(`buildKindHint.${kind}`)}</div>
+            {/* A release needs no hint: its label says it (ADR-200). */}
+            {hasBuildKindHint(kind) && (
+              <div className="upgrade-hint muted">{t(`buildKindHint.${kind}`)}</div>
+            )}
           </Row>
           <Row label={t('build.sourceRef')} mono>
             {ref ? (
@@ -665,18 +677,23 @@ export function UpgradePage() {
         {/* Five distinct answers — no mechanism here, not deployed, dead, switched off, ready —
             because they call for five different actions. See `mechanism()`. */}
         {status.updater.present && (
-          <label className="upgrade-switch">
-            <input
-              type="checkbox"
-              checked={status.upgrade_enabled}
-              disabled={switching || isRunning(status)}
-              onChange={() => void toggle(!status.upgrade_enabled)}
-            />
-            <span>{t('mechanism.switch')}</span>
-          </label>
-        )}
-        {status.updater.present && (
-          <p className="upgrade-hint muted">{t('mechanism.switchHint')}</p>
+          <div className="upgrade-switch-row">
+            <label className="upgrade-switch">
+              <input
+                type="checkbox"
+                checked={status.upgrade_enabled}
+                disabled={switching || isRunning(status)}
+                onChange={() => void toggle(!status.upgrade_enabled)}
+              />
+              <span>{t('mechanism.switch')}</span>
+            </label>
+            {/* Outside the label: a button inside a wrapping label would become what it names. The
+                one thing worth knowing before flipping it is what holds the Docker socket. */}
+            <InfoTip infoKey="settings-upgrade:mechanism.info" label={t('mechanism.switch')} />
+            {/* Saved, and not yet seen by the sidecar. A state, so a badge beside the switch it is
+                about, in either direction; it used to show only while turning the switch off. */}
+            {switchPending(status) && <Badge tone="neutral">{t('mechanism.switchPending')}</Badge>}
+          </div>
         )}
         {switchError && <p className="upgrade-note">{switchError}</p>}
 
@@ -692,21 +709,19 @@ export function UpgradePage() {
             <p className="upgrade-hint muted">{t('mechanism.disabledHint')}</p>
             {/* A shell command, which only makes sense where there is a composition to run it
                 against — hence no counterpart in the `unsupported` block above. */}
-            <p className="upgrade-hint muted mono">{t('mechanism.disabledHowTo')}</p>
+            <CopyCommand command={UPDATER_PS_COMMAND} />
           </>
         )}
         {state === 'stopped' && (
           <>
             <p className="upgrade-note">{t('mechanism.stopped')}</p>
             <p className="upgrade-hint muted">{t('mechanism.stoppedHint')}</p>
+            <CopyCommand command={UPDATER_LOGS_COMMAND} />
           </>
         )}
         {state === 'paused' && (
           <>
             <p className="upgrade-note">{t('mechanism.paused')}</p>
-            {switchPending(status) && (
-              <p className="upgrade-hint muted">{t('mechanism.switchPending')}</p>
-            )}
           </>
         )}
         {state === 'ready' && (
@@ -768,7 +783,6 @@ export function UpgradePage() {
             host. */}
         <Sub>{t('components.heading')}</Sub>
         <ul className="upgrade-releases upgrade-components">{rows.map(component)}</ul>
-        <p className="upgrade-hint muted">{t('components.hint')}</p>
         {/* 🚨 The way in when core is current and only the sites have drifted. It opens the same
             dialog with core's row already excluded, so there is one entrance rather than two.
 
@@ -797,8 +811,9 @@ export function UpgradePage() {
       {/* ── 3. The other way in, for a site with no registry ─────────────────────────────── */}
       {state === 'ready' && status.updater.allow_bundle && (
         <Card title={t('bundle.heading')}>
-          <p className="upgrade-hint muted">{t('bundle.intro')}</p>
-          <p className="upgrade-hint muted mono">{t('bundle.howTo')}</p>
+          {/* The command that makes the file, built from the release typed below. It used to name a
+              fixed v0.2.2 whatever was being installed (ADR-200). */}
+          <CopyCommand command={bundleSaveCommand(status.updater.repo, bundleTag)} />
           <div className="upgrade-bundle">
             <input
               type="file"
@@ -924,8 +939,6 @@ export function UpgradePage() {
             />
           }
         >
-          <p className="upgrade-note">{t('pick.intro', { tag: picked })}</p>
-
           <div className="upgrade-pick">
             <div className="upgrade-pick-head">
               <span />
@@ -1040,7 +1053,26 @@ export function UpgradePage() {
                   names: pickedUnprepared.join(', '),
                 })}
               </p>
-              <p className="upgrade-hint muted">{t('sitePrep.fix')}</p>
+              <StepFrame
+                className="upgrade-steps-frame"
+                summary={t('sitePrep.steps.title')}
+                steps={[
+                  <>
+                    {t('sitePrep.steps.s1')}
+                    <CopyCommand command={SITE_UPDATER_RECREATE_COMMAND} />
+                  </>,
+                  <Trans
+                    key="s2"
+                    t={t}
+                    i18nKey="sitePrep.steps.s2"
+                    components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
+                  />,
+                  <>
+                    {t('sitePrep.steps.s3')}
+                    <CopyCommand command={SITE_KIT_UP_COMMAND} />
+                  </>,
+                ]}
+              />
             </>
           )}
           {/* The consequence an operator cannot find out afterwards except from an alert: no

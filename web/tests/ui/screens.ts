@@ -137,7 +137,7 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/pollers': 113,
   '/settings/relocation': 1851,
   '/settings/tls': 55,
-  '/settings/upgrade': 813,
+  '/settings/upgrade': 300,
   '/topology/dependency': 151,
   '/topology/map': 239,
   '/troubleshoot': 2076,

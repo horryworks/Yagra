@@ -74,7 +74,10 @@ test('the dialog names the unprepared site, and stops naming it when it is untic
   // The repair is on the screen beside it, not behind a link: production is a closed network, so
   // the text *is* the manual (ADR-055 R5). It is also deliberately the repair that clears the
   // warning — an operator told to set `YAGRA_CERT_DIR` would come back to an unchanged row.
-  const fix = warn.locator('xpath=following-sibling::p[1]');
+  // Since ADR-200 Inc.9 the repair is a step frame directly after the warning, with each command
+  // copyable. Still the next element: a repair that drifted elsewhere in the dialog is not beside it.
+  const fix = warn.locator('xpath=following-sibling::*[1]');
+  await expect(fix).toHaveClass(/step-frame/);
   // The cheap repair first: recreating one service clears the common case and rotates no token.
   await expect(fix).toContainText('yagra-poller-updater');
   // And the fallback for a site whose composition is itself old, which does cost a new bundle.

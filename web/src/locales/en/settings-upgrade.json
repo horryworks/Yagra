@@ -18,7 +18,6 @@
     "unknown": "Not from an image"
   },
   "buildKindHint": {
-    "release": "A published release image.",
     "development": "Built straight to this server, bypassing the release pipeline.",
     "unknown": "No build markers, so this core was started outside a container."
   },
@@ -38,17 +37,15 @@
   "mechanism": {
     "heading": "Upgrading from here",
     "switch": "Allow upgrading from the WebUI",
-    "switchHint": "Upgrades are carried out by a separate container holding the Docker socket. Off means none can be requested and it stops contacting the registry. Stored in the database, so it survives upgrades.",
-    "switchPending": "Saved. The updater applies it within a few seconds.",
+    "switchPending": "Applying…",
     "switchFailed": "The setting could not be saved.",
     "paused": "Upgrading from the WebUI is switched off.",
     "unsupported": "This deployment cannot be upgraded from here.",
-    "unsupportedHint": "Upgrading from the WebUI needs a container deployment that runs the updater alongside Yagra, and this one was not installed that way. Nothing is wrong — upgrade it the way it was installed, from the command line. Everything above stays accurate either way.",
+    "unsupportedHint": "Upgrade it from the command line, the way it was installed.",
     "disabled": "No updater has reported on this deployment.",
-    "disabledHint": "It ships with the deployment, so the stack has not finished starting or the service was removed.",
-    "disabledHowTo": "docker compose -p yagra ps yagra-updater",
+    "disabledHint": "The stack is still starting, or the service was removed.",
     "stopped": "The updater is enabled but has stopped reporting.",
-    "stoppedHint": "It ran at some point, so this is a fault rather than a setting:",
+    "stoppedHint": "This is a fault, not a setting. Read its logs:",
     "readyFrom": "Releases come from {{repo}}, fixed by this server.",
     "lastChecked": "Release list checked {{when}}",
     "neverChecked": "The release list has not been fetched yet.",
@@ -57,12 +54,11 @@
     "checkFailed": "Could not ask the updater to check.",
     "checkTimeout": "The updater did not answer. Check that it is running.",
     "noNewer": "No release newer than the one running.",
-    "noRegistry": "The updater could not reach a registry. Expected on a closed network."
+    "noRegistry": "The updater could not reach a registry. Expected on a closed network.",
+    "info": "Upgrades run in a separate container that holds the Docker socket. Off refuses every upgrade request and stops it contacting the registry."
   },
   "bundle": {
     "heading": "Install from a file",
-    "intro": "For a site with no registry. Save the release's images elsewhere and bring the file here; the rest of the upgrade is identical.",
-    "howTo": "docker save -o yagra-v0.2.2.tar ghcr.io/horryworks/yagra-core:v0.2.2 ghcr.io/horryworks/yagra-poller:v0.2.2 ghcr.io/horryworks/yagra-web:v0.2.2",
     "tagLabel": "Release in this file",
     "needTag": "Enter the release this file contains, for example v0.2.2.",
     "limit": "Up to {{size}} GiB, plus about twice that again in free space to unpack it.",
@@ -77,7 +73,7 @@
   "offerBlock": {
     "below_floor": "This version cannot read the current database.",
     "unknown": "Cannot tell whether this version can read the current database.",
-    "pollers_behind": "This jump would leave a poller more than one release behind, which the bus does not support. Upgrade to the release in between first."
+    "pollers_behind": "A poller would fall two releases behind. Upgrade to the release in between first."
   },
   "pollers": {
     "darkPools": "{{count}} pool has only one poller, so monitoring stops there while its container is recreated: {{pools}}",
@@ -85,16 +81,21 @@
   },
   "sitePrep": {
     "row": "site has not confirmed an upgrade is safe there",
-    "warning": "{{count}} site has not confirmed that an upgrade is safe there: {{names}}. Its updater can hand the replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing it needs someone at the site.",
-    "warning_other": "{{count}} sites have not confirmed that an upgrade is safe there: {{names}}. Their updaters can hand each replacement poller an empty certificate directory, leaving it unable to reach the bus — and both ends report success, so nothing here would say it went wrong. Repairing them needs someone at each site.",
-    "fix": "To clear this, recreate that site's updater from the directory holding its composition: docker compose -p yagra-poller -f docker-compose.poller.yml up -d --force-recreate yagra-poller-updater. That is usually all it takes and it changes no credentials — an upgrade installs a site's new composition but deliberately leaves the container running the old one, so a site can hold a current file and a stale updater. If the warning stays, that site's composition itself predates the fix: re-issue its bundle at Settings ▸ Pollers, unpack it there and run docker compose -f docker-compose.poller.yml up -d. That bundle replaces the site's .env, so its bus token changes."
+    "warning": "{{count}} site has not confirmed an upgrade is safe there: {{names}}. Its poller can lose the bus while both ends report success, and repairing it needs someone at the site.",
+    "warning_other": "{{count}} sites have not confirmed an upgrade is safe there: {{names}}. Their pollers can lose the bus while both ends report success, and repairing them needs someone at each site.",
+    "steps": {
+      "title": "How to clear this",
+      "s1": "At the site, in the directory holding its composition, recreate the updater:",
+      "s2": "If the warning stays, re-issue the site's bundle at <lnk/> and unpack it there. Its bus token changes.",
+      "s3": "Then start it:"
+    }
   },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",
     "hide": "Hide earlier releases"
   },
   "apply": {
-    "confirmBackup": "A backup is taken first. It lands on this host, so it is a rollback aid, not disaster recovery.",
+    "confirmBackup": "A backup is taken first, on this host: a rollback aid, not disaster recovery.",
     "confirmFloor": "This database cannot be taken back past {{minCore}}.",
     "failed": "The upgrade could not be started."
   },
@@ -127,7 +128,6 @@
   "components": {
     "heading": "Components",
     "core": "core + web",
-    "hint": "A remote-site poller upgrades itself only when a site updater is deployed beside it. Until then, upgrade it on its own host.",
     "behindHint": "{{count}} poller is not on {{version}}.",
     "behindHint_other": "{{count}} pollers are not on {{version}}.",
     "bring": "Bring them to {{version}}"
@@ -141,7 +141,6 @@
   },
   "pick": {
     "title": "Upgrade to {{tag}}",
-    "intro": "Everything that can take {{tag}} is selected. Core goes first; the remote pollers follow, one at a time per pool.",
     "component": "Component",
     "pool": "Pool",
     "now": "Now",
@@ -149,9 +148,9 @@
     "count": "{{count}} of {{total}} selected",
     "confirm": "Upgrade {{count}} component",
     "confirm_other": "Upgrade {{count}} components",
-    "coreUntouched": "Nothing on this host restarts. No image is pulled here and no maintenance window is opened.",
-    "downgrade": "{{count}} poller is ahead of this core and is moved back to it: {{names}}. A poller holds no state, so this costs it a restart.",
-    "downgrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}. A poller holds no state, so this costs each one a restart."
+    "coreUntouched": "Nothing on this host restarts, and no maintenance window is opened.",
+    "downgrade": "{{count}} poller is ahead of this core and is moved back to it: {{names}}.",
+    "downgrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}."
   },
   "converge": {
     "heading": "Remote-site pollers",
@@ -159,7 +158,6 @@
     "lastHeading": "Last poller run",
     "starting": "Handed to the sites; waiting for the first one to report.",
     "count": "{{done}} of {{total}} sites on {{version}}",
-    "serial": "Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout. Pools run in parallel, so more than one site can be replacing its container at once.",
     "outcome": "{{done}} returned, {{failed}} did not",
     "attention": "attention",
     "stuckAt": "stuck at {{step}}"

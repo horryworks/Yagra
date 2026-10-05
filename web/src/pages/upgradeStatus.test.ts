@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import type { UpgradeStatus } from '../types/api';
 import type { ComponentRow, Convergence } from './upgradeStatus';
 import {
+  BUNDLE_IMAGES,
+  BUNDLE_TAG_PLACEHOLDER,
   CORE_ID,
+  DEFAULT_IMAGE_REPO,
   UPGRADE_PROGRESS_STEPS,
   UPGRADE_RUN_STEPS,
   buildKind,
+  bundleSaveCommand,
   bundleTagFromFilename,
   canApply,
   canOffer,
@@ -17,6 +21,7 @@ import {
   convergeState,
   darkPools,
   defaultSelection,
+  hasBuildKindHint,
   isRunning,
   lastChecked,
   looksLikeReleaseTag,
@@ -251,6 +256,33 @@ describe('offline bundle', () => {
     expect(bundleTagFromFilename('/downloads/yagra_v1.2.3-rc2_images.tar')).toBe('v1.2.3-rc2');
     expect(bundleTagFromFilename('images.tar')).toBeNull();
   });
+
+  it('builds the save command from the release in the tag field', () => {
+    expect(bundleSaveCommand('registry.example.com/yagra', ' v1.4.0 ')).toBe(
+      'docker save -o yagra-v1.4.0.tar registry.example.com/yagra/yagra-core:v1.4.0 ' +
+        'registry.example.com/yagra/yagra-poller:v1.4.0 registry.example.com/yagra/yagra-web:v1.4.0',
+    );
+    // A trailing slash on the repository must not double up.
+    expect(bundleSaveCommand('registry.example.com/yagra/', 'v1.4.0')).toContain(
+      'registry.example.com/yagra/yagra-core:v1.4.0',
+    );
+  });
+
+  it('names a placeholder, never a half-typed tag or a fixed release', () => {
+    for (const typed of ['', 'v', '1.4.0', 'v1.4 0']) {
+      const cmd = bundleSaveCommand('registry.example.com/yagra', typed);
+      expect(cmd).toContain(`yagra-${BUNDLE_TAG_PLACEHOLDER}.tar`);
+      expect(cmd.split(' ').filter((w) => w.endsWith(`:${BUNDLE_TAG_PLACEHOLDER}`))).toHaveLength(
+        BUNDLE_IMAGES.length,
+      );
+    }
+  });
+
+  it('falls back to the default repository when the updater named none', () => {
+    for (const repo of [null, undefined, '  ']) {
+      expect(bundleSaveCommand(repo, 'v1.4.0')).toContain(`${DEFAULT_IMAGE_REPO}/yagra-web:v1.4.0`);
+    }
+  });
 });
 
 describe('rollback', () => {
@@ -293,6 +325,12 @@ describe('buildKind', () => {
     expect(buildKind(null)).toBe('unknown');
     expect(buildKind(undefined)).toBe('unknown');
     expect(buildKind('  ')).toBe('unknown');
+  });
+
+  it('hints under every kind but a release', () => {
+    expect(hasBuildKindHint('release')).toBe(false);
+    expect(hasBuildKindHint('development')).toBe(true);
+    expect(hasBuildKindHint('unknown')).toBe(true);
   });
 });
 

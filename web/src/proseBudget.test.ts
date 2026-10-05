@@ -76,7 +76,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-relocation': [4933, 2515],
   'settings-tls': [1619, 872],
   'settings-tokens': [801, 433],
-  'settings-upgrade': [5335, 3023],
+  'settings-upgrade': [3291, 1796],
   settings: [217, 101],
   suppression: [1091, 712],
   system: [13290, 7315],
@@ -122,11 +122,6 @@ const LONG_LEGACY: string[] = [
   'settings-forwarding:filter.flowAnyRecord',
   'settings-forwarding:note',
   'settings-relocation:warning.secrets',
-  'settings-upgrade:bundle.howTo',
-  'settings-upgrade:mechanism.unsupportedHint',
-  'settings-upgrade:sitePrep.fix',
-  'settings-upgrade:sitePrep.warning',
-  'settings-upgrade:sitePrep.warning_other',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -265,7 +260,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 13, press: 7 };
+const INFO_COUNT = { tip: 14, press: 7 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -298,7 +293,6 @@ const POINTER_LEGACY: string[] = [
   'settings-relocation:afterwards.item2',
   'settings-relocation:afterwards.item3',
   'settings-relocation:readiness.paused',
-  'settings-upgrade:sitePrep.fix',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];
