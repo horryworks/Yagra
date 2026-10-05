@@ -21,7 +21,7 @@
 // (testing.md). What is left here is layout.
 
 import { useCallback, useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
@@ -30,6 +30,10 @@ import { Button } from '../components/ui/Button';
 import { Segmented } from '../components/ui/Segmented';
 import { ProgressBar } from '../components/ui/ProgressBar';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
+import { InfoTip } from '../components/ui/InfoTip';
+import { ScreenLink } from '../components/ui/ScreenLink';
+import { StepFrame } from '../components/ui/StepFrame';
+import { CopyCommand } from '../components/ui/CopyCommand';
 import { api, errMsg } from '../services/api';
 import { saveBlob } from '../lib/download';
 import { formatBytes, formatTimestamp } from '../lib/format';
@@ -37,6 +41,7 @@ import type { RelocationStatus } from '../types/api';
 import type { RelocationAuthKind, RunPhase, TargetForm } from './relocationStatus';
 import {
   RELOCATION_AUTH_KINDS,
+  STOP_OLD_SERVER_COMMAND,
   canStart,
   readiness,
   relocationStage,
@@ -45,6 +50,7 @@ import {
   shouldPoll,
   stageProgress,
   targetCommands,
+  targetScreenUrl,
   validateTarget,
 } from './relocationStatus';
 import './RelocationPage.css';
@@ -207,7 +213,8 @@ function Header() {
   );
 }
 
-/** The three hazards, stated before anything else on the page. */
+/** The two hazards, stated before anything else on the page. The third, Docker installed as
+ *  root, is said by the option that does it, where it can be refused. */
 function WarningCard() {
   const { t } = useTranslation('settings-relocation');
   return (
@@ -215,7 +222,6 @@ function WarningCard() {
       <ul>
         <li>{t('warning.secrets')}</li>
         <li>{t('warning.ssh')}</li>
-        <li>{t('warning.root')}</li>
       </ul>
     </Card>
   );
@@ -273,16 +279,24 @@ function ReadinessCard({
     typeof n === 'number' ? formatBytes(n) : t('space.unknown');
   return (
     <Card title={t('mechanism.heading')}>
-      <p className={state === 'ready' ? 'muted' : 'form-error'}>{t(`readiness.${state}`)}</p>
+      <p className={state === 'ready' ? 'muted' : 'form-error'}>
+        <Trans
+          t={t}
+          i18nKey={`readiness.${state}`}
+          components={{ lnk: <ScreenLink to="/settings/upgrade" /> }}
+        />
+      </p>
       <dl className="reloc-space">
         <dt>{t('space.free')}</dt>
         <dd>{size(status.free_bytes)}</dd>
-        <dt>{t('space.estimate')}</dt>
+        <dt>
+          {t('space.estimate')}{' '}
+          <InfoTip infoKey="settings-relocation:space.partial.info" label={t('space.estimate')} />
+        </dt>
         <dd>{size(status.estimate_bytes)}</dd>
         <dt>{t('space.needed')}</dt>
         <dd>{size(status.needed_bytes)}</dd>
       </dl>
-      <p className="muted">{t('space.partial')}</p>
       {room === false && <p className="form-error">{t('space.tight')}</p>}
     </Card>
   );
@@ -371,6 +385,8 @@ function RelocateForm({
   const problems = validateTarget(form);
   const running = phase.kind === 'starting' || phase.kind === 'running';
   const locked = busy || running || !status.enabled;
+  // A sudo password typed and then made moot by unticking Docker is not sent.
+  const sendable = options.installDocker ? form : { ...form, sudo: '' };
 
   // The credentials live in this component's state and nowhere else — not in the store, not in the
   // URL, not in `localStorage`. When a push finishes they go, because the next press is a new
@@ -395,7 +411,6 @@ function RelocateForm({
 
   return (
     <Card title={t('push.heading')}>
-      <p className="muted">{t('push.help')}</p>
       <OptionRows value={options} onChange={setOptions} disabled={locked} />
       <div className="reloc-target">
         {field('host')}
@@ -435,18 +450,20 @@ function RelocateForm({
             />
           </label>
         )}
-        <label className="reloc-field">
-          <span>{t('push.sudo')}</span>
-          <input
-            className="field"
-            type="password"
-            value={form.sudo}
-            disabled={locked}
-            autoComplete="new-password"
-            onChange={(e) => setForm({ ...form, sudo: e.target.value })}
-          />
-          <em className="muted">{t('push.sudoHint')}</em>
-        </label>
+        {/* sudo is used only to install Docker, so the field exists only while that is ticked. */}
+        {options.installDocker && (
+          <label className="reloc-field">
+            <span>{t('push.sudo')}</span>
+            <input
+              className="field"
+              type="password"
+              value={form.sudo}
+              disabled={locked}
+              autoComplete="new-password"
+              onChange={(e) => setForm({ ...form, sudo: e.target.value })}
+            />
+          </label>
+        )}
       </div>
       {problems.length > 0 && form.host !== '' && (
         <ul className="reloc-problems">
@@ -459,14 +476,14 @@ function RelocateForm({
       )}
       <div className="reloc-actions">
         <Button
-          onClick={() => onStart('preflight', options, form)}
+          onClick={() => onStart('preflight', options, sendable)}
           disabled={locked || problems.length > 0}
         >
           {t('push.check')}
         </Button>
         <Button
           variant="primary"
-          onClick={() => onStart('push', options, form)}
+          onClick={() => onStart('push', options, sendable)}
           disabled={locked || problems.length > 0}
         >
           {t('push.go')}
@@ -509,7 +526,7 @@ function ProgressCard({ phase, log }: { phase: RunPhase; log: string[] }) {
             <p className="muted">{t('done.fingerprint', { fp: done.host_key_fingerprint })}</p>
           )}
           {done.docker_installed && <p className="muted">{t('done.dockerInstalled')}</p>}
-          {phase.state === 'done' && done.target_url && <AfterwardsList />}
+          {phase.state === 'done' && done.target_url && <AfterwardsList url={done.target_url} />}
         </div>
       )}
       {log.length > 0 && <pre className="reloc-log">{log.join('\n')}</pre>}
@@ -518,18 +535,72 @@ function ProgressCard({ phase, log }: { phase: RunPhase; log: string[] }) {
 }
 
 /** The five things the new server's operator has to decide again. Also printed by the restore
- *  script and by RELOCATION-README.md — three copies of one list, so keep them in step. */
-function AfterwardsList() {
+ *  script and by RELOCATION-README.md — three copies of one list, so keep them in step.
+ *  The two screen links open the NEW server (`url`): that is where those settings now live. */
+function AfterwardsList({ url }: { url: string }) {
   const { t } = useTranslation('settings-relocation');
   return (
     <>
       <h4>{t('afterwards.heading')}</h4>
       <ol className="reloc-afterwards">
-        {[1, 2, 3, 4, 5].map((i) => (
-          <li key={i}>{t(`afterwards.item${i}`)}</li>
-        ))}
+        <li>
+          {t('afterwards.item1')}
+          <CopyCommand command={STOP_OLD_SERVER_COMMAND} />
+        </li>
+        <li>
+          <Trans
+            t={t}
+            i18nKey="afterwards.item2"
+            components={{
+              lnk: (
+                <ScreenLink
+                  to="/settings/pollers"
+                  href={targetScreenUrl(url, '/settings/pollers')}
+                />
+              ),
+            }}
+          />
+        </li>
+        <li>
+          <Trans
+            t={t}
+            i18nKey="afterwards.item3"
+            components={{
+              lnk: <ScreenLink to="/settings/auth" href={targetScreenUrl(url, '/settings/auth')} />,
+            }}
+          />
+        </li>
+        <li>{t('afterwards.item4')}</li>
+        <li>{t('afterwards.item5')}</li>
       </ol>
     </>
+  );
+}
+
+/** What the operator types on the new server, having carried the archive there. */
+function RestoreSteps({ filename }: { filename: string }) {
+  const { t } = useTranslation('settings-relocation');
+  const [mkdir, untar, run] = targetCommands(filename);
+  return (
+    <StepFrame
+      className="reloc-steps"
+      summary={t('manual.steps.title')}
+      steps={[
+        t('manual.steps.s1'),
+        <>
+          {t('manual.steps.s2')}
+          <CopyCommand command={mkdir} />
+        </>,
+        <>
+          {t('manual.steps.s3')}
+          <CopyCommand command={untar} />
+        </>,
+        <>
+          {t('manual.steps.s4')}
+          <CopyCommand command={run} />
+        </>,
+      ]}
+    />
   );
 }
 
@@ -569,7 +640,6 @@ function ManualCard({
       </button>
       {open && (
         <>
-          <p className="muted">{t('manual.help')}</p>
           <OptionRows value={options} onChange={setOptions} disabled={busy || disabled} />
           <div className="reloc-actions">
             <Button onClick={() => onCreate(options)} disabled={busy || disabled}>
@@ -600,8 +670,7 @@ function ManualCard({
               {t('manual.delete')}
             </Button>
           </div>
-          <p className="muted">{t('manual.thenRun')}</p>
-          <pre className="reloc-cmds">{targetCommands(archive.filename).join('\n')}</pre>
+          <RestoreSteps filename={archive.filename} />
         </div>
       )}
       {error && <p className="form-error">{error}</p>}

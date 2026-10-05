@@ -169,6 +169,22 @@ export function targetCommands(filename: string): string[] {
   return ['mkdir yagra && cd yagra', `tar -xzf ~/${filename}`, './yagra-relocate.sh'];
 }
 
+/** The command that stops this (old) deployment once the new one is up — both poll and both
+ *  notify until it runs. ⚠️ The same line is printed by `scripts/yagra-relocate.sh` and written in
+ *  `scripts/RELOCATION-README.md`; keep the three in step. */
+export const STOP_OLD_SERVER_COMMAND = 'docker compose -p yagra -f docker-compose.deploy.yml stop';
+
+/** A screen on the NEW server, for the "before you call this done" list. Those steps are done in
+ *  the new deployment's WebUI, so an in-app link would send the operator to the wrong host.
+ *  Falls back to plain concatenation when the reported URL does not parse. */
+export function targetScreenUrl(targetUrl: string, path: string): string {
+  try {
+    return new URL(path, targetUrl).href;
+  } catch {
+    return targetUrl.replace(/\/+$/, '') + path;
+  }
+}
+
 /** What the operator typed into the target form. Strings, because that is what an input holds. */
 export interface TargetForm {
   host: string;

@@ -14,6 +14,7 @@ import {
   shouldPoll,
   stageProgress,
   targetCommands,
+  targetScreenUrl,
   validateTarget,
 } from './relocationStatus';
 import type { TargetForm } from './relocationStatus';
@@ -190,6 +191,21 @@ describe('targetCommands', () => {
     expect(cmds).toHaveLength(3);
     expect(cmds[1]).toContain('yagra-relocation-20260908T101530Z.tar.gz');
     expect(cmds[2]).toBe('./yagra-relocate.sh');
+  });
+});
+
+describe('targetScreenUrl', () => {
+  it('points at the new server, not at this one', () => {
+    expect(targetScreenUrl('https://192.0.2.20:8443', '/settings/pollers')).toBe(
+      'https://192.0.2.20:8443/settings/pollers',
+    );
+    expect(targetScreenUrl('https://new.example.com/', '/settings/auth')).toBe(
+      'https://new.example.com/settings/auth',
+    );
+  });
+
+  it('still names the new server when the reported URL does not parse', () => {
+    expect(targetScreenUrl('new-host/', '/settings/auth')).toBe('new-host/settings/auth');
   });
 });
 

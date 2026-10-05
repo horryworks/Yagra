@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-ai': [736, 410],
   'settings-auth': [3540, 2095],
   'settings-forwarding': [3454, 1893],
-  'settings-relocation': [4933, 2515],
+  'settings-relocation': [3661, 1808],
   'settings-tls': [1619, 872],
   'settings-tokens': [801, 433],
   'settings-upgrade': [3291, 1796],
@@ -121,7 +121,6 @@ const LONG_LEGACY: string[] = [
   'settings-forwarding:field.serviceAccountHint',
   'settings-forwarding:filter.flowAnyRecord',
   'settings-forwarding:note',
-  'settings-relocation:warning.secrets',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -260,7 +259,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 14, press: 7 };
+const INFO_COUNT = { tip: 15, press: 7 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -290,9 +289,6 @@ const POINTER_LEGACY: string[] = [
   'nodes:rediscover.err.noLivePoller',
   'nodes:rediscover.phase.waitingLong',
   'rca:err.notConfigured',
-  'settings-relocation:afterwards.item2',
-  'settings-relocation:afterwards.item3',
-  'settings-relocation:readiness.paused',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];

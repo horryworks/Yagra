@@ -135,7 +135,7 @@ export const PROSE_CEILING: Record<string, number> = {
   [MERAKI_ORG_SCREEN]: 378,
   '/settings/integrations/netbox': 58,
   '/settings/pollers': 113,
-  '/settings/relocation': 1851,
+  '/settings/relocation': 1393,
   '/settings/tls': 55,
   '/settings/upgrade': 300,
   '/topology/dependency': 151,

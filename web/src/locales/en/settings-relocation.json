@@ -3,19 +3,18 @@
   "unavailable": "This deployment has no upgrade mechanism, so it cannot move itself.",
   "loadFailed": "Could not read the relocation status.",
   "warning": {
-    "secrets": "The archive this makes holds the encryption key and the whole database together. Anyone who has it can read every stored credential. Treat it exactly as you would the key itself, and delete it from everywhere it passed through once the move is done.",
-    "ssh": "Yagra will open an SSH session to the server you name and act on it. The password or key you type here is used for that one run and then deleted — it is never stored, logged or shown again.",
-    "root": "If that server has no Docker, Yagra installs it by running the official get.docker.com script as root. Untick that option to refuse."
+    "secrets": "The archive holds the encryption key together with the whole database, so anyone who has it can read every stored credential — delete every copy once the move is done.",
+    "ssh": "Yagra opens an SSH session to the server you name and acts there, using sudo to install Docker; the password or key you type is used for this run only and never stored."
   },
   "mechanism": {
     "heading": "The mechanism"
   },
   "readiness": {
-    "unsupported": "This deployment was installed without the updater container, so it cannot move itself. Take an archive from the command line instead — see DEPLOYMENT.md.",
-    "absent": "The updater container is not reporting. It ships in the composition, so either it was removed or the stack has not finished starting.",
+    "unsupported": "This deployment has no updater container, so it cannot move itself — take an archive by hand as DEPLOYMENT.md describes.",
+    "absent": "The updater container is not reporting: it was removed, or the stack is still starting.",
     "stopped": "The updater container has stopped reporting. Check its logs alongside core.",
-    "paused": "Upgrading from the WebUI is switched off for this deployment, and this uses the same mechanism. Turn it on in Settings ▸ Upgrade.",
-    "updater_too_old": "This deployment's updater predates the relocation feature. Upgrade once, and this page will work — nothing else is needed.",
+    "paused": "Moving uses the WebUI upgrade mechanism, which is switched off here — turn it on in <lnk/>.",
+    "updater_too_old": "This updater predates relocation — upgrade once in <lnk/> and this page will work.",
     "ready": "Ready."
   },
   "space": {
@@ -23,8 +22,10 @@
     "estimate": "Estimated archive",
     "needed": "Room needed",
     "unknown": "unknown",
-    "partial": "The estimate covers the database and the metrics. The event store, the flow store and the images are measured by the updater when the run starts, and it refuses the run if they will not fit.",
-    "tight": "There may not be enough room. Free some space before starting, or untick what you do not need to carry."
+    "tight": "There may not be enough room. Free some space before starting, or untick what you do not need to carry.",
+    "partial": {
+      "info": "Covers the database and the metrics. Events, flows and images are measured when the run starts, and the run stops if they do not fit."
+    }
   },
   "carried": {
     "heading": "What moves",
@@ -54,17 +55,16 @@
   },
   "options": {
     "metrics": "Carry the metrics",
-    "metricsHint": "The full VictoriaMetrics history. Without it the new server starts with empty graphs.",
+    "metricsHint": "Without it, graphs start empty",
     "tier2": "Carry events and flows",
-    "tier2Hint": "The event and flow stores are stopped while they are copied, so syslog, traps and flow records are not recorded for those few minutes. Polling, alerting and notifications keep running.",
+    "tier2Hint": "Pauses event and flow recording briefly",
     "images": "Carry the Yagra images",
-    "imagesHint": "Adds about a gigabyte. Needed only when the new server cannot reach the image registry, or when this deployment runs images from a private one.",
+    "imagesHint": "About 1 GB, for a private or unreachable registry",
     "installDocker": "Install Docker if it is missing",
-    "installDockerHint": "Runs the official get.docker.com script there as root, and adds your account to the docker group. Needs sudo and internet on that server."
+    "installDockerHint": "Runs get.docker.com as root"
   },
   "push": {
     "heading": "Move it now",
-    "help": "The new server needs SSH, and an account you can log in as. Docker is installed for you if it is missing.",
     "host": "Host or IP",
     "port": "SSH port",
     "user": "Account",
@@ -72,8 +72,7 @@
     "authKind": "How to sign in",
     "password": "Password",
     "key": "Private key",
-    "sudo": "sudo password (optional)",
-    "sudoHint": "Only needed to install Docker, and only when sudo asks for a different password than the login one.",
+    "sudo": "sudo password, if different",
     "check": "Check the connection",
     "go": "Move this deployment"
   },
@@ -113,9 +112,9 @@
   },
   "afterwards": {
     "heading": "Before you call this done",
-    "item1": "Stop this server. Both are polling now, and both will notify: run docker compose -p yagra -f docker-compose.deploy.yml stop here.",
-    "item2": "If you run remote-site pollers and the new address differs, reissue the bus certificate in Settings ▸ Pollers and hand out the site bundles again.",
-    "item3": "Update the OIDC redirect URIs in Settings ▸ Authentication.",
+    "item1": "Stop this server — both are polling now, and both will notify:",
+    "item2": "If you run remote-site pollers and the new address differs, reissue the bus certificate in <lnk/> there and hand out the site bundles again.",
+    "item3": "Update the OIDC redirect URIs in <lnk/> there.",
     "item4": "Repoint any device sending syslog, traps or flow records at this host's address.",
     "item5": "Open the WebUI port in the new server's firewall, if it has one."
   },
@@ -123,14 +122,19 @@
     "heading": "Or carry it over yourself",
     "show": "Show the manual route",
     "hide": "Hide the manual route",
-    "help": "Build the archive here, download it, and run one command on the new server. Use this when Yagra should not have SSH access to it — the new server needs Docker already installed.",
     "create": "Build the archive",
     "waiting": "An archive is waiting on this host. It holds the encryption key and every stored credential — download it, move it, and delete it from here.",
     "download": "Download",
     "delete": "Delete the archive",
     "deleteTitle": "Delete the relocation archive?",
     "deleteBody": "The archive holds the encryption key and every stored credential. Deleting it here does not affect any copy you have already downloaded.",
-    "thenRun": "Then, on the new server:"
+    "steps": {
+      "title": "Restore it on the new server",
+      "s1": "Put the archive in your home directory there. Docker must be installed.",
+      "s2": "Make a directory:",
+      "s3": "Unpack the archive:",
+      "s4": "Run the restore:"
+    }
   },
   "err": {
     "start": "Could not start the relocation.",

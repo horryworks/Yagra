@@ -14,10 +14,24 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { navItemForPath } from '../../nav';
 
-export function ScreenLink({ to }: { to: string }) {
+export function ScreenLink({
+  to,
+  href,
+}: {
+  to: string;
+  /** The same screen on ANOTHER deployment (a relocation's new server). The name still comes from
+   *  this build's menu, but the link leaves the app, so it opens in a new tab. */
+  href?: string;
+}) {
   const { t } = useTranslation('nav');
   const hit = navItemForPath(to);
   if (!hit) return null;
+  if (href)
+    return (
+      <a href={href} className="screen-link" target="_blank" rel="noopener noreferrer">
+        {t(hit.section.labelKey)} ▸ {t(hit.item.labelKey)}
+      </a>
+    );
   return (
     <Link to={to} className="screen-link">
       {t(hit.section.labelKey)} ▸ {t(hit.item.labelKey)}

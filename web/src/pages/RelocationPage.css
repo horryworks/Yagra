@@ -63,9 +63,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* One checkbox per line with its consequence beneath it. The hint is part of the control, not a
-   tooltip: a tooltip is a thing a touch device never shows (ADR-055 R4), and each of these four
-   options has a cost the operator has to weigh before ticking it. */
+/* One checkbox per line with its cost beneath it as a short sub-label (ADR-200 kind 5). Part of
+   the control, not a tooltip: a tooltip is a thing a touch device never shows (ADR-055 R4), and
+   each of these four options has a cost the operator has to weigh before ticking it. */
 .reloc-opts {
   display: flex;
   flex-direction: column;
@@ -152,8 +152,7 @@
 
 /* The run's own output, and the restore's output from the other host. Scrolls inside itself: it is
    machine text of unbounded width, and letting it widen the page would push the controls off. */
-.reloc-log,
-.reloc-cmds {
+.reloc-log {
   margin: 12px 0 0;
   padding: 10px 12px;
   background: var(--bg-tertiary);
@@ -163,11 +162,13 @@
   font-size: var(--font-sm);
   white-space: pre;
   overflow-x: auto;
-}
-
-.reloc-log {
   max-height: 320px;
   overflow-y: auto;
+}
+
+.reloc-steps {
+  margin-top: 12px;
+  max-width: 70ch;
 }
 
 .reloc-archive {
