@@ -18,8 +18,8 @@ import { useSubmit } from '../../lib/useSubmit';
 import { LIVENESS_METRIC } from '../../lib/format';
 import { splitInterfaceScopeId } from '../../lib/interfaceScope';
 import {
+  DEFAULT_DWELL,
   isThresholdReady,
-  scopeAcceptsMany,
   scopeAcceptsRowMatch,
   scopeIdKind,
   thresholdBody,
@@ -37,7 +37,7 @@ import { MetricPicker } from '../MetricPicker/MetricPicker';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
-import { Select, TextInput } from '../ui/Field';
+import { Field, Select, TextInput } from '../ui/Field';
 import { MultiSelectList } from '../ui/MultiSelectList';
 import { useEntityNames } from '../ui/entityNames';
 import { groupOptions } from '../../lib/nodeTree';
@@ -100,10 +100,21 @@ function ScopeIdField({
   if (kind === 'none') {
     return (
       <div className="modal-field">
-        <span className="modal-hint">{t(`thresholds.addModal.scopeIdNoun.global`)}</span>
+        <span className="modal-hint">{t('thresholds.addModal.globalScope')}</span>
       </div>
     );
   }
+  // What the target list needs said, by level: a folder reaches the folders inside it, the legacy
+  // tag scope is on its way out, and a port rule is made elsewhere. The others say nothing — the
+  // picker names its own targets (ADR-200).
+  const hint =
+    kind === 'folderGroup'
+      ? t('thresholds.addModal.folderGroupHint')
+      : kind === 'tag'
+        ? t('thresholds.addModal.legacyTagHint')
+        : kind === 'interface'
+          ? t('thresholds.addModal.interfaceHint')
+          : null;
   return (
     <div className="modal-field">
       <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
@@ -174,20 +185,7 @@ function ScopeIdField({
           onChange={(e) => onChange(e.target.value ? [e.target.value] : [])}
         />
       )}
-      <span className="modal-hint">
-        {kind === 'folderGroup'
-          ? t('thresholds.addModal.folderGroupHint')
-          : kind === 'tag'
-            ? t('thresholds.addModal.legacyTagHint')
-            : kind === 'interface'
-              ? t('thresholds.addModal.interfaceHint')
-              : t(
-                  scopeAcceptsMany(form.level)
-                    ? 'thresholds.addModal.scopeIdHintMany'
-                    : 'thresholds.addModal.scopeIdHint',
-                  { noun: t(`thresholds.addModal.scopeIdNoun.${form.level}`) },
-                )}
-      </span>
+      {hint && <span className="modal-hint">{hint}</span>}
     </div>
   );
 }
@@ -302,10 +300,8 @@ export function ThresholdModal({
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
         {lockedMetric ? (
-          <>
-            <p className="thresholds-fixed">{t('format:liveness')}</p>
-            <span className="modal-hint">{t('thresholds.livenessMetric')}</span>
-          </>
+          // Why there are no bounds is said once, beside the breach count below.
+          <p className="thresholds-fixed">{t('format:liveness')}</p>
         ) : (
           <MetricPicker
             value={form.metric}
@@ -321,73 +317,82 @@ export function ThresholdModal({
           offered for a port rule, which already names exactly one thing and which the server refuses
           a pattern on; the form sends none there even if one was typed before the level changed. */}
       {scopeAcceptsRowMatch(form.level) && !noBounds && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('thresholds.addModal.rowMatch')}</label>
+        // The ⓘ carries the one thing the placeholder cannot: a named rule beats an unnamed one
+        // at the same scope (ADR-143), which decides whether a second rule is needed at all.
+        <Field
+          label={t('thresholds.addModal.rowMatch')}
+          htmlFor="threshold-row-match"
+          infoKey="alertsConfig:thresholds.addModal.row.info"
+        >
           <TextInput
+            id="threshold-row-match"
             className="mono"
             placeholder={t('thresholds.addModal.rowMatchPlaceholder')}
             value={form.rowMatch}
             onChange={(e) => set('rowMatch', e.target.value)}
           />
-          <span className="modal-hint">{t('thresholds.addModal.rowMatchHint')}</span>
-        </div>
+        </Field>
       )}
       {/* ADR-081: there is no direction selector. The rule faces whichever way the operator filled
           in, and filling both rows alerts outside a band — a dark optical link *and* an overdriven
           one, from one rule. A selector beside the numbers was a second statement of the same fact,
           and the two could disagree: the form let a rule be saved saying `above` with bounds that
           only made sense downward, which stored, listed, and never fired. */}
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {noBounds ? t('thresholds.addModal.dwellOnly') : t('thresholds.addModal.boundsDwell')}
-        </label>
-        {!noBounds && (
-          <>
-            <div className="thresholds-bound-row">
-              <span className="thresholds-bound-side">{t('thresholds.addModal.belowSide')}</span>
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.warnPlaceholder')}
-                value={form.warningBelow}
-                onChange={(e) => set('warningBelow', e.target.value)}
-              />
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.critPlaceholder')}
-                value={form.criticalBelow}
-                onChange={(e) => set('criticalBelow', e.target.value)}
-              />
-            </div>
-            <div className="thresholds-bound-row">
-              <span className="thresholds-bound-side">{t('thresholds.addModal.aboveSide')}</span>
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.warnPlaceholder')}
-                value={form.warningAbove}
-                onChange={(e) => set('warningAbove', e.target.value)}
-              />
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.critPlaceholder')}
-                value={form.criticalAbove}
-                onChange={(e) => set('criticalAbove', e.target.value)}
-              />
-            </div>
-          </>
-        )}
+      {!noBounds && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('thresholds.addModal.bounds')}</label>
+          <div className="thresholds-bound-row">
+            <span className="thresholds-bound-side">{t('thresholds.addModal.belowSide')}</span>
+            <TextInput
+              className="thresholds-num"
+              placeholder={t('thresholds.addModal.warnPlaceholder')}
+              value={form.warningBelow}
+              onChange={(e) => set('warningBelow', e.target.value)}
+            />
+            <TextInput
+              className="thresholds-num"
+              placeholder={t('thresholds.addModal.critPlaceholder')}
+              value={form.criticalBelow}
+              onChange={(e) => set('criticalBelow', e.target.value)}
+            />
+          </div>
+          <div className="thresholds-bound-row">
+            <span className="thresholds-bound-side">{t('thresholds.addModal.aboveSide')}</span>
+            <TextInput
+              className="thresholds-num"
+              placeholder={t('thresholds.addModal.warnPlaceholder')}
+              value={form.warningAbove}
+              onChange={(e) => set('warningAbove', e.target.value)}
+            />
+            <TextInput
+              className="thresholds-num"
+              placeholder={t('thresholds.addModal.critPlaceholder')}
+              value={form.criticalAbove}
+              onChange={(e) => set('criticalAbove', e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+      {/* The label and the unit say what the number is; the ⓘ is the one case where a reading is
+          not a poll (the per-minute interface metrics). An empty box sends the default, so the
+          placeholder is that default rather than a word. */}
+      <Field
+        label={t('thresholds.addModal.dwell.label')}
+        htmlFor="threshold-dwell"
+        infoKey="alertsConfig:thresholds.addModal.dwell.info"
+      >
         <div className="thresholds-bounds">
           <TextInput
+            id="threshold-dwell"
             className="thresholds-num"
-            placeholder={t('thresholds.addModal.dwellPlaceholder')}
+            placeholder={String(DEFAULT_DWELL)}
+            suffix={t('thresholds.addModal.dwell.unit')}
             value={form.dwell}
             onChange={(e) => set('dwell', e.target.value)}
-            title={t('thresholds.addModal.dwellTitle')}
           />
         </div>
-        <span className="modal-hint">
-          {noBounds ? t('thresholds.livenessMetric') : t('thresholds.addModal.boundsHint')}
-        </span>
-      </div>
+        {noBounds && <span className="modal-hint">{t('thresholds.livenessMetric')}</span>}
+      </Field>
       <FormError form={save} />
     </Modal>
   );

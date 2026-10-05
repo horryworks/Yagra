@@ -470,9 +470,7 @@
     }
   },
   "thresholds": {
-    "note": "Hierarchical overrides: profile → group → node. The most specific scope wins.",
-    "explainer": "Every alert Yagra raises from polling comes from a rule here, node up/down included. Each is evaluated live on every matching poll sample; the most-specific scope wins, and a rule at “every node” is the fleet default. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule. Two exceptions worth knowing: reachability has no bounds, because a node either answered or it did not — only the breach count applies; and the four interface metrics Yagra computes rather than collects (if_in_util_pct / if_out_util_pct / if_in_bps / if_out_bps) are evaluated once a minute rather than per poll, so their breach count counts minutes — or polls, on a node polled less often than once a minute.",
-    "noLiveness": "No reachability rule exists, so a node going down raises no alert and sends no notification. Node state on the Nodes page still updates. Add a rule on Reachability to start paging again.",
+    "noLiveness": "No reachability rule: a node going down raises no alert and no notification.",
     "portRulesHidden": "{{count}} port rules are hidden.",
     "showPortRules": "Show them",
     "add": "+ Add rule",
@@ -487,7 +485,6 @@
       "scopeId": "Scope"
     },
     "empty": "No threshold rules yet",
-    "emptySub": "Add a metric threshold scoped to a profile, group, or node.",
     "truncated": "Showing {{shown}} of {{total}} rules",
     "warnShort": "W",
     "critShort": "C",
@@ -515,34 +512,28 @@
         "node": "Pick a node",
         "group_id": "Pick a folder group"
       },
-      "scopeIdNoun": {
-        "global": "This rule applies to every node. Anything you set at a profile, group or node scope overrides it.",
-        "profile": "device profile",
-        "group": "node tag",
-        "node": "node",
-        "group_id": "folder group",
-        "interface": "interface"
-      },
-      "scopeIdHint": "The {{noun}} this rule targets.",
-      "scopeIdHintMany": "Every {{noun}} this rule targets. Pick as many as apply — one rule, not one each.",
       "removeTarget": "Remove {{name}}",
       "metric": "Metric",
-      "boundsDwell": "Bounds & breaches",
       "belowSide": "Alert at or below",
       "aboveSide": "Alert at or above",
       "warnPlaceholder": "warn",
       "critPlaceholder": "crit",
-      "dwellPlaceholder": "breaches",
-      "dwellTitle": "Consecutive breaches: readings that must cross the bound in a row before the alert fires",
-      "boundsHint": "Fill either row, or both. Filling both alerts outside a band — a value that drops too low OR climbs too high, from one rule. Every bound is optional. Breaches is how many consecutive readings must cross a bound before the alert fires; higher values suppress flapping (rapid on/off alerts).",
       "add": "Add rule",
-      "dwellOnly": "Breaches",
-      "folderGroupHint": "Applies to this group and every group inside it. A rule on a group further in wins over this one.",
-      "legacyTagHint": "Legacy scope: matches a tag on the node, or one it inherits from its folder — not the folder tree itself. Kept so existing rules keep working; new rules use a folder group.",
-      "interfaceHint": "This rule covers one port of one node. Port rules are created from a node’s Interfaces tab, where the port is already in view; here you can change its bounds or delete it.",
+      "folderGroupHint": "Also covers every group inside it.",
+      "legacyTagHint": "Legacy scope: matches a node tag. New rules use a folder group.",
+      "interfaceHint": "Port rules are created from a node’s Interfaces tab.",
       "rowMatch": "Row name (optional)",
       "rowMatchPlaceholder": "every row (e.g. I/O, MPU Board *)",
-      "rowMatchHint": "For a metric reported once per memory pool, CPU or sensor: apply this rule only to rows with this name. * matches anything, and case is ignored. Leave it empty for every row. At the same scope, a rule with a row name wins over one without for the rows it names — so it can loosen or tighten one pool beside the rule for all of them."
+      "globalScope": "This rule applies to every node.",
+      "bounds": "Bounds",
+      "dwell": {
+        "label": "Consecutive breaches",
+        "unit": "readings",
+        "info": "The computed interface metrics (if_in_util_pct, if_out_util_pct, if_in_bps, if_out_bps) take one reading a minute, so there the count is in minutes."
+      },
+      "row": {
+        "info": "Applies only to rows with this name. * matches anything, and a named rule wins over an unnamed one."
+      }
     },
     "deleteModal": {
       "title": "Delete threshold rule",
@@ -562,13 +553,19 @@
     "scopeIdNone": "This rule targets every node, so it has no scope.",
     "scopeMore_one": "and 1 more",
     "scopeMore_other": "and {{count}} more",
-    "livenessMetric": "Reachability has no bounds — a node either answered or it did not — so only the breach count applies.",
+    "livenessMetric": "Reachability has no bounds; only consecutive breaches apply.",
     "editModal": {
       "title": "Edit threshold rule"
+    },
+    "overridden": {
+      "nodes_one": "Overridden on {{count}} node",
+      "nodes_other": "Overridden on {{count}} nodes",
+      "rules_one": "Overridden by {{count}} rule",
+      "rules_other": "Overridden by {{count}} rules",
+      "info": "A narrower rule on this metric applies there instead of this one."
     }
   },
   "eventRules": {
-    "note": "Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting.",
     "add": "+ Add rule",
     "cols": {
       "name": "Name",
@@ -597,11 +594,10 @@
       "name": "Name",
       "matchKind": "Match kind",
       "severity": "Severity",
-      "severityInfo": "{{label}} — record only",
+      "severityInfo": "{{label}} (record only)",
       "pattern": "Pattern",
       "patternHint": "Matching is case-sensitive; use (?i) in a regex for case-insensitive.",
-      "clearPattern": "Clear pattern",
-      "clearPatternHint": "Optional — a message matching this resolves the alert (e.g. link-up clears link-down).",
+      "clearPattern": "Clear pattern (optional)",
       "sourceKind": "Source kind",
       "webhookSource": "Webhook source",
       "autoClose": "Auto-close (s)",
@@ -636,7 +632,6 @@
     }
   },
   "eventSources": {
-    "note": "Webhook senders that POST events to Yagra. Each carries a bearer token, shown once at create/rotate; store it in the sender's config.",
     "add": "+ Add source",
     "cols": {
       "name": "Name",
@@ -655,7 +650,6 @@
       "title": "Add webhook source",
       "name": "Name",
       "namePlaceholder": "e.g. Grafana alerts",
-      "hint": "A bearer token is generated and shown once after create.",
       "create": "Create"
     },
     "editModal": {

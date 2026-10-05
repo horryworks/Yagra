@@ -1,12 +1,7 @@
 /* Alert rules — data-table standard v2. The chrome (toolbar, sticky header, hover
    actions, empty state) comes from styles/table.css; only the page-local bits live here: the
-   blue-left-border explainer card, the compact number inputs in the add modal, and the W/C
+   "no reachability rule" warning, the compact number inputs in the add modal, and the W/C
    badge pairing used by both the modal and the Bounds cell. */
-
-.thresholds-note-card {
-  margin-bottom: 16px;
-  border-left: 2px solid var(--status-maintenance);
-}
 
 .thresholds-note {
   margin: 0;
@@ -78,11 +73,19 @@ html[data-viewport='mobile'] .thresholds-bound-side {
   width: 100%;
 }
 
-/* The "no reachability rule" warning. Same shape as the explainer card above it, in the warning
-   colour: it is not an error (the operator may have meant it) but it must not read as prose. */
+/* The "no reachability rule" warning, in the warning colour: it is not an error (the operator may
+   have meant it) but it must not read as prose. */
 .thresholds-warn-card {
   margin-bottom: 16px;
   border-left: 2px solid var(--status-warning);
+}
+
+/* The sentence and the way back (the add button) on one line, wrapping on a narrow window. */
+.thresholds-warn-card .card-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* The "what it measures" cell. Rows are a fixed 44px (DataTable's virtualizer), so the sentence is
@@ -187,4 +190,20 @@ html[data-viewport='mobile'] .thresholds-meaning {
 
 .thresholds-chip button:hover {
   color: var(--status-critical);
+}
+
+/* A Scope cell whose rule a narrower rule takes over from somewhere (ADR-200 Inc.14): the targets,
+   then the pressable "Overridden on N nodes" badge on its own line. The table opts into
+   `autoRowHeight`, so the row grows to hold it. */
+.thresholds-overridden {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Stretched like the targets above it, the badge would be drawn the cell's full width. */
+.thresholds-overridden > .infotip {
+  align-self: flex-start;
 }

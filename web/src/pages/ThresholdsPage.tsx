@@ -6,8 +6,9 @@
 // same hysteresis/flapping machinery as liveness, so a breach fires a real alert.
 //
 // Data-table standard v2: a toolbar (count + "+ Add rule") over the shared `DataTable`; the
-// add form and delete confirmation both go through modals. The blue-left-border note card
-// above the toolbar keeps the "what a rule is" explainer in view.
+// add form and delete confirmation both go through modals. "The most specific scope wins" is not a
+// paragraph above the table any more (ADR-200 Inc.14): a row that a narrower rule takes over from
+// carries a pressable "Overridden on N nodes" badge instead (`thresholdOverrides.ts`).
 //
 // This is the one configuration list that grows with the fleet — a node-level override is per
 // (node × metric) — so it uses the virtualized `DataTable` rather than a hand-rolled grid, and the
@@ -25,7 +26,10 @@ import { boundText } from '../lib/portRuleForm';
 import { boundSides } from '../lib/thresholdBounds';
 import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
 import { splitInterfaceScopeId } from '../lib/interfaceScope';
+import { overriddenRows } from './thresholdOverrides';
 import { PageHeader } from '../components/ui/PageHeader';
+import { EmptyState } from '../components/ui/EmptyState';
+import { InfoPress } from '../components/ui/InfoTip';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -123,6 +127,27 @@ export function ThresholdsPage() {
   // and the ruleset would be refetched at that moment. The specs depend on `t` alone.
   const specs = useMemo(() => thresholdFilters(t), [t]);
   const filterCols = useMemo(() => specColumns(specs), [specs]);
+
+  // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
+  // reload and can be shared. Since Inc.10 that is the shared codec (`useFilterParams`) rather
+  // than a per-field `readFilters`/`writeFilters` pair: the column key **is** the query key, so
+  // the bookmarks taken before this change still resolve. `replace: true` lives in the hook,
+  // because a settled filter is not a place you navigated to.
+  const { filters, setFilters } = useFilterParams(filterCols);
+  const filtered = isAnyFiltered(filterCols, filters);
+
+  // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
+  // narrowing would only ever examine the 500 rules already on screen — which is the whole
+  // reason this screen filters server-side (see `thresholdQuery.ts`).
+  const ruleset = useLoad(() => api.listThresholds(queryFor(filterCols, filters)), [filterCols, filters], {
+    initial: { items: [], total: 0, truncated: false } as ThresholdPage,
+  });
+  const { data: page, loading, reload: rulesetReload } = ruleset;
+  const rows = page.items;
+  /** Which rows a narrower rule on the same metric takes over from, read off the rows on screen.
+   *  Judged in `thresholdOverrides.ts`, which says what it can and cannot prove. */
+  const overridden = useMemo(() => overriddenRows(rows), [rows]);
+
   const columns = useMemo<Column<StoredThreshold>[]>(() => {
     const cols: Column<StoredThreshold>[] = [
       {
@@ -144,45 +169,68 @@ export function ThresholdsPage() {
         // Wider since Inc.5, taken from the meaning column: stacking makes each line short, and
         // the width is what decides whether a profile name ends in an ellipsis at 1280px.
         width: '1.6fr',
-        render: (row) =>
-          // A global rule has no target to resolve — the type column already says "every node",
-          // and `EntityName` on an empty id renders a bare em dash with no explanation of why.
-          row.scope_level === 'global' || row.scope_ids.length === 0 ? (
-            <span className="muted" title={t('thresholds.scopeIdNone')}>
-              —
+        render: (row) => {
+          // Where a narrower rule on the same metric takes over from this one (ADR-200 Inc.14) —
+          // the page note "the most specific scope wins", said on the row that loses.
+          const over = overridden.get(row.id);
+          const badge = over && (
+            <InfoPress
+              infoKey="alertsConfig:thresholds.overridden.info"
+              className="badge badge-neutral"
+            >
+              {over.kind === 'nodes'
+                ? t('thresholds.overridden.nodes', { count: over.count })
+                : t('thresholds.overridden.rules', { count: over.count })}
+            </InfoPress>
+          );
+          const target =
+            // A global rule has no target to resolve — the type column already says "every node",
+            // and `EntityName` on an empty id renders a bare em dash with no explanation of why.
+            row.scope_level === 'global' || row.scope_ids.length === 0 ? (
+              <span className="muted" title={t('thresholds.scopeIdNone')}>
+                —
+              </span>
+            ) : (
+              // Since ADR-078 a rule may name several, and Inc.5 draws them ALL, one per line, with
+              // the row growing to suit (`autoRowHeight` below).
+              //
+              // 🚨 Two were drawn and the rest counted until an operator reported that the column
+              // says nothing at all. The cell was one line and narrower than a single profile name
+              // at most window widths, so the second name fell past the ellipsis — and so did the
+              // "and N more" standing behind it. A five-profile rule and a one-profile rule rendered
+              // identically, and the only way to tell them apart was a hover title, which a touch
+              // device does not have.
+              <span className="thresholds-scopes" title={scopeTitle(row)}>
+                {row.scope_ids.slice(0, MAX_SCOPE_LINES).map((id) =>
+                  row.scope_level === 'interface' ? (
+                    // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's
+                    // half — `EntityName` would offer the whole composed string as a copyable
+                    // "id", which is not an id anything else accepts.
+                    <EntityName
+                      key={id}
+                      name={scopeName(row.scope_level, id)}
+                      id={splitInterfaceScopeId(id)[0]}
+                    />
+                  ) : (
+                    <EntityName key={id} name={scopeName(row.scope_level, id)} id={id} />
+                  ),
+                )}
+                {row.scope_ids.length > MAX_SCOPE_LINES && (
+                  <span className="muted">
+                    {t('thresholds.scopeMore', { count: row.scope_ids.length - MAX_SCOPE_LINES })}
+                  </span>
+                )}
+              </span>
+            );
+          return badge ? (
+            <span className="thresholds-overridden">
+              {target}
+              {badge}
             </span>
           ) : (
-            // Since ADR-078 a rule may name several, and Inc.5 draws them ALL, one per line, with
-            // the row growing to suit (`autoRowHeight` below).
-            //
-            // 🚨 Two were drawn and the rest counted until an operator reported that the column
-            // says nothing at all. The cell was one line and narrower than a single profile name
-            // at most window widths, so the second name fell past the ellipsis — and so did the
-            // "and N more" standing behind it. A five-profile rule and a one-profile rule rendered
-            // identically, and the only way to tell them apart was a hover title, which a touch
-            // device does not have.
-            <span className="thresholds-scopes" title={scopeTitle(row)}>
-              {row.scope_ids.slice(0, MAX_SCOPE_LINES).map((id) =>
-                row.scope_level === 'interface' ? (
-                  // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's
-                  // half — `EntityName` would offer the whole composed string as a copyable
-                  // "id", which is not an id anything else accepts.
-                  <EntityName
-                    key={id}
-                    name={scopeName(row.scope_level, id)}
-                    id={splitInterfaceScopeId(id)[0]}
-                  />
-                ) : (
-                  <EntityName key={id} name={scopeName(row.scope_level, id)} id={id} />
-                ),
-              )}
-              {row.scope_ids.length > MAX_SCOPE_LINES && (
-                <span className="muted">
-                  {t('thresholds.scopeMore', { count: row.scope_ids.length - MAX_SCOPE_LINES })}
-                </span>
-              )}
-            </span>
-          ),
+            target
+          );
+        },
       },
       {
         key: 'q',
@@ -315,24 +363,7 @@ export function ThresholdsPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [canConfig, scopeName, scopeTitle, specs, t]);
-
-  // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
-  // reload and can be shared. Since Inc.10 that is the shared codec (`useFilterParams`) rather
-  // than a per-field `readFilters`/`writeFilters` pair: the column key **is** the query key, so
-  // the bookmarks taken before this change still resolve. `replace: true` lives in the hook,
-  // because a settled filter is not a place you navigated to.
-  const { filters, setFilters } = useFilterParams(filterCols);
-  const filtered = isAnyFiltered(filterCols, filters);
-
-  // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
-  // narrowing would only ever examine the 500 rules already on screen — which is the whole
-  // reason this screen filters server-side (see `thresholdQuery.ts`).
-  const ruleset = useLoad(() => api.listThresholds(queryFor(filterCols, filters)), [filterCols, filters], {
-    initial: { items: [], total: 0, truncated: false } as ThresholdPage,
-  });
-  const { data: page, loading, reload: rulesetReload } = ruleset;
-  const rows = page.items;
+  }, [canConfig, overridden, scopeName, scopeTitle, specs, t]);
   /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
    *
    *  It cannot be read off `rows`: that list is the operator's current filter, capped by the
@@ -377,19 +408,20 @@ export function ThresholdsPage() {
       <PageHeader
         title={t('nav:alerts.rules')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.rules') }]}
-        note={t('thresholds.note')}
       />
-
-      <Card className="thresholds-note-card">
-        <p className="thresholds-note">{t('thresholds.explainer')}</p>
-      </Card>
 
       {/* Deleting the reachability rule is allowed — it is an ordinary row — and it switches off
           node-down paging for the whole fleet. Saying so where it happened is the alternative to
-          making that one row undeletable, which would make it a different kind of row. */}
+          making that one row undeletable, which would make it a different kind of row. The way
+          back is the add button, beside the sentence rather than in it (ADR-200). */}
       {hasLiveness === false && (
         <Card className="thresholds-warn-card">
           <p className="thresholds-note">{t('thresholds.noLiveness')}</p>
+          {canConfig && (
+            <Button type="button" variant="outline" onClick={() => setAdding(true)}>
+              {t('thresholds.add')}
+            </Button>
+          )}
         </Card>
       )}
 
@@ -464,10 +496,16 @@ export function ThresholdsPage() {
                 <p className="yt-empty-title">{t('thresholds.emptyFiltered')}</p>
               </div>
             ) : (
-              <div className="yt-empty">
-                <p className="yt-empty-title">{t('thresholds.empty')}</p>
-                <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
-              </div>
+              <EmptyState
+                text={t('thresholds.empty')}
+                action={
+                  canConfig && (
+                    <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                      {t('thresholds.add')}
+                    </Button>
+                  )
+                }
+              />
             )
           }
         />

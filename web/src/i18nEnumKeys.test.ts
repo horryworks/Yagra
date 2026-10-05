@@ -293,11 +293,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // The placeholder is checked over a *subset*, derived rather than listed: the scope-id input
     // is not rendered for `global` (a fleet-wide rule has nothing to point at), so demanding a
     // string there would demand one nobody can ever see — and an unread string is what drifts.
-    // The *noun* is still checked over every level: it doubles as the `global` explanation.
     // `interface` has no input either: its target is shown, not edited (ThresholdModal).
+    // (The per-level `scopeIdNoun` family went with the hint it filled, ADR-200 Inc.14.)
     const WITH_SCOPE_ID = SCOPE_LEVELS.filter((l) => l !== 'global' && l !== 'interface');
     expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', WITH_SCOPE_ID);
-    expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
   });
 

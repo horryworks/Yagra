@@ -97,8 +97,6 @@ export const LONG_NOTE: Record<string, string> = {
   '/dashboard/public': 'Inc.21 — nothing else is reachable without an account',
   '/events': 'Inc.16 — unmatched events are kept for 24 hours',
   '/events/forwarding': 'Inc.16 — flow and BigQuery destinations',
-  '/events/webhooks': 'Inc.14 — the token is shown once',
-  '/alerts/event-rules': 'Inc.14 — an info rule only records',
   '/topology/dependency': 'Inc.23 — the upstream decides suppression',
   '/topology/map': 'Inc.23 — off the menu, so it has no nav description',
   [`/troubleshoot/report/${REPORT_TOOL}`]: 'Inc.22 — each analysis explains its own scoring',
@@ -115,7 +113,6 @@ export const LONG_NOTE: Record<string, string> = {
  */
 export const PROSE_CEILING: Record<string, number> = {
   '/alerts/routing': 156,
-  '/alerts/rules': 734,
   '/dashboard/public': 182,
   '/events': 159,
   '/events/forwarding': 97,

@@ -58,6 +58,23 @@ select.field {
   width: 100%;
 }
 
+/* A date-and-time box carries its time zone as the suffix (`Asia/Tokyo`), which is longer than a
+   unit, varies by browser, and would sit on the native calendar button. So there the suffix stands
+   beside the box rather than over its padding. */
+.field-affix:has(> .field[type='datetime-local']) {
+  gap: 8px;
+}
+
+.field-affix > .field[type='datetime-local'] {
+  flex: 1;
+  min-width: 0;
+  padding-right: 10px;
+}
+
+.field-affix > .field[type='datetime-local'] + .field-suffix {
+  position: static;
+}
+
 /* A field's label row: the label, then its ⓘ (`Field`, ADR-200). */
 .field-head {
   display: flex;

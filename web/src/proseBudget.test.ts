@@ -59,7 +59,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
   alerts: [1470, 875],
-  alertsConfig: [12397, 6669],
+  alertsConfig: [10123, 5392],
   auth: [79, 43],
   common: [717, 385],
   dashboard: [7503, 4079],
@@ -78,7 +78,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tokens': [801, 433],
   'settings-upgrade': [3291, 1796],
   settings: [217, 101],
-  suppression: [1091, 712],
+  suppression: [959, 626],
   system: [13290, 7315],
   topology: [4304, 2334],
   troubleshoot: [7347, 3814],
@@ -95,9 +95,6 @@ const LONG_LEGACY: string[] = [
   'alertsConfig:routing.template.freeLayout.hint',
   'alertsConfig:routing.template.intro',
   'alertsConfig:routing.test.intro',
-  'alertsConfig:thresholds.addModal.boundsHint',
-  'alertsConfig:thresholds.addModal.rowMatchHint',
-  'alertsConfig:thresholds.explainer',
   'nodes:bulkTag.note',
   'nodes:deleteNode.body',
   'nodes:deleteNodes.body',
@@ -135,7 +132,6 @@ const HOVER_LEGACY: string[] = [
   'alerts:row.merakiOrgSubjectHint',
   'alerts:row.poolSubjectHint',
   'alertsConfig:routing.template.status.confirmTitle',
-  'alertsConfig:thresholds.addModal.dwellTitle',
   'alertsConfig:thresholds.meaningUnknown',
   'dashboard:widgets.ifTraffic.unitTitle',
   'dashboard:widgets.pollerHealth.mirrorWritesHint',
@@ -191,16 +187,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'Inc.23',
     why: 'the upstream decides parent-down suppression',
   },
-  'pages/EventRulesPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.14',
-    why: 'an info rule records the match and raises no alert',
-  },
-  'pages/EventSourcesPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.14',
-    why: 'the bearer token is shown once, at create and rotate',
-  },
   'pages/EventsPage.tsx': {
     kind: 'fact',
     until: 'Inc.16',
@@ -214,11 +200,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
   'pages/NodesPage.tsx': {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',
-  },
-  'pages/ThresholdsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.14',
-    why: 'the most specific scope wins',
   },
   'pages/TopologyMapPage.tsx': { kind: 'offNav', until: 'Inc.23', why: 'opened from the tree' },
   'pages/integrations/MerakiIntegrationPage.tsx': {
@@ -241,7 +222,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 16, press: 10 };
+const INFO_COUNT = { tip: 18, press: 11 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -279,7 +260,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 20, formHint: 19, modalHint: 43 };
+const HINT_SITES = { fieldHint: 19, formHint: 19, modalHint: 38 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

@@ -209,8 +209,12 @@ export function AddMuteModal({
       )}
       <div className="modal-field">
         <label className="modal-field-label">{t('muteForm.until')}</label>
-        <TextInput type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
-        <span className="modal-hint">{t('muteForm.tzHint', { tz: TZ })}</span>
+        <TextInput
+          type="datetime-local"
+          suffix={TZ}
+          value={until}
+          onChange={(e) => setUntil(e.target.value)}
+        />
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('muteForm.reason')}</label>

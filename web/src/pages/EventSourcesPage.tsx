@@ -125,7 +125,7 @@ export function EventSourcesPage() {
 
   return (
     <div>
-      <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
+      <PageHeader title={t('nav:events.webhooks')} />
       <LoadGate load={sources} permission="manage_config">
         <ListToolbar
           list={filtering}
@@ -231,7 +231,6 @@ function AddSourceModal({
           placeholder={t('eventSources.addModal.namePlaceholder')}
           autoFocus
         />
-        <span className="modal-hint">{t('eventSources.addModal.hint')}</span>
       </div>
       <FormError form={form} />
     </Modal>

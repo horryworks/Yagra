@@ -125,6 +125,24 @@ function ruleset(): Json {
       critical_above: -3,
       dwell_samples: 3,
     },
+    // ADR-200 Inc.14: a fleet-wide rule on the band rule's metric, so the node rule above takes
+    // over from it on one node. LAST on purpose: the tests above address the band rule with
+    // `.first()`, and this one must not become that row.
+    {
+      ...template,
+      id: '00000000-0000-4000-8000-00000000f005',
+      scope_level: 'global',
+      scope_ids: [],
+      metric: BAND_RULE_METRIC,
+      direction: 'below',
+      warning: -25,
+      critical: -28,
+      warning_below: -25,
+      critical_below: -28,
+      warning_above: null,
+      critical_above: null,
+      dwell_samples: 3,
+    },
   ];
   return { items, total: items.length, truncated: false } as unknown as Json;
 }
@@ -210,6 +228,28 @@ test('the scope level and the scope id are two columns, each carrying its own va
     els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
   );
   expect(clipped).toEqual([]);
+});
+
+test('a rule a narrower rule takes over from says so, and only that rule', async ({ page }) => {
+  // ADR-200 Inc.14 replaced the page note "the most specific scope wins" with a badge on the row
+  // that loses. What only a browser can see: the badge is on the fleet-wide row and NOT on the node
+  // row that beats it, and pressing it opens the explanation rather than navigating.
+  await page.goto('/alerts/rules');
+  const bandRows = page.locator('.dt-row').filter({ hasText: BAND_RULE_METRIC });
+  await expect(bandRows).toHaveCount(2);
+  const nodeRow = bandRows.filter({ hasText: 'node' }).filter({ hasNotText: 'every node' });
+  const fleetRow = bandRows.filter({ hasText: 'every node' });
+  await expect(nodeRow.locator('.infopress')).toHaveCount(0);
+  const badge = fleetRow.locator('.infopress');
+  await expect(badge).toHaveText(/Overridden on 1 node/);
+  // The reachability rule has no narrower rule on its metric, so it carries no badge.
+  await expect(
+    page.locator('.dt-row').filter({ hasText: 'Reachability' }).locator('.infopress'),
+  ).toHaveCount(0);
+
+  await badge.click();
+  await expect(page.locator('.infotip-pop')).toContainText('narrower rule');
+  await expect(page).toHaveURL(/\/alerts\/rules/);
 });
 
 test('opting one table into auto row heights leaves the others at 44px', async ({ page }) => {

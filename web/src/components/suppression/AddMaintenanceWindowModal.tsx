@@ -226,14 +226,19 @@ export function AddMaintenanceWindowModal({
         <label className="modal-field-label">{t('common:range.from')}</label>
         <TextInput
           type="datetime-local"
+          suffix={TZ}
           value={startsAt}
           onChange={(e) => setStartsAt(e.target.value)}
         />
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('common:range.to')}</label>
-        <TextInput type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
-        <span className="modal-hint">{t('maintenanceForm.tzHint', { tz: TZ })}</span>
+        <TextInput
+          type="datetime-local"
+          suffix={TZ}
+          value={endsAt}
+          onChange={(e) => setEndsAt(e.target.value)}
+        />
       </div>
       <FormError form={form} />
     </Modal>

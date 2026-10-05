@@ -166,7 +166,7 @@ export function EventRulesPage() {
 
   return (
     <div>
-      <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
+      <PageHeader title={t('nav:alerts.eventRules')} />
       <LoadGate load={rules} permission="manage_config">
         <ListToolbar
           list={filtering}
@@ -388,7 +388,6 @@ function RuleModal({
           value={clearPattern}
           onChange={(e) => setClearPattern(e.target.value)}
         />
-        <FieldHint>{t('eventRules.modal.clearPatternHint')}</FieldHint>
       </div>
       <div className="modal-field-row">
         <div className="modal-field">

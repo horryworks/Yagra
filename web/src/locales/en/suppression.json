@@ -69,7 +69,6 @@
     "pickProfile": "(pick a profile)",
     "pickGroup": "(pick a group)",
     "groupHint": "Covers the group and all its subgroups.",
-    "tzHint": "“From”/“To” are in {{tz}} (your browser’s local time) and are stored as UTC.",
     "err": {
       "add": "failed to add window"
     },
@@ -130,7 +129,6 @@
     "groupHint": "Silences every node under the group and its subgroups.",
     "metric": "Metric",
     "until": "Until",
-    "tzHint": "In {{tz}} (your browser’s local time) and stored as UTC.",
     "reason": "Reason",
     "reasonPlaceholder": "reason (optional)",
     "err": {
