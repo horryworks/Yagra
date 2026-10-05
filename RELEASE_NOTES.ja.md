@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.45 — アラートに人が読める名前が付き、ポートのアラートはポート名で出て、テンプレートの画面に組み込みの文面が出る
+
 ### 破壊的変更
 
 - **通知のタイトルがメトリクス名ではなくアラートの名前を出すようになり、PagerDuty の要約にも名前が入る。** JSM とメールのタイトルは `core-sw-01 (192.0.2.11) is critical: snmp_up` から `core-sw-01 (192.0.2.11) is critical: SNMP not responding` になる。死活のアラートには `: Node not responding` が付く。ポートごとのアラートは、ポートの名前が分かればそれを出す（`… : Inbound utilization on GigabitEthernet0/7`。分からなければ今どおり `on ifIndex 7`）。テンプレートの無い Webhook と PagerDuty の要約は `node <uuid> is critical` だったが、同じタイトルになる。ノード名を出すのは、PagerDuty・JSM・メールのチャネルかテンプレートがあって Yagra がノードを引くとき。そうでなければ ID のまま（`<uuid> is critical: Ping response time`）。Webhook と PagerDuty の本体（アラートの JSON）は変わらない。PagerDuty の `dedup_key` と JSM の alias も変わらないので、開いているインシデントは今までどおり閉じる。タイトルのメトリクス名や、要約の先頭の `node ` を条件にした JSM のルールやメールの振り分けは直す必要がある。生のメトリクス名は本文の `Metric:` の行と、JSM の `metric` プロパティに残る。(ADR-196)

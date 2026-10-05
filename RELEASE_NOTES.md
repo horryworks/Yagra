@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.45 — Alerts have names a person can read, a per-port alert names its port, and the template editor shows the built-in text
+
 ### Breaking changes
 
 - **A notification's title names the alert instead of the metric, and PagerDuty's summary now names it too.** A JSM or email title that read `core-sw-01 (192.0.2.11) is critical: snmp_up` now reads `core-sw-01 (192.0.2.11) is critical: SNMP not responding`; an up/down alert gains `: Node not responding`; and a per-port alert names the port when its name is known (`… : Inbound utilization on GigabitEthernet0/7`, otherwise `on ifIndex 7` as before). Webhook and PagerDuty with no template used to send the summary `node <uuid> is critical`; they now send the same title — the node's name when a PagerDuty, JSM or email channel or a template makes Yagra look it up, its id otherwise (`<uuid> is critical: Ping response time`). The webhook and PagerDuty payload — the alert as JSON — is unchanged, and so are PagerDuty's `dedup_key` and JSM's alias, so open incidents still close. A JSM rule or mail filter that matched the metric name in the title, or `node ` at the start of a summary, has to change; the raw metric is still on the body's `Metric:` line and in JSM's `metric` property. (ADR-196)
