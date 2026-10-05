@@ -123,7 +123,7 @@ export const PROSE_CEILING: Record<string, number> = {
   '/events': 159,
   '/events/forwarding': 97,
   '/nodes': 41,
-  '/nodes/discovery': 856,
+  '/nodes/discovery': 253,
   '/nodes/duplicates': 338,
   '/nodes/missing-prefixes': 411,
   '/nodes/reclassify': 263,

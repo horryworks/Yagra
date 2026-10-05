@@ -11,6 +11,7 @@ import {
   specFor,
   sumHosts,
   SWEEP_LIMIT,
+  typedTargets,
   UNSWEEPABLE_REASONS,
 } from './siteTargets';
 
@@ -183,6 +184,29 @@ describe('hostCount', () => {
     expect(hostCount('')).toBeNull();
     expect(hostCount('   ')).toBeNull();
     expect(hostCount('not-a-prefix')).toBeNull();
+  });
+});
+
+describe('typedTargets', () => {
+  it('says nothing about an empty field', () => {
+    expect(typedTargets('')).toEqual({ kind: 'empty' });
+    expect(typedTargets(' \n ')).toEqual({ kind: 'empty' });
+  });
+
+  it('counts every shape the placeholder shows, one per line or comma-separated', () => {
+    expect(typedTargets('192.0.2.0/24')).toEqual({ kind: 'count', count: 254 });
+    expect(typedTargets('198.51.100.5')).toEqual({ kind: 'count', count: 1 });
+    expect(typedTargets('192.0.2.10-20')).toEqual({ kind: 'count', count: 11 });
+    expect(typedTargets('192.0.2.0/24\n198.51.100.5, 203.0.113.10-20')).toEqual({
+      kind: 'count',
+      count: 266,
+    });
+  });
+
+  it('is invalid for malformed text and past the sweep limit', () => {
+    expect(typedTargets('not-a-prefix')).toEqual({ kind: 'invalid' });
+    expect(typedTargets('192.0.2.0/8')).toEqual({ kind: 'invalid' });
+    expect(typedTargets('10.0.0.0/20, 10.0.16.0/24')).toEqual({ kind: 'invalid' });
   });
 });
 

@@ -124,6 +124,26 @@ export function hostCount(spec: string): number | null {
   return n === 0 ? null : n;
 }
 
+/** What the free-text Addresses field says about itself while it is being typed. */
+export type TypedTargets =
+  | { kind: 'empty' }
+  | { kind: 'count'; count: number }
+  | { kind: 'invalid' };
+
+/**
+ * The live reading of the free-text Addresses field (ADR-200 Inc.11): nothing while it is empty,
+ * the address count while it parses, and the format error the moment it does not.
+ *
+ * This is what lets the field carry no examples paragraph — the format is stated by the
+ * placeholder and enforced here, so the error appears only when it applies. The parse is
+ * [`hostCount`]'s, so the number on screen and the one Scan sends cannot disagree.
+ */
+export function typedTargets(spec: string): TypedTargets {
+  if (!spec.trim()) return { kind: 'empty' };
+  const count = hostCount(spec);
+  return count === null ? { kind: 'invalid' } : { kind: 'count', count };
+}
+
 /** One folder offered by the Site picker. */
 export interface SiteTargetOption {
   id: string;

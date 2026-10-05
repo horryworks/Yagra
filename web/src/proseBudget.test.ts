@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [7503, 4079],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [13797, 8166],
+  monitoring: [12393, 7364],
   nav: [2907, 1367],
   nodes: [23833, 13291],
   rca: [1038, 532],
@@ -98,9 +98,6 @@ const LONG_LEGACY: string[] = [
   'alertsConfig:thresholds.addModal.boundsHint',
   'alertsConfig:thresholds.addModal.rowMatchHint',
   'alertsConfig:thresholds.explainer',
-  'monitoring:discovery.examplesHint',
-  'monitoring:discovery.seen.coverage.off',
-  'monitoring:discovery.seen.note',
   'monitoring:duplicates.hint',
   'monitoring:missingPrefixes.note',
   'monitoring:subnetOverlaps.rules.text',
@@ -281,7 +278,6 @@ const POINTER_LEGACY: string[] = [
   'access:cred.delete.held',
   'dashboard:public.bannerOff',
   'dashboard:widgets.discovery.empty',
-  'monitoring:discovery.seen.coverage.off',
   'nodes:editNode.profileLockHint',
   'nodes:interfaces.rules.inheritedHint',
   'nodes:neighbors.empty.disabled',
@@ -299,7 +295,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 27, formHint: 19, modalHint: 49 };
+const HINT_SITES = { fieldHint: 22, formHint: 19, modalHint: 49 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

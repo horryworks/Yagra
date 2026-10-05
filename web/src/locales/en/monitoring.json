@@ -498,7 +498,6 @@
   "discovery": {
     "scans": {
       "title": "Recent sweeps",
-      "note": "Sweeps this core is holding. Pick one to see its progress or its results.",
       "resumed": "Showing a sweep that was already running.",
       "resumedDone": "Showing the most recent sweep.",
       "unknownScan": "This core does not know that sweep — it restarted, or the sweep aged out. A poller may still be running it.",
@@ -525,7 +524,6 @@
     "site": {
       "label": "Sweep a site",
       "none": "None — type a range instead",
-      "hint": "Lists the ranges recorded for that site so you can pick which to sweep, and files anything you import into its folder.",
       "rangesLabel": "Ranges at this site",
       "hosts_one": "{{count}} address",
       "hosts_other": "{{count}} addresses",
@@ -544,16 +542,14 @@
     "pool": {
       "label": "Sweep from",
       "any": "Any poller",
-      "anyHint": "With no site chosen the sweep goes to whichever poller answers first — which may be one that cannot reach these addresses.",
-      "deadHint": "No live poller serves this site, so the sweep will go to whichever poller answers first instead.",
-      "oneOf": "One live poller in this site will run it."
+      "anyHint": "Any poller may take this sweep, including one that cannot reach these addresses.",
+      "deadHint": "No live poller serves this site, so the sweep will go to whichever poller answers first instead."
     },
     "seen": {
       "title": "Seen on the network",
       "dest": {
         "label": "Add to folder",
         "byRange": "File by IP range",
-        "byRangeHint": "A device goes into the folder whose IP range contains its address. One that no range covers — or that two folders claim equally well — goes into the folder chosen above.",
         "line": {
           "matched": "Goes into “{{folder}}” — its IP range {{prefix}} holds this address.",
           "unmatched": "No folder’s IP range holds this address. It goes into “{{folder}}”.",
@@ -564,9 +560,8 @@
           "chosenRoot": "Goes into no folder, at the top of the tree."
         }
       },
-      "note": "Devices your monitored equipment has seen that Yagra is not monitoring yet: hosts in a router’s ARP / IPv6 neighbor cache, LLDP and CDP neighbors that advertise a management address, OSPF neighbors and BGP peers, and senders of syslog or SNMP traps that no node claimed. No scan is needed. Phones and end stations behind a switch are left out of the LLDP / CDP half.",
       "coverage": {
-        "off": "The ARP cache walk is off, so this list comes only from LLDP / CDP neighbors, routing peers and syslog / trap senders. Turn on the ARP / IPv6 neighbor cache walk under Settings ▸ System settings ▸ Discovery walks to add every host your routers have spoken to.",
+        "off": "The ARP cache walk is off, so hosts your routers have spoken to are not listed. Turn it on in <lnk/>.",
         "complete": "ARP: {{nodes}} device(s) reporting, {{observed}} address(es) resolved in total.",
         "sampled": "ARP: {{nodes}} device(s) reporting, {{observed}} address(es) resolved — but {{truncated}} of them hit the row budget, so the ARP half of this list is a sample of what is out there, not all of it."
       },
@@ -626,20 +621,19 @@
       "more": {
         "button": "Load {{n}} more",
         "loaded": "{{loaded}} of {{total}} unregistered devices loaded. Filters search only the loaded rows."
-      }
+      },
+      "empty": "Nothing has been seen yet that Yagra does not already monitor."
     },
     "scanTitle": "Scan a subnet",
     "targetsLabel": "Addresses",
     "credsLabel": "Credentials to try",
     "icmpGate": {
-      "label": "Also try SNMP where ping is blocked",
-      "hint": "Off: an address that does not answer ping is skipped instead of being tried with every credential, which is what keeps a large range quick. Turn it on to find devices that block ICMP but answer SNMP."
+      "label": "Also try SNMP where ping is blocked (slower on large ranges)"
     },
     "resultsTitle": "Discovered devices",
-    "targetPlaceholder": "192.168.1.0/24\n10.0.0.5\n192.168.1.10-20",
+    "targetPlaceholder": "192.0.2.0/24\n198.51.100.5\n192.0.2.10-20",
     "scan": "Scan",
     "scanning": "Scanning…",
-    "examplesHint": "Examples: <c>192.168.1.0/24</c> · <c>10.0.0.5</c> · <c>192.168.1.10-20</c> · <c>192.168.1.10-192.168.1.20</c> — one per line, or comma-separated.",
     "credsLink": "Discovery uses your stored credentials. <lnk>Manage credentials →</lnk>",
     "none": "(none)",
     "noSnmp": "no SNMP",
@@ -709,8 +703,7 @@
       "candidateNoun": "addresses"
     },
     "fileByPrefix": {
-      "label": "File each device by its IP range",
-      "hint": "Each device goes into the folder whose IP range contains its address. One that no range covers — or that two folders claim equally well — goes into the folder chosen above instead."
+      "label": "File each device by its IP range"
     },
     "dest": {
       "root": "Tree root",

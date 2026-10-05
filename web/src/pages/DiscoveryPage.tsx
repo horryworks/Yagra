@@ -57,10 +57,12 @@ import {
   specFor,
   sumHosts,
   SWEEP_LIMIT,
+  typedTargets,
 } from './siteTargets';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -401,6 +403,8 @@ export function DiscoveryPage() {
   const tickedTotal = sumHosts(siteRows, checkedPrefixes);
   const shownCount = exactCount ?? (siteId ? tickedTotal : null);
   const overLimit = exactCount === null && tickedTotal > SWEEP_LIMIT;
+  /** The free-text field's live line — its count, or its format error (ADR-200 Inc.11). */
+  const typed = useMemo(() => typedTargets(targetSpec), [targetSpec]);
 
   /** Choose a site — or leave it, which brings the free-text field back. */
   const pickSite = (id: string) => {
@@ -482,7 +486,15 @@ export function DiscoveryPage() {
       // Two ways to get here and they need different sentences: a site with nothing usable ticked,
       // and a typed spec that does not parse. The typed one's message names the syntax; saying
       // that to someone who just unticked three checkboxes would be nonsense.
-      setError(t(siteId ? 'discovery.site.err.nothingTicked' : 'discovery.err.badTargets'));
+      // A typed spec that does not parse already shows the format error under the field, so the
+      // line here would be its second copy.
+      setError(
+        siteId
+          ? t('discovery.site.err.nothingTicked')
+          : typed.kind === 'invalid'
+            ? null
+            : t('discovery.err.badTargets'),
+      );
       return;
     }
     // Remember this sweep's settings for the next visit (ADR-134 decision 5). **After the validation
@@ -862,7 +874,6 @@ export function DiscoveryPage() {
                     emptyOption={t('discovery.site.none')}
                     disabled={inFlight}
                   />
-                  <FieldHint>{t('discovery.site.hint')}</FieldHint>
                 </label>
               </div>
             )}
@@ -939,22 +950,18 @@ export function DiscoveryPage() {
                     value={targetSpec}
                     onChange={(e) => setTargetSpec(e.target.value)}
                   />
-                  {/* The count first, because it is the thing that changes as the field is edited.
-                      When it is `null` the spec will not run, and the examples hint below already
-                      names all three reasons — so this line simply goes away rather than repeating
-                      them in a second wording. */}
-                  {shownCount !== null && (
+                  {/* The field explains its format through the placeholder and this one live line
+                      (ADR-200 Inc.11): the count while the text parses, the format error the
+                      moment it does not, nothing while it is empty. The error is the one Scan
+                      would have shown, so it is not repeated there (`startScan`). */}
+                  {typed.kind === 'count' && (
                     <FieldHint>
-                      {t('discovery.site.addresses', { count: shownCount, max: SWEEP_LIMIT })}
+                      {t('discovery.site.addresses', { count: typed.count, max: SWEEP_LIMIT })}
                     </FieldHint>
                   )}
-                  <FieldHint>
-                    <Trans
-                      t={t}
-                      i18nKey="discovery.examplesHint"
-                      components={{ c: <span className="mono" /> }}
-                    />
-                  </FieldHint>
+                  {typed.kind === 'invalid' && (
+                    <FieldHint error>{t('discovery.err.badTargets')}</FieldHint>
+                  )}
                 </label>
               )}
 
@@ -992,16 +999,15 @@ export function DiscoveryPage() {
                     </option>
                   ))}
                 </Select>
-                {/* Says what the choice means rather than removing the option: a pool that is
+                {/* Says what the choice risks rather than removing the option: a pool that is
                     briefly down is still the pool the operator means, and hiding it would take
-                    away the reason to come back to it. */}
-                <FieldHint error={unroutedPool}>
-                  {!pool
-                    ? t('discovery.pool.anyHint')
-                    : unroutedPool
-                      ? t('discovery.pool.deadHint')
-                      : t('discovery.pool.oneOf')}
-                </FieldHint>
+                    away the reason to come back to it. A live pool says nothing — it does what
+                    the label says. */}
+                {unroutedPool && (
+                  <FieldHint error>
+                    {!pool ? t('discovery.pool.anyHint') : t('discovery.pool.deadHint')}
+                  </FieldHint>
+                )}
               </label>
 
             </div>
@@ -1012,9 +1018,8 @@ export function DiscoveryPage() {
                 The input stays enabled mid-sweep (the value is worth reading) — only the button
                 that acts on it goes away (ui-conventions). */}
             <div className="disco-opt">
-              {/* ⚠️ The hint is a *sibling* of the label, not a child of it. Inside, the whole
-                  two-line explanation becomes part of the checkbox's hit area — so selecting the
-                  text to read it flips the setting instead. */}
+              {/* The label carries the cost itself (ADR-200 Inc.11) — "slower on large ranges" is
+                  the one thing the operator needs before ticking it, so there is no hint below. */}
               <label className="form-label form-check">
                 <input
                   type="checkbox"
@@ -1024,7 +1029,6 @@ export function DiscoveryPage() {
                 />
                 {t('discovery.icmpGate.label')}
               </label>
-              <FieldHint>{t('discovery.icmpGate.hint')}</FieldHint>
             </div>
 
             {/* File each device into the folder whose IP range contains it (ADR-131).
@@ -1036,7 +1040,7 @@ export function DiscoveryPage() {
                 server's answer cannot be waited for here — only the per-row wording uses that. */}
             {siteOptions.length > 0 && (
               <div className="disco-opt">
-                {/* Hint outside the label, for the reason the ICMP gate's is. */}
+                {/* No hint: each result row says where it will go and why (`dest.why.*`). */}
                 <label className="form-label form-check">
                   <input
                     type="checkbox"
@@ -1045,7 +1049,6 @@ export function DiscoveryPage() {
                   />
                   {t('discovery.fileByPrefix.label')}
                 </label>
-                <FieldHint>{t('discovery.fileByPrefix.hint')}</FieldHint>
               </div>
             )}
 
@@ -1103,7 +1106,6 @@ export function DiscoveryPage() {
 
       {scans.length > 0 && (
         <Card title={t('discovery.scans.title')}>
-          <p className="sys-setting-help muted">{t('discovery.scans.note')}</p>
           {/* Deliberately not a table. This screen already carries two, and `MUST_FILTER` treats
               that count as the thing to protect; a third grid would also need a filter row it has
               no use for. The list is capped server-side, so it cannot grow into one. */}
@@ -1433,7 +1435,6 @@ function SeenOnNetworkCard({
 
   return (
     <Card title={t('discovery.seen.title')}>
-      <p className="sys-setting-help muted">{t('discovery.seen.note')}</p>
       {/* What Detect tries, in order — the Scan tab's picker, over the same list. Drawn only with
           the permission Detect needs (ADR-056): without it there is nothing to try them with. */}
       {canConfig && (
@@ -1458,12 +1459,21 @@ function SeenOnNetworkCard({
         />
       )}
       <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
-        {t(`discovery.seen.coverage.${coverage}`, {
-          observed: page?.summary?.observed_total ?? 0,
-          nodes: page?.summary?.nodes_reporting ?? 0,
-          truncated: page?.summary?.truncated_nodes ?? 0,
-        })}
+        {/* `off` names the switch as a link to the screen that holds it (ADR-200 Inc.11); the
+            other two have no `<lnk/>` and ignore the component. */}
+        <Trans
+          t={t}
+          i18nKey={`discovery.seen.coverage.${coverage}`}
+          values={{
+            observed: page?.summary?.observed_total ?? 0,
+            nodes: page?.summary?.nodes_reporting ?? 0,
+            truncated: page?.summary?.truncated_nodes ?? 0,
+          }}
+          components={{ lnk: <ScreenLink to="/settings/system" /> }}
+        />
       </p>
+      {/* One sentence for the empty list, which used to be a paragraph above it at all times. */}
+      {page && all.length === 0 && <p className="muted">{t('discovery.seen.empty')}</p>}
       {all.length > 0 && (
         // "Clear all" goes back to *this table's* default, not to the empty state: "unmonitored
         // only" is the view an operator expects to land on here. `defaultFilters` is that view,
