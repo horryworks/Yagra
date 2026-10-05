@@ -39,7 +39,7 @@ const group = (over: Partial<NodeGroup> = {}): NodeGroup => ({
 });
 
 const assignment = (over: Partial<NodeAssignment> = {}): NodeAssignment => ({
-  pool: 'tokyo',
+  pool: 'site-a',
   pool_source: 'node',
   pool_source_group_id: null,
   polled_by: { state: 'assigned', poller_id: 'edge-1' },
@@ -48,17 +48,17 @@ const assignment = (over: Partial<NodeAssignment> = {}): NodeAssignment => ({
 
 describe('isValidPoolName', () => {
   it('accepts the server alphabet and treats empty as "inherit"', () => {
-    expect(isValidPoolName('tokyo')).toBe(true);
+    expect(isValidPoolName('site-a')).toBe(true);
     expect(isValidPoolName('edge-1_lab')).toBe(true);
-    expect(isValidPoolName('  tokyo  ')).toBe(true);
+    expect(isValidPoolName('  site-a  ')).toBe(true);
     // Blank is valid: the forms send '' to clear an assignment back to inherited.
     expect(isValidPoolName('')).toBe(true);
     expect(isValidPoolName('   ')).toBe(true);
   });
 
   it('rejects anything that is not a single NATS subject token', () => {
-    // A dot would publish to `yagra.jobs.tokyo.1`, a subject no poller subscribes to.
-    expect(isValidPoolName('tokyo.1')).toBe(false);
+    // A dot would publish to `yagra.jobs.site-a.1`, a subject no poller subscribes to.
+    expect(isValidPoolName('site-a.1')).toBe(false);
     expect(isValidPoolName('east dc')).toBe(false);
     expect(isValidPoolName('a/b')).toBe(false);
     expect(isValidPoolName('*')).toBe(false);
@@ -108,15 +108,15 @@ describe('poolFactLabel', () => {
   const names = (id: string) => (id === 'g1' ? 'Tokyo' : undefined);
 
   it('shows a node-set pool plainly', () => {
-    expect(poolFactLabel(assignment(), names, t)).toBe('tokyo');
+    expect(poolFactLabel(assignment(), names, t)).toBe('site-a');
   });
 
   it('annotates an inherited pool with the folder it came from', () => {
     const inherited = assignment({ pool_source: 'group', pool_source_group_id: 'g1' });
-    expect(poolFactLabel(inherited, names, t)).toBe('tokyo (from Tokyo)');
+    expect(poolFactLabel(inherited, names, t)).toBe('site-a (from Tokyo)');
     // An unresolvable folder degrades to the bare pool rather than "from undefined".
     const orphan = assignment({ pool_source: 'group', pool_source_group_id: 'gone' });
-    expect(poolFactLabel(orphan, names, t)).toBe('tokyo');
+    expect(poolFactLabel(orphan, names, t)).toBe('site-a');
   });
 
   it('marks the implicit default', () => {
@@ -133,18 +133,18 @@ describe('poolChoices', () => {
   const opt = (name: string, live = true): PoolOption => ({ name, live });
 
   it('keeps the server order and marks liveness', () => {
-    const chips = poolChoices([opt('default'), opt('tokyo'), opt('osaka', false)], null);
-    expect(chips.map((c) => c.name)).toEqual(['default', 'tokyo', 'osaka']);
+    const chips = poolChoices([opt('default'), opt('site-a'), opt('osaka', false)], null);
+    expect(chips.map((c) => c.name)).toEqual(['default', 'site-a', 'osaka']);
     expect(chips.map((c) => c.live)).toEqual([true, true, false]);
     // Nothing is current when the target inherits.
     expect(chips.some((c) => c.current)).toBe(false);
   });
 
   it('puts the current pool first and marks it, without duplicating it', () => {
-    const chips = poolChoices([opt('default'), opt('tokyo'), opt('osaka')], 'tokyo');
-    expect(chips.map((c) => c.name)).toEqual(['tokyo', 'default', 'osaka']);
+    const chips = poolChoices([opt('default'), opt('site-a'), opt('osaka')], 'site-a');
+    expect(chips.map((c) => c.name)).toEqual(['site-a', 'default', 'osaka']);
     expect(chips[0].current).toBe(true);
-    expect(chips.filter((c) => c.name === 'tokyo')).toHaveLength(1);
+    expect(chips.filter((c) => c.name === 'site-a')).toHaveLength(1);
   });
 
   it('still shows a current pool the server no longer lists', () => {
@@ -173,14 +173,14 @@ describe('poolChoices', () => {
 describe('inheritedGroupPool', () => {
   it('returns the nearest ancestor that sets a pool', () => {
     const groups = [
-      group({ id: 'root', pool: 'tokyo' }),
+      group({ id: 'root', pool: 'site-a' }),
       group({ id: 'mid', parent_id: 'root' }),
       group({ id: 'leaf', parent_id: 'mid', pool: 'edge' }),
     ];
-    expect(inheritedGroupPool(groups, 'mid')).toBe('tokyo');
+    expect(inheritedGroupPool(groups, 'mid')).toBe('site-a');
     // The folder's OWN pool is ignored — this previews what it would inherit.
     expect(inheritedGroupPool(groups, 'leaf')).toBe('edge');
-    expect(inheritedGroupPool(groups, 'root')).toBe('tokyo');
+    expect(inheritedGroupPool(groups, 'root')).toBe('site-a');
   });
 
   it('returns undefined when nothing is inherited', () => {
@@ -193,8 +193,8 @@ describe('inheritedGroupPool', () => {
   });
 
   it('treats a blank stored pool as unset', () => {
-    const groups = [group({ id: 'root', pool: 'tokyo' }), group({ id: 'mid', parent_id: 'root', pool: '  ' })];
-    expect(inheritedGroupPool(groups, 'mid')).toBe('tokyo');
+    const groups = [group({ id: 'root', pool: 'site-a' }), group({ id: 'mid', parent_id: 'root', pool: '  ' })];
+    expect(inheritedGroupPool(groups, 'mid')).toBe('site-a');
   });
 
   it('does not hang on cyclic ancestry', () => {
@@ -212,7 +212,7 @@ describe('sharedOwnPool', () => {
 
   it('answers the pool only when every node agrees', () => {
     expect(sharedOwnPool([n('osaka'), n('osaka')])).toBe('osaka');
-    expect(sharedOwnPool([n('osaka'), n('tokyo')])).toBeNull();
+    expect(sharedOwnPool([n('osaka'), n('site-a')])).toBeNull();
   });
 
   it('answers null when any node is inheriting', () => {
@@ -230,20 +230,20 @@ describe('sharedOwnPool', () => {
 
 describe('fallbackPool / sharedFallbackPool / poolPlaceholder', () => {
   const groups = [
-    group({ id: 'tokyo', pool: 'tokyo' }),
-    group({ id: 'floor', parent_id: 'tokyo' }),
+    group({ id: 'site-a', pool: 'site-a' }),
+    group({ id: 'floor', parent_id: 'site-a' }),
     group({ id: 'osaka' }),
   ];
   const n = (group_id: string | null) => ({ group_id });
 
   it('falls back to the default pool when no folder above sets one', () => {
-    expect(fallbackPool(groups, 'floor')).toBe('tokyo');
+    expect(fallbackPool(groups, 'floor')).toBe('site-a');
     expect(fallbackPool(groups, 'osaka')).toBe(DEFAULT_POOL);
     expect(fallbackPool(groups, null)).toBe(DEFAULT_POOL);
   });
 
   it('answers one value for a batch only when every node falls back to it', () => {
-    expect(sharedFallbackPool(groups, [n('tokyo'), n('floor')])).toBe('tokyo');
+    expect(sharedFallbackPool(groups, [n('site-a'), n('floor')])).toBe('site-a');
     // Unfiled and in a folder with no pool both land on the default pool: the same answer.
     expect(sharedFallbackPool(groups, [n(null), n('osaka')])).toBe(DEFAULT_POOL);
     expect(sharedFallbackPool(groups, [n('floor'), n('osaka')])).toBeNull();
@@ -251,7 +251,7 @@ describe('fallbackPool / sharedFallbackPool / poolPlaceholder', () => {
   });
 
   it('names the value in the placeholder, or says it comes from the folder', () => {
-    expect(poolPlaceholder('tokyo', t)).toBe('Inherited: tokyo');
+    expect(poolPlaceholder('site-a', t)).toBe('Inherited: site-a');
     expect(poolPlaceholder(null, t)).toBe('Inherited from the folder');
   });
 });
