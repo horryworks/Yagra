@@ -27,7 +27,9 @@
 
   "meta": {
     "cached": "Cached",
-    "cachedHint": "The evidence has not changed since this was generated, so it was served from storage without calling the provider again.",
+    "cachedWhy": {
+      "info": "The evidence has not changed since this was generated, so it was served from storage without calling the provider again."
+    },
     "generated": "Generated {{at}} by {{by}}",
     "model": "{{provider}} · {{model}}"
   },
@@ -56,7 +58,7 @@
   },
 
   "err": {
-    "notConfigured": "No AI provider is configured. Set one up in Settings ▸ AI analysis.",
+    "notConfigured": "No AI provider is configured. Set one up in <lnk/>.",
     "misconfigured": "The AI provider is configured but unusable: {{message}}",
     "rateLimited": "Too many analyses at once. Try again in a minute.",
     "forbidden": "Generating an explanation needs the operator role.",

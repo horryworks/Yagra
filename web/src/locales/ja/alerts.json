@@ -19,10 +19,14 @@
     "flapping": "フラッピング",
     "acked": "ACK 済み",
     "poolSubject": "ポーラープール「{{pool}}」",
-    "poolSubjectHint": "デバイスではなく、Yagra 自身の監視範囲についてのアラートです。このプールにはノードが割り当てられたままなのに、実際に監視する稼働中のポーラーがありません。",
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
-    "merakiOrgSubjectHint": "Cisco Meraki の Dashboard API がこの組織に応答していないため、デバイスの値を取得できていません。各デバイスの状態は、最後に取得したときのままです。このアラート 1 つが、組織のデバイス全部を代表します。",
-    "partOfOutage": "このノードの停止に含まれる"
+    "partOfOutage": "このノードの停止に含まれる",
+    "poolSubjectWhy": {
+      "info": "デバイスではなく、Yagra 自身の監視についてのアラートです。このプールにはノードがあるのに稼働中のポーラーがなく、監視されていません。"
+    },
+    "merakiOrgSubjectWhy": {
+      "info": "Meraki の Dashboard API がこの組織に応答せず、デバイスの値を取得できていません。各デバイスは最後に取得した状態のままで、このアラート 1 つが全部を代表します。"
+    }
   },
   "acked": {
     "title": "{{source}} で {{by}} が確認済み{{note}}（読み取り専用 · 外部ツールから反映）",
@@ -56,23 +60,22 @@
     }
   },
   "events": {
-    "note": "受信した syslog / SNMP トラップ / webhook のイベントです。ルールに一致しなかったイベントは、ルールを書く材料として 24 時間保持します。一致したイベントはアラート履歴の保持期間に従います。",
     "listening": "受信待ち: {{endpoints}}",
-    "listeningNone": "syslog・トラップの受信口がありません。受信するにはポーラーに YAGRA_SYSLOG_BIND / YAGRA_TRAP_BIND を設定してください。Webhook の送信元は「Webhook 送信元」で設定します。",
-    "empty": "受信したイベントはまだありません。",
+    "listeningNone": "syslog・トラップを受けるポーラーがありません。ポーラーに YAGRA_SYSLOG_BIND か YAGRA_TRAP_BIND を設定してください。",
     "events": "件のイベント",
     "eventsLoaded": "件のイベントを読み込み",
     "filters": {
       "allKinds": "すべての種別",
       "allEvents": "すべてのイベント"
     },
-    "emptyWindow": "過去 24 時間にイベントはありません。この期間の区切りが検索を速く保っています。「日時」で広げてください。",
-    "emptyPrefixMiss": "語の先頭が一致するものがありません。このデプロイでは語の先頭から一致するため、長い語の途中にある文字列は見つかりません。メッセージの絞り込みを正規表現に切り替えてください。",
-    "widened": "語の先頭が一致するものが無かったので、語の途中に含むイベントを表示しています。"
+    "emptyWindow": "過去 24 時間にイベントはありません。",
+    "emptyPrefixMiss": "「{{term}}」で始まる語はありません。",
+    "widened": "語の先頭が一致するものが無かったので、語の途中に含むイベントを表示しています。",
+    "showWeek": "過去 7 日間に広げる",
+    "unmatchedKept": "ルールに一致しなかったイベントは <lnk/> で決めた期間だけ保持するため、古い範囲では欠けることがあります。"
   },
   "eventLog": {
     "openInEvents": "イベントで開く",
-    "emptyNode": "このノードから受信したイベントはまだありません。",
     "cols": {
       "kind": "種別",
       "source": "送信元",
@@ -88,6 +91,6 @@
       "info": "情報",
       "none": "一致なし"
     },
-    "emptyNodeWindow": "このノードから過去 24 時間に受信したイベントはありません。「日時」で期間を広げてください。"
+    "emptyNodeWindow": "このノードから過去 24 時間に受信したイベントはありません。"
   }
 }

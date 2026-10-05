@@ -54,3 +54,15 @@ export function refusalText(e: unknown, t: Translate): string {
       return e.message || t('err.generic');
   }
 }
+
+/**
+ * Whether the refusal is "no provider is configured" — the one whose next step is another screen,
+ * so the modal draws it with a link to Settings > AI analysis instead of as plain text (ADR-200).
+ * The permission check comes first, exactly as in `refusalText`: a caller who may not generate is
+ * told about the permission, never sent to a settings screen they cannot use.
+ */
+export function refusalNeedsSetup(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return false;
+  if (e.status === 401 || e.status === 403) return false;
+  return e.code === 'rca_not_configured';
+}

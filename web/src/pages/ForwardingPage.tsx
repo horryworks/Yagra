@@ -25,11 +25,10 @@ import type {
 import { FORWARD_SOURCE_KINDS } from '../types/api';
 import {
   destKindsForSource,
+  fidelityChoices,
   fieldsForSource,
   opsForField,
   reconcileDraft,
-  supportsRendered,
-  supportsVerbatim,
   filtersWholeDatagram,
   usesCommunity,
   usesHostPort,
@@ -42,7 +41,9 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, TextArea, Select } from '../components/ui/Field';
+import { Field, TextInput, TextArea, Select } from '../components/ui/Field';
+import { InfoTip } from '../components/ui/InfoTip';
+import { SecretInput } from '../components/ui/SecretInput';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -55,6 +56,7 @@ import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
   draftFrom,
   emptyDraft,
+  targetProblem,
   toInput,
   type Draft,
   type DraftCondition,
@@ -277,11 +279,22 @@ function DestinationModal({
   // Every mutation goes through this so the draft can never hold a combination core would reject.
   const update = (patch: Partial<Draft>) => setDraft((d) => reconcileDraft({ ...d, ...patch }));
 
-  const verbatimPossible = supportsVerbatim(draft.source_kind, draft.dest_kind);
-  const renderedPossible = supportsRendered(draft.source_kind, draft.dest_kind);
   const hostPort = usesHostPort(draft.dest_kind);
   const rowsOnly = usesServiceAccount(draft.dest_kind);
-  const ready = draft.name.trim() !== '' && draft.target.trim() !== '';
+  const fidelity = fidelityChoices(draft.source_kind, draft.dest_kind);
+  // Said only when the value is wrong (ADR-200): the placeholder shows the shape, this names it.
+  const problem = targetProblem(draft.dest_kind, draft.target);
+  const targetError =
+    problem === 'hostPort'
+      ? t('field.targetInvalid')
+      : problem === 'table'
+        ? t('field.targetTableInvalid')
+        : null;
+  // `has_secret` is one flag for whichever secret the stored kind takes, so it vouches for this
+  // box only while the destination is still that kind.
+  const storedKey = !!existing?.has_secret && usesServiceAccount(existing.dest_kind);
+  const storedCommunity = !!existing?.has_secret && usesCommunity(existing.dest_kind);
+  const ready = draft.name.trim() !== '' && draft.target.trim() !== '' && problem === null;
 
   const submit = () => {
     if (!ready) return;
@@ -353,19 +366,18 @@ function DestinationModal({
         {/* Two target shapes, and the difference is not cosmetic: a relay is addressed by
             `host:port`, BigQuery by `project.dataset.table`. Relabelling rather than sharing one
             vague placeholder is what stops an admin typing a host into a table field. */}
-        <div className="modal-field">
-          <label className="modal-field-label">
-            {hostPort ? t('field.target') : t('field.targetTable')}
-          </label>
+        <Field
+          label={hostPort ? t('field.target') : t('field.targetTable')}
+          htmlFor="fwd-target"
+          error={targetError}
+        >
           <TextInput
+            id="fwd-target"
             value={draft.target}
             placeholder={hostPort ? t('field.targetPlaceholder') : t('field.targetTablePlaceholder')}
             onChange={(e) => update({ target: e.target.value })}
           />
-          <span className="modal-hint">
-            {hostPort ? t('field.targetHint') : t('field.targetTableHint')}
-          </span>
-        </div>
+        </Field>
         <div className="modal-field">
           <label className="modal-field-label">{t('field.pool')}</label>
           <TextInput
@@ -378,89 +390,97 @@ function DestinationModal({
 
       <div className="modal-field">
         <label className="modal-field-label">{t('field.fidelity')}</label>
+        {/* Each choice says what it does, and one this pairing cannot carry stays in the list,
+            disabled, saying why (`fidelityChoices`). BigQuery is neither fidelity: it writes rows,
+            so its list of one is disabled rather than leaving "Rebuilt" selected. */}
         <Select
           value={rowsOnly ? 'rows' : draft.verbatim ? 'verbatim' : 'rendered'}
-          disabled={rowsOnly || !verbatimPossible || !renderedPossible}
+          disabled={fidelity.filter((c) => !c.disabled).length < 2}
           onChange={(e) => update({ verbatim: e.target.value === 'verbatim' })}
         >
-          {/* BigQuery is neither fidelity: it produces normalized rows. Showing a disabled third
-              value is more honest than leaving "rendered" selected and hoping the hint is read. */}
-          {rowsOnly ? (
-            <option value="rows">{t('fidelity.rows')}</option>
-          ) : (
-            <>
-              <option value="verbatim">{t('fidelity.verbatim')}</option>
-              <option value="rendered">{t('fidelity.rendered')}</option>
-            </>
-          )}
+          {fidelity.map((c) => (
+            <option key={c.value} value={c.value} disabled={c.disabled}>
+              {t(c.label)} — {t(c.sub)}
+            </option>
+          ))}
         </Select>
-        <span className="modal-hint">
-          {rowsOnly
-            ? t('field.fidelityRowsOnly')
-            : !renderedPossible
-              ? t('field.fidelityVerbatimOnly')
-              : verbatimPossible
-                ? t('field.fidelityHint')
-                : t('field.fidelityImpossible')}
-        </span>
       </div>
 
       {usesServiceAccount(draft.dest_kind) && (
         <div className="modal-field">
-          <label className="modal-field-label">{t('field.serviceAccount')}</label>
-          <TextArea
+          <label className="modal-field-label" htmlFor="fwd-sa">
+            {t('field.serviceAccount')}
+          </label>
+          <SecretInput
+            id="fwd-sa"
+            stored={storedKey}
+            rows={5}
             value={draft.service_account_json}
-            placeholder={
-              existing?.has_secret
-                ? t('field.serviceAccountKept')
-                : t('field.serviceAccountPlaceholder')
-            }
-            spellCheck={false}
-            onChange={(e) => update({ service_account_json: e.target.value })}
+            // Only with nothing stored does an empty box mean something other than "keep": there,
+            // it selects the instance's own identity.
+            placeholder={storedKey ? undefined : t('field.serviceAccountPlaceholder')}
+            onChange={(v) => update({ service_account_json: v })}
           />
-          <span className="modal-hint">{t('field.serviceAccountHint')}</span>
         </div>
       )}
 
       {usesTls(draft.dest_kind) && (
         <div className="modal-field">
-          <label className="modal-field-label">{t('field.caCert')}</label>
+          <label className="modal-field-label" htmlFor="fwd-ca">
+            {t('field.caCert')}
+          </label>
           <TextArea
+            id="fwd-ca"
             value={draft.ca_cert}
             placeholder={t('field.caCertPlaceholder')}
             spellCheck={false}
             onChange={(e) => update({ ca_cert: e.target.value })}
           />
-          <span className="modal-hint">{t('field.caCertHint')}</span>
         </div>
       )}
 
       {usesCommunity(draft.dest_kind) && (
         <div className="modal-field">
-          <label className="modal-field-label">{t('field.community')}</label>
-          <TextInput
-            type="password"
+          <label className="modal-field-label" htmlFor="fwd-community">
+            {t('field.community')}
+          </label>
+          <SecretInput
+            id="fwd-community"
+            stored={storedCommunity}
             value={draft.community}
-            placeholder={existing?.has_secret ? t('field.communityKept') : 'public'}
-            onChange={(e) => update({ community: e.target.value })}
+            placeholder={storedCommunity ? undefined : 'public'}
+            onChange={(v) => update({ community: v })}
           />
-          <span className="modal-hint">{t('field.communityHint')}</span>
         </div>
       )}
 
       <div className="modal-field">
-        <label className="modal-field-label">{t('field.rateLimit')}</label>
+        <label className="modal-field-label" htmlFor="fwd-rate">
+          {t('field.rateLimit')}
+        </label>
         <TextInput
+          id="fwd-rate"
           value={draft.rate_limit}
           inputMode="numeric"
+          suffix={t('field.rateLimitUnit')}
           placeholder={t('field.rateLimitPlaceholder')}
           onChange={(e) => update({ rate_limit: e.target.value.replace(/[^0-9]/g, '') })}
         />
-        <span className="modal-hint">{t('field.rateLimitHint')}</span>
       </div>
 
       <div className="modal-field">
-        <label className="modal-field-label">{t('filter.label')}</label>
+        <div className="field-head">
+          <label className="modal-field-label">{t('filter.label')}</label>
+          {/* A flow export is a template + many records, and records cannot be removed from one
+              without re-encoding it — so one matching record carries the whole datagram. That
+              changes what a filter here is worth, so it is said where the filter is built. */}
+          {filtersWholeDatagram(draft.source_kind, draft.dest_kind) && (
+            <InfoTip
+              infoKey="settings-forwarding:filter.wholeDatagram.info"
+              label={t('filter.label')}
+            />
+          )}
+        </div>
         <div className="fwd-mode">
           <Select
             value={draft.mode}
@@ -484,18 +504,6 @@ function DestinationModal({
             + {t('filter.add')}
           </Button>
         </div>
-        {/* A flow export is a template + many records, and records cannot be removed from one
-            without re-encoding it. Saying so here is the difference between a filter that behaves
-            surprisingly and one that behaves as documented. */}
-        {filtersWholeDatagram(draft.source_kind, draft.dest_kind) &&
-          draft.conditions.length > 0 && (
-            <span className="modal-hint fwd-warn">{t('filter.flowAnyRecord')}</span>
-          )}
-        {/* ...and the converse, because it is the reason to pick BigQuery for a filtered flow
-            feed: rows are independent, so a non-matching record is simply not written. */}
-        {draft.source_kind === 'flow' && rowsOnly && draft.conditions.length > 0 && (
-          <span className="modal-hint">{t('filter.flowPerRecord')}</span>
-        )}
         {draft.conditions.length === 0 ? (
           <span className="modal-hint">{t('filter.emptyHint')}</span>
         ) : (
@@ -633,15 +641,14 @@ export function ForwardingPage() {
       <PageHeader
         title={t('nav:events.forwarding')}
         trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.forwarding') }]}
-        note={t('note')}
       />
 
       {!authed ? (
         <Card>
-          <p className="muted">{t('signInPrompt')}</p>
+          <p className="muted">{t('common:loadBlock.signIn')}</p>
         </Card>
       ) : (
-        <LoadGate load={destinations} unavailable={t('unavailable')} permission="manage_system">
+        <LoadGate load={destinations} permission="manage_system">
           {wantsVerbatim && staleP.length > 0 && (
             <Card>
               <p className="fwd-warn">{t('warn.noRawCapture', { pollers: staleP.join(', ') })}</p>

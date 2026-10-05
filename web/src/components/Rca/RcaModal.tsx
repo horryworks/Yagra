@@ -14,15 +14,17 @@
 // is served from the store (`cached`) rather than billed again.
 
 import { useCallback, useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import i18n from '../../i18n';
 import { api } from '../../services/api';
 import { formatExactTime, formatTimestamp, LIVENESS_METRIC } from '../../lib/format';
 import { alertTitle } from '../../lib/alertName';
 import type { RcaEvidence, RcaReport, RcaReportBody } from '../../types/api';
-import { formatWindow, nodeLine, refusalText } from './rcaText';
+import { formatWindow, nodeLine, refusalNeedsSetup, refusalText } from './rcaText';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
+import { InfoPress } from '../ui/InfoTip';
+import { ScreenLink } from '../ui/ScreenLink';
 import './RcaModal.css';
 
 interface Props {
@@ -139,7 +141,8 @@ export function RcaModal({ node, check, onClose }: Props) {
   const { t } = useTranslation('rca');
   const [report, setReport] = useState<RcaReport | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // `setup` marks the one refusal whose next step is another screen, drawn with a link to it.
+  const [error, setError] = useState<{ text: string; setup: boolean } | null>(null);
 
   const generate = useCallback(
     (force: boolean) => {
@@ -149,7 +152,9 @@ export function RcaModal({ node, check, onClose }: Props) {
         // The instructions stay English server-side; only the answer follows the reader's language.
         .createRca({ node, check, language: i18n.language, force })
         .then(setReport)
-        .catch((e: unknown) => setError(refusalText(e, t)))
+        .catch((e: unknown) =>
+          setError({ text: refusalText(e, t), setup: refusalNeedsSetup(e) }),
+        )
         .finally(() => setLoading(false));
     },
     [node, check, t],
@@ -192,7 +197,19 @@ export function RcaModal({ node, check, onClose }: Props) {
       <p className="rca-disclaimer">{t('disclaimer')}</p>
 
       {loading && <p className="rca-loading muted">{t('loading')}</p>}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error">
+          {error.setup ? (
+            <Trans
+              t={t}
+              i18nKey="err.notConfigured"
+              components={{ lnk: <ScreenLink to="/settings/ai" /> }}
+            />
+          ) : (
+            error.text
+          )}
+        </p>
+      )}
 
       {!loading && report && answer && (
         <>
@@ -200,9 +217,9 @@ export function RcaModal({ node, check, onClose }: Props) {
           <div className="rca-meta">
             <span className={`rca-conf ${confidence}`}>{t(`confidence.${confidence}`)}</span>
             {report.cached && (
-              <span className="rca-cached" title={t('meta.cachedHint')}>
+              <InfoPress infoKey="rca:meta.cachedWhy.info" className="rca-cached">
                 {t('meta.cached')}
-              </span>
+              </InfoPress>
             )}
             <span className="muted">
               {t('meta.model', { provider: report.provider, model: report.model })}

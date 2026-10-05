@@ -12,11 +12,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable } from '../components/ui/DataTable';
+import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { NodePicker } from '../components/NodePicker/NodePicker';
@@ -26,6 +29,9 @@ import {
   eventFilterColumns,
   eventFilterQuery,
   eventHighlight,
+  prefixMissTerm,
+  reachesPastDefaultWindow,
+  widenedToAWeek,
 } from '../components/EventLog/eventFilterSpec';
 import {
   eventColumnLabels,
@@ -100,10 +106,21 @@ export function EventsPage() {
   const renderCard = useMemo(() => eventCard(nodeName, t, { highlight }), [nodeName, t, highlight]);
 
   const anyFiltered = isAnyFiltered(filterCols, filters) || nodeId != null;
+  // Each empty state is one sentence and, where there is one, the next step (ADR-200): an empty
+  // default window offers the wider one rather than describing where the range control is.
   const empty = {
-    unfiltered: t('events.emptyWindow'),
-    filtered: t('events.empty'),
-    prefixMiss: t('events.emptyPrefixMiss'),
+    unfiltered: (
+      <EmptyState
+        text={t('events.emptyWindow')}
+        action={
+          <Button type="button" onClick={() => setFilters(widenedToAWeek(filters))}>
+            {t('events.showWeek')}
+          </Button>
+        }
+      />
+    ),
+    filtered: t('common:filter.noMatch'),
+    prefixMiss: t('events.emptyPrefixMiss', { term: prefixMissTerm(filters) }),
   }[eventEmptyKind(filters, semantics, anyFiltered)];
 
   const setNode = (node: { id: string; name: string } | null) => {
@@ -117,7 +134,6 @@ export function EventsPage() {
       <PageHeader
         title={t('nav:events.all')}
         trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.all') }]}
-        note={t('events.note')}
       />
       {/* The answer to "where do I point my devices". It lives on this screen rather than beside
           the webhook list because this is where someone who sees no syslog comes looking — and
@@ -173,6 +189,17 @@ export function EventsPage() {
       {/* Said out loud, because the rows below are the answer to a slightly broader question than
           the one the operator typed. Silently widening would be the worse half of this trade. */}
       {widened && <p className="ev-widened">{t('events.widened')}</p>}
+      {/* What the page note used to say on every visit, said only when it is true of the rows:
+          beyond the default window the list can be missing the events that matched no rule. */}
+      {reachesPastDefaultWindow(filters, nowMs) && (
+        <p className="ev-retention">
+          <Trans
+            t={t}
+            i18nKey="events.unmatchedKept"
+            components={{ lnk: <ScreenLink to="/settings/system" /> }}
+          />
+        </p>
+      )}
       <DataTable
         tableId="events.log"
         rows={rows}

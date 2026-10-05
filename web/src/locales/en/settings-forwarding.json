@@ -1,7 +1,4 @@
 {
-  "note": "Relay received syslog, SNMP traps and flow exports on to external collectors, or stream them into BigQuery as queryable rows. Core does the sending, so only one egress point has to be allowed through a firewall.",
-  "unavailable": "Managing forwarding requires the admin role.",
-  "signInPrompt": "Sign in to manage forwarding destinations.",
   "empty": "No forwarding destinations yet. Nothing is being relayed.",
   "count_one": "destination",
   "count_other": "destinations",
@@ -57,7 +54,14 @@
   "fidelity": {
     "verbatim": "Original",
     "rendered": "Rebuilt",
-    "rows": "Structured rows"
+    "rows": "Structured rows",
+    "sub": {
+      "verbatim": "exact bytes as received",
+      "rendered": "from parsed fields — may drop structured data and long text",
+      "rows": "one row per event or flow record",
+      "verbatimImpossible": "not possible with this destination",
+      "renderedImpossible": "not possible for flow exports"
+    }
   },
   "field": {
     "name": "Name",
@@ -65,31 +69,19 @@
     "source": "Forward",
     "dest": "Send as",
     "target": "Collector",
-    "targetPlaceholder": "siem.example.com:514",
-    "targetHint": "host:port. Use [address]:port for a literal IPv6 address.",
+    "targetPlaceholder": "siem.example.com:514 or [2001:db8::1]:514",
     "targetTable": "BigQuery table",
     "targetTablePlaceholder": "my-project.analytics.yagra_events",
-    "targetTableHint": "project.dataset.table. The dataset must already exist — Yagra will not create one, because a dataset's region cannot be changed afterwards. The table is created automatically, partitioned by day.",
     "pool": "Poller pool",
     "poolPlaceholder": "all pools",
     "fidelity": "Fidelity",
-    "fidelityHint": "Original relays the datagram exactly as received. Rebuilt regenerates it from the parsed fields, which loses RFC 5424 structured data, non-UTF-8 bytes, text past 4096 characters, and varbinds past the 32nd.",
-    "fidelityImpossible": "This pairing cannot carry the original bytes, so the message is always rebuilt.",
-    "fidelityVerbatimOnly": "A flow export is a template plus many records in one binary datagram, so it can only be relayed exactly as received.",
-    "fidelityRowsOnly": "BigQuery receives normalized rows — one per event, one per flow record — with typed columns. The original bytes are deliberately not stored: a raw-payload column would make anything sensitive in a log line permanently queryable off-box.",
-    "serviceAccount": "Service-account key",
+    "serviceAccount": "Service-account key (BigQuery Data Editor)",
     "serviceAccountPlaceholder": "Leave empty to use the instance's own identity (Workload Identity)",
-    "serviceAccountKept": "a key is stored — leave empty to keep it",
-    "serviceAccountHint": "Paste the JSON key file for a service account with the BigQuery Data Editor role. It is encrypted at rest and never shown again. Leave it empty when core runs on Google Cloud with Workload Identity — that stores no credential at all and is the better option.",
-    "caCert": "CA certificate",
+    "caCert": "CA certificate (private CA only)",
     "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
-    "caCertHint": "Optional. Paste the PEM certificate of the CA that signed the collector, if it is not in the system trust store. The collector's certificate is always verified — there is no way to turn that off.",
-    "community": "SNMP community",
-    "communityHint": "Used only when a trap has to be rebuilt. A relayed original carries the device's own community.",
-    "communityKept": "unchanged",
+    "community": "SNMP community (rebuilt traps only)",
     "rateLimit": "Rate limit",
     "rateLimitPlaceholder": "no limit",
-    "rateLimitHint": "Messages per second. Excess is dropped and counted, never queued.",
     "enabled": "Status",
     "source_ip": "Source address",
     "kind": "Event kind",
@@ -106,7 +98,10 @@
     "src_port": "Source port",
     "dst_port": "Destination port",
     "src_as": "Source AS",
-    "dst_as": "Destination AS"
+    "dst_as": "Destination AS",
+    "targetInvalid": "Use host:port, with [brackets] around an IPv6 address.",
+    "targetTableInvalid": "Use project.dataset.table.",
+    "rateLimitUnit": "msg/s"
   },
   "valuePlaceholder": {
     "source_ip": "10.0.0.0/8, 192.168.1.5",
@@ -141,20 +136,21 @@
     "remove": "Remove condition",
     "none": "Everything",
     "emptyHint": "No conditions — the whole stream is forwarded.",
-    "flowAnyRecord": "A flow datagram carries many records at once. If any record matches, the whole datagram is forwarded — the records that did not match go with it. Records cannot be removed without re-encoding the export into a different datagram. Send the same stream to BigQuery instead if you need exact filtering.",
-    "flowPerRecord": "Each flow record is filtered on its own, and only the matching ones become rows.",
     "count_one": "{{count}} condition ({{mode}})",
     "count_other": "{{count}} conditions ({{mode}})",
     "mode": {
       "all": "all must match",
       "any": "any may match"
+    },
+    "wholeDatagram": {
+      "info": "If any record in a flow datagram matches, the whole datagram is forwarded, unmatched records included. Send the stream to BigQuery to filter record by record."
     }
   },
   "health": {
     "counts": "{{sent}} sent / {{dropped}} lost",
     "paused": "Paused",
     "degraded": "Rebuilt",
-    "degradedHint": "Some messages were rebuilt because no original payload was available."
+    "degradedHint": "Some were rebuilt: the poller sent no original bytes."
   },
   "test": {
     "title": "Test: {{name}}",

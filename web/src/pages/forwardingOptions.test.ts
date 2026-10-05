@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   destKindsForSource,
+  fidelityChoices,
   fieldAppliesTo,
   fieldsForSource,
   opsForField,
@@ -220,5 +221,43 @@ describe('forwardingOptions', () => {
       conditions: [{ field: 'severity', op: 'regex', value: '4' }],
     });
     expect(repaired.conditions[0].op).toBe(opsForField('severity')[0]);
+  });
+});
+
+describe('fidelityChoices', () => {
+  it('offers exactly one enabled choice per pairing the form can hold', () => {
+    // `reconcileDraft` picks the value; the dropdown must never offer a different one as choosable.
+    for (const source of STREAMS) {
+      for (const dest of destKindsForSource(source)) {
+        const choices = fidelityChoices(source, dest);
+        const open = choices.filter((c) => !c.disabled).map((c) => c.value);
+        if (dest === 'bigquery') expect(open).toEqual(['rows']);
+        else {
+          expect(open.includes('verbatim')).toBe(supportsVerbatim(source, dest));
+          expect(open.includes('rendered')).toBe(supportsRendered(source, dest));
+        }
+      }
+    }
+  });
+
+  it('keeps an impossible choice in the list, with the reason as its phrase', () => {
+    // A trap sent as a syslog line has no original bytes to carry.
+    const trapToSyslog = fidelityChoices('trap', 'syslog_udp');
+    expect(trapToSyslog[0]).toEqual({
+      value: 'verbatim',
+      label: 'fidelity.verbatim',
+      sub: 'fidelity.sub.verbatimImpossible',
+      disabled: true,
+    });
+    // A flow relay cannot be rebuilt.
+    expect(fidelityChoices('flow', 'flow_udp')[1]).toMatchObject({
+      sub: 'fidelity.sub.renderedImpossible',
+      disabled: true,
+    });
+    // Syslog to syslog can be either, so both carry what they do rather than why not.
+    expect(fidelityChoices('syslog', 'syslog_tcp').map((c) => c.sub)).toEqual([
+      'fidelity.sub.verbatim',
+      'fidelity.sub.rendered',
+    ]);
   });
 });

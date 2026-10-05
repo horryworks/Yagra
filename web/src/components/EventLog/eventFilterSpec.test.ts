@@ -10,6 +10,9 @@ import { describe, expect, it } from 'vitest';
 import {
   EVENT_FILTER_KEYS,
   eventEmptyKind,
+  prefixMissTerm,
+  reachesPastDefaultWindow,
+  widenedToAWeek,
   shouldWiden,
   widenEventQuery,
   eventFilterColumns,
@@ -20,6 +23,7 @@ import {
 import { DEFAULT_EVENT_RANGE, EVENT_RANGES } from './eventRange';
 import {
   defaultFilters,
+  encodeRange,
   isAnyFiltered,
   reservedKeyCollisions,
   type FilterState,
@@ -198,12 +202,24 @@ describe('eventEmptyKind', () => {
     expect(eventEmptyKind(DEFAULTS, 'prefix', false)).toBe('unfiltered');
   });
 
-  it('names the whole-word rule when a plain term found nothing on a log store', () => {
-    // `%%01POLICY/6/POLICYPERMIT` tokenizes to `01policy` and `policypermit`, so `POLICY` matches
-    // nothing while the operator is looking at the word. This is the case the generic message
-    // cannot explain, and the reason the deployment reports its search semantics at all.
-    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'prefix', true)).toBe('prefixMiss');
+  it('names the whole-word rule when a plain Source term found nothing on a log store', () => {
+    // A source is matched from the start of a word and has no regex form on the wire, so `rtr`
+    // misses `core-rtr-01` while the operator is looking at it. This is the case the generic
+    // message cannot explain, and the reason the deployment reports its search semantics at all.
     expect(eventEmptyKind({ ...DEFAULTS, source: 'rtr' }, 'prefix', true)).toBe('prefixMiss');
+    expect(prefixMissTerm({ ...DEFAULTS, source: 'rtr' })).toBe('rtr');
+  });
+
+  it('does not blame the whole-word rule for a Message term, which was already searched inside words', () => {
+    // A plain Message term that misses is re-asked as a regex automatically (`widenEventQuery`).
+    // An empty list after that means nothing contains it anywhere, so "no word starts with it" —
+    // and the "search inside words" it implies — would name a search that already ran.
+    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'prefix', true)).toBe('filtered');
+    expect(prefixMissTerm({ ...DEFAULTS, message: 'POLICY' })).toBe('');
+    // With both set, the Source term is still the one that can explain the miss.
+    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY', source: 'rtr' }, 'prefix', true)).toBe(
+      'prefixMiss',
+    );
   });
 
   it('does not blame tokenization for a case it cannot explain', () => {
@@ -212,11 +228,54 @@ describe('eventEmptyKind', () => {
     // to the wrong fix.
     expect(eventEmptyKind({ ...DEFAULTS, message: '~POLICY' }, 'prefix', true)).toBe('filtered');
     expect(eventEmptyKind({ ...DEFAULTS, message: '!POLICY' }, 'prefix', true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, source: '!rtr' }, 'prefix', true)).toBe('filtered');
+    expect(prefixMissTerm({ ...DEFAULTS, source: '!rtr' })).toBe('');
     // And on a substring deployment there is nothing to explain in the first place.
-    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'substring', true)).toBe('filtered');
-    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, undefined, true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, source: 'rtr' }, 'substring', true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, source: 'rtr' }, undefined, true)).toBe('filtered');
     // A non-text filter finding nothing is just an empty result.
     expect(eventEmptyKind({ ...DEFAULTS, kind: 'trap' }, 'prefix', true)).toBe('filtered');
+  });
+});
+
+/** A `datetime-local` value for an instant, in this machine's zone — the shape the input holds. */
+function localInput(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+describe('reachesPastDefaultWindow', () => {
+  const HOUR = 3600 * 1000;
+  const custom = (from: string, to = '') =>
+    ({ ...DEFAULTS, at: encodeRange({ preset: 'custom', from, to }) }) as FilterState;
+
+  it('is false for the default window, where every event is still kept', () => {
+    // The sentence about unmatched events being kept for a shorter time is noise here.
+    expect(reachesPastDefaultWindow(DEFAULTS, NOW)).toBe(false);
+    expect(reachesPastDefaultWindow({ ...DEFAULTS, at: '24h' }, NOW)).toBe(false);
+  });
+
+  it('is true for every wider preset, including no bound at all', () => {
+    for (const at of ['7d', '30d', 'all']) {
+      expect(reachesPastDefaultWindow({ ...DEFAULTS, at }, NOW)).toBe(true);
+    }
+  });
+
+  it('reads a custom range by where it starts', () => {
+    expect(reachesPastDefaultWindow(custom(localInput(NOW - 2 * HOUR)), NOW)).toBe(false);
+    expect(reachesPastDefaultWindow(custom(localInput(NOW - 48 * HOUR)), NOW)).toBe(true);
+    // No start is no lower bound.
+    expect(reachesPastDefaultWindow(custom('', localInput(NOW - HOUR)), NOW)).toBe(true);
+  });
+});
+
+describe('widenedToAWeek', () => {
+  it('moves only the range, to a preset the screen offers', () => {
+    const next = widenedToAWeek({ ...DEFAULTS, kind: 'trap' });
+    expect(next).toEqual({ ...DEFAULTS, kind: 'trap', at: '7d' });
+    expect(EVENT_RANGES).toContain(next.at);
+    expect(isAnyFiltered(COLUMNS, next)).toBe(true);
   });
 });
 

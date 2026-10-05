@@ -17,6 +17,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
+import { Button } from '../ui/Button';
+import { EmptyState } from '../ui/EmptyState';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useEntityNames } from '../ui/entityNames';
@@ -26,6 +28,8 @@ import {
   eventFilterColumns,
   eventFilterQuery,
   eventHighlight,
+  prefixMissTerm,
+  widenedToAWeek,
 } from '../EventLog/eventFilterSpec';
 import {
   eventColumnLabels,
@@ -70,12 +74,23 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     [nodeName, t, highlight],
   );
 
+  // `filtered` is the generic sentence on purpose: "no events received from this node yet" is
+  // false the moment a filter is set, and this tab has no Source column, so `prefixMiss` (a Source
+  // term's whole-word miss) cannot occur here — it is listed only because the map is exhaustive.
   const empty = {
-    unfiltered: t('eventLog.emptyNodeWindow'),
-    filtered: t('eventLog.emptyNode'),
-    prefixMiss: t('events.emptyPrefixMiss'),
+    unfiltered: (
+      <EmptyState
+        text={t('eventLog.emptyNodeWindow')}
+        action={
+          <Button type="button" onClick={() => setFilters(widenedToAWeek(filters))}>
+            {t('events.showWeek')}
+          </Button>
+        }
+      />
+    ),
+    filtered: t('common:filter.noMatch'),
+    prefixMiss: t('events.emptyPrefixMiss', { term: prefixMissTerm(filters) }),
   }[eventEmptyKind(filters, semantics, isAnyFiltered(filterCols, filters))];
-
 
   return (
     <div className="nd-ev">

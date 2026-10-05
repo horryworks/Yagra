@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* A Meraki organization subject: the link to the organization, then the ⓘ that says what an alert
+   about a whole organization means. The link gives way first in a narrow cell; the ⓘ never does. */
+
+.alert-subject-org {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.alert-subject-org > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

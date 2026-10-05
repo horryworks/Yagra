@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../services/api';
 import type { RcaNodeFacts } from '../../types/api';
-import { formatWindow, nodeLine, refusalText } from './rcaText';
+import { formatWindow, nodeLine, refusalNeedsSetup, refusalText } from './rcaText';
 
 /** Echoes the key (plus any interpolated message) so a test asserts on the branch taken. */
 const t = (key: string, opts?: Record<string, unknown>) =>
@@ -80,5 +80,19 @@ describe('refusalText', () => {
   it('falls back generically for a non-API failure (e.g. the network dropped)', () => {
     expect(refusalText(new TypeError('Failed to fetch'), t)).toBe('err.generic');
     expect(refusalText(undefined, t)).toBe('err.generic');
+  });
+});
+
+describe('refusalNeedsSetup', () => {
+  it('links only the unconfigured provider to its settings screen', () => {
+    expect(refusalNeedsSetup(new ApiError('rca_not_configured', 'x', 503))).toBe(true);
+    expect(refusalNeedsSetup(new ApiError('rca_misconfigured', 'no key', 503))).toBe(false);
+    expect(refusalNeedsSetup(new TypeError('Failed to fetch'))).toBe(false);
+  });
+
+  it('never sends a caller without the permission to a settings screen', () => {
+    // The same order as `refusalText`: 403 is told about the permission, not about the provider.
+    expect(refusalNeedsSetup(new ApiError('rca_not_configured', 'x', 403))).toBe(false);
+    expect(refusalNeedsSetup(new ApiError('rca_not_configured', 'x', 401))).toBe(false);
   });
 });

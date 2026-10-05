@@ -91,7 +91,7 @@
     "alertsEventRules": "受動監視 — Events タブに届いたイベントに対する一致条件",
     "eventsAll": "受動監視 — 自分から取りに行かず届く syslog・SNMP トラップ・webhook",
     "eventsWebhooks": "HTTP でイベントを送ってくる、許可済みの送信元",
-    "eventsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
+    "eventsForwarding": "受信データを外部コレクタや BigQuery へ送出",
     "alertsMaintenance": "計画作業 — ノードをメンテナンス状態にして SLA から除外",
     "alertsMutes": "通知だけを止める — 状態と SLA はそのまま",
     "topologyDependency": "親 → 子の依存リンクを管理",

@@ -28,7 +28,7 @@ import {
   type FilterableColumn,
 } from '../../lib/columnFilter';
 import { decodeCondition, type TextCondition } from '../../lib/filterCondition';
-import { rangeLabel } from '../../lib/filterPresets';
+import { rangeLabel, rangeSeconds } from '../../lib/filterPresets';
 import { localInputToIso } from '../../lib/format';
 import { boundsFor, DEFAULT_EVENT_RANGE, EVENT_RANGES, type EventRange } from './eventRange';
 
@@ -123,6 +123,15 @@ export function eventFilterColumns(
   return EVENT_FILTER_KEYS.flatMap((k) => (specs[k] ? [{ key: k, filter: specs[k] }] : []));
 }
 
+/** The range column as the codec reads it. Built from the shape rather than the spec because the
+ *  callers below must work without a translator, so they cannot ask `eventFilters` for the presets
+ *  (their labels are localized). */
+const RANGE_SHAPE = {
+  presets: EVENT_RANGES.map((r) => ({ value: r, label: r, seconds: null })),
+  defaultPreset: DEFAULT_EVENT_RANGE,
+  custom: true,
+};
+
 /** Every filter parameter the two Events screens send, as primitives.
  *
  *  Primitives rather than a nested object because `useEventLog` takes them as its dependency list —
@@ -167,13 +176,7 @@ export function eventFilterQuery(state: FilterState, nowMs: number): EventQuery 
     if (src.not) q.src_not = true;
   }
 
-  // Decoded against the shape rather than the built spec: this function must be callable without a
-  // translator, so it cannot ask `eventFilters` for the presets (their labels are localized).
-  const range = decodeRange(state.at ?? '', {
-    presets: EVENT_RANGES.map((r) => ({ value: r, label: r, seconds: null })),
-    defaultPreset: DEFAULT_EVENT_RANGE,
-    custom: true,
-  });
+  const range = decodeRange(state.at ?? '', RANGE_SHAPE);
   const bounds =
     range.preset === CUSTOM_RANGE
       ? { start: localInputToIso(range.from), end: localInputToIso(range.to) }
@@ -207,6 +210,12 @@ export function eventFilterKey(q: EventQuery): string {
  * found by `POLICY` but not by `PERMIT` — and the operator is looking at those letters on screen
  * while the screen says nothing matched. "Nothing matches these filters" is true and explains none
  * of that.
+ *
+ * ⚠️ **Only the Source term can end here.** A plain Message term that misses is re-asked inside
+ * words automatically (`widenEventQuery`), so by the time the list is empty that search has already
+ * been made and found nothing too — "no word starts with it" would be the wrong reason, and the
+ * fix it implies (search inside words) is the one that just ran. Source has no regex form on the
+ * wire, so its miss is the one the screen still has to name (ADR-200 Inc.16).
  */
 export type EventEmptyKind = 'unfiltered' | 'filtered' | 'prefixMiss';
 
@@ -216,15 +225,37 @@ export function eventEmptyKind(
   anyFiltered: boolean,
 ): EventEmptyKind {
   if (!anyFiltered) return 'unfiltered';
-  if (semantics === 'prefix') {
-    // Only a *plain, non-negated* term can miss this way. A regex reaches inside tokens on either
-    // store, and a negated term returning nothing means everything matched — a different story.
-    const plain = [state.message ?? '', state.source ?? '']
-      .map(decodeCondition)
-      .some((c) => c.term !== '' && c.mode === 'contains' && !c.not);
-    if (plain) return 'prefixMiss';
-  }
+  if (semantics === 'prefix' && prefixMissTerm(state) !== '') return 'prefixMiss';
   return 'filtered';
+}
+
+/** The plain Source term a `prefixMiss` names, or `''`. Only a *plain, non-negated* term can miss
+ *  this way: a negated term returning nothing means everything matched — a different story. */
+export function prefixMissTerm(state: FilterState): string {
+  const c = decodeCondition(state.source ?? '');
+  return c.term !== '' && c.mode === 'contains' && !c.not ? c.term : '';
+}
+
+/**
+ * Whether the chosen range reaches further back than the default 24 hours.
+ *
+ * The Events screen says, only then, that events which matched no rule are kept for a shorter
+ * period (ADR-200 Inc.16): within the default window every event is still there, so the sentence
+ * would be noise, and beyond it the older part of the list can be missing exactly the events the
+ * operator came to write a rule for. A custom range with no start reaches back without limit.
+ */
+export function reachesPastDefaultWindow(state: FilterState, nowMs: number): boolean {
+  const range = decodeRange(state.at ?? '', RANGE_SHAPE);
+  if (range.preset !== CUSTOM_RANGE) return range.preset !== DEFAULT_EVENT_RANGE;
+  const start = localInputToIso(range.from);
+  const windowMs = (rangeSeconds(DEFAULT_EVENT_RANGE) ?? 0) * 1000;
+  return start === undefined || Date.parse(start) < nowMs - windowMs;
+}
+
+/** The filter state with the range widened to the last seven days — the empty state's next step
+ *  when the default window held nothing. */
+export function widenedToAWeek(state: FilterState): FilterState {
+  return { ...state, at: '7d' satisfies EventRange };
 }
 
 /** Escape a plain term so it matches itself as a regular expression.

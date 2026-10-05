@@ -91,7 +91,7 @@
     "alertsEventRules": "Passive monitoring — patterns matched against the events on the Events tab",
     "eventsAll": "Passive monitoring — syslog, SNMP traps and webhook events as they arrive",
     "eventsWebhooks": "Senders authorized to POST events to Yagra over HTTP",
-    "eventsForwarding": "Relay received syslog and traps to external collectors",
+    "eventsForwarding": "Relay syslog, traps and flow to collectors or BigQuery",
     "alertsMaintenance": "Planned work — node enters maintenance, excluded from SLA",
     "alertsMutes": "Silence notifications only — state and SLA unaffected",
     "topologyDependency": "Manage parent → child dependency links",

@@ -55,13 +55,11 @@
   border-color: var(--status-unknown);
 }
 
-.rca-cached {
-  padding: 1px 8px;
-  border-radius: 10px;
-  border: var(--border-width) solid var(--border-color);
+/* "Cached" opens its reason when pressed (ADR-200), so it is an `InfoPress` label rather than a
+   chip with a hover title; only the size and tone of the meta row are kept. */
+.rca-meta button.infopress.rca-cached {
   font-size: var(--font-xs);
   color: var(--text-secondary);
-  cursor: help;
 }
 
 .rca-section {

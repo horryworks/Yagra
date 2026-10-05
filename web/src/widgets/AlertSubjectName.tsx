@@ -15,7 +15,9 @@ import { alertSubject } from '../lib/alertSubject';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { EntityName } from '../components/ui/EntityName';
+import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { merakiOrgPath } from '../lib/entityHref';
+import './AlertSubjectName.css';
 
 /** Renders the alert's subject: a node's resolved name (UUID on hover), or the poller pool the
  *  alert is about. `nodeName` is the caller's `useEntityNames()` resolver, threaded in so the
@@ -38,18 +40,30 @@ export function AlertSubjectName({
       // A pool name is already the human-readable thing — there is no inventory row to resolve
       // it through, and the label is what tells an operator this row is about Yagra's own polling
       // rather than about a device.
+      // Pressed rather than hovered (ADR-200): what makes a pool a subject is the one thing on the
+      // row an operator may not know, and a hover title never reaches a touch screen.
       return (
-        <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
+        <InfoPress infoKey="alerts:row.poolSubjectWhy.info">
+          {t('row.poolSubject', { pool: subject.name })}
+        </InfoPress>
       );
-    case 'meraki_org':
+    case 'meraki_org': {
       // One alert for the whole organization (ADR-164 decision 18): its devices did not fail, the API
       // that reports on them did. The link goes to the page that says which collect is failing
       // and why — the organization is identified by id, and an id is not what anyone reads.
+      // The name stays a link, so the explanation is an ⓘ beside it rather than the name itself:
+      // a link cannot also be the button that opens a popover.
+      // The visible name doubles as the link's `title`, for when a narrow column cuts it.
+      const label = t('row.merakiOrgSubject', { org: subject.name ?? subject.orgId });
       return (
-        <Link to={merakiOrgPath(subject.orgId)} title={t('row.merakiOrgSubjectHint')}>
-          {t('row.merakiOrgSubject', { org: subject.name ?? subject.orgId })}
-        </Link>
+        <span className="alert-subject-org">
+          <Link to={merakiOrgPath(subject.orgId)} title={label}>
+            {label}
+          </Link>
+          <InfoTip infoKey="alerts:row.merakiOrgSubjectWhy.info" label={label} />
+        </span>
       );
+    }
     default: {
       const unknown: never = subject;
       return unknown;

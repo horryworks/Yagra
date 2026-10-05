@@ -19,10 +19,14 @@
     "flapping": "flapping",
     "acked": "acked",
     "poolSubject": "Poller pool “{{pool}}”",
-    "poolSubjectHint": "This alert is about Yagra's own monitoring coverage, not a device: the pool still has nodes assigned to it but no live poller to poll them.",
     "merakiOrgSubject": "Meraki organization “{{org}}”",
-    "merakiOrgSubjectHint": "The Cisco Meraki Dashboard API is not answering this organization, so nothing is being collected for its devices. Each device keeps the last state that was collected; this one alert stands for all of them.",
-    "partOfOutage": "part of this node’s outage"
+    "partOfOutage": "part of this node’s outage",
+    "poolSubjectWhy": {
+      "info": "This alert is about Yagra's own monitoring, not a device. The pool still has nodes but no live poller, so they are not being polled."
+    },
+    "merakiOrgSubjectWhy": {
+      "info": "The Meraki Dashboard API is not answering for this organization, so its devices are not being collected. Each device keeps its last collected state; this one alert stands for all of them."
+    }
   },
   "acked": {
     "title": "Acknowledged in {{source}} by {{by}}{{note}} (read-only, mirrored from your external tool)",
@@ -56,23 +60,22 @@
     }
   },
   "events": {
-    "note": "Received syslog / SNMP-trap / webhook events. Unmatched events are kept for 24h to help author rules; matched events follow the alert-history retention.",
     "listening": "Listening: {{endpoints}}",
-    "listeningNone": "No syslog or trap listener is bound. Set YAGRA_SYSLOG_BIND / YAGRA_TRAP_BIND on a poller to receive them; webhook senders are configured under Webhook sources.",
-    "empty": "No events received yet.",
+    "listeningNone": "No poller is listening for syslog or traps — set YAGRA_SYSLOG_BIND or YAGRA_TRAP_BIND on one.",
     "events": "events",
     "eventsLoaded": "events loaded",
     "filters": {
       "allKinds": "All kinds",
       "allEvents": "All events"
     },
-    "emptyWindow": "No events in the last 24 hours. The window is what keeps searching fast — widen it under When.",
-    "emptyPrefixMiss": "No word starts with that here. This deployment matches from the start of a word, so a term that sits inside a longer one finds nothing — switch the message filter to Regex.",
-    "widened": "No word starts with that term, so these are the events with it anywhere inside a word."
+    "emptyWindow": "No events in the last 24 hours.",
+    "emptyPrefixMiss": "No word starts with “{{term}}”.",
+    "widened": "No word starts with that term, so these are the events with it anywhere inside a word.",
+    "showWeek": "Show the last 7 days",
+    "unmatchedKept": "Events that matched no rule are kept only for the period set in <lnk/>, so older ones may be missing."
   },
   "eventLog": {
     "openInEvents": "Open in Events",
-    "emptyNode": "No events received from this node yet.",
     "cols": {
       "kind": "Kind",
       "source": "Source",
@@ -88,6 +91,6 @@
       "info": "info",
       "none": "unmatched"
     },
-    "emptyNodeWindow": "No events from this node in the last 24 hours. Widen the window under When."
+    "emptyNodeWindow": "No events from this node in the last 24 hours."
   }
 }

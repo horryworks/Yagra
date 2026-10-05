@@ -163,3 +163,12 @@
 .ev-listening.none {
   color: var(--text-tertiary);
 }
+
+/* Shown only while the range reaches past the default 24 hours (ADR-200 Inc.16): events that
+   matched no rule are kept for a shorter period, so the older part of the list can be missing the
+   very events a rule is being written for. Same tone as `.ev-widened` — it explains the rows. */
+.ev-retention {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}

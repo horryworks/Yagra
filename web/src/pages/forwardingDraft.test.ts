@@ -5,7 +5,7 @@
 // operator meant to clear.
 
 import { describe, expect, it } from 'vitest';
-import { draftFrom, emptyDraft, toInput, type Draft } from './forwardingDraft';
+import { draftFrom, emptyDraft, targetProblem, toInput, type Draft } from './forwardingDraft';
 import type { ForwardDestination } from '../types/api';
 
 const dest = (over: Partial<ForwardDestination> = {}): ForwardDestination =>
@@ -144,5 +144,32 @@ describe('toInput', () => {
       mode: 'any',
       conditions: [{ field: 'source_ip', op: 'eq', value: '10.0.0.1' }],
     });
+  });
+});
+
+describe('targetProblem', () => {
+  it('accepts the two shapes core accepts', () => {
+    expect(targetProblem('syslog_udp', 'siem.example.com:514')).toBeNull();
+    expect(targetProblem('syslog_tls', '[2001:db8::1]:6514')).toBeNull();
+    expect(targetProblem('syslog_tcp', '192.0.2.10:514')).toBeNull();
+    expect(targetProblem('bigquery', 'my-project.analytics.yagra_events')).toBeNull();
+    // A domain-scoped project carries a colon and a dot of its own.
+    expect(targetProblem('bigquery', 'example.com:proj.analytics.events')).toBeNull();
+  });
+
+  it('says nothing about a blank box, which Save already waits for', () => {
+    expect(targetProblem('syslog_udp', '  ')).toBeNull();
+    expect(targetProblem('bigquery', '')).toBeNull();
+  });
+
+  it('refuses what core refuses, naming which shape was expected', () => {
+    // No port, a port of zero or past 65535, and a bare IPv6 literal (its last group is not a port).
+    for (const bad of ['siem.example.com', 'siem.example.com:0', 'siem:70000', '2001:db8::1:514', ':514']) {
+      expect(targetProblem('syslog_udp', bad)).toBe('hostPort');
+    }
+    expect(targetProblem('syslog_udp', '[2001:db8::1]514')).toBe('hostPort');
+    for (const bad of ['analytics.events', 'proj.analytics.my-events', 'proj.data set.events']) {
+      expect(targetProblem('bigquery', bad)).toBe('table');
+    }
   });
 });

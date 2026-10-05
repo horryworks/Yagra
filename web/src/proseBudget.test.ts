@@ -58,7 +58,7 @@ import { readSources, SRC } from './testSupport/sources';
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
-  alerts: [1470, 875],
+  alerts: [1077, 626],
   alertsConfig: [8407, 4476],
   auth: [79, 43],
   common: [717, 385],
@@ -68,11 +68,11 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   monitoring: [11335, 6683],
   nav: [2907, 1367],
   nodes: [23833, 13291],
-  rca: [1038, 532],
+  rca: [1022, 528],
   reports: [700, 445],
   'settings-ai': [736, 410],
   'settings-auth': [3540, 2095],
-  'settings-forwarding': [3454, 1893],
+  'settings-forwarding': [1695, 900],
   'settings-relocation': [3661, 1808],
   'settings-tls': [1619, 872],
   'settings-tokens': [801, 433],
@@ -89,7 +89,6 @@ const SLACK: [number, number] = [300, 200];
 
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
-  'alerts:row.merakiOrgSubjectHint',
   'nodes:bulkTag.note',
   'nodes:deleteNode.body',
   'nodes:deleteNodes.body',
@@ -102,11 +101,6 @@ const LONG_LEGACY: string[] = [
   'nodes:neighbors.detail.note',
   'nodes:neighbors.peer.hint',
   'nodes:rediscover.applyHint',
-  'settings-forwarding:field.fidelityHint',
-  'settings-forwarding:field.fidelityRowsOnly',
-  'settings-forwarding:field.serviceAccountHint',
-  'settings-forwarding:filter.flowAnyRecord',
-  'settings-forwarding:note',
   'troubleshoot:report.event_flap.note',
   'troubleshoot:report.event_storm.note',
   'troubleshoot:report.flow_scan.note',
@@ -124,8 +118,6 @@ const LONG_ALLOWED: Record<string, string> = {};
 const HOVER_LEGACY: string[] = [
   'alerts:acked.title',
   'alerts:active.muteHint',
-  'alerts:row.merakiOrgSubjectHint',
-  'alerts:row.poolSubjectHint',
   'alertsConfig:routing.template.status.confirmTitle',
   'alertsConfig:thresholds.meaningUnknown',
   'dashboard:widgets.ifTraffic.unitTitle',
@@ -139,8 +131,6 @@ const HOVER_LEGACY: string[] = [
   'nodes:interfaces.duplexHint',
   'nodes:interfaces.rulesButtonTitle',
   'nodes:inventory.needAttentionOnlyHint',
-  'rca:meta.cachedHint',
-  'settings-forwarding:health.degradedHint',
   'system:pollers.selfUpgradeHint',
   'system:pollers.skewHint',
   'topology:dependency.optOutHelp',
@@ -182,16 +172,6 @@ const PAGE_NOTES: Record<string, PageNote> = {
     until: 'Inc.23',
     why: 'the upstream decides parent-down suppression',
   },
-  'pages/EventsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.16',
-    why: 'unmatched events are kept for 24 hours',
-  },
-  'pages/ForwardingPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.16',
-    why: 'flow exports and BigQuery are destinations too',
-  },
   'pages/NodesPage.tsx': {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',
@@ -217,7 +197,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 18, press: 11 };
+const INFO_COUNT = { tip: 20, press: 13 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -244,7 +224,6 @@ const POINTER_LEGACY: string[] = [
   'nodes:neighbors.setup.credsHint',
   'nodes:rediscover.err.noLivePoller',
   'nodes:rediscover.phase.waitingLong',
-  'rca:err.notConfigured',
   'topology:dependency.mode.blocked',
   'topology:geo.empty',
 ];
@@ -255,7 +234,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 19, formHint: 19, modalHint: 32 };
+const HINT_SITES = { fieldHint: 19, formHint: 19, modalHint: 24 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

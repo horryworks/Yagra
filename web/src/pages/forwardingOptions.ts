@@ -135,6 +135,46 @@ export function supportsRendered(source: ForwardSourceKind, dest: ForwardDestKin
   return source !== 'flow' && dest !== 'flow_udp';
 }
 
+/** One entry of the Fidelity dropdown: the value it sets, the key of its name, the key of the short
+ *  phrase beside the name, and whether it can be chosen for this pairing. */
+export interface FidelityChoice {
+  value: 'verbatim' | 'rendered' | 'rows';
+  label: string;
+  sub: string;
+  disabled: boolean;
+}
+
+/**
+ * The Fidelity dropdown for a pairing (ADR-200 Inc.16).
+ *
+ * Four paragraphs under the field used to say what each choice does and why one could not be
+ * picked. Each option now carries that as a short phrase beside its name, and a choice this pairing
+ * cannot carry stays in the list, disabled, with the reason as its phrase — so the explanation is
+ * where the choice is made. BigQuery has neither: it writes rows, so it is a list of one.
+ * The keys are spelled out (not built from the value) so the key check can see every one.
+ */
+export function fidelityChoices(source: ForwardSourceKind, dest: ForwardDestKind): FidelityChoice[] {
+  if (dest === 'bigquery') {
+    return [{ value: 'rows', label: 'fidelity.rows', sub: 'fidelity.sub.rows', disabled: false }];
+  }
+  const verbatim = supportsVerbatim(source, dest);
+  const rendered = supportsRendered(source, dest);
+  return [
+    {
+      value: 'verbatim',
+      label: 'fidelity.verbatim',
+      sub: verbatim ? 'fidelity.sub.verbatim' : 'fidelity.sub.verbatimImpossible',
+      disabled: !verbatim,
+    },
+    {
+      value: 'rendered',
+      label: 'fidelity.rendered',
+      sub: rendered ? 'fidelity.sub.rendered' : 'fidelity.sub.renderedImpossible',
+      disabled: !rendered,
+    },
+  ];
+}
+
 /** Whether a community applies (only a re-encoded SNMP trap uses one). */
 export function usesCommunity(dest: ForwardDestKind): boolean {
   return dest === 'snmp_trap_udp';
