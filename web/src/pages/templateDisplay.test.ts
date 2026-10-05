@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  bodyAfterTitle,
   builtinSource,
-  describeBranch,
+  circled,
+  describeNote,
   hasOwnTemplate,
+  layoutForDisplay,
   readCondition,
   readForDisplay,
   type ConditionWords,
+  type Shown,
 } from './templateDisplay';
 import type { BuiltinSubjectTemplate } from '../types/api';
 
@@ -18,13 +22,32 @@ const FIRE =
 
 const WORDS: ConditionWords = {
   labelOf: (n) => n.toUpperCase(),
+  numberOf: circled,
   present: (n) => `${n} known`,
   differs: (a, b) => `${a} not ${b}`,
   and: ' & ',
-  when: (c) => `when ${c}`,
-  otherwiseWhen: (c) => `else when ${c}`,
-  otherwise: 'else',
+  when: (c) => `only when ${c}`,
+  otherwiseWhen: (p, c) => `only when ${p} is not sent and ${c}`,
+  otherwise: (p) => `only when ${p} is not sent`,
+  inside: (t, p) => `${t} (inside ${p})`,
 };
+
+/** The sentence as drawn: a numbered part reads `<n>text</n>`, a kept-or-dropped line `[line]`. */
+function drawn(shown: Shown[]): string {
+  return shown
+    .map((s) =>
+      s.kind === 'text'
+        ? s.text
+        : s.kind === 'var'
+          ? `{${s.name}}`
+          : s.kind === 'raw'
+            ? s.text
+            : s.kind === 'part'
+              ? `<${s.n}>${drawn(s.pieces)}</${s.n}>`
+              : `[${drawn(s.pieces)}]`,
+    )
+    .join('');
+}
 
 describe('the built-in text, read for showing (ADR-197)', () => {
   it('draws variables as tags and each conditional part as a branch, nested where the template nests', () => {
@@ -45,11 +68,34 @@ describe('the built-in text, read for showing (ADR-197)', () => {
     if (title.kind !== 'cond') throw new Error('not a condition');
     const inside = title.branches[0].pieces;
     expect(inside.map((p) => p.kind)).toEqual(['text', 'var', 'cond', 'cond']);
-    const port = inside[2];
-    if (port.kind !== 'cond') throw new Error('not a condition');
-    expect(port.branches.map((b) => describeBranch(b, WORDS))).toEqual([
-      'when IF_NAME known & IFINDEX known',
-      'else when IFINDEX known',
+  });
+
+  it('numbers each conditional part in reading order and says its condition once, below (Inc.2)', () => {
+    const { shown, legend } = layoutForDisplay(readForDisplay(FIRE));
+    expect(drawn(shown)).toBe(
+      '{node_name}<1> ({node_address})</1> is {state}<2>: {title}<3> on {if_name}</3><4> on ifIndex {ifindex}</4><5> [{row_name}]</5></2>',
+    );
+    expect(legend.map((l) => `${circled(l.n)} ${describeNote(l.note, WORDS)}`)).toEqual([
+      '① only when NODE_ADDRESS not NODE_NAME',
+      '② only when TITLE known',
+      '③ only when IF_NAME known & IFINDEX known (inside ②)',
+      '④ only when ③ is not sent and IFINDEX known (inside ②)',
+      '⑤ only when ROW_NAME known (inside ②)',
+    ]);
+  });
+
+  it('says a whole kept-or-dropped line at the end of the line, with no number', () => {
+    const src =
+      'Node: {{ node_name }}\n{% if group is defined %}Folder: {{ group }}\n{% endif %}' +
+      '{% if ifindex is defined %}Port: {% if if_name is defined %}{{ if_name }}{% else %}#{{ ifindex }}{% endif %}\n{% endif %}End\n';
+    const { shown, legend } = layoutForDisplay(readForDisplay(src));
+    expect(drawn(shown)).toBe('Node: {node_name}\n[Folder: {group}\n][Port: <1>{if_name}</1><2>#{ifindex}</2>\n]End\n');
+    const folder = shown.find((s) => s.kind === 'line');
+    if (folder?.kind !== 'line') throw new Error('no line');
+    expect(describeNote(folder.note, WORDS)).toBe('only when GROUP known');
+    expect(legend.map((l) => describeNote(l.note, WORDS))).toEqual([
+      'only when IF_NAME known',
+      'only when ① is not sent',
     ]);
   });
 
@@ -64,12 +110,18 @@ describe('the built-in text, read for showing (ADR-197)', () => {
       { kind: 'raw', text: '{% for x in tags %}' },
     ]);
     expect(readCondition('value > 3')).toEqual({ raw: 'value > 3' });
-    expect(describeBranch({ when: null, otherwise: true, pieces: [] }, WORDS)).toBe('else');
+    expect(circled(3)).toBe('③');
+    expect(circled(21)).toBe('(21)');
   });
 
   it('never throws on a template it cannot balance', () => {
     expect(() => readForDisplay('{% endif %}{% if group %}x')).not.toThrow();
     expect(readForDisplay('{{ broken')).toEqual([{ kind: 'text', text: '{{ broken' }]);
+  });
+
+  it('draws the body without the title sentence it repeats, and leaves another body whole', () => {
+    expect(bodyAfterTitle('T is down\n\nNode: x\n', 'T is down')).toBe('\n\nNode: x\n');
+    expect(bodyAfterTitle('Other\n', 'T is down')).toBe('Other\n');
   });
 
   it('a channel has its own template only when a field holds text', () => {

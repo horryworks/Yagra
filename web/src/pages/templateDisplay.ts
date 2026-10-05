@@ -155,32 +155,120 @@ export function readForDisplay(src: string): DisplayPiece[] {
   return settle(root);
 }
 
-/** The words a condition is drawn with, in the operator's language. */
+/**
+ * Pieces laid out for reading (Inc.2 decision 10). The sentence stays one line: a part sent only
+ * under a condition is underlined and numbered, and its condition is said once, below, in the
+ * legend. A condition that keeps or drops a whole line is said at the end of that line instead,
+ * and takes no number.
+ */
+export type Shown =
+  | { kind: 'text'; text: string }
+  | { kind: 'var'; name: string }
+  | { kind: 'raw'; text: string }
+  | { kind: 'part'; n: number; pieces: Shown[] }
+  | { kind: 'line'; note: Note; pieces: Shown[] };
+
+/** When one numbered part, or one line, is sent. */
+export interface Note {
+  branch: Branch;
+  /** The number of the branch before this one in the same `if`, for "only when ③ is not sent". */
+  prev: number | null;
+  /** The numbered part this one sits inside, if any. */
+  parent: number | null;
+}
+
+/** The text a branch would send, with each variable as one character: enough to tell where lines end. */
+function flat(pieces: readonly DisplayPiece[]): string {
+  return pieces
+    .map((p) => (p.kind === 'text' ? p.text : p.kind === 'cond' ? flat(p.branches[0].pieces) : 'x'))
+    .join('');
+}
+
+export function layoutForDisplay(pieces: readonly DisplayPiece[]): {
+  shown: Shown[];
+  legend: { n: number; note: Note }[];
+} {
+  const legend: { n: number; note: Note }[] = [];
+  let next = 1;
+  const walk = (list: readonly DisplayPiece[], parent: number | null, startsLine: boolean): Shown[] => {
+    const out: Shown[] = [];
+    let atLineStart = startsLine;
+    for (const p of list) {
+      if (p.kind !== 'cond') {
+        out.push(p);
+        atLineStart = p.kind === 'text' ? p.text.endsWith('\n') : false;
+        continue;
+      }
+      const only = p.branches.length === 1 ? p.branches[0] : null;
+      const body = only ? flat(only.pieces) : '';
+      if (only && atLineStart && body.endsWith('\n') && !body.slice(0, -1).includes('\n')) {
+        out.push({ kind: 'line', note: { branch: only, prev: null, parent }, pieces: walk(only.pieces, parent, true) });
+        atLineStart = true;
+        continue;
+      }
+      let prev: number | null = null;
+      for (const branch of p.branches) {
+        const n = next++;
+        legend.push({ n, note: { branch, prev, parent } });
+        out.push({ kind: 'part', n, pieces: walk(branch.pieces, n, atLineStart) });
+        prev = n;
+      }
+      atLineStart = false;
+    }
+    return out;
+  };
+  return { shown: walk(pieces, null, true), legend };
+}
+
+/** The words a condition is said with, in the operator's language. */
 export interface ConditionWords {
   labelOf: (name: string) => string;
+  /** A part's number as it is drawn: ③. */
+  numberOf: (n: number) => string;
   present: (name: string) => string;
   differs: (name: string, other: string) => string;
   /** Joins two or more clauses. */
   and: string;
   when: (cond: string) => string;
-  otherwiseWhen: (cond: string) => string;
-  otherwise: string;
+  otherwiseWhen: (prev: string, cond: string) => string;
+  otherwise: (prev: string) => string;
+  inside: (text: string, parent: string) => string;
 }
 
-/** The caption above one branch: "when the address differs from the node name". */
-export function describeBranch(branch: Branch, words: ConditionWords): string {
-  if (branch.when === null) return words.otherwise;
+/** "only when Address differs from Node name", "only when ③ is not sent (inside ②)". */
+export function describeNote(note: Note, words: ConditionWords): string {
+  const { branch, prev, parent } = note;
   const cond =
-    'raw' in branch.when
-      ? branch.when.raw
-      : branch.when.terms
-          .map((t) =>
-            t.kind === 'present'
-              ? words.present(words.labelOf(t.name))
-              : words.differs(words.labelOf(t.name), words.labelOf(t.other)),
-          )
-          .join(words.and);
-  return branch.otherwise ? words.otherwiseWhen(cond) : words.when(cond);
+    branch.when === null
+      ? null
+      : 'raw' in branch.when
+        ? branch.when.raw
+        : branch.when.terms
+            .map((t) =>
+              t.kind === 'present'
+                ? words.present(words.labelOf(t.name))
+                : words.differs(words.labelOf(t.name), words.labelOf(t.other)),
+            )
+            .join(words.and);
+  const prevText = prev === null ? '' : words.numberOf(prev);
+  const text =
+    cond === null
+      ? words.otherwise(prevText)
+      : branch.otherwise && prev !== null
+        ? words.otherwiseWhen(prevText, cond)
+        : words.when(cond);
+  return parent === null ? text : words.inside(text, words.numberOf(parent));
+}
+
+/** ① … ⑳, then (21) — the numbers a legend can run to. */
+export function circled(n: number): string {
+  return n >= 1 && n <= 20 ? String.fromCodePoint(0x2460 + n - 1) : `(${n})`;
+}
+
+/** A built-in body without the title sentence it starts with, which the view draws as one tag
+ *  (Inc.2 decision 10). A body that does not start with it is returned whole. */
+export function bodyAfterTitle(body: string, title: string): string {
+  return body.startsWith(title) ? body.slice(title.length) : body;
 }
 
 /** Whether a channel sends a template of its own. Blank text is not one: it sends the built-in. */

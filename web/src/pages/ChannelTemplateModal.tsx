@@ -63,8 +63,9 @@ import {
 import { presetLanguage, presetTemplate, TEMPLATE_PRESETS } from './templatePresets';
 import type { ChipLook } from './templateDom';
 import { ChipSettings, TemplateField, VariablePicker, VariableTooltip, type FieldHandle } from './TemplateEditor';
-import { builtinSource, hasOwnTemplate } from './templateDisplay';
-import { BuiltinTemplateText } from './BuiltinTemplateText';
+import { bodyAfterTitle, builtinSource, hasOwnTemplate } from './templateDisplay';
+import { BuiltinTemplateText, JsonText } from './BuiltinTemplateText';
+import { BUILTIN_JSON_KEYS, JSON_SKELETON, TEMPLATE_FORMS } from './templateForm';
 import './ChannelTemplateModal.css';
 
 /** What the dialog learns before it can draw: the built-in draft, the variables, and whether the
@@ -294,9 +295,45 @@ export function ChannelTemplateModal({
   const resetToBuiltin = () =>
     form.submit(() => api.setNotificationTemplate(channel.id, { subject: null, body: null }).then(() => done()));
 
+  // "Start from a JSON skeleton" (Inc.2 decision 11): the built-in JSON is no template, so a JSON
+  // channel starts from a skeleton instead of a copy. PagerDuty's summary is still a copy.
+  const startFromSkeleton = () => {
+    closePopovers();
+    setCode({ subject: shape.subject && copy ? copy.subject : '', body: JSON_SKELETON });
+    codeCaret.current = null;
+    setUnsupported(null);
+    setMode('code');
+    setShowBuiltin(false);
+  };
+
   const isJsm = channel.kind === 'jsm';
-  const subjectLabel = isJsm ? t('routing.template.jsmSubject') : t('routing.template.subject');
+  const shape = TEMPLATE_FORMS[channel.kind];
+  const subjectLabel =
+    shape.subject === 'title'
+      ? t('routing.template.jsmSubject')
+      : shape.subject === 'summary'
+        ? t('routing.template.pdSubject')
+        : t('routing.template.subject');
+  const bodyLabel =
+    shape.body === 'json'
+      ? t('routing.template.jsonBodyLabel')
+      : shape.body === 'customDetails'
+        ? t('routing.template.pdBody')
+        : t('routing.template.body');
+  const hintOf = (field: 'subject' | 'body'): string | null => {
+    if (isJsm || channel.kind === 'email') {
+      return t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, { max: JSM_MESSAGE_MAX_CHARS });
+    }
+    if (channel.kind === 'pagerduty') {
+      return field === 'subject' ? t('routing.template.pdSubjectHint') : t('routing.template.pdBodyHint');
+    }
+    return field === 'body' ? t('routing.template.webhookBodyHint') : null;
+  };
+  // A webhook sends no subject (Inc.2 decision 8): its field is drawn only to show and remove one
+  // that was saved before this was known.
+  const showCodeSubject = shape.subject !== null || code.subject.trim() !== '';
   const view = preview ? previewView(preview) : null;
+  const unusedNow = shape.unusedAt.includes(sample.event);
 
   return (
     <Modal
@@ -319,6 +356,10 @@ export function ChannelTemplateModal({
       ) : (
         <div className="tpl-layout">
           <div className="tpl-edit">
+            <p className="tpl-sends">
+              <span className="tpl-label-sm">{t('routing.template.sends.label')}</span>{' '}
+              {t(`routing.template.sends.${channel.kind}`)}
+            </p>
             <div
               className={`tpl-status ${!own ? 'is-builtin' : confirmReset ? 'is-confirm' : 'is-own'}`}
               role="status"
@@ -356,7 +397,7 @@ export function ChannelTemplateModal({
 
             {viewingBuiltin ? (
               <>
-                {boot.jsonBody === false && (
+                {boot.jsonBody === false && !shape.json && (
                   <div className="tpl-presets">
                     <span className="tpl-label-sm">{t('routing.template.presets')}</span>
                     {copy && (
@@ -384,41 +425,84 @@ export function ChannelTemplateModal({
                   active={tab}
                   onChange={chooseTab}
                 />
-                {(['subject', 'body'] as const).map((field) => {
-                  const label = field === 'subject' ? subjectLabel : t('routing.template.body');
-                  const source = field === 'subject' ? builtinAt(tab)?.subject : builtinAt(tab)?.body;
-                  return (
-                    <div className="tpl-field-wrap" key={field}>
-                      <div className="tpl-field-head">
-                        <span className="tpl-field-name">{label}</span>
-                        {(isJsm || channel.kind === 'email') && (
-                          <span className="tpl-field-hint">
-                            {t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, {
-                              max: JSM_MESSAGE_MAX_CHARS,
-                            })}
-                          </span>
-                        )}
-                      </div>
-                      {source != null ? (
+                {shape.unusedAt.includes(tab) ? (
+                  <p className="tpl-note">{t(`routing.template.builtinView.closeOnly.${tab}`)}</p>
+                ) : (
+                  <>
+                    {shape.subject !== null && builtinAt(tab) && (
+                      <div className="tpl-field-wrap">
+                        <div className="tpl-field-head">
+                          <span className="tpl-field-name">{subjectLabel}</span>
+                          {hintOf('subject') && <span className="tpl-field-hint">{hintOf('subject')}</span>}
+                        </div>
                         <BuiltinTemplateText
-                          id={`tpl-builtin-${field}`}
-                          source={source}
-                          label={label}
-                          multiline={field === 'body'}
+                          id="tpl-builtin-subject"
+                          source={builtinAt(tab)!.subject}
+                          label={subjectLabel}
+                          multiline={false}
                         />
+                      </div>
+                    )}
+                    <div className="tpl-field-wrap">
+                      <div className="tpl-field-head">
+                        <span className="tpl-field-name">{bodyLabel}</span>
+                        {hintOf('body') && <span className="tpl-field-hint">{hintOf('body')}</span>}
+                      </div>
+                      {shape.json ? (
+                        <>
+                          <p className="tpl-note">{t('routing.template.builtinView.jsonSample')}</p>
+                          <pre
+                            id="tpl-builtin-body"
+                            className="tpl-field tpl-builtin is-multi is-mono"
+                            data-readonly={t('routing.template.builtinView.readOnly')}
+                          >
+                            {view && request.body === null ? <JsonText text={view.body} /> : t('routing.template.updating')}
+                          </pre>
+                          <details className="tpl-keys">
+                            <summary>{t('routing.template.builtinView.keysTitle')}</summary>
+                            <dl>
+                              {BUILTIN_JSON_KEYS.map((k) => (
+                                <div key={k}>
+                                  <dt>
+                                    <code>{k}</code>
+                                  </dt>
+                                  <dd>{t(`routing.template.jsonKeys.${k}`)}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </details>
+                        </>
                       ) : (
-                        <p className="tpl-note">{t('routing.template.builtinView.jsonBody')}</p>
+                        builtinAt(tab)?.body != null && (
+                          <BuiltinTemplateText
+                            id="tpl-builtin-body"
+                            source={bodyAfterTitle(builtinAt(tab)!.body!, builtinAt(tab)!.subject)}
+                            lead={
+                              builtinAt(tab)!.body!.startsWith(builtinAt(tab)!.subject)
+                                ? t('routing.template.builtinView.sameAsTitle')
+                                : undefined
+                            }
+                            label={bodyLabel}
+                            multiline
+                          />
+                        )
                       )}
                     </div>
-                  );
-                })}
+                  </>
+                )}
                 <div className="tpl-builtin-acts">
-                  {copy && <Button onClick={editCopy}>{t('routing.template.builtinView.copy')}</Button>}
+                  {shape.json ? (
+                    <Button onClick={startFromSkeleton}>{t('routing.template.builtinView.skeleton')}</Button>
+                  ) : (
+                    copy && <Button onClick={editCopy}>{t('routing.template.builtinView.copy')}</Button>
+                  )}
                   <Button variant="ghost" onClick={() => setShowBuiltin(false)}>
                     {t('routing.template.builtinView.blank')}
                   </Button>
                 </div>
-                <p className="tpl-hint">{t('routing.template.builtinView.condNote')}</p>
+                <p className="tpl-hint">
+                  {shape.json ? t('routing.template.builtinView.jsonNote') : t('routing.template.builtinView.condNote')}
+                </p>
               </>
             ) : (
               <>
@@ -496,15 +580,9 @@ export function ChannelTemplateModal({
                         <div className="tpl-field-wrap" key={field}>
                           <div className="tpl-field-head">
                             <label className="tpl-field-name" htmlFor={`tpl-${field}`}>
-                              {field === 'subject' ? subjectLabel : t('routing.template.body')}
+                              {field === 'subject' ? subjectLabel : bodyLabel}
                             </label>
-                            {(isJsm || channel.kind === 'email') && (
-                              <span className="tpl-field-hint">
-                                {t(`routing.template.${field}Hint.${isJsm ? 'jsm' : 'email'}`, {
-                                  max: JSM_MESSAGE_MAX_CHARS,
-                                })}
-                              </span>
-                            )}
+                            {hintOf(field) && <span className="tpl-field-hint">{hintOf(field)}</span>}
                             <span
                               className="tpl-insert"
                               ref={(el) => {
@@ -552,7 +630,7 @@ export function ChannelTemplateModal({
                             id={`tpl-${field}`}
                             segments={effective(model, tab, field)}
                             multiline={field === 'body'}
-                            label={field === 'subject' ? subjectLabel : t('routing.template.body')}
+                            label={field === 'subject' ? subjectLabel : bodyLabel}
                             placeholder={t('routing.template.builtinPlaceholder')}
                             look={look}
                             handleRef={handles[field]}
@@ -589,29 +667,39 @@ export function ChannelTemplateModal({
                 </>
               ) : (
                 <>
-                  <div className="tpl-code-head">
-                    <label className="form-label" htmlFor="tpl-subject">
-                      {subjectLabel}
-                    </label>
-                    {code.subject.trim() !== '' && (
-                      <button type="button" className="tpl-link" onClick={() => setCode({ ...code, subject: '' })}>
-                        {t('routing.template.resetField')}
-                      </button>
-                    )}
-                  </div>
-                  <TextInput
-                    id="tpl-subject"
-                    className="mono"
-                    value={code.subject}
-                    spellCheck={false}
-                    placeholder={t('routing.template.builtinPlaceholder')}
-                    inputRef={codeSubjectRef}
-                    onChange={(e) => setCode({ ...code, subject: e.target.value })}
-                    onSelect={(e) => rememberCaret('subject', e.currentTarget)}
-                  />
+                  {showCodeSubject && (
+                    <>
+                      {shape.subject === null && (
+                        <div className="form-warning tpl-unsent" role="status">
+                          <strong>{t('routing.template.webhookSubject.title')}</strong>
+                          <p>{t('routing.template.webhookSubject.note')}</p>
+                        </div>
+                      )}
+                      <div className="tpl-code-head">
+                        <label className="form-label" htmlFor="tpl-subject">
+                          {subjectLabel}
+                        </label>
+                        {code.subject.trim() !== '' && (
+                          <button type="button" className="tpl-link" onClick={() => setCode({ ...code, subject: '' })}>
+                            {t('routing.template.resetField')}
+                          </button>
+                        )}
+                      </div>
+                      <TextInput
+                        id="tpl-subject"
+                        className="mono"
+                        value={code.subject}
+                        spellCheck={false}
+                        placeholder={t('routing.template.builtinPlaceholder')}
+                        inputRef={codeSubjectRef}
+                        onChange={(e) => setCode({ ...code, subject: e.target.value })}
+                        onSelect={(e) => rememberCaret('subject', e.currentTarget)}
+                      />
+                    </>
+                  )}
                   <div className="tpl-code-head">
                     <label className="form-label" htmlFor="tpl-body">
-                      {t('routing.template.body')}
+                      {bodyLabel}
                     </label>
                     {code.body.trim() !== '' && (
                       <button type="button" className="tpl-link" onClick={() => setCode({ ...code, body: '' })}>
@@ -685,12 +773,21 @@ export function ChannelTemplateModal({
               ))}
             </div>
             {previewFailed && <p className="form-error">{t('routing.err.preview')}</p>}
-            {view && (
+            {view && unusedNow ? (
               <div className="tpl-card">
+                <div className="tpl-card-meta">{t('routing.template.preview.closeOnly')}</div>
+                <pre className="tpl-card-body is-json">
+                  <JsonText text={'{"event_action":"resolve","dedup_key":"…"}'} />
+                </pre>
+              </div>
+            ) : view && (
+              <div className="tpl-card">
+                {shape.subject !== null && (
                 <div className="tpl-card-title">
                   {isJsm ? <JsmTitle title={view.subject} /> : view.subject}
                   {request.subject === null && <Badge tone="neutral">{t('routing.template.fieldBuiltin')}</Badge>}
                 </div>
+                )}
                 {isJsm && (
                   <div className="tpl-card-meta">
                     {jsmTitle(view.subject).cut
@@ -701,8 +798,13 @@ export function ChannelTemplateModal({
                         })}
                   </div>
                 )}
-                <div className="tpl-card-body">
-                  {view.body}
+                {shape.json && (
+                  <div className="tpl-card-meta">
+                    {channel.kind === 'pagerduty' ? t('routing.template.pdBody') : t('routing.template.preview.post')}
+                  </div>
+                )}
+                <div className={shape.json ? 'tpl-card-body is-json' : 'tpl-card-body'}>
+                  {shape.json ? <JsonText text={view.body} /> : view.body}
                   {request.body === null && <Badge tone="neutral">{t('routing.template.fieldBuiltin')}</Badge>}
                 </div>
               </div>

@@ -626,20 +626,116 @@
   border-color: var(--border-color);
 }
 
-/* A part sent only when its condition holds: a dashed box with the condition in small type. */
-.tpl-cond {
-  padding: 1px 3px;
-  border: var(--border-width) dashed var(--text-tertiary);
-  border-radius: var(--radius-sm);
-}
-
-.tpl-cond + .tpl-cond {
-  margin-left: 2px;
-}
-
-.tpl-cond-cap {
-  margin-right: 4px;
+/* A part sent only when its condition holds (Inc.2 decision 10): underlined in the sentence and
+   numbered, with the condition said once in the legend below the field. */
+.tpl-cond-num {
+  display: inline-block;
+  min-width: 1.2em;
+  margin: 0 1px 0 2px;
+  color: var(--text-tertiary);
+  font-family: var(--ui-font-family);
   font-size: var(--font-xs);
+  text-align: center;
+}
+
+.tpl-cond-part {
+  text-decoration: underline dashed var(--text-tertiary);
+  text-underline-offset: 5px;
+}
+
+/* A whole line kept or dropped: its condition at the end of the line, no number. */
+.tpl-line-when {
+  margin-left: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+.tpl-legend {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.tpl-legend li {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.tpl-field.is-mono {
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  line-height: 1.9;
+}
+
+.tpl-chip.is-lead {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* What this channel sends, above everything else (Inc.2 decision 7). */
+.tpl-sends {
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+/* A webhook subject that is saved and reaches no one (decision 8). */
+.tpl-unsent p {
+  margin: 2px 0 0;
+}
+
+/* The built-in JSON's keys, explained (decision 9). */
+.tpl-keys {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.tpl-keys summary {
+  cursor: pointer;
+}
+
+.tpl-keys dl {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+}
+
+.tpl-keys dl div {
+  display: grid;
+  grid-template-columns: 9em minmax(0, 1fr);
+  gap: 8px;
+}
+
+.tpl-keys dd {
+  margin: 0;
+}
+
+/* JSON laid out one value per line, coloured from the series palette (decision 9). */
+.tpl-card-body.is-json {
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+}
+
+.tpl-json-key {
+  color: var(--series-2);
+}
+
+.tpl-json-string {
+  color: var(--series-3);
+}
+
+.tpl-json-number {
+  color: var(--series-4);
+}
+
+.tpl-json-literal {
   color: var(--text-tertiary);
 }
 

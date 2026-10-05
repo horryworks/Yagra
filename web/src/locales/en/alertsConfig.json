@@ -326,17 +326,62 @@
         "readOnly": "Built-in · read only",
         "copy": "Edit a copy of this text",
         "blank": "Start from empty fields",
-        "condNote": "A dashed box is sent only when its condition holds. The Visual editor cannot hold those parts, so the copy opens in Code. Nothing changes until you save.",
-        "jsonBody": "The built-in body is the whole alert as JSON, not a template. The preview on the right shows it.",
-        "when": "when {{cond}}",
-        "otherwiseWhen": "otherwise, when {{cond}}",
-        "otherwise": "otherwise",
+        "condNote": "An underlined part is sent only when its numbered condition holds. The Visual editor cannot hold those parts, so the copy opens in Code. Nothing changes until you save.",
+        "when": "only when {{cond}}",
+        "otherwiseWhen": "only when {{prev}} is not sent and {{cond}}",
+        "otherwise": "only when {{prev}} is not sent",
         "present": "{{name}} is known",
         "differs": "{{name}} differs from {{other}}",
-        "and": " and "
+        "and": " and ",
+        "inside": "{{text}} (inside {{parent}})",
+        "legend": "When each numbered part of the {{field}} is sent",
+        "jsonSample": "The built-in body is the alert itself as JSON, shown here for the sample alert on the right.",
+        "keysTitle": "What each key means",
+        "skeleton": "Start from a JSON skeleton",
+        "jsonNote": "The built-in JSON is the alert written out, not a template, so it cannot be copied. The skeleton lists the facts a receiver usually wants, as variables; it is not the same as the built-in JSON. Nothing changes until you save.",
+        "sameAsTitle": "Same sentence as the title",
+        "closeOnly": {
+          "resolve": "When it recovers, PagerDuty is sent only a close signal (the dedup key). This template is not used.",
+          "suppress": "When it is rolled up under upstream, PagerDuty is sent only a close signal (the dedup key). This template is not used."
+        }
       },
       "resetField": "Use built-in for this field",
-      "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body."
+      "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body.",
+      "sends": {
+        "label": "Sends:",
+        "jsm": "Title (the JSM message, 130 characters) + Body (the JSM description)",
+        "email": "Subject + Body",
+        "webhook": "The JSON body, POSTed as it is. No subject is sent.",
+        "pagerduty": "summary (one line, 1024 characters) + custom_details (JSON) when an alert fires; only a close signal when it recovers or is rolled up"
+      },
+      "pdSubject": "summary",
+      "pdBody": "custom_details",
+      "jsonBodyLabel": "JSON body",
+      "pdSubjectHint": "The line PagerDuty shows. Cut off past 1024 characters",
+      "pdBodyHint": "JSON attached to the PagerDuty alert",
+      "webhookBodyHint": "POSTed as it is",
+      "webhookSubject": {
+        "title": "Saved but not sent",
+        "note": "This channel has a subject saved, but a webhook sends only its JSON body, so no one receives it."
+      },
+      "preview": {
+        "post": "POSTed body",
+        "closeOnly": "PagerDuty is sent only a close signal at this point in the alert’s life:"
+      },
+      "jsonKeys": {
+        "node": "The node’s ID (a UUID).",
+        "check": "The ID of the check that raised the alert.",
+        "severity": "info, warning or critical.",
+        "state": "ok, warning, critical, unknown, unreachable or maintenance.",
+        "at_unix_ms": "When the state changed, in milliseconds since 1970 (UTC).",
+        "root_cause": "The upstream node’s ID when the alert was rolled up under it; otherwise null.",
+        "flapping": "Whether the node’s state keeps changing.",
+        "metric": "The metric’s name; __liveness__ for an up/down alert.",
+        "breach": "For a threshold alert: the measured value, the threshold and which way it crossed. null for an up/down alert.",
+        "ifindex": "Only for a per-port alert: the port’s ifIndex.",
+        "row": "Only for a per-row alert (a memory pool, a sensor): the row’s index.",
+        "row_name": "Only for a per-row alert: the row’s name."
+      }
     },
     "test": {
       "title": "Send a test notification — {{name}}",

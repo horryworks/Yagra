@@ -25,6 +25,8 @@ type Schemas = components['schemas'];
 const CHANNEL_ID = '00000000-0000-4000-8000-0000000000c1';
 /** A channel that already sends a template of its own. */
 const OWN_ID = '00000000-0000-4000-8000-0000000000c2';
+const HOOK_ID = '00000000-0000-4000-8000-0000000000c3';
+const PD_ID = '00000000-0000-4000-8000-0000000000c4';
 
 const channels = (() => {
   const [first] = defaultBodyFor('/api/v1/notification-channels') as unknown as Schemas['ChannelSummary'][];
@@ -47,6 +49,8 @@ const channels = (() => {
       subject_template: '{{ subject_name }} is {{ state }}',
       body_template: null,
     },
+    { ...first, id: HOOK_ID, name: 'ymock-hook', kind: 'webhook', enabled: true, subject_template: null, body_template: null },
+    { ...first, id: PD_ID, name: 'ymock-pd', kind: 'pagerduty', enabled: true, subject_template: null, body_template: null },
   ] as unknown as Json;
 })();
 
@@ -103,10 +107,14 @@ test('a channel with no template shows the built-in text, and editing a copy sav
   // Variables as tags; the part sent only when the address is not the name, in a box that says so.
   const shown = dialog.locator('#tpl-builtin-subject');
   await expect(shown.locator('.tpl-chip')).toHaveText(['Node name', 'Address', 'State']);
-  await expect(shown.locator('.tpl-cond-cap')).toHaveText(['when Address differs from Node name']);
+  // The conditional part is numbered in the sentence and its condition said once, below.
+  await expect(shown.locator('.tpl-cond-part')).toHaveText(['(Address)']);
+  await expect(dialog.locator('.tpl-legend').first()).toHaveText('①only when Address differs from Node name');
   const shownBody = dialog.locator('#tpl-builtin-body');
   await expect(shownBody).toContainText('Severity:');
-  await expect(shownBody.locator('.tpl-cond-cap')).toContainText(['when Folder is known']);
+  // The title sentence it repeats is one tag; a whole kept-or-dropped line says so at its end.
+  await expect(shownBody.locator('.tpl-chip.is-lead')).toHaveText('Same sentence as the title');
+  await expect(shownBody.locator('.tpl-line-when')).toHaveText(['only when Folder is known']);
 
   // Each tab shows its own point in the alert's life.
   await dialog.getByRole('tab', { name: 'When it recovers' }).click();
@@ -128,6 +136,33 @@ test('a channel with no template shows the built-in text, and editing a copy sav
   await dialog.getByRole('button', { name: 'Save template' }).click();
   expect((await put).postDataJSON()).toEqual({ subject: copied, body: copiedBody });
 
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('a webhook shows the JSON it posts and no subject, and starts from a JSON skeleton', async ({ page, errors }) => {
+  const dialog = await openTemplate(page, 'ymock-hook');
+  await expect(dialog).toContainText('No subject is sent.');
+  await expect(dialog.locator('#tpl-builtin-subject')).toHaveCount(0);
+  // The built-in body is the preview of the alert itself, laid out one value per line.
+  const body = dialog.locator('#tpl-builtin-body');
+  await expect(body).toContainText('"node": "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60"');
+  await expect(body.locator('.tpl-json-key')).toHaveText(['"node"']);
+  await dialog.getByText('What each key means').click();
+  await expect(dialog.locator('.tpl-keys')).toContainText('The ID of the check that raised the alert.');
+
+  await dialog.getByRole('button', { name: 'Start from a JSON skeleton' }).click();
+  await expect(dialog.locator('#tpl-subject')).toHaveCount(0);
+  await expect(dialog.locator('#tpl-body')).toHaveValue(/"dedup_key": \{\{ dedup_key \| tojson \}\}/);
+  expect(errors.uncaught).toEqual([]);
+});
+
+test('PagerDuty says that a recovery sends only a close signal', async ({ page, errors }) => {
+  const dialog = await openTemplate(page, 'ymock-pd');
+  await expect(dialog.locator('#tpl-builtin-subject')).toBeVisible();
+  await dialog.getByRole('tab', { name: 'When it recovers' }).click();
+  await expect(dialog.locator('.tpl-edit')).toContainText('PagerDuty is sent only a close signal');
+  await expect(dialog.locator('#tpl-builtin-subject')).toHaveCount(0);
+  await expect(dialog.locator('.tpl-preview')).toContainText('"event_action": "resolve"');
   expect(errors.uncaught).toEqual([]);
 });
 
