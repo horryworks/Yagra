@@ -52,6 +52,12 @@
   font-size: var(--font-xs);
 }
 
+/* Free layout (ADR-199): under the body field, before the hints that explain it. */
+.tpl-free-layout {
+  margin: 8px 0 4px;
+  font-size: var(--font-sm);
+}
+
 /* Not wrapping (ADR-198 decision 4): each line is drawn whole and the box scrolls sideways, so the
    line breaks on screen are the template's own. */
 .tpl-layout.is-nowrap .tpl-field,
@@ -228,6 +234,14 @@
 .tpl-chip-mark {
   color: var(--text-tertiary);
   font-size: var(--font-xs);
+}
+
+/* Text sent just before the value when it is there (ADR-199). Monospace so a leading or trailing
+   space can be counted. */
+.tpl-chip-prefix {
+  font-family: var(--font-family);
+  color: var(--text-secondary);
+  white-space: pre;
 }
 
 /* ── Variable list and tag settings ───────────────────────────────────────────────────────── */

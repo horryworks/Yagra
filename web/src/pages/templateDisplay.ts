@@ -309,6 +309,54 @@ function branched(by: Record<NotifyEvent, string>): string {
 }
 
 /**
+ * {@link branched}, laid out for a template saved with free layout (ADR-199): each event tag on a
+ * line of its own, each event's text on the lines under it, indented. With free layout the tag
+ * lines and the indentation are not sent, so it sends what {@link branched} sends.
+ *
+ * Each event's text loses its last newline ({@link inner}) because the line break before the next
+ * tag line is sent; for the last arm, the server's dropping of one trailing newline takes it back
+ * off. `notify_render.rs`'s `the_laid_out_builtin_sends_the_builtin` runs this shape through the
+ * renderer.
+ */
+function laidOutBranched(by: Record<NotifyEvent, string>): string {
+  const indent = (text: string) =>
+    inner(text)
+      .split('\n')
+      .map((l) => `  ${l}`)
+      .join('\n');
+  const arms = (['resolve', 'suppress'] as const).filter((e) => by[e] !== by.fire);
+  if (arms.length === 0) return by.fire;
+  return [
+    ...arms.flatMap((e, i) => [`{% ${i === 0 ? 'if' : 'elif'} event == "${e}" %}`, indent(by[e])]),
+    '{% else %}',
+    indent(by.fire),
+    '{% endif %}',
+  ].join('\n');
+}
+
+/**
+ * {@link builtinSource}, laid out for free layout (ADR-199): the copy the code editor offers when
+ * the operator has turned free layout on. Sends exactly what {@link builtinSource} sends.
+ */
+export function laidOutBuiltinSource(
+  templates: readonly BuiltinSubjectTemplate[],
+): { subject: string; body: string } | null {
+  const subject = perEvent(templates, 'subject');
+  if (!subject) return null;
+  const body = perEvent(templates, 'body');
+  if (!body) return { subject: laidOutBranched(subject), body: '' };
+  const rests = TEMPLATE_EVENTS.map((e) => (body[e].startsWith(subject[e]) ? body[e].slice(subject[e].length) : null));
+  const rest = rests[0];
+  // The subject's line ends with a line break that is sent, so the shared lines give up one of
+  // their own leading line breaks to keep the same blank line.
+  const shared = rest !== null && rest.startsWith('\n') && rests.every((r) => r === rest);
+  return {
+    subject: laidOutBranched(subject),
+    body: shared ? `${laidOutBranched(subject)}\n${rest.slice(1)}` : laidOutBranched(body),
+  };
+}
+
+/**
  * The built-in text as one subject and one body, for the code editor (decision 4). Rendering it
  * sends what the channel sends today, at every point in the alert's life.
  *

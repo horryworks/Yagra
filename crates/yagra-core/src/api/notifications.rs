@@ -354,6 +354,12 @@ pub(super) struct TemplateBody {
     subject: Option<String>,
     #[serde(default)]
     body: Option<String>,
+    /// Whether line breaks and indentation around the tags are layout rather than text (ADR-199):
+    /// the indentation at the start of each line is not sent, a line holding only `{% … %}` tags
+    /// or `{# … #}` comments is not sent, and in the subject no line break is sent. Absent means
+    /// `false`, which sends every character as written.
+    #[serde(default)]
+    free_layout: bool,
 }
 
 impl TemplateBody {
@@ -364,9 +370,13 @@ impl TemplateBody {
         fn meaningful(s: Option<String>) -> Option<String> {
             s.filter(|s| !s.trim().is_empty())
         }
+        let subject = meaningful(self.subject);
+        let body = meaningful(self.body);
         ChannelTemplate {
-            subject: meaningful(self.subject),
-            body: meaningful(self.body),
+            // Nothing to lay out is the built-in, and the built-in has one spelling.
+            free_layout: self.free_layout && (subject.is_some() || body.is_some()),
+            subject,
+            body,
         }
     }
 }
@@ -791,6 +801,9 @@ pub(super) struct PreviewRequest {
     subject: Option<String>,
     #[serde(default)]
     body: Option<String>,
+    /// As on the saved template: line breaks and indentation around the tags are layout.
+    #[serde(default)]
+    free_layout: bool,
 }
 
 fn default_event() -> NotifyEvent {
@@ -855,6 +868,7 @@ async fn preview_notification_template(
     let template = TemplateBody {
         subject: req.subject,
         body: req.body,
+        free_layout: req.free_layout,
     }
     .into_template();
     let rendered = crate::notify_render::render_with_fallback(
@@ -1388,7 +1402,7 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(events, ["fire", "resolve", "suppress"]);
         // Since ADR-196 the webhook and PagerDuty summary is the same sentence JSM and email use.
         let fire = out[0]["subject"].as_str().expect("subject");
-        assert!(fire.starts_with("{{ node_name }}"), "{fire}");
+        assert!(fire.starts_with("{{ node_label }}"), "{fire}");
         // The webhook's built-in body is the alert as JSON, which is no template (ADR-197).
         assert!(out[0]["body"].is_null(), "{}", out[0]);
 
@@ -1401,7 +1415,7 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, StatusCode::OK);
         let fire = out[0]["subject"].as_str().expect("subject");
-        assert!(fire.starts_with("{{ node_name }}"), "{fire}");
+        assert!(fire.starts_with("{{ node_label }}"), "{fire}");
         // Their built-in body is text, and it is a template too (ADR-197).
         let body = out[0]["body"].as_str().expect("body");
         assert!(body.contains("Severity:  {{ severity }}"), "{body}");
@@ -1418,6 +1432,7 @@ at 2026-08-04T09:41:07+00:00"
     fn a_template_that_does_not_compile_maps_to_a_typed_400() {
         use axum::response::IntoResponse;
         let bad = ChannelTemplate {
+            free_layout: false,
             subject: None,
             body: Some("{% if severity %}unclosed".to_owned()),
         };
@@ -1431,6 +1446,7 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // …and a template that compiles is accepted, including the empty pair (= built-in).
         crate::notify_render::validate(&ChannelTemplate {
+            free_layout: false,
             subject: Some("{{ severity }} {{ node_name }}".to_owned()),
             body: Some("{% if event == 'resolve' %}ok{% endif %}".to_owned()),
         })
@@ -1443,6 +1459,7 @@ at 2026-08-04T09:41:07+00:00"
     #[test]
     fn a_blank_field_clears_the_override_rather_than_emptying_it() {
         let cleared = TemplateBody {
+            free_layout: false,
             subject: Some("   ".to_owned()),
             body: Some(String::new()),
         }
@@ -1450,6 +1467,7 @@ at 2026-08-04T09:41:07+00:00"
         assert!(cleared.is_builtin());
 
         let kept = TemplateBody {
+            free_layout: false,
             subject: Some("{{ node_name }}".to_owned()),
             body: None,
         }
@@ -1463,11 +1481,13 @@ at 2026-08-04T09:41:07+00:00"
     #[test]
     fn an_over_long_template_is_rejected_before_the_database_sees_it() {
         let too_long = ChannelTemplate {
+            free_layout: false,
             subject: Some("x".repeat(MAX_SUBJECT_SOURCE + 1)),
             body: None,
         };
         assert!(check_template_size(&too_long).is_err());
         let ok = ChannelTemplate {
+            free_layout: false,
             subject: Some("x".repeat(MAX_SUBJECT_SOURCE)),
             body: Some("y".repeat(MAX_BODY_SOURCE)),
         };

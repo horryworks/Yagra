@@ -26,6 +26,7 @@ export type TemplateVariableGroup = (typeof TEMPLATE_VARIABLE_GROUPS)[number];
 /** Every variable, in the order the insert list shows them. */
 export const TEMPLATE_VARIABLE_NAMES = [
   'subject_name',
+  'node_label',
   'node_name',
   'node_address',
   'group',
@@ -37,6 +38,7 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'state',
   'flapping',
   'title',
+  'alert_label',
   'metric',
   'value',
   'threshold',
@@ -58,6 +60,7 @@ export type TemplateVariableName = (typeof TEMPLATE_VARIABLE_NAMES)[number];
 export const TEMPLATE_VARIABLE_GROUP_OF: Readonly<Record<TemplateVariableName, TemplateVariableGroup>> =
   {
     subject_name: 'subject',
+    node_label: 'subject',
     node_name: 'subject',
     node_address: 'subject',
     group: 'subject',
@@ -69,6 +72,7 @@ export const TEMPLATE_VARIABLE_GROUP_OF: Readonly<Record<TemplateVariableName, T
     state: 'what',
     flapping: 'what',
     title: 'what',
+    alert_label: 'what',
     metric: 'numbers',
     value: 'numbers',
     threshold: 'numbers',

@@ -32,7 +32,15 @@ export interface ChipLook {
 /** Draw a tag's label and marks from its `data-*`. */
 export function paintChip(chip: HTMLElement, look: ChipLook): void {
   const seg = chipSegment(chip);
-  chip.textContent = look.labelOf(seg.name);
+  chip.textContent = '';
+  // The prefix is drawn inside the tag because it travels with the value: both are sent, or neither.
+  if (seg.prefix) {
+    const pre = chip.ownerDocument.createElement('span');
+    pre.className = 'tpl-chip-prefix';
+    pre.textContent = seg.prefix;
+    chip.appendChild(pre);
+  }
+  chip.appendChild(chip.ownerDocument.createTextNode(look.labelOf(seg.name)));
   chip.classList.toggle('is-optional', look.isOptional(seg.name));
   chip.classList.toggle('hides-line', seg.hideLine);
   if (look.isOptional(seg.name)) {
@@ -62,6 +70,8 @@ export function writeChip(chip: HTMLElement, seg: Extract<Segment, { kind: 'var'
   chip.dataset.var = seg.name;
   chip.dataset.fallback = seg.fallback;
   chip.dataset.hide = seg.hideLine ? '1' : '';
+  if (seg.prefix !== undefined) chip.dataset.prefix = seg.prefix;
+  else delete chip.dataset.prefix;
 }
 
 /** The variable a tag holds. */
@@ -71,6 +81,7 @@ export function chipSegment(chip: HTMLElement): Extract<Segment, { kind: 'var' }
     name: chip.dataset.var ?? '',
     fallback: chip.dataset.fallback ?? '',
     hideLine: chip.dataset.hide === '1',
+    ...(chip.dataset.prefix !== undefined ? { prefix: chip.dataset.prefix } : {}),
   };
 }
 

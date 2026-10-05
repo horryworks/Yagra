@@ -41,6 +41,20 @@ describe('a field as DOM', () => {
     expect(JSON.stringify(readSegments(el))).not.toContain('ラベル');
   });
 
+  it('draws a prefix inside the tag and reads it back from the tag, not from its text (ADR-199)', () => {
+    const row: Segment[] = [text('is '), { kind: 'var', name: 'group', fallback: '', hideLine: false, prefix: ': ' }];
+    const el = field();
+    renderSegments(el, row, look);
+    const chip = el.querySelector<HTMLElement>('.tpl-chip')!;
+    expect(chip.querySelector('.tpl-chip-prefix')?.textContent).toBe(': ');
+    expect(readSegments(el)).toEqual(row);
+    // Taking the prefix away leaves no trace of it on the tag.
+    writeChip(chip, { kind: 'var', name: 'group', fallback: '', hideLine: false });
+    paintChip(chip, look);
+    expect(chip.querySelector('.tpl-chip-prefix')).toBeNull();
+    expect(chipSegment(chip)).toEqual({ kind: 'var', name: 'group', fallback: '', hideLine: false });
+  });
+
   it('pads a trailing newline so it shows, and does not read the padding', () => {
     const el = field();
     renderSegments(el, [text('a\n')], look);

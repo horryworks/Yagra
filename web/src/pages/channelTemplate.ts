@@ -17,6 +17,8 @@ import type { NotificationChannel, TemplatePreview } from '../types/api';
 export interface TemplateDraft {
   subject: string;
   body: string;
+  /** Line breaks and indentation around the tags are layout, not text (ADR-199). Absent is off. */
+  freeLayout?: boolean;
 }
 
 /** The draft a channel opens with. */
@@ -24,6 +26,7 @@ export function draftFor(channel: NotificationChannel): TemplateDraft {
   return {
     subject: channel.subject_template ?? '',
     body: channel.body_template ?? '',
+    ...(channel.template_free_layout ? { freeLayout: true } : {}),
   };
 }
 
@@ -35,16 +38,20 @@ export function draftFor(channel: NotificationChannel): TemplateDraft {
  * and then wonder where their notifications went. The server applies the same rule; this one
  * exists so the UI can tell "cleared" from "unchanged" before it asks.
  */
-export function saveBody(draft: TemplateDraft): { subject: string | null; body: string | null } {
+export function saveBody(draft: TemplateDraft): { subject: string | null; body: string | null; free_layout?: boolean } {
   const blank = (s: string) => (s.trim() === '' ? null : s);
-  return { subject: blank(draft.subject), body: blank(draft.body) };
+  const subject = blank(draft.subject);
+  const body = blank(draft.body);
+  // Nothing to lay out is the built-in, which has one spelling; the server applies the same rule.
+  const free = draft.freeLayout === true && (subject !== null || body !== null);
+  return { subject, body, ...(free ? { free_layout: true } : {}) };
 }
 
 /** Whether the draft differs from what the channel currently has stored. */
 export function isDirty(channel: NotificationChannel, draft: TemplateDraft): boolean {
   const saved = saveBody(draftFor(channel));
   const next = saveBody(draft);
-  return saved.subject !== next.subject || saved.body !== next.body;
+  return saved.subject !== next.subject || saved.body !== next.body || saved.free_layout !== next.free_layout;
 }
 
 /** Whether the draft overrides nothing, i.e. saving it restores the built-in wording. */
@@ -125,4 +132,21 @@ export function insertAtCaret(
   const from = Math.max(0, Math.min(start, text.length));
   const to = Math.max(from, Math.min(end, text.length));
   return { text: text.slice(0, from) + snippet + text.slice(to), caret: from + snippet.length };
+}
+
+/**
+ * The draft with free layout turned on or off (ADR-199). The text is kept as typed, except that
+ * the built-in copy is swapped for its other spelling — one line off, laid out on — because the
+ * two send the same thing and the switch is what the operator reached for to read it.
+ */
+export function withFreeLayout(
+  draft: TemplateDraft,
+  on: boolean,
+  copy: { subject: string; body: string } | null,
+  laidCopy: { subject: string; body: string } | null,
+): TemplateDraft {
+  const same = (a: { subject: string; body: string } | null) =>
+    a !== null && a.subject === draft.subject && a.body === draft.body;
+  const text = on && same(copy) && laidCopy ? laidCopy : !on && same(laidCopy) && copy ? copy : draft;
+  return { subject: text.subject, body: text.body, ...(on ? { freeLayout: true } : {}) };
 }

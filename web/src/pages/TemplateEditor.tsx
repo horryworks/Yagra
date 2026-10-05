@@ -327,8 +327,8 @@ export function ChipSettings({
               type="radio"
               name="tpl-missing"
               id="tpl-missing-text"
-              checked={!seg.hideLine}
-              onChange={() => apply({ ...seg, hideLine: false })}
+              checked={!seg.hideLine && seg.prefix === undefined}
+              onChange={() => apply({ ...seg, hideLine: false, prefix: undefined })}
             />
             {t('routing.template.chip.missText')}
             <input
@@ -336,7 +336,7 @@ export function ChipSettings({
               id="tpl-missing-fallback"
               className="tpl-chip-fallback"
               value={seg.fallback}
-              onChange={(e) => apply({ ...seg, hideLine: false, fallback: e.target.value })}
+              onChange={(e) => apply({ ...seg, hideLine: false, prefix: undefined, fallback: e.target.value })}
             />
           </label>
           <label className={inSubject ? 'tpl-chip-opt is-disabled' : 'tpl-chip-opt'}>
@@ -346,9 +346,27 @@ export function ChipSettings({
               id="tpl-missing-hide"
               checked={seg.hideLine}
               disabled={inSubject}
-              onChange={() => apply({ ...seg, hideLine: true })}
+              onChange={() => apply({ ...seg, hideLine: true, prefix: undefined })}
             />
             {t(inSubject ? 'routing.template.chip.missHideSubject' : 'routing.template.chip.missHide')}
+          </label>
+          <label className="tpl-chip-opt">
+            <input
+              type="radio"
+              name="tpl-missing"
+              id="tpl-missing-prefix"
+              checked={!seg.hideLine && seg.prefix !== undefined}
+              onChange={() => apply({ ...seg, hideLine: false, prefix: seg.prefix ?? '' })}
+            />
+            {t('routing.template.chip.missPrefix')}
+            <input
+              type="text"
+              id="tpl-missing-prefix-text"
+              className="tpl-chip-fallback"
+              value={seg.prefix ?? ''}
+              // One line: a newline here would turn the prefix into a line of its own.
+              onChange={(e) => apply({ ...seg, hideLine: false, prefix: e.target.value.replace(/[\r\n]/g, '') })}
+            />
           </label>
         </fieldset>
       )}

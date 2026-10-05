@@ -102,6 +102,9 @@ pub struct ChannelSummary {
     /// Template for the notification body. Absent means Yagra's built-in format is used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_template: Option<String>,
+    /// Whether the template's line breaks and indentation around its tags are layout rather than
+    /// text to send (ADR-199). `false` when the channel has no template.
+    pub template_free_layout: bool,
 }
 
 /// A channel with its config decrypted — core-side only, for building live delivery channels.
@@ -154,7 +157,8 @@ impl NotificationRepo {
     /// the ledger for something the list already had to fetch a row for.
     pub async fn list_channels(&self) -> anyhow::Result<Vec<ChannelSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, kind, enabled, subject_template, body_template \
+            "SELECT id, name, kind, enabled, subject_template, body_template, \
+                    template_free_layout \
              FROM notification_channels ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -169,6 +173,7 @@ impl NotificationRepo {
                     enabled: row.try_get("enabled")?,
                     subject_template: row.try_get("subject_template")?,
                     body_template: row.try_get("body_template")?,
+                    template_free_layout: row.try_get("template_free_layout")?,
                 })
             })
             .collect()
@@ -231,12 +236,14 @@ impl NotificationRepo {
         template: &ChannelTemplate,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE notification_channels SET subject_template = $2, body_template = $3 \
+            "UPDATE notification_channels \
+             SET subject_template = $2, body_template = $3, template_free_layout = $4 \
              WHERE id = $1",
         )
         .bind(id)
         .bind(template.subject.as_deref())
         .bind(template.body.as_deref())
+        .bind(template.free_layout)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -247,7 +254,7 @@ impl NotificationRepo {
     pub async fn list_open_channels(&self) -> anyhow::Result<Vec<OpenChannel>> {
         let rows = sqlx::query(
             "SELECT id, enabled, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
-                    subject_template, body_template \
+                    subject_template, body_template, template_free_layout \
              FROM notification_channels WHERE enabled = true",
         )
         .fetch_all(&self.pool)
@@ -273,7 +280,7 @@ impl NotificationRepo {
     pub async fn open_channel(&self, id: Uuid) -> anyhow::Result<Option<OpenChannel>> {
         let Some(row) = sqlx::query(
             "SELECT id, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
-                    subject_template, body_template \
+                    subject_template, body_template, template_free_layout \
              FROM notification_channels WHERE id = $1",
         )
         .bind(id)
@@ -295,6 +302,7 @@ impl NotificationRepo {
     fn open_row(&self, row: &sqlx::postgres::PgRow) -> anyhow::Result<Option<OpenChannel>> {
         let id: Uuid = row.try_get("id")?;
         let template = ChannelTemplate {
+            free_layout: row.try_get("template_free_layout")?,
             subject: row.try_get("subject_template")?,
             body: row.try_get("body_template")?,
         };
@@ -646,6 +654,7 @@ mod tests {
             .set_channel_template(
                 id,
                 &ChannelTemplate {
+                    free_layout: true,
                     subject: Some("[{{severity}}] {{node}}".into()),
                     body: Some("{{metric}} = {{value}}".into()),
                 },
@@ -656,6 +665,13 @@ mod tests {
         assert_eq!(
             listed[0].subject_template.as_deref(),
             Some("[{{severity}}] {{node}}")
+        );
+        // Free layout (ADR-199) is stored with the pair and read back by both readers.
+        assert!(listed[0].template_free_layout);
+        assert!(
+            repo.list_open_channels().await.expect("open")[0]
+                .template
+                .free_layout
         );
         assert_eq!(
             listed[0].body_template.as_deref(),
@@ -669,6 +685,7 @@ mod tests {
             .set_channel_template(
                 id,
                 &ChannelTemplate {
+                    free_layout: false,
                     subject: None,
                     body: Some("only the body now".into()),
                 },
@@ -687,6 +704,8 @@ mod tests {
         let open = repo.list_open_channels().await.expect("open");
         assert_eq!(open[0].template.subject, None);
         assert_eq!(open[0].template.body.as_deref(), Some("only the body now"));
+        assert!(!open[0].template.free_layout, "replaced with the pair");
+        assert!(!listed[0].template_free_layout);
 
         assert!(!repo
             .set_channel_template(Uuid::new_v4(), &ChannelTemplate::default())

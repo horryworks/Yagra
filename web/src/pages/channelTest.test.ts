@@ -6,7 +6,7 @@ import type { ChannelTestResult, NotificationChannel } from '../types/api';
 import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk, type TestVerdict } from './channelTest';
 
 function channel(over: Partial<NotificationChannel>): NotificationChannel {
-  return { id: 'c1', name: 'ops', kind: 'webhook', enabled: true, ...over };
+  return { id: 'c1', name: 'ops', kind: 'webhook', enabled: true, template_free_layout: false, ...over };
 }
 
 function result(over: Partial<ChannelTestResult>): ChannelTestResult {

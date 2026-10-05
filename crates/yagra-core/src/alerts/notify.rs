@@ -1868,6 +1868,7 @@ mod template_tests {
     fn over(subject: Option<&str>, body: Option<&str>, needs_json: bool) -> ChannelOverride {
         ChannelOverride {
             template: ChannelTemplate {
+                free_layout: false,
                 subject: subject.map(str::to_owned),
                 body: body.map(str::to_owned),
             },
@@ -1897,6 +1898,7 @@ mod template_tests {
                         let mut facts = context_for(&alert, event, &resolved);
                         facts.if_name = crate::notify_facts::preview_port_name(sample);
                         let template = ChannelTemplate {
+                            free_layout: false,
                             subject: Some(builtin_subject_template_for(kind, event).to_owned()),
                             body: None,
                         };
@@ -1953,6 +1955,7 @@ mod template_tests {
                         row.threshold = Some(0.25);
                         for facts in [base, no_name, row] {
                             let template = ChannelTemplate {
+                                free_layout: false,
                                 subject: None,
                                 body: builtin_body_template_for(kind, event),
                             };
@@ -1981,6 +1984,88 @@ mod template_tests {
             compared, 72,
             "2 kinds x 2 samples x resolved or not x 3 points x 3 shapes"
         );
+    }
+
+    /// The copy the code editor offers with free layout on (`templateDisplay.ts`'s
+    /// `laidOutBuiltinSource`, ADR-199) sends the built-in text, at every point in the alert's life.
+    /// The two helpers below write the shape that function writes; what this test proves is that
+    /// [`crate::notify_render::lay_out`] turns that shape back into the built-in, line breaks and all.
+    #[test]
+    fn the_laid_out_builtin_sends_the_builtin() {
+        fn inner(text: &str) -> &str {
+            text.strip_suffix('\n').unwrap_or(text)
+        }
+        fn laid_out(by: &[(NotifyEvent, String)]) -> String {
+            let get = |e: NotifyEvent| by.iter().find(|(x, _)| *x == e).map(|(_, t)| t.as_str());
+            let fire = get(NotifyEvent::Fire).expect("fire");
+            let indent = |t: &str| {
+                inner(t)
+                    .split('\n')
+                    .map(|l| format!("  {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let arms: Vec<NotifyEvent> = [NotifyEvent::Resolve, NotifyEvent::Suppress]
+                .into_iter()
+                .filter(|e| get(*e) != Some(fire))
+                .collect();
+            if arms.is_empty() {
+                return fire.to_owned();
+            }
+            let mut lines = Vec::new();
+            for (i, e) in arms.iter().enumerate() {
+                let tag = if i == 0 { "if" } else { "elif" };
+                lines.push(format!("{{% {tag} event == \"{}\" %}}", e.as_str()));
+                lines.push(indent(get(*e).expect("arm")));
+            }
+            lines.push("{% else %}".to_owned());
+            lines.push(indent(fire));
+            lines.push("{% endif %}".to_owned());
+            lines.join("\n")
+        }
+        let mut compared = 0;
+        for kind in [ChannelKind::Email, ChannelKind::Jsm] {
+            let subjects: Vec<(NotifyEvent, String)> = NotifyEvent::ALL
+                .into_iter()
+                .map(|e| (e, builtin_subject_template_for(kind, e).to_owned()))
+                .collect();
+            let bodies: Vec<(NotifyEvent, String)> = NotifyEvent::ALL
+                .into_iter()
+                .map(|e| (e, builtin_body_template_for(kind, e).expect("a text body")))
+                .collect();
+            // The built-in body is its subject followed by the same lines at every point, which is
+            // the case the copy writes once.
+            let rests: Vec<&str> = subjects
+                .iter()
+                .zip(&bodies)
+                .map(|((_, s), (_, b))| {
+                    b.strip_prefix(s.as_str())
+                        .expect("body starts with subject")
+                })
+                .collect();
+            assert!(rests.iter().all(|r| *r == rests[0] && r.starts_with('\n')));
+            let template = ChannelTemplate {
+                free_layout: true,
+                subject: Some(laid_out(&subjects)),
+                body: Some(format!("{}\n{}", laid_out(&subjects), &rests[0][1..])),
+            };
+            assert!(template.subject.as_deref().unwrap().contains("\n  "));
+            for sample in yagra_common::PreviewSample::ALL {
+                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                for event in NotifyEvent::ALL {
+                    let mut facts = context_for(&alert, event, &resolved);
+                    facts.if_name = crate::notify_facts::preview_port_name(sample);
+                    let rendered =
+                        render_with_fallback(Some(&template), &facts, false, "FELL", "FELL");
+                    assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
+                    let builtin = builtin_for_kind(kind, &alert, event, Some(&facts));
+                    assert_eq!(rendered.subject, builtin.summary);
+                    assert_eq!(rendered.body, builtin.payload);
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 12, "2 kinds x 2 samples x 3 points");
     }
 
     /// Webhook and PagerDuty are read by programs, and ADR-194 changes nothing they receive: the
@@ -3003,6 +3088,7 @@ mod delivery_tests {
         let mut broken = text(broken_id, &broken_log);
         broken.over = Some(ChannelOverride {
             template: ChannelTemplate {
+                free_layout: false,
                 subject: Some("{{ nope.attr }}".to_owned()),
                 body: None,
             },
@@ -3348,6 +3434,7 @@ mod test_send_tests {
 
     fn template(subject: Option<&str>, body: Option<&str>) -> ChannelTemplate {
         ChannelTemplate {
+            free_layout: false,
             subject: subject.map(str::to_owned),
             body: body.map(str::to_owned),
         }

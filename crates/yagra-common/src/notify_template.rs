@@ -124,6 +124,11 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: true,
     },
     TemplateVariable {
+        name: "node_label",
+        description: "The node as the built-in text names it: its display name, with its address                       in brackets when the address differs from the name, e.g.                       core-sw-01 (192.0.2.11). Computed by Yagra, so a template need not compare                       node_name with node_address itself.",
+        always_present: true,
+    },
+    TemplateVariable {
         name: "node_address",
         description: "The node's monitored address.",
         always_present: false,
@@ -180,6 +185,11 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     TemplateVariable {
         name: "title",
         description: "What the alert is called, in plain English — SNMP not responding rather                       than snmp_up, Node not responding for an up/down alert (ADR-196). The                       metric itself when Yagra has no name for it.",
+        always_present: false,
+    },
+    TemplateVariable {
+        name: "alert_label",
+        description: "The alert as the built-in subject names it: its title, then the port it is                       about (on GigabitEthernet0/7, or on ifIndex 7 when the name is not known),                       then the table row in square brackets. Absent when the alert has no title.",
         always_present: false,
     },
     TemplateVariable {
@@ -355,6 +365,61 @@ pub struct AlertFacts {
     /// rather than only a type change.
     #[serde(default)]
     pub tags: Vec<String>,
+}
+
+/// The values Yagra computes from [`AlertFacts`] rather than reads (ADR-199): the phrases the
+/// built-in text is assembled from, offered to a template so it does not have to rebuild them out
+/// of comparisons and nested conditions.
+///
+/// Computed when a template is rendered, never stored beside the facts: `if_name` is filled in
+/// after [`AlertFacts`] is built (`notify_facts::context_for`), so a label stored at build time
+/// would name no port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DerivedFacts {
+    /// See [`AlertFacts::node_label`].
+    pub node_label: String,
+    /// See [`AlertFacts::alert_label`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_label: Option<String>,
+}
+
+impl AlertFacts {
+    /// `core-sw-01 (192.0.2.11)`: the name, with the address in brackets only when it says
+    /// something the name does not.
+    #[must_use]
+    pub fn node_label(&self) -> String {
+        match self.node_address.as_deref() {
+            Some(addr) if !addr.is_empty() && addr != self.node_name => {
+                format!("{} ({addr})", self.node_name)
+            }
+            _ => self.node_name.clone(),
+        }
+    }
+
+    /// `Inbound utilization on Gi0/7`, `Memory pool usage [I/O]`: the alert's title (ADR-196) and
+    /// where on the device it is. `None` for an alert with no title.
+    #[must_use]
+    pub fn alert_label(&self) -> Option<String> {
+        let mut out = self.title.clone()?;
+        match (self.if_name.as_deref(), self.ifindex) {
+            (Some(name), Some(_)) => out.push_str(&format!(" on {name}")),
+            (None, Some(i)) => out.push_str(&format!(" on ifIndex {i}")),
+            (_, None) => {}
+        }
+        if let Some(row) = self.row_name.as_deref() {
+            out.push_str(&format!(" [{row}]"));
+        }
+        Some(out)
+    }
+
+    /// Everything a template sees beyond the facts themselves.
+    #[must_use]
+    pub fn derived(&self) -> DerivedFacts {
+        DerivedFacts {
+            node_label: self.node_label(),
+            alert_label: self.alert_label(),
+        }
+    }
 }
 
 /// A representative alert for previewing a template before it is saved.
@@ -533,11 +598,25 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    fn keys(facts: &AlertFacts) -> BTreeSet<String> {
-        match serde_json::to_value(facts).expect("facts serialize") {
+    fn object_keys(value: serde_json::Value) -> BTreeSet<String> {
+        match value {
             serde_json::Value::Object(map) => map.keys().cloned().collect(),
             other => panic!("facts must serialize to an object, got {other:?}"),
         }
+    }
+
+    /// What a template sees: the facts and the values derived from them, as the renderer merges
+    /// them (`notify_render::render_field`).
+    fn keys(facts: &AlertFacts) -> BTreeSet<String> {
+        let mut out = object_keys(serde_json::to_value(facts).expect("facts serialize"));
+        let derived =
+            object_keys(serde_json::to_value(facts.derived()).expect("derived serialize"));
+        assert!(
+            out.is_disjoint(&derived),
+            "a derived value shadows a fact of the same name"
+        );
+        out.extend(derived);
+        out
     }
 
     fn declared() -> BTreeSet<String> {
@@ -604,6 +683,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_labels_read_the_way_the_built_in_subject_writes_them() {
+        let f = sample_facts(NotifyEvent::Fire);
+        assert_eq!(f.node_label(), "core-sw-01 (192.0.2.11)");
+        assert_eq!(
+            f.alert_label().as_deref(),
+            Some("Inbound utilization on GigabitEthernet0/7")
+        );
+        let unnamed = AlertFacts {
+            if_name: None,
+            ..f.clone()
+        };
+        assert_eq!(
+            unnamed.alert_label().as_deref(),
+            Some("Inbound utilization on ifIndex 7")
+        );
+        assert_eq!(
+            sample_row_facts(NotifyEvent::Fire).alert_label().as_deref(),
+            Some("Memory pool usage [I/O]")
+        );
+        let same = AlertFacts {
+            node_address: Some("core-sw-01".to_owned()),
+            ..f.clone()
+        };
+        assert_eq!(same.node_label(), "core-sw-01");
+        let min = minimal_facts(NotifyEvent::Fire);
+        assert_eq!(min.node_label(), "core-sw-01");
+        assert_eq!(min.alert_label(), None);
+    }
+
     /// The catalogue and the context are one list written twice unless this holds. A variable the
     /// palette offers but the context never provides renders as empty text and looks like a Yagra
     /// bug; a fact the context carries but the catalogue omits is undiscoverable.
@@ -639,11 +748,15 @@ mod tests {
     /// literal text `none`, which is what an operator would find in their inbox.
     #[test]
     fn an_absent_fact_is_omitted_rather_than_serialized_as_null() {
-        let json = serde_json::to_value(minimal_facts(NotifyEvent::Resolve)).unwrap();
-        assert!(
-            !json.as_object().unwrap().values().any(|v| v.is_null()),
-            "no context value may be null: {json}"
-        );
+        let facts = minimal_facts(NotifyEvent::Resolve);
+        let json = serde_json::to_value(&facts).unwrap();
+        let derived = serde_json::to_value(facts.derived()).unwrap();
+        for j in [&json, &derived] {
+            assert!(
+                !j.as_object().unwrap().values().any(|v| v.is_null()),
+                "no context value may be null: {j}"
+            );
+        }
         assert!(json.get("value").is_none());
     }
 

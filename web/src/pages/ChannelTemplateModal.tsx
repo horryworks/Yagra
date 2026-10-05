@@ -31,11 +31,12 @@ import type { Point } from '../components/ui/popoverPlacement';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
-import { draftFor, insertAtCaret, isDirty, previewView, saveBody, variableSnippet } from './channelTemplate';
+import { draftFor, insertAtCaret, isDirty, previewView, saveBody, variableSnippet, withFreeLayout } from './channelTemplate';
 import type { TemplateDraft } from './channelTemplate';
 import {
   backToFire,
   builtinDraft,
+  builtinTemplate,
   clearField,
   effective,
   fieldFollowsFire,
@@ -63,7 +64,7 @@ import {
 import { presetLanguage, presetTemplate, TEMPLATE_PRESETS } from './templatePresets';
 import type { ChipLook } from './templateDom';
 import { ChipSettings, TemplateField, VariablePicker, VariableTooltip, type FieldHandle } from './TemplateEditor';
-import { bodyAfterTitle, builtinSource, hasOwnTemplate } from './templateDisplay';
+import { bodyAfterTitle, builtinSource, hasOwnTemplate, laidOutBuiltinSource } from './templateDisplay';
 import { BuiltinTemplateText, JsonText } from './BuiltinTemplateText';
 import { BUILTIN_JSON_KEYS, JSON_SKELETON, TEMPLATE_FORMS } from './templateForm';
 import { usePrefsStore } from '../prefs';
@@ -104,6 +105,7 @@ export function ChannelTemplateModal({
   // with no caret seen yet it appends to the body, as the list always did.
   const codeCaret = useRef<{ field: 'subject' | 'body'; start: number; end: number } | null>(null);
   const codeSubjectRef = useRef<HTMLInputElement>(null);
+  const codeSubjectAreaRef = useRef<HTMLTextAreaElement>(null);
   const codeBodyRef = useRef<HTMLTextAreaElement>(null);
   const [varTip, setVarTip] = useState<{ v: TemplateVariable; el: HTMLElement } | null>(null);
   const [unsupported, setUnsupported] = useState<Unsupported | null>(null);
@@ -139,7 +141,11 @@ export function ChannelTemplateModal({
       const draft = builtinDraft(builtin);
       const jsonBody = first ? first.json_valid != null : null;
       const opened = openTemplate(
-        { subject: channel.subject_template ?? null, body: channel.body_template ?? null },
+        {
+          subject: channel.subject_template ?? null,
+          body: channel.body_template ?? null,
+          free_layout: channel.template_free_layout,
+        },
         draft,
       );
       setBoot({ draft, variables, jsonBody, builtin });
@@ -156,7 +162,7 @@ export function ChannelTemplateModal({
     };
   }, [channel]);
 
-  const request = useMemo(
+  const request = useMemo<{ subject: string | null; body: string | null; free_layout?: boolean }>(
     () => (mode === 'visual' && model ? saveRequest(model, boot?.draft ?? null) : saveBody(code)),
     [mode, model, code, boot],
   );
@@ -187,6 +193,7 @@ export function ChannelTemplateModal({
           sample: sample.sample,
           subject: request.subject,
           body: request.body,
+          free_layout: request.free_layout,
         })
         .then((r) => {
           if (seq !== asked.current) return;
@@ -201,7 +208,7 @@ export function ChannelTemplateModal({
         });
     }, PREVIEW_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [boot, channel.kind, sample.event, sample.sample, request.subject, request.body]);
+  }, [boot, channel.kind, sample.event, sample.sample, request.subject, request.body, request.free_layout]);
 
   const optional = useMemo(
     () => new Set((boot?.variables ?? []).filter((v) => !v.always_present).map((v) => v.name)),
@@ -218,7 +225,7 @@ export function ChannelTemplateModal({
     codeCaret.current = { field: at.field, start: put.caret, end: put.caret };
     // After React has written the new value, or the browser moves the caret to its end.
     requestAnimationFrame(() => {
-      const el = at.field === 'subject' ? codeSubjectRef.current : codeBodyRef.current;
+      const el = at.field === 'subject' ? (codeSubjectRef.current ?? codeSubjectAreaRef.current) : codeBodyRef.current;
       el?.focus({ preventScroll: true });
       el?.setSelectionRange(put.caret, put.caret);
     });
@@ -230,7 +237,9 @@ export function ChannelTemplateModal({
     missingNote: (s) =>
       s.hideLine
         ? t('routing.template.missingNote.hide')
-        : s.fallback
+        : s.prefix !== undefined
+          ? t('routing.template.missingNote.prefix', { text: s.prefix })
+          : s.fallback
           ? t('routing.template.missingNote.text', { text: s.fallback })
           : t('routing.template.missingNote.empty'),
   };
@@ -278,6 +287,7 @@ export function ChannelTemplateModal({
 
   const own = hasOwnTemplate(channel);
   const copy = boot?.builtin ? builtinSource(boot.builtin) : null;
+  const laidCopy = boot?.builtin ? laidOutBuiltinSource(boot.builtin) : null;
   const viewingBuiltin = boot !== null && !own && showBuiltin && boot.builtin !== null;
   const builtinAt = (e: NotifyEvent) => boot?.builtin?.find((b) => b.event === e) ?? null;
 
@@ -286,10 +296,27 @@ export function ChannelTemplateModal({
   const editCopy = () => {
     if (!copy) return;
     closePopovers();
-    setCode(copy);
+    setCode(code.freeLayout && laidCopy ? { ...laidCopy, freeLayout: true } : copy);
     codeCaret.current = null;
     setUnsupported(null);
     setMode('code');
+    setShowBuiltin(false);
+  };
+  // The built-in subject as tags, the body left built-in (ADR-199): only offered where the tags view
+  // opens at all and the server's subject reads as tags.
+  const asTags =
+    boot?.jsonBody === false && boot.draft
+      ? () => {
+          closePopovers();
+          replaceModel(builtinTemplate(boot.draft));
+          setMode('visual');
+          setShowBuiltin(false);
+        }
+      : null;
+  // Empty, as the button says: since ADR-199 the visual view would otherwise open on the built-in
+  // subject, which now reads as tags.
+  const startBlank = () => {
+    if (mode === 'visual') replaceModel(builtinTemplate(null));
     setShowBuiltin(false);
   };
   // Both fields empty is the built-in text, at every point in the alert's life (decision 5).
@@ -509,12 +536,13 @@ export function ChannelTemplateModal({
                   ) : (
                     copy && <Button onClick={editCopy}>{t('routing.template.builtinView.copy')}</Button>
                   )}
-                  <Button variant="ghost" onClick={() => setShowBuiltin(false)}>
+                  {asTags && <Button variant="outline" onClick={asTags}>{t('routing.template.builtinView.asTags', { field: subjectLabel })}</Button>}
+                  <Button variant="ghost" onClick={startBlank}>
                     {t('routing.template.builtinView.blank')}
                   </Button>
                 </div>
                 <p className="tpl-hint">
-                  {shape.json ? t('routing.template.builtinView.jsonNote') : t('routing.template.builtinView.condNote')}
+                  {shape.json ? t('routing.template.builtinView.jsonNote') : t('routing.template.builtinView.condNote', { field: subjectLabel })}
                 </p>
               </>
             ) : (
@@ -698,16 +726,33 @@ export function ChannelTemplateModal({
                           </button>
                         )}
                       </div>
-                      <TextInput
-                        id="tpl-subject"
-                        className="mono"
-                        value={code.subject}
-                        spellCheck={false}
-                        placeholder={t('routing.template.builtinPlaceholder')}
-                        inputRef={codeSubjectRef}
-                        onChange={(e) => setCode({ ...code, subject: e.target.value })}
-                        onSelect={(e) => rememberCaret('subject', e.currentTarget)}
-                      />
+                      {/* Laid out, the subject spans lines (ADR-199), which a one-line input would
+                          join on paste; it is still sent as one line. */}
+                      {code.freeLayout ? (
+                        <TextArea
+                          id="tpl-subject"
+                          className="mono"
+                          rows={7}
+                          wrap={wrapLines ? 'soft' : 'off'}
+                          value={code.subject}
+                          spellCheck={false}
+                          placeholder={t('routing.template.builtinPlaceholder')}
+                          inputRef={codeSubjectAreaRef}
+                          onChange={(e) => setCode({ ...code, subject: e.target.value })}
+                          onSelect={(e) => rememberCaret('subject', e.currentTarget)}
+                        />
+                      ) : (
+                        <TextInput
+                          id="tpl-subject"
+                          className="mono"
+                          value={code.subject}
+                          spellCheck={false}
+                          placeholder={t('routing.template.builtinPlaceholder')}
+                          inputRef={codeSubjectRef}
+                          onChange={(e) => setCode({ ...code, subject: e.target.value })}
+                          onSelect={(e) => rememberCaret('subject', e.currentTarget)}
+                        />
+                      )}
                     </>
                   )}
                   <div className="tpl-code-head">
@@ -732,6 +777,16 @@ export function ChannelTemplateModal({
                     onChange={(e) => setCode({ ...code, body: e.target.value })}
                     onSelect={(e) => rememberCaret('body', e.currentTarget)}
                   />
+                  <label className="form-label form-check tpl-free-layout">
+                    <input
+                      type="checkbox"
+                      id="tpl-free-layout"
+                      checked={code.freeLayout === true}
+                      onChange={(e) => setCode(withFreeLayout(code, e.target.checked, copy, laidCopy))}
+                    />
+                    <span>{t('routing.template.freeLayout.label')}</span>
+                  </label>
+                  {code.freeLayout && <p className="tpl-hint">{t('routing.template.freeLayout.hint')}</p>}
                   <p className="tpl-hint">
                     {request.subject === null && request.body === null
                       ? t('routing.template.builtinHint')

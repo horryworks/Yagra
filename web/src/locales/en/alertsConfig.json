@@ -139,7 +139,8 @@
         "eventBranch": "A notification-kind branch that does not span the whole field:",
         "comment": "A comment:",
         "whitespaceControl": "Whitespace control (a “-” inside the braces):",
-        "unclosed": "An opening brace with no closing one:"
+        "unclosed": "An opening brace with no closing one:",
+        "freeLayout": "It is written with free layout, whose line breaks and indentation are not sent. Turn free layout off to edit it as tags."
       },
       "presets": "Start from:",
       "preset": {
@@ -180,6 +181,10 @@
         "node_name": {
           "label": "Node name",
           "desc": "The node’s display name"
+        },
+        "node_label": {
+          "label": "Node with address",
+          "desc": "The node's name, with its address in brackets when it differs from the name, such as core-sw-01 (192.0.2.11)"
         },
         "node_address": {
           "label": "Address",
@@ -224,6 +229,10 @@
         "title": {
           "label": "Alert name",
           "desc": "What the alert is called, such as SNMP not responding"
+        },
+        "alert_label": {
+          "label": "Alert name with where",
+          "desc": "The alert's name, then the port or table row it is about, such as Inbound utilization on GigabitEthernet0/7"
         },
         "value": {
           "label": "Measured value",
@@ -287,12 +296,14 @@
         "missText": "Show instead",
         "missHide": "Leave out this whole line",
         "missHideSubject": "Leave out this whole line (not in the subject)",
+        "missPrefix": "Show nothing, and when the value is there, put this just before it",
         "remove": "Remove"
       },
       "missingNote": {
         "text": "shows “{{text}}” when missing",
         "empty": "shows nothing when missing",
-        "hide": "line left out when missing"
+        "hide": "line left out when missing",
+        "prefix": "“{{text}}” goes before it, and both are left out when missing"
       },
       "sampleLabel": "Sample alert",
       "samples": {
@@ -326,7 +337,8 @@
         "readOnly": "Built-in · read only",
         "copy": "Edit a copy of this text",
         "blank": "Start from empty fields",
-        "condNote": "An underlined part is sent only when its numbered condition holds. The Visual editor cannot hold those parts, so the copy opens in Code. Nothing changes until you save.",
+        "asTags": "Edit the {{field}} as tags",
+        "condNote": "An underlined part is sent only when its numbered condition holds. The body has such parts the Visual editor cannot hold, so the copy opens in Code; the {{field}} alone can be edited as tags. Nothing changes until you save.",
         "when": "only when {{cond}}",
         "otherwiseWhen": "only when {{prev}} is not sent and {{cond}}",
         "otherwise": "only when {{prev}} is not sent",
@@ -346,6 +358,10 @@
         }
       },
       "wrap": "Wrap long lines",
+      "freeLayout": {
+        "label": "Free layout: line breaks and indentation are for reading, not sent",
+        "hint": "With this on, the spaces at the start of a line are not sent, a line holding only {% … %} tags or {# … #} comments is not sent, and the subject sends no line break. Put the spaces between words on the same line as the words."
+      },
       "resetField": "Use built-in for this field",
       "builtinBodyEmptyText": "Leave the body empty to send Yagra’s built-in text body.",
       "sends": {

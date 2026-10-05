@@ -27183,7 +27183,8 @@
           "id",
           "name",
           "kind",
-          "enabled"
+          "enabled",
+          "template_free_layout"
         ],
         "properties": {
           "body_template": {
@@ -27212,6 +27213,10 @@
               "null"
             ],
             "description": "Template for the notification subject. Absent means Yagra's built-in wording is used."
+          },
+          "template_free_layout": {
+            "type": "boolean",
+            "description": "Whether the template's line breaks and indentation around its tags are layout rather than\ntext to send (ADR-199). `false` when the channel has no template."
           }
         }
       },
@@ -38531,6 +38536,10 @@
             "$ref": "#/components/schemas/NotifyEvent",
             "description": "Which point in an alert's life to render: `fire`, `resolve`, or `suppress`."
           },
+          "free_layout": {
+            "type": "boolean",
+            "description": "As on the saved template: line breaks and indentation around the tags are layout."
+          },
           "kind": {
             "$ref": "#/components/schemas/ChannelKind",
             "description": "The channel kind the template is for. Decides whether the body has to be valid JSON."
@@ -42147,6 +42156,10 @@
               "string",
               "null"
             ]
+          },
+          "free_layout": {
+            "type": "boolean",
+            "description": "Whether line breaks and indentation around the tags are layout rather than text (ADR-199):\nthe indentation at the start of each line is not sent, a line holding only `{% … %}` tags\nor `{# … #}` comments is not sent, and in the subject no line break is sent. Absent means\n`false`, which sends every character as written."
           },
           "subject": {
             "type": [

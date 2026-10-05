@@ -110,6 +110,64 @@ describe('writing and reading one row', () => {
   });
 });
 
+describe('a variable with text sent just before it (ADR-199)', () => {
+  const pre = (name: string, prefix: string): Segment => ({ kind: 'var', name, fallback: '', hideLine: false, prefix });
+
+  it('is written as a condition around the prefix and the value, mid-line', () => {
+    const row = [v('node_label'), text(' is '), v('state'), pre('alert_label', ': ')];
+    const src = serializeSegments(row);
+    expect(src).toBe('{{ node_label }} is {{ state }}{% if alert_label is defined %}: {{ alert_label }}{% endif %}');
+    expect(reads(src).fire).toEqual(row);
+  });
+
+  it('round-trips a prefix holding braces, and one at the start of a line before more text', () => {
+    for (const row of [
+      [text('a '), pre('root_cause_name', ' {under} ')],
+      [pre('group', 'in '), text(' tail')],
+      [text('x\n'), pre('profile', '— '), text('\ny')],
+    ]) {
+      const src = serializeSegments(row);
+      expect(sameSegments(reads(src).fire, row), src).toBe(true);
+    }
+  });
+
+  it('drops a fallback and a hidden line it cannot send, and an empty prefix is a plain tag', () => {
+    const withFallback: Segment = { kind: 'var', name: 'group', fallback: 'n/a', hideLine: false, prefix: 'in ' };
+    expect(sameSegments([withFallback], [pre('group', 'in ')])).toBe(true);
+    expect(sameSegments([pre('group', '')], [v('group')])).toBe(true);
+    expect(reads('x {% if metric is defined %}{{ metric }}{% endif %}').fire).toEqual([text('x '), v('metric')]);
+  });
+
+  it('a whole last line still reads as a line left out, as it did before', () => {
+    expect(reads('{% if group is defined %}Folder: {{ group }}{% endif %}').fire).toEqual([
+      text('Folder: '),
+      v('group', '', true),
+    ]);
+  });
+
+  it('opens the built-in subject Yagra serves today as tags', () => {
+    const draft = builtinDraft([
+      {
+        event: 'fire',
+        subject: '{{ node_label }} is {{ state }}{% if alert_label is defined %}: {{ alert_label }}{% endif %}',
+      },
+      { event: 'resolve', subject: 'resolved: {{ node_label }} recovered' },
+      {
+        event: 'suppress',
+        subject:
+          'rolled up: {{ node_label }} suppressed under upstream{% if root_cause_name is defined %} {{ root_cause_name }}{% endif %}',
+      },
+    ]);
+    expect(draft).not.toBeNull();
+    expect(draft!.suppress).toEqual([
+      text('rolled up: '),
+      v('node_label'),
+      text(' suppressed under upstream'),
+      pre('root_cause_name', ' '),
+    ]);
+  });
+});
+
 describe('what cannot be shown as tags opens as code, with the reason', () => {
   const cases: [string, string][] = [
     ['{% for t in tags %}{{ t }}{% endfor %}', 'statement'],
@@ -119,7 +177,8 @@ describe('what cannot be shown as tags opens as code, with the reason', () => {
     ['{# note #}hello', 'comment'],
     ['{{- node_name }}', 'whitespaceControl'],
     ['{{ node_name', 'unclosed'],
-    ['x {% if metric is defined %}{{ metric }}{% endif %}', 'lineCondition'],
+    ['x {% if metric is defined %}{{ value }}{% endif %}', 'lineCondition'],
+    ['x {% if metric is defined %}a\n{{ metric }}{% endif %}', 'lineCondition'],
     ['{% if metric is defined %}a\nb\n{% endif %}', 'lineCondition'],
     ['{% if metric is defined %}{{ value }}\n{% endif %}', 'lineCondition'],
     ['{% if event == "resolve" %}a{% endif %}', 'eventBranch'],

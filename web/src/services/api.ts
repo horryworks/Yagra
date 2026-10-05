@@ -2217,7 +2217,7 @@ export const api = {
    *  a typed 400 rather than being stored and failing during an outage. */
   setNotificationTemplate: (
     id: string,
-    body: { subject: string | null; body: string | null },
+    body: { subject: string | null; body: string | null; free_layout?: boolean },
   ): Promise<void> =>
     apiPut('/api/v1/notification-channels/{id}/template', { path: { id }, body }),
 
@@ -2242,6 +2242,8 @@ export const api = {
     sample?: PreviewSample;
     subject: string | null;
     body: string | null;
+    /** As on the saved template (ADR-199). */
+    free_layout?: boolean;
   }): Promise<TemplatePreview> =>
     apiPost('/api/v1/notification-channels/preview', { body }),
 

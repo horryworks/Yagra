@@ -48,6 +48,9 @@ pub struct ChannelTemplate {
     pub subject: Option<String>,
     /// Template for the notification body / payload.
     pub body: Option<String>,
+    /// Whether the line breaks and indentation around the template's tags are layout for the
+    /// person reading it rather than text to send (ADR-199 decision 4) — see [`lay_out`].
+    pub free_layout: bool,
 }
 
 impl ChannelTemplate {
@@ -167,13 +170,86 @@ pub fn validate(template: &ChannelTemplate) -> Result<(), TemplateFailure> {
         (TemplateField::Body, template.body.as_deref()),
     ] {
         let Some(source) = source else { continue };
-        env.template_from_str(source).map_err(|e| TemplateFailure {
-            field,
-            kind: FailureKind::Compile,
-            message: detail(&e),
-        })?;
+        let source = source_for(template.free_layout, field, source);
+        env.template_from_str(&source)
+            .map_err(|e| TemplateFailure {
+                field,
+                kind: FailureKind::Compile,
+                message: detail(&e),
+            })?;
     }
     Ok(())
+}
+
+/// A template written with free layout, turned into the text minijinja renders (ADR-199
+/// decision 4). Three rules, applied to the **source**, so a value that contains a line break or
+/// leading spaces is sent as it is:
+///
+/// 1. The indentation at the start of every line is dropped.
+/// 2. A line holding nothing but `{% … %}` tags and `{# … #}` comments is dropped with its line
+///    break, so a condition can stand on a line of its own and say nothing.
+/// 3. In the subject, every other line break is dropped too: a subject is one line.
+///
+/// Jinja's own `trim_blocks` is not used: it also eats the line break after a tag that ends a line
+/// of text (`…{% endif %}` then a newline), so two lines laid out alike would send differently.
+///
+/// A tag that spans lines is left alone by rule 2 — none of its lines is a whole tag — and the
+/// whitespace rule 1 drops inside it is whitespace the tag never cared about.
+#[must_use]
+pub fn lay_out(source: &str, field: TemplateField) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut lines = source.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        let line = line.trim_end_matches('\r').trim_start_matches([' ', '\t']);
+        let last = lines.peek().is_none();
+        out.push_str(line);
+        if last || only_tags(line) {
+            continue;
+        }
+        if field == TemplateField::Body {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Whether a line is one or more `{% … %}` / `{# … #}` and nothing else but spaces.
+fn only_tags(line: &str) -> bool {
+    let mut rest = line.trim();
+    if rest.is_empty() {
+        return false;
+    }
+    while !rest.is_empty() {
+        let close = if rest.starts_with("{%") {
+            "%}"
+        } else if rest.starts_with("{#") {
+            "#}"
+        } else {
+            return false;
+        };
+        let Some(end) = rest[2..].find(close) else {
+            return false;
+        };
+        rest = rest[2 + end + 2..].trim_start();
+    }
+    true
+}
+
+fn source_for(free_layout: bool, field: TemplateField, source: &str) -> std::borrow::Cow<'_, str> {
+    if free_layout {
+        std::borrow::Cow::Owned(lay_out(source, field))
+    } else {
+        std::borrow::Cow::Borrowed(source)
+    }
+}
+
+/// What a template renders against: the facts, and the labels Yagra derives from them (ADR-199).
+/// The two never share a name — `notify_template.rs`'s `keys` checks that.
+fn context(facts: &AlertFacts) -> minijinja::Value {
+    minijinja::context! {
+        ..minijinja::Value::from_serialize(facts),
+        ..minijinja::Value::from_serialize(facts.derived())
+    }
 }
 
 /// Render one field, applying the size cap and the JSON rule.
@@ -189,7 +265,7 @@ fn render_field(
         kind,
         message,
     };
-    let out = env.render_str(source, facts).map_err(|e| {
+    let out = env.render_str(source, context(facts)).map_err(|e| {
         // A compile error surfaces here too when the template was stored by an older core, or
         // predates a validation rule. Distinguishing the two is worth the branch: "it does not
         // parse" and "it failed on this alert" send an operator to different places.
@@ -271,14 +347,16 @@ pub fn render_with_fallback(
     // (`{% if event == "resolve" %}...{% else %}{% endif %}`), and an empty subject or body is never
     // what anyone meant to send.
     if let Some(source) = template.subject.as_deref() {
-        match render_field(&env, TemplateField::Subject, source, facts, false) {
+        let source = source_for(template.free_layout, TemplateField::Subject, source);
+        match render_field(&env, TemplateField::Subject, &source, facts, false) {
             Ok(s) if s.trim().is_empty() => {}
             Ok(s) => out.subject = s,
             Err(e) => out.failures.push(e),
         }
     }
     if let Some(source) = template.body.as_deref() {
-        match render_field(&env, TemplateField::Body, source, facts, needs_json) {
+        let source = source_for(template.free_layout, TemplateField::Body, source);
+        match render_field(&env, TemplateField::Body, &source, facts, needs_json) {
             Ok(s) if s.trim().is_empty() => {}
             Ok(s) => out.body = s,
             Err(e) => out.failures.push(e),
@@ -299,6 +377,7 @@ mod tests {
 
     fn tpl(subject: Option<&str>, body: Option<&str>) -> ChannelTemplate {
         ChannelTemplate {
+            free_layout: false,
             subject: subject.map(str::to_owned),
             body: body.map(str::to_owned),
         }
@@ -312,6 +391,63 @@ mod tests {
             BUILTIN_SUBJECT,
             BUILTIN_BODY,
         )
+    }
+
+    fn laid_out(subject: Option<&str>, body: Option<&str>) -> ChannelTemplate {
+        ChannelTemplate {
+            free_layout: true,
+            ..tpl(subject, body)
+        }
+    }
+
+    /// The three rules of free layout (ADR-199), each on its own.
+    #[test]
+    fn free_layout_drops_indentation_tag_only_lines_and_the_subjects_line_breaks() {
+        let body = "{# who #}\n{% if group is defined %}\n    Folder: {{ group }}\n{% endif %}\n\n  Node: {{ node_name }}\n";
+        assert_eq!(
+            lay_out(body, TemplateField::Body),
+            "{# who #}{% if group is defined %}Folder: {{ group }}\n{% endif %}\nNode: {{ node_name }}\n"
+        );
+        let subject = "{% if event == \"resolve\" %}\n  resolved\n{% else %}\n  {{ node_name }} is {{ state }}\n{% endif %}";
+        assert_eq!(
+            lay_out(subject, TemplateField::Subject),
+            "{% if event == \"resolve\" %}resolved{% else %}{{ node_name }} is {{ state }}{% endif %}"
+        );
+        // A tag that ends a line of text keeps that line's break: only a line of nothing but tags
+        // loses it, which is what Jinja's trim_blocks would get wrong.
+        assert_eq!(
+            lay_out("a{% if x %}b{% endif %}\nc\n", TemplateField::Body),
+            "a{% if x %}b{% endif %}\nc\n"
+        );
+        // Off, nothing changes: every saved template keeps sending what it sent.
+        let r = render(&tpl(Some("  {{ node_name }}\n  x"), None), false);
+        assert_eq!(r.subject, "  core-sw-01\n  x");
+        let r = render(&laid_out(Some("  {{ node_name }}\n  x"), None), false);
+        assert_eq!(r.subject, "core-sw-01x");
+    }
+
+    /// The layout is applied to the template, never to what a value holds.
+    #[test]
+    fn free_layout_leaves_a_values_own_spaces_and_line_breaks_alone() {
+        let mut facts = sample_facts(NotifyEvent::Fire);
+        facts.group = Some("  Tokyo\n  Rack 3".to_owned());
+        let r = render_with_fallback(
+            Some(&laid_out(None, Some("  {{ group }}\n"))),
+            &facts,
+            false,
+            BUILTIN_SUBJECT,
+            BUILTIN_BODY,
+        );
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        assert_eq!(r.body, "  Tokyo\n  Rack 3");
+    }
+
+    /// A blank template is the built-in whatever the switch says, and a laid-out template that does
+    /// not compile is still refused at save time.
+    #[test]
+    fn free_layout_is_validated_on_the_text_it_renders() {
+        assert!(validate(&laid_out(Some("{% if x %}\n  a\n"), None)).is_err());
+        assert!(validate(&laid_out(Some("{% if x %}\n  a\n{% endif %}"), None)).is_ok());
     }
 
     #[test]

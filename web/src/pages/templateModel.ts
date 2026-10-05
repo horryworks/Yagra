@@ -31,6 +31,10 @@ export type Segment =
       fallback: string;
       /** Leave this whole line out when the alert lacks the value. */
       hideLine: boolean;
+      /** Text sent just before the value, and only when the alert has it (ADR-199): the `: ` in
+       *  `is critical: Inbound utilization`. Set, it also means "send nothing when the value is
+       *  missing", so `fallback` and `hideLine` are ignored. One line; never a newline. */
+      prefix?: string;
     };
 
 export type TemplateField = 'subject' | 'body';
@@ -76,6 +80,7 @@ export const UNSUPPORTED_REASONS = [
   'comment',
   'whitespaceControl',
   'unclosed',
+  'freeLayout',
 ] as const;
 export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number];
 
@@ -104,10 +109,20 @@ export function normalize(segments: readonly Segment[]): Segment[] {
       }
       out.push({ kind: 'text', text: s.text });
     } else {
-      out.push({ ...s, fallback: s.hideLine ? '' : s.fallback });
+      out.push(normalizeVar(s));
     }
   }
   return out;
+}
+
+/** One variable in its one spelling: a setting that cannot be sent is dropped, and an empty
+ *  prefix is the same as no prefix with nothing shown when the value is missing. */
+function normalizeVar(s: Extract<Segment, { kind: 'var' }>): Extract<Segment, { kind: 'var' }> {
+  if (s.hideLine) return { kind: 'var', name: s.name, fallback: '', hideLine: true };
+  if (s.prefix !== undefined && s.prefix !== '') {
+    return { kind: 'var', name: s.name, fallback: '', hideLine: false, prefix: s.prefix };
+  }
+  return { kind: 'var', name: s.name, fallback: s.prefix === '' ? '' : s.fallback, hideLine: false };
 }
 
 /** Whether two rows send the same thing. A hidden line's fallback is never sent, so it is ignored. */
@@ -149,6 +164,9 @@ function escapeText(text: string): string {
 function variableExpr(s: Extract<Segment, { kind: 'var' }>): string {
   // `tags` is a list; printed bare it would read like `["JAPAN", "core"]`.
   if (s.name === 'tags') return '{{ tags | join(", ") }}';
+  if (!s.hideLine && s.prefix) {
+    return `{% if ${s.name} is defined %}${escapeText(s.prefix)}{{ ${s.name} }}{% endif %}`;
+  }
   if (!s.hideLine && s.fallback !== '') return `{{ ${s.name} | default(${JSON.stringify(s.fallback)}) }}`;
   return `{{ ${s.name} }}`;
 }
@@ -271,6 +289,33 @@ function readExpr(tok: Extract<Token, { t: 'expr' }>): Segment | { ok: false; er
   return { kind: 'var', name, fallback: dflt ? unquote(dflt[2]) : '', hideLine: false };
 }
 
+/** `{% if X is defined %}text{{ X }}{% endif %}` starting at `i`, the shape a variable with a
+ *  prefix is written in, or `null` when the tokens are not that shape. */
+function readPrefixed(
+  tokens: readonly Token[],
+  i: number,
+  cond: string,
+): { seg: Segment | { ok: false; error: Unsupported }; end: number } | null {
+  const name = /^([a-z_]+)\s+is\s+defined$/.exec(cond)?.[1];
+  if (!name) return null;
+  let j = i + 1;
+  let prefix = '';
+  const text = tokens[j];
+  if (text?.t === 'text') {
+    if (text.text.includes('\n')) return null;
+    prefix = text.text;
+    j++;
+  }
+  const expr = tokens[j];
+  const end = tokens[j + 1];
+  if (expr?.t !== 'expr' || end?.t !== 'stmt' || end.inner !== 'endif') return null;
+  if (RE_NAME.exec(expr.inner)?.[1] !== name) return null;
+  const seg = readExpr(expr);
+  if ('ok' in seg) return { seg, end: j + 1 };
+  if (seg.kind !== 'var') return null;
+  return { seg: normalizeVar({ ...seg, prefix }), end: j + 1 };
+}
+
 /** Text and variables, with line conditions. No event branches: those are the field's own level. */
 function readBody(tokens: readonly Token[]): { ok: true; segments: Segment[] } | { ok: false; error: Unsupported } {
   const out: Segment[] = [];
@@ -294,6 +339,14 @@ function readBody(tokens: readonly Token[]): { ok: true; segments: Segment[] } |
     if (RE_IF_EVENT.test(tok.inner)) return fail('eventBranch', tok.raw);
     const cond = RE_IF_DEFINED.exec(tok.inner);
     if (!cond) return fail('statement', tok.raw);
+    const prefixed = readPrefixed(tokens, i, cond[1]);
+    // A whole last line reads as a line condition, as it always has; anywhere else it is a prefix.
+    if (prefixed && !(atLineStart() && prefixed.end === tokens.length - 1)) {
+      if ('ok' in prefixed.seg) return prefixed.seg;
+      out.push(prefixed.seg);
+      i = prefixed.end;
+      continue;
+    }
     // A line condition: exactly one line, starting at a line start, ending at a newline or at the
     // end of the row, holding every variable it names.
     const end = tokens.findIndex((t, j) => j > i && t.t === 'stmt');
@@ -427,10 +480,12 @@ function draftBranches(draft: BuiltinDraft): FieldBranches {
  *  starts from the built-in: the subject as the draft, the body empty (the built-in body is the
  *  alert as JSON, which has no rows to show). */
 export function openTemplate(
-  stored: { subject: string | null; body: string | null },
+  stored: { subject: string | null; body: string | null; free_layout?: boolean },
   draft: BuiltinDraft,
 ): { ok: true; model: VisualTemplate } | { ok: false; error: Unsupported } {
   const read = (src: string | null): ParseResult | null => (src && src.trim() !== '' ? parseField(src) : null);
+  // Laid out (ADR-199), its line breaks are not the rows the tags would show: it stays code.
+  if (stored.free_layout && (read(stored.subject) || read(stored.body))) return fail('freeLayout', '');
   const subject = read(stored.subject);
   const body = read(stored.body);
   if (subject && !subject.ok) return subject;

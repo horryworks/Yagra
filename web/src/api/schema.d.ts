@@ -6328,6 +6328,11 @@ export interface components {
             name: string;
             /** @description Template for the notification subject. Absent means Yagra's built-in wording is used. */
             subject_template?: string | null;
+            /**
+             * @description Whether the template's line breaks and indentation around its tags are layout rather than
+             *     text to send (ADR-199). `false` when the channel has no template.
+             */
+            template_free_layout: boolean;
         };
         /**
          * @description What a test send did (ADR-192). A failure is reported **in the 200 response**, as the template
@@ -11933,6 +11938,8 @@ export interface components {
             body?: string | null;
             /** @description Which point in an alert's life to render: `fire`, `resolve`, or `suppress`. */
             event?: components["schemas"]["NotifyEvent"];
+            /** @description As on the saved template: line breaks and indentation around the tags are layout. */
+            free_layout?: boolean;
             /** @description The channel kind the template is for. Decides whether the body has to be valid JSON. */
             kind: components["schemas"]["ChannelKind"];
             /**
@@ -13556,6 +13563,13 @@ export interface components {
          */
         TemplateBody: {
             body?: string | null;
+            /**
+             * @description Whether line breaks and indentation around the tags are layout rather than text (ADR-199):
+             *     the indentation at the start of each line is not sent, a line holding only `{% … %}` tags
+             *     or `{# … #}` comments is not sent, and in the subject no line break is sent. Absent means
+             *     `false`, which sends every character as written.
+             */
+            free_layout?: boolean;
             subject?: string | null;
         };
         /** @description One metric in a template, with its id, for the template editor. */

@@ -24,16 +24,6 @@ pub(crate) const DETAIL_VALUE_MAX_CHARS: usize = 450;
 /// Prefix of the test notification's text body (ADR-192 decision 1 / ADR-194 decision 5).
 pub(crate) const TEST_BODY_LINE: &str = "This is a test notification from Yagra.";
 
-/// `core-sw-01 (192.0.2.10)`, or just the name when the address is unknown.
-fn who(facts: &AlertFacts) -> String {
-    match facts.node_address.as_deref() {
-        Some(addr) if !addr.is_empty() && addr != facts.node_name => {
-            format!("{} ({addr})", facts.node_name)
-        }
-        _ => facts.node_name.clone(),
-    }
-}
-
 /// A number as a person writes it: `97`, not `97.0`; `0.25`, not `0.25000000000000006`.
 pub(crate) fn fmt_num(v: f64) -> String {
     if v.is_finite() && v.fract() == 0.0 && v.abs() < 1e15 {
@@ -55,30 +45,14 @@ fn port(facts: &AlertFacts) -> Option<String> {
     })
 }
 
-/// `CPU usage (5 min)`, `Inbound utilization on Gi0/3`, `Memory pool usage [I/O]` — the alert's
-/// name (ADR-196) and where on the device it is.
-fn title_where(title: &str, facts: &AlertFacts) -> String {
-    let mut out = title.to_owned();
-    match (facts.if_name.as_deref(), facts.ifindex) {
-        (Some(name), Some(_)) => out.push_str(&format!(" on {name}")),
-        (None, Some(i)) => out.push_str(&format!(" on ifIndex {i}")),
-        (_, None) => {}
-    }
-    if let Some(row) = facts.row_name.as_deref() {
-        out.push_str(&format!(" [{row}]"));
-    }
-    out
-}
-
 /// `: SNMP not responding`, `: Inbound utilization on Gi0/3`, or nothing for an alert with no name.
 ///
 /// The numbers stay in the body and the details. Here they would not survive the editor's draft:
 /// a template prints `97.0` where a person writes `97`, and the draft has to render this exactly.
 fn breach_clause(facts: &AlertFacts) -> String {
     facts
-        .title
-        .as_deref()
-        .map(|t| format!(": {}", title_where(t, facts)))
+        .alert_label()
+        .map(|label| format!(": {label}"))
         .unwrap_or_default()
 }
 
@@ -89,12 +63,25 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
     let name = &facts.subject_name;
     match (&alert.subject, facts.event) {
         (Subject::Node(_), NotifyEvent::Fire) => {
-            format!("{} is {}{}", who(facts), facts.state, breach_clause(facts))
+            format!(
+                "{} is {}{}",
+                facts.node_label(),
+                facts.state,
+                breach_clause(facts)
+            )
         }
-        (Subject::Node(_), NotifyEvent::Resolve) => format!("resolved: {} recovered", who(facts)),
+        (Subject::Node(_), NotifyEvent::Resolve) => {
+            format!("resolved: {} recovered", facts.node_label())
+        }
         (Subject::Node(_), NotifyEvent::Suppress) => match facts.root_cause_name.as_deref() {
-            Some(root) => format!("rolled up: {} suppressed under upstream {root}", who(facts)),
-            None => format!("rolled up: {} suppressed under upstream", who(facts)),
+            Some(root) => format!(
+                "rolled up: {} suppressed under upstream {root}",
+                facts.node_label()
+            ),
+            None => format!(
+                "rolled up: {} suppressed under upstream",
+                facts.node_label()
+            ),
         },
         (Subject::Pool(_), NotifyEvent::Fire) => {
             format!("poller pool \"{name}\" has no live poller — its nodes are not being monitored")
@@ -124,7 +111,7 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
 pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
     let mut lines: Vec<(&str, String)> = Vec::new();
     match &alert.subject {
-        Subject::Node(_) => lines.push(("Node", who(facts))),
+        Subject::Node(_) => lines.push(("Node", facts.node_label())),
         Subject::Pool(_) => lines.push(("Poller pool", facts.subject_name.clone())),
         Subject::MerakiOrg(_) => lines.push(("Meraki organization", facts.subject_name.clone())),
     }
@@ -223,22 +210,13 @@ pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
 pub(crate) const fn node_subject_template(event: NotifyEvent) -> &'static str {
     match event {
         NotifyEvent::Fire => concat!(
-            "{{ node_name }}{% if node_address and node_address != node_name %} ",
-            "({{ node_address }}){% endif %} is {{ state }}",
-            "{% if title %}: {{ title }}",
-            "{% if if_name and ifindex is defined %} on {{ if_name }}",
-            "{% elif ifindex is defined %} on ifIndex {{ ifindex }}{% endif %}",
-            "{% if row_name %} [{{ row_name }}]{% endif %}",
-            "{% endif %}"
+            "{{ node_label }} is {{ state }}",
+            "{% if alert_label is defined %}: {{ alert_label }}{% endif %}"
         ),
-        NotifyEvent::Resolve => concat!(
-            "resolved: {{ node_name }}{% if node_address and node_address != node_name %} ",
-            "({{ node_address }}){% endif %} recovered"
-        ),
+        NotifyEvent::Resolve => "resolved: {{ node_label }} recovered",
         NotifyEvent::Suppress => concat!(
-            "rolled up: {{ node_name }}{% if node_address and node_address != node_name %} ",
-            "({{ node_address }}){% endif %} suppressed under upstream",
-            "{% if root_cause_name %} {{ root_cause_name }}{% endif %}"
+            "rolled up: {{ node_label }} suppressed under upstream",
+            "{% if root_cause_name is defined %} {{ root_cause_name }}{% endif %}"
         ),
     }
 }
@@ -259,11 +237,7 @@ pub(crate) fn node_body_template(event: NotifyEvent) -> String {
     }
     let mut out = String::from(node_subject_template(event));
     out.push_str("\n\n");
-    out.push_str(&line(
-        "Node",
-        "{{ node_name }}{% if node_address and node_address != node_name %} \
-         ({{ node_address }}){% endif %}",
-    ));
+    out.push_str(&line("Node", "{{ node_label }}"));
     out.push_str(&when("group is defined", "Folder", "{{ group }}"));
     out.push_str(&when("profile is defined", "Profile", "{{ profile }}"));
     out.push_str(&when("title is defined", "Alert", "{{ title }}"));

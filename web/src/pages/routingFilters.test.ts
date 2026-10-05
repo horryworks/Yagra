@@ -20,6 +20,7 @@ const chan = (over: Partial<NotificationChannel> = {}): NotificationChannel => (
   enabled: true,
   subject_template: null,
   body_template: null,
+  template_free_layout: false,
   ...over,
 });
 

@@ -19,6 +19,7 @@ function channel(over: Partial<NotificationChannel> = {}): NotificationChannel {
     name: 'ops webhook',
     kind: 'webhook',
     enabled: true,
+    template_free_layout: false,
     ...over,
   };
 }
