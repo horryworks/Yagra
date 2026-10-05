@@ -5,6 +5,7 @@ import {
   LABEL_MAX,
   LABEL_PROBLEMS,
   addLabel,
+  firstLabelProblem,
   labelProblem,
   labelProblems,
   labelsAreValid,
@@ -105,5 +106,15 @@ describe('a list of labels', () => {
     expect(marked.get('x'.repeat(LABEL_MAX + 1))).toBe('tooLong');
     expect(labelsAreValid(list)).toBe(false);
     expect(labelsAreValid(removeLabel(list, 'x'.repeat(LABEL_MAX + 1)))).toBe(true);
+  });
+
+  it('names one reason for the error line, and none for a savable list', () => {
+    // The Edit node dialog shows one line under the tags while Save is held; it must name the
+    // marked chip's problem, and say nothing once the list can be saved.
+    expect(firstLabelProblem(['JAPAN'])).toBeNull();
+    expect(firstLabelProblem([])).toBeNull();
+    expect(firstLabelProblem(['JAPAN', 'x'.repeat(LABEL_MAX + 1)])).toBe('tooLong');
+    const over = Array.from({ length: LABELS_MAX + 1 }, (_, i) => `l${i}`);
+    expect(firstLabelProblem(over)).toBe('tooMany');
   });
 });

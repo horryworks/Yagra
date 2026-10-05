@@ -126,12 +126,16 @@ export function sentenceCount(s: string): number {
 }
 
 /** The ⓘ and pressable labels one file draws: `<InfoTip`, plus `<Field` with an `infoKey` (which
- *  draws one inside), and `<InfoPress`. */
-export function infoSites(src: string): { tip: number; press: number } {
+ *  draws one inside), and `<InfoPress`. A press given `text=` rather than a key (a metric's
+ *  generated meaning) is counted apart as `pressText`, because no `.info` key stands behind it. */
+export function infoSites(src: string): { tip: number; press: number; pressText: number } {
   const fields = openingTags(src, 'Field').filter((tag) => /\binfoKey=/.test(tag)).length;
+  const presses = openingTags(src, 'InfoPress');
+  const withText = presses.filter((tag) => /\btext=/.test(tag)).length;
   return {
     tip: openingTags(src, 'InfoTip').length + fields,
-    press: openingTags(src, 'InfoPress').length,
+    press: presses.length - withText,
+    pressText: withText,
   };
 }
 

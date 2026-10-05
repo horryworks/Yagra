@@ -18,6 +18,8 @@
 // - G8 `INFO_COUNT` — every ⓘ (`InfoTip`) and pressable label (`InfoPress`). Its text is a `.info`
 //   key, quoted once in the code, two sentences and 200 EN / 120 JA characters at most, and no
 //   file draws more than three ⓘ. The count only moves with a reason: an ⓘ is the last resort.
+//   `INFO_TEXT_SITES` names the files whose press shows a text that is not a `.info` key (a
+//   metric's generated meaning), with the reason; those presses are not in the count.
 // - G9 `POINTER_LEGACY` — strings that spell a menu path with `▸`. A pointer to a screen is a
 //   `ScreenLink`, which takes the names from the menu itself. Only shrinks.
 // - G10 `HINT_SITES` — static hints under fields and at the head of dialogs (`<FieldHint>` with no
@@ -67,7 +69,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11335, 6683],
   nav: [2907, 1367],
-  nodes: [21697, 12127],
+  nodes: [20606, 11557],
   rca: [1022, 528],
   reports: [700, 445],
   'settings-ai': [736, 410],
@@ -90,7 +92,6 @@ const SLACK: [number, number] = [300, 200];
 /** Strings over 200 EN / 120 JA characters that predate ADR-200. Remove entries; never add. */
 const LONG_LEGACY: string[] = [
   'nodes:deleteNode.body',
-  'nodes:field.tagHint',
   'nodes:interfaces.colAddressesTitle',
   'nodes:interfaces.colNeighborsTitle',
   'nodes:interfaces.duplexHint',
@@ -194,6 +195,15 @@ const PAGE_NOTES: Record<string, PageNote> = {
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
 const INFO_COUNT = { tip: 22, press: 13 };
 
+/** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
+ *  text is not counted, capped or held to a key here, so each one says why that is right. Checked
+ *  both ways. */
+const INFO_TEXT_SITES: Record<string, string> = {
+  'components/NodeDetail/OverviewTab.tsx':
+    "a metric's meaning: the key is built from the metric name (metricMeaningKey) and the sentence " +
+    'is generated from metric_meaning.rs, which MCP shares; ADR-200 changes how it is shown, not it',
+};
+
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
 
@@ -213,7 +223,6 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 const POINTER_LEGACY: string[] = [
   'dashboard:public.bannerOff',
   'dashboard:widgets.discovery.empty',
-  'nodes:editNode.profileLockHint',
   'nodes:interfaces.rules.inheritedHint',
   'nodes:neighbors.empty.disabled',
   'nodes:neighbors.setup.credsHint',
@@ -227,7 +236,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 19, formHint: 17, modalHint: 24 };
+const HINT_SITES = { fieldHint: 18, formHint: 17, modalHint: 24 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));
@@ -375,9 +384,10 @@ describe('G8: an explanation behind ⓘ is short, keyed, and counted', () => {
       '<Field label={l} htmlFor="f" infoKey="a:f.info">',
       "<InfoTip infoKey='a:y.info' label={t('y')} />",
       '<InfoPress infoKey={k} className="badge">{n}</InfoPress>',
+      '<InfoPress text={meaning}>{label}</InfoPress>',
       "const K = { s: 'a:z.info' };",
     ].join('\n');
-    expect(infoSites(src)).toEqual({ tip: 2, press: 1 });
+    expect(infoSites(src)).toEqual({ tip: 2, press: 1, pressText: 1 });
     expect(infoKeyLiterals(src)).toEqual(['a:f.info', 'a:y.info', 'a:z.info']);
     expect(infoKeyAttrs(src)).toEqual(['a:f.info', 'a:y.info']);
     expect(infoKeys({ a: { en: { x: { info: 'i' }, info: 'j', infoText: 'k' } } })).toEqual([
@@ -430,15 +440,19 @@ describe('G8: an explanation behind ⓘ is short, keyed, and counted', () => {
   it(`no file draws more than ${INFO_PER_FILE} ⓘ, and the total is the counted one`, () => {
     const total = { tip: 0, press: 0 };
     const crowded: string[] = [];
+    const withText: string[] = [];
     for (const [file, src] of files) {
       if (INFO_PRIMITIVES.includes(file)) continue;
       const n = infoSites(src);
       total.tip += n.tip;
       total.press += n.press;
+      if (n.pressText > 0) withText.push(file);
       if (n.tip > INFO_PER_FILE) crowded.push(`${file}: ${n.tip}`);
     }
     expect(crowded).toEqual([]);
     expect(total).toEqual(INFO_COUNT);
+    // A press with free text instead of a key is declared, with its reason, in both directions.
+    expect(withText.sort()).toEqual(Object.keys(INFO_TEXT_SITES).sort());
   });
 });
 

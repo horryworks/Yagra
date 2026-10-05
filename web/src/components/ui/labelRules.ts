@@ -101,6 +101,17 @@ export function labelsAreValid(list: readonly string[]): boolean {
   );
 }
 
+/**
+ * Why `list` cannot be saved, for the one error line under the field: the first marked chip's
+ * problem, or `tooMany` for a list over the cap whose labels are each fine on their own.
+ * `null` exactly when `labelsAreValid(list)`.
+ */
+export function firstLabelProblem(list: readonly string[]): LabelProblem | null {
+  if (labelsAreValid(list)) return null;
+  const first = labelProblems(list).values().next();
+  return first.done ? 'tooMany' : first.value;
+}
+
 /** Which labels in `list` cannot be saved, so the chip row can mark exactly those. */
 export function labelProblems(list: readonly string[]): Map<string, LabelProblem> {
   const out = new Map<string, LabelProblem>();

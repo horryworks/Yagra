@@ -146,13 +146,19 @@ test.describe('node Overview metric cards', () => {
     const label = explained.locator('.nd-health-metric-label');
     await expect(label).toHaveClass(/mono/);
     expect(await label.evaluate((el) => getComputedStyle(el).textTransform)).toBe('none');
-    // The catalogue sentence, which already exists in both locales for every explained gauge.
-    await expect(explained.locator('.nd-health-metric-meaning')).not.toBeEmpty();
-    // A metric nothing explains gets no line at all rather than invented prose.
+    // The catalogue sentence, which already exists in both locales for every explained gauge —
+    // behind the name since ADR-200 Inc.18, not under it: pressing the name opens it.
+    const press = label.locator('button.infopress');
+    await expect(press).toHaveText(GENERIC_EXPLAINED);
+    await expect(page.locator('.infotip-pop')).toHaveCount(0);
+    await press.click();
+    await expect(press).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.infotip-pop')).not.toBeEmpty();
+    // A metric nothing explains is a plain name rather than a press that opens invented prose.
     const unexplained = genericSections(page).locator('.nd-health-metric', {
       has: page.getByText(GENERIC_UNEXPLAINED, { exact: true }),
     });
-    await expect(unexplained.locator('.nd-health-metric-meaning')).toHaveCount(0);
+    await expect(unexplained.locator('button.infopress')).toHaveCount(0);
   });
 
   test('asks for a counter as a rate, and never asks for its stored value', async ({

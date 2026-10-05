@@ -33,7 +33,6 @@
     "nameRequired": "名前は必須です。",
     "notes": "メモ",
     "notesPlaceholder": "例: 東側廊下の天井裏。脚立が必要",
-    "notesHint": "この機器に触る前に次の人が知っておくべきことを書きます。概要タブに表示され、アラートと一緒に PagerDuty と Jira Service Management にも送られます。",
     "notesTooLong": "メモは最大 {{max}} 文字です。",
     "tags": "タグ",
     "tagPlaceholder": "JAPAN",
@@ -42,7 +41,6 @@
     "tagsInherited": "フォルダから継承",
     "tagsInheritedFrom": "フォルダから",
     "tagsExcluded": "ここでは継承しない",
-    "tagHint": "タグはこのノードのアラートと一緒に送られるので、PagerDuty や Jira Service Management 側の振り分けに使えます。入力して Enter で追加します。1 ノードにつき最大 {{max}} 個。これとは別に、上位フォルダのタグもすべて付きます。",
     "tagErr": {
       "empty": "空のタグは付けられません。",
       "tooLong": "このタグは長すぎます。",
@@ -50,7 +48,8 @@
       "tooMany": "このノードのタグはもう上限に達しています。"
     },
     "resolver": "リゾルバ",
-    "poolInheritFolder": "フォルダから継承"
+    "poolInheritFolder": "フォルダから継承",
+    "sentWithAlerts": "アラートと一緒に送信"
   },
   "kind": {
     "wireless_ap": "無線 AP（コントローラ経由）",
@@ -357,10 +356,10 @@
     },
     "profileOffKind": "このプロファイルは別の種別のノード向けです。現在割り当てられているため候補に残しています。",
     "profileLock": "分類ルールが変わってもこのプロファイルのままにする",
-    "profileLockHint": "固定したノードは「分類のかけ直し」の候補に出ません。上でプロファイルを選び直すと、自動でチェックが入ります。",
     "err": {
       "bindingsAfterCheck": "監視の内容は保存しましたが、ノードの設定は保存できませんでした: {{reason}}。もう一度保存しても安全です。"
-    }
+    },
+    "profileLockSkipped": "固定したノードは <lnk/> の対象外です。"
   },
   "deleteNodes": {
     "title_one": "{{count}} 件のノードを削除",
@@ -467,9 +466,7 @@
       "meraki": "Meraki",
       "wlan": "無線 AP"
     },
-    "snmpNote": "エージェントが答えたか、walk がどこまで進んだか、walk が見つけた件数です。",
     "other": "その他のメトリクス",
-    "otherNote": "組込の定義が無いメトリクスです。",
     "dnsMonitor": "DNS 監視",
     "systemResolver": "システムリゾルバ",
     "resolution": "名前解決",
@@ -930,7 +927,6 @@
       "range": "範囲で指定"
     },
     "statusCodes": "ステータスコード",
-    "statusCodesHint": "カンマ区切り（例: 200, 204）。",
     "statusLo": "開始",
     "statusHi": "終了",
     "timeoutMs": "タイムアウト（ミリ秒）",
@@ -941,31 +937,24 @@
     "credentialNone": "— なし —",
     "credentialNeedsTls": "認証情報を提示する監視では、TLS 検証が必須です。",
     "bodyMatch": "応答本文をキーワードで照合する",
-    "bodyMatchHint": "200 を返しておきながら、本文では障害を伝えているエンドポイントを捕まえます。",
     "bodyModeLabel": "条件",
     "bodyMode": {
       "contains": "本文に含まれること",
       "not_contains": "本文に含まれないこと"
     },
     "bodyPattern": "キーワード",
-    "bodyPatternHint": "正規表現ではなく、大文字小文字を区別した単純な文字列一致です。",
     "jsonExtract": "JSON 本文から値を記録する",
-    "jsonExtractHint": "応答本文の数値を取り出し、指定した名前のメトリクスとして記録します。値が見つからなかった回は、0 ではなく何も記録しません。",
     "extractMetric": "メトリクス名",
     "extractMetricPlaceholder": "queue_depth",
     "extractPath": "値の場所",
     "extractAdd": "値を追加",
-    "bodyMaxBytes": "読み取り上限（バイト）",
-    "bodyMaxBytesHint": "キーワード照合と値の取り出しの両方で、本文をどこまで読むかを決めます。上限内にキーワードが見つからなかった場合は、合格ではなく失敗として報告します。",
+    "bodyMaxBytes": "読み取り上限",
     "bodyMatchNeedsBody": "HEAD リクエストは本文を返しません。本文を見るには GET か POST を使ってください。",
     "dnsName": "解決する名前",
     "recordType": "レコード種別",
     "resolver": "リゾルバ",
-    "resolverHint": "空欄にするとポーラー自身のリゾルバを使います。",
-    "resolverPlaceholder": "1.1.1.1",
     "resolverPort": "ポート",
     "maxDepth": "CNAME 追跡の上限",
-    "maxDepthHint": "CNAME チェーンをどこまで辿るかを決めます。",
     "err": {
       "urlRequired": "URL は必須です。",
       "urlScheme": "URL は http:// または https:// で始まる必要があります。",
@@ -988,7 +977,9 @@
       "maxDepth": "追跡上限は 1 以上の整数で指定してください。",
       "save": "監視設定を保存できませんでした。",
       "remove": "監視設定を削除できませんでした。"
-    }
+    },
+    "bodyPatternSub": "文字列一致・大文字小文字を区別",
+    "bytes": "バイト"
   },
   "dns": {
     "failure": {

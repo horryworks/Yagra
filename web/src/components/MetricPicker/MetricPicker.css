@@ -116,14 +116,13 @@
   font-size: var(--font-xs);
 }
 
-/* Two lines, then clipped: the sentence is the reason to read the row, but a five-line row would
-   put three metrics on a screen. The full text is on the trigger's hint once it is chosen. */
+/* One line, then clipped (ADR-200 Inc.18): the start of the sentence is enough to tell two rows
+   apart, and a two-line row made the list a page of prose. The whole text is in the row's `title`
+   and, once chosen, under the trigger. */
 .metricpick-meaning {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-secondary);
   font-size: var(--font-sm);
   line-height: 1.35;

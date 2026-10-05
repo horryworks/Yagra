@@ -30,14 +30,18 @@ const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
 
 /** One labelled row. Exported because both this file's forms and the dialog that hosts them spell
- *  a field the same way; the shared `Field` exports the controls, not the label+hint wrapper. */
+ *  a field the same way; the shared `Field` exports the controls, not the label+hint wrapper.
+ *  `sub` is a few words beside the label (ADR-200 kind 5), never a sentence; `hint` is for a state
+ *  the field is in, not for explaining it. */
 export function Row({
   label,
+  sub,
   required,
   hint,
   children,
 }: {
   label: string;
+  sub?: string;
   required?: boolean;
   hint?: string;
   children: ReactNode;
@@ -46,6 +50,7 @@ export function Row({
     <label className="modal-field">
       <span className="modal-field-label">
         {label} {required && <RequiredMark />}
+        {sub && <span className="nd-field-sub">{sub}</span>}
       </span>
       {children}
       {hint && <FieldHint>{hint}</FieldHint>}
@@ -109,7 +114,7 @@ export function UrlCheckFields({
         </Select>
       </Row>
       {d.statusMode === 'exact' && (
-        <Row label={t('checkEdit.statusCodes')} hint={t('checkEdit.statusCodesHint')}>
+        <Row label={t('checkEdit.statusCodes')}>
           <TextInput
             value={d.statusCodes}
             placeholder="200, 204"
@@ -184,7 +189,6 @@ export function UrlCheckFields({
         />
         <span>{t('checkEdit.bodyMatch')}</span>
       </label>
-      <FieldHint>{t('checkEdit.bodyMatchHint')}</FieldHint>
       {d.bodyMatchEnabled && (
         <>
           <Row label={t('checkEdit.bodyModeLabel')}>
@@ -199,7 +203,7 @@ export function UrlCheckFields({
               ))}
             </Select>
           </Row>
-          <Row label={t('checkEdit.bodyPattern')} required hint={t('checkEdit.bodyPatternHint')}>
+          <Row label={t('checkEdit.bodyPattern')} sub={t('checkEdit.bodyPatternSub')} required>
             <TextInput
               value={d.bodyPattern}
               placeholder={'"status":"ok"'}
@@ -208,7 +212,7 @@ export function UrlCheckFields({
           </Row>
         </>
       )}
-      <Row label={t('checkEdit.jsonExtract')} hint={t('checkEdit.jsonExtractHint')}>
+      <Row label={t('checkEdit.jsonExtract')}>
         <div className="nd-extract-rows">
           {d.extracts.map((row, i) => (
             <div className="nd-extract-row" key={i}>
@@ -240,10 +244,14 @@ export function UrlCheckFields({
       </Row>
       {readsBody && (
         <>
-          <Row label={t('checkEdit.bodyMaxBytes')} hint={t('checkEdit.bodyMaxBytesHint')}>
+          {/* Shown only while something reads the body, so the label alone says what it bounds.
+              A keyword past the limit is a failed check, and the Overview card says so when it
+              happens (`overview.bodyTruncated`). */}
+          <Row label={t('checkEdit.bodyMaxBytes')}>
             <TextInput
               value={d.bodyMaxBytes}
               inputMode="numeric"
+              suffix={t('checkEdit.bytes')}
               onChange={(e) => set('bodyMaxBytes', e.target.value)}
             />
           </Row>
@@ -285,10 +293,12 @@ export function DnsCheckFields({
         </Select>
       </Row>
       <div className="modal-field-row">
-        <Row label={t('checkEdit.resolver')} hint={t('checkEdit.resolverHint')}>
+        {/* Blank means the poller's own resolver, so the placeholder says that rather than showing
+            an example address that would read as the default. */}
+        <Row label={t('checkEdit.resolver')}>
           <TextInput
             value={d.resolver}
-            placeholder={t('checkEdit.resolverPlaceholder')}
+            placeholder={t('add.resolverPlaceholder')}
             onChange={(e) => set('resolver', e.target.value)}
           />
         </Row>
@@ -301,7 +311,7 @@ export function DnsCheckFields({
         </Row>
       </div>
       <div className="modal-field-row">
-        <Row label={t('checkEdit.maxDepth')} hint={t('checkEdit.maxDepthHint')}>
+        <Row label={t('checkEdit.maxDepth')}>
           <TextInput
             value={d.maxDepth}
             inputMode="numeric"

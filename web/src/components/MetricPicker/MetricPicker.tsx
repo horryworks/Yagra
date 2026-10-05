@@ -250,11 +250,19 @@ function Row({
         {option.perInterface && <span className="metricpick-badge">{perInterfaceLabel}</span>}
       </span>
       {/* The meaning if there is one, else where it comes from. Never a filler sentence — an OID
-          says something true, "a metric collected from this device" says nothing. */}
+          says something true, "a metric collected from this device" says nothing. One line, with
+          the whole string in `title`: a list of sentences is prose to scroll past (ADR-200), and
+          the chosen metric's full meaning stays under the trigger. */}
       {option.meaning ? (
-        <span className="metricpick-meaning">{option.meaning}</span>
+        <span className="metricpick-meaning" title={option.meaning}>
+          {option.meaning}
+        </span>
       ) : (
-        option.oid && <span className="metricpick-meaning mono muted">{option.oid}</span>
+        option.oid && (
+          <span className="metricpick-meaning mono muted" title={option.oid}>
+            {option.oid}
+          </span>
+        )
       )}
     </button>
   );

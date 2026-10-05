@@ -16,6 +16,7 @@ import { rootCause, type HasSubject } from '../../lib/alertSubject';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
+import { InfoPress } from '../ui/InfoTip';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
 import { nodesPageHref } from '../../lib/entityHref';
 import { api } from '../../services/api';
@@ -1257,7 +1258,7 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
  *  Used by both sections on this tab — the curated Device-health gauges above, and the node's
  *  remaining node-level metrics below. One component rather than two because they differ only in
  *  where the label comes from: a curated card has a translated name, a generic one shows its raw
- *  metric name with the catalogue's one-line explanation under it.
+ *  metric name, which opens the catalogue's explanation when pressed.
  *
  *  The two scales were two components that differed only in how a number is rendered. A `percent`
  *  card pins the Y axis to 0–100 so a CPU hovering at 40% doesn't fill the chart; a `count` card
@@ -1289,7 +1290,7 @@ function MetricCard({
   label: string;
   /** The label is a raw metric name, so render it mono and un-uppercased. */
   labelMono?: boolean;
-  /** One line saying what the metric measures, under the label. */
+  /** What the metric measures, opened by pressing the label (ADR-200 Inc.18). */
   meaning?: string | null;
   scale: MetricScale;
   /** Appended to the headline and hover value — `/s` for a rate. */
@@ -1368,10 +1369,17 @@ function MetricCard({
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className={`nd-health-metric-label${labelMono ? ' mono' : ''}`}>{label}</span>
+        {/* The meaning is behind the name rather than under it (ADR-200 Inc.18): a line of tertiary
+            text in every card made the grid read as prose. `title` because a raw metric name is
+            clipped to one line in a narrow cell. */}
+        <span
+          className={`nd-health-metric-label${labelMono ? ' mono' : ''}`}
+          title={labelMono ? label : undefined}
+        >
+          {meaning ? <InfoPress text={meaning}>{label}</InfoPress> : label}
+        </span>
         <span className="nd-health-metric-value">{value == null ? '—' : fmt(value)}</span>
       </div>
-      {meaning ? <p className="nd-health-metric-meaning">{meaning}</p> : null}
       {series.timestamps.length > 0 ? (
         <MetricChart
           title=""
@@ -1630,15 +1638,8 @@ function OverviewSections({ node }: { node: NodeDetail }) {
             : key.kind === 'set'
               ? key.name
               : t('overview.other');
-        // Two sections explain themselves: SNMP, because sysUpTime sits beside "did the agent
-        // answer" and the pairing is not obvious; Other, because "not built in" is the whole
-        // reason a metric is there. A set's name and a probe's name need no note.
-        const note =
-          key.kind === 'family' && key.family === 'snmp'
-            ? t('overview.snmpNote')
-            : key.kind === 'other'
-              ? t('overview.otherNote')
-              : null;
+        // No section carries a note under its heading (ADR-200 Inc.18): each card's name opens what
+        // it measures, and "Other" is the name of what the catalog does not know.
         const kindAttr = key.kind === 'family' ? key.family : key.kind;
         const reactKey = key.kind === 'set' ? `set:${key.name}` : kindAttr;
         return (
@@ -1648,7 +1649,6 @@ function OverviewSections({ node }: { node: NodeDetail }) {
             data-set={key.kind === 'set' ? key.name : undefined}
           >
             <div className="nd-section-t">{heading}</div>
-            {note && <p className="nd-section-note">{note}</p>}
             <div className="nd-health-metrics">
               {s.cards.map((c) => {
                 const { label, known } = scalarLabel(c.metric);

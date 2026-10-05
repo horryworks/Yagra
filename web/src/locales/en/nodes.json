@@ -33,7 +33,6 @@
     "nameRequired": "A name is required.",
     "notes": "Notes",
     "notesPlaceholder": "e.g. in the ceiling void above the east corridor — needs a ladder",
-    "notesHint": "Anything the next person should know before touching this device. Shown on its Overview tab, and sent to PagerDuty and Jira Service Management with its alerts.",
     "notesTooLong": "Notes may be at most {{max}} characters.",
     "tags": "Tags",
     "tagPlaceholder": "JAPAN",
@@ -42,7 +41,6 @@
     "tagsInherited": "Inherited from its folder",
     "tagsInheritedFrom": "From its folder",
     "tagsExcluded": "Not inherited here",
-    "tagHint": "Tags ride along with this node's alerts, so PagerDuty and Jira Service Management can route on them. Type one and press Enter. Up to {{max}} per node — and it also carries every tag on the folders above it.",
     "tagErr": {
       "empty": "A tag cannot be empty.",
       "tooLong": "This tag is too long.",
@@ -50,7 +48,8 @@
       "tooMany": "This node already carries as many tags as it can."
     },
     "resolver": "Resolver",
-    "poolInheritFolder": "Inherited from the folder"
+    "poolInheritFolder": "Inherited from the folder",
+    "sentWithAlerts": "Sent with alerts"
   },
   "kind": {
     "wireless_ap": "Wireless AP (via its controller)",
@@ -358,10 +357,10 @@
     },
     "profileOffKind": "This profile belongs to another kind of node. It is listed only because it is the one currently bound.",
     "profileLock": "Keep this profile when classification rules change",
-    "profileLockHint": "Nodes ▸ Reclassify never offers to change a locked node. Choosing a different profile above ticks this for you.",
     "err": {
       "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
-    }
+    },
+    "profileLockSkipped": "Locked nodes are left out of <lnk/>."
   },
   "deleteNodes": {
     "title_one": "Delete {{count}} node",
@@ -469,9 +468,7 @@
       "meraki": "Meraki",
       "wlan": "Wireless AP"
     },
-    "snmpNote": "Whether the agent answered, how far the walk got, and what it found.",
     "other": "Other metrics",
-    "otherNote": "Metrics with no built-in definition.",
     "dnsMonitor": "DNS monitor",
     "systemResolver": "system resolver",
     "resolution": "Resolution",
@@ -934,7 +931,6 @@
       "range": "Within a range"
     },
     "statusCodes": "Status codes",
-    "statusCodesHint": "Comma-separated, e.g. 200, 204.",
     "statusLo": "From",
     "statusHi": "To",
     "timeoutMs": "Timeout (ms)",
@@ -945,31 +941,24 @@
     "credentialNone": "— none —",
     "credentialNeedsTls": "A monitor that presents credentials must verify TLS.",
     "bodyMatch": "Check the response body for a keyword",
-    "bodyMatchHint": "Catches an endpoint that answers 200 while its body says the service is broken.",
     "bodyModeLabel": "Condition",
     "bodyMode": {
       "contains": "The body must contain",
       "not_contains": "The body must not contain"
     },
     "bodyPattern": "Keyword",
-    "bodyPatternHint": "Matched as plain text, case-sensitively — not a regular expression.",
     "jsonExtract": "Record values from a JSON body",
-    "jsonExtractHint": "Lift numbers out of the response and record them under names you choose. A rule that finds no number records nothing for that poll, rather than a zero.",
     "extractMetric": "Metric name",
     "extractMetricPlaceholder": "queue_depth",
     "extractPath": "Path to the value",
     "extractAdd": "Add a value",
-    "bodyMaxBytes": "Read budget (bytes)",
-    "bodyMaxBytesHint": "How much of the body to read, for both the keyword check and any extracted values. If a keyword is not found within it, the check reports a failure rather than a pass.",
+    "bodyMaxBytes": "Read budget",
     "bodyMatchNeedsBody": "A HEAD request returns no body — use GET or POST to check content.",
     "dnsName": "Name to resolve",
     "recordType": "Record type",
     "resolver": "Resolver",
-    "resolverHint": "Leave empty to use the poller's own resolver.",
-    "resolverPlaceholder": "1.1.1.1",
     "resolverPort": "Port",
     "maxDepth": "Max CNAME hops",
-    "maxDepthHint": "How far a CNAME chain may be followed.",
     "err": {
       "urlRequired": "A URL is required.",
       "urlScheme": "The URL must start with http:// or https://.",
@@ -992,7 +981,9 @@
       "maxDepth": "The hop limit must be a whole number, at least 1.",
       "save": "Could not save the monitor configuration.",
       "remove": "Could not remove the monitor configuration."
-    }
+    },
+    "bodyPatternSub": "plain text, case-sensitive",
+    "bytes": "bytes"
   },
   "dns": {
     "failure": {

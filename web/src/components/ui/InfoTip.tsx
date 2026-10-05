@@ -72,13 +72,17 @@ export function InfoTip({ infoKey, label }: { infoKey: string; label: string }) 
 }
 
 /** A label or badge that opens its own explanation. Text is drawn with a dotted underline; pass the
- *  badge's classes (`badge badge-warning`) and it is drawn as that badge with a `▾`. */
+ *  badge's classes (`badge badge-warning`) and it is drawn as that badge with a `▾`.
+ *
+ *  `text` instead of `infoKey` is for an explanation that is not a `.info` key of this WebUI's: a
+ *  metric's meaning, whose key is built from the metric name and whose sentence is generated from
+ *  `metric_meaning.rs` (ADR-200 Inc.18). A file that passes `text` is listed, with its reason, in
+ *  `proseBudget.test.ts` (G8) — it is not a way to put free prose behind a press. */
 export function InfoPress({
-  infoKey,
   className,
   children,
-}: {
-  infoKey: string;
+  ...source
+}: ({ infoKey: string; text?: never } | { text: string; infoKey?: never }) & {
   className?: string;
   children: ReactNode;
 }) {
@@ -104,7 +108,7 @@ export function InfoPress({
         className="infotip-pop"
         onDismiss={dismiss}
       >
-        {t(infoKey)}
+        {source.infoKey === undefined ? source.text : t(source.infoKey)}
       </AnchoredPopover>
     </span>
   );

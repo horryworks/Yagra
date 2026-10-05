@@ -13,8 +13,9 @@
 // the form: no fields exist until the node does.
 
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
+import { ScreenLink } from '../ui/ScreenLink';
 import { isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/api';
@@ -43,7 +44,7 @@ import {
   type NodeEditField,
 } from './nodeEditForm';
 import { ChipInput } from '../ui/ChipInput';
-import { LABELS_MAX, labelsAreValid } from '../ui/labelRules';
+import { LABELS_MAX, firstLabelProblem, labelsAreValid } from '../ui/labelRules';
 import { Badge } from '../ui/Badge';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { done, WordedFailure } from '../../lib/submitState';
@@ -170,7 +171,7 @@ export function EditNodeModal({
         </Select>
       </Row>
     ),
-    // Not a `Row`: its `<label>` would wrap the hint too. The checkbox carries its own label.
+    // Not a `Row`: its `<label>` would wrap the link too. The checkbox carries its own label.
     profileLock: (
       <div className="modal-field nd-profile-lock">
         <label className="nd-profile-lock-check">
@@ -181,7 +182,13 @@ export function EditNodeModal({
           />
           <span>{t('editNode.profileLock')}</span>
         </label>
-        <FieldHint>{t('editNode.profileLockHint')}</FieldHint>
+        <FieldHint>
+          <Trans
+            t={t}
+            i18nKey="editNode.profileLockSkipped"
+            components={{ lnk: <ScreenLink to="/nodes/reclassify" /> }}
+          />
+        </FieldHint>
       </div>
     ),
     snmpCredential: (
@@ -231,7 +238,15 @@ export function EditNodeModal({
     // whichever came first. Each input carries its own `aria-label` instead.
     tags: (
       <div className="modal-field nd-tags">
-        <span className="modal-field-label">{t('field.tags')}</span>
+        {/* The count beside the label is the cap the entry box closes at; "sent with alerts" is
+            where a tag goes. Both used to be a 206-character hint under the field (ADR-200). */}
+        <span className="modal-field-label">
+          {t('field.tags')}
+          <span className="nd-field-sub">{t('field.sentWithAlerts')}</span>
+          <span className="nd-field-sub mono">
+            {d.tags.length} / {LABELS_MAX}
+          </span>
+        </span>
         <ChipInput
           value={d.tags}
           onChange={(next) => set('tags', next)}
@@ -280,20 +295,24 @@ export function EditNodeModal({
             )}
           </div>
         )}
-        <FieldHint error={tagsInvalid}>{t('field.tagHint', { max: LABELS_MAX })}</FieldHint>
+        {/* A stored tag the rules now refuse (migration 0109) is marked on its chip; this line
+            says why Save is held, since a chip's reason is otherwise a hover. */}
+        {tagsInvalid && (
+          <FieldHint error>{t(`field.tagErr.${firstLabelProblem(d.tags)}`)}</FieldHint>
+        )}
       </div>
     ),
     notes: (
-      <Row label={t('field.notes')}>
+      <Row label={t('field.notes')} sub={t('field.sentWithAlerts')}>
         <TextArea
           rows={4}
           value={d.notes}
           onChange={(e) => set('notes', e.target.value)}
           placeholder={t('field.notesPlaceholder')}
         />
-        <FieldHint error={notesTooLong}>
-          {notesTooLong ? t('field.notesTooLong', { max: NOTES_MAX }) : t('field.notesHint')}
-        </FieldHint>
+        {notesTooLong && (
+          <FieldHint error>{t('field.notesTooLong', { max: NOTES_MAX })}</FieldHint>
+        )}
       </Row>
     ),
   };

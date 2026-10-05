@@ -309,15 +309,6 @@
   margin-bottom: 9px;
 }
 
-/* One line under a section title saying what the section deliberately leaves out. Sits above the
-   grid, not inside a card, so it reads as a property of the section (ADR-055 R2's shape, applied to
-   a section rather than a page). */
-.nd-section-note {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  margin: -4px 0 10px;
-}
-
 .nd-section-head {
   display: flex;
   align-items: center;
@@ -382,6 +373,15 @@ html[data-viewport='mobile'] .nd-extract-row {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* A few words beside a field's label (ADR-200 kind 5): where the value goes ("Sent with alerts")
+   or how many it holds ("3 / 32"). Not a sentence, so it never wraps under the label. */
+.nd-field-sub {
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
 }
 
 /* "Keep this profile when classification rules change" (ADR-140). */
@@ -606,9 +606,6 @@ html[data-viewport='mobile'] .nd-extract-row {
   white-space: nowrap;
 }
 
-/* One line under a generic card's label saying what the metric measures. Two lines maximum: the
-   catalogue sentences run to about 100 characters and an uncapped block would make one card in the
-   grid twice the height of its neighbours. */
 /* Device health, one line per table row (ADR-143): a memory pool, a CPU, a sensor. The name truncates
    and carries its whole text in `title`; the numbers never wrap. */
 .nd-row-list {
