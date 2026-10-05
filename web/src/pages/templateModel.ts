@@ -316,8 +316,13 @@ function readPrefixed(
   return { seg: normalizeVar({ ...seg, prefix }), end: j + 1 };
 }
 
-/** Text and variables, with line conditions. No event branches: those are the field's own level. */
-function readBody(tokens: readonly Token[]): { ok: true; segments: Segment[] } | { ok: false; error: Unsupported } {
+/** Text and variables, with line conditions. No event branches: those are the field's own level.
+ *  The subject is one line and offers no hidden line, so there `{% if X is defined %}p{{ X }}{% endif %}`
+ *  is always a prefix, even when it is the whole row; it sends the same thing either way. */
+function readBody(
+  tokens: readonly Token[],
+  field: TemplateField,
+): { ok: true; segments: Segment[] } | { ok: false; error: Unsupported } {
   const out: Segment[] = [];
   const atLineStart = () => {
     const norm = normalize(out);
@@ -340,8 +345,9 @@ function readBody(tokens: readonly Token[]): { ok: true; segments: Segment[] } |
     const cond = RE_IF_DEFINED.exec(tok.inner);
     if (!cond) return fail('statement', tok.raw);
     const prefixed = readPrefixed(tokens, i, cond[1]);
-    // A whole last line reads as a line condition, as it always has; anywhere else it is a prefix.
-    if (prefixed && !(atLineStart() && prefixed.end === tokens.length - 1)) {
+    // In the body a whole last line reads as a line condition, as it always has; anywhere else, and
+    // anywhere in the subject, it is a prefix.
+    if (prefixed && (field === 'subject' || !(atLineStart() && prefixed.end === tokens.length - 1))) {
       if ('ok' in prefixed.seg) return prefixed.seg;
       out.push(prefixed.seg);
       i = prefixed.end;
@@ -382,14 +388,14 @@ function readBody(tokens: readonly Token[]): { ok: true; segments: Segment[] } |
 }
 
 /** Read one stored field back into rows, or say why it cannot be. */
-export function parseField(src: string): ParseResult {
+export function parseField(src: string, field: TemplateField): ParseResult {
   const tokens = tokenize(src);
   if (!Array.isArray(tokens)) return tokens;
   const first = tokens[0];
   const headTok = first && first.t === 'stmt' ? first : null;
   const head = headTok ? RE_IF_EVENT.exec(headTok.inner) : null;
   if (!headTok || !head || head[1] !== 'if') {
-    const body = readBody(tokens);
+    const body = readBody(tokens, field);
     return body.ok ? { ok: true, branches: { fire: body.segments } } : body;
   }
   // `{% if event == "a" %}...{% elif event == "b" %}...{% else %}...{% endif %}`, spanning the
@@ -429,7 +435,7 @@ export function parseField(src: string): ParseResult {
   }
   const branches: Partial<Record<NotifyEvent, Segment[]>> = {};
   for (const arm of arms) {
-    const body = readBody(arm.tokens);
+    const body = readBody(arm.tokens, field);
     if (!body.ok) return body;
     branches[arm.event] = body.segments;
   }
@@ -446,7 +452,7 @@ export function builtinDraft(templates: readonly BuiltinSubjectTemplate[] | null
   if (!templates) return null;
   const out: Partial<Record<NotifyEvent, Segment[]>> = {};
   for (const t of templates) {
-    const parsed = parseField(t.subject);
+    const parsed = parseField(t.subject, 'subject');
     if (!parsed.ok) return null;
     out[t.event] = parsed.branches.fire;
   }
@@ -483,11 +489,14 @@ export function openTemplate(
   stored: { subject: string | null; body: string | null; free_layout?: boolean },
   draft: BuiltinDraft,
 ): { ok: true; model: VisualTemplate } | { ok: false; error: Unsupported } {
-  const read = (src: string | null): ParseResult | null => (src && src.trim() !== '' ? parseField(src) : null);
+  const read = (src: string | null, field: TemplateField): ParseResult | null =>
+    src && src.trim() !== '' ? parseField(src, field) : null;
   // Laid out (ADR-199), its line breaks are not the rows the tags would show: it stays code.
-  if (stored.free_layout && (read(stored.subject) || read(stored.body))) return fail('freeLayout', '');
-  const subject = read(stored.subject);
-  const body = read(stored.body);
+  if (stored.free_layout && (read(stored.subject, 'subject') || read(stored.body, 'body'))) {
+    return fail('freeLayout', '');
+  }
+  const subject = read(stored.subject, 'subject');
+  const body = read(stored.body, 'body');
   if (subject && !subject.ok) return subject;
   if (body && !body.ok) return body;
   return {

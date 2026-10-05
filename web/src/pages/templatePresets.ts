@@ -8,7 +8,7 @@
 // they are not locale keys: a preset is a whole template, and translating it fragment by fragment
 // would split one sentence across keys that a translator cannot see together.
 
-import { parseField, templateFrom, type VisualTemplate, type FieldBranches } from './templateModel';
+import { parseField, templateFrom, type FieldBranches, type TemplateField, type VisualTemplate } from './templateModel';
 
 export const TEMPLATE_PRESETS = ['detailed', 'short'] as const;
 export type TemplatePreset = (typeof TEMPLATE_PRESETS)[number];
@@ -52,8 +52,8 @@ export function presetSource(preset: TemplatePreset, lang: PresetLanguage): { su
   return SOURCES[preset][lang];
 }
 
-function branches(src: string): FieldBranches {
-  const parsed = parseField(src);
+function branches(src: string, field: TemplateField): FieldBranches {
+  const parsed = parseField(src, field);
   // A preset that cannot be read is a defect in this file, caught by its test; an empty row is the
   // harmless thing to show if one ever ships.
   return parsed.ok ? parsed.branches : { fire: [] };
@@ -62,7 +62,7 @@ function branches(src: string): FieldBranches {
 /** A preset as the editor's model. */
 export function presetTemplate(preset: TemplatePreset, lang: PresetLanguage): VisualTemplate {
   const src = SOURCES[preset][lang];
-  return templateFrom(branches(src.subject), branches(src.body));
+  return templateFrom(branches(src.subject, 'subject'), branches(src.body, 'body'));
 }
 
 /** The preset language for a UI language code. */

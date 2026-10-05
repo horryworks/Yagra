@@ -24,6 +24,7 @@ import {
   withField,
   writeOwn,
   type Segment,
+  type TemplateField,
   type VisualTemplate,
 } from './templateModel';
 
@@ -38,8 +39,8 @@ const BUILTIN = [
 ] as const;
 const DRAFT = builtinDraft([...BUILTIN]);
 
-function reads(src: string) {
-  const r = parseField(src);
+function reads(src: string, field: TemplateField = 'body') {
+  const r = parseField(src, field);
   if (!r.ok) throw new Error(`did not read: ${r.error.reason} ${r.error.snippet}`);
   return r.branches;
 }
@@ -135,10 +136,22 @@ describe('a variable with text sent just before it (ADR-199)', () => {
     const withFallback: Segment = { kind: 'var', name: 'group', fallback: 'n/a', hideLine: false, prefix: 'in ' };
     expect(sameSegments([withFallback], [pre('group', 'in ')])).toBe(true);
     expect(sameSegments([pre('group', '')], [v('group')])).toBe(true);
+    // A tag made with a fallback and then given an empty prefix shows nothing when the value is
+    // missing, as the prefix option says: it is written as a plain tag, not with its old fallback.
+    const emptied: Segment = { kind: 'var', name: 'group', fallback: '—', hideLine: false, prefix: '' };
+    expect(serializeSegments([text('x '), emptied])).toBe('x {{ group }}');
     expect(reads('x {% if metric is defined %}{{ metric }}{% endif %}').fire).toEqual([text('x '), v('metric')]);
   });
 
-  it('a whole last line still reads as a line left out, as it did before', () => {
+  it('in the subject, a prefixed tag that is the whole row stays a prefix', () => {
+    // The subject offers no hidden line, and both readings send the same thing.
+    const row = [pre('group', 'in ')];
+    const src = serializeSegments(row);
+    expect(src).toBe('{% if group is defined %}in {{ group }}{% endif %}');
+    expect(reads(src, 'subject').fire).toEqual(row);
+  });
+
+  it('a whole last line still reads as a line left out in the body, as it did before', () => {
     expect(reads('{% if group is defined %}Folder: {{ group }}{% endif %}').fire).toEqual([
       text('Folder: '),
       v('group', '', true),
@@ -187,7 +200,7 @@ describe('what cannot be shown as tags opens as code, with the reason', () => {
   ];
   for (const [src, reason] of cases) {
     it(`${reason}: ${src}`, () => {
-      const r = parseField(src);
+      const r = parseField(src, 'body');
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error.reason).toBe(reason);
     });

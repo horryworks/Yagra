@@ -125,7 +125,7 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     },
     TemplateVariable {
         name: "node_label",
-        description: "The node as the built-in text names it: its display name, with its address                       in brackets when the address differs from the name, e.g.                       core-sw-01 (192.0.2.11). Computed by Yagra, so a template need not compare                       node_name with node_address itself.",
+        description: "The node as the built-in text names it: its display name, with its address in brackets when the address differs from the name, e.g. core-sw-01 (192.0.2.11). Computed by Yagra, so a template need not compare node_name with node_address itself.",
         always_present: true,
     },
     TemplateVariable {
@@ -184,12 +184,12 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     },
     TemplateVariable {
         name: "title",
-        description: "What the alert is called, in plain English — SNMP not responding rather                       than snmp_up, Node not responding for an up/down alert (ADR-196). The                       metric itself when Yagra has no name for it.",
+        description: "What the alert is called, in plain English — SNMP not responding rather than snmp_up, Node not responding for an up/down alert (ADR-196). The metric itself when Yagra has no name for it.",
         always_present: false,
     },
     TemplateVariable {
         name: "alert_label",
-        description: "The alert as the built-in subject names it: its title, then the port it is                       about (on GigabitEthernet0/7, or on ifIndex 7 when the name is not known),                       then the table row in square brackets. Absent when the alert has no title.",
+        description: "The alert as the built-in subject names it: its title, then the port it is about (on GigabitEthernet0/7, or on ifIndex 7 when the name is not known), then the table row in square brackets. Absent when the alert has no title.",
         always_present: false,
     },
     TemplateVariable {
@@ -219,7 +219,7 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     },
     TemplateVariable {
         name: "if_name",
-        description: "The name of the port that breached, such as GigabitEthernet0/7, as the                       interface inventory calls it when the notification is sent. Absent when the                       alert is about no port or the port's name is not known.",
+        description: "The name of the port that breached, such as GigabitEthernet0/7, as the interface inventory calls it when the notification is sent. Absent when the alert is about no port or the port's name is not known.",
         always_present: false,
     },
     TemplateVariable {
@@ -793,6 +793,12 @@ mod tests {
             assert!(
                 v.description.trim().len() >= 20,
                 "`{}` does not describe what its value means",
+                v.name
+            );
+            // A line break in the literal without its `\` keeps the next line's indentation.
+            assert!(
+                !v.description.contains("  "),
+                "`{}`'s description carries a run of spaces: a continuation lost its `\\`",
                 v.name
             );
         }

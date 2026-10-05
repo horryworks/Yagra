@@ -16,8 +16,8 @@ describe('presets', () => {
     for (const preset of TEMPLATE_PRESETS) {
       for (const lang of LANGS) {
         const src = presetSource(preset, lang);
-        expect(parseField(src.subject).ok, `${preset}/${lang} subject`).toBe(true);
-        expect(parseField(src.body).ok, `${preset}/${lang} body`).toBe(true);
+        expect(parseField(src.subject, 'subject').ok, `${preset}/${lang} subject`).toBe(true);
+        expect(parseField(src.body, 'body').ok, `${preset}/${lang} body`).toBe(true);
       }
     }
   });

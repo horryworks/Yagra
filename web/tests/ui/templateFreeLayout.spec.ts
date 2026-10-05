@@ -155,3 +155,51 @@ test('free layout lays the built-in copy out over several lines and is saved wit
   expect(sent.free_layout).toBe(true);
   expect(errors.uncaught).toEqual([]);
 });
+
+// A channel that already has a template of its own: turning the switch alone is an edit to save, and
+// turning it off again keeps a multi-line subject on screen as several lines.
+test.describe('a saved template', () => {
+  const saved = [
+    { ...(channels as unknown as Schemas['ChannelSummary'][])[0], subject_template: 'x {{ state }}' },
+  ] as unknown as Json;
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/notification-channels': saved,
+        '/api/v1/notification-channels/builtin-template': builtin as unknown as Json,
+        '/api/v1/notification-channels/preview': preview,
+        '/api/v1/notification-channels/template-variables': variables as unknown as Json,
+      },
+    },
+  });
+
+  test('turning free layout on is saved even when no text changed, and turning it off hides no line break', async ({
+    page,
+    errors,
+  }) => {
+    const dialog = await openTemplate(page);
+    await dialog.getByRole('button', { name: 'Code' }).click();
+    const save = dialog.getByRole('button', { name: 'Save template' });
+    await expect(save).toBeDisabled();
+
+    const layout = dialog.getByRole('checkbox', { name: /Free layout/ });
+    await layout.check();
+    await expect(save).toBeEnabled();
+
+    // Laid out over lines, then switched off: the line breaks are still in the text, so they stay
+    // on screen rather than being hidden by a one-line input.
+    await dialog.locator('#tpl-subject').fill('{% if state is defined %}\n  {{ state }}\n{% endif %}');
+    await layout.uncheck();
+    await expect(dialog.locator('#tpl-subject')).toHaveJSProperty('tagName', 'TEXTAREA');
+    expect(await dialog.locator('#tpl-subject').inputValue()).toContain('\n');
+
+    await layout.check();
+    const put = page.waitForRequest(
+      (r) => r.method() === 'PUT' && new URL(r.url()).pathname === `/api/v1/notification-channels/${CHANNEL_ID}/template`,
+    );
+    await save.click();
+    expect(((await put).postDataJSON() as { free_layout?: boolean }).free_layout).toBe(true);
+    expect(errors.uncaught).toEqual([]);
+  });
+});

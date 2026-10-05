@@ -135,6 +135,15 @@ export function insertAtCaret(
 }
 
 /**
+ * Whether the subject is edited in a multi-line field. Laid out it spans lines (ADR-199); and a
+ * subject that still holds a line break after free layout is turned off must show it, because a
+ * one-line input hides line breaks on screen while the value it holds keeps them and sends them.
+ */
+export function subjectSpansLines(draft: TemplateDraft): boolean {
+  return draft.freeLayout === true || /[\r\n]/.test(draft.subject);
+}
+
+/**
  * The draft with free layout turned on or off (ADR-199). The text is kept as typed, except that
  * the built-in copy is swapped for its other spelling — one line off, laid out on — because the
  * two send the same thing and the switch is what the operator reached for to read it.

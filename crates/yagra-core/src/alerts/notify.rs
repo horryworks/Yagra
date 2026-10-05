@@ -1988,66 +1988,70 @@ mod template_tests {
 
     /// The copy the code editor offers with free layout on (`templateDisplay.ts`'s
     /// `laidOutBuiltinSource`, ADR-199) sends the built-in text, at every point in the alert's life.
-    /// The two helpers below write the shape that function writes; what this test proves is that
-    /// [`crate::notify_render::lay_out`] turns that shape back into the built-in, line breaks and all.
+    ///
+    /// The layout is written in TypeScript and rendered here, so the two meet in a committed file,
+    /// `web/src/pages/laidOutBuiltin.json`, with one writer per half: this test writes `builtin`
+    /// (what `GET …/builtin-template` serves), and `freeLayout.test.ts` writes `laid` (what the
+    /// editor makes of it) and fails when the function no longer makes that. What this test proves
+    /// is that [`crate::notify_render::lay_out`] turns `laid` back into the built-in, line breaks
+    /// and all. Regenerate `builtin` with `UPDATE_LAID_OUT_BUILTIN=1`, then `laid` with
+    /// `UPDATE_LAID_OUT_BUILTIN=1 npx vitest run src/pages/freeLayout.test.ts` in `web/`.
     #[test]
     fn the_laid_out_builtin_sends_the_builtin() {
-        fn inner(text: &str) -> &str {
-            text.strip_suffix('\n').unwrap_or(text)
-        }
-        fn laid_out(by: &[(NotifyEvent, String)]) -> String {
-            let get = |e: NotifyEvent| by.iter().find(|(x, _)| *x == e).map(|(_, t)| t.as_str());
-            let fire = get(NotifyEvent::Fire).expect("fire");
-            let indent = |t: &str| {
-                inner(t)
-                    .split('\n')
-                    .map(|l| format!("  {l}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
-            let arms: Vec<NotifyEvent> = [NotifyEvent::Resolve, NotifyEvent::Suppress]
-                .into_iter()
-                .filter(|e| get(*e) != Some(fire))
-                .collect();
-            if arms.is_empty() {
-                return fire.to_owned();
+        const KINDS: [ChannelKind; 2] = [ChannelKind::Email, ChannelKind::Jsm];
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/src/pages/laidOutBuiltin.json");
+        let builtin_of = |kind: ChannelKind| {
+            serde_json::Value::Array(
+                NotifyEvent::ALL
+                    .into_iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "event": e.as_str(),
+                            "subject": builtin_subject_template_for(kind, e),
+                            "body": builtin_body_template_for(kind, e),
+                        })
+                    })
+                    .collect(),
+            )
+        };
+        let mut fixture: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if std::env::var_os("UPDATE_LAID_OUT_BUILTIN").is_some() {
+            for kind in KINDS {
+                let entry = fixture
+                    .as_object_mut()
+                    .expect("the fixture is an object")
+                    .entry(kind.as_str())
+                    .or_insert_with(|| serde_json::json!({}));
+                entry["builtin"] = builtin_of(kind);
             }
-            let mut lines = Vec::new();
-            for (i, e) in arms.iter().enumerate() {
-                let tag = if i == 0 { "if" } else { "elif" };
-                lines.push(format!("{{% {tag} event == \"{}\" %}}", e.as_str()));
-                lines.push(indent(get(*e).expect("arm")));
-            }
-            lines.push("{% else %}".to_owned());
-            lines.push(indent(fire));
-            lines.push("{% endif %}".to_owned());
-            lines.join("\n")
+            let text = serde_json::to_string_pretty(&fixture).expect("serialize the fixture");
+            std::fs::write(&path, format!("{text}\n")).expect("write laidOutBuiltin.json");
+            return;
         }
         let mut compared = 0;
-        for kind in [ChannelKind::Email, ChannelKind::Jsm] {
-            let subjects: Vec<(NotifyEvent, String)> = NotifyEvent::ALL
-                .into_iter()
-                .map(|e| (e, builtin_subject_template_for(kind, e).to_owned()))
-                .collect();
-            let bodies: Vec<(NotifyEvent, String)> = NotifyEvent::ALL
-                .into_iter()
-                .map(|e| (e, builtin_body_template_for(kind, e).expect("a text body")))
-                .collect();
-            // The built-in body is its subject followed by the same lines at every point, which is
-            // the case the copy writes once.
-            let rests: Vec<&str> = subjects
-                .iter()
-                .zip(&bodies)
-                .map(|((_, s), (_, b))| {
-                    b.strip_prefix(s.as_str())
-                        .expect("body starts with subject")
-                })
-                .collect();
-            assert!(rests.iter().all(|r| *r == rests[0] && r.starts_with('\n')));
+        for kind in KINDS {
+            let entry = &fixture[kind.as_str()];
+            assert_eq!(
+                entry["builtin"],
+                builtin_of(kind),
+                "web/src/pages/laidOutBuiltin.json is stale for {kind:?}. Regenerate it with:\n    \
+                 UPDATE_LAID_OUT_BUILTIN=1 cargo test -p yagra-core the_laid_out_builtin_sends_the_builtin\n\
+                 then `UPDATE_LAID_OUT_BUILTIN=1 npx vitest run src/pages/freeLayout.test.ts` in web/."
+            );
+            let laid = |field: &str| {
+                entry["laid"][field]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("laidOutBuiltin.json has no {kind:?} laid {field}"))
+                    .to_owned()
+            };
             let template = ChannelTemplate {
                 free_layout: true,
-                subject: Some(laid_out(&subjects)),
-                body: Some(format!("{}\n{}", laid_out(&subjects), &rests[0][1..])),
+                subject: Some(laid("subject")),
+                body: Some(laid("body")),
             };
             assert!(template.subject.as_deref().unwrap().contains("\n  "));
             for sample in yagra_common::PreviewSample::ALL {

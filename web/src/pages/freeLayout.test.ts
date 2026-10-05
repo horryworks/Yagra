@@ -2,9 +2,10 @@
 // Free layout (ADR-199): a template whose line breaks and indentation around its tags are layout.
 // What the server does with such a template is `notify_render.rs::lay_out`; these pin what the
 // editor sends, when it refuses the tags view, and the laid-out copy of the built-in text.
+import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { NotificationChannel } from '../types/api';
-import { draftFor, isDirty, saveBody, withFreeLayout } from './channelTemplate';
+import { draftFor, isDirty, saveBody, subjectSpansLines, withFreeLayout } from './channelTemplate';
 import { builtinSource, laidOutBuiltinSource } from './templateDisplay';
 import { openTemplate } from './templateModel';
 
@@ -36,6 +37,17 @@ describe('what the editor sends', () => {
     expect(draftFor(c)).toEqual({ subject: 'x', body: '', freeLayout: true });
     expect(isDirty(c, draftFor(c))).toBe(false);
     expect(isDirty(c, { subject: 'x', body: '' })).toBe(true);
+    // And the other way: the same text, switched on, is something to save.
+    const off = channel({ subject_template: 'x' });
+    expect(isDirty(off, { ...draftFor(off), freeLayout: true })).toBe(true);
+  });
+
+  it('edits the subject over several lines while it is laid out or still holds a line break', () => {
+    expect(subjectSpansLines({ subject: 'x', body: '' })).toBe(false);
+    expect(subjectSpansLines({ subject: 'x', body: '', freeLayout: true })).toBe(true);
+    // Switched off with its layout kept: a one-line input would hide what is about to be sent.
+    expect(subjectSpansLines({ subject: '{% if a is defined %}\n  {{ a }}\n{% endif %}', body: '' })).toBe(true);
+    expect(subjectSpansLines({ subject: 'x\r', body: '' })).toBe(true);
   });
 });
 
@@ -73,5 +85,31 @@ describe('the laid-out copy of the built-in text', () => {
       body: '',
       freeLayout: true,
     });
+  });
+});
+
+// The laid-out copy of the REAL built-in text is rendered by the server in Rust, which cannot run
+// this function; the two meet in `laidOutBuiltin.json`. `alerts/notify.rs`'s
+// `the_laid_out_builtin_sends_the_builtin` writes `builtin` and renders `laid`; this test writes
+// `laid` and fails when the function no longer makes it. Both halves name the same regeneration.
+describe('the laid-out copy the server renders', () => {
+  const url = new URL('./laidOutBuiltin.json', import.meta.url);
+  type Entry = { builtin: Parameters<typeof laidOutBuiltinSource>[0]; laid?: { subject: string; body: string } };
+  const fixture: Record<string, Entry> = JSON.parse(readFileSync(url, 'utf8'));
+
+  it('is what laidOutBuiltinSource makes of the built-in text Yagra serves', () => {
+    const kinds = Object.keys(fixture);
+    expect(kinds.sort()).toEqual(['email', 'jsm']);
+    if (import.meta.env.UPDATE_LAID_OUT_BUILTIN) {
+      for (const k of kinds) fixture[k].laid = laidOutBuiltinSource(fixture[k].builtin)!;
+      writeFileSync(url, `${JSON.stringify(fixture, null, 2)}\n`);
+      return;
+    }
+    for (const k of kinds) {
+      expect(
+        laidOutBuiltinSource(fixture[k].builtin),
+        `laidOutBuiltin.json is stale for ${k}: run UPDATE_LAID_OUT_BUILTIN=1 npx vitest run src/pages/freeLayout.test.ts, then the Rust test`,
+      ).toEqual(fixture[k].laid);
+    }
   });
 });

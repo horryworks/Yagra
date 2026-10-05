@@ -31,7 +31,16 @@ import type { Point } from '../components/ui/popoverPlacement';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
-import { draftFor, insertAtCaret, isDirty, previewView, saveBody, variableSnippet, withFreeLayout } from './channelTemplate';
+import {
+  draftFor,
+  insertAtCaret,
+  isDirty,
+  previewView,
+  saveBody,
+  subjectSpansLines,
+  variableSnippet,
+  withFreeLayout,
+} from './channelTemplate';
 import type { TemplateDraft } from './channelTemplate';
 import {
   backToFire,
@@ -175,7 +184,7 @@ export function ChannelTemplateModal({
           model,
           boot?.draft ?? null,
         )
-      : isDirty(channel, { subject: request.subject ?? '', body: request.body ?? '' });
+      : isDirty(channel, code);
   const sample = previewSample(sampleId);
 
   // The preview follows the text, a moment after the typing stops. An answer to an older request is
@@ -726,9 +735,9 @@ export function ChannelTemplateModal({
                           </button>
                         )}
                       </div>
-                      {/* Laid out, the subject spans lines (ADR-199), which a one-line input would
-                          join on paste; it is still sent as one line. */}
-                      {code.freeLayout ? (
+                      {/* Laid out, the subject spans lines (ADR-199) and is still sent as one line.
+                          Not laid out, a line break it holds is sent, so it stays on screen. */}
+                      {subjectSpansLines(code) ? (
                         <TextArea
                           id="tpl-subject"
                           className="mono"

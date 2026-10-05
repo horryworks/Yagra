@@ -315,7 +315,7 @@ function branched(by: Record<NotifyEvent, string>): string {
  *
  * Each event's text loses its last newline ({@link inner}) because the line break before the next
  * tag line is sent; for the last arm, the server's dropping of one trailing newline takes it back
- * off. `notify_render.rs`'s `the_laid_out_builtin_sends_the_builtin` runs this shape through the
+ * off. `alerts/notify.rs`'s `the_laid_out_builtin_sends_the_builtin` runs this shape through the
  * renderer.
  */
 function laidOutBranched(by: Record<NotifyEvent, string>): string {
