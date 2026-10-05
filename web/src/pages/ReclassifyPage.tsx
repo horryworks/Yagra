@@ -21,6 +21,8 @@ import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
+import { InfoPress } from '../components/ui/InfoTip';
+import { LockIcon } from '../components/ui/icons';
 import { applyItems, emptyState, pruneSelection, ruleSignature } from './reclassify';
 import { nodeHref } from '../lib/entityHref';
 import './ReclassifyPage.css';
@@ -196,13 +198,20 @@ export function ReclassifyPage() {
             </label>
           )}
           <TableSpacer />
+          {/* Locked and not-yet-identified nodes are counted but never listed, so those two counts
+              open the reason when pressed — the list cannot show a row for them. */}
           {view && (
             <span className="reclassify-counts">
-              {t('reclassify.counts', {
-                differ: view.total,
-                locked: view.locked,
-                unidentified: view.unidentified,
-              })}
+              {t('reclassify.countDiffer', { n: view.total })}
+              {' · '}
+              <InfoPress infoKey="monitoring:reclassify.locked.info">
+                <LockIcon className="reclassify-lock" />
+                {t('reclassify.countLocked', { n: view.locked })}
+              </InfoPress>
+              {' · '}
+              <InfoPress infoKey="monitoring:reclassify.unidentified.info">
+                {t('reclassify.countUnidentified', { n: view.unidentified })}
+              </InfoPress>
             </span>
           )}
           {canConfig && (
@@ -237,9 +246,6 @@ export function ReclassifyPage() {
           loading={loading}
           empty={t(emptyState(view).key, { count: emptyState(view).count })}
         />
-        <p className="muted reclassify-hint">
-          {t('reclassify.lockedHint')} {t('reclassify.unidentifiedHint')}
-        </p>
       </LoadGate>
 
       {confirming && (

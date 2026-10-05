@@ -26,6 +26,8 @@ export function SecretInput({
   placeholder,
   autoFocus,
   rows,
+  replacing: replacingProp,
+  onReplacingChange,
 }: {
   id?: string;
   /** Whether the server holds a value for this field already. */
@@ -41,9 +43,18 @@ export function SecretInput({
    *  It is not masked — a browser has no masked text area — which is why it starts closed whenever
    *  a value is stored, like every other secret here. */
   rows?: number;
+  /** Controlled Replace state, for a form that draws more than the box while a secret is being
+   *  replaced (a credential's type, an SNMPv3 sub-form). Omit both to let the field keep its own. */
+  replacing?: boolean;
+  onReplacingChange?: (replacing: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [replacing, setReplacing] = useState(false);
+  const [ownReplacing, setOwnReplacing] = useState(false);
+  const replacing = replacingProp ?? ownReplacing;
+  const setReplacing = (next: boolean) => {
+    if (replacingProp === undefined) setOwnReplacing(next);
+    onReplacingChange?.(next);
+  };
   const mode = secretMode(stored, replacing, mustReplace);
 
   if (mode.kind === 'stored') {

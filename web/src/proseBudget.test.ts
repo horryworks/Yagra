@@ -56,7 +56,7 @@ import { readSources, SRC } from './testSupport/sources';
 
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06; lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
-  access: [1731, 948],
+  access: [1343, 736],
   alertNames: [166, 97],
   alerts: [1470, 875],
   alertsConfig: [12397, 6669],
@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [7503, 4079],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11804, 7051],
+  monitoring: [11335, 6683],
   nav: [2907, 1367],
   nodes: [23833, 13291],
   rca: [1038, 532],
@@ -180,13 +180,11 @@ const PAGE_NOTES: Record<string, PageNote> = {
   },
   'pages/CollectionTemplatesPage.tsx': {
     kind: 'fact',
-    until: 'Inc.13',
+    // Not Inc.13's to remove: "used by N profiles" in the set needs a profile count the
+    // collection-templates list does not return, and counting client-side is one request per
+    // profile. Shortened to one line under the limit meanwhile.
+    until: 'API',
     why: 'editing a set changes every profile that uses it',
-  },
-  'pages/CredentialsPage.tsx': {
-    kind: 'fact',
-    until: 'Inc.13',
-    why: 'encrypted at rest; a secret is never shown or returned',
   },
   'pages/DependencyPage.tsx': {
     kind: 'fact',
@@ -243,7 +241,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 15, press: 8 };
+const INFO_COUNT = { tip: 16, press: 10 };
 
 /** No file draws more ⓘ than this (`<InfoTip`, or `<Field infoKey=…>`). */
 const INFO_PER_FILE = 3;
@@ -262,7 +260,6 @@ const INFO_NOT_A_TIP: Record<string, string> = {
 
 /** Strings that spell a menu path with `▸` and predate ADR-200 (G9). Remove; never add. */
 const POINTER_LEGACY: string[] = [
-  'access:cred.delete.held',
   'dashboard:public.bannerOff',
   'dashboard:widgets.discovery.empty',
   'nodes:editNode.profileLockHint',
@@ -282,7 +279,7 @@ const POINTER_ALLOWED: Record<string, string> = {
 };
 
 /** Static hints left on the screens (G10). Lower as they go; never raise. */
-const HINT_SITES = { fieldHint: 21, formHint: 19, modalHint: 49 };
+const HINT_SITES = { fieldHint: 20, formHint: 19, modalHint: 43 };
 
 const locales = loadLocales();
 const measured = Object.keys(locales).filter((ns) => !NOT_MEASURED.includes(ns));

@@ -103,13 +103,11 @@ test('replacing a Meraki key keeps its kind and sends the document the server pa
   await row.getByRole('button', { name: 'Edit' }).click();
 
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('checkbox').check();
+  // The stored key is a masked mark; Replace opens the type and the box for the new one.
+  await dialog.getByRole('button', { name: 'Replace' }).click();
   // No select to choose another kind with — the kind is said, not offered.
   await expect(dialog.getByRole('combobox')).toHaveCount(0);
   await expect(dialog).toContainText('Cisco Meraki API key');
-  await expect(dialog).toContainText(
-    'This key belongs to an integration, so its type cannot be changed.',
-  );
 
   await dialog.locator('input[type="password"]').fill('  rotated-key\n');
   const put = page.waitForRequest(
@@ -129,8 +127,29 @@ test('a credential made here can still change kind', async ({ page }) => {
   await row.hover();
   await row.getByRole('button', { name: 'Edit' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('checkbox').check();
+  await dialog.getByRole('button', { name: 'Replace' }).click();
   await expect(dialog.getByRole('combobox')).toHaveValue('snmp_v2c');
+});
+
+// "Keep stored" goes back to the masked mark, and the save that follows carries no secret at all:
+// an emptied box must never reach the server as a new, empty community.
+test('keeping the stored secret sends only the name', async ({ page, errors }) => {
+  await page.goto('/nodes/credentials');
+  const row = page.locator('.dt-row', { hasText: 'ymock-community' });
+  await row.hover();
+  await row.getByRole('button', { name: 'Edit' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Replace' }).click();
+  await dialog.getByRole('button', { name: 'Keep stored' }).click();
+  await expect(dialog.getByRole('combobox')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Replace' })).toBeVisible();
+  const put = page.waitForRequest(
+    (r) => r.method() === 'PUT' && new URL(r.url()).pathname.includes('/credentials/'),
+  );
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  const body = (await put).postDataJSON() as Record<string, unknown>;
+  expect(Object.keys(body)).toEqual(['name']);
+  expect(errors.uncaught).toEqual([]);
 });
 
 // The ranges under the cadence dialog's intervals come from `merakiCadence.ts`, which a Rust test

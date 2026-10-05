@@ -132,12 +132,12 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('mib.modal.vendor')}</label>
+        {/* Blank is a standard OID, which the list calls "standard" — so that is the placeholder. */}
         <TextInput
-          placeholder={t('mib.modal.vendorPlaceholder')}
+          placeholder={t('mib.standard')}
           value={vendor}
           onChange={(e) => setVendor(e.target.value)}
         />
-        <span className="modal-hint">{t('mib.modal.vendorHint')}</span>
       </div>
       <FormError form={form} />
     </Modal>

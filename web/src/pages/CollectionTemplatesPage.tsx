@@ -19,6 +19,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -162,14 +163,23 @@ export function CollectionTemplatesPage() {
             filters={filters}
             onFiltersChange={setFilters}
             empty={
-              <>
-                <p className="yt-empty-title">
-                  {rows.length === 0 ? t('sets.empty.none') : t('sets.empty.noMatch')}
-                </p>
-                <p className="yt-empty-sub">
-                  {rows.length === 0 ? t('sets.empty.noneSub') : t('shared.trySearch')}
-                </p>
-              </>
+              rows.length === 0 ? (
+                <EmptyState
+                  text={t('sets.empty.none')}
+                  action={
+                    canConfig ? (
+                      <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                        + {t('sets.addSet')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <>
+                  <p className="yt-empty-title">{t('sets.empty.noMatch')}</p>
+                  <p className="yt-empty-sub">{t('shared.trySearch')}</p>
+                </>
+              )
             }
           />
         </div>

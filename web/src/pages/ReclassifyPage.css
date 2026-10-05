@@ -19,6 +19,9 @@
   margin: 8px 0;
 }
 
-.reclassify-hint {
-  margin-top: 8px;
+.reclassify-lock {
+  width: 12px;
+  height: 12px;
+  margin-right: 3px;
+  vertical-align: -1px;
 }

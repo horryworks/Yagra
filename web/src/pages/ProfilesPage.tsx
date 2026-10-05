@@ -13,7 +13,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useCan } from '../store';
+import { useCan, useConfigStore } from '../store';
 import type {
   CollectionTemplate,
   ProfileInput,
@@ -27,6 +27,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
@@ -211,17 +212,24 @@ export function ProfilesPage() {
 
           {filtered.length === 0 ? (
             <div className="yt-empty">
-              <p className="yt-empty-title">
-                {loading
-                  ? t('common:loading')
-                  : rows.length === 0
-                    ? t('profiles.empty.none')
-                    : t('profiles.empty.noMatch')}
-              </p>
-              {!loading && (
-                <p className="yt-empty-sub">
-                  {rows.length === 0 ? t('profiles.empty.noneSub') : t('shared.trySearch')}
-                </p>
+              {loading ? (
+                <p className="yt-empty-title">{t('common:loading')}</p>
+              ) : rows.length === 0 ? (
+                <EmptyState
+                  text={t('profiles.empty.none')}
+                  action={
+                    canConfig ? (
+                      <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                        + {t('profiles.addProfile')}
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <>
+                  <p className="yt-empty-title">{t('profiles.empty.noMatch')}</p>
+                  <p className="yt-empty-sub">{t('shared.trySearch')}</p>
+                </>
               )}
             </div>
           ) : (
@@ -356,6 +364,22 @@ function ProfileModal({
     profile?.poll_interval_secs != null ? String(profile.poll_interval_secs) : '',
   );
   const form = useSubmit({ errorFallback: t('profiles.err.save'), onDone });
+  // The default a blank interval inherits, shown as the placeholder. Read again on open rather than
+  // taken only from the boot-time copy, so a change made under Settings this session shows here.
+  const bootDefault = useConfigStore((s) => s.config?.default_poll_interval_secs ?? null);
+  const [systemDefault, setSystemDefault] = useState<number | null>(bootDefault);
+  useEffect(() => {
+    let live = true;
+    api
+      .getConfig()
+      .then((cfg) => {
+        if (live) setSystemDefault(cfg.default_poll_interval_secs);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const submit = () => {
     if (!name.trim()) return;
@@ -428,14 +452,23 @@ function ProfileModal({
         </div>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">{t('profiles.modal.pollInterval')}</label>
+        <label className="modal-field-label" htmlFor="profile-poll-interval">
+          {t('profiles.cols.pollInterval')}
+        </label>
+        {/* Blank inherits the system default, so the placeholder is that default's real value. The
+            10–3600 range is said by `err.pollInterval` when Save is pressed outside it. */}
         <TextInput
-          placeholder={t('profiles.modal.pollIntervalPlaceholder')}
+          id="profile-poll-interval"
+          placeholder={
+            systemDefault === null
+              ? t('profiles.filter.interval.inherited')
+              : t('profiles.modal.pollIntervalPlaceholder', { secs: systemDefault })
+          }
           value={pollInterval}
           onChange={(e) => setPollInterval(e.target.value)}
           inputMode="numeric"
+          suffix={t('profiles.modal.pollIntervalUnit')}
         />
-        <span className="modal-hint">{t('profiles.modal.pollIntervalHint')}</span>
       </div>
       <FormError form={form} />
     </Modal>

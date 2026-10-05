@@ -54,6 +54,13 @@ export function isValidHeaderName(name: string): boolean {
   return /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/.test(name);
 }
 
+/** Whether to say, under the header-name box, that the name cannot be used. Only once something
+ *  is typed: an empty box is unfinished, not wrong, and Save stays disabled for it either way. */
+export function headerNameRefused(name: string): boolean {
+  const n = name.trim();
+  return n !== '' && !isValidHeaderName(n);
+}
+
 /** Whether the sub-form has everything its scheme needs. */
 export function httpAuthReady(s: HttpAuthState): boolean {
   switch (s.scheme) {

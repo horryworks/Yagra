@@ -4,6 +4,7 @@ import {
   buildHttpAuthSecret,
   emptyHttpAuth,
   httpAuthReady,
+  headerNameRefused,
   isValidHeaderName,
   type HttpAuthState,
 } from './httpAuthCredential';
@@ -95,5 +96,22 @@ describe('buildHttpAuthSecret', () => {
       buildHttpAuthSecret(state({ scheme: 'basic', username: 'u', password: ' pw ' })),
     );
     expect(doc.password).toBe(' pw ');
+  });
+});
+
+describe('headerNameRefused', () => {
+  it('says nothing about an empty box', () => {
+    expect(headerNameRefused('')).toBe(false);
+    expect(headerNameRefused('   ')).toBe(false);
+  });
+
+  it('refuses a reserved or malformed name once one is typed', () => {
+    expect(headerNameRefused('Authorization')).toBe(true);
+    expect(headerNameRefused('host')).toBe(true);
+    expect(headerNameRefused('X Api Key')).toBe(true);
+  });
+
+  it('accepts a header the request may set, ignoring surrounding spaces', () => {
+    expect(headerNameRefused(' X-API-Key ')).toBe(false);
   });
 });

@@ -5,7 +5,6 @@
     "admin": "管理者"
   },
   "cred": {
-    "note": "保存時に暗号化します。シークレットの値を画面に出すことも、API から返すこともありません。",
     "filter": {
       "allTypes": "すべての種類"
     },
@@ -28,9 +27,8 @@
       "password": "パスワード",
       "token": "トークン",
       "headerName": "ヘッダー名",
-      "headerNameHint": "リクエストに設定できるヘッダー名です — Host / Authorization / hop-by-hop ヘッダーは指定できません。",
       "headerValue": "ヘッダー値",
-      "hint": "この認証情報を紐付けた URL 監視が提示します。暗号化して保存し、API から返すことはありません。"
+      "headerNameRefused": "このヘッダーは設定できません。Host・Authorization・hop-by-hop ヘッダーは予約されています。"
     },
     "cols": {
       "name": "名前",
@@ -70,21 +68,17 @@
       "secretPlaceholder": {
         "apiToken": "Bearer トークン",
         "community": "コミュニティ文字列"
-      },
-      "secretHint": "保存時に暗号化するエンドポイントへ送り、サーバー側で秘匿します。以後は二度と表示されません。"
+      }
     },
     "edit": {
       "title": "認証情報を編集",
-      "replaceSecret": "シークレットを置き換える",
-      "replaceHint": "再入力しない限り、保存済みのシークレットはそのまま残ります。",
-      "newSecret": "新しいシークレット",
-      "fixedKindHint": "このキーは連携機能が使っているため、種類は変更できません。"
+      "newSecret": "新しいシークレット"
     },
     "delete": {
       "title": "認証情報を削除",
       "confirm": "認証情報 <strong>{{name}}</strong> を削除しますか？",
       "inUse": "{{usage}} が参照しています — この紐付けが失われます。",
-      "held": "{{usage}} が使用中のため削除できません。先に「設定 ▸ 連携」の側で削除してください。",
+      "held": "{{usage}} が使用中のため削除できません。先に <lnk/> の側で削除してください。",
       "unused": "未使用です。",
       "irreversible": "この操作は取り消せません。"
     },

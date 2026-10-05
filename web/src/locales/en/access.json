@@ -5,7 +5,6 @@
     "admin": "Admin"
   },
   "cred": {
-    "note": "Encrypted at rest. Secret values are never displayed or returned by the API.",
     "filter": {
       "allTypes": "All types"
     },
@@ -28,9 +27,8 @@
       "password": "Password",
       "token": "Token",
       "headerName": "Header name",
-      "headerNameHint": "A header the request may set — not Host, Authorization, or a hop-by-hop header.",
       "headerValue": "Header value",
-      "hint": "Presented by URL monitors bound to this credential. Stored encrypted and never returned by the API."
+      "headerNameRefused": "This header cannot be set here: Host, Authorization and hop-by-hop headers are reserved."
     },
     "cols": {
       "name": "Name",
@@ -73,21 +71,17 @@
       "secretPlaceholder": {
         "apiToken": "Bearer token",
         "community": "Community string"
-      },
-      "secretHint": "Sent over the encrypted-at-rest endpoint and sealed server-side. It is never shown again."
+      }
     },
     "edit": {
       "title": "Edit credential",
-      "replaceSecret": "Replace secret",
-      "replaceHint": "the stored secret stays unless you re-enter it.",
-      "newSecret": "New secret",
-      "fixedKindHint": "This key belongs to an integration, so its type cannot be changed."
+      "newSecret": "New secret"
     },
     "delete": {
       "title": "Delete credential",
       "confirm": "Delete credential <strong>{{name}}</strong>?",
       "inUse": "{{usage}} reference it — they will lose this binding.",
-      "held": "Still used by {{usage}}, so it cannot be deleted. Remove it there first, under Settings ▸ Integrations.",
+      "held": "Still used by {{usage}}, so it cannot be deleted. Remove it there first, in <lnk/>.",
       "unused": "It is unused.",
       "irreversible": "This cannot be undone."
     },

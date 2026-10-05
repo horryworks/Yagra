@@ -3,7 +3,7 @@
 // classification rule decides which device profile a discovered node is bound to, so a field
 // silently dropped on save re-classifies devices on the next sweep.
 import { describe, expect, it } from 'vitest';
-import { ruleToInput } from './classificationRuleForm';
+import { prefixLacksDot, ruleToInput } from './classificationRuleForm';
 import type { ClassificationRule, ClassificationRuleInput } from '../types/api';
 
 /** One of every field, each distinguishable from a default. */
@@ -41,5 +41,18 @@ describe('ruleToInput', () => {
     // is a *prefix that matches everything*, which would make that rule claim every device.
     const one = ruleToInput({ ...STORED, sysobjectid_prefix: null } as ClassificationRule);
     expect(one.sysobjectid_prefix).toBeNull();
+  });
+});
+
+describe('prefixLacksDot', () => {
+  it('warns about a prefix that would also match a longer number', () => {
+    expect(prefixLacksDot('1.3.6.1.4.1.9')).toBe(true);
+    expect(prefixLacksDot(' 1.3.6.1.4.1.9 ')).toBe(true);
+  });
+
+  it('is quiet for a prefix ending in a dot, and for no prefix at all', () => {
+    expect(prefixLacksDot('1.3.6.1.4.1.9.')).toBe(false);
+    expect(prefixLacksDot('')).toBe(false);
+    expect(prefixLacksDot('   ')).toBe(false);
   });
 });

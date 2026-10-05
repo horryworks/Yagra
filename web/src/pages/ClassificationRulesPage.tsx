@@ -19,7 +19,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
+import { Field, TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
@@ -32,7 +32,7 @@ import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
-import { ruleToInput } from './classificationRuleForm';
+import { prefixLacksDot, ruleToInput } from './classificationRuleForm';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
@@ -309,16 +309,19 @@ function RuleModal({
           ))}
         </Select>
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('rules.modal.oidPrefix')}</label>
+      <Field
+        label={t('rules.modal.oidPrefix')}
+        htmlFor="rule-oid-prefix"
+        error={prefixLacksDot(prefix) ? t('rules.modal.oidPrefixNoDot') : null}
+      >
         <TextInput
+          id="rule-oid-prefix"
           className="mono"
           placeholder={t('rules.modal.oidPrefixPlaceholder')}
           value={prefix}
           onChange={(e) => setPrefix(e.target.value)}
         />
-        <FieldHint>{t('rules.modal.oidPrefixHint')}</FieldHint>
-      </div>
+      </Field>
       <div className="modal-field">
         <label className="modal-field-label">{t('rules.modal.descrRegex')}</label>
         <TextInput
@@ -327,22 +330,27 @@ function RuleModal({
           value={regex}
           onChange={(e) => setRegex(e.target.value)}
         />
-        <FieldHint error={!hasMatcher}>
-          {hasMatcher ? t('rules.modal.descrRegexHintBoth') : t('rules.modal.matcherRequired')}
-        </FieldHint>
+        {/* Said only when it applies: with both filled, a device has to match both. */}
+        {!hasMatcher ? (
+          <FieldHint error>{t('rules.modal.matcherRequired')}</FieldHint>
+        ) : prefix.trim() !== '' && regex.trim() !== '' ? (
+          <FieldHint>{t('rules.modal.descrRegexHintBoth')}</FieldHint>
+        ) : null}
       </div>
       <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label">
-            {t('rules.cols.priority')} <RequiredMark />
-          </label>
+        <Field
+          label={t('rules.cols.priority')}
+          htmlFor="rule-priority"
+          required
+          infoKey="monitoring:rules.modal.priority.info"
+        >
           <TextInput
+            id="rule-priority"
             type="number"
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
           />
-          <FieldHint>{t('rules.modal.priorityHint')}</FieldHint>
-        </div>
+        </Field>
         <div className="modal-field">
           <label className="modal-field-label">{t('rules.modal.maker')}</label>
           <TextInput

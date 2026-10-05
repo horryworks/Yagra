@@ -20,7 +20,9 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { TextInput, Select, FieldHint } from '../components/ui/Field';
+import { SecretInput } from '../components/ui/SecretInput';
+import { ScreenLink } from '../components/ui/ScreenLink';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -43,6 +45,7 @@ import {
 import {
   buildHttpAuthSecret,
   emptyHttpAuth,
+  headerNameRefused,
   httpAuthReady,
   HTTP_AUTH_SCHEMES,
   type HttpAuthScheme,
@@ -165,7 +168,9 @@ function HttpAuthFields({
               value={value.headerName}
               onChange={(e) => set({ headerName: e.target.value })}
             />
-            <span className="modal-hint">{t('cred.http.headerNameHint')}</span>
+            {headerNameRefused(value.headerName) && (
+              <FieldHint error>{t('cred.http.headerNameRefused')}</FieldHint>
+            )}
           </div>
           <div className="modal-field">
             <label className="modal-field-label">{t('cred.http.headerValue')}</label>
@@ -179,7 +184,6 @@ function HttpAuthFields({
           </div>
         </>
       )}
-      <span className="modal-hint">{t('cred.http.hint')}</span>
     </>
   );
 }
@@ -344,20 +348,20 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
         <HttpAuthFields value={httpAuth} onChange={setHttpAuth} />
       ) : (
         <div className="modal-field">
-          <label className="modal-field-label">{t('cred.field.secret')}</label>
-          <TextInput
-            className="mono"
-            type="password"
+          <label className="modal-field-label" htmlFor="cred-add-secret">
+            {t('cred.field.secret')}
+          </label>
+          <SecretInput
+            id="cred-add-secret"
+            stored={false}
             placeholder={
               kind === 'api_token'
                 ? t('cred.add.secretPlaceholder.apiToken')
                 : t('cred.add.secretPlaceholder.community')
             }
             value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            autoComplete="new-password"
+            onChange={setSecret}
           />
-          <span className="modal-hint">{t('cred.add.secretHint')}</span>
         </div>
       )}
       <FormError form={form} />
@@ -433,12 +437,19 @@ function EditCredentialModal({
       </div>
       {/* A kind this build does not know gets no replacement at all: it cannot know the shape the
           secret is sealed in, and a control that can only do harm is not drawn. */}
-      {replacement.mode !== 'rename_only' && (
-        <label className="cred-replace">
-          <input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
-          <span>{t('cred.edit.replaceSecret')}</span>
-          <span className="muted">— {t('cred.edit.replaceHint')}</span>
-        </label>
+      {/* The stored secret is a masked mark with Replace (`SecretInput`); Replace opens the type
+          and the new value, and "Keep stored" closes them again without sending a secret. */}
+      {replacement.mode !== 'rename_only' && !replace && (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('cred.field.secret')}</label>
+          <SecretInput
+            stored
+            value=""
+            onChange={setSecret}
+            replacing={false}
+            onReplacingChange={setReplace}
+          />
+        </div>
       )}
       {replace && (
         <>
@@ -448,10 +459,7 @@ function EditCredentialModal({
               // An integration's key keeps its kind: the select never held it, so it showed
               // another one over it and saved that. `.modal-field-value` is what a field holds
               // where a control cannot go — it keeps the row the height every other field is.
-              <>
-                <span className="modal-field-value">{kindLabel(fixedKind, t)}</span>
-                <span className="modal-hint">{t('cred.edit.fixedKindHint')}</span>
-              </>
+              <span className="modal-field-value">{kindLabel(fixedKind, t)}</span>
             ) : (
               <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
                 {KINDS.map((k) => (
@@ -463,16 +471,26 @@ function EditCredentialModal({
             )}
           </div>
           {isV3 ? (
-            <V3Fields value={v3} onChange={setV3} />
+            <>
+              <V3Fields value={v3} onChange={setV3} />
+              <div className="cred-keep">
+                <Button type="button" onClick={() => setReplace(false)}>
+                  {t('common:secret.keep')}
+                </Button>
+              </div>
+            </>
           ) : (
             <div className="modal-field">
-              <label className="modal-field-label">{t('cred.edit.newSecret')}</label>
-              <TextInput
-                className="mono"
-                type="password"
+              <label className="modal-field-label" htmlFor="cred-new-secret">
+                {t('cred.edit.newSecret')}
+              </label>
+              <SecretInput
+                id="cred-new-secret"
+                stored
                 value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                autoComplete="new-password"
+                onChange={setSecret}
+                replacing
+                onReplacingChange={setReplace}
               />
             </div>
           )}
@@ -512,7 +530,12 @@ function DeleteCredentialModal({
         }
       >
         <p className="modal-confirm-text">
-          {t('cred.delete.held', { usage: integrationUsageLabel(cred, t) })}
+          <Trans
+            t={t}
+            i18nKey="cred.delete.held"
+            values={{ usage: integrationUsageLabel(cred, t) }}
+            components={{ lnk: <ScreenLink to="/settings/integrations" /> }}
+          />
         </p>
       </Modal>
     );
@@ -657,7 +680,6 @@ export function CredentialsPage() {
       <PageHeader
         title={t('nav:nodes.credentials')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.credentials') }]}
-        note={t('cred.note')}
       />
 
       <LoadGate load={creds} permission="manage_credentials">
