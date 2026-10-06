@@ -268,6 +268,18 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     for (const org of body) org.collect_failures = [];
     return body as unknown as Json;
   })(),
+  // The same shape again (ADR-170 Inc.4): the generator fills each gap's nullable `intentional`, so
+  // every gap arrived marked — and the screen opens on the "Gaps" tab, which lists only unmarked
+  // ones, so it rendered nothing while `gap_count` said 1. Unmarked is the state a site opens in.
+  '/api/v1/prefix-gaps': (() => {
+    const body = defaultBodyFor('/api/v1/prefix-gaps') as unknown as Schemas['PrefixGapSitesView'];
+    for (const site of body.sites) {
+      for (const gap of site.gaps) gap.intentional = null;
+      site.intentional_count = 0;
+      site.status = 'gaps';
+    }
+    return body as unknown as Json;
+  })(),
 
   // The generator answers a list with **one** item, which is enough for every screen that renders
   // rows and not enough for the one that operates on a *range* of them. Ctrl / Shift assemble a
