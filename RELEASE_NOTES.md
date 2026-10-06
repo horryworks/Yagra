@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.46 — Every site's subnets missing from its IP prefixes on one screen, and screens that explain themselves through their controls instead of paragraphs
+
 ### New Features
 
 - **Nodes ▸ Missing IP prefixes lists, for every site at once, the subnets its devices carry that none of the site's IP prefixes covers.** It is the folder pane's "Subnets missing from the IP prefixes" for the whole fleet, so you no longer open sites one by one, and a region or the root is no longer refused for holding too many devices. It opens by site: each row shows how many gaps of each kind the site has, how many of its devices reported their addresses, and how many IP prefixes it holds, and opening a row lists the subnets with the devices, ports and addresses they were seen on. Tabs separate sites with gaps, complete sites, and sites not compared yet (none of their devices has reported an address). **Subnets** lists every gap as one line instead, and **Export CSV** saves that list. A site is the nearest folder of type Site above a device, the same rule as Subnet overlaps. `GET /api/v1/prefix-gaps` and the MCP tool `get_site_prefix_gaps` return the same answer; at most 2,000 gaps are listed, with the total beside them, and the 2,000 are shared between sites so one site with thousands of subnets cannot leave the others with nothing to open. (ADR-170)
