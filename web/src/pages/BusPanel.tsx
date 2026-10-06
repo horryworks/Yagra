@@ -22,7 +22,7 @@ import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, FieldError } from '../components/ui/Field';
 import { StepFrame } from '../components/ui/StepFrame';
-import { busCertState, namesNotCovered, parseBusNames } from '../lib/busCert';
+import { busCertState, externalBusNames, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -47,9 +47,7 @@ function ReissueModal({
   // Seeded with what the certificate already covers, minus the internal defaults the server adds
   // back on its own. Starting empty would make "reissue to add one site" read as "replace the list",
   // which is how a working site loses its name.
-  const [text, setText] = useState(
-    currentSans.filter((s) => !['nats', 'localhost', '127.0.0.1', '::1'].includes(s)).join(', '),
-  );
+  const [text, setText] = useState(externalBusNames(currentSans).join(', '));
   const form = useSubmit({ errorFallback: t('pollers.bus.reissue.failed'), onDone });
 
   const save = () =>
@@ -101,9 +99,7 @@ function SwitchModal({
   onAccepted: (a: BusRemoteAccepted) => void;
 }) {
   const { t } = useTranslation('system');
-  const [text, setText] = useState(
-    currentSans.filter((s) => !['nats', 'localhost', '127.0.0.1', '::1'].includes(s)).join(', '),
-  );
+  const [text, setText] = useState(externalBusNames(currentSans).join(', '));
   const form = useSubmit({ errorFallback: t('pollers.bus.switchFailed'), onDone: onAccepted });
   const names = parseBusNames(text);
   const ready = !enabling || names.length > 0;
@@ -244,11 +240,10 @@ export function BusPanel() {
   const cert = status?.certificate ?? null;
   const state = busCertState(cert);
   const enabled = status?.remote_enabled ?? false;
-  const extraSans = (cert?.sans ?? []).filter(
-    (s) => !['nats', 'localhost', '127.0.0.1', '::1'].includes(s),
-  );
-  // The question the panel exists to answer before somebody drives to a site.
-  const uncovered = namesNotCovered(cert, []);
+  const extraSans = externalBusNames(cert?.sans);
+  // "Can a site at that address connect?" is answered in the kit dialog (`PollerTokenModal`),
+  // where the address is typed. The panel has no list of site addresses to compare against —
+  // none is stored — so the line it once drew here compared against an empty list and never fired.
 
   return (
     <Card
@@ -317,11 +312,6 @@ export function BusPanel() {
           {state !== 'ok' && state !== 'not_materialized' && (
             <p className={state === 'expiring' ? 'form-warning' : 'form-error'}>
               {t(`pollers.bus.cert.warn.${state}`)}
-            </p>
-          )}
-          {uncovered.length > 0 && (
-            <p className="form-error">
-              {t('pollers.bus.cert.uncovered', { names: uncovered.join(', ') })}
             </p>
           )}
         </div>

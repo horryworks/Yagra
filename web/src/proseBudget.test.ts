@@ -85,7 +85,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1796],
   suppression: [866, 571],
-  system: [12980, 7143],
+  system: [12975, 7143],
   topology: [3104, 1757],
   troubleshoot: [3370, 1766],
 };

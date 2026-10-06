@@ -16,6 +16,7 @@ import {
   toggled,
   visibleSites,
 } from './subnetOverlaps';
+import carriesWordsCases from './fixtures/carriesWords.cases.json';
 
 function overlap(p: Partial<SubnetOverlap>): SubnetOverlap {
   return {
@@ -146,23 +147,15 @@ describe('subnet overlaps', () => {
 });
 
 describe('the add-rule preview', () => {
-  // The cases are the Rust tests' own (`subnet_overlaps.rs`), so the two copies are held to one list.
-  it('matches whole words, in order, ignoring case, with a trailing number allowed', () => {
-    expect(carriesWords('HA sync', 'ha')).toBe(true);
-    expect(carriesWords('ha-link2', 'ha')).toBe(true);
-    expect(carriesWords('Port-channel1', 'ha')).toBe(false);
-    expect(carriesWords('chassis mgmt', 'ha')).toBe(false);
-    expect(carriesWords('Dialer1', 'dialer')).toBe(true);
-    expect(carriesWords('to ISP-A', 'To ISP')).toBe(true);
-    expect(carriesWords('to isp a', 'To ISP')).toBe(true);
-    expect(carriesWords('isp to', 'To ISP')).toBe(false);
-    expect(carriesWords('display', 'To ISP')).toBe(false);
-  });
-
-  it('matches text with no ASCII word as plain text, and an empty needle as nothing', () => {
-    expect(carriesWords('本社 回線', '回線')).toBe(true);
-    expect(carriesWords('本社', '回線')).toBe(false);
-    expect(carriesWords('anything', '   ')).toBe(false);
+  // The same table runs against `subnet_overlaps.rs::carries_words`
+  // (`carries_words_answers_the_case_table_the_webui_preview_shares`), so the two copies of the
+  // rule are held to one list of answers.
+  it('answers every case of the table core runs', () => {
+    expect(carriesWordsCases.cases.length).toBeGreaterThanOrEqual(40);
+    const wrong = carriesWordsCases.cases
+      .filter((c) => carriesWords(c.text, c.needle) !== c.matches)
+      .map((c) => `${JSON.stringify(c.needle)} in ${JSON.stringify(c.text)}: expected ${c.matches}`);
+    expect(wrong).toEqual([]);
   });
 
   it('counts each port once and names the first few', () => {

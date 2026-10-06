@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { draftFrom, emptyDraft, targetProblem, toInput, type Draft } from './forwardingDraft';
-import type { ForwardDestination } from '../types/api';
+import { FORWARD_DEST_KINDS, type ForwardDestination, type ForwardDestKind } from '../types/api';
+import forwardTargetCases from './fixtures/forwardTargets.cases.json';
 
 const dest = (over: Partial<ForwardDestination> = {}): ForwardDestination =>
   ({
@@ -148,28 +149,22 @@ describe('toInput', () => {
 });
 
 describe('targetProblem', () => {
-  it('accepts the two shapes core accepts', () => {
-    expect(targetProblem('syslog_udp', 'siem.example.com:514')).toBeNull();
-    expect(targetProblem('syslog_tls', '[2001:db8::1]:6514')).toBeNull();
-    expect(targetProblem('syslog_tcp', '192.0.2.10:514')).toBeNull();
-    expect(targetProblem('bigquery', 'my-project.analytics.yagra_events')).toBeNull();
-    // A domain-scoped project carries a colon and a dot of its own.
-    expect(targetProblem('bigquery', 'example.com:proj.analytics.events')).toBeNull();
+  // The same table runs against core's `api/forwarding.rs::check_target`
+  // (`check_target_answers_the_case_table_the_webui_form_shares`). "blank" is refused there and
+  // left unmarked here, because Save already waits for a value.
+  it('answers every case of the table core runs', () => {
+    expect(forwardTargetCases.cases.length).toBeGreaterThanOrEqual(60);
+    const wrong = forwardTargetCases.cases
+      .filter((c) => {
+        const got = targetProblem(c.kind as ForwardDestKind, c.target);
+        const want = c.expect === 'ok' || c.expect === 'blank' ? null : c.expect;
+        return got !== want;
+      })
+      .map((c) => `${c.kind} ${JSON.stringify(c.target)}: expected ${c.expect}`);
+    expect(wrong).toEqual([]);
   });
 
-  it('says nothing about a blank box, which Save already waits for', () => {
-    expect(targetProblem('syslog_udp', '  ')).toBeNull();
-    expect(targetProblem('bigquery', '')).toBeNull();
-  });
-
-  it('refuses what core refuses, naming which shape was expected', () => {
-    // No port, a port of zero or past 65535, and a bare IPv6 literal (its last group is not a port).
-    for (const bad of ['siem.example.com', 'siem.example.com:0', 'siem:70000', '2001:db8::1:514', ':514']) {
-      expect(targetProblem('syslog_udp', bad)).toBe('hostPort');
-    }
-    expect(targetProblem('syslog_udp', '[2001:db8::1]514')).toBe('hostPort');
-    for (const bad of ['analytics.events', 'proj.analytics.my-events', 'proj.data set.events']) {
-      expect(targetProblem('bigquery', bad)).toBe('table');
-    }
+  it('covers every destination kind the form offers', () => {
+    expect(new Set(forwardTargetCases.cases.map((c) => c.kind))).toEqual(new Set(FORWARD_DEST_KINDS));
   });
 });

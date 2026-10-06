@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type {
+  BusTlsView,
   MonitoringGap,
   PollerInfo,
   PollerNodesResponse,
@@ -74,6 +75,7 @@ import { DndContext, useDraggable, useDroppable, PointerSensor, useSensor, useSe
 import type { DragEndEvent } from '@dnd-kit/core';
 import { decodeSet, toggleSetValue } from '../lib/columnFilter';
 import { BusPanel } from './BusPanel';
+import { uncoveredKitHost } from '../lib/busCert';
 import './PollersPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
@@ -905,6 +907,22 @@ function PollerTokenModal({
 }) {
   const { t } = useTranslation('system');
   const [host, setHost] = useState('');
+  // The bus certificate, read so the address can be checked as it is typed. The server refuses an
+  // address the certificate does not carry (`address_not_in_certificate`); saying so before the
+  // click is the warning the Remote pollers panel promised and could never draw, because this field
+  // is the only place the address is known. A failed read leaves it null and the check silent.
+  const [cert, setCert] = useState<BusTlsView | null>(null);
+  useEffect(() => {
+    let live = true;
+    api
+      .getBus()
+      .then((s) => live && setCert(s.certificate ?? null))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  const uncovered = uncoveredKitHost(cert, host);
   // On by default (ADR-051 Inc.4 decision 15). The site can turn it off later in its own `.env`,
   // which is the file no upgrade replaces — so this is a starting point rather than a commitment.
   const [selfUpgrade, setSelfUpgrade] = useState(true);
@@ -951,6 +969,7 @@ function PollerTokenModal({
           onClose={onClose}
           onSubmit={issue}
           submitLabel={poller.has_token ? t('pollers.token.reissue') : t('pollers.token.issue')}
+          canSubmit={uncovered.length === 0}
           extra={
             poller.has_token && (
               <Button variant="danger" onClick={revoke} disabled={form.busy}>
@@ -962,14 +981,22 @@ function PollerTokenModal({
       }
     >
       <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.token.host.label')}
+        <Field
+          label={t('pollers.token.host.label')}
+          htmlFor="poller-token-host"
+          error={
+            uncovered.length > 0
+              ? t('pollers.bus.cert.uncovered', { names: uncovered.join(', ') })
+              : null
+          }
+        >
           <TextInput
+            id="poller-token-host"
             value={host}
             onChange={(e) => setHost(e.target.value)}
             placeholder={t('pollers.token.host.placeholder')}
           />
-        </label>
+        </Field>
         {/* What the site is being asked to run is said here, before the download — not in the
             README alone, which is read at the site by whoever unpacks it and not by whoever
             decided. The label names the container; the ⓘ names the Docker socket it holds and

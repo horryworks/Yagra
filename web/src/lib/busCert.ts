@@ -84,6 +84,30 @@ export function namesNotCovered(cert: BusTlsView | null | undefined, names: stri
   return names.filter((n) => !coversName(cert, n));
 }
 
+/** Names the certificate carries for the deployment's own containers, which no remote site dials.
+ *  The same four the server leaves out when it picks a default address (`api/pollers.rs`
+ *  `INTERNAL_NAMES`) and adds back on its own when it reissues. */
+export const INTERNAL_BUS_NAMES: readonly string[] = ['nats', 'localhost', '127.0.0.1', '::1'];
+
+/** The certificate's names a remote site could dial — everything but the internal four. */
+export function externalBusNames(sans: readonly string[] | null | undefined): string[] {
+  return (sans ?? []).filter((s) => !INTERNAL_BUS_NAMES.includes(s));
+}
+
+/** What to warn about for the address typed into the kit dialog, before the request is sent.
+ *
+ *  The only place an operator names the address a site will dial is that dialog, and the address is
+ *  not stored anywhere afterwards — so this is the one moment the comparison can be made (the panel
+ *  has no list of site addresses to compare against). Returns the names to show as uncovered:
+ *  empty for a blank field (the server's own default is a certificate name, so it is covered by
+ *  construction) and empty while the certificate is unknown, because a warning built on a failed
+ *  read would refuse an address the server might accept. */
+export function uncoveredKitHost(cert: BusTlsView | null | undefined, host: string): string[] {
+  const typed = host.trim();
+  if (!cert || !typed) return [];
+  return namesNotCovered(cert, [typed]);
+}
+
 /** The `.env` a remote site needs, given what the switch returned.
  *
  *  Built here rather than in the component for the reason above, and it is the one artifact the

@@ -15,6 +15,7 @@ import type {
   ForwardDestKind,
   ForwardSourceKind,
 } from '../types/api';
+import { trimLikeCore, utf8Length } from '../lib/coreText';
 import { usesCommunity, usesHostPort, usesServiceAccount, usesTls } from './forwardingOptions';
 
 /** A condition as the form holds it. `Condition.value` is `#[serde(default)]` on the Rust side, so
@@ -109,13 +110,13 @@ export function toInput(d: Draft): ForwardDestinationInput {
  *
  * The form used to explain both shapes in a sentence under the field; the field now says so only
  * when the value is wrong, in the operator's language. Core refuses the same values
- * (`api/forwarding.rs::split_host_port` and `bigquery.rs::BigQueryTarget::parse`) with an English
- * message, and ⚠️ nothing compares the two copies — change one, change the other.
+ * (`api/forwarding.rs::check_target`) with an English message. Both run
+ * `fixtures/forwardTargets.cases.json`, so a change to one that the other does not make fails a test.
  */
 export type TargetProblem = 'hostPort' | 'table';
 
 export function targetProblem(dest: ForwardDestKind, target: string): TargetProblem | null {
-  const v = target.trim();
+  const v = trimLikeCore(target);
   if (v === '') return null;
   if (usesHostPort(dest)) return splitsAsHostPort(v) ? null : 'hostPort';
   return parsesAsTable(v) ? null : 'table';
@@ -137,9 +138,10 @@ function splitsAsHostPort(v: string): boolean {
     port = v.slice(at + 1);
     if (host.includes(':')) return false;
   }
-  if (!/^\d+$/.test(port)) return false;
+  // Rust's `u16` parse takes an optional `+`, and core's limit on the host is in UTF-8 bytes.
+  if (!/^\+?\d+$/.test(port)) return false;
   const n = Number(port);
-  return host !== '' && host.length <= 255 && n > 0 && n <= 65535;
+  return host !== '' && utf8Length(host) <= 255 && n > 0 && n <= 65535;
 }
 
 /** `project.dataset.table`: the last two parts are letters, digits and underscores; the project

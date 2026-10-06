@@ -205,7 +205,7 @@
         "internalOnly": "this host only",
         "expires": "Expires {{when}} ({{days}} days).",
         "fingerprint": "Fingerprint",
-        "uncovered": "Not covered by this certificate: {{names}}. Reissue it before those sites can connect.",
+        "uncovered": "The bus certificate does not cover {{names}}. Reissue it with that address first.",
         "warn": {
           "absent": "No certificate yet.",
           "unreadable": "The private key cannot be read — the encryption key has changed or been lost. Reissue the certificate, then give the new one to every site.",

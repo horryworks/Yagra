@@ -8,6 +8,7 @@
 
 import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
+import { trimLikeCore } from '../lib/coreText';
 import type {
   ExclusionReason,
   OverlapKind,
@@ -82,14 +83,14 @@ function wordIs(token: string, word: string): boolean {
 /**
  * Whether a rule's port text appears in `text` as whole words, in order, ignoring case.
  *
- * ⚠️ A mirror of `crates/yagra-core/src/subnet_overlaps.rs::carries_words`, which decides what a
- * rule actually excludes. This copy only previews it in the add dialog; nothing compares the two,
- * so a change there must be made here too (the cases below are the Rust tests' own).
+ * A mirror of `crates/yagra-core/src/subnet_overlaps.rs::carries_words`, which decides what a
+ * rule actually excludes; this copy only previews it in the add dialog. Both run
+ * `fixtures/carriesWords.cases.json`, so a change to one that the other does not make fails a test.
  */
 export function carriesWords(text: string, needle: string): boolean {
   const wanted = wordsOf(needle);
   if (wanted.length === 0) {
-    const plain = needle.trim().toLowerCase();
+    const plain = trimLikeCore(needle).toLowerCase();
     return plain !== '' && text.toLowerCase().includes(plain);
   }
   const words = wordsOf(text);

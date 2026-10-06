@@ -128,21 +128,7 @@ fn validate_forward_body(
     // Validated per kind here so a typo is a 400 with a useful message, rather than a destination
     // that only reports "404" from Google after an admin enables it.
     let target = body.target.trim().to_owned();
-    let mut socket_port = None;
-    if body.dest_kind.is_host_port() {
-        let Some((_, port)) = split_host_port(&target) else {
-            return Err(bad(
-                "invalid_target",
-                "target must be host:port (use [addr]:port for a literal IPv6 address)",
-            ));
-        };
-        socket_port = Some(port);
-    } else if let Err(e) = crate::bigquery::BigQueryTarget::parse(&target) {
-        return Err(ApiError::bad_request(
-            "invalid_target",
-            format!("target must be project.dataset.table — {e}"),
-        ));
-    }
+    let socket_port = check_target(body.dest_kind, &target)?;
     if !body.dest_kind.accepts(body.source_kind) {
         return Err(bad(
             "incompatible_kinds",
@@ -317,6 +303,31 @@ const MAX_SERVICE_ACCOUNT_BYTES: usize = 16 * 1024;
 /// Ceiling on a destination's PEM trust bundle. Generous for a chain, small enough that the column
 /// cannot be used as arbitrary storage.
 const MAX_CA_CERT_BYTES: usize = 64 * 1024;
+
+/// Whether `target` (already trimmed) has the shape its destination kind needs: `host:port` for the
+/// socket kinds — answering the port — and `project.dataset.table` for BigQuery.
+///
+/// ⚠️ The WebUI marks the field with its own copy of this rule
+/// (`web/src/pages/forwardingDraft.ts::targetProblem`). Both run
+/// `web/src/pages/fixtures/forwardTargets.cases.json`, so change the two together.
+fn check_target(kind: yagra_forward::DestKind, target: &str) -> Result<Option<u16>, ApiError> {
+    if kind.is_host_port() {
+        let Some((_, port)) = split_host_port(target) else {
+            return Err(ApiError::bad_request(
+                "invalid_target",
+                "target must be host:port (use [addr]:port for a literal IPv6 address)",
+            ));
+        };
+        return Ok(Some(port));
+    }
+    match crate::bigquery::BigQueryTarget::parse(target) {
+        Ok(_) => Ok(None),
+        Err(e) => Err(ApiError::bad_request(
+            "invalid_target",
+            format!("target must be project.dataset.table — {e}"),
+        )),
+    }
+}
 
 /// Split `host:port`, accepting `[::1]:514` for a literal IPv6 address. Returns `None` unless both
 /// halves are present and the port is a valid non-zero number.
@@ -722,6 +733,54 @@ mod tests {
         ] {
             assert_eq!(split_host_port(bad), None, "{bad} should not parse");
         }
+    }
+
+    /// The form marks a target with its own copy of this rule
+    /// (`web/src/pages/forwardingDraft.ts::targetProblem`), and `forwardingDraft.test.ts` runs the
+    /// same table. Core answers 400 for a refusal of either shape, so the kind decides which name
+    /// it gets; "blank" is a refusal here and no mark there, because the form's Save waits for a
+    /// value instead.
+    #[test]
+    fn check_target_answers_the_case_table_the_webui_form_shares() {
+        #[derive(Deserialize)]
+        struct Case {
+            kind: String,
+            target: String,
+            expect: String,
+        }
+        #[derive(Deserialize)]
+        struct Table {
+            cases: Vec<Case>,
+        }
+        let table: Table = serde_json::from_str(include_str!(
+            "../../../../web/src/pages/fixtures/forwardTargets.cases.json"
+        ))
+        .expect("the shared case table parses");
+        assert!(table.cases.len() >= 60, "{} cases", table.cases.len());
+        let mut kinds = std::collections::BTreeSet::new();
+        let mut wrong = Vec::new();
+        for c in &table.cases {
+            let kind = yagra_forward::DestKind::parse(&c.kind)
+                .unwrap_or_else(|| panic!("{:?} is not a destination kind", c.kind));
+            kinds.insert(kind.as_str());
+            // `validate_forward_body` trims before it checks.
+            let trimmed = c.target.trim();
+            let got = match check_target(kind, trimmed) {
+                Ok(_) => "ok",
+                Err(_) if trimmed.is_empty() => "blank",
+                Err(_) if kind.is_host_port() => "hostPort",
+                Err(_) => "table",
+            };
+            if got != c.expect {
+                wrong.push(format!(
+                    "{} {:?}: expected {}, core says {got}",
+                    c.kind, c.target, c.expect
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        // Each of the six `DestKind` variants appears at least once.
+        assert_eq!(kinds.len(), 6, "{kinds:?}");
     }
 
     #[test]

@@ -1018,6 +1018,35 @@ mod tests {
         assert_eq!(only(&f, "same:203.0.113.0/24").status, OverlapStatus::Open);
     }
 
+    /// The WebUI previews a rule in the add dialog with its own copy of this rule
+    /// (`web/src/pages/subnetOverlaps.ts::carriesWords`), and `subnetOverlaps.test.ts` runs the
+    /// same table — so a change to either copy that the other does not make fails one of the two.
+    #[test]
+    fn carries_words_answers_the_case_table_the_webui_preview_shares() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            text: String,
+            needle: String,
+            matches: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Table {
+            cases: Vec<Case>,
+        }
+        let table: Table = serde_json::from_str(include_str!(
+            "../../../web/src/pages/fixtures/carriesWords.cases.json"
+        ))
+        .expect("the shared case table parses");
+        assert!(table.cases.len() >= 40, "{} cases", table.cases.len());
+        let wrong: Vec<String> = table
+            .cases
+            .iter()
+            .filter(|c| carries_words(&c.text, &c.needle) != c.matches)
+            .map(|c| format!("{:?} in {:?}: expected {}", c.needle, c.text, c.matches))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     #[test]
     fn a_several_word_rule_matches_those_words_in_order() {
         let mut fleet = Fleet::new();

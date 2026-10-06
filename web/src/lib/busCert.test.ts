@@ -6,8 +6,11 @@ import {
   busCertState,
   busPollerEnv,
   coversName,
+  externalBusNames,
+  INTERNAL_BUS_NAMES,
   namesNotCovered,
   parseBusNames,
+  uncoveredKitHost,
 } from './busCert';
 
 function cert(over: Partial<BusTlsView> = {}): BusTlsView {
@@ -91,6 +94,38 @@ describe('namesNotCovered', () => {
     const missing = namesNotCovered(cert(), ['nats', 'yagra.example.net', '127.0.0.1']);
     expect(missing).toEqual(['yagra.example.net']);
     expect(namesNotCovered(cert(), ['nats'])).toEqual([]);
+  });
+});
+
+describe('externalBusNames', () => {
+  it('leaves out the four names the deployment keeps for itself', () => {
+    expect(INTERNAL_BUS_NAMES).toEqual(['nats', 'localhost', '127.0.0.1', '::1']);
+    expect(externalBusNames(['nats', 'yagra.example.net', '::1', '203.0.113.10'])).toEqual([
+      'yagra.example.net',
+      '203.0.113.10',
+    ]);
+    expect(externalBusNames(null)).toEqual([]);
+  });
+});
+
+describe('uncoveredKitHost', () => {
+  const withSite = cert({ sans: ['nats', 'yagra.example.net'] });
+
+  it('names a typed address the certificate does not carry', () => {
+    // The warning the panel promised since ADR-065 and never drew: the dialog is the only place
+    // the address is known, so the comparison happens here or nowhere.
+    expect(uncoveredKitHost(withSite, ' 203.0.113.10 ')).toEqual(['203.0.113.10']);
+  });
+
+  it('accepts a covered address, in any case', () => {
+    expect(uncoveredKitHost(withSite, 'Yagra.Example.Net')).toEqual([]);
+  });
+
+  it('says nothing for a blank field or an unknown certificate', () => {
+    // Blank means "the server's default", which is a certificate name by construction. An unknown
+    // certificate is a failed read, and refusing on it would block an address the server accepts.
+    expect(uncoveredKitHost(withSite, '   ')).toEqual([]);
+    expect(uncoveredKitHost(null, '203.0.113.10')).toEqual([]);
   });
 });
 
