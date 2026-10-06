@@ -46,7 +46,11 @@
       "disable": "ルールを無効化",
       "delete": "ルールを削除",
       "deleteTitle": "ルーティングルールを削除",
-      "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？一致していたアラートは、環境変数で指定した既定ルートに戻ります。",
+      "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？このルールのチャネルには届かなくなります。",
+      "defaultRoute": {
+        "allAlerts": "すべてのアラート",
+        "notSet": "未設定"
+      },
       "allSeverities": "すべての重大度",
       "edit": "ルールを編集"
     },
@@ -537,8 +541,7 @@
     },
     "overridden": {
       "nodes_other": "{{count}} 台で上書き中",
-      "rules_other": "{{count}} 件のルールが上書き中",
-      "info": "同じメトリクスに範囲の狭いルールがあり、そこではそちらが優先されます。"
+      "info": "それらのノードでは、同じメトリクスの範囲の狭いルールが、行やポートの全部か一部で優先されます。"
     }
   },
   "eventRules": {

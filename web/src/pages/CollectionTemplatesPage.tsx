@@ -100,6 +100,13 @@ export function CollectionTemplatesPage() {
         },
       },
       {
+        key: 'profiles',
+        header: t('sets.cols.profiles'),
+        width: '100px',
+        align: 'right',
+        render: (r) => r.profile_count,
+      },
+      {
         key: 'actions',
         header: t('shared.colActions'),
         width: '72px',
@@ -122,7 +129,6 @@ export function CollectionTemplatesPage() {
       <PageHeader
         title={t('nav:nodes.metricSets')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.metricSets') }]}
-        note={t('sets.note')}
       />
 
       <LoadGate load={sets} permission="manage_config">
@@ -155,6 +161,8 @@ export function CollectionTemplatesPage() {
             expanded={(r) =>
               openItems === r.id ? (
                 <div className="crud-collection">
+                  {/* How far an edit here reaches: every profile that attaches the set. */}
+                  <p className="form-status">{t('sets.usedBy', { count: r.profile_count })}</p>
                   <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
                 </div>
               ) : null
@@ -281,12 +289,23 @@ function DeleteTemplateModal({
       onClose={onClose}
       onDone={onDone}
     >
-      <Trans
-        t={t}
-        i18nKey="sets.delete.confirm"
-        values={{ name: template.name }}
-        components={{ strong: <strong /> }}
-      />
+      {/* The count is what the delete takes away from; a set nobody attaches costs nothing. */}
+      {template.profile_count > 0 ? (
+        <Trans
+          t={t}
+          i18nKey="sets.delete.confirm"
+          values={{ name: template.name, count: template.profile_count }}
+          count={template.profile_count}
+          components={{ strong: <strong /> }}
+        />
+      ) : (
+        <Trans
+          t={t}
+          i18nKey="sets.delete.confirmUnused"
+          values={{ name: template.name }}
+          components={{ strong: <strong /> }}
+        />
+      )}
     </ConfirmDeleteModal>
   );
 }

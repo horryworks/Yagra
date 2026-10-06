@@ -79,6 +79,11 @@ pub struct ApiTokenInfo {
     /// This is the only signal Yagra has that an SSO account is still live (see [`ApiTokenStore`]),
     /// so the listing shows it; `None` for local and service accounts, where it means nothing.
     pub owner_last_login_at: Option<DateTime<Utc>>,
+    /// How many days the owner may go without signing in before this token stops authenticating.
+    /// Set only when the owner authenticates through an external IdP (SSO or LDAP), because an
+    /// identity provider does not tell Yagra when it disables an account; `None` for local and
+    /// service accounts, whose tokens do not expire on idleness.
+    pub owner_idle_days: Option<i64>,
     pub created_by: String,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
@@ -212,7 +217,10 @@ impl ApiTokenStore {
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter().map(row_to_info).collect()
+        let idle_days = self.external_idle.num_days();
+        rows.into_iter()
+            .map(|row| row_to_info(row, idle_days))
+            .collect()
     }
 
     /// Soft-revoke a token by id (idempotent): sets `revoked_at` if it was still active. Returns
@@ -373,13 +381,14 @@ fn row_surfaces(row: &sqlx::postgres::PgRow) -> anyhow::Result<Vec<TokenSurface>
 }
 
 /// Map one listing row to its `ApiTokenInfo` (metadata only).
-fn row_to_info(row: sqlx::postgres::PgRow) -> anyhow::Result<ApiTokenInfo> {
+fn row_to_info(row: sqlx::postgres::PgRow, idle_days: i64) -> anyhow::Result<ApiTokenInfo> {
     let role_key: String = row.try_get("role")?;
     let scope_json: serde_json::Value = row.try_get("scope")?;
     let surfaces = row_surfaces(&row)?;
     let owner: Option<String> = row.try_get("owner_username")?;
     let auth_source: Option<String> = row.try_get("auth_source")?;
     let owner_kind = auth_source.as_deref().map(UserKind::parse);
+    let external = owner_kind.is_some_and(UserKind::is_external);
     Ok(ApiTokenInfo {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -397,16 +406,23 @@ fn row_to_info(row: sqlx::postgres::PgRow) -> anyhow::Result<ApiTokenInfo> {
         // Only meaningful for an externally-authenticated owner, which is the only kind whose
         // idleness ends its tokens. Showing it for a service account would invite reading a blank
         // as a problem when it is the normal state.
-        owner_last_login_at: if owner_kind.is_some_and(UserKind::is_external) {
+        owner_last_login_at: if external {
             row.try_get("last_login_at")?
         } else {
             None
         },
+        owner_idle_days: owner_idle_days(external, idle_days),
         created_by: row.try_get("created_by")?,
         created_at: row.try_get("created_at")?,
         last_used_at: row.try_get("last_used_at")?,
         revoked_at: row.try_get("revoked_at")?,
     })
+}
+
+/// The idle window to report for a token's owner: the store's window for an externally
+/// authenticated owner, nothing for any other (their tokens never lapse on idleness).
+fn owner_idle_days(external: bool, idle_days: i64) -> Option<i64> {
+    external.then_some(idle_days)
 }
 
 /// Parse the stored snake_case role key back into a [`Role`] (the mirror of [`Role::key`]).
@@ -442,5 +458,17 @@ mod tests {
             assert_eq!(parse_role(role.key()).unwrap(), role);
         }
         assert!(parse_role("root").is_err());
+    }
+
+    #[test]
+    fn only_an_external_owner_carries_the_idle_window() {
+        assert_eq!(owner_idle_days(true, 30), Some(30));
+        assert_eq!(owner_idle_days(false, 30), None);
+        for kind in [UserKind::Oidc, UserKind::Ldap] {
+            assert_eq!(owner_idle_days(kind.is_external(), 7), Some(7));
+        }
+        for kind in [UserKind::Local, UserKind::Service] {
+            assert_eq!(owner_idle_days(kind.is_external(), 7), None);
+        }
     }
 }

@@ -144,7 +144,14 @@ function ruleset(): Json {
       dwell_samples: 3,
     },
   ];
-  return { items, total: items.length, truncated: false } as unknown as Json;
+  // ADR-200 Inc.29: the server counts overrides across the fleet, so the fixture states its answer
+  // for the pair above — the node rule takes over from the fleet-wide one on one node.
+  return {
+    items,
+    total: items.length,
+    truncated: false,
+    overridden: { '00000000-0000-4000-8000-00000000f005': 1 },
+  } as unknown as Json;
 }
 
 test.use({

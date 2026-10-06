@@ -1554,6 +1554,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/notification-default-route",
+        // Kinds of channel only, read from this core's environment; nothing about the fleet.
+        ADMIN_CFG,
+        Tool("get_config"),
+    ),
+    (
+        "GET",
         "/api/v1/openapi.json",
         Global("the API contract document itself"),
         Exempt("the REST contract document; an MCP client reads tools/list, not OpenAPI"),

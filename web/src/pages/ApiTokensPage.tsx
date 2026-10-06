@@ -131,12 +131,17 @@ function tokenColumns(
           // the note when pressed (ADR-200); `title` keeps the whole name readable when the
           // column cuts it.
           <span className="tok-owner" title={r.owner}>
-            {r.owner_last_login_at ? (
-              <InfoPress infoKey="settings-tokens:ssoIdle.info">{r.owner}</InfoPress>
+            {r.owner_idle_days != null ? (
+              <InfoPress
+                infoKey="settings-tokens:ssoIdle.info"
+                values={{ days: r.owner_idle_days }}
+              >
+                {r.owner}
+              </InfoPress>
             ) : (
               r.owner
             )}
-            {r.owner_last_login_at && <span className="tok-sso-dot" aria-hidden="true" />}
+            {r.owner_idle_days != null && <span className="tok-sso-dot" aria-hidden="true" />}
           </span>
         ) : (
           <span className="muted">{t('owner.none')}</span>

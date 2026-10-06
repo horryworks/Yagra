@@ -75,7 +75,7 @@
     "none": "—"
   },
   "ssoIdle": {
-    "info": "Yagra is not told when an identity provider disables an account. An SSO-owned token stops once its owner has been absent too long."
+    "info": "Yagra is not told when an identity provider disables an account. An SSO-owned token stops once its owner has not signed in for {{days}} days."
   },
   "lastUsed": {
     "never": "Never"

@@ -159,7 +159,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// sweeps — are still asynchronous: assert the accepted `202` and the row that records it, not the
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
-    live_state_with(pool, None, None, None).await
+    live_state_with(pool, None, None, None, Vec::new()).await
 }
 
 /// [`live_state`], talking to a Meraki Dashboard the test supplies instead of [`EmptyDashboard`].
@@ -171,7 +171,7 @@ pub(crate) async fn live_state_with_dashboard(
     pool: sqlx::PgPool,
     dashboard: Arc<dyn crate::meraki_sync::MerakiDirectory>,
 ) -> ApiState {
-    live_state_with(pool, None, None, Some(dashboard)).await
+    live_state_with(pool, None, None, Some(dashboard), Vec::new()).await
 }
 
 /// The Meraki Dashboard the live fixture talks to: reachable, and empty.
@@ -250,7 +250,7 @@ pub(crate) async fn live_state_with_upgrade_dir(
     pool: sqlx::PgPool,
     dir: std::path::PathBuf,
 ) -> ApiState {
-    live_state_with(pool, None, Some(dir), None).await
+    live_state_with(pool, None, Some(dir), None, Vec::new()).await
 }
 
 /// [`live_state`], with the deployment-wide SNMP community the scheduler falls back to.
@@ -266,10 +266,22 @@ pub(crate) async fn live_state_with_env_community(
     pool: sqlx::PgPool,
     env_community: Option<String>,
 ) -> ApiState {
-    live_state_with(pool, env_community, None, None).await
+    live_state_with(pool, env_community, None, None, Vec::new()).await
 }
 
-/// The one live-mode builder the three entry points above are shells over.
+/// [`live_state`], reporting an env default notification route made of `kinds` (ADR-200 Inc.28).
+///
+/// Its own entry point for the same reason as the two above: production reads the route from
+/// `YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*` in the **process** environment. Only the reported kinds
+/// change; the notifier still has no route, so nothing is delivered.
+pub(crate) async fn live_state_with_default_route(
+    pool: sqlx::PgPool,
+    kinds: Vec<crate::alerts::notify::DefaultRouteKind>,
+) -> ApiState {
+    live_state_with(pool, None, None, None, kinds).await
+}
+
+/// The one live-mode builder the entry points above are shells over.
 ///
 /// The first two options exist because production reads them from the **process** environment,
 /// which a test cannot set for itself alone — see the doc comments above. The third replaces a
@@ -279,6 +291,7 @@ async fn live_state_with(
     env_community: Option<String>,
     upgrade_dir: Option<std::path::PathBuf>,
     dashboard: Option<Arc<dyn crate::meraki_sync::MerakiDirectory>>,
+    notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
     use crate::alerts::Notifier;
     use crate::secrets::CredentialStore;
@@ -390,6 +403,7 @@ async fn live_state_with(
             kek.clone(),
         )),
         deliveries: Arc::new(crate::notification_log::DeliveryLogRepo::new(pool.clone())),
+        notify_default_route,
         mib,
         discovery: Arc::new(crate::discovery::DiscoveryRunner::new(
             discovery_bus,

@@ -245,6 +245,10 @@
     "err": {
       "load": "監査ログの読み込みに失敗しました",
       "loadMore": "追加の読み込みに失敗しました"
+    },
+    "retention": {
+      "indefinite": "無期限に保持",
+      "days_other": "{{count}} 日間保持"
     }
   }
 }

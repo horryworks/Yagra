@@ -65,13 +65,13 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
   alerts: [942, 557],
-  alertsConfig: [8344, 4430],
+  alertsConfig: [8360, 4431],
   auth: [79, 43],
   common: [717, 385],
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11132, 6567],
+  monitoring: [11146, 6614],
   nav: [2907, 1367],
   nodes: [15378, 8693],
   rca: [1022, 528],
@@ -82,7 +82,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-forwarding': [1695, 900],
   'settings-relocation': [3661, 1808],
   'settings-tls': [1592, 857],
-  'settings-tokens': [801, 433],
+  'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1796],
   suppression: [866, 571],
   system: [12980, 7143],
@@ -126,14 +126,6 @@ interface PageNote {
 }
 
 const PAGE_NOTES: Record<string, PageNote> = {
-  'pages/CollectionTemplatesPage.tsx': {
-    kind: 'fact',
-    // Not Inc.13's to remove: "used by N profiles" in the set needs a profile count the
-    // collection-templates list does not return, and counting client-side is one request per
-    // profile. Shortened to one line under the limit meanwhile.
-    until: 'API',
-    why: 'editing a set changes every profile that uses it',
-  },
   'pages/NodesPage.tsx': {
     kind: 'data',
     why: 'the fleet counts; Tier2a consistency.spec.ts reads them',

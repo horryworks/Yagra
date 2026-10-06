@@ -415,15 +415,17 @@
     }
   },
   "sets": {
-    "note": "Editing a set changes every profile that attaches it",
     "addSet": "Add metric set",
     "deleteSet": "Delete metric set",
+    "usedBy_one": "Used by {{count}} profile",
+    "usedBy_other": "Used by {{count}} profiles",
     "noun_one": "set",
     "noun_other": "sets",
     "cols": {
       "name": "Name",
       "description": "Description",
-      "metrics": "Metrics"
+      "metrics": "Metrics",
+      "profiles": "Profiles"
     },
     "empty": {
       "none": "No metric sets yet",
@@ -435,7 +437,9 @@
       "descPlaceholder": "Optional"
     },
     "delete": {
-      "confirm": "Delete metric set <strong>{{name}}</strong>? Profiles that attach it lose this bundle's metrics."
+      "confirm_one": "Delete metric set <strong>{{name}}</strong>? {{count}} profile loses its metrics.",
+      "confirm_other": "Delete metric set <strong>{{name}}</strong>? {{count}} profiles lose its metrics.",
+      "confirmUnused": "Delete metric set <strong>{{name}}</strong>?"
     },
     "err": {
       "create": "failed to create template",

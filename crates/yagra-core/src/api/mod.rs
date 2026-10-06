@@ -158,6 +158,9 @@ pub struct AdminState {
     /// The notification delivery log (ADR-195): read by the Notification delivery screen and
     /// written directly by a test send. Real deliveries are written by the notifier's own writer.
     pub deliveries: Arc<crate::notification_log::DeliveryLogRepo>,
+    /// The kinds of channel this core's env default route is made of (ADR-200 Inc.28), copied
+    /// from its `Notifier` at startup. Kinds only: the URL and the mail settings stay where they are.
+    pub notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
     pub mib: Arc<MibRepo>,
     pub discovery: Arc<DiscoveryRunner>,
     pub maintenance: Arc<MaintenanceRepo>,

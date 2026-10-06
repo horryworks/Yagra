@@ -77,12 +77,16 @@ export function InfoTip({ infoKey, label }: { infoKey: string; label: string }) 
  *  `text` instead of `infoKey` is for an explanation that is not a `.info` key of this WebUI's: a
  *  metric's meaning, whose key is built from the metric name and whose sentence is generated from
  *  `metric_meaning.rs` (ADR-200 Inc.18). A file that passes `text` is listed, with its reason, in
- *  `proseBudget.test.ts` (G8) — it is not a way to put free prose behind a press. */
+ *  `proseBudget.test.ts` (G8) — it is not a way to put free prose behind a press. A number the
+ *  sentence names (a configured window, say) goes in `values`, so the key stays the key G8 checks. */
 export function InfoPress({
   className,
   children,
   ...source
-}: ({ infoKey: string; text?: never } | { text: string; infoKey?: never }) & {
+}: (
+  | { infoKey: string; values?: Record<string, string | number>; text?: never }
+  | { text: string; infoKey?: never; values?: never }
+) & {
   className?: string;
   children: ReactNode;
 }) {
@@ -108,7 +112,7 @@ export function InfoPress({
         className="infotip-pop"
         onDismiss={dismiss}
       >
-        {source.infoKey === undefined ? source.text : t(source.infoKey)}
+        {source.infoKey === undefined ? source.text : t(source.infoKey, source.values)}
       </AnchoredPopover>
     </span>
   );

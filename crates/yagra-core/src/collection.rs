@@ -303,23 +303,16 @@ impl CollectionRepo {
     /// profile attach picker).
     pub async fn list_templates(&self) -> anyhow::Result<Vec<TemplateSummary>> {
         let rows = sqlx::query(
-            "SELECT t.id, t.name, t.description, count(i.id) AS item_count \
+            "SELECT t.id, t.name, t.description, count(i.id) AS item_count, \
+                    (SELECT count(*) FROM profile_collection_templates pp \
+                      WHERE pp.template_id = t.id) AS profile_count \
              FROM collection_templates t \
              LEFT JOIN collection_template_items i ON i.template_id = t.id \
              GROUP BY t.id, t.name, t.description ORDER BY t.name",
         )
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(TemplateSummary {
-                    id: row.try_get("id")?,
-                    name: row.try_get("name")?,
-                    description: row.try_get("description")?,
-                    item_count: row.try_get("item_count")?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(template_summary).collect()
     }
 
     /// Create a template; returns its id, or [`CreateTemplateOutcome::NameTaken`] on a
@@ -438,7 +431,9 @@ impl CollectionRepo {
         profile_id: Uuid,
     ) -> anyhow::Result<Vec<TemplateSummary>> {
         let rows = sqlx::query(
-            "SELECT t.id, t.name, t.description, count(i.id) AS item_count \
+            "SELECT t.id, t.name, t.description, count(i.id) AS item_count, \
+                    (SELECT count(*) FROM profile_collection_templates pp \
+                      WHERE pp.template_id = t.id) AS profile_count \
              FROM profile_collection_templates pct \
              JOIN collection_templates t ON t.id = pct.template_id \
              LEFT JOIN collection_template_items i ON i.template_id = t.id \
@@ -448,16 +443,7 @@ impl CollectionRepo {
         .bind(profile_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(TemplateSummary {
-                    id: row.try_get("id")?,
-                    name: row.try_get("name")?,
-                    description: row.try_get("description")?,
-                    item_count: row.try_get("item_count")?,
-                })
-            })
-            .collect()
+        rows.into_iter().map(template_summary).collect()
     }
 
     /// Replace the set of templates attached to a profile (transactional).
@@ -486,6 +472,20 @@ impl CollectionRepo {
     }
 }
 
+/// Read one template listing row (both listings project the same columns).
+///
+/// Their `profile_count` is a correlated subquery rather than a second join: joined beside the
+/// items, every link would be counted once per metric and every metric once per link.
+fn template_summary(row: sqlx::postgres::PgRow) -> anyhow::Result<TemplateSummary> {
+    Ok(TemplateSummary {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        item_count: row.try_get("item_count")?,
+        profile_count: row.try_get("profile_count")?,
+    })
+}
+
 /// A collection template row for the API (id + name + description + metric count).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TemplateSummary {
@@ -493,6 +493,9 @@ pub struct TemplateSummary {
     pub name: String,
     pub description: Option<String>,
     pub item_count: i64,
+    /// How many device profiles have this template attached. Every node using one of those
+    /// profiles collects the template's metrics, so an edit here reaches all of them.
+    pub profile_count: i64,
 }
 
 /// One metric in a template, with its id, for the template editor.
@@ -583,6 +586,29 @@ mod tests {
             body.contains("$1"),
             "the metric name must be bound, never interpolated"
         );
+    }
+
+    #[test]
+    fn both_template_listings_count_profiles_apart_from_the_metric_join() {
+        // A second join on the links beside the items join would multiply the two counts into
+        // each other. The database test proves the numbers; this pins the shape where no database
+        // runs.
+        let src = production_source();
+        for list in [
+            "pub async fn list_templates",
+            "pub async fn list_profile_templates",
+        ] {
+            let body = src.split_once(list).expect("the listing exists").1;
+            let body = body.split_once("pub async fn").map_or(body, |(b, _)| b);
+            assert!(
+                body.contains("(SELECT count(*) FROM profile_collection_templates pp"),
+                "{list}: the profile count is a correlated subquery"
+            );
+            assert!(
+                !body.contains("LEFT JOIN profile_collection_templates"),
+                "{list}: joined, the links would be counted once per metric"
+            );
+        }
     }
 
     #[test]
@@ -1256,9 +1282,35 @@ mod tests {
         assert_eq!(
             attached
                 .iter()
-                .map(|t| (t.name.as_str(), t.item_count))
+                .map(|t| (t.name.as_str(), t.item_count, t.profile_count))
                 .collect::<Vec<_>>(),
-            [("A interfaces", 2)]
+            [("A interfaces", 2, 1)]
+        );
+
+        // A second profile using it: the count is of profiles, not of (profile, metric) pairs.
+        // Joined beside the two metrics instead of counted apart, it would read 4 here, and the
+        // metric count would double with it.
+        let other = crate::pgtest::profile(&pool, "Generic router").await;
+        repo.set_profile_templates(other, &[filled])
+            .await
+            .expect("attach");
+        assert_eq!(
+            repo.list_templates()
+                .await
+                .expect("list")
+                .iter()
+                .map(|t| (t.name.as_str(), t.item_count, t.profile_count))
+                .collect::<Vec<_>>(),
+            [("A interfaces", 2, 2), ("B empty", 0, 0)]
+        );
+        assert_eq!(
+            repo.list_profile_templates(other)
+                .await
+                .expect("attached")
+                .iter()
+                .map(|t| (t.item_count, t.profile_count))
+                .collect::<Vec<_>>(),
+            [(2, 2)]
         );
         assert!(repo
             .list_profile_templates(Uuid::new_v4())

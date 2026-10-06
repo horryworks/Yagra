@@ -40,6 +40,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     list_template_variables,
     get_builtin_template,
     list_routing_rules,
+    get_notification_default_route,
     create_routing_rule,
     set_routing_rule_enabled,
     update_routing_rule,
@@ -72,6 +73,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/notification-deliveries",
             get(list_notification_deliveries),
+        )
+        .route(
+            "/api/v1/notification-default-route",
+            get(get_notification_default_route),
         )
         .route(
             "/api/v1/notification-channels/:id",
@@ -993,6 +998,51 @@ async fn list_routing_rules(
     Ok(Json(list))
 }
 
+/// The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
+/// kinds of channel it is made of.
+///
+/// Kinds only, by design — the webhook URL, the mail server and the addresses are never returned,
+/// for the same reason a channel's sealed config is not.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct NotificationDefaultRoute {
+    /// Whether this core has a default route at all.
+    configured: bool,
+    /// The kinds of channel it sends to, in the order they are configured. Empty when not configured.
+    kinds: Vec<crate::alerts::notify::DefaultRouteKind>,
+}
+
+impl NotificationDefaultRoute {
+    /// The answer for a route made of `kinds`. One function, so the REST handler and
+    /// `get_config(kind=notification_default_route)` cannot disagree about `configured`.
+    pub(crate) fn of(kinds: &[crate::alerts::notify::DefaultRouteKind]) -> Self {
+        Self {
+            configured: !kinds.is_empty(),
+            kinds: kinds.to_vec(),
+        }
+    }
+}
+
+/// The default notification route, set by `YAGRA_WEBHOOK_URL` and `YAGRA_SMTP_*` on the core.
+///
+/// It is sent every alert, whatever the routing rules say, so it is not a fallback for alerts no
+/// rule matches. The answer is the environment of the core that answers: with two cores, each
+/// reads its own, and only the leader delivers.
+#[utoipa::path(
+    get, path = "/api/v1/notification-default-route", tag = "notifications",
+    responses(
+        (status = 200, description = "Whether the default route is configured and which kinds of channel it sends to", body = NotificationDefaultRoute),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_notification_default_route(
+    _guard: RequireManageSystem,
+    admin: Admin,
+) -> Json<NotificationDefaultRoute> {
+    Json(NotificationDefaultRoute::of(&admin.notify_default_route))
+}
+
 /// Create-rule body: a name, an optional severity filter (absent = any), and target channels.
 /// Editing a rule takes the same body (ADR-193).
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1193,6 +1243,7 @@ mod tests {
             ("PUT", format!("/api/v1/routing-rules/{ID}/definition")),
             ("DELETE", format!("/api/v1/routing-rules/{ID}")),
             ("GET", "/api/v1/notification-deliveries".to_owned()),
+            ("GET", "/api/v1/notification-default-route".to_owned()),
         ]
     }
 
@@ -1922,5 +1973,45 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(body["error"]["code"], "rule_not_found", "{body}");
+    }
+
+    /// ADR-200 Inc.28: the default route is reported by kind, and `configured` follows the kinds.
+    /// The three shapes an environment can produce: nothing, a webhook alone, both.
+    #[test]
+    fn the_default_route_is_reported_by_kind_only() {
+        use crate::alerts::notify::DefaultRouteKind::{Email, Webhook};
+        let cases: [(&[_], serde_json::Value); 3] = [
+            (&[], serde_json::json!({ "configured": false, "kinds": [] })),
+            (
+                &[Webhook],
+                serde_json::json!({ "configured": true, "kinds": ["webhook"] }),
+            ),
+            (
+                &[Webhook, Email],
+                serde_json::json!({ "configured": true, "kinds": ["webhook", "email"] }),
+            ),
+        ];
+        for (kinds, want) in cases {
+            let got = serde_json::to_value(NotificationDefaultRoute::of(kinds)).unwrap();
+            assert_eq!(got, want, "{kinds:?}");
+        }
+    }
+
+    /// ADR-200 Inc.28, through the router: the kinds a core's notifier reports are what an
+    /// administrator reads, with the documented 200.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_default_route_answers_what_the_notifier_holds(pool: sqlx::PgPool) {
+        use crate::alerts::notify::DefaultRouteKind::{Email, Webhook};
+        use crate::api::tests_support::{live_state_with_default_route, send, token};
+        let path = "/api/v1/notification-default-route";
+        let st = live_state_with_default_route(pool, vec![Webhook, Email]).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(&st, "GET", path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!({ "configured": true, "kinds": ["webhook", "email"] })
+        );
     }
 }

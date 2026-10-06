@@ -2020,6 +2020,18 @@ impl AlertManager {
         matching_rules(rules, node, ifindex, config.node_meta.get(&node))
     }
 
+    /// On how many nodes each of `rules` is overridden by a narrower rule (ADR-200 Inc.29) — see
+    /// [`super::rules::overridden_counts`] for what counts.
+    ///
+    /// The same split as [`Self::matching_rules`]: the **rules** come from the caller, read fresh,
+    /// so a rule saved a second ago is counted; **membership** (profile, tags, folder chain) and
+    /// which metrics are per-interface come from the snapshot, which can be one refresh old.
+    #[must_use]
+    pub fn overridden_counts(&self, rules: &[StoredThreshold]) -> HashMap<Uuid, u32> {
+        let config = self.config.read().expect("config rwlock poisoned");
+        super::rules::overridden_counts(rules, &config.node_meta, &config.per_interface)
+    }
+
     /// A node's committed **liveness** state — what its liveness check settled on, with no alert
     /// rolled into it. `None` when the engine has never observed the node, which every caller must
     /// treat as "we have no opinion", not as "fine".

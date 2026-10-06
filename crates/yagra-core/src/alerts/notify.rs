@@ -1111,6 +1111,19 @@ fn record_dispatch(
         .record(started.elapsed().as_secs_f64());
 }
 
+/// One kind of channel the environment can configure as the default route (ADR-200 Inc.28).
+///
+/// A closed set of two, apart from [`ChannelKind`] on purpose: the environment knows only
+/// `YAGRA_WEBHOOK_URL` and `YAGRA_SMTP_*`, so a type naming PagerDuty or JSM here would advertise
+/// a default route nobody can configure. Reported by kind only — never the URL, host or address,
+/// which are secrets like a channel's sealed config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultRouteKind {
+    Webhook,
+    Email,
+}
+
 /// Forwards alert lifecycle to the configured channels with the engine's dedup + retry
 /// (ADR-015). Channels + rules come from the database (refreshed periodically via
 /// [`Self::set_routing`]); env channels remain an always-on default route.
@@ -1162,6 +1175,9 @@ pub struct Notifier {
     any_facts_channel: AtomicBool,
     /// Where each delivery is recorded (ADR-195). Recording never waits: see [`DeliveryLog`].
     delivery_log: RwLock<Option<DeliveryLog>>,
+    /// Which kinds of channel make up the env default route, in the order [`Self::from_env`]
+    /// adds them (ADR-200 Inc.28). Fixed for the process's life, like the route itself.
+    default_kinds: Vec<DefaultRouteKind>,
 }
 
 impl Notifier {
@@ -1170,13 +1186,16 @@ impl Notifier {
     #[must_use]
     pub fn from_env() -> Self {
         let mut channels: Vec<Box<dyn NotifyChannel>> = Vec::new();
+        let mut kinds = Vec::new();
         if let Ok(url) = std::env::var("YAGRA_WEBHOOK_URL") {
             if !url.is_empty() {
                 channels.push(Box::new(WebhookChannel::new(url)));
+                kinds.push(DefaultRouteKind::Webhook);
             }
         }
         if let Some(email) = EmailChannel::from_env() {
             channels.push(Box::new(email));
+            kinds.push(DefaultRouteKind::Email);
         }
         let default = (!channels.is_empty()).then(|| {
             tracing::info!(
@@ -1185,7 +1204,7 @@ impl Notifier {
             );
             Arc::new(MultiChannel { channels }) as Arc<dyn NotifyChannel>
         });
-        Self::with_default(default)
+        Self::with_default_kinds(default, kinds)
     }
 
     /// A notifier over a given default route, with no DB channels or rules yet.
@@ -1198,7 +1217,19 @@ impl Notifier {
     /// reader takes `YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*` from the process environment, so a
     /// developer who happens to have one exported would make a test deliver a real webhook or a
     /// real mail. `with_default(None)` has no route at all and so cannot (`api::tests_support`).
+    ///
+    /// It reports no default-route kinds; a test that asks what the route is made of builds
+    /// through [`Self::with_default_kinds`].
+    #[cfg(test)]
     pub(crate) fn with_default(default: Option<Arc<dyn NotifyChannel>>) -> Self {
+        Self::with_default_kinds(default, Vec::new())
+    }
+
+    /// [`Self::with_default`], naming the kinds of channel the default route is made of.
+    pub(crate) fn with_default_kinds(
+        default: Option<Arc<dyn NotifyChannel>>,
+        default_kinds: Vec<DefaultRouteKind>,
+    ) -> Self {
         Self {
             routing: RwLock::new(Arc::new(Routing {
                 default: default.map(|c| Arc::new(Dispatcher::new(c, RetryPolicy::default()))),
@@ -1213,7 +1244,15 @@ impl Notifier {
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
             delivery_log: RwLock::new(None),
+            default_kinds,
         }
+    }
+
+    /// The kinds of channel the env default route is made of — empty when it has none. This
+    /// core's own environment: under HA each core reads its own, and only the leader delivers.
+    #[must_use]
+    pub fn default_route_kinds(&self) -> &[DefaultRouteKind] {
+        &self.default_kinds
     }
 
     /// Attach the delivery log (ADR-195). Called once at startup, after the shutdown token
@@ -2987,6 +3026,24 @@ mod delivery_tests {
             )
             .into())
         }
+    }
+
+    /// ADR-200 Inc.28: the kinds a notifier was built with are the ones it reports, and a
+    /// notifier built with no route reports none. Routing installs do not change them.
+    #[test]
+    fn a_notifier_reports_the_kinds_its_default_route_was_built_with() {
+        assert!(Notifier::with_default(None)
+            .default_route_kinds()
+            .is_empty());
+        let n = Notifier::with_default_kinds(
+            Some(Arc::new(Recorder(log()))),
+            vec![DefaultRouteKind::Webhook, DefaultRouteKind::Email],
+        );
+        n.install_routing(Vec::new(), Vec::new());
+        assert_eq!(
+            n.default_route_kinds(),
+            [DefaultRouteKind::Webhook, DefaultRouteKind::Email]
+        );
     }
 
     /// ADR-195: every dispatch that called a channel becomes one delivery-log row, saying which

@@ -688,6 +688,10 @@ export type ChannelConfigInput = components['schemas']['ChannelConfig'];
  *  to `channel_ids`. */
 export type RoutingRule = components['schemas']['RoutingRule'];
 
+/** The env-configured default notification route (`GET /api/v1/notification-default-route`):
+ *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */
+export type NotificationDefaultRoute = components['schemas']['NotificationDefaultRoute'];
+
 /** One name a notification template may reference (ADR-039). The catalogue is served rather than
  *  transcribed, so the editor's palette and the renderer's context cannot disagree. */
 export type TemplateVariable = components['schemas']['TemplateVariable'];

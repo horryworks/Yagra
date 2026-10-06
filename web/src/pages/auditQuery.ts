@@ -26,6 +26,7 @@ import {
   AUDIT_STATUS_CLASSES,
   type AuditQuery,
   type AuditRow,
+  type RetentionRow,
 } from '../types/api';
 
 /**
@@ -127,6 +128,24 @@ export function nextCursor(rows: readonly { at: string }[]): string | null {
 export function appendPage<T extends { id: string }>(have: readonly T[], page: readonly T[]): T[] {
   const seen = new Set(have.map((r) => r.id));
   return [...have, ...page.filter((r) => !seen.has(r.id))];
+}
+
+/** How long the audit log is kept, as the line under the table says it. */
+export type AuditRetention = { kind: 'indefinite' } | { kind: 'days'; days: number };
+
+/**
+ * Read the `audit_log` row out of the retention table (ADR-200 Inc.25).
+ *
+ * The row is unlimited by decision today, so the server sends no number. If it ever gains a window,
+ * only a `days` value is shown; any other unit, or a missing row, shows nothing rather than a guess.
+ */
+export function auditRetention(
+  rows: readonly Pick<RetentionRow, 'subject' | 'enforcement' | 'unit' | 'value'>[],
+): AuditRetention | null {
+  const row = rows.find((r) => r.subject === 'audit_log');
+  if (!row) return null;
+  if (row.value != null) return row.unit === 'days' ? { kind: 'days', days: row.value } : null;
+  return row.enforcement === 'unlimited' ? { kind: 'indefinite' } : null;
 }
 
 /**

@@ -7,6 +7,7 @@ import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter'
 import { encodeCondition } from '../lib/filterCondition';
 import {
   appendPage,
+  auditRetention,
   auditFilters,
   nextCursor,
   exportUrl,
@@ -174,5 +175,31 @@ describe('exportUrl', () => {
   it('omits an unset field rather than sending it empty', () => {
     const params = new URLSearchParams(url({ action: 'login' }).split('?')[1]);
     expect([...params.keys()]).toEqual(['action']);
+  });
+});
+
+describe('auditRetention', () => {
+  const row = (over: Partial<{ subject: string; enforcement: string; unit: string; value: number | null }>) => ({
+    subject: 'audit_log',
+    enforcement: 'unlimited',
+    unit: '',
+    value: null,
+    ...over,
+  });
+
+  it('reads the unlimited audit_log row as kept indefinitely', () => {
+    expect(auditRetention([row({ subject: 'alert_history', enforcement: 'pg_prune', unit: 'days', value: 90 }), row({})])).toEqual({
+      kind: 'indefinite',
+    });
+  });
+
+  it('reads a days window if the row ever gains one', () => {
+    expect(auditRetention([row({ enforcement: 'pg_prune', unit: 'days', value: 365 })])).toEqual({ kind: 'days', days: 365 });
+  });
+
+  it('shows nothing for a missing row, another unit, or a row with no number that is not unlimited', () => {
+    expect(auditRetention([])).toBeNull();
+    expect(auditRetention([row({ enforcement: 'pg_prune', unit: 'hours', value: 48 })])).toBeNull();
+    expect(auditRetention([row({ enforcement: 'pg_prune' })])).toBeNull();
   });
 });

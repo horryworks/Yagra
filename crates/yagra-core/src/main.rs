@@ -953,6 +953,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         collection,
         notifications,
         deliveries,
+        notify_default_route: notifier.default_route_kinds().to_vec(),
         mib,
         discovery,
         maintenance: maintenance.clone(),

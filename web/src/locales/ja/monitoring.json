@@ -409,14 +409,15 @@
     }
   },
   "sets": {
-    "note": "セットを直すと、紐付けたすべてのプロファイルに反映されます",
     "addSet": "メトリクスセットを追加",
     "deleteSet": "メトリクスセットを削除",
+    "usedBy_other": "{{count}} 個のプロファイルで使用中",
     "noun_other": "セット",
     "cols": {
       "name": "名前",
       "description": "説明",
-      "metrics": "メトリクス"
+      "metrics": "メトリクス",
+      "profiles": "プロファイル"
     },
     "empty": {
       "none": "メトリクスセットがありません",
@@ -428,7 +429,8 @@
       "descPlaceholder": "任意"
     },
     "delete": {
-      "confirm": "メトリクスセット <strong>{{name}}</strong> を削除しますか？紐付けていたプロファイルからは、この束のメトリクスが無くなります。"
+      "confirm_other": "メトリクスセット <strong>{{name}}</strong> を削除しますか？{{count}} 個のプロファイルからメトリクスが無くなります。",
+      "confirmUnused": "メトリクスセット <strong>{{name}}</strong> を削除しますか？"
     },
     "err": {
       "create": "テンプレートの作成に失敗しました",

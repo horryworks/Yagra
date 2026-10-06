@@ -146,6 +146,7 @@ pub(super) enum ConfigKind {
     EventSources,
     NotificationChannels,
     RoutingRules,
+    NotificationDefaultRoute,
     Profiles,
     ProfileTemplates,
     CollectionTemplates,
@@ -183,6 +184,7 @@ crate::stored_enum::token_enum!(ConfigKind, [
     EventSources => "event_sources",
     NotificationChannels => "notification_channels",
     RoutingRules => "routing_rules",
+    NotificationDefaultRoute => "notification_default_route",
     Profiles => "profiles",
     ProfileTemplates => "profile_templates",
     CollectionTemplates => "collection_templates",
@@ -241,6 +243,7 @@ impl ConfigKind {
             | Self::EventSources
             | Self::NotificationChannels
             | Self::RoutingRules
+            | Self::NotificationDefaultRoute
             | Self::Profiles
             | Self::CollectionTemplates
             | Self::ClassificationRules
@@ -273,6 +276,7 @@ impl ConfigKind {
             Self::EventSources => "event_sources",
             Self::NotificationChannels => "notification_channels",
             Self::RoutingRules => "routing_rules",
+            Self::NotificationDefaultRoute => "notification_default_route",
             Self::Profiles => "profiles",
             Self::ProfileTemplates => "profile_templates",
             Self::CollectionTemplates => "collection_templates",
@@ -322,7 +326,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 34 values.
+    /// Which configuration to read. Required; see the tool description for the 35 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -816,7 +820,10 @@ impl YagraMcp {
                        notify and forward, and how. `kind` is one of: **alerting/notification** — \
                        thresholds (the metric alert rules; `limit` 1–500, narrowed by `search` / \
                        `scope_level` / `direction`), event_rules, event_sources, \
-                       notification_channels, routing_rules; **collection** — profiles, \
+                       notification_channels, routing_rules, notification_default_route (the \
+                       route set by the core's environment, which every alert is sent to whatever \
+                       the routing rules say: whether it is configured and which kinds of channel \
+                       — webhook, email — it sends to, never where); **collection** — profiles, \
                        profile_templates (needs `profile_id`), collection_templates, \
                        template_items (needs `template_id`), node_collection (one node's collected \
                        metrics — needs `node_id`; `resolved=true` for the effective set the poller \
@@ -886,8 +893,8 @@ impl YagraMcp {
                        get_interface_thresholds; for what a metric measures use \
                        kind=metric_meanings. \
                        Kinds require different permissions: oidc and ldap need manage-users; \
-                       notification_channels, routing_rules, forward_destinations and llm need \
-                       manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
+                       notification_channels, routing_rules, notification_default_route, \
+                       forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
                        discovery_candidates, the four meraki kinds, the two report kinds, \
                        retention, adjacency_settings and roles need view; the rest need \
                        manage-config. This reads configuration only — no tool changes it. No \
@@ -974,7 +981,13 @@ impl YagraMcp {
                     Ok(f) => f,
                     Err(e) => return tool_api_error(TOOL, &e),
                 };
-                match crate::api::thresholds::threshold_page(a, p.limit, &filter.as_filter()).await
+                match crate::api::thresholds::threshold_page(
+                    a,
+                    &self.state.alerts,
+                    p.limit,
+                    &filter.as_filter(),
+                )
+                .await
                 {
                     Ok(page) => ok_json(TOOL, &page),
                     Err(e) => tool_api_error(TOOL, &e),
@@ -996,6 +1009,10 @@ impl YagraMcp {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_error(TOOL, "list routing rules", &e),
             },
+            ConfigKind::NotificationDefaultRoute => ok_json(
+                TOOL,
+                &crate::api::notifications::NotificationDefaultRoute::of(&a.notify_default_route),
+            ),
             // ── collection ───────────────────────────────────────────────────
             ConfigKind::Profiles => match a.repo.list_profiles().await {
                 Ok(list) => ok_json(TOOL, &list),
@@ -1530,7 +1547,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            34,
+            35,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

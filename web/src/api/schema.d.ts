@@ -3269,6 +3269,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notification-default-route": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The default notification route, set by `YAGRA_WEBHOOK_URL` and `YAGRA_SMTP_*` on the core.
+         * @description It is sent every alert, whatever the routing rules say, so it is not a fallback for alerts no
+         *     rule matches. The answer is the environment of the core that answers: with two cores, each
+         *     reads its own, and only the leader delivers.
+         */
+        get: operations["get_notification_default_route"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-deliveries": {
         parameters: {
             query?: never;
@@ -5741,6 +5763,14 @@ export interface components {
              */
             owner_active: boolean;
             /**
+             * Format: int64
+             * @description How many days the owner may go without signing in before this token stops authenticating.
+             *     Set only when the owner authenticates through an external IdP (SSO or LDAP), because an
+             *     identity provider does not tell Yagra when it disables an account; `None` for local and
+             *     service accounts, whose tokens do not expire on idleness.
+             */
+            owner_idle_days?: number | null;
+            /**
              * Format: date-time
              * @description The owner's last interactive sign-in, when the owner authenticates through an external IdP.
              *     This is the only signal Yagra has that an SSO account is still live (see [`ApiTokenStore`]),
@@ -7096,6 +7126,16 @@ export interface components {
         DashboardSaved: {
             ok: boolean;
         };
+        /**
+         * @description One kind of channel the environment can configure as the default route (ADR-200 Inc.28).
+         *
+         *     A closed set of two, apart from [`ChannelKind`] on purpose: the environment knows only
+         *     `YAGRA_WEBHOOK_URL` and `YAGRA_SMTP_*`, so a type naming PagerDuty or JSM here would advertise
+         *     a default route nobody can configure. Reported by kind only — never the URL, host or address,
+         *     which are secrets like a channel's sealed config.
+         * @enum {string}
+         */
+        DefaultRouteKind: "webhook" | "email";
         /** @description One call to the channel inside a delivery. */
         DeliveryAttempt: {
             /**
@@ -11194,6 +11234,19 @@ export interface components {
          */
         NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed" | "skipped_invalid_value";
         /**
+         * @description The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
+         *     kinds of channel it is made of.
+         *
+         *     Kinds only, by design — the webhook URL, the mail server and the addresses are never returned,
+         *     for the same reason a channel's sealed config is not.
+         */
+        NotificationDefaultRoute: {
+            /** @description Whether this core has a default route at all. */
+            configured: boolean;
+            /** @description The kinds of channel it sends to, in the order they are configured. Empty when not configured. */
+            kinds: components["schemas"]["DefaultRouteKind"][];
+        };
+        /**
          * @description Which point in an alert's life produced this notification.
          *
          *     Templates branch on it — a resolve usually wants different wording from a fire — so it is a
@@ -13695,6 +13748,12 @@ export interface components {
             /** Format: int64 */
             item_count: number;
             name: string;
+            /**
+             * Format: int64
+             * @description How many device profiles have this template attached. Every node using one of those
+             *     profiles collects the template's metrics, so an edit here reaches all of them.
+             */
+            profile_count: number;
         };
         /** @description One name a notification template may reference. */
         TemplateVariable: {
@@ -13829,6 +13888,19 @@ export interface components {
          */
         ThresholdPage: {
             items: components["schemas"]["StoredThreshold"][];
+            /**
+             * @description For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on
+             *     the same metric applies instead. A rule overridden nowhere has no entry.
+             *
+             *     Counted across the whole fleet, regardless of the filter and the cap. The unit is the node:
+             *     a node counts once even when the narrower rule covers only some of its ports or table rows.
+             *     Rules at the same scope level combine rather than override, so they do not count against
+             *     each other. Which nodes a profile, label or folder holds is read from the alert engine's
+             *     copy, which can be up to about 30 seconds old.
+             */
+            overridden: {
+                [key: string]: number;
+            };
             /**
              * Format: int64
              * @description Rules matching the filter, ignoring the cap.
@@ -27282,6 +27354,53 @@ export interface operations {
             };
             /** @description No such channel */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_notification_default_route: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the default route is configured and which kinds of channel it sends to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDefaultRoute"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -17,6 +17,16 @@
   margin-top: 24px;
 }
 
+/* The env default route above the rules table (ADR-200 Inc.28): name, "all alerts", the kinds. */
+.routing-default-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: var(--font-sm);
+}
+
 /* Channel multi-select inside the add-rule modal. */
 .routing-picks {
   display: flex;

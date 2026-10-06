@@ -251,6 +251,11 @@
     "err": {
       "load": "failed to load the audit log",
       "loadMore": "failed to load more"
+    },
+    "retention": {
+      "indefinite": "Kept indefinitely",
+      "days_one": "Kept for {{count}} day",
+      "days_other": "Kept for {{count}} days"
     }
   }
 }

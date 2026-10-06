@@ -8,7 +8,7 @@
 // Data-table standard v2: a toolbar (count + "+ Add rule") over the shared `DataTable`; the
 // add form and delete confirmation both go through modals. "The most specific scope wins" is not a
 // paragraph above the table any more (ADR-200 Inc.14): a row that a narrower rule takes over from
-// carries a pressable "Overridden on N nodes" badge instead (`thresholdOverrides.ts`).
+// carries a pressable "Overridden on N nodes" badge instead, counted by the server (Inc.29).
 //
 // This is the one configuration list that grows with the fleet — a node-level override is per
 // (node × metric) — so it uses the virtualized `DataTable` rather than a hand-rolled grid, and the
@@ -140,13 +140,13 @@ export function ThresholdsPage() {
   // narrowing would only ever examine the 500 rules already on screen — which is the whole
   // reason this screen filters server-side (see `thresholdQuery.ts`).
   const ruleset = useLoad(() => api.listThresholds(queryFor(filterCols, filters)), [filterCols, filters], {
-    initial: { items: [], total: 0, truncated: false } as ThresholdPage,
+    initial: { items: [], total: 0, truncated: false, overridden: {} } as ThresholdPage,
   });
   const { data: page, loading, reload: rulesetReload } = ruleset;
   const rows = page.items;
-  /** Which rows a narrower rule on the same metric takes over from, read off the rows on screen.
-   *  Judged in `thresholdOverrides.ts`, which says what it can and cannot prove. */
-  const overridden = useMemo(() => overriddenRows(rows), [rows]);
+  /** On how many nodes a narrower rule on the same metric takes over from each row — counted by
+   *  the server across the whole fleet (ADR-200 Inc.29), read in `thresholdOverrides.ts`. */
+  const overridden = useMemo(() => overriddenRows(page), [page]);
 
   const columns = useMemo<Column<StoredThreshold>[]>(() => {
     const cols: Column<StoredThreshold>[] = [
@@ -178,9 +178,7 @@ export function ThresholdsPage() {
               infoKey="alertsConfig:thresholds.overridden.info"
               className="badge badge-neutral"
             >
-              {over.kind === 'nodes'
-                ? t('thresholds.overridden.nodes', { count: over.count })
-                : t('thresholds.overridden.rules', { count: over.count })}
+              {t('thresholds.overridden.nodes', { count: over })}
             </InfoPress>
           );
           const target =

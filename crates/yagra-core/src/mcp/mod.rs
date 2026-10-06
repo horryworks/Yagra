@@ -86,7 +86,8 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     unreachable, missing data means missing collection rather than a healthy quiet, and its \
     monitoring_gaps section names the windows where that was true. get_audit says who changed or \
     acknowledged what. To see how Yagra itself is set up — thresholds, event_rules, \
-    notification_channels, routing_rules, profiles, node_collection, forward_destinations, \
+    notification_channels, routing_rules, notification_default_route, profiles, node_collection, \
+    forward_destinations, \
     report_definitions and the deployment settings — use get_config; its `kind` argument selects \
     one, and each kind demands the permission the WebUI demands for the same screen. Node ids are \
     UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";

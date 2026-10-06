@@ -602,6 +602,21 @@ pub(crate) fn threshold_applies(
             return false;
         }
     }
+    scope_applies(t, node, ifindex, meta)
+}
+
+/// The scope half of [`threshold_applies`]: whether `t`'s level and targets reach `(node, ifindex)`,
+/// **regardless of its row pattern**.
+///
+/// Split out for [`overridden_counts`], which answers per node rather than per row and so must
+/// treat a row-pattern rule as reaching the node it is scoped to ("on some rows"). One predicate
+/// with two entry points, not a second copy of scope inheritance.
+fn scope_applies(
+    t: &StoredThreshold,
+    node: NodeId,
+    ifindex: Option<IfIndex>,
+    meta: Option<&NodeMeta>,
+) -> bool {
     match t.level {
         // The fleet default (ADR-075). It matches a node with no profile and no tags too —
         // which is the whole reason it exists, since a profile-scoped default cannot reach
@@ -718,6 +733,90 @@ pub(crate) fn matching_rules(
             (t.clone(), in_force)
         })
         .collect()
+}
+
+/// On how many nodes each rule is **overridden** — reaches the node, but a narrower rule on the same
+/// metric is in force there instead (ADR-200 Inc.29). Rules overridden nowhere are absent.
+///
+/// The unit is the **node**, and a partial override counts as a whole one:
+///
+/// * **Node level.** Every rule whose scope reaches the node is collected; the winners are the
+///   most specific level present, and among folder-group rules only the nearest folder — exactly
+///   the narrowing [`AlertConfig::resolve`] applies. Every other rule that reaches the node gets
+///   one. Rules at the *same* level merge rather than override, so none of them counts against
+///   another.
+/// * **Row patterns are ignored for reach.** A rule scoped to row names reaches its node "on some
+///   rows" — the server does not resolve row names here — so a profile rule with a pattern still
+///   overrides a global rule on that profile's nodes, and a pattern-only node rule still overrides
+///   the profile rule on that node. Which rows are affected is not counted.
+/// * **Ports**, only for a metric the catalogue says publishes per interface (`per_interface`): a
+///   node with any port rule on that metric adds one to each rule in force at the node level,
+///   because on those ports the port rule wins. A port rule on any other metric never takes
+///   effect, so it overrides nothing.
+///
+/// Membership comes from `node_meta`, so a node the snapshot has not seen yet is not counted.
+///
+/// Cost: per metric, the broad rules are checked once per node; a metric with no broad rule
+/// visits only the nodes its node rules name. The port bucket is never scanned per node — it is
+/// reduced to the set of nodes that have one, which is what keeps ~9,600 port rules out of the
+/// loop (the reason [`MetricRules`] exists).
+pub(crate) fn overridden_counts(
+    rules: &[StoredThreshold],
+    node_meta: &HashMap<NodeId, NodeMeta>,
+    per_interface: &BTreeSet<String>,
+) -> HashMap<Uuid, u32> {
+    let mut by_metric: HashMap<&str, MetricRules> = HashMap::new();
+    for (seq, t) in rules.iter().enumerate() {
+        let seq = u32::try_from(seq).unwrap_or(u32::MAX);
+        by_metric
+            .entry(t.rule.metric.as_str())
+            .or_default()
+            .insert(seq, t.clone());
+    }
+    let mut counts: HashMap<Uuid, u32> = HashMap::new();
+    for (metric, m) in &by_metric {
+        // The nodes on which a port rule for this metric can take effect at all.
+        let ported: std::collections::HashSet<Uuid> = if per_interface.contains(*metric) {
+            m.by_port.keys().map(|(n, _)| *n).collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+        let mut tally = |node: NodeId, meta: Option<&NodeMeta>| {
+            let applicable: Vec<&StoredThreshold> = m
+                .broad
+                .iter()
+                .chain(m.by_node.get(&node.as_uuid()).into_iter().flatten())
+                .map(|e| &e.t)
+                .filter(|t| scope_applies(t, node, None, meta))
+                .collect();
+            let Some(top) = applicable.iter().map(|t| t.level).max() else {
+                return;
+            };
+            let nearest = nearest_folder_depth(&applicable, meta);
+            let partly_by_port = ported.contains(&node.as_uuid());
+            for t in applicable {
+                let wins = t.level == top
+                    && (t.level != ScopeLevel::FolderGroup || folder_depth(t, meta) == nearest);
+                if !wins || partly_by_port {
+                    *counts.entry(t.id).or_default() += 1;
+                }
+            }
+        };
+        if m.broad.is_empty() {
+            // Only node rules: no other node has anything that could be overridden.
+            for id in m.by_node.keys() {
+                let node = NodeId::from(*id);
+                if let Some(meta) = node_meta.get(&node) {
+                    tally(node, Some(meta));
+                }
+            }
+        } else {
+            for (node, meta) in node_meta {
+                tally(*node, Some(meta));
+            }
+        }
+    }
+    counts
 }
 
 /// What the interface-threshold rules for one metric cover (ADR-076 decisions 3 and 10).
@@ -1846,5 +1945,367 @@ mod row_rule_tests {
             interface_check_id(node, IfIndex(2), M)
         );
         assert_ne!(row_check_id(node, 2, M), check_id(node, M));
+    }
+}
+
+/// ADR-200 Inc.29: how many nodes each rule is overridden on.
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+    use yagra_common::{ThresholdBounds, ThresholdRule};
+
+    const CPU: &str = "cpu_util";
+    const UTIL: &str = "if_in_util_pct";
+
+    fn rule(metric: &str, level: ScopeLevel, ids: &[&str], row: Option<&str>) -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            level,
+            ids.iter().map(|s| (*s).to_owned()).collect(),
+            ThresholdRule::new(metric, ThresholdBounds::above(Some(80.0), None), 1),
+        )
+        .with_row_match(row.map(str::to_owned))
+    }
+
+    fn port(node: NodeId, ifindex: u32) -> String {
+        format!("{}:{ifindex}", node.as_uuid())
+    }
+
+    /// The obvious way to count: ask [`matching_rules`] about every node, and about every port a
+    /// port rule names, and collect what is not in force. Row patterns are stripped first, because
+    /// the count is about reach and `matching_rules` answers for a row-less sample.
+    fn reference(
+        rules: &[StoredThreshold],
+        node_meta: &HashMap<NodeId, NodeMeta>,
+        per_interface: &BTreeSet<String>,
+    ) -> HashMap<Uuid, u32> {
+        let stripped: Vec<StoredThreshold> = rules
+            .iter()
+            .map(|t| t.clone().with_row_match(None))
+            .collect();
+        let mut counts: HashMap<Uuid, u32> = HashMap::new();
+        for (node, meta) in node_meta {
+            let mut over: BTreeSet<Uuid> = BTreeSet::new();
+            for (t, in_force) in matching_rules(&stripped, *node, None, Some(meta)) {
+                if !in_force {
+                    over.insert(t.id);
+                }
+            }
+            let ports: BTreeSet<u32> = stripped
+                .iter()
+                .filter(|t| t.level == ScopeLevel::Interface)
+                .flat_map(|t| t.scope_ids.iter())
+                .filter_map(|s| yagra_common::parse_interface_scope_id(s))
+                .filter(|(n, _)| *n == node.as_uuid())
+                .map(|(_, p)| p)
+                .collect();
+            for p in ports {
+                for (t, in_force) in matching_rules(&stripped, *node, Some(IfIndex(p)), Some(meta))
+                {
+                    if !in_force && per_interface.contains(&t.rule.metric) {
+                        over.insert(t.id);
+                    }
+                }
+            }
+            for id in over {
+                *counts.entry(id).or_default() += 1;
+            }
+        }
+        counts
+    }
+
+    struct Fixture {
+        rules: Vec<StoredThreshold>,
+        meta: HashMap<NodeId, NodeMeta>,
+        per_interface: BTreeSet<String>,
+        names: HashMap<&'static str, Uuid>,
+    }
+
+    fn fixture() -> Fixture {
+        let (a, b, c, d) = (NodeId::new(), NodeId::new(), NodeId::new(), NodeId::new());
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let (ps, cs) = (parent.to_string(), child.to_string());
+        let named: Vec<(&'static str, StoredThreshold)> = vec![
+            ("global", rule(CPU, ScopeLevel::Global, &[], None)),
+            ("profile", rule(CPU, ScopeLevel::Profile, &["switch"], None)),
+            ("tag", rule(CPU, ScopeLevel::Group, &["prod"], None)),
+            ("parent", rule(CPU, ScopeLevel::FolderGroup, &[&ps], None)),
+            ("child", rule(CPU, ScopeLevel::FolderGroup, &[&cs], None)),
+            (
+                "node_a",
+                rule(CPU, ScopeLevel::Node, &[&a.to_string()], None),
+            ),
+            // A node rule that only reaches some of c's rows: still an override on c.
+            (
+                "node_c_row",
+                rule(CPU, ScopeLevel::Node, &[&c.to_string()], Some("IO")),
+            ),
+            // A port rule on a metric that is not per-interface never takes effect.
+            (
+                "port_a_cpu",
+                rule(CPU, ScopeLevel::Interface, &[&port(a, 7)], None),
+            ),
+            ("util_global", rule(UTIL, ScopeLevel::Global, &[], None)),
+            (
+                "util_profile",
+                rule(UTIL, ScopeLevel::Profile, &["router"], None),
+            ),
+            (
+                "util_port_b",
+                rule(UTIL, ScopeLevel::Interface, &[&port(b, 3)], None),
+            ),
+            (
+                "util_port_c",
+                rule(
+                    UTIL,
+                    ScopeLevel::Interface,
+                    &[&port(c, 1), &port(c, 2)],
+                    None,
+                ),
+            ),
+            // Same level as `profile`, with a pattern: merges with it, never overrides it.
+            (
+                "profile_row",
+                rule(CPU, ScopeLevel::Profile, &["switch"], Some("IO")),
+            ),
+        ];
+        let mut meta = HashMap::new();
+        meta.insert(
+            a,
+            NodeMeta {
+                profile: Some("switch".into()),
+                folder_group: Some(child),
+                folder_chain: vec![child, parent],
+                ..NodeMeta::default()
+            },
+        );
+        meta.insert(
+            b,
+            NodeMeta {
+                profile: Some("switch".into()),
+                folder_group: Some(parent),
+                folder_chain: vec![parent],
+                ..NodeMeta::default()
+            },
+        );
+        meta.insert(
+            c,
+            NodeMeta {
+                profile: Some("router".into()),
+                ..NodeMeta::default()
+            },
+        );
+        meta.insert(
+            d,
+            NodeMeta {
+                profile: Some("switch".into()),
+                tag_groups: ["prod".to_owned()].into_iter().collect(),
+                folder_group: Some(child),
+                folder_chain: vec![child, parent],
+            },
+        );
+        Fixture {
+            names: named.iter().map(|(n, t)| (*n, t.id)).collect(),
+            rules: named.into_iter().map(|(_, t)| t).collect(),
+            meta,
+            per_interface: [UTIL.to_owned()].into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn each_rule_is_counted_on_the_nodes_a_narrower_rule_takes_over() {
+        let f = fixture();
+        let got = overridden_counts(&f.rules, &f.meta, &f.per_interface);
+        let count = |name: &str| got.get(&f.names[name]).copied().unwrap_or(0);
+        // a: the node rule wins. b: the parent folder wins. c: the row-pattern node rule wins.
+        // d: the child folder wins (nearest), so the tag rule and the parent folder lose there.
+        assert_eq!(count("global"), 4);
+        assert_eq!(count("profile"), 3, "a, b and d, not c, which is a router");
+        assert_eq!(
+            count("profile_row"),
+            3,
+            "same level as `profile`, same nodes"
+        );
+        assert_eq!(count("tag"), 1, "d only");
+        assert_eq!(
+            count("parent"),
+            2,
+            "the child folder on d, the node rule on a"
+        );
+        assert_eq!(count("child"), 1, "the node rule on a");
+        assert_eq!(count("node_a"), 0);
+        assert_eq!(count("node_c_row"), 0);
+        assert_eq!(count("port_a_cpu"), 0, "nothing is narrower than a port");
+        // Per-interface: b and c have port rules, so what is in force on them loses some ports.
+        assert_eq!(count("util_global"), 2, "b by its port, c by the profile");
+        assert_eq!(count("util_profile"), 1, "c by its two ports, counted once");
+        assert_eq!(count("util_port_b"), 0);
+        assert_eq!(count("util_port_c"), 0);
+        // Zero is absent, never stored.
+        assert!(got.values().all(|n| *n > 0));
+    }
+
+    #[test]
+    fn a_profile_rule_is_overridden_on_the_one_node_with_its_own_rule() {
+        let (a, b) = (NodeId::new(), NodeId::new());
+        let profile = rule(CPU, ScopeLevel::Profile, &["switch"], None);
+        let node = rule(CPU, ScopeLevel::Node, &[&a.to_string()], None);
+        let switch = NodeMeta {
+            profile: Some("switch".into()),
+            ..NodeMeta::default()
+        };
+        let meta: HashMap<NodeId, NodeMeta> =
+            [(a, switch.clone()), (b, switch)].into_iter().collect();
+        let got = overridden_counts(&[profile.clone(), node.clone()], &meta, &BTreeSet::new());
+        assert_eq!(got.get(&profile.id), Some(&1));
+        assert_eq!(got.get(&node.id), None);
+    }
+
+    #[test]
+    fn a_parent_folder_rule_is_overridden_where_a_child_folder_rule_reaches() {
+        let (inner, outer) = (NodeId::new(), NodeId::new());
+        let (parent, child) = (Uuid::new_v4(), Uuid::new_v4());
+        let on_parent = rule(CPU, ScopeLevel::FolderGroup, &[&parent.to_string()], None);
+        let on_child = rule(CPU, ScopeLevel::FolderGroup, &[&child.to_string()], None);
+        let meta: HashMap<NodeId, NodeMeta> = [
+            (
+                inner,
+                NodeMeta {
+                    folder_chain: vec![child, parent],
+                    ..NodeMeta::default()
+                },
+            ),
+            (
+                outer,
+                NodeMeta {
+                    folder_chain: vec![parent],
+                    ..NodeMeta::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let got = overridden_counts(
+            &[on_parent.clone(), on_child.clone()],
+            &meta,
+            &BTreeSet::new(),
+        );
+        assert_eq!(got.get(&on_parent.id), Some(&1));
+        assert_eq!(got.get(&on_child.id), None);
+    }
+
+    #[test]
+    fn a_port_rule_overrides_only_on_a_metric_collected_per_port() {
+        let a = NodeId::new();
+        let global = rule(CPU, ScopeLevel::Global, &[], None);
+        let on_port = rule(CPU, ScopeLevel::Interface, &[&port(a, 7)], None);
+        let meta: HashMap<NodeId, NodeMeta> = [(a, NodeMeta::default())].into_iter().collect();
+        let rules = [global.clone(), on_port];
+        assert!(overridden_counts(&rules, &meta, &BTreeSet::new()).is_empty());
+        let per_port: BTreeSet<String> = [CPU.to_owned()].into_iter().collect();
+        assert_eq!(
+            overridden_counts(&rules, &meta, &per_port).get(&global.id),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn the_indexed_count_agrees_with_the_reference_implementation() {
+        let f = fixture();
+        let subsets: Vec<Vec<StoredThreshold>> = vec![
+            Vec::new(),
+            f.rules.clone(),
+            f.rules.iter().rev().cloned().collect(),
+            f.rules.iter().skip(1).cloned().collect(),
+            f.rules.iter().step_by(2).cloned().collect(),
+            f.rules
+                .iter()
+                .filter(|t| t.level != ScopeLevel::Node)
+                .cloned()
+                .collect(),
+        ];
+        let interface_sets: Vec<BTreeSet<String>> = vec![
+            BTreeSet::new(),
+            f.per_interface.clone(),
+            [CPU.to_owned(), UTIL.to_owned()].into_iter().collect(),
+        ];
+        let mut compared = 0usize;
+        let mut nonzero = 0usize;
+        for subset in &subsets {
+            for per_interface in &interface_sets {
+                let got = overridden_counts(subset, &f.meta, per_interface);
+                let want = reference(subset, &f.meta, per_interface);
+                assert_eq!(
+                    got,
+                    want,
+                    "{} rules, per-interface {per_interface:?}",
+                    subset.len()
+                );
+                compared += 1;
+                nonzero += got.len();
+            }
+        }
+        // A differential test where both sides answer "nothing" agrees perfectly and proves
+        // nothing, so the counts are the load-bearing half.
+        assert_eq!(compared, 18);
+        assert!(
+            nonzero > 40,
+            "only {nonzero} non-zero counts across the corpus"
+        );
+    }
+
+    /// Not part of the suite: prints the time for a fleet-sized input. Run with
+    /// `cargo test -p yagra-core overridden_counts_at_fleet_scale -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing only"]
+    fn overridden_counts_at_fleet_scale() {
+        let folders: Vec<Uuid> = (0..20).map(|_| Uuid::new_v4()).collect();
+        let mut meta = HashMap::new();
+        let mut nodes = Vec::new();
+        for i in 0..10_000usize {
+            let node = NodeId::new();
+            nodes.push(node);
+            let f = folders[i % folders.len()];
+            meta.insert(
+                node,
+                NodeMeta {
+                    profile: Some(format!("p{}", i % 10)),
+                    folder_group: Some(f),
+                    folder_chain: vec![f],
+                    ..NodeMeta::default()
+                },
+            );
+        }
+        // 20 broad rules per metric: global, 9 profiles, 10 folders.
+        let mut broad = vec![rule(CPU, ScopeLevel::Global, &[], None)];
+        for p in 0..9 {
+            broad.push(rule(CPU, ScopeLevel::Profile, &[&format!("p{p}")], None));
+        }
+        for f in folders.iter().take(10) {
+            broad.push(rule(CPU, ScopeLevel::FolderGroup, &[&f.to_string()], None));
+        }
+        let mut rules = broad.clone();
+        // The same 20 on a per-interface metric, plus 9,600 port rules on 100 nodes.
+        for t in broad {
+            rules.push(rule(UTIL, t.level, &[], None).with_row_match(None));
+            let last = rules.len() - 1;
+            rules[last].scope_ids = t.scope_ids.clone();
+        }
+        for node in nodes.iter().take(100) {
+            for p in 0..96 {
+                rules.push(rule(UTIL, ScopeLevel::Interface, &[&port(*node, p)], None));
+            }
+        }
+        let per_interface: BTreeSet<String> = [UTIL.to_owned()].into_iter().collect();
+        let started = std::time::Instant::now();
+        let got = overridden_counts(&rules, &meta, &per_interface);
+        let took = started.elapsed();
+        println!(
+            "overridden_counts: 10,000 nodes, 2 metrics x 20 broad rules, 9,600 port rules: \
+             {took:?} ({} rules overridden somewhere)",
+            got.len()
+        );
+        assert!(!got.is_empty());
     }
 }

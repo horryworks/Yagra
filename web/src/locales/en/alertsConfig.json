@@ -48,7 +48,11 @@
       "disable": "Disable rule",
       "delete": "Delete rule",
       "deleteTitle": "Delete routing rule",
-      "deleteBody": "Delete rule <strong>{{name}}</strong>? Matching alerts will fall back to the env default route.",
+      "deleteBody": "Delete rule <strong>{{name}}</strong>? Its channels stop receiving matching alerts.",
+      "defaultRoute": {
+        "allAlerts": "All alerts",
+        "notSet": "Not set"
+      },
       "allSeverities": "All severities",
       "edit": "Edit rule"
     },
@@ -541,9 +545,7 @@
     "overridden": {
       "nodes_one": "Overridden on {{count}} node",
       "nodes_other": "Overridden on {{count}} nodes",
-      "rules_one": "Overridden by {{count}} rule",
-      "rules_other": "Overridden by {{count}} rules",
-      "info": "A narrower rule on this metric applies there instead of this one."
+      "info": "A narrower rule on this metric applies on those nodes instead, for some or all rows or ports."
     }
   },
   "eventRules": {

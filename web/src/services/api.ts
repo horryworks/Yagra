@@ -132,6 +132,7 @@ import type {
   ReportSectionDef,
   Role,
   RoleMatrix,
+  NotificationDefaultRoute,
   RoutingRule,
   ChannelKind,
   NotifyEvent,
@@ -2264,6 +2265,11 @@ export const api = {
 
   /** Routing rules (which alerts, by severity, fan out to which channels). */
   listRoutingRules: (): Promise<RoutingRule[]> => apiGet('/api/v1/routing-rules'),
+
+  /** The default route set by the core's environment: whether it exists and which kinds of
+   *  channel it sends every alert to — never where (ADR-200 Inc.28). */
+  getNotificationDefaultRoute: (): Promise<NotificationDefaultRoute> =>
+    apiGet('/api/v1/notification-default-route'),
 
   /** Create a routing rule. `severity` null ⇒ matches all severities. */
   createRoutingRule: (body: {

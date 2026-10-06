@@ -562,4 +562,37 @@ mod tests {
             "the list handed the raw token back"
         );
     }
+
+    /// The idle window is reported for a token whose owner signs in through an IdP, and only then.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_listing_names_the_idle_window_only_for_an_sso_owner(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, owner) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/api-tokens",
+            &tok,
+            Some(serde_json::json!({ "name": "ci", "role": "viewer" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+
+        let (_, list) = send(&st, "GET", "/api/v1/api-tokens", &tok, None).await;
+        assert!(list[0]["owner_idle_days"].is_null(), "local owner: {list}");
+
+        sqlx::query("UPDATE users SET auth_source = 'oidc' WHERE id = $1")
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .expect("make the owner an SSO account");
+        let (_, list) = send(&st, "GET", "/api/v1/api-tokens", &tok, None).await;
+        assert_eq!(
+            list[0]["owner_idle_days"],
+            serde_json::json!(crate::config::DEFAULT_PAT_OIDC_IDLE_DAYS),
+            "SSO owner: {list}"
+        );
+    }
 }

@@ -3,7 +3,8 @@
 // CHANNELS (where alerts can go — webhook/email; the connection config is a secret, sealed
 // server-side and never returned) and routing RULES (which alerts, by severity, fan out to
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;
-// any env-configured channel stays an always-on default route. The third section is the delivery
+// any env-configured channel stays an always-on default route, shown as one line above the rules
+// (ADR-200 Inc.28). The third section is the delivery
 // log (ADR-195, `DeliveryLog.tsx`): what each delivery did, and on whose side a failure was.
 //
 // Data-table standard v2: each list is a section header + toolbar (count + "+ Add …") over the
@@ -19,6 +20,7 @@ import {
   type ChannelKind,
   type ChannelTestResult,
   type NotificationChannel,
+  type NotificationDefaultRoute,
   type RoutingRule,
   type Severity,
 } from '../types/api';
@@ -53,6 +55,7 @@ import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTes
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { DeliveryLog } from './DeliveryLog';
+import { defaultRouteChannels } from './defaultRoute';
 import { DELIVERY_FILTER_PREFIX, deliveryFilters } from './deliveryLogQuery';
 import { specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
@@ -89,6 +92,13 @@ export function RoutingPage() {
     loading,
     reload: load,
   } = routing;
+  // Apart from the read above: the default route is a fact about this core's environment, and a
+  // failure to read it must not take the rule list with it. It stays `null`, and nothing is drawn.
+  const { data: defaultRoute } = useLoad<NotificationDefaultRoute | null>(
+    () => api.getNotificationDefaultRoute(),
+    [],
+    { initial: null },
+  );
 
   // The delivery log's filters live here rather than in its section so a channel row can narrow
   // the log to that channel (ADR-195). In the URL under `log.`.
@@ -118,6 +128,7 @@ export function RoutingPage() {
         />
         <RulesSection
           rules={rules}
+          defaultRoute={defaultRoute}
           channels={channels}
           canSystem={canSystem}
           loading={loading}
@@ -552,6 +563,7 @@ function AddChannelModal({
 
 function RulesSection({
   rules,
+  defaultRoute,
   channels,
   canSystem,
   loading,
@@ -559,6 +571,7 @@ function RulesSection({
   onError,
 }: {
   rules: RoutingRule[];
+  defaultRoute: NotificationDefaultRoute | null;
   channels: NotificationChannel[];
   canSystem: boolean;
   loading: boolean;
@@ -681,6 +694,19 @@ function RulesSection({
           </Button>
         )}
       </ListToolbar>
+
+      {/* The env default route, read-only: it is sent every alert whatever the rules say. A line
+          rather than a pinned row, because the rules table is filtered and counted in the browser
+          and a row that is not a rule would be filtered and counted with them. */}
+      {defaultRoute && (
+        <p className="routing-default-route">
+          <span className="yt-name-txt">{t('routing.log.defaultRoute')}</span>
+          <Badge tone="neutral">{t('routing.rules.defaultRoute.allAlerts')}</Badge>
+          <span className="muted">
+            {defaultRouteChannels(defaultRoute) ?? t('routing.rules.defaultRoute.notSet')}
+          </span>
+        </p>
+      )}
 
       <DataTable
         tableId="settings.routingRules"

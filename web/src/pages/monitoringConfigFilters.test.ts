@@ -24,6 +24,7 @@ const tmpl = (over: Partial<CollectionTemplate> = {}): CollectionTemplate => ({
   name: 'Standard interfaces',
   description: 'if_hc counters for every port',
   item_count: 6,
+  profile_count: 2,
   ...over,
 });
 

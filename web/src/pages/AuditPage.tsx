@@ -32,7 +32,15 @@ import { useFilterParams } from '../lib/useFilterParams';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
 import { parseAction } from './auditRow';
-import { appendPage, auditFilters, exportUrl, nextCursor, queryFor } from './auditQuery';
+import {
+  appendPage,
+  auditFilters,
+  auditRetention,
+  exportUrl,
+  nextCursor,
+  queryFor,
+  type AuditRetention,
+} from './auditQuery';
 
 /** Columns for the virtualized table. Stateless renderers, but the headers + synthetic "sign in"
  *  label are localized, so build them from the calling component's `t` (rebuild on language
@@ -87,6 +95,9 @@ export function AuditPage() {
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
+  // How long the log is kept, shown once the whole log has been read. A failed read shows nothing:
+  // this one line is not worth an error on a screen whose subject is the log itself.
+  const [retention, setRetention] = useState<AuditRetention | null>(null);
 
   // The search box settles before it is sent; the selects commit immediately (picking an option is
   // already a deliberate act, and waiting on it would feel broken).
@@ -142,6 +153,22 @@ export function AuditPage() {
       cancelled = true;
     };
   }, [authed, filterCols, rowFilters, nowMs, t]);
+
+  useEffect(() => {
+    if (!authed) return;
+    let cancelled = false;
+    api
+      .getRetention()
+      .then((p) => {
+        if (!cancelled) setRetention(auditRetention(p.rows));
+      })
+      .catch(() => {
+        if (!cancelled) setRetention(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authed]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || cursor === null) return;
@@ -229,6 +256,13 @@ export function AuditPage() {
             loading={loading}
             empty={filtered ? t('audit.empty.filtered') : t('audit.empty.none')}
           />
+          {retention && !loading && cursor === null && rows.length > 0 && (
+            <p className="muted">
+              {retention.kind === 'days'
+                ? t('audit.retention.days', { count: retention.days })
+                : t('audit.retention.indefinite')}
+            </p>
+          )}
         </>
       )}
     </div>

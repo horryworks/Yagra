@@ -70,6 +70,15 @@ pub(crate) struct ThresholdPage {
     total: i64,
     /// Whether `items` is a prefix of the matching rules rather than all of them.
     truncated: bool,
+    /// For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on
+    /// the same metric applies instead. A rule overridden nowhere has no entry.
+    ///
+    /// Counted across the whole fleet, regardless of the filter and the cap. The unit is the node:
+    /// a node counts once even when the narrower rule covers only some of its ports or table rows.
+    /// Rules at the same scope level combine rather than override, so they do not count against
+    /// each other. Which nodes a profile, label or folder holds is read from the alert engine's
+    /// copy, which can be up to about 30 seconds old.
+    overridden: std::collections::BTreeMap<Uuid, u32>,
 }
 
 /// `?limit=` plus the filters, all optional.
@@ -107,6 +116,7 @@ pub(super) struct ThresholdQuery {
 )]
 async fn list_thresholds(
     _guard: RequireManageConfig,
+    State(st): State<ApiState>,
     Query(q): Query<ThresholdQuery>,
     admin: Admin,
 ) -> ApiResult<Json<ThresholdPage>> {
@@ -130,6 +140,7 @@ async fn list_thresholds(
     Ok(Json(
         threshold_page(
             &admin,
+            &st.alerts,
             q.limit,
             &crate::thresholds::ThresholdFilter {
                 metric: metric.as_deref(),
@@ -161,6 +172,7 @@ async fn list_thresholds(
 /// those are the ones that grow with the fleet.
 pub(crate) async fn threshold_page(
     admin: &super::AdminState,
+    alerts: &std::sync::Arc<crate::alerts::AlertManager>,
     limit: Option<i64>,
     filter: &crate::thresholds::ThresholdFilter<'_>,
 ) -> ApiResult<ThresholdPage> {
@@ -176,11 +188,49 @@ pub(crate) async fn threshold_page(
     if truncated {
         tracing::info!(total, limit, "threshold list capped to the page limit");
     }
+    let overridden = overridden_on_page(admin, alerts, &items).await?;
     Ok(ThresholdPage {
         items,
         total,
         truncated,
+        overridden,
     })
+}
+
+/// The override counts for the rules on one page (ADR-200 Inc.29).
+///
+/// Counted over **every** rule, read fresh — the filter and the cap decide what is shown, not what
+/// can override it, and a rule saved a second ago must count. The count walks the fleet, so it runs
+/// off the async workers; an empty page skips both the read and the walk.
+async fn overridden_on_page(
+    admin: &super::AdminState,
+    alerts: &std::sync::Arc<crate::alerts::AlertManager>,
+    items: &[crate::thresholds::StoredThreshold],
+) -> ApiResult<std::collections::BTreeMap<Uuid, u32>> {
+    if items.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let all = admin.thresholds.list_all().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "count overridden thresholds",
+            "failed to list thresholds",
+        )
+    })?;
+    let engine = std::sync::Arc::clone(alerts);
+    let counts = tokio::task::spawn_blocking(move || engine.overridden_counts(&all))
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                &e,
+                "count overridden thresholds",
+                "failed to list thresholds",
+            )
+        })?;
+    Ok(items
+        .iter()
+        .filter_map(|t| counts.get(&t.id).map(|n| (t.id, *n)))
+        .collect())
 }
 
 /// One rule that reaches a port, and whether it is the one in force there.
