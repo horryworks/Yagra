@@ -10,6 +10,7 @@
 // what the certificate carries, here.
 
 import type { BusTlsView } from '../types/api';
+import { eqIgnoreAsciiCase, trimLikeCore } from './coreText';
 
 /** How close to expiry the card starts warning. A bus certificate is not renewed automatically —
  *  see `bus_cert.rs` — so this is the operator's only prompt, and it has to leave time to visit the
@@ -67,16 +68,23 @@ export function parseBusNames(text: string): string[] {
 
 /** Does this certificate already cover `name`?
  *
- *  Case-insensitive, and **exact only** — no wildcard matching. That is deliberate rather than
- *  unfinished: `generate_self_signed` never emits a wildcard SAN, so accepting `*.example.net` here
- *  would report a name as covered that the certificate cannot actually present. A UI that is wrong
- *  in the permissive direction sends someone to a site to debug a connection this page told them
- *  would work. */
+ *  Exact only — no wildcard matching. That is deliberate rather than unfinished:
+ *  `generate_self_signed` never emits a wildcard SAN, so accepting `*.example.net` here would
+ *  report a name as covered that the certificate cannot actually present. A UI that is wrong in
+ *  the permissive direction sends someone to a site to debug a connection this page told them
+ *  would work.
+ *
+ *  The trim and the case fold are core's, not JavaScript's — this is the mirror of
+ *  `api/pollers.rs::uncovered_bus_host`, and the two run one case table
+ *  (`fixtures/busHostCoverage.cases.json`). JavaScript's own pair disagrees with core in both
+ *  directions: `trim()` keeps U+0085 where `str::trim` strips it, so a pasted address with one
+ *  would be refused here and accepted there, and `toLowerCase()` folds the whole of Unicode where
+ *  `eq_ignore_ascii_case` folds only `A`-`Z`. SANs are compared as stored, because core does. */
 export function coversName(cert: BusTlsView | null | undefined, name: string): boolean {
   if (!cert) return false;
-  const want = name.trim().toLowerCase();
+  const want = trimLikeCore(name);
   if (!want) return false;
-  return cert.sans.some((s) => s.trim().toLowerCase() === want);
+  return cert.sans.some((s) => eqIgnoreAsciiCase(s, want));
 }
 
 /** The names in `names` this certificate does not carry. Empty ⇒ every site can connect. */
@@ -94,6 +102,20 @@ export function externalBusNames(sans: readonly string[] | null | undefined): st
   return (sans ?? []).filter((s) => !INTERNAL_BUS_NAMES.includes(s));
 }
 
+/** The address the kit dialog sends, cleaned exactly as far as the reissue field cleans a SAN.
+ *
+ *  Trimmed the way core trims, then stripped of U+FEFF. Core's `str::trim` keeps that character,
+ *  but `parseBusNames` already drops it from a typed SAN -- JavaScript's `\s` matches it -- so an
+ *  address pasted with one could never match the certificate it was pasted into, and the refusal
+ *  would name an address that looks identical to the SAN beside it. Removing it here means the
+ *  two fields treat the same pasted string the same way.
+ *
+ *  The check and the request both read this one value, so the dialog never predicts core's answer
+ *  about a string it is not going to send. */
+export function normalizeBusHost(host: string): string {
+  return trimLikeCore(host.replace(/\ufeff/g, ''));
+}
+
 /** What to warn about for the address typed into the kit dialog, before the request is sent.
  *
  *  The only place an operator names the address a site will dial is that dialog, and the address is
@@ -103,7 +125,7 @@ export function externalBusNames(sans: readonly string[] | null | undefined): st
  *  construction) and empty while the certificate is unknown, because a warning built on a failed
  *  read would refuse an address the server might accept. */
 export function uncoveredKitHost(cert: BusTlsView | null | undefined, host: string): string[] {
-  const typed = host.trim();
+  const typed = trimLikeCore(host);
   if (!cert || !typed) return [];
   return namesNotCovered(cert, [typed]);
 }

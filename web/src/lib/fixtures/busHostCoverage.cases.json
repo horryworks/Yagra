@@ -1,0 +1,62 @@
+{
+  "about": "Whether the bus certificate covers the address a remote site will dial: crates/yagra-core/src/api/pollers.rs::uncovered_bus_host and web/src/lib/busCert.ts::uncoveredKitHost both run every case. \"uncovered\" is the trimmed address the operator is told to reissue for, or null when the certificate carries it (a blank address is null: the server picks its own default). \"sans\" defaults to the list below; a case may carry its own.",
+  "sans": ["nats", "localhost", "127.0.0.1", "::1", "yagra.example.net", "203.0.113.10", "2001:db8::10"],
+  "cases": [
+    { "typed": "yagra.example.net", "uncovered": null },
+    { "typed": "Yagra.Example.Net", "uncovered": null },
+    { "typed": "YAGRA.EXAMPLE.NET", "uncovered": null },
+    { "typed": "nats", "uncovered": null },
+    { "typed": "localhost", "uncovered": null },
+    { "typed": "127.0.0.1", "uncovered": null },
+    { "typed": "::1", "uncovered": null },
+    { "typed": "203.0.113.10", "uncovered": null },
+    { "typed": "2001:db8::10", "uncovered": null },
+    { "typed": "2001:DB8::10", "uncovered": null },
+
+    { "typed": "site-b.example.net", "uncovered": "site-b.example.net" },
+    { "typed": "198.51.100.5", "uncovered": "198.51.100.5" },
+    { "typed": "yagra.example.net.", "uncovered": "yagra.example.net." },
+    { "typed": "yagra.example.net:4222", "uncovered": "yagra.example.net:4222" },
+    { "typed": "[2001:db8::10]", "uncovered": "[2001:db8::10]" },
+    { "typed": "yagra. example.net", "uncovered": "yagra. example.net" },
+
+    { "typed": "", "uncovered": null },
+    { "typed": "   ", "uncovered": null },
+    { "typed": "\t\n", "uncovered": null },
+    { "typed": " yagra.example.net ", "uncovered": null },
+    { "typed": "\tyagra.example.net\n", "uncovered": null },
+    { "typed": " site-b.example.net ", "uncovered": "site-b.example.net" },
+
+    { "typed": "\u0085yagra.example.net", "uncovered": null },
+    { "typed": "yagra.example.net\u0085", "uncovered": null },
+    { "typed": "\u0085 yagra.example.net \u0085", "uncovered": null },
+    { "typed": "\u0085", "uncovered": null },
+    { "typed": "\u0085site-b.example.net", "uncovered": "site-b.example.net" },
+    { "typed": " yagra.example.net", "uncovered": null },
+    { "typed": "　yagra.example.net　", "uncovered": null },
+    { "typed": " yagra.example.net", "uncovered": null },
+    { "typed": " yagra.example.net", "uncovered": null },
+    { "typed": "\u000byagra.example.net", "uncovered": null },
+    { "typed": "\u000cyagra.example.net", "uncovered": null },
+    { "typed": "\r\nyagra.example.net\r\n", "uncovered": null },
+
+    { "typed": "﻿yagra.example.net", "uncovered": "﻿yagra.example.net" },
+    { "typed": "yagra.example.net﻿", "uncovered": "yagra.example.net﻿" },
+    { "typed": "﻿", "uncovered": "﻿" },
+    { "typed": " ﻿ yagra.example.net", "uncovered": "﻿ yagra.example.net" },
+
+    { "typed": "*.example.net", "uncovered": "*.example.net" },
+    { "sans": ["*.example.net"], "typed": "a.example.net", "uncovered": "a.example.net" },
+    { "sans": ["*.example.net"], "typed": "*.example.net", "uncovered": null },
+    { "sans": [], "typed": "yagra.example.net", "uncovered": "yagra.example.net" },
+    { "sans": ["  yagra.example.net  "], "typed": "yagra.example.net", "uncovered": "yagra.example.net" },
+
+    { "sans": ["k.example.net"], "typed": "K.example.net", "uncovered": "K.example.net" },
+    { "sans": ["k.example.net"], "typed": "K.example.net", "uncovered": null },
+    { "sans": ["i.example.net"], "typed": "İ.example.net", "uncovered": "İ.example.net" },
+    { "sans": ["σ.example.net"], "typed": "Σ.example.net", "uncovered": "Σ.example.net" },
+    { "sans": ["sw-é.example.net"], "typed": "sw-É.example.net", "uncovered": "sw-É.example.net" },
+    { "sans": ["sw-é.example.net"], "typed": "sw-é.example.net", "uncovered": null },
+    { "sans": ["sw-é.example.net"], "typed": "SW-é.EXAMPLE.net", "uncovered": null }
+  ]
+}

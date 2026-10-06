@@ -75,7 +75,7 @@ import { DndContext, useDraggable, useDroppable, PointerSensor, useSensor, useSe
 import type { DragEndEvent } from '@dnd-kit/core';
 import { decodeSet, toggleSetValue } from '../lib/columnFilter';
 import { BusPanel } from './BusPanel';
-import { uncoveredKitHost } from '../lib/busCert';
+import { normalizeBusHost, uncoveredKitHost } from '../lib/busCert';
 import './PollersPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
@@ -922,7 +922,10 @@ function PollerTokenModal({
       live = false;
     };
   }, []);
-  const uncovered = uncoveredKitHost(cert, host);
+  // One expression for both the check and the request: checking one string and sending another is
+  // how a field refuses an address the server would have taken.
+  const typedHost = normalizeBusHost(host);
+  const uncovered = uncoveredKitHost(cert, typedHost);
   // On by default (ADR-051 Inc.4 decision 15). The site can turn it off later in its own `.env`,
   // which is the file no upgrade replaces — so this is a starting point rather than a commitment.
   const [selfUpgrade, setSelfUpgrade] = useState(true);
@@ -943,7 +946,7 @@ function PollerTokenModal({
       api
         .issuePollerToken(poller.id, {
           pool: poller.pool || undefined,
-          host: host.trim() || undefined,
+          host: typedHost || undefined,
           self_upgrade: selfUpgrade,
         })
         .then(({ blob, filename }) => {

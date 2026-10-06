@@ -9,9 +9,11 @@ import {
   externalBusNames,
   INTERNAL_BUS_NAMES,
   namesNotCovered,
+  normalizeBusHost,
   parseBusNames,
   uncoveredKitHost,
 } from './busCert';
+import busHostCases from './fixtures/busHostCoverage.cases.json';
 
 function cert(over: Partial<BusTlsView> = {}): BusTlsView {
   return {
@@ -108,6 +110,29 @@ describe('externalBusNames', () => {
   });
 });
 
+describe('normalizeBusHost', () => {
+  it('trims the way core trims', () => {
+    expect(normalizeBusHost('  yagra.example.net  ')).toBe('yagra.example.net');
+    // U+0085 is whitespace to Rust and not to JavaScript, which is what made the dialog refuse
+    // an address core would have accepted.
+    expect(normalizeBusHost('\u0085yagra.example.net\u0085')).toBe('yagra.example.net');
+  });
+
+  it('drops a pasted U+FEFF, which the reissue field already drops from a SAN', () => {
+    // Core keeps it, so an address carrying one can never match a certificate whose SAN list
+    // was typed into a field that splits on JavaScript whitespace. Leaving it in would refuse
+    // the operator with an error naming an address that looks exactly like the covered one.
+    expect(parseBusNames('\ufeffyagra.example.net')).toEqual(['yagra.example.net']);
+    expect(normalizeBusHost('\ufeffyagra.example.net\ufeff')).toBe('yagra.example.net');
+  });
+
+  it('changes nothing else', () => {
+    expect(normalizeBusHost('Yagra.Example.Net')).toBe('Yagra.Example.Net');
+    expect(normalizeBusHost('')).toBe('');
+    expect(normalizeBusHost('   ')).toBe('');
+  });
+});
+
 describe('uncoveredKitHost', () => {
   const withSite = cert({ sans: ['nats', 'yagra.example.net'] });
 
@@ -126,6 +151,27 @@ describe('uncoveredKitHost', () => {
     // certificate is a failed read, and refusing on it would block an address the server accepts.
     expect(uncoveredKitHost(withSite, '   ')).toEqual([]);
     expect(uncoveredKitHost(null, '203.0.113.10')).toEqual([]);
+  });
+
+  // The same table runs against core's `api/pollers.rs::uncovered_bus_host`
+  // (`uncovered_bus_host_answers_the_case_table_the_kit_dialog_shares`). The rows that earn it are
+  // the invisible characters and the case fold: this copy first used JavaScript's `trim` and
+  // `toLowerCase`, which strip U+FEFF where Rust keeps it, keep U+0085 where Rust strips it, and
+  // fold the whole of Unicode where `eq_ignore_ascii_case` folds only A-Z. The first of those held
+  // the Issue button closed over an address core would have accepted.
+  it('answers every case of the table core runs', () => {
+    expect(busHostCases.cases.length).toBeGreaterThanOrEqual(40);
+    const wrong = busHostCases.cases
+      .map((c) => {
+        const sans = (c as { sans?: string[] }).sans ?? busHostCases.sans;
+        const got = uncoveredKitHost(cert({ sans }), c.typed)[0] ?? null;
+        const want = c.uncovered ?? null;
+        return got === want
+          ? null
+          : `${JSON.stringify(c.typed)}: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`;
+      })
+      .filter((m) => m !== null);
+    expect(wrong).toEqual([]);
   });
 });
 

@@ -823,6 +823,24 @@ const POLLER_TOKEN_LEN: usize = 40;
 /// to be filled in wrongly.
 const INTERNAL_NAMES: &[&str] = &["nats", "localhost", "127.0.0.1", "::1"];
 
+/// The address a site will dial, when the bus certificate does **not** carry it; `None` when it
+/// does, and `None` for a blank address, which the caller answers with a default instead.
+///
+/// Split out of `issue_poller_token` so the dialog that types the address can answer the same
+/// question before the click. The WebUI holds a copy
+/// (`web/src/lib/busCert.ts::uncoveredKitHost`) and both run
+/// `web/src/lib/fixtures/busHostCoverage.cases.json` -- change the two together. The trim and the
+/// case fold are the half worth sharing: JavaScript's `trim` keeps U+0085 and strips U+FEFF where
+/// `str::trim` does the reverse, and its `toLowerCase` folds the whole of Unicode where this folds
+/// only `A`-`Z`, so a copy written the obvious way refuses addresses core accepts.
+fn uncovered_bus_host(sans: &[String], typed: &str) -> Option<String> {
+    let host = typed.trim();
+    if host.is_empty() || sans.iter().any(|s| s.eq_ignore_ascii_case(host)) {
+        return None;
+    }
+    Some(host.to_owned())
+}
+
 /// Issue a poller a bus token of its own and return the archive its site needs.
 ///
 /// The response is the archive, not the token: this is the only moment the token exists in the
@@ -898,7 +916,7 @@ async fn issue_poller_token(
     // Refused rather than issued-and-broken. A bundle naming an address the certificate does not
     // carry produces a poller that starts, fails its handshake at a site nobody is watching, and
     // never appears here — the exact failure this whole increment exists to remove.
-    if !cert.sans.iter().any(|s| s.eq_ignore_ascii_case(&host)) {
+    if let Some(host) = uncovered_bus_host(&cert.sans, &host) {
         return Err(ApiError::bad_request(
             "address_not_in_certificate",
             format!(
@@ -1340,6 +1358,45 @@ mod tests {
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt;
     use yagra_common::{DiskUsage, Principal, Role, Scope};
+
+    /// The token dialog asks this before the click with its own copy of the rule
+    /// (`web/src/lib/busCert.ts::uncoveredKitHost`), and `busCert.test.ts` runs the same table --
+    /// so a change to either copy the other does not make fails one of the two.
+    ///
+    /// The rows that earn the table are the invisible characters and the case fold. The first copy
+    /// used JavaScript's `trim` and `toLowerCase`, which disagree with Rust's in both directions:
+    /// an address pasted with a U+0085 in it was marked uncovered and the Issue button held,
+    /// although core strips that character and would have issued the kit.
+    #[test]
+    fn uncovered_bus_host_answers_the_case_table_the_kit_dialog_shares() {
+        #[derive(Deserialize)]
+        struct Case {
+            #[serde(default)]
+            sans: Option<Vec<String>>,
+            typed: String,
+            uncovered: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct Table {
+            sans: Vec<String>,
+            cases: Vec<Case>,
+        }
+        let table: Table = serde_json::from_str(include_str!(
+            "../../../../web/src/lib/fixtures/busHostCoverage.cases.json"
+        ))
+        .expect("the shared case table parses");
+        assert!(table.cases.len() >= 40, "{} cases", table.cases.len());
+        let wrong: Vec<String> = table
+            .cases
+            .iter()
+            .filter(|c| {
+                let sans = c.sans.as_ref().unwrap_or(&table.sans);
+                uncovered_bus_host(sans, &c.typed) != c.uncovered
+            })
+            .map(|c| format!("{:?}: expected {:?}", c.typed, c.uncovered))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 
     #[test]
     fn polled_by_states_cover_every_answer() {
