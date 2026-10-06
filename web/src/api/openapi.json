@@ -23258,6 +23258,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "overridden",
+            "in": "query",
+            "description": "`true` to fill `overridden`. Off by default: the count walks every node.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -42764,7 +42773,7 @@
           },
           "overridden": {
             "type": "object",
-            "description": "For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on\nthe same metric applies instead. A rule overridden nowhere has no entry.\n\nCounted across the whole fleet, regardless of the filter and the cap. The unit is the node:\na node counts once even when the narrower rule covers only some of its ports or table rows.\nRules at the same scope level combine rather than override, so they do not count against\neach other. Which nodes a profile, label or folder holds is read from the alert engine's\ncopy, which can be up to about 30 seconds old.",
+            "description": "For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on\nthe same metric applies instead. A rule overridden nowhere has no entry.\n\nFilled only when the request asks with `overridden=true`; empty otherwise, because the count\nwalks the whole fleet and a caller that wants only `total` should not pay for it.\n\nCounted across the whole fleet, regardless of the filter and the cap. The unit is the node:\na node counts once even when the narrower rule covers only some of its ports or table rows.\nRules at the same scope level combine rather than override, so they do not count against\neach other — except folder rules, where only the nearest folder's is in force, so a parent\nfolder's rule counts as overridden on the nodes a child folder's rule reaches. Which nodes a\nprofile, label or folder holds is read from the alert engine's copy, which can be up to\nabout 30 seconds old.",
             "additionalProperties": {
               "type": "integer",
               "format": "int32",

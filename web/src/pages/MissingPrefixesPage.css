@@ -176,32 +176,20 @@
   margin: 0;
 }
 
-.mp-gaps-wrap {
-  overflow-x: auto;
-}
-
-.mp-gaps {
-  border-collapse: collapse;
+/* The opened site's subnets, on the shared `.ytable` (cards on a phone). Rows hold a multi-line
+   "seen on" list, so cells align to the top (table.css: a column-direction cell must). */
+.mp-gaps .ytable-row {
+  align-items: start;
+  min-height: 0;
+  padding: 6px 0;
   font-size: var(--font-sm);
 }
 
-.mp-gaps th {
-  text-align: left;
-  font-weight: var(--weight-medium);
-  color: var(--text-secondary);
-  padding: 2px var(--space-3) 2px 0;
-  border-bottom: 1px solid var(--border-color);
-  white-space: nowrap;
-}
-
-.mp-gaps td {
-  padding: 4px var(--space-3) 4px 0;
-  border-bottom: 1px solid var(--border-color);
-  vertical-align: top;
+.mp-gaps .ytable-cell {
+  align-items: flex-start;
 }
 
 .mp-gaps .num {
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 

@@ -129,6 +129,35 @@ fn internal(e: &anyhow::Error, what: &'static str) -> ApiError {
     ApiError::from_internal(e.as_ref(), what, "failed to read prefix gaps")
 }
 
+/// How many gaps each site may list, out of one `budget` for the whole answer (ADR-170 decision 17).
+///
+/// Shared, not spent greedily. Spending it in display order — most gaps first — let one site whose
+/// devices carry a few thousand subnets take the whole budget, and every other site came back with
+/// a count and nothing to open. Each site with gaps first gets an equal share (at least 10), then
+/// whatever is left goes down the list in order. Under the budget nothing is cut.
+fn gap_allowance(lens: &[usize], budget: usize) -> Vec<usize> {
+    if lens.iter().sum::<usize>() <= budget {
+        return lens.to_vec();
+    }
+    let with_gaps = lens.iter().filter(|n| **n > 0).count().max(1);
+    let share = (budget / with_gaps).max(10);
+    let mut left = budget;
+    let mut keep: Vec<usize> = lens
+        .iter()
+        .map(|n| {
+            let k = (*n).min(share).min(left);
+            left -= k;
+            k
+        })
+        .collect();
+    for (k, n) in keep.iter_mut().zip(lens) {
+        let more = (n - *k).min(left);
+        *k += more;
+        left -= more;
+    }
+    keep
+}
+
 fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
@@ -169,14 +198,11 @@ pub(crate) async fn site_gaps_view(
     }
     let sites: BTreeSet<Option<Uuid>> = device_count.keys().copied().collect();
 
-    let observed: Vec<(Uuid, &L3Snapshot)> = snapshots
-        .iter()
-        .filter(|(n, _)| devices.contains(&n.0))
-        .map(|(n, s)| (n.0, s))
-        .collect();
+    let mut observed_count = 0;
     let mut read: BTreeMap<Option<Uuid>, (usize, usize)> = BTreeMap::new();
-    for (node, snapshot) in &observed {
-        if let Some(site) = site_of.get(node) {
+    for (node, snapshot) in snapshots.iter().filter(|(n, _)| devices.contains(&n.0)) {
+        observed_count += 1;
+        if let Some(site) = site_of.get(&node.0) {
             let entry = read.entry(*site).or_default();
             entry.0 += 1;
             entry.1 += usize::from(snapshot.truncated);
@@ -193,9 +219,30 @@ pub(crate) async fn site_gaps_view(
                 .filter_map(move |p| Some((g.id, p.prefix.parse().ok()?)))
         })
         .collect();
-    let compared = by_site(&observed, &site_of, &sites, &edges, &prefixes, |g| {
-        scope.allows_group(Some(g))
-    });
+    let counted: HashSet<Uuid> = groups
+        .iter()
+        .map(|g| g.id)
+        .filter(|g| scope.allows_group(Some(*g)))
+        .collect();
+    // Every site against every prefix is pure CPU and grows with the fleet, so it runs off the
+    // async workers — the same reason the threshold override count does.
+    let compared = {
+        let edges = edges.clone();
+        tokio::task::spawn_blocking(move || {
+            let observed: Vec<(Uuid, &L3Snapshot)> = snapshots
+                .iter()
+                .filter(|(n, _)| devices.contains(&n.0))
+                .map(|(n, s)| (n.0, s))
+                .collect();
+            by_site(&observed, &site_of, &sites, &edges, &prefixes, |g| {
+                counted.contains(&g)
+            })
+        })
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(&e, "compare prefix gaps", "failed to read prefix gaps")
+        })?
+    };
 
     let by_id: HashMap<Uuid, &crate::groups::GroupSummary> =
         groups.iter().map(|g| (g.id, g)).collect();
@@ -245,10 +292,9 @@ pub(crate) async fn site_gaps_view(
     });
 
     let gaps_total: usize = out.iter().map(|s| s.gaps.len()).sum();
-    let mut budget = SITE_GAPS_MAX;
-    for site in &mut out {
-        site.gaps.truncate(budget);
-        budget -= site.gaps.len();
+    let lens: Vec<usize> = out.iter().map(|s| s.gaps.len()).collect();
+    for (site, keep) in out.iter_mut().zip(gap_allowance(&lens, SITE_GAPS_MAX)) {
+        site.gaps.truncate(keep);
     }
 
     let names: HashMap<Uuid, &str> = groups.iter().map(|g| (g.id, g.name.as_str())).collect();
@@ -265,7 +311,7 @@ pub(crate) async fn site_gaps_view(
 
     Ok(PrefixGapSitesView {
         nodes_total: count(device_count.values().sum()),
-        nodes_with_addresses: count(observed.len()),
+        nodes_with_addresses: count(observed_count),
         nodes_truncated: count(read.values().map(|(_, t)| t).sum()),
         subnets_checked: count(out.iter().map(|s| s.subnets_checked as usize).sum()),
         gaps_total: count(gaps_total),
@@ -297,36 +343,32 @@ pub(crate) fn withhold_ranges<'a>(
 }
 
 /// Fill each listed place's port name from the interface inventory, in one read.
+///
+/// One row per listed port, through the primary key. Reading every port of every listed node
+/// instead (`interface_idents_for`) was ~48 rows per name on a 48-port fleet — about half a million
+/// rows for the 10,000 places a fleet-wide answer can list.
 pub(crate) async fn fill_port_names(
     admin: &AdminState,
     mut gaps: Vec<&mut PrefixGap>,
 ) -> ApiResult<()> {
-    let listed: Vec<Uuid> = gaps
+    let listed: Vec<(Uuid, u32)> = gaps
         .iter()
-        .flat_map(|g| g.seen_on.iter().map(|s| s.node_id))
-        .collect::<BTreeSet<Uuid>>()
+        .flat_map(|g| g.seen_on.iter().map(|s| (s.node_id, s.ifindex)))
+        .collect::<BTreeSet<(Uuid, u32)>>()
         .into_iter()
         .collect();
     if listed.is_empty() {
         return Ok(());
     }
-    let idents = admin
-        .repo
-        .interface_idents_for(&listed)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "read interface names",
-                "failed to read interfaces",
-            )
-        })?;
+    let names = admin.repo.port_names_for(&listed).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "read interface names",
+            "failed to read interfaces",
+        )
+    })?;
     for seen in gaps.iter_mut().flat_map(|g| g.seen_on.iter_mut()) {
-        let key = (
-            seen.node_id,
-            i32::try_from(seen.ifindex).unwrap_or(i32::MAX),
-        );
-        seen.if_name = idents.get(&key).and_then(|i| i.if_name.clone());
+        seen.if_name = names.get(&(seen.node_id, seen.ifindex)).cloned();
     }
     Ok(())
 }
@@ -377,6 +419,36 @@ impl PrefixGapSitesView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_noisy_site_cannot_take_every_other_sites_share() {
+        // The failure this replaced: the first site took all 2,000 and the rest listed nothing.
+        let lens = [3_000, 40, 5, 0, 12];
+        let keep = gap_allowance(&lens, SITE_GAPS_MAX);
+        assert_eq!(keep.iter().sum::<usize>(), SITE_GAPS_MAX);
+        assert_eq!(
+            &keep[1..],
+            &[40, 5, 0, 12],
+            "the small sites are listed whole"
+        );
+        assert_eq!(
+            keep[0],
+            SITE_GAPS_MAX - 57,
+            "the remainder goes to the large one"
+        );
+    }
+
+    #[test]
+    fn under_the_budget_nothing_is_cut_and_over_it_every_site_gets_a_floor() {
+        assert_eq!(gap_allowance(&[7, 0, 3], 2_000), vec![7, 0, 3]);
+        let keep = gap_allowance(&[900; 4], 2_000);
+        assert_eq!(keep, vec![500; 4], "an equal share when all four are large");
+        // More sites than the budget can give ten each: the floor holds down the list and the
+        // budget is still the ceiling.
+        let keep = gap_allowance(&[50; 300], 2_000);
+        assert_eq!(keep.iter().sum::<usize>(), 2_000);
+        assert!(keep[..200].iter().all(|k| *k == 10), "{keep:?}");
+    }
 
     #[test]
     fn every_status_serializes_to_its_documented_token() {

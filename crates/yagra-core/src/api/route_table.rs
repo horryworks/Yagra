@@ -1555,8 +1555,9 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "GET",
         "/api/v1/notification-default-route",
-        // Kinds of channel only, read from this core's environment; nothing about the fleet.
-        ADMIN_CFG,
+        // Kinds of channel only, read from this core's environment. Not `ADMIN_CFG`: an Admin
+        // token can carry a group scope, and the answer is the same for it anyway.
+        DEPLOY_WIDE,
         Tool("get_config"),
     ),
     (

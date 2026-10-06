@@ -14,6 +14,7 @@ import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
+import { Field } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 
 export function SetParentModal({
@@ -88,17 +89,22 @@ export function SetParentModal({
       }
     >
       <div className="form-stack">
-        <label className="form-label">
-          {t('setParent.dependsOn')}
+        {/* What an upstream does is the same sentence however the dialog is used, so it is an ⓘ
+            on the field rather than a standing line under it (ADR-200 Inc.33). */}
+        <Field
+          label={t('setParent.dependsOn')}
+          htmlFor="set-parent-upstream"
+          infoKey="nodes:setParent.info"
+        >
           <NodePicker
+            id="set-parent-upstream"
             value={parent?.id ?? null}
             valueLabel={parent ? parent.name || t('setParent.currentUnnamed') : undefined}
             onChange={setParent}
             exclude={exclude}
             placeholder={t('setParent.noUpstream')}
           />
-        </label>
-        <p className="form-status">{t('setParent.hint', { name: nodeName })}</p>
+        </Field>
         {loadFailed && <p className="form-error">{t('setParent.loadFailed')}</p>}
         <FormError form={form} />
       </div>

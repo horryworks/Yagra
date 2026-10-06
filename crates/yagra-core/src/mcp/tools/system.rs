@@ -986,6 +986,8 @@ impl YagraMcp {
                     &self.state.alerts,
                     p.limit,
                     &filter.as_filter(),
+                    // A model reading the ruleset needs to know which rules are not in force.
+                    true,
                 )
                 .await
                 {

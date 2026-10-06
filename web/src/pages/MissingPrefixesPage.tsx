@@ -31,6 +31,7 @@ import {
 } from '../components/NodeDetail/prefixGaps';
 import {
   allGaps,
+  allSubnetRows,
   gapsCsv,
   kindCounts,
   MISSING_PREFIX_VIEWS,
@@ -40,13 +41,20 @@ import {
   sitesOn,
   statusCounts,
   SUBNET_FILTER_PREFIX,
+  matchingSubnetRows,
   subnetRowFilters,
-  subnetRows,
   type MissingPrefixView,
   type SiteRow,
   type SubnetRow,
 } from './missingPrefixes';
 import './MissingPrefixesPage.css';
+
+/** The opened site's subnets: one template for the header and every row (table.css). */
+const GAP_COLS = '150px minmax(0, 1.2fr) minmax(0, 2fr) 72px minmax(0, 1fr)';
+
+/** What the view not on screen is given — one identity, so its memos do not re-run. */
+const NO_SITES: SiteRow[] = [];
+const NO_SUBNETS: SubnetRow[] = [];
 
 export function MissingPrefixesPage() {
   const { t } = useTranslation('monitoring');
@@ -63,10 +71,20 @@ export function MissingPrefixesPage() {
   const { data, loading } = load;
 
   const filter = useMemo(() => ({ kind, q }), [kind, q]);
-  const siteRows = useMemo(() => sitesOn(data, tab, filter, nodeName), [data, tab, filter, nodeName]);
-  const gapRows = useMemo(() => subnetRows(data, filter, nodeName), [data, filter, nodeName]);
-  const tiles = kindCounts(allGaps(data));
-  const tabs = statusCounts(data);
+  // Only the view on screen builds and filters its rows; the subnet list is sorted once per
+  // answer and filtered per keystroke (ADR-170 Inc.3). `gapRows` is still built in the site view
+  // because Export CSV saves it from either view, and filtering it is linear.
+  const siteRows = useMemo(
+    () => (view === 'site' ? sitesOn(data, tab, filter, nodeName) : NO_SITES),
+    [view, data, tab, filter, nodeName],
+  );
+  const allSubnets = useMemo(() => allSubnetRows(data), [data]);
+  const gapRows = useMemo(
+    () => matchingSubnetRows(allSubnets, filter, nodeName),
+    [allSubnets, filter, nodeName],
+  );
+  const tiles = useMemo(() => kindCounts(allGaps(data)), [data]);
+  const tabs = useMemo(() => statusCounts(data), [data]);
 
   const siteLabel = (s: SitePrefixGaps) => s.name ?? t('missingPrefixes.root');
   const reason = (g: PrefixGap) => {
@@ -219,7 +237,9 @@ export function MissingPrefixesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- kindCell and siteLabel read only `t`
   }, [t, openKey]);
   const siteFiltering = useClientFilters(siteColumns, siteRows);
-  const subnetFiltering = useClientFilters(subnetColumns, gapRows, { prefix: SUBNET_FILTER_PREFIX });
+  const subnetFiltering = useClientFilters(subnetColumns, view === 'subnet' ? gapRows : NO_SUBNETS, {
+    prefix: SUBNET_FILTER_PREFIX,
+  });
   const anyFiltered = view === 'site' ? siteFiltering.anyFiltered : subnetFiltering.anyFiltered;
 
   const siteDetail = ({ site, gaps }: SiteRow) => (
@@ -230,29 +250,26 @@ export function MissingPrefixesPage() {
       {gaps.length === 0 ? (
         <p className="muted">{t('missingPrefixes.nothingHere')}</p>
       ) : (
-        <div className="mp-gaps-wrap">
-          <table className="mp-gaps">
-            <thead>
-              <tr>
-                <th>{t('missingPrefixes.cols.subnet')}</th>
-                <th>{t('missingPrefixes.cols.reason')}</th>
-                <th>{t('missingPrefixes.cols.seenOn')}</th>
-                <th className="num">{t('missingPrefixes.cols.devices')}</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {gaps.map((g) => (
-                <tr key={g.subnet}>
-                  <td className="mono">{g.subnet}</td>
-                  <td>{kindCell(g)}</td>
-                  <td>{seenOn(g)}</td>
-                  <td className="num">{g.node_count}</td>
-                  <td>{links(g, site)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        // `.ytable` rather than a `<table>`: it stacks into cards on a phone with no markup of
+        // its own, where a five-column table scrolled sideways. Bounded by the server's cut
+        // (`siteCut` below), so it needs no virtualization (ui-conventions.md, hand-rolled tables).
+        <div className="ytable mp-gaps">
+          <div className="ytable-head" style={{ gridTemplateColumns: GAP_COLS }}>
+            <div className="ytable-h">{t('missingPrefixes.cols.subnet')}</div>
+            <div className="ytable-h">{t('missingPrefixes.cols.reason')}</div>
+            <div className="ytable-h">{t('missingPrefixes.cols.seenOn')}</div>
+            <div className="ytable-h right">{t('missingPrefixes.cols.devices')}</div>
+            <div className="ytable-h" />
+          </div>
+          {gaps.map((g) => (
+            <div className="ytable-row" key={g.subnet} style={{ gridTemplateColumns: GAP_COLS }}>
+              <div className="ytable-cell mono">{g.subnet}</div>
+              <div className="ytable-cell">{kindCell(g)}</div>
+              <div className="ytable-cell">{seenOn(g)}</div>
+              <div className="ytable-cell right num">{g.node_count}</div>
+              <div className="ytable-cell">{links(g, site)}</div>
+            </div>
+          ))}
         </div>
       )}
       {site.gap_count > site.gaps.length && (

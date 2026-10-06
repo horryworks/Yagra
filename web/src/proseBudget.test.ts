@@ -151,7 +151,9 @@ const PAGE_NOTES: Record<string, PageNote> = {
 };
 
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
-const INFO_COUNT = { tip: 26, press: 19 };
+// tip 27 (Inc.33): the set-parent dialog said what an upstream does under the field, the same
+// sentence whatever the operator chose.
+const INFO_COUNT = { tip: 27, press: 19 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

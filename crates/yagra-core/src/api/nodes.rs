@@ -429,8 +429,9 @@ pub(crate) async fn filtered_node_page(
 
 /// Which single-purpose rows each of the given nodes carries, resolved into a [`NodeKind`].
 ///
-/// Page-scoped: each read is a `WHERE node_id = ANY($1)` over the ids on this page, not a
-/// full-table scan of every monitor in the fleet. A node absent from all three sets is a
+/// Each read is a `WHERE node_id = ANY($1)` over the ids it is given. A list page passes one
+/// page; Missing IP prefixes and a folder's prefix-gap report pass every node they compare, so
+/// the bound is the caller's, not this function's. A node absent from all three sets is a
 /// `Device` — which is also what a *failed* read degrades to, matching [`get_node`] and the
 /// scheduler, so a transient database error cannot make the list and the detail page disagree
 /// about what a node is.

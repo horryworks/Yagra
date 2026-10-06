@@ -1,0 +1,13 @@
+/* A pointer to another screen has to look pressable. `index.css` resets every anchor to the
+   surrounding text's colour with no underline, and a ScreenLink usually sits inside a sentence —
+   often a warning's — so without this it read as more of that sentence (ADR-200 Inc.33). */
+.screen-link {
+  color: var(--accent-color);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.screen-link:hover,
+.screen-link:focus-visible {
+  color: var(--accent-hover);
+}

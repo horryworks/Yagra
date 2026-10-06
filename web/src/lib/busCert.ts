@@ -94,7 +94,8 @@ export function namesNotCovered(cert: BusTlsView | null | undefined, names: stri
 
 /** Names the certificate carries for the deployment's own containers, which no remote site dials.
  *  The same four the server leaves out when it picks a default address (`api/pollers.rs`
- *  `INTERNAL_NAMES`) and adds back on its own when it reissues. */
+ *  `INTERNAL_NAMES`) and adds back on its own when it reissues. That Rust test reads this line
+ *  (`the_webuis_internal_bus_names_are_these`), so keep the list inline on one line. */
 export const INTERNAL_BUS_NAMES: readonly string[] = ['nats', 'localhost', '127.0.0.1', '::1'];
 
 /** The certificate's names a remote site could dial — everything but the internal four. */

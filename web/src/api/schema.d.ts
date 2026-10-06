@@ -13892,11 +13892,16 @@ export interface components {
              * @description For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on
              *     the same metric applies instead. A rule overridden nowhere has no entry.
              *
+             *     Filled only when the request asks with `overridden=true`; empty otherwise, because the count
+             *     walks the whole fleet and a caller that wants only `total` should not pay for it.
+             *
              *     Counted across the whole fleet, regardless of the filter and the cap. The unit is the node:
              *     a node counts once even when the narrower rule covers only some of its ports or table rows.
              *     Rules at the same scope level combine rather than override, so they do not count against
-             *     each other. Which nodes a profile, label or folder holds is read from the alert engine's
-             *     copy, which can be up to about 30 seconds old.
+             *     each other — except folder rules, where only the nearest folder's is in force, so a parent
+             *     folder's rule counts as overridden on the nodes a child folder's rule reaches. Which nodes a
+             *     profile, label or folder holds is read from the alert engine's copy, which can be up to
+             *     about 30 seconds old.
              */
             overridden: {
                 [key: string]: number;
@@ -33396,6 +33401,8 @@ export interface operations {
                 scope_level?: string;
                 /** @description Comma-separated directions (`above` | `below`); empty or absent means both. */
                 direction?: string;
+                /** @description `true` to fill `overridden`. Off by default: the count walks every node. */
+                overridden?: boolean;
             };
             header?: never;
             path?: never;

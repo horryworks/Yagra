@@ -1398,6 +1398,29 @@ mod tests {
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
+    /// The Remote pollers panel offers every certificate name except these four as a site address
+    /// (`busCert.ts::externalBusNames`). A fifth internal name added here and not there would be
+    /// offered to a site that cannot reach it.
+    #[test]
+    fn the_webuis_internal_bus_names_are_these() {
+        let source = include_str!("../../../../web/src/lib/busCert.ts");
+        let line = source
+            .lines()
+            .find(|l| l.contains("export const INTERNAL_BUS_NAMES"))
+            .expect("busCert.ts declares INTERNAL_BUS_NAMES on one line");
+        let list = line
+            .split_once("= [")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(inside, _)| inside)
+            .expect("the list is written inline");
+        let webui: Vec<&str> = list
+            .split(',')
+            .map(|s| s.trim().trim_matches('\''))
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(webui, INTERNAL_NAMES);
+    }
+
     #[test]
     fn polled_by_states_cover_every_answer() {
         let assigned = || Some("edge-1".to_owned());

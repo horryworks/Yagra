@@ -13,6 +13,7 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { navItemForPath } from '../../nav';
+import './ScreenLink.css';
 
 export function ScreenLink({
   to,

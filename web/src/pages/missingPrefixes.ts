@@ -93,14 +93,17 @@ export function subnetRows(
   filter: GapFilter,
   nodeName: (id: string) => string,
 ): SubnetRow[] {
+  return matchingSubnetRows(allSubnetRows(view), filter, nodeName);
+}
+
+/** Every gap as a row, in display order. Sorted once per answer: the order does not depend on the
+ *  filter, so the screen keeps this and filters it on each keystroke rather than re-sorting up to
+ *  2,000 rows with `localeCompare` every time (ADR-170 Inc.3). */
+export function allSubnetRows(view: PrefixGapSitesView | null): SubnetRow[] {
   if (!view) return [];
   const rows: SubnetRow[] = [];
   for (const site of view.sites) {
-    for (const gap of site.gaps) {
-      if (gapMatches(gap, site, filter, nodeName)) {
-        rows.push({ key: `${siteKey(site)}|${gap.subnet}`, site, gap });
-      }
-    }
+    for (const gap of site.gaps) rows.push({ key: `${siteKey(site)}|${gap.subnet}`, site, gap });
   }
   const order = (k: PrefixGapKind) => PREFIX_GAP_KINDS.indexOf(k);
   return rows.sort(
@@ -109,6 +112,15 @@ export function subnetRows(
       a.gap.subnet.localeCompare(b.gap.subnet) ||
       (a.site.name ?? '').localeCompare(b.site.name ?? ''),
   );
+}
+
+/** The rows of [`allSubnetRows`] the filter keeps, in the same order. */
+export function matchingSubnetRows(
+  rows: readonly SubnetRow[],
+  filter: GapFilter,
+  nodeName: (id: string) => string,
+): SubnetRow[] {
+  return rows.filter((r) => gapMatches(r.gap, r.site, filter, nodeName));
 }
 
 /** The subnet view's filter keys carry this prefix: both tables live on one route, and the URL is

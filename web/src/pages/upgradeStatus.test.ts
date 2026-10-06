@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { UpgradeStatus } from '../types/api';
 import type { ComponentRow, Convergence } from './upgradeStatus';
@@ -276,6 +278,17 @@ describe('offline bundle', () => {
         BUNDLE_IMAGES.length,
       );
     }
+  });
+
+  it('names the images the deployment itself saves, in its order', () => {
+    // The relocation step in docker-compose.deploy.yml is the other place the release's images
+    // are listed. Nothing else compares the two, so a renamed or added image would leave the
+    // copyable command producing an archive the other machine cannot install from.
+    const compose = readFileSync(join(__dirname, '../../../docker-compose.deploy.yml'), 'utf8');
+    const line = compose.split('\n').find((l) => l.includes('docker save "$$REPO_RUN/'));
+    expect(line, 'the relocation docker save line').toBeDefined();
+    const saved = [...(line ?? '').matchAll(/\/(yagra-[a-z]+):/g)].map((m) => m[1]);
+    expect(saved).toEqual([...BUNDLE_IMAGES]);
   });
 
   it('falls back to the default repository when the updater named none', () => {

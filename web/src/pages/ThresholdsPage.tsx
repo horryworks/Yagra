@@ -139,9 +139,13 @@ export function ThresholdsPage() {
   // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
   // narrowing would only ever examine the 500 rules already on screen — which is the whole
   // reason this screen filters server-side (see `thresholdQuery.ts`).
-  const ruleset = useLoad(() => api.listThresholds(queryFor(filterCols, filters)), [filterCols, filters], {
-    initial: { items: [], total: 0, truncated: false, overridden: {} } as ThresholdPage,
-  });
+  // The only call that asks for the override count: the two `total` questions below would pay a
+  // fleet walk each and throw it away (ADR-200 Inc.33).
+  const ruleset = useLoad(
+    () => api.listThresholds({ ...queryFor(filterCols, filters), overridden: true }),
+    [filterCols, filters],
+    { initial: { items: [], total: 0, truncated: false, overridden: {} } as ThresholdPage },
+  );
   const { data: page, loading, reload: rulesetReload } = ruleset;
   const rows = page.items;
   /** On how many nodes a narrower rule on the same metric takes over from each row — counted by

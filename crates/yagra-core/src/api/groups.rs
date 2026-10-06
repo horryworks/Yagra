@@ -833,18 +833,38 @@ pub(crate) async fn prefix_gap_report(
         return Err(ApiError::bad_request(
             "too_many_nodes",
             format!(
-                "this folder holds {} devices; a report reads at most {MAX_PREFIX_GAP_NODES}",
+                "this folder holds {} nodes; a report reads at most {MAX_PREFIX_GAP_NODES}",
                 nodes.len()
             ),
         ));
     }
-    let snapshots = admin.l3.current_for(&nodes).await.map_err(|e| {
+    // Two independent reads; neither needs the other's answer.
+    let (snapshots, kinds) = tokio::join!(
+        admin.l3.current_for(&nodes),
+        super::nodes::node_kinds(admin, &nodes)
+    );
+    let snapshots = snapshots.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "read node addresses",
             "failed to read addresses",
         )
     })?;
+    // Devices only (ADR-170 decisions 16 and 18): a URL, DNS, Meraki or wireless-AP node reports
+    // no interface addresses, so counting one keeps "read N of N" from ever being reached. Both
+    // sides of that line and the subnets compared are devices, as on Missing IP prefixes — a node
+    // that was polled as a device and later became an AP keeps its stored addresses, and counting
+    // them put more nodes "read" than there were nodes.
+    let is_device = |id: &Uuid| {
+        kinds
+            .get(id)
+            .is_none_or(|k| *k == yagra_common::NodeKind::Device)
+    };
+    let devices = nodes.iter().filter(|id| is_device(id)).count();
+    let snapshots: Vec<_> = snapshots
+        .into_iter()
+        .filter(|(n, _)| is_device(n))
+        .collect();
 
     // A stored range that does not parse (a `/0`, which is no subnet) covers nothing.
     let ranges: Vec<Range> = groups
@@ -875,19 +895,6 @@ pub(crate) async fn prefix_gap_report(
         groups.iter().map(|g| (g.id, g.name.as_str())).collect();
     super::prefix_gaps::withhold_ranges(gaps.iter_mut(), &names, scope);
     super::prefix_gaps::fill_port_names(admin, gaps.iter_mut().collect()).await?;
-
-    // Devices only (ADR-170 decision 16): a URL, DNS, Meraki or wireless-AP node reports no
-    // interface addresses, so counting one keeps "read N of N" from ever being reached — and
-    // Missing IP prefixes counts the same way, so the two screens agree about a site.
-    let kinds = super::nodes::node_kinds(admin, &nodes).await;
-    let devices = nodes
-        .iter()
-        .filter(|id| {
-            kinds
-                .get(id)
-                .is_none_or(|k| *k == yagra_common::NodeKind::Device)
-        })
-        .count();
 
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     Ok(crate::prefix_gaps::PrefixGapReport {
@@ -2009,6 +2016,42 @@ mod tests {
             .await
             .expect("record b");
         (site, other, region)
+    }
+
+    /// ADR-170 decision 18: a node that is no longer a device keeps the addresses it reported as
+    /// one. Counting them on one side of "read N of M" and not the other put more nodes read than
+    /// there were, and compared subnets the fleet-wide screen leaves out.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_that_stopped_being_a_device_is_left_out_of_both_counts(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (site, ..) = gap_fixture(&pool, &st, &tok).await;
+        // `as-a` reported two addresses as a device; it is a DNS monitor now.
+        sqlx::query(
+            "INSERT INTO dns_checks (node_id, name) \
+             SELECT id, 'example.com' FROM nodes WHERE name = 'as-a'",
+        )
+        .execute(&pool)
+        .await
+        .expect("mark as-a a DNS monitor");
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/node-groups/{site}/prefix-gaps"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["nodes_total"], 2, "{body}");
+        assert_eq!(body["nodes_with_addresses"], 1, "{body}");
+        assert_eq!(
+            body["subnets_checked"], 5,
+            "as-a's 10.1.2.0/24 is not compared: {body}"
+        );
     }
 
     /// 🚨 The read is **answered** — kinds, ranges, names and the three counts — and a subnet a

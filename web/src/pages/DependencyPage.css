@@ -135,7 +135,18 @@ button.infopress.dep-verdict.dep-verdict:focus-visible {
 /* Per-node exclusion from derived suppression: the checkbox alone; the header names it and opens
    what it does. */
 .dep-optout {
+  width: 18px;
+  height: 18px;
   cursor: pointer;
+}
+
+/* The checkbox lost its label in Inc.23 and with it the hit area; a bare native box is about 13px,
+   under the 40px floor for an in-row control. */
+@media (hover: none) {
+  .dep-optout {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 }
 
 .dep-optout:disabled {

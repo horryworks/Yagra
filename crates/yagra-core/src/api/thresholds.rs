@@ -73,11 +73,16 @@ pub(crate) struct ThresholdPage {
     /// For each rule in `items` that is overridden somewhere: on how many nodes a narrower rule on
     /// the same metric applies instead. A rule overridden nowhere has no entry.
     ///
+    /// Filled only when the request asks with `overridden=true`; empty otherwise, because the count
+    /// walks the whole fleet and a caller that wants only `total` should not pay for it.
+    ///
     /// Counted across the whole fleet, regardless of the filter and the cap. The unit is the node:
     /// a node counts once even when the narrower rule covers only some of its ports or table rows.
     /// Rules at the same scope level combine rather than override, so they do not count against
-    /// each other. Which nodes a profile, label or folder holds is read from the alert engine's
-    /// copy, which can be up to about 30 seconds old.
+    /// each other — except folder rules, where only the nearest folder's is in force, so a parent
+    /// folder's rule counts as overridden on the nodes a child folder's rule reaches. Which nodes a
+    /// profile, label or folder holds is read from the alert engine's copy, which can be up to
+    /// about 30 seconds old.
     overridden: std::collections::BTreeMap<Uuid, u32>,
 }
 
@@ -101,6 +106,8 @@ pub(super) struct ThresholdQuery {
     scope_level: Option<String>,
     /// Comma-separated directions (`above` | `below`); empty or absent means both.
     direction: Option<String>,
+    /// `true` to fill `overridden`. Off by default: the count walks every node.
+    overridden: Option<bool>,
 }
 
 #[utoipa::path(
@@ -147,6 +154,7 @@ async fn list_thresholds(
                 level: &levels,
                 direction: &directions,
             },
+            q.overridden.unwrap_or(false),
         )
         .await?,
     ))
@@ -175,6 +183,7 @@ pub(crate) async fn threshold_page(
     alerts: &std::sync::Arc<crate::alerts::AlertManager>,
     limit: Option<i64>,
     filter: &crate::thresholds::ThresholdFilter<'_>,
+    count_overrides: bool,
 ) -> ApiResult<ThresholdPage> {
     let limit = limit.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
     let (items, total) = admin
@@ -188,7 +197,13 @@ pub(crate) async fn threshold_page(
     if truncated {
         tracing::info!(total, limit, "threshold list capped to the page limit");
     }
-    let overridden = overridden_on_page(admin, alerts, &items).await?;
+    // Asked for by the one call that shows the badge. The screen's two `total`-only questions and
+    // the profile list used to pay a full read and a fleet walk each and throw the answer away.
+    let overridden = if count_overrides {
+        overridden_on_page(admin, alerts, &items).await?
+    } else {
+        std::collections::BTreeMap::new()
+    };
     Ok(ThresholdPage {
         items,
         total,
@@ -1175,6 +1190,59 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "thresholds").await, before + 1);
+    }
+
+    /// ADR-200 Inc.33: only a request that asks pays for the override count. The screen's two
+    /// `total`-only questions and the profile list used to walk the fleet and discard the answer.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_override_count_is_filled_only_when_asked_for(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use std::collections::HashMap;
+        use yagra_common::NodeId;
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node = crate::pgtest::node(&pool, "slow-link", 6, None).await;
+        st.alerts.set_config(crate::alerts::AlertConfig::new(
+            Vec::new(),
+            HashMap::from([(NodeId::from(node), crate::alerts::NodeMeta::default())]),
+        ));
+        let (status, out) = send(
+            &st,
+            "POST",
+            "/api/v1/thresholds",
+            &tok,
+            Some(serde_json::json!({
+                "scope_level": "node",
+                "scope_ids": [node.to_string()],
+                "metric": "icmp_rtt_ms",
+                "direction": "above",
+                "warning": 120.0,
+                "critical": 400.0,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{out}");
+
+        let overridden = |page: &serde_json::Value| {
+            page["overridden"]
+                .as_object()
+                .expect("overridden is always present")
+                .len()
+        };
+        let path = "/api/v1/thresholds?q=icmp_rtt_ms";
+        let (status, plain) = send(&st, "GET", path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{plain}");
+        assert_eq!(overridden(&plain), 0, "not asked for, not counted: {plain}");
+
+        let (status, asked) =
+            send(&st, "GET", &format!("{path}&overridden=true"), &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{asked}");
+        assert_eq!(
+            overridden(&asked),
+            1,
+            "the seeded global rule is overridden on the one node: {asked}"
+        );
     }
 
     /// ADR-143: a rule naming a table row sits beside the rule for every row at the same scope —

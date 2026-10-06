@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
 import type { PrefixGap, PrefixGapSitesView, SitePrefixGaps } from '../types/api';
 import {
+  allSubnetRows,
   gapsCsv,
   kindCounts,
   allGaps,
@@ -10,6 +11,7 @@ import {
   siteRowFilters,
   sitesOn,
   statusCounts,
+  matchingSubnetRows,
   subnetRowFilters,
   subnetRows,
 } from './missingPrefixes';
@@ -94,6 +96,16 @@ describe('missing IP prefixes', () => {
       ['other_folder', '192.168.10.0/24'],
       ['parent_only', '10.1.30.0/24'],
     ]);
+  });
+
+  it('filtering the once-sorted list gives what sorting the filtered one gave', () => {
+    // The screen sorts once per answer and filters per keystroke; that is only sound because the
+    // filter keeps the order.
+    const sorted = allSubnetRows(view());
+    for (const f of [none, { kind: null, q: '10.1' }, { kind: 'other_folder' as const, q: '' }]) {
+      expect(matchingSubnetRows(sorted, f, nodeName)).toEqual(subnetRows(view(), f, nodeName));
+    }
+    expect(sorted).toHaveLength(subnetRows(view(), none, nodeName).length);
   });
 
   it('counts each kind over every listed gap', () => {

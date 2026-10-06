@@ -118,7 +118,10 @@ pub struct AlertManager {
     /// dedicated channel so the inventory/topology views patch one node live instead of re-fetching
     /// the whole fleet every 15s. Kept separate from `tx` so the two event schemas don't mix.
     node_tx: broadcast::Sender<StreamFrame>,
-    config: RwLock<AlertConfig>,
+    /// Behind an `Arc` so a long reader can take a copy and let the lock go: the override count
+    /// (ADR-200 Inc.33) walks the fleet, and holding the read guard for that walk queued the
+    /// refresh writer, and every `process_check` reader behind it, behind a Settings screen.
+    config: RwLock<Arc<AlertConfig>>,
     /// What each vendor-table row is called: node → metric → row key → name (ADR-143).
     ///
     /// Filled from poll results ([`Self::record_row_names`]) and, before those start, from PostgreSQL
@@ -185,7 +188,7 @@ impl AlertManager {
             down: Mutex::new(BTreeSet::new()),
             tx,
             node_tx,
-            config: RwLock::new(AlertConfig::default()),
+            config: RwLock::new(Arc::new(AlertConfig::default())),
             row_names: RwLock::new(HashMap::new()),
             row_states: Mutex::new(HashMap::new()),
             legacy_node_checks: Mutex::new(HashSet::new()),
@@ -196,7 +199,7 @@ impl AlertManager {
 
     /// Replace the threshold/metadata snapshot (called by the periodic refresh task).
     pub fn set_config(&self, config: AlertConfig) {
-        *self.config.write().expect("config rwlock poisoned") = config;
+        *self.config.write().expect("config rwlock poisoned") = Arc::new(config);
     }
 
     /// Remember what one node's vendor-table rows are called, from the poll result that read them
@@ -2028,7 +2031,9 @@ impl AlertManager {
     /// which metrics are per-interface come from the snapshot, which can be one refresh old.
     #[must_use]
     pub fn overridden_counts(&self, rules: &[StoredThreshold]) -> HashMap<Uuid, u32> {
-        let config = self.config.read().expect("config rwlock poisoned");
+        // A copy of the pointer, not the guard: the walk below is fleet-sized, and nothing that
+        // evaluates an alert should wait behind it.
+        let config = Arc::clone(&self.config.read().expect("config rwlock poisoned"));
         super::rules::overridden_counts(rules, &config.node_meta, &config.per_interface)
     }
 
