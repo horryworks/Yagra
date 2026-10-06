@@ -173,7 +173,7 @@ export function SubnetOverlapsPage() {
           return (
             <span className="so-sites" title={all}>
               {names.slice(0, SITES_SHOWN).map((n, i) => (
-                <span className="so-chip" key={`${n}-${i}`}>
+                <span className="so-chip" key={`${n}-${i}`} title={n}>
                   {n}
                 </span>
               ))}

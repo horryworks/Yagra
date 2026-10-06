@@ -97,14 +97,22 @@
   color: var(--severity-info);
 }
 
+/* One line, never wrapped: the row is DataTable's fixed 44px, so a second line of chips grew the
+   grid track past it — every other cell centred against the taller track and sat low, and the
+   second line ran into the next row. A long name is cut instead; the cell's title has them all. */
 .so-sites {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .so-chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: var(--font-xs);
   padding: 0 6px;
   border-radius: var(--radius-sm);
@@ -114,6 +122,7 @@
 }
 
 .so-chip-more {
+  flex: none;
   background: none;
   border: 1px dashed var(--border-color);
 }

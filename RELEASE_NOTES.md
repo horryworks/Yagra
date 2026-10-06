@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Nodes ▸ Subnet overlaps no longer draws a row low when its sites spill onto a second line.** The site names stay on one line, a long one is cut short (hover it for the whole name), and the `+N` count says how many more there are.
+
 ## v0.3.46 — Every site's subnets missing from its IP prefixes on one screen, and screens that explain themselves through their controls instead of paragraphs
 
 ### New Features
