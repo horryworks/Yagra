@@ -248,12 +248,14 @@
     "tabs": {
       "gaps": "抜けあり",
       "clean": "抜けなし",
-      "no_data": "比べていない"
+      "no_data": "比べていない",
+      "intentional": "意図的"
     },
     "empty": {
       "gaps": "IP プレフィックスに無いサブネットを持つサイトはありません。",
       "clean": "抜けの無いサイトはまだありません。",
-      "no_data": "すべてのサイトを比べました。"
+      "no_data": "すべてのサイトを比べました。",
+      "intentional": "意図的にした抜けはありません。"
     },
     "emptyFiltered": "条件に合う抜けはありません。",
     "search": "サブネット・サイト・機器で探す",
@@ -275,8 +277,27 @@
       "subnet": "サブネット",
       "reason": "理由",
       "devices": "台数",
-      "seenOn": "見つけた場所"
-    }
+      "seenOn": "見つけた場所",
+      "action": "操作",
+      "note": "メモ"
+    },
+    "gapTabs": {
+      "open": "要確認",
+      "intentional": "意図的"
+    },
+    "noNote": "メモなし",
+    "actions": {
+      "intentional": "意図的にする",
+      "reopen": "要確認に戻す"
+    },
+    "ack": {
+      "title": "{{site}} の {{subnet}} を意図的にする",
+      "note": "メモ",
+      "notePlaceholder": "例: 保守用の回線",
+      "save": "意図的にする",
+      "err": "保存できませんでした。"
+    },
+    "reopenErr": "戻せませんでした。"
   },
   "subnetOverlaps": {
     "coverage": "{{total}} 台中 {{withAddresses}} 台を比べました（範囲 {{subnets}} 個）。インターフェースのアドレスを答えていない機器は含まれません。",
@@ -332,7 +353,8 @@
       "subnet": "範囲",
       "kind": "種類",
       "sites": "拠点",
-      "devices": "機器"
+      "devices": "機器",
+      "action": "操作"
     },
     "detail": {
       "shared": "複数の拠点で使われているアドレス:",

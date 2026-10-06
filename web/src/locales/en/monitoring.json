@@ -253,12 +253,14 @@
     "tabs": {
       "gaps": "Gaps",
       "clean": "Complete",
-      "no_data": "Not compared"
+      "no_data": "Not compared",
+      "intentional": "Intentional"
     },
     "empty": {
       "gaps": "No site has a subnet missing from its IP prefixes.",
       "clean": "No site is complete yet.",
-      "no_data": "Every site has been compared."
+      "no_data": "Every site has been compared.",
+      "intentional": "No gap is marked as intentional."
     },
     "emptyFiltered": "Nothing matches the filter.",
     "search": "Subnet, site or device",
@@ -280,8 +282,27 @@
       "subnet": "Subnet",
       "reason": "Reason",
       "devices": "Devices",
-      "seenOn": "Seen on"
-    }
+      "seenOn": "Seen on",
+      "action": "Action",
+      "note": "Note"
+    },
+    "gapTabs": {
+      "open": "To check",
+      "intentional": "Intentional"
+    },
+    "noNote": "No note",
+    "actions": {
+      "intentional": "Mark as intentional",
+      "reopen": "Move back to To check"
+    },
+    "ack": {
+      "title": "Mark {{subnet}} at {{site}} as intentional",
+      "note": "Note",
+      "notePlaceholder": "e.g. Maintenance link",
+      "save": "Mark as intentional",
+      "err": "Could not save."
+    },
+    "reopenErr": "Could not move it back."
   },
   "subnetOverlaps": {
     "coverage": "Compared {{withAddresses}} of {{total}} devices ({{subnets}} ranges). A device that has not reported its interface addresses is not included.",
@@ -337,7 +358,8 @@
       "subnet": "Range",
       "kind": "Kind",
       "sites": "Sites",
-      "devices": "Devices"
+      "devices": "Devices",
+      "action": "Action"
     },
     "detail": {
       "shared": "Configured at more than one site:",

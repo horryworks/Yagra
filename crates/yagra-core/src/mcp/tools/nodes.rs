@@ -739,10 +739,13 @@ impl YagraMcp {
                        the whole fleet at once. A site is the nearest folder of type Site above a \
                        device, else the device's own folder (is_site false); devices filed in no \
                        folder are one site with a null site_id. Each site has a status: gaps, \
-                       clean, or no_data (none of its devices reported an address, so nothing was \
-                       compared; never read that as complete). Each gap carries the same kind as \
-                       get_prefix_gaps (unregistered, partial, other_folder, parent_only). Sites \
-                       are ordered most gaps first; at most 2,000 gaps are listed in all \
+                       clean, intentional (every gap it has was marked intentional by an \
+                       operator), or no_data (none of its devices reported an address, so nothing \
+                       was compared; never read that as complete). Each gap carries the same kind \
+                       as get_prefix_gaps (unregistered, partial, other_folder, parent_only), and \
+                       intentional with the operator's note when it was marked; gap_count counts \
+                       only the unmarked ones, intentional_count the rest. Sites are ordered most \
+                       unmarked gaps first; at most 2,000 gaps are listed in all \
                        (gaps_total says how many there are, each site's gap_count is uncapped). A \
                        range filed in a folder outside your scope is omitted. Requires live mode."
     )]

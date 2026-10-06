@@ -769,6 +769,9 @@ fn changes_monitoring_config(path: &str) -> bool {
         // counted, working through the Open tab re-resolved the whole fleet on every press.
         // Invisible to the mechanical check: the handlers demand ManageConfig.
         || path.starts_with("/api/v1/subnet-overlaps/")
+        // Missing IP prefixes' "intentional" marks (ADR-170 Inc.4), for the same reason: only that
+        // screen's own comparison reads them. Invisible to the mechanical check: ManageConfig.
+        || path.starts_with("/api/v1/prefix-gaps/")
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1878,6 +1881,10 @@ mod tests {
             );
         }
         assert!(changes_monitoring_config("/api/v1/subnet-overlapsx"));
+        assert!(
+            !changes_monitoring_config("/api/v1/prefix-gaps/acks"),
+            "a missing-prefix mark is read only by its own screen"
+        );
     }
 
     #[test]

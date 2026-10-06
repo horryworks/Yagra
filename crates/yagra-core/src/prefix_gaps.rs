@@ -60,6 +60,17 @@ pub enum GapKind {
 }
 
 impl GapKind {
+    /// The kind's token — the same spelling serde writes, and what `prefix_gap_acks.kind` stores.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            GapKind::Unregistered => "unregistered",
+            GapKind::Partial => "partial",
+            GapKind::OtherFolder => "other_folder",
+            GapKind::ParentOnly => "parent_only",
+        }
+    }
+
     /// Every kind, for the token test and the WebUI's mirror.
     #[cfg(test)]
     pub const ALL: [GapKind; 4] = [
@@ -98,6 +109,16 @@ pub struct PrefixGap {
     pub node_count: u32,
     /// Up to [`SEEN_ON_MAX`] of the places it was seen, ordered by device then port.
     pub seen_on: Vec<SeenOn>,
+    /// Set when an operator marked this gap as intentional on Nodes ▸ Missing IP prefixes
+    /// (ADR-170 Inc.4). Always `null` on a folder's own report, which is not read per site.
+    pub intentional: Option<GapMark>,
+}
+
+/// "This subnet is meant to stay out of the site's IP prefixes."
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct GapMark {
+    /// What the operator wrote when marking it; may be empty.
+    pub note: String,
 }
 
 /// The answer for one folder.
@@ -160,6 +181,7 @@ pub fn classify(observed: &[(Uuid, &L3Snapshot)], ranges: &[Range]) -> (Vec<Pref
                 range_group_name: None,
                 node_count: u32::try_from(nodes.len()).unwrap_or(u32::MAX),
                 seen_on: seen,
+                intentional: None,
             })
         })
         .collect();
@@ -594,6 +616,10 @@ mod tests {
             tokens,
             ["unregistered", "partial", "other_folder", "parent_only"]
         );
+        // The stored token is written by hand; a mark saved under one spelling and compared
+        // under another would never apply.
+        let stored: Vec<&str> = GapKind::ALL.iter().map(|k| k.token()).collect();
+        assert_eq!(stored, tokens);
     }
 
     /// The WebUI iterates its own copy of the kinds to build `t()` keys. Pinned here, in order.

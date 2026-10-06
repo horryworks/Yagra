@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+### 新機能
+
+- **Nodes ▸ Missing IP prefixes で、IP プレフィックスに無いサブネットを「意図的」にできるようになりました。** 行の右端の **意図的にする** を押します（サブネットの一覧か、開いたサイトの中）。メモも残せます。印を付けた抜けは新しい **意図的** タブに移り、種類のタイルの数からは外れます。**要確認に戻す** で取り消せます。抜けがすべて意図的なサイトは「抜けなし」ではなく「意図的」に出ます。サブネットの理由が変わったとき（例: 一部だけ登録された）は印が効かなくなり、要確認に戻ります。CSV に `status` と `note` の列が増えました。
+  - API: `PUT` / `DELETE /api/v1/prefix-gaps/acks`（ManageConfig。Subnet overlaps と同じく、フォルダで範囲を絞ったトークンは断ります）。`GET /api/v1/prefix-gaps` では、抜けごとに `intentional`（メモ付き、無ければ `null`）が付き、サイトに `intentional_count` と状態 `intentional` が増え、**`gap_count` は印の無い抜けだけを数えるようになりました**。MCP の `get_site_prefix_gaps` も同じです。フォルダの画面の `GET /api/v1/node-groups/{id}/prefix-gaps` は印を読みません（`intentional` は常に `null`）。
+
+### 改善
+
+- **Nodes ▸ Subnet overlaps の「意図的にする」「要確認に戻す」を、行を開かずに右端の列から押せるようになりました。** 開いた行に残るのは、除外ルールの提案だけです。
+
 ### バグ修正
 
 - **Nodes ▸ Subnet overlaps で、サイト名が 2 行に折り返した行が下にずれて描かれる問題を直しました。** サイト名は 1 行に収め、長い名前は途中で切ります（マウスを載せると全体が出ます）。残りの数は `+N` で出ます。

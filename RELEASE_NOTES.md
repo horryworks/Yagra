@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+### New Features
+
+- **Nodes ▸ Missing IP prefixes can mark a missing subnet as intentional.** Press **Mark as intentional** at the end of its row (in the subnet list, or inside an opened site) and add a note if you like. The gap moves to a new **Intentional** tab and stops counting towards the kind tiles; **Move back to To check** undoes it. A site whose every gap is marked is listed under Intentional, not Complete. If the subnet's reason changes — say it becomes partly registered — the mark no longer applies and the gap is back to check. The CSV gains `status` and `note` columns.
+  - API: `PUT` / `DELETE /api/v1/prefix-gaps/acks` (ManageConfig; refused to a folder-scoped token, as for Subnet overlaps). In `GET /api/v1/prefix-gaps`, each gap carries `intentional` (with its note, or `null`), a site gains `intentional_count` and the status `intentional`, and **`gap_count` now counts only the unmarked gaps**. The MCP tool `get_site_prefix_gaps` returns the same. The folder pane's `GET /api/v1/node-groups/{id}/prefix-gaps` does not read marks; its gaps always have `intentional: null`.
+
+### Improvements
+
+- **Nodes ▸ Subnet overlaps: Mark as intentional and Move back to To check are pressed from the row's last column**, without opening the row. The opened row keeps only the suggested exclusion rule.
+
 ### Bug Fixes
 
 - **Nodes ▸ Subnet overlaps no longer draws a row low when its sites spill onto a second line.** The site names stay on one line, a long one is cut short (hover it for the whole name), and the `+N` count says how many more there are.

@@ -7,6 +7,8 @@ import {
   gapsCsv,
   kindCounts,
   allGaps,
+  gapStatusCounts,
+  openGaps,
   siteKey,
   siteRowFilters,
   sitesOn,
@@ -24,7 +26,10 @@ const gap = (subnet: string, kind: PrefixGap['kind'], node = 'n1', ip = '10.0.0.
   range_group_name: null,
   node_count: 1,
   seen_on: [{ node_id: node, ifindex: 1, if_name: 'Vlan1', ip }],
+  intentional: null,
 });
+
+const marked = (g: PrefixGap, note = 'on purpose'): PrefixGap => ({ ...g, intentional: { note } });
 
 const site = (
   id: string | null,
@@ -42,7 +47,8 @@ const site = (
   nodes_truncated: 0,
   prefixes: 1,
   subnets_checked: gaps.length + 1,
-  gap_count: gaps.length,
+  gap_count: gaps.filter((g) => !g.intentional).length,
+  intentional_count: gaps.filter((g) => g.intentional).length,
   gaps,
 });
 
@@ -70,7 +76,27 @@ describe('missing IP prefixes', () => {
     expect(sitesOn(view(), 'gaps', none, nodeName).map((r) => r.site.name)).toEqual(['hq', 'branch-a']);
     expect(sitesOn(view(), 'clean', none, nodeName).map((r) => r.site.name)).toEqual(['branch-b']);
     expect(sitesOn(view(), 'no_data', none, nodeName).map((r) => siteKey(r.site))).toEqual(['root']);
-    expect(statusCounts(view())).toEqual({ gaps: 2, clean: 1, no_data: 1 });
+    expect(statusCounts(view())).toEqual({ gaps: 2, clean: 1, intentional: 0, no_data: 1 });
+  });
+
+  it('a marked gap leaves the gaps tab for the intentional one, and a mixed site is on both', () => {
+    const v = view();
+    // hq keeps one gap open and marks the other; branch-a marks its only one.
+    v.sites[0] = site('a', 'hq', 'gaps', [gap('198.51.100.0/29', 'unregistered', 'rt'), marked(gap('10.1.30.0/24', 'parent_only'))]);
+    v.sites[1] = site('b', 'branch-a', 'intentional', [marked(gap('192.168.10.0/24', 'other_folder'))]);
+    const on = (tab: 'gaps' | 'intentional') =>
+      sitesOn(v, tab, none, nodeName).map((r) => [r.site.name, r.gaps.map((g) => g.subnet)]);
+    expect(on('gaps')).toEqual([['hq', ['198.51.100.0/29']]]);
+    expect(on('intentional')).toEqual([
+      ['hq', ['10.1.30.0/24']],
+      ['branch-a', ['192.168.10.0/24']],
+    ]);
+    expect(statusCounts(v)).toEqual({ gaps: 1, clean: 1, intentional: 2, no_data: 1 });
+    // A site whose every gap is marked is never complete.
+    expect(sitesOn(v, 'clean', none, nodeName).map((r) => r.site.name)).toEqual(['branch-b']);
+    // The tiles count what is left to check.
+    expect(kindCounts(openGaps(v))).toEqual({ unregistered: 1, partial: 0, other_folder: 0, parent_only: 0 });
+    expect(gapStatusCounts(allSubnetRows(v))).toEqual({ open: 1, intentional: 2 });
   });
 
   it('a kind tile keeps only that kind, and a site left with nothing drops off the gaps tab', () => {
@@ -123,10 +149,12 @@ describe('missing IP prefixes', () => {
     v.sites[0].name = '=HYPERLINK("x")';
     const csv = gapsCsv(subnetRows(v, none, nodeName), nodeName);
     const lines = csv.split('\r\n');
-    expect(lines[0]).toBe('"subnet","kind","site","folders","range","devices","seen_on"');
+    expect(lines[0]).toBe('"subnet","kind","site","folders","range","devices","seen_on","status","note"');
     expect(lines).toHaveLength(4);
     expect(lines[1]).toContain(`"'=HYPERLINK(""x"")"`);
-    expect(lines[1]).toContain('"rt-01 Vlan1 10.0.0.1"');
+    expect(lines[1]).toContain('"rt-01 Vlan1 10.0.0.1","open",""');
+    v.sites[1].gaps[0] = marked(v.sites[1].gaps[0], 'NAT');
+    expect(gapsCsv(subnetRows(v, none, nodeName), nodeName)).toContain('"intentional","NAT"');
   });
 });
 

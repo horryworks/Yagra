@@ -17900,7 +17900,7 @@
         "operationId": "get_site_prefix_gaps",
         "responses": {
           "200": {
-            "description": "For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site",
+            "description": "For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported and whether an operator marked it as intentional. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site",
             "content": {
               "application/json": {
                 "schema": {
@@ -17931,6 +17931,154 @@
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prefix-gaps/acks": {
+      "put": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "set_gap_ack",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GapAckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The gap is recorded as intentional for this site. The mark applies while the gap keeps the kind it has now; if the subnet's kind changes it is open again"
+          },
+          "400": {
+            "description": "`text_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`gap_not_found`: the site has no current gap for this subnet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "delete_gap_ack",
+        "parameters": [
+          {
+            "name": "site_id",
+            "in": "query",
+            "description": "The site's `site_id`; omitted for the root.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "subnet",
+            "in": "query",
+            "description": "The gap's `subnet`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The gap is open again"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`ack_not_found`: this gap was not marked as intentional",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -31665,6 +31813,30 @@
           }
         }
       },
+      "GapAckBody": {
+        "type": "object",
+        "description": "\"This subnet is meant to stay out of this site's IP prefixes.\"",
+        "required": [
+          "subnet"
+        ],
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The site's `site_id`, as the list returned it; `null` for the root."
+          },
+          "subnet": {
+            "type": "string",
+            "description": "The gap's `subnet`, as the list returned it."
+          }
+        }
+      },
       "GapKind": {
         "type": "string",
         "description": "Why a subnet is reported. Ordered by how directly it names something to fix in NetBox.",
@@ -31674,6 +31846,19 @@
           "other_folder",
           "parent_only"
         ]
+      },
+      "GapMark": {
+        "type": "object",
+        "description": "\"This subnet is meant to stay out of the site's IP prefixes.\"",
+        "required": [
+          "note"
+        ],
+        "properties": {
+          "note": {
+            "type": "string",
+            "description": "What the operator wrote when marking it; may be empty."
+          }
+        }
       },
       "GeoSource": {
         "type": "string",
@@ -38422,6 +38607,17 @@
           "seen_on"
         ],
         "properties": {
+          "intentional": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GapMark",
+                "description": "Set when an operator marked this gap as intentional on Nodes ▸ Missing IP prefixes\n(ADR-170 Inc.4). Always `null` on a folder's own report, which is not read per site."
+              }
+            ]
+          },
           "kind": {
             "$ref": "#/components/schemas/GapKind"
           },
@@ -38537,7 +38733,7 @@
           "gaps_total": {
             "type": "integer",
             "format": "int32",
-            "description": "Gaps across every site.",
+            "description": "Gaps across every site, marked ones included.",
             "minimum": 0
           },
           "nodes_total": {
@@ -38562,7 +38758,7 @@
             "items": {
               "$ref": "#/components/schemas/SitePrefixGaps"
             },
-            "description": "Every site holding a device this caller may see. Most gaps first, then by name."
+            "description": "Every site holding a device this caller may see. Most unmarked gaps first, then by name."
           },
           "subnets_checked": {
             "type": "integer",
@@ -41586,10 +41782,11 @@
       },
       "SiteGapStatus": {
         "type": "string",
-        "description": "Where one site stands — the screen's three tabs, in their order.",
+        "description": "Where one site stands - the screen's four tabs, in their order.",
         "enum": [
           "gaps",
           "clean",
+          "intentional",
           "no_data"
         ]
       },
@@ -41661,13 +41858,14 @@
           "prefixes",
           "subnets_checked",
           "gap_count",
+          "intentional_count",
           "gaps"
         ],
         "properties": {
           "gap_count": {
             "type": "integer",
             "format": "int32",
-            "description": "How many gaps the site has. `gaps` may list fewer when the answer was cut.",
+            "description": "How many of its gaps nobody has marked as intentional. `gaps` may list fewer when the\nanswer was cut.",
             "minimum": 0
           },
           "gaps": {
@@ -41675,7 +41873,13 @@
             "items": {
               "$ref": "#/components/schemas/PrefixGap"
             },
-            "description": "Ordered by kind, then subnet — the folder pane's order."
+            "description": "The unmarked gaps first, then the marked ones; inside each, by kind, then subnet - the\nfolder pane's order. So a cut answer drops marked gaps before unmarked ones."
+          },
+          "intentional_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of its gaps were marked as intentional.",
+            "minimum": 0
           },
           "is_site": {
             "type": "boolean",

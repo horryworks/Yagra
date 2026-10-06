@@ -4,7 +4,8 @@
 //
 // The comparison is the server's (`crates/yagra-core/src/api/prefix_gaps.rs`). What is decided here
 // is only how the answer is shown: which tab a site sits on, what the search and the kind tiles
-// keep, how the subnet list is ordered, and what the CSV carries. Why one gap is reported is the
+// keep, how the subnet list is ordered, and what the CSV carries. Whether a gap was marked as
+// intentional is the server's (ADR-170 Inc.4); which tab shows it is decided here. Why one gap is reported is the
 // folder pane's sentence (`components/NodeDetail/prefixGaps.ts::gapReason`), reused as it is.
 
 import type { TFunction } from 'i18next';
@@ -16,7 +17,16 @@ import { csvField } from '../lib/csv';
 /** Where a site stands, in the server's order — the tabs of the by-site view.
  *  ⚠️ **Keep the array on one line**: `yagra-core`'s
  *  `api/prefix_gaps.rs::the_webuis_status_list_is_this_enum_in_order` reads it. */
-export const SITE_GAP_STATUSES = ['gaps', 'clean', 'no_data'] as const satisfies readonly SiteGapStatus[];
+export const SITE_GAP_STATUSES = ['gaps', 'clean', 'intentional', 'no_data'] as const satisfies readonly SiteGapStatus[];
+
+/** Where one gap stands — the tabs of the subnet view. */
+export const GAP_STATUSES = ['open', 'intentional'] as const;
+export type GapStatus = (typeof GAP_STATUSES)[number];
+
+/** Whether an operator marked the gap as intentional. */
+export function gapStatus(gap: PrefixGap): GapStatus {
+  return gap.intentional ? 'intentional' : 'open';
+}
 
 /** The two ways the screen lays the answer out. By site is the default (ADR-170 decision 11). */
 export const MISSING_PREFIX_VIEWS = ['site', 'subnet'] as const;
@@ -61,9 +71,32 @@ export interface SiteRow {
   gaps: PrefixGap[];
 }
 
-/** The sites on one tab. On the gaps tab a site with nothing left after the filter drops out;
- *  the other tabs hold no gaps, so there the term matches the site's name and folders only, and a
- *  kind tile does not apply. The server already orders the sites. */
+/** Whether a site is on a tab. The gaps tab holds a site with any unmarked gap, the intentional
+ *  tab one with any marked gap — so a site with both is on both, each showing its own half. */
+export function siteOnTab(site: SitePrefixGaps, tab: SiteGapStatus): boolean {
+  switch (tab) {
+    case 'gaps':
+      return site.gap_count > 0;
+    case 'intentional':
+      return site.intentional_count > 0;
+    case 'clean':
+    case 'no_data':
+      return site.status === tab;
+    default: {
+      const never: never = tab;
+      return never;
+    }
+  }
+}
+
+/** The gap status a site tab lists, or `null` for the tabs that hold no gaps. */
+function gapsOfTab(tab: SiteGapStatus): GapStatus | null {
+  return tab === 'gaps' ? 'open' : tab === 'intentional' ? 'intentional' : null;
+}
+
+/** The sites on one tab. On the gaps and intentional tabs a site with nothing left after the
+ *  filter drops out; the other tabs hold no gaps, so there the term matches the site's name and
+ *  folders only, and a kind tile does not apply. The server already orders the sites. */
 export function sitesOn(
   view: PrefixGapSitesView | null,
   tab: SiteGapStatus,
@@ -72,12 +105,16 @@ export function sitesOn(
 ): SiteRow[] {
   if (!view) return [];
   const q = filter.q.trim().toLowerCase();
+  const wanted = gapsOfTab(tab);
   return view.sites
-    .filter((site) => site.status === tab)
-    .map((site) => ({ site, gaps: site.gaps.filter((g) => gapMatches(g, site, filter, nodeName)) }))
-    .filter(({ site, gaps }) =>
-      tab === 'gaps' ? gaps.length > 0 : !q || siteMatches(site, q),
-    );
+    .filter((site) => siteOnTab(site, tab))
+    .map((site) => ({
+      site,
+      gaps: site.gaps.filter(
+        (g) => gapStatus(g) === wanted && gapMatches(g, site, filter, nodeName),
+      ),
+    }))
+    .filter(({ site, gaps }) => (wanted ? gaps.length > 0 : !q || siteMatches(site, q)));
 }
 
 /** One line of the subnet view. */
@@ -171,13 +208,27 @@ export function allGaps(view: PrefixGapSitesView | null): PrefixGap[] {
   return view?.sites.flatMap((s) => s.gaps) ?? [];
 }
 
-/** How many sites sit on each tab. */
+/** The gaps nobody marked — what the kind tiles count. */
+export function openGaps(view: PrefixGapSitesView | null): PrefixGap[] {
+  return allGaps(view).filter((g) => !g.intentional);
+}
+
+/** How many sites sit on each tab. A site with marked and unmarked gaps counts on both. */
 export function statusCounts(view: PrefixGapSitesView | null): Record<SiteGapStatus, number> {
   const counts = Object.fromEntries(SITE_GAP_STATUSES.map((s) => [s, 0])) as Record<
     SiteGapStatus,
     number
   >;
-  for (const s of view?.sites ?? []) counts[s.status] += 1;
+  for (const site of view?.sites ?? []) {
+    for (const tab of SITE_GAP_STATUSES) if (siteOnTab(site, tab)) counts[tab] += 1;
+  }
+  return counts;
+}
+
+/** How many listed gaps are on each tab of the subnet view. */
+export function gapStatusCounts(rows: Iterable<SubnetRow>): Record<GapStatus, number> {
+  const counts: Record<GapStatus, number> = { open: 0, intentional: 0 };
+  for (const r of rows) counts[gapStatus(r.gap)] += 1;
   return counts;
 }
 
@@ -187,7 +238,7 @@ export function statusCounts(view: PrefixGapSitesView | null): Record<SiteGapSta
  *  `csvField`, which also neutralizes a value a spreadsheet would execute — the device name and
  *  addresses come from the network. CRLF per RFC 4180. */
 export function gapsCsv(rows: SubnetRow[], nodeName: (id: string) => string): string {
-  const head = ['subnet', 'kind', 'site', 'folders', 'range', 'devices', 'seen_on'];
+  const head = ['subnet', 'kind', 'site', 'folders', 'range', 'devices', 'seen_on', 'status', 'note'];
   const lines = rows.map(({ site, gap }) =>
     [
       gap.subnet,
@@ -199,6 +250,8 @@ export function gapsCsv(rows: SubnetRow[], nodeName: (id: string) => string): st
       gap.seen_on
         .map((s) => [nodeName(s.node_id), s.if_name ?? '', s.ip].filter(Boolean).join(' '))
         .join('; '),
+      gapStatus(gap),
+      gap.intentional?.note ?? '',
     ]
       .map(csvField)
       .join(','),

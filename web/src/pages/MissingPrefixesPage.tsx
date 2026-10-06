@@ -2,12 +2,14 @@
 // Nodes ▸ Missing IP prefixes (ADR-170 Inc.2). For every site, the subnets its devices carry that
 // none of its IP prefixes covers — the folder pane's "Subnets missing from the IP prefixes", for
 // the whole fleet at once. Opens by site (ADR-170 decision 11); the subnet list is one switch away.
-// Read only. The judgement is in `missingPrefixes.ts`.
+// One gap at a time can be marked as intentional, from the row (ADR-170 Inc.4) — the same button,
+// in the same place, as Subnet overlaps. The judgement is in `missingPrefixes.ts`.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api } from '../services/api';
+import { api, errMsg } from '../services/api';
+import { useCan, useScope } from '../store';
 import type { PrefixGap, PrefixGapSitesView, SiteGapStatus, SitePrefixGaps } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -30,10 +32,13 @@ import {
   type PrefixGapKind,
 } from '../components/NodeDetail/prefixGaps';
 import {
-  allGaps,
   allSubnetRows,
+  GAP_STATUSES,
+  gapStatus,
+  gapStatusCounts,
   gapsCsv,
   kindCounts,
+  openGaps,
   MISSING_PREFIX_VIEWS,
   SITE_GAP_STATUSES,
   siteKey,
@@ -43,14 +48,18 @@ import {
   SUBNET_FILTER_PREFIX,
   matchingSubnetRows,
   subnetRowFilters,
+  type GapStatus,
   type MissingPrefixView,
   type SiteRow,
   type SubnetRow,
 } from './missingPrefixes';
+import { AckGapModal } from './MissingPrefixModals';
 import './MissingPrefixesPage.css';
 
-/** The opened site's subnets: one template for the header and every row (table.css). */
+/** The opened site's subnets: one template for the header and every row (table.css). The last
+ *  track is the mark button, drawn only for someone who may press it. */
 const GAP_COLS = '150px minmax(0, 1.2fr) minmax(0, 2fr) 72px minmax(0, 1fr)';
+const GAP_COLS_ACT = `${GAP_COLS} 180px`;
 
 /** What the view not on screen is given — one identity, so its memos do not re-run. */
 const NO_SITES: SiteRow[] = [];
@@ -64,11 +73,19 @@ export function MissingPrefixesPage() {
   const [kind, setKind] = useState<PrefixGapKind | null>(null);
   const [q, setQ] = useState('');
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [gapTab, setGapTab] = useState<GapStatus>('open');
+  const [acking, setAcking] = useState<{ site: SitePrefixGaps; gap: PrefixGap } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // A mark silences the gap for the whole site, so it is refused to a folder-scoped caller —
+  // Subnet overlaps' rule, and the button is drawn for the same people on both screens.
+  const mayConfig = useCan('manage_config');
+  const scope = useScope();
+  const canConfig = mayConfig && scope === 'All';
 
   const load = useLoad(() => api.getSitePrefixGaps(), [], {
     initial: null as PrefixGapSitesView | null,
   });
-  const { data, loading } = load;
+  const { data, loading, reload } = load;
 
   const filter = useMemo(() => ({ kind, q }), [kind, q]);
   // Only the view on screen builds and filters its rows; the subnet list is sorted once per
@@ -83,7 +100,12 @@ export function MissingPrefixesPage() {
     () => matchingSubnetRows(allSubnets, filter, nodeName),
     [allSubnets, filter, nodeName],
   );
-  const tiles = useMemo(() => kindCounts(allGaps(data)), [data]);
+  const gapTabRows = useMemo(
+    () => gapRows.filter((r) => gapStatus(r.gap) === gapTab),
+    [gapRows, gapTab],
+  );
+  const gapTabs = useMemo(() => gapStatusCounts(allSubnets), [allSubnets]);
+  const tiles = useMemo(() => kindCounts(openGaps(data)), [data]);
   const tabs = useMemo(() => statusCounts(data), [data]);
 
   const siteLabel = (s: SitePrefixGaps) => s.name ?? t('missingPrefixes.root');
@@ -92,6 +114,38 @@ export function MissingPrefixesPage() {
     return t(`nodes:${r.key}`, r.values);
   };
   const reset = () => setOpenKey(null);
+
+  const reopen = (s: SitePrefixGaps, g: PrefixGap) => {
+    setActionError(null);
+    api
+      .unackPrefixGap(s.site_id ?? null, g.subnet)
+      .then(() => reload())
+      .catch((e: unknown) => setActionError(errMsg(e, t('missingPrefixes.reopenErr'))));
+  };
+
+  // The button sits inside a row that opens on click; pressing it must not open the row too.
+  const markButton = (s: SitePrefixGaps, g: PrefixGap) =>
+    g.intentional ? (
+      <Button
+        variant="outline"
+        onClick={(e) => {
+          e.stopPropagation();
+          reopen(s, g);
+        }}
+      >
+        {t('missingPrefixes.actions.reopen')}
+      </Button>
+    ) : (
+      <Button
+        variant="outline"
+        onClick={(e) => {
+          e.stopPropagation();
+          setAcking({ site: s, gap: g });
+        }}
+      >
+        {t('missingPrefixes.actions.intentional')}
+      </Button>
+    );
 
   const seenOn = (g: PrefixGap) => {
     const more = moreDevices(g);
@@ -122,6 +176,15 @@ export function MissingPrefixesPage() {
       )}
     </span>
   );
+
+  const noteCell = (g: PrefixGap) => {
+    const note = g.intentional?.note || t('missingPrefixes.noNote');
+    return (
+      <span className={g.intentional?.note ? 'mp-note' : 'mp-note muted'} title={note}>
+        {note}
+      </span>
+    );
+  };
 
   const kindCell = (g: PrefixGap) => (
     <span className={`mp-kind mp-kind-${g.kind}`} title={reason(g)}>
@@ -231,17 +294,27 @@ export function MissingPrefixesPage() {
         render: (r) => r.gap.node_count,
       },
     ];
+    if (canConfig) {
+      cols.push({
+        key: 'action',
+        header: t('missingPrefixes.cols.action'),
+        width: '180px',
+        align: 'right',
+        render: (r) => markButton(r.site, r.gap),
+      });
+    }
     const filters = subnetRowFilters(t);
     for (const c of cols) c.filter = filters[c.key];
     return cols;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- kindCell and siteLabel read only `t`
-  }, [t, openKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- kindCell, siteLabel and markButton read only `t` and `reload`
+  }, [t, openKey, canConfig]);
   const siteFiltering = useClientFilters(siteColumns, siteRows);
-  const subnetFiltering = useClientFilters(subnetColumns, view === 'subnet' ? gapRows : NO_SUBNETS, {
+  const subnetFiltering = useClientFilters(subnetColumns, view === 'subnet' ? gapTabRows : NO_SUBNETS, {
     prefix: SUBNET_FILTER_PREFIX,
   });
   const anyFiltered = view === 'site' ? siteFiltering.anyFiltered : subnetFiltering.anyFiltered;
 
+  const gapCols = canConfig ? GAP_COLS_ACT : GAP_COLS;
   const siteDetail = ({ site, gaps }: SiteRow) => (
     <div className="mp-detail">
       {site.nodes_truncated > 0 && (
@@ -254,20 +327,24 @@ export function MissingPrefixesPage() {
         // its own, where a five-column table scrolled sideways. Bounded by the server's cut
         // (`siteCut` below), so it needs no virtualization (ui-conventions.md, hand-rolled tables).
         <div className="ytable mp-gaps">
-          <div className="ytable-head" style={{ gridTemplateColumns: GAP_COLS }}>
+          <div className="ytable-head" style={{ gridTemplateColumns: gapCols }}>
             <div className="ytable-h">{t('missingPrefixes.cols.subnet')}</div>
             <div className="ytable-h">{t('missingPrefixes.cols.reason')}</div>
-            <div className="ytable-h">{t('missingPrefixes.cols.seenOn')}</div>
+            <div className="ytable-h">
+              {tab === 'intentional' ? t('missingPrefixes.cols.note') : t('missingPrefixes.cols.seenOn')}
+            </div>
             <div className="ytable-h right">{t('missingPrefixes.cols.devices')}</div>
             <div className="ytable-h" />
+            {canConfig && <div className="ytable-h right">{t('missingPrefixes.cols.action')}</div>}
           </div>
           {gaps.map((g) => (
-            <div className="ytable-row" key={g.subnet} style={{ gridTemplateColumns: GAP_COLS }}>
+            <div className="ytable-row" key={g.subnet} style={{ gridTemplateColumns: gapCols }}>
               <div className="ytable-cell mono">{g.subnet}</div>
               <div className="ytable-cell">{kindCell(g)}</div>
-              <div className="ytable-cell">{seenOn(g)}</div>
+              <div className="ytable-cell">{g.intentional ? noteCell(g) : seenOn(g)}</div>
               <div className="ytable-cell right num">{g.node_count}</div>
               <div className="ytable-cell">{links(g, site)}</div>
+              {canConfig && <div className="ytable-cell right">{markButton(site, g)}</div>}
             </div>
           ))}
         </div>
@@ -282,6 +359,7 @@ export function MissingPrefixesPage() {
 
   const subnetDetail = (r: SubnetRow) => (
     <div className="mp-detail">
+      {r.gap.intentional && noteCell(r.gap)}
       {seenOn(r.gap)}
       {links(r.gap, r.site)}
     </div>
@@ -298,7 +376,9 @@ export function MissingPrefixesPage() {
       ? t('missingPrefixes.emptyFiltered')
       : view === 'site'
         ? t(`missingPrefixes.empty.${tab}`)
-        : t('missingPrefixes.empty.gaps');
+        : gapTab === 'intentional'
+          ? t('missingPrefixes.empty.intentional')
+          : t('missingPrefixes.empty.gaps');
 
   // One toolbar, two filter states: each layout keeps its own (the subnet one under a prefix).
   const toolbarLeading = (
@@ -312,7 +392,7 @@ export function MissingPrefixesPage() {
         }}
         ariaLabel={t('missingPrefixes.viewsLabel')}
       />
-      {view === 'site' && (
+      {view === 'site' ? (
         <Tabs
           tabs={SITE_GAP_STATUSES.map((s) => ({
             key: s,
@@ -322,6 +402,19 @@ export function MissingPrefixesPage() {
           active={tab}
           onChange={(s) => {
             setTab(s);
+            reset();
+          }}
+        />
+      ) : (
+        <Tabs
+          tabs={GAP_STATUSES.map((s) => ({
+            key: s,
+            label: t(`missingPrefixes.gapTabs.${s}`),
+            count: data ? gapTabs[s] : undefined,
+          }))}
+          active={gapTab}
+          onChange={(s) => {
+            setGapTab(s);
             reset();
           }}
         />
@@ -383,6 +476,7 @@ export function MissingPrefixesPage() {
               onClick={() => {
                 setKind(kind === k ? null : k);
                 setTab('gaps');
+                setGapTab('open');
                 reset();
               }}
             >
@@ -400,6 +494,12 @@ export function MissingPrefixesPage() {
           <ListToolbar list={subnetFiltering} labels={columnLabels(subnetColumns)} leading={toolbarLeading}>
             {toolbarTools}
           </ListToolbar>
+        )}
+
+        {actionError && (
+          <p className="form-error" role="alert">
+            {actionError}
+          </p>
         )}
 
         {view === 'site' ? (
@@ -434,6 +534,19 @@ export function MissingPrefixesPage() {
           />
         )}
       </LoadGate>
+
+      {acking && (
+        <AckGapModal
+          site={acking.site}
+          siteName={siteLabel(acking.site)}
+          gap={acking.gap}
+          onClose={() => setAcking(null)}
+          onDone={() => {
+            setAcking(null);
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -112,6 +112,8 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
         "subnet_overlaps.rs",
         &["subnet_overlap_rules", "subnet_overlap_acks", "nodes"],
     ),
+    // The missing subnets an operator marked as intentional (ADR-170 Inc.4).
+    ("prefix_gap_acks.rs", &["prefix_gap_acks"]),
     // sqlx's own bookkeeping table; no migration declares it, so `table_vocabulary` adds it by hand.
     ("migrate.rs", &["_sqlx_migrations"]),
     // 🚨 The one file that is not about a table, and the exemption is structural rather than

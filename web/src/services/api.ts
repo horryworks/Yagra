@@ -1975,6 +1975,13 @@ export const api = {
   /** Nodes ▸ Missing IP prefixes (ADR-170 Inc.2): for every site, the subnets its devices carry
    *  that its IP prefixes do not cover. Computed on the server on every read. */
   getSitePrefixGaps: (): Promise<PrefixGapSitesView> => apiGet('/api/v1/prefix-gaps'),
+  /** Mark one site's missing subnet as intentional (ADR-170 Inc.4). `siteId` is `null` for the root. */
+  ackPrefixGap: (siteId: string | null, subnet: string, note: string): Promise<void> =>
+    apiPut('/api/v1/prefix-gaps/acks', { body: { site_id: siteId, subnet, note } }),
+  unackPrefixGap: (siteId: string | null, subnet: string): Promise<void> =>
+    apiDelete('/api/v1/prefix-gaps/acks', {
+      query: siteId ? { site_id: siteId, subnet } : { subnet },
+    }),
 
   /** Nodes ▸ Subnet overlaps (ADR-187): address ranges more than one site carries. Computed on the
    *  server on every read; only the rules and the acknowledgements are stored. */

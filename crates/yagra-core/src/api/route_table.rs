@@ -189,6 +189,14 @@ const OVERLAP_WRITE: Scoping = Refused(
      of an overlap and is refused",
 );
 
+/// A **missing-prefix mark** (ADR-170 Inc.4): "this site's gap is intentional". Refused to a
+/// scoped caller for the overlap screen's reason, so the two screens offer their buttons to the
+/// same people: the mark silences the gap for everyone who opens the site.
+const GAP_MARK_WRITE: Scoping = Refused(
+    "an intentional mark on a missing subnet applies to the whole site for every viewer; a scoped \
+     caller is refused, as for subnet-overlap marks",
+);
+
 /// A **Meraki write**. Refused to a group-scoped caller (ADR-164) — see
 /// `api/meraki.rs::meraki_is_deployment_wide`.
 ///
@@ -1980,6 +1988,8 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         GroupFiltered,
         Tool("get_site_prefix_gaps"),
     ),
+    ("PUT", "/api/v1/prefix-gaps/acks", GAP_MARK_WRITE, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/prefix-gaps/acks", GAP_MARK_WRITE, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/subnet-overlaps",

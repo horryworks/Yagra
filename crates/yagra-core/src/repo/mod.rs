@@ -64,6 +64,7 @@ mod migrate;
 mod nodes;
 mod pool_takeover;
 mod pools;
+mod prefix_gap_acks;
 mod profiles;
 mod row_names;
 mod seed;
@@ -104,6 +105,7 @@ pub use nodes::{
 #[allow(unused_imports)]
 pub use pool_takeover::{PoolTakeoverCounts, PoolTakeoverSummary};
 pub use pools::{PoolCarry, PoolRow};
+pub use prefix_gap_acks::StoredGapAck;
 pub use profiles::ProfileSummary;
 pub use row_names::RowNameRow;
 pub use subnet_overlaps::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};

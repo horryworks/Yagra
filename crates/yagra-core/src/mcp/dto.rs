@@ -1456,6 +1456,7 @@ mod tests {
                     if_name: Some("Vlan10".to_owned()),
                     ip: "10.1.2.1".to_owned(),
                 }],
+                intentional: None,
             }],
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&gaps).unwrap(), "PrefixGapReport");

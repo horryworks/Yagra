@@ -71,7 +71,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11146, 6614],
+  monitoring: [11222, 6644],
   nav: [2907, 1367],
   nodes: [15378, 8693],
   rca: [1022, 528],

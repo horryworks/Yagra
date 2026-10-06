@@ -7,6 +7,9 @@
 // port, a range) moves every overlap it explains to Excluded, and "Mark as intentional" moves one
 // overlap until another site joins it. A hint ("looks like WAN") is only ever a suggestion — it
 // pre-fills a rule, it never applies one. The judgement is in `subnetOverlaps.ts`.
+//
+// Marking and taking a mark back are pressed from the row's last column (ADR-187 Inc.3), so an
+// overlap is handled without opening it; the opened row keeps only the rule suggestion.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -136,6 +139,42 @@ export function SubnetOverlapsPage() {
     );
   };
 
+  // The button sits inside a row that opens on click; pressing it must not open the row too.
+  const markButton = (o: SubnetOverlap) => {
+    switch (o.status) {
+      case 'open':
+        return (
+          <Button
+            variant="outline"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAcking(o);
+            }}
+          >
+            {t('subnetOverlaps.actions.intentional')}
+          </Button>
+        );
+      case 'intentional':
+        return (
+          <Button
+            variant="outline"
+            onClick={(e) => {
+              e.stopPropagation();
+              reopen(o);
+            }}
+          >
+            {t('subnetOverlaps.actions.reopen')}
+          </Button>
+        );
+      case 'excluded':
+        return null;
+      default: {
+        const never: never = o.status;
+        return never;
+      }
+    }
+  };
+
   const columns = useMemo<Column<SubnetOverlap>[]>(() => {
     const cols: Column<SubnetOverlap>[] = [
       {
@@ -197,11 +236,21 @@ export function SubnetOverlapsPage() {
         render: whyCell,
       },
     ];
+    // Excluded overlaps are taken back by editing the rule, so that tab has no column.
+    if (canConfig && tab !== 'excluded') {
+      cols.push({
+        key: 'action',
+        header: t('subnetOverlaps.cols.action'),
+        width: '180px',
+        align: 'right',
+        render: markButton,
+      });
+    }
     const filters = overlapFilters(t);
     for (const c of cols) c.filter = filters[c.key];
     return cols;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- whyCell reads `view` through ruleName
-  }, [t, openKey, tab, view]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- whyCell reads `view` through ruleName; markButton only `t` and `reload`
+  }, [t, openKey, tab, view, canConfig]);
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
 
@@ -276,22 +325,10 @@ export function SubnetOverlapsPage() {
             {t('subnetOverlaps.detail.placesMore', { shown: o.places.length, total: o.place_count })}
           </p>
         )}
-        {canConfig && o.status === 'open' && (
+        {canConfig && o.status === 'open' && suggestion && (
           <div className="so-actions">
-            <Button variant="outline" onClick={() => setAcking(o)}>
-              {t('subnetOverlaps.actions.intentional')}
-            </Button>
-            {suggestion && (
-              <Button variant="outline" onClick={() => setNewRule(suggestion)}>
-                {t('subnetOverlaps.actions.suggest', { word: suggestion.port_text })}
-              </Button>
-            )}
-          </div>
-        )}
-        {canConfig && o.status === 'intentional' && (
-          <div className="so-actions">
-            <Button variant="outline" onClick={() => reopen(o)}>
-              {t('subnetOverlaps.actions.reopen')}
+            <Button variant="outline" onClick={() => setNewRule(suggestion)}>
+              {t('subnetOverlaps.actions.suggest', { word: suggestion.port_text })}
             </Button>
           </div>
         )}

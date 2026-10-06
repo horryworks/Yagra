@@ -205,3 +205,13 @@
   gap: var(--space-3);
   white-space: nowrap;
 }
+
+/* An intentional gap's note, where the open tab lists the places it was seen. One line; the cell's
+   title carries the whole note. */
+.mp-note {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

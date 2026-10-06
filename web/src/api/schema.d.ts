@@ -3734,6 +3734,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prefix-gaps/acks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_gap_ack"];
+        post?: never;
+        delete: operations["delete_gap_ack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles": {
         parameters: {
             query?: never;
@@ -8318,11 +8334,27 @@ export interface components {
             /** @description False on an HA standby, whose dispatcher is not running (destination CRUD still works). */
             sending: boolean;
         };
+        /** @description "This subnet is meant to stay out of this site's IP prefixes." */
+        GapAckBody: {
+            note?: string;
+            /**
+             * Format: uuid
+             * @description The site's `site_id`, as the list returned it; `null` for the root.
+             */
+            site_id?: string | null;
+            /** @description The gap's `subnet`, as the list returned it. */
+            subnet: string;
+        };
         /**
          * @description Why a subnet is reported. Ordered by how directly it names something to fix in NetBox.
          * @enum {string}
          */
         GapKind: "unregistered" | "partial" | "other_folder" | "parent_only";
+        /** @description "This subnet is meant to stay out of the site's IP prefixes." */
+        GapMark: {
+            /** @description What the operator wrote when marking it; may be empty. */
+            note: string;
+        };
         /**
          * @description Where a group's effective map position came from.
          * @enum {string}
@@ -11885,6 +11917,7 @@ export interface components {
         };
         /** @description One subnet a folder's devices carry that its own ranges do not cover. */
         PrefixGap: {
+            intentional?: null | components["schemas"]["GapMark"];
             kind: components["schemas"]["GapKind"];
             /**
              * Format: int32
@@ -11947,7 +11980,7 @@ export interface components {
             gaps_listed: number;
             /**
              * Format: int32
-             * @description Gaps across every site.
+             * @description Gaps across every site, marked ones included.
              */
             gaps_total: number;
             /**
@@ -11963,7 +11996,7 @@ export interface components {
              *     this equals `nodes_total`.
              */
             nodes_with_addresses: number;
-            /** @description Every site holding a device this caller may see. Most gaps first, then by name. */
+            /** @description Every site holding a device this caller may see. Most unmarked gaps first, then by name. */
             sites: components["schemas"]["SitePrefixGaps"][];
             /**
              * Format: int32
@@ -13291,10 +13324,10 @@ export interface components {
             parent: string;
         };
         /**
-         * @description Where one site stands — the screen's three tabs, in their order.
+         * @description Where one site stands - the screen's four tabs, in their order.
          * @enum {string}
          */
-        SiteGapStatus: "gaps" | "clean" | "no_data";
+        SiteGapStatus: "gaps" | "clean" | "intentional" | "no_data";
         /**
          * @description A built-in Site field that can supply a code — the closed half of `site_id_field`'s values.
          *
@@ -13349,11 +13382,20 @@ export interface components {
         SitePrefixGaps: {
             /**
              * Format: int32
-             * @description How many gaps the site has. `gaps` may list fewer when the answer was cut.
+             * @description How many of its gaps nobody has marked as intentional. `gaps` may list fewer when the
+             *     answer was cut.
              */
             gap_count: number;
-            /** @description Ordered by kind, then subnet — the folder pane's order. */
+            /**
+             * @description The unmarked gaps first, then the marked ones; inside each, by kind, then subnet - the
+             *     folder pane's order. So a cut answer drops marked gaps before unmarked ones.
+             */
             gaps: components["schemas"]["PrefixGap"][];
+            /**
+             * Format: int32
+             * @description How many of its gaps were marked as intentional.
+             */
+            intentional_count: number;
             /**
              * @description Whether the folder is of type Site. A device with no Site folder above it is compared
              *     against its own folder, which is then listed as a site with this `false`.
@@ -28777,7 +28819,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site */
+            /** @description For every site holding a device this caller may see, the subnets its devices carry that none of the IP prefixes filed in the site's folder or beneath it contains, with why each is reported and whether an operator marked it as intentional. A site is the nearest folder of type Site above a device, else the device's own folder; devices filed in no folder are one site */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -28805,6 +28847,132 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_gap_ack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapAckBody"];
+            };
+        };
+        responses: {
+            /** @description The gap is recorded as intentional for this site. The mark applies while the gap keeps the kind it has now; if the subnet's kind changes it is open again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `text_too_long` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `gap_not_found`: the site has no current gap for this subnet */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_gap_ack: {
+        parameters: {
+            query: {
+                /** @description The site's `site_id`; omitted for the root. */
+                site_id?: string | null;
+                /** @description The gap's `subnet`. */
+                subnet: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The gap is open again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the token is scoped to some folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `ack_not_found`: this gap was not marked as intentional */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
