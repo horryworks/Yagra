@@ -1138,6 +1138,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     serve(state, &cfg.api_addr, metrics, shutdown).await
 }
 
+/// The sending half of the leader's one notification delivery queue
+/// (`LeaderTasks::spawn_delivery_worker`).
+type DeliveryQueue = tokio::sync::mpsc::Sender<crate::alerts::NotifyAction>;
+
 /// Everything the leader-only background work needs, and the work itself.
 ///
 /// This used to be an 828-line `run_live` whose leader half was a single async block preceded by
@@ -1241,12 +1245,35 @@ impl LeaderTasks {
     /// an operator that *something* failed to record and not which loop. Nothing is stored: a sink
     /// is two `Arc` clones and a `&'static str`, and giving each source its own is what lets it be
     /// named (ADR-092).
-    fn alert_sink(&self, subject: &'static str) -> Arc<dyn alerts::sink::AlertSink> {
+    ///
+    /// Delivery goes through `delivery`, the queue [`Self::spawn_delivery_worker`] drains, never
+    /// through the notifier itself: a watch loop that awaited a slow channel stopped evaluating for
+    /// as long as the channel was slow (`alerts::sink::QueuedNotifier` has the measured case).
+    fn alert_sink(
+        &self,
+        delivery: &DeliveryQueue,
+        subject: &'static str,
+    ) -> Arc<dyn alerts::sink::AlertSink> {
         Arc::new(alerts::sink::RecordingSink::new(
             self.history.clone(),
-            self.notifier.clone(),
+            Arc::new(alerts::sink::QueuedNotifier::new(delivery.clone())),
             subject,
         ))
+    }
+
+    /// The one notification delivery worker: a bounded queue with a single ordered consumer, fed
+    /// by the poll-result matcher and by every leader watch loop's sink, so a slow vendor endpoint
+    /// can stall neither ingest nor evaluation. One consumer for all of them keeps a fire ahead of
+    /// the resolve that follows it whichever path produced each.
+    fn spawn_delivery_worker(&self) -> DeliveryQueue {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
+        let notifier = self.notifier.clone();
+        spawn_cancellable(&self.shutdown, async move {
+            while let Some(action) = rx.recv().await {
+                notifier.handle(action).await;
+            }
+        });
+        tx
     }
 
     /// Start every leader-only pipeline. Returns once they are all spawned (they run until the
@@ -1257,12 +1284,13 @@ impl LeaderTasks {
     /// backfill consumer clones, so those two live in the same method.
     async fn run(mut self) -> anyhow::Result<()> {
         self.spawn_coordinator().await?;
-        self.spawn_result_ingest().await?;
+        let delivery = self.spawn_delivery_worker();
+        self.spawn_result_ingest(delivery.clone()).await?;
         self.spawn_discovery_and_forwarding().await?;
         self.spawn_event_pipeline().await?;
         self.spawn_flow_pipeline().await?;
         self.spawn_schedulers();
-        self.spawn_refresh_loops();
+        self.spawn_refresh_loops(&delivery);
         self.reconcile_orphaned_jobs().await;
         Ok(())
     }
@@ -1289,20 +1317,7 @@ impl LeaderTasks {
     /// writers, and the backfill consumer reuses those same writers via cloned senders (it imports
     /// metrics at their original timestamp but must NEVER run alert evaluation — replayed samples
     /// would re-fire dwell-based alerts as a flood).
-    async fn spawn_result_ingest(&self) -> anyhow::Result<()> {
-        // Notification delivery worker (bounded queue, single ordered consumer) — fed by the
-        // matcher so a slow vendor endpoint can never stall ingest.
-        let (notify_tx, mut notify_rx) =
-            tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
-        {
-            let notifier = self.notifier.clone();
-            spawn_cancellable(&self.shutdown, async move {
-                while let Some(action) = notify_rx.recv().await {
-                    notifier.handle(action).await;
-                }
-            });
-        }
-
+    async fn spawn_result_ingest(&self, notify_tx: DeliveryQueue) -> anyhow::Result<()> {
         let vm = result_ingest::start_vm_writers(self.store.clone(), self.shutdown.clone());
         let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<result_ingest::MetaRecord>(
             result_ingest::RESULT_PERSIST_CHANNEL_CAP,
@@ -1541,7 +1556,7 @@ impl LeaderTasks {
 
     /// The periodic reload loops that pick up operator config edits, plus the report schedule
     /// firing loop.
-    fn spawn_refresh_loops(&self) {
+    fn spawn_refresh_loops(&self, delivery: &DeliveryQueue) {
         spawn_cancellable(
             &self.shutdown,
             alerts::config::run_alert_config_refresh(
@@ -1619,7 +1634,7 @@ impl LeaderTasks {
                 self.store.clone(),
                 self.repo.clone(),
                 self.alerts.clone(),
-                self.alert_sink("an interface-utilisation transition"),
+                self.alert_sink(delivery, "an interface-utilisation transition"),
             ),
         );
         // Node-level derived metrics (ADR-105) — memory, disk, swap and load percentages that no
@@ -1629,7 +1644,7 @@ impl LeaderTasks {
             derived::run_derived_metric_watch(
                 self.store.clone(),
                 self.alerts.clone(),
-                self.alert_sink("a derived-metric transition"),
+                self.alert_sink(delivery, "a derived-metric transition"),
             ),
         );
         // Nodes that have been deleted (ADR-097 Increment 4). Nothing polls a node that no longer
@@ -1640,7 +1655,7 @@ impl LeaderTasks {
             &self.shutdown,
             alerts::deleted::run_deleted_node_watch(
                 self.alerts.clone(),
-                self.alert_sink("a deleted-node resolution"),
+                self.alert_sink(delivery, "a deleted-node resolution"),
             ),
         );
         // APs whose controller stopped reporting them, and ones it reported again (ADR-064 Inc.G):
@@ -1660,7 +1675,7 @@ impl LeaderTasks {
                 self.alerts.clone(),
                 self.store.clone(),
                 self.meraki_devices.clone(),
-                self.alert_sink("a stale-check resolution"),
+                self.alert_sink(delivery, "a stale-check resolution"),
             ),
         );
         spawn_cancellable(
@@ -1671,7 +1686,7 @@ impl LeaderTasks {
                 self.meraki_devices.clone(),
                 self.groups.clone(),
                 self.alerts.clone(),
-                self.alert_sink("a pool-coverage transition"),
+                self.alert_sink(delivery, "a pool-coverage transition"),
             ),
         );
         // Whether the Dashboard API is answering each Meraki organization (ADR-164 decision 18). Leader-
@@ -1684,7 +1699,7 @@ impl LeaderTasks {
                 self.repo.clone(),
                 self.meraki_inflight.clone(),
                 self.alerts.clone(),
-                self.alert_sink("a meraki collect transition"),
+                self.alert_sink(delivery, "a meraki collect transition"),
             ),
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).

@@ -21,6 +21,7 @@
 
 ### Bug Fixes
 
+- **A slow notification channel no longer holds port and derived-metric alerts open.** The loops that judge port traffic, derived metrics, deleted nodes, stale checks, pool coverage and Meraki collection used to wait for each notification to be delivered before moving on, so a webhook that timed out made them stop judging until every pending page had been tried. Port alerts whose rule had been deleted stayed open for as long as that took — measured at over an hour and a half for 135 alerts. Delivery now goes through the same ordered queue poll results use, so evaluation carries on while a channel is slow.
 - **Nodes ▸ Subnet overlaps no longer draws a row low when its sites spill onto a second line.** The site names stay on one line, a long one is cut short (hover it for the whole name), and the `+N` count says how many more there are.
 
 ## v0.3.46 — Every site's subnets missing from its IP prefixes on one screen, and screens that explain themselves through their controls instead of paragraphs

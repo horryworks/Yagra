@@ -93,6 +93,38 @@ impl AlertNotifier for Notifier {
     }
 }
 
+/// Delivery handed to the leader's one ordered delivery worker instead of awaited in place.
+///
+/// 🚨 **Every leader watch loop takes its sink over this, never over [`Notifier`] directly.** A
+/// delivery awaits the channel's whole retry budget, and a loop that awaits it stops evaluating for
+/// as long as the endpoint is slow. Found on a lab deployment 2026-10-07: a webhook timing out
+/// at ~48 s per fire held the interface-utilisation loop for 1 h 40 min while it delivered 135
+/// fires one by one — its rule-gone sweep could not run, so the alerts of a rule deleted a minute
+/// after they fired stayed open for that whole time, and recreating the rule changed nothing
+/// because the evaluator that would have read it was not ticking.
+///
+/// One consumer, so a fire is always delivered before the resolve that follows it — the order the
+/// poll path's queue has kept since ADR-025. The queue is bounded: a full one still blocks the
+/// sender, which is backpressure rather than a dropped page.
+pub(crate) struct QueuedNotifier {
+    tx: tokio::sync::mpsc::Sender<NotifyAction>,
+}
+
+impl QueuedNotifier {
+    pub(crate) fn new(tx: tokio::sync::mpsc::Sender<NotifyAction>) -> Self {
+        Self { tx }
+    }
+}
+
+#[async_trait]
+impl AlertNotifier for QueuedNotifier {
+    async fn handle(&self, action: NotifyAction) {
+        if self.tx.send(action).await.is_err() {
+            tracing::debug!("notification channel closed (shutdown); dropping delivery");
+        }
+    }
+}
+
 /// The live sink: `alert_history` first, then delivery.
 pub(crate) struct RecordingSink {
     history: Arc<dyn HistoryWriter>,
@@ -255,6 +287,34 @@ mod tests {
             1,
             "…but it must still reach the notifier, which is what closes the incident"
         );
+    }
+
+    /// 🚨 **A watch loop's dispatch must not wait for the delivery.** Nothing drains the queue
+    /// here, which is what a webhook stuck in its retry budget looks like from the loop's side:
+    /// every dispatch still returns, the History row is already written, and the deliveries come
+    /// out in the order they went in — a fire ahead of its resolve.
+    #[tokio::test]
+    async fn a_queued_sink_returns_before_anything_is_delivered() {
+        let history = Arc::new(FakeHistory::default());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let s = RecordingSink::new(
+            history.clone(),
+            Arc::new(QueuedNotifier::new(tx)),
+            "a test transition",
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            s.dispatch(NotifyAction::Fire(alert())).await;
+            s.dispatch(NotifyAction::Resolve(alert())).await;
+        })
+        .await
+        .expect("dispatch waited on a delivery nobody was taking");
+        assert_eq!(
+            history.rows.lock().unwrap().len(),
+            2,
+            "both rows are written before delivery"
+        );
+        assert!(matches!(rx.try_recv(), Ok(NotifyAction::Fire(_))));
+        assert!(matches!(rx.try_recv(), Ok(NotifyAction::Resolve(_))));
     }
 
     /// 🚨 **A failed write must not swallow the page.** The reverse order would turn a database
