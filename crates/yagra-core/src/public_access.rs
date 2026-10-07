@@ -39,6 +39,15 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// access-control table without the declaration that produced it.
 const WIDGET_ROUTES_JSON: &str = include_str!("../../../web/src/dashboard/widgetRoutes.json");
 
+/// The widget types that may never go on the public board, generated from `NOT_PUBLIC` in
+/// `web/src/dashboard/publicCatalog.ts` by the same command as [`WIDGET_ROUTES_JSON`].
+///
+/// The WebUI catalog hides these, but a layout reaches core as an opaque document, so before this
+/// was read here a board written through the API stored the audit widget and every anonymous
+/// visitor saw "a valid bearer token is required" in its card (found on a lab deployment,
+/// 2026-10-08). Core now refuses such a layout on save, and a stored one contributes no routes.
+const NOT_PUBLIC_JSON: &str = include_str!("../../../web/src/dashboard/notPublicWidgets.json");
+
 /// Routes an anonymous visitor may reach whenever the switch is on, whatever the board carries.
 ///
 /// Exactly one entry, and it is the bootstrap: without the layout there is no page to draw, so a
@@ -104,8 +113,14 @@ impl PublicAccess {
             return Self::closed();
         }
         let table = widget_route_table();
+        let refused = not_public_types();
         let mut routes = HashSet::new();
         for ty in widget_types(layout) {
+            // A widget that cannot work for a visitor opens nothing, even if a board stored before
+            // the save-time check still carries it.
+            if refused.contains(ty.as_str()) {
+                continue;
+            }
             if let Some(rs) = table.get(ty.as_str()) {
                 routes.extend(rs.iter().cloned());
             }
@@ -297,6 +312,31 @@ fn widget_route_table() -> &'static HashMap<String, Vec<(String, String)>> {
             })
             .collect()
     })
+}
+
+/// The generated deny-list, parsed once.
+fn not_public_types() -> &'static HashSet<String> {
+    static SET: OnceLock<HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| {
+        serde_json::from_str::<Vec<String>>(NOT_PUBLIC_JSON)
+            .expect("notPublicWidgets.json is a committed build output and must parse")
+            .into_iter()
+            .collect()
+    })
+}
+
+/// The widget types on `layout` that may not go on the public board, sorted and de-duplicated.
+/// Empty means the layout is acceptable.
+#[must_use]
+pub fn not_public_widgets(layout: &Value) -> Vec<String> {
+    let refused = not_public_types();
+    let mut out: Vec<String> = widget_types(Some(layout))
+        .into_iter()
+        .filter(|t| refused.contains(t.as_str()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Every widget type placed on the board, across all of its boards.
@@ -568,12 +608,35 @@ mod tests {
     }
 
     #[test]
-    fn the_audit_widget_would_open_the_audit_log_which_is_why_the_catalog_refuses_it() {
-        // Not a rule this module enforces — the WebUI catalog is what keeps the widget off the
-        // public board (it takes `view_audit`, which `Require<P>` refuses anonymously whatever
-        // this list says). Pinned here so the two halves cannot drift apart unnoticed: if this
-        // ever stops being true, the catalog filter is filtering on the wrong thing.
-        let a = PublicAccess::derive(true, Some(&board(&["audit"])));
-        assert!(a.allows("GET", "/api/v1/audit"));
+    fn a_widget_that_cannot_be_public_opens_nothing_even_if_a_board_carries_it() {
+        // `audit` is on the generated deny-list (it takes `view_audit`, which no visitor has). A
+        // board stored before the save-time check could still name it; it must open nothing, and
+        // must not stop the widgets beside it from opening theirs.
+        let a = PublicAccess::derive(true, Some(&board(&["audit", "status-summary"])));
+        assert!(!a.allows("GET", "/api/v1/audit"));
+        assert!(a.allows("GET", "/api/v1/fleet/summary"));
+    }
+
+    #[test]
+    fn the_save_check_names_each_refused_widget_once_and_passes_a_clean_board() {
+        assert_eq!(
+            not_public_widgets(&board(&["audit", "status-summary", "audit"])),
+            vec!["audit".to_string()]
+        );
+        assert!(not_public_widgets(&board(&["status-summary", "active-alerts"])).is_empty());
+    }
+
+    #[test]
+    fn every_refused_widget_is_a_widget_the_route_table_knows() {
+        // The generator already refuses an unknown name; this is the Rust half of the same
+        // promise, so a hand-edited file cannot carry a misspelling that refuses nothing.
+        let table = widget_route_table();
+        assert!(!not_public_types().is_empty());
+        for t in not_public_types() {
+            assert!(
+                table.contains_key(t.as_str()),
+                "{t} is not a registry widget"
+            );
+        }
     }
 }

@@ -433,6 +433,9 @@ export const REGISTRY: WidgetDefinition[] = [
     // every board sitting at that width would snap to its neighbour on the next load.
     allowedSpans: [4, 6, 8, 12],
     allowedRowSpans: [1, 2, 3],
+    // Two rows: up to six links put twelve entries in the legend, and one row left the mirrored
+    // plot too short to read beside them (measured on a lab deployment, 2026-10-08).
+    defaultRowSpan: 2,
     reads: [
       'GET /api/v1/nodes/{node_id}/interfaces',
       'GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series',

@@ -90,7 +90,8 @@ pub(super) fn routes() -> Router<ApiState> {
         )
 }
 
-/// Reject a layout that is not a JSON object, or is too big to be a real board.
+/// Reject a layout that is not a JSON object, is too big to be a real board, or carries a widget
+/// no anonymous visitor can be served ([`public_access::not_public_widgets`]).
 fn validate_layout(body: &Value) -> Result<(), ApiError> {
     validate_opaque_doc(
         body,
@@ -98,7 +99,18 @@ fn validate_layout(body: &Value) -> Result<(), ApiError> {
         "layout_too_large",
         "public dashboard layout",
         MAX_JSON_DOC_BYTES,
-    )
+    )?;
+    let refused = public_access::not_public_widgets(body);
+    if !refused.is_empty() {
+        return Err(ApiError::bad_request(
+            "widget_not_public",
+            format!(
+                "these widgets cannot go on the public board: {}",
+                refused.join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Is this deployment public, and how much does the current board open?
@@ -195,7 +207,7 @@ async fn get_public_dashboard(_guard: RequireView, admin: Admin) -> ApiResult<Js
     request_body = serde_json::Value,
     responses(
         (status = 200, description = "Board saved; the anonymous route set has already been re-derived from it", body = PublicDashboardSaved),
-        (status = 400, description = "The layout is not a JSON object", body = super::error::ErrorBody),
+        (status = 400, description = "The layout is not a JSON object, or carries a widget that cannot be served to anonymous visitors (`widget_not_public`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 413, description = "The layout exceeds the document size cap", body = super::error::ErrorBody),
@@ -433,6 +445,34 @@ mod tests {
         let (status, read) = send(&st, "GET", "/api/v1/public-dashboard", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{read}");
         assert!(read.to_string().contains("status-summary"), "{read}");
+    }
+
+    /// A board carrying a widget no visitor can be served is refused, and nothing is stored.
+    ///
+    /// The catalog never offers the audit widget, but the layout is an opaque document and the API
+    /// accepted one carrying it — every visitor then saw an auth error in that card.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_board_with_a_widget_that_cannot_be_public_is_refused(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let (tok, _) = account_token(&st, "fixture-public-audit", yagra_common::Role::Admin).await;
+        let board = serde_json::json!({
+            "version": 3,
+            "boards": [{
+                "id": "b1",
+                "name": "Public",
+                "widgets": [
+                    { "instanceId": "w1", "type": "status-summary" },
+                    { "instanceId": "w2", "type": "audit" },
+                ],
+            }],
+        });
+        let (status, body) = send(&st, "PUT", "/api/v1/public-dashboard", &tok, Some(board)).await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.to_string().contains("widget_not_public"), "{body}");
+        assert!(body.to_string().contains("audit"), "{body}");
+        assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 0);
     }
 
     /// Turning the switch off closes the surface even with a board still saved.

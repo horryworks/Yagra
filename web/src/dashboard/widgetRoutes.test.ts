@@ -7,10 +7,14 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { NOT_PUBLIC } from './publicCatalog';
 import { REGISTRY } from './registry';
 
 const WIDGET_ROUTES: Record<string, string[]> = JSON.parse(
   readFileSync(new URL('./widgetRoutes.json', import.meta.url), 'utf8'),
+);
+const NOT_PUBLIC_WIDGETS: string[] = JSON.parse(
+  readFileSync(new URL('./notPublicWidgets.json', import.meta.url), 'utf8'),
 );
 const OPENAPI: { paths: Record<string, Record<string, unknown>> } = JSON.parse(
   readFileSync(new URL('../api/openapi.json', import.meta.url), 'utf8'),
@@ -71,6 +75,12 @@ describe('widget route declarations', () => {
       }
     }
     expect(bad, 'a widget declares a mutating route').toEqual([]);
+  });
+
+  it('the committed notPublicWidgets.json matches NOT_PUBLIC', () => {
+    // Core refuses a public layout that carries any of these (ADR-123 decision 8). A stale file
+    // would let the API store a widget the catalog hides — the card every visitor then sees fail.
+    expect(NOT_PUBLIC_WIDGETS).toEqual(Object.keys(NOT_PUBLIC).sort());
   });
 
   it('the audit widget is still the case that must never reach the public board', () => {

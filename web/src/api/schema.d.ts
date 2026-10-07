@@ -29388,7 +29388,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublicDashboardSaved"];
                 };
             };
-            /** @description The layout is not a JSON object */
+            /** @description The layout is not a JSON object, or carries a widget that cannot be served to anonymous visitors (`widget_not_public`) */
             400: {
                 headers: {
                     [name: string]: unknown;

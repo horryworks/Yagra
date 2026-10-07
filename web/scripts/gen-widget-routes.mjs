@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Generate `src/dashboard/widgetRoutes.json` from the `reads` declarations in `registry.tsx`.
+// Generate `src/dashboard/widgetRoutes.json` from the `reads` declarations in `registry.tsx`, and
+// `src/dashboard/notPublicWidgets.json` from `NOT_PUBLIC` in `publicCatalog.ts`.
 //
 // WHY THIS EXISTS (ADR-123 decision 6). Core derives the anonymous route allow-list from the widgets on
 // the public board, so it needs the widget-type → routes table. Writing that table a second time in
@@ -24,6 +25,8 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const REGISTRY = join(here, '..', 'src', 'dashboard', 'registry.tsx');
 const OUT = join(here, '..', 'src', 'dashboard', 'widgetRoutes.json');
+const CATALOG = join(here, '..', 'src', 'dashboard', 'publicCatalog.ts');
+const OUT_NOT_PUBLIC = join(here, '..', 'src', 'dashboard', 'notPublicWidgets.json');
 
 const src = readFileSync(REGISTRY, 'utf8');
 
@@ -58,3 +61,22 @@ if (entries.length < 40) {
 const byType = Object.fromEntries(entries.sort((a, b) => a[0].localeCompare(b[0])));
 writeFileSync(OUT, JSON.stringify(byType, null, 2) + '\n');
 console.log(`widgetRoutes.json: ${entries.length} widgets, ${new Set(entries.flatMap((e) => e[1])).size} distinct routes`);
+
+// The second half: which widget types may NOT go on the public board (`publicCatalog.ts`'s
+// `NOT_PUBLIC`). The catalog hides them, but the layout reaches core as an opaque document, so a
+// board written through the API carried the audit widget and every visitor saw an auth error in
+// it. Core refuses such a layout on save; this file is how it learns the list without a Rust copy.
+const catalogSrc = readFileSync(CATALOG, 'utf8');
+const block = /export const NOT_PUBLIC[^{]*\{([\s\S]*?)\n\};/.exec(catalogSrc);
+if (!block) throw new Error('publicCatalog.ts has no NOT_PUBLIC object literal');
+const notPublic = [...block[1].matchAll(/^  '?([a-z][a-z0-9-]*)'?: /gm)].map((x) => x[1]).sort();
+if (notPublic.length === 0) {
+  // The list is short, but it is not empty: an empty result means the parse stopped matching, and
+  // an empty file would quietly let core accept every widget again.
+  throw new Error('parsed no NOT_PUBLIC entries — the publicCatalog.ts format probably changed');
+}
+for (const t of notPublic) {
+  if (!(t in byType)) throw new Error(`NOT_PUBLIC names '${t}', which is not a registry widget`);
+}
+writeFileSync(OUT_NOT_PUBLIC, JSON.stringify(notPublic, null, 2) + '\n');
+console.log(`notPublicWidgets.json: ${notPublic.length} widget(s)`);

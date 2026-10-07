@@ -17,6 +17,7 @@ import { applyIdleLegend, resolveColor } from './chartColor';
 import { LABEL_ROTATION, gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
 import { usePrefsStore } from '../../prefs';
 import { PALETTE } from './palette';
+import { MIN_PLOT_HEIGHT, fillSplit } from './fillLayout';
 
 /** Static fallbacks for the `--series-*` tokens, used only if computed style can't resolve them
  *  (e.g. the var is missing). Mirror tokens.css so a fallback still looks right. */
@@ -27,7 +28,6 @@ const SERIES_FALLBACK = ['#4c8dd6', '#9b7bd4', '#4caf9b', '#d68a4c', '#b05c8e', 
 // First-paint estimate of uPlot's title+legend chrome height (px) in `fill` mode, before the real
 // elements exist to measure. Corrected to the exact measured value immediately after construction.
 const FILL_CHROME_ESTIMATE = 28;
-const MIN_PLOT_HEIGHT = 40;
 
 /** Width of the value-axis gutter on a `mirrored` chart (px). uPlot's default is 50, which the tick
  *  labels fill; the extra 18 is the lane the rotated IN/OUT labels stand in. Set at build time, so
@@ -416,16 +416,20 @@ export function MetricChart({
     // scrollbar, the scrollbar shrinks the pane, and the ResizeObserver oscillates (flickering
     // scrollbar + doubled baseline). Deferring to rAF also avoids the synchronous RO loop.
     let raf = 0;
-    const chromeHeight = () => {
+    // The legend is capped at a share of the pane and scrolls inside it (`fillLayout.ts`): with
+    // many series it wraps to many lines, and before the cap it took the whole pane and left the
+    // plot its floor. `scrollHeight` is the legend's full height whatever cap it carries now.
+    const plotHeight = () => {
       const title = el.querySelector<HTMLElement>('.u-title');
       const legend = el.querySelector<HTMLElement>('.u-legend');
-      return (title?.offsetHeight ?? 0) + (legend?.offsetHeight ?? 0);
+      const split = fillSplit(el.clientHeight, title?.offsetHeight ?? 0, legend?.scrollHeight ?? 0);
+      if (legend) legend.style.maxHeight = `${split.legendCap}px`;
+      return split.plotHeight;
     };
     const applySize = () => {
       const w = el.clientWidth;
       if (w <= 0) return;
-      const h = fill ? Math.max(MIN_PLOT_HEIGHT, el.clientHeight - chromeHeight()) : height;
-      plot.setSize({ width: w, height: h });
+      plot.setSize({ width: w, height: fill ? plotHeight() : height });
     };
     // Correct the first-paint estimate now that the real chrome elements are in the DOM.
     if (fill) applySize();

@@ -29,3 +29,9 @@
   min-height: 0;
   overflow: hidden;
 }
+
+/* The legend's height is capped from JS (`fillLayout.ts`); past the cap it scrolls here rather
+   than squeezing the plot. */
+.metricchart-fill .u-legend {
+  overflow-y: auto;
+}
