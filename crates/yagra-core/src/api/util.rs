@@ -711,6 +711,10 @@ mod tests {
             "api/topology.rs",
             "the nodes blocking a change — ids, not allowed values",
         ),
+        (
+            "api/public_dashboard.rs",
+            "the widgets the caller sent that the public board refuses — not the allowed set",
+        ),
     ];
 
     /// ADR-184: the sentences an API edge says about a timestamp, a cursor and a set of allowed
