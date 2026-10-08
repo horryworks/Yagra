@@ -259,6 +259,7 @@ export function AckOverlapModal({
             placeholder={t('subnetOverlaps.ack.notePlaceholder')}
             onChange={(e) => setNote(e.target.value)}
             maxLength={200}
+            autoFocus
           />
         </label>
         <FormError form={form} />

@@ -10380,7 +10380,7 @@ export interface components {
              *     uses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has
              *     no row, so the record still has an identity rather than being dropped. The current set
              *     and the history show a CDP `ifindex <n>` as that port's interface name (`ifName`) when the
-             *     node's interface list has one.
+             *     node's interface list has one, unless two ports would then share a name.
              */
             local_port: string;
             /** @description Which protocol reported this. */

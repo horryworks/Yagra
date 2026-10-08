@@ -35,8 +35,8 @@ use yagra_common::{L3Snapshot, NodeKind, SubnetKey};
 /// The most gaps one answer lists, across every site. Each site's `gap_count` is never capped.
 pub(crate) const SITE_GAPS_MAX: usize = 2_000;
 
-/// The longest note accepted on a mark - the overlap screen's limit.
-const NOTE_MAX: usize = 200;
+/// The longest note accepted on a mark - the overlap screen's limit, read from there.
+const NOTE_MAX: usize = super::subnet_overlaps::TEXT_MAX;
 
 const SCOPED_WRITE: &str =
     "an intentional mark applies to the whole site; a folder-scoped token cannot set one";
@@ -933,6 +933,19 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(body["error"]["code"], "gap_not_found", "{body}");
+
+        // A note longer than the overlap screen's limit is refused before anything is compared.
+        let long = "x".repeat(NOTE_MAX + 1);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            ACKS,
+            &tok,
+            Some(serde_json::json!({ "site_id": site_a, "subnet": "10.1.3.0/24", "note": long })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "text_too_long", "{body}");
 
         // Taking it back is ACCEPTED once, and the second time there is nothing to take back.
         let undo = format!("{ACKS}?site_id={site_a}&subnet=192.0.2.0/24");

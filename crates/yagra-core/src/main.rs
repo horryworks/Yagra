@@ -1239,12 +1239,12 @@ struct LeaderTasks {
 }
 
 impl LeaderTasks {
-    /// A sink for one alert source, built from the two handles this struct already holds.
+    /// A sink for one alert source: this struct's history handle plus the shared delivery queue.
     ///
     /// The `subject` is what its failure log says — a shared message across the sources would tell
     /// an operator that *something* failed to record and not which loop. Nothing is stored: a sink
-    /// is two `Arc` clones and a `&'static str`, and giving each source its own is what lets it be
-    /// named (ADR-092).
+    /// is a history clone, a queue sender and a `&'static str`, and giving each source its own is
+    /// what lets it be named (ADR-092).
     ///
     /// Delivery goes through `delivery`, the queue [`Self::spawn_delivery_worker`] drains, never
     /// through the notifier itself: a watch loop that awaited a slow channel stopped evaluating for
@@ -1263,8 +1263,14 @@ impl LeaderTasks {
 
     /// The one notification delivery worker: a bounded queue with a single ordered consumer, fed
     /// by the poll-result matcher and by every leader watch loop's sink, so a slow vendor endpoint
-    /// can stall neither ingest nor evaluation. One consumer for all of them keeps a fire ahead of
-    /// the resolve that follows it whichever path produced each.
+    /// no longer holds a watch loop's evaluation for as long as it is slow. One consumer for all
+    /// of them keeps a fire ahead of the resolve that follows it whichever path produced each.
+    ///
+    /// ⚠️ One consumer is also head-of-line: a burst from one source (a utilisation sweep firing
+    /// on many ports) delays every other source's notification behind it, and a queue filled to
+    /// its 1024 makes the senders - the poll-result matcher included - wait for room. Splitting
+    /// the consumer by check would keep the per-check order and remove the wait; it is a decision
+    /// of its own and has not been taken.
     fn spawn_delivery_worker(&self) -> DeliveryQueue {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::alerts::NotifyAction>(1024);
         let notifier = self.notifier.clone();
@@ -1310,8 +1316,9 @@ impl LeaderTasks {
         Ok(())
     }
 
-    /// Poll-result ingestion (ADR-025): the notification worker, the async batch writers, the
-    /// single in-memory matcher, and the store-and-forward backfill consumer.
+    /// Poll-result ingestion (ADR-025): the async batch writers, the single in-memory matcher
+    /// (which hands its notifications to [`Self::spawn_delivery_worker`]'s queue), and the
+    /// store-and-forward backfill consumer.
     ///
     /// These are one method because they share channels: the matcher hands off to the VM/PG
     /// writers, and the backfill consumer reuses those same writers via cloned senders (it imports

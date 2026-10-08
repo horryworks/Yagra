@@ -9,7 +9,8 @@
 //! It now means one board. The allow-list is **derived from what that board displays**: each
 //! widget type declares the routes it reads (`web/src/dashboard/registry.tsx`, generated into
 //! `widgetRoutes.json`), and the set open to an anonymous caller is the union over the widgets the
-//! public board actually carries. Take a widget off the board and its routes close; the board is
+//! public board actually carries, leaving out every type `notPublicWidgets.json` refuses (a widget
+//! whose data is not for strangers contributes nothing even if a board still holds it). Take a widget off the board and its routes close; the board is
 //! the access-control list, which is why composing it takes `manage_system` rather than the
 //! `manage_config` its shared-board sibling takes.
 //!

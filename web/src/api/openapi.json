@@ -35725,7 +35725,7 @@
           },
           "local_port": {
             "type": "string",
-            "description": "The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP\nuses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has\nno row, so the record still has an identity rather than being dropped. The current set\nand the history show a CDP `ifindex <n>` as that port's interface name (`ifName`) when the\nnode's interface list has one."
+            "description": "The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP\nuses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has\nno row, so the record still has an identity rather than being dropped. The current set\nand the history show a CDP `ifindex <n>` as that port's interface name (`ifName`) when the\nnode's interface list has one, unless two ports would then share a name."
           },
           "proto": {
             "$ref": "#/components/schemas/NeighborProto",

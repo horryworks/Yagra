@@ -40,8 +40,9 @@ pub(crate) const CGNAT_RULE_ID: Uuid = Uuid::from_u128(0x0a0187);
 /// The most overlaps one answer lists. `counts` beside them is never capped.
 pub(crate) const OVERLAPS_MAX: usize = 2_000;
 
-/// The longest note or port text accepted.
-const TEXT_MAX: usize = 200;
+/// The longest note or port text accepted. Missing IP prefixes' intentional mark takes the same
+/// limit (`prefix_gaps.rs`), so the two screens' note boxes agree.
+pub(crate) const TEXT_MAX: usize = 200;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]

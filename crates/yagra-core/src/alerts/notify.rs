@@ -17,10 +17,12 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_alert::{
-    Alert, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
+    Alert, DedupKey, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
     NotifyChannel, NotifyError, RetryPolicy, Subject,
 };
-use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, NodeId, NotifyEvent, Severity};
+use yagra_common::{
+    is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
+};
 
 use crate::notification_log::{DeliveryLog, DeliveryRecord};
 use crate::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
@@ -1175,6 +1177,15 @@ pub struct Notifier {
     any_facts_channel: AtomicBool,
     /// Where each delivery is recorded (ADR-195). Recording never waits: see [`DeliveryLog`].
     delivery_log: RwLock<Option<DeliveryLog>>,
+    /// The side of its band each open threshold alert was last handed to the channels with.
+    ///
+    /// 🚨 A side change re-fires an open alert at the same severity, so it carries the same
+    /// [`DedupKey`] as the fire already delivered, and every [`Dispatcher`] would suppress it as a
+    /// duplicate: History and the WebUI said "above" while every channel stayed on "below". A fire
+    /// whose side differs from the one recorded here clears the channels' dedup first, so it is
+    /// delivered like an escalation. Cleared by a resolve or a roll-up; empty after a restart,
+    /// which is right because the dispatchers' dedup state is empty then too.
+    sides: std::sync::Mutex<HashMap<DedupKey, Direction>>,
     /// Which kinds of channel make up the env default route, in the order [`Self::from_env`]
     /// adds them (ADR-200 Inc.28). Fixed for the process's life, like the route itself.
     default_kinds: Vec<DefaultRouteKind>,
@@ -1244,6 +1255,7 @@ impl Notifier {
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
             delivery_log: RwLock::new(None),
+            sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
         }
     }
@@ -1466,6 +1478,15 @@ impl Notifier {
                     tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
+                if self.side_changed(&alert) {
+                    let key = alert.dedup_key();
+                    if let Some(d) = routing.default.as_ref() {
+                        d.mark_resolved(&key).await;
+                    }
+                    for d in routing.channels.values() {
+                        d.mark_resolved(&key).await;
+                    }
+                }
                 let notification = with_subject_facts(
                     json_notification(&alert, NotifyEvent::Fire, facts.as_ref()),
                     facts.as_ref(),
@@ -1498,6 +1519,7 @@ impl Notifier {
                 }
             }
             NotifyAction::Resolve(alert) => {
+                self.forget_side(&alert);
                 // A root-cause-suppressed alert never delivered its fire, so there is no
                 // remote incident to close — just clear local dedup (mirror of the fire path).
                 if alert.root_cause.is_some() {
@@ -1525,6 +1547,7 @@ impl Notifier {
                 .await;
             }
             NotifyAction::Suppress(alert) => {
+                self.forget_side(&alert);
                 // A downstream alert that had been paging standalone is now rolled up under its
                 // upstream root cause: close its remote incident so on-call isn't left with a
                 // separate open page. Mirrors the (non-root-cause) resolve close path — the alert
@@ -1540,6 +1563,27 @@ impl Notifier {
                 .await;
             }
         }
+    }
+
+    /// Record the side `alert` is being delivered with, and say whether that differs from the
+    /// side it was last delivered with. A breach-less alert (liveness) has no side and never
+    /// changes one.
+    fn side_changed(&self, alert: &Alert) -> bool {
+        let Some(breach) = alert.breach.as_ref() else {
+            return false;
+        };
+        let mut sides = self.sides.lock().expect("notifier sides lock poisoned");
+        sides
+            .insert(alert.dedup_key(), breach.direction)
+            .is_some_and(|was| was != breach.direction)
+    }
+
+    /// Drop the side recorded for `alert`: its incident is closing, so the next fire is new.
+    fn forget_side(&self, alert: &Alert) {
+        self.sides
+            .lock()
+            .expect("notifier sides lock poisoned")
+            .remove(&alert.dedup_key());
     }
 
     /// Close a remote incident on the channels the fire was routed to, and clear local dedup on
@@ -3133,6 +3177,55 @@ mod delivery_tests {
             0,
             "no rule named channel B, so it must not be paged"
         );
+    }
+
+    /// An open alert re-fired on the other side of its band reaches the channels again, although
+    /// its dedup key is the one already delivered; the same side again stays a duplicate, and a
+    /// breach-less alert is never re-delivered by this path.
+    #[tokio::test]
+    async fn a_side_change_is_delivered_again_and_the_same_side_is_not() {
+        let (dflt, a) = (log(), log());
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let id_a = Uuid::from_u128(1);
+        n.install_routing(
+            vec![built(id_a, Recorder(a.clone()))],
+            vec![rule(id_a, None)],
+        );
+        let node = NodeId::new();
+        let on = |direction| Alert {
+            breach: Some(yagra_alert::Breach {
+                value: 0.0,
+                threshold: Some(1.0),
+                direction,
+            }),
+            ..alert(node, Severity::Critical, None)
+        };
+        let fires = || {
+            (
+                dflt.lock().unwrap().count("fire"),
+                a.lock().unwrap().count("fire"),
+            )
+        };
+
+        n.handle(NotifyAction::Fire(on(Direction::Below))).await;
+        assert_eq!(fires(), (1, 1), "the first fire");
+        n.handle(NotifyAction::Fire(on(Direction::Below))).await;
+        assert_eq!(fires(), (1, 1), "the same side again is a duplicate");
+        n.handle(NotifyAction::Fire(on(Direction::Above))).await;
+        assert_eq!(fires(), (2, 2), "the other side reaches every channel");
+        n.handle(NotifyAction::Fire(on(Direction::Above))).await;
+        assert_eq!(fires(), (2, 2), "and is itself deduplicated after that");
+
+        // A resolve forgets the side, so the next incident starts clean on either side.
+        n.handle(NotifyAction::Resolve(on(Direction::Above))).await;
+        n.handle(NotifyAction::Fire(on(Direction::Below))).await;
+        assert_eq!(fires(), (3, 3), "a new incident after the resolve");
+
+        // The accept side's twin: no breach, no side, so a repeat stays suppressed.
+        let other = alert(NodeId::new(), Severity::Critical, None);
+        n.handle(NotifyAction::Fire(other.clone())).await;
+        n.handle(NotifyAction::Fire(other)).await;
+        assert_eq!(fires(), (4, 4), "a liveness repeat is still a duplicate");
     }
 
     /// A JSM or email channel receives the text built-in and a webhook beside it the JSON one, for
