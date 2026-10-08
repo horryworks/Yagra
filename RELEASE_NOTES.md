@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.47 — A missing subnet can be marked as intentional, and alerts no longer stall behind a slow notification channel
+
 ### New Features
 
 - **Nodes ▸ Missing IP prefixes can mark a missing subnet as intentional.** Press **Mark as intentional** at the end of its row (in the subnet list, or inside an opened site) and add a note if you like. The gap moves to a new **Intentional** tab and stops counting towards the kind tiles; **Move back to To check** undoes it. A site whose every gap is marked is listed under Intentional, not Complete. If the subnet's reason changes — say it becomes partly registered — the mark no longer applies and the gap is back to check. The CSV gains `status` and `note` columns.
@@ -30,7 +32,7 @@
 - **A node rule on per-port traffic that a port rule overrides is marked as overridden.** Metric alert rules counted port rules only on collected metrics, so a port rule on `if_in_bps`, `if_out_bps`, `if_in_util_pct` or `if_out_util_pct` never produced "Overridden on N nodes". The port's alert-rule dialog now marks the losing rule "Overridden" in text instead of with a hover-only dot.
 - **Node ▸ Neighbors names the local port of a CDP neighbour by its interface name** (`Gi1/0/3`) on a device that does not report CDP's interface names (e.g. Catalyst 2960), instead of `ifindex 10103`. `get_neighbors` answers the same. Stored neighbour sets and their history are unchanged.
 - **The network map fits a large folder.** A level with many switches put them all in one row and its islands side by side, so even "Fit" stopped at 25% with both edges off screen. Wide rows now wrap, islands stack into bands, and "Fit" zooms out as far as the level needs. On a folder's pane, pressing a bundle of access points lists them under the map, as the full-screen map does, instead of opening the switch above it.
-- **Clearing the inventory search lands the tree on the selected node.** When folders above it were still loading, their rows arrived after the tree had scrolled and pushed the node hundreds of rows down off screen. The tree now follows the row until the folders above it have loaded, and lets go as soon as you scroll or click.
+- **Clearing the inventory search lands the tree on the selected node.** When folders above it were still loading, their rows arrived after the tree had scrolled and pushed the node hundreds of rows down off screen. The tree now follows the row until the folders above it have loaded, and lets go as soon as you scroll or click, or after ten seconds.
 - **Events: a Message term that matches nothing even inside words says so** — "Nothing contains “…”, even inside a word." — instead of the generic "Nothing matches these filters", on Events ▸ Events and the node Events tab.
 - **Editing the NetBox deployment no longer moves the cursor into the API token box while you type a new Base URL.** As soon as the address pointed at another host, the token box took the focus, so the rest of the address went into it — and Save became pressable with that text as the token. The address now types through; Save stays disabled until the new token is entered.
 
