@@ -154,3 +154,14 @@ export function revealHolds(
   }
   return false;
 }
+
+/** The longest a reveal follows its row, from its first scroll. Past it the reveal lets go whatever
+ *  is still loading: a folder above that never answers (or is never asked for) would otherwise
+ *  keep the tree re-scrolling on every later change above the row, with no input from the operator
+ *  to end it (ADR-124 Inc.5). Long enough for the folders on screen to answer on a slow core. */
+export const REVEAL_FOLLOW_MS = 10_000;
+
+/** Whether a reveal that began following its row at `since` has followed it long enough. */
+export function revealOutstayed(since: number, now: number): boolean {
+  return now - since >= REVEAL_FOLLOW_MS;
+}

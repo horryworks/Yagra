@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import {
   foldersToOpen,
   openFolders,
+  REVEAL_FOLLOW_MS,
   revealHolds,
+  revealOutstayed,
   revealRequestFor,
   revealStep,
   type RevealRequest,
@@ -172,5 +174,13 @@ describe('revealHolds', () => {
   it('ignores a failed folder, whose row never grows', () => {
     const failed = [groupRow('above'), failedRow('above'), groupRow('site'), nodeRow('sw9')];
     expect(revealHolds(failed, 3, new Set(['above']), new Set(['above']))).toBe(false);
+  });
+});
+
+describe('revealOutstayed', () => {
+  it('follows the row until the limit, and no longer', () => {
+    expect(revealOutstayed(1_000, 1_000)).toBe(false);
+    expect(revealOutstayed(1_000, 1_000 + REVEAL_FOLLOW_MS - 1)).toBe(false);
+    expect(revealOutstayed(1_000, 1_000 + REVEAL_FOLLOW_MS)).toBe(true);
   });
 });

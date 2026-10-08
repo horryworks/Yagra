@@ -114,8 +114,8 @@ pub(crate) struct AlertHistoryView {
     pub acked: Option<AckView>,
 }
 
-/// The names of the ports a page of alerts is about, keyed by `(node, ifindex)` (ADR-196
-/// decision 6).
+/// The names of the ports a page of alerts (or a node's status) is about, keyed by
+/// `(node, ifindex)` (ADR-196 decision 6).
 ///
 /// One primary-key read per port, and none when no alert is about a port — the ordinary case. A
 /// port name is decorative, so a failed read (or skeleton mode, with no inventory to read) answers
@@ -131,7 +131,8 @@ pub(crate) async fn port_names(
 }
 
 /// [`port_names`] for a caller already holding the live write side — the threshold list, which
-/// names a port rule's target the way an alert names its port.
+/// names a port rule's target the way an alert names its port, and the neighbour views, which
+/// name a CDP `ifindex <n>` port by its interface name.
 pub(crate) async fn port_names_of(
     admin: &super::AdminState,
     ports: impl IntoIterator<Item = (Uuid, u32)>,
@@ -149,7 +150,7 @@ pub(crate) async fn port_names_of(
         .port_names_for(&wanted)
         .await
         .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to read port names for alerts; serving ifIndex only");
+            tracing::warn!(error = %e, "failed to read port names; serving ifIndex only");
             HashMap::new()
         })
 }

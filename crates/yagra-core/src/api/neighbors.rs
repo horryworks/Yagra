@@ -422,7 +422,7 @@ pub(crate) async fn current_neighbors(
     let unaddressed = unaddressed_mac_chassis(&current.set);
     let unaddressed_list: Vec<String> = unaddressed.iter().cloned().collect();
     let ports = ports_to_read(&advertised, &claims, &names);
-    let unnamed = [current.set.unnamed_local_ifindexes()];
+    let unnamed = current.set.unnamed_local_ifindexes();
     // Everything below depends on the addresses or the claims and on nothing else, so it is asked
     // at once — the link-state read in particular must not add its wait to the tab's (decision 8).
     let (listed, aps, meraki, by_mac, oper, local_names) = tokio::join!(
@@ -433,7 +433,7 @@ pub(crate) async fn current_neighbors(
         admin.meraki_inventory.devices_at(&addresses),
         admin.meraki_inventory.devices_with_mac(&unaddressed_list),
         link_states(store, &ports),
-        local_port_names(&admin.repo, node_id, &unnamed),
+        local_port_names(admin, node_id, unnamed),
     );
     let listed = listed.map_err(|e| {
         ApiError::from_internal(
@@ -814,31 +814,16 @@ fn ports_to_read(
 /// moves when the interface walk catches up. A read that fails leaves the ports as the poller named
 /// them rather than failing the tab — the adjacency is still right, only its label is not.
 async fn local_port_names(
-    repo: &crate::repo::NodeRepo,
+    admin: &super::AdminState,
     node_id: Uuid,
-    unnamed: &[Vec<u32>],
+    unnamed: impl IntoIterator<Item = u32>,
 ) -> HashMap<u32, String> {
-    let pairs: Vec<(Uuid, u32)> = unnamed
-        .iter()
-        .flatten()
-        .copied()
-        .collect::<BTreeSet<u32>>()
+    let ports = unnamed.into_iter().map(|ifindex| (node_id, ifindex));
+    super::alerts::port_names_of(admin, ports)
+        .await
         .into_iter()
-        .map(|ifindex| (node_id, ifindex))
-        .collect();
-    if pairs.is_empty() {
-        return HashMap::new();
-    }
-    match repo.port_names_for(&pairs).await {
-        Ok(names) => names
-            .into_iter()
-            .map(|((_, ifindex), name)| (ifindex, name))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(%node_id, error = %e, "could not read interface names for CDP ports");
-            HashMap::new()
-        }
-    }
+        .map(|((_, ifindex), name)| (ifindex, name))
+        .collect()
 }
 
 /// How long the tab waits for link state before answering without it (decision 8). The store's own
@@ -1085,11 +1070,11 @@ pub(crate) async fn neighbor_history(
                 "failed to load neighbour history",
             )
         })?;
-    let unnamed: Vec<Vec<u32>> = rows
+    let unnamed: Vec<u32> = rows
         .iter()
-        .map(|r| r.set.unnamed_local_ifindexes())
+        .flat_map(|r| r.set.unnamed_local_ifindexes())
         .collect();
-    let local_names = local_port_names(&admin.repo, node_id, &unnamed).await;
+    let local_names = local_port_names(admin, node_id, unnamed).await;
     for row in &mut rows {
         row.set.name_unnamed_ports(&local_names);
     }

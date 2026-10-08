@@ -50,6 +50,7 @@ import {
   foldersToOpen,
   openFolders,
   revealHolds,
+  revealOutstayed,
   revealStep,
   type RevealRequest,
 } from './nodeTreeReveal';
@@ -1788,7 +1789,7 @@ export function NodeTree({
   // turns one placeholder into a hundred rows and pushes the row off the pane; `revealHolds` says
   // how long to stay, and a press, wheel or key in the tree hands the scroll back at once — staying
   // past that would be the tree scrolling under the operator (ADR-124 Inc.5).
-  const revealScrolled = useRef<{ seq: number; index: number } | null>(null);
+  const revealScrolled = useRef<{ seq: number; index: number; since: number } | null>(null);
   const [revealHeld, setRevealHeld] = useState<number | null>(null);
   const onScreenPending = useMemo(
     () => new Set(pendingKey ? pendingKey.split(',') : []),
@@ -1814,8 +1815,15 @@ export function NodeTree({
       return;
     }
     const last = revealScrolled.current;
+    const now = Date.now();
+    // How long it has followed the row is counted from its FIRST scroll, not its latest one.
+    const since = last && last.seq === reveal.seq ? last.since : now;
+    if (revealOutstayed(since, now)) {
+      onRevealDone?.();
+      return;
+    }
     if (!last || last.seq !== reveal.seq || last.index !== step.index) {
-      revealScrolled.current = { seq: reveal.seq, index: step.index };
+      revealScrolled.current = { seq: reveal.seq, index: step.index, since };
       setRevealHeld(reveal.seq);
       // Whether this moves the pane at all. When it does, the placeholders to judge are the ones
       // around the row's new position, which only exist once the scroll has rendered.

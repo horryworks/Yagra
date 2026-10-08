@@ -146,6 +146,14 @@ pub struct AlertManager {
     /// (ADR-064 Inc.G, [`super::reported`]). What turns a committed `ok` nobody is confirming any
     /// more into `unknown` on every display surface. Never read by the state machine.
     reports: Mutex<ReportLedger>,
+    /// How many consecutive samples each open threshold alert has seen on the **other** side of its
+    /// band ([`Self::refresh_breached_side`]). The side change is held to the rule's dwell like any
+    /// other change, so one noisy sample across the band does not page. A sample back on the
+    /// alert's side, a committed transition, or a sample arriving with no open alert removes an
+    /// entry. ⚠️ An alert closed by a sweep (its rule or node gone) leaves its entry until that
+    /// check is observed again: at most one `u32` per check, and harmless, because a new alert
+    /// only opens through a committed transition, which clears it first.
+    side_pending: Mutex<HashMap<CheckId, u32>>,
 }
 
 /// One open alert a store can still be asked about, and the series that would answer.
@@ -194,6 +202,7 @@ impl AlertManager {
             legacy_node_checks: Mutex::new(HashSet::new()),
             intervals,
             reports: Mutex::new(ReportLedger::default()),
+            side_pending: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1349,8 +1358,13 @@ impl AlertManager {
         }
 
         let Some(t) = transition else {
-            return self.refresh_breached_side(check, raw, at_unix_ms, eval);
+            return self.refresh_breached_side(check, raw, at_unix_ms, eval, dwell);
         };
+        // A committed transition replaces whatever side change was pending on the old alert.
+        self.side_pending
+            .lock()
+            .expect("side mutex poisoned")
+            .remove(&check);
 
         // Who this alert's incident belongs to (ADR-015, widened by ADR-087).
         //
@@ -1447,35 +1461,51 @@ impl AlertManager {
     ///
     /// Re-fired rather than edited in place, the same shape as a warning→critical escalation: the
     /// check id (and so the external dedup key) is unchanged, History gains the row that says what
-    /// is now wrong, and the notification names the side the operator has to act on.
+    /// is now wrong, and the notification names the side the operator has to act on. The notifier
+    /// is what lets that notification through: a same-key fire is a duplicate to every channel's
+    /// dedup, so `Notifier` clears the key when the side differs from the one it last delivered.
     ///
     /// Only the side decides. A same-side change of value is every poll and must stay silent; a
     /// same-side change of bound (a rule edit) is left as it was, so editing a rule never pages by
     /// itself. A sample whose state differs from the alert's is dwell still in progress, which the
     /// state machine will commit on its own.
+    ///
+    /// 🚨 **The side change is held to the rule's dwell** (`dwell` samples in a row on the new
+    /// side), exactly as a state change is. The band between the two sides does not reset an open
+    /// alert until its own dwell commits `Ok`, so without this a value bouncing across the band
+    /// paged on every crossing, one sample each, with nothing to damp it.
     fn refresh_breached_side(
         &self,
         check: CheckId,
         raw: NodeState,
         at_unix_ms: i64,
         eval: Option<ThresholdEval>,
+        dwell: u32,
     ) -> Vec<NotifyAction> {
-        let Some(ev) = eval else {
-            return Vec::new();
-        };
+        let mut pending = self.side_pending.lock().expect("side mutex poisoned");
         let updated = {
             let mut active = self.active.lock().expect("alerts mutex poisoned");
-            let Some(alert) = active.get_mut(&check) else {
+            let (Some(ev), Some(alert)) = (eval, active.get_mut(&check)) else {
+                pending.remove(&check);
                 return Vec::new();
             };
             // A breach-less alert (liveness, or a row restored without its value) has no side to
             // compare, and inventing one would re-page every such alert after an upgrade.
             let Some(previous) = alert.breach.as_ref() else {
+                pending.remove(&check);
                 return Vec::new();
             };
             if alert.state != raw || previous.direction == ev.direction {
+                // Not on the other side at this severity: any run there is broken.
+                pending.remove(&check);
                 return Vec::new();
             }
+            let seen = pending.entry(check).or_insert(0);
+            *seen += 1;
+            if *seen < dwell.max(1) {
+                return Vec::new();
+            }
+            pending.remove(&check);
             alert.breach = Some(breach_for(alert.severity, ev));
             alert.at_unix_ms = at_unix_ms;
             alert.clone()
@@ -3405,6 +3435,86 @@ mod tests {
             [NotifyAction::Resolve(_)]
         ));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// A side change waits for the rule's dwell like any other change. With a dwell of 3, one
+    /// sample across the band is noise: the open alert keeps its side and nothing pages. Three in a
+    /// row re-fire it, and a run broken by a sample back on the old side starts over.
+    #[test]
+    fn a_side_change_is_held_to_the_rules_dwell() {
+        use yagra_bus::Sample;
+        use yagra_common::{
+            interface_scope_id, Direction, IfIndex, MetricKind, ThresholdBounds, ThresholdRule,
+        };
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let port = 10;
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(
+            cfg(
+                vec![StoredThreshold::new(
+                    Uuid::nil(),
+                    ScopeLevel::Interface,
+                    vec![interface_scope_id(node.as_uuid(), port)],
+                    ThresholdRule::new(
+                        "if_rx_power_dbm",
+                        ThresholdBounds {
+                            warning_below: None,
+                            critical_below: Some(-10.0),
+                            warning_above: None,
+                            critical_above: Some(0.0),
+                        },
+                        3,
+                    ),
+                )],
+                meta,
+            )
+            .with_per_interface(["if_rx_power_dbm".to_owned()].into_iter().collect()),
+        );
+        let mut at = 0;
+        let mut observe = |value: f64| {
+            let mut r = result(node, CheckOutcome::Reachable, at);
+            at += 60_000;
+            r.samples = vec![Sample::interface(
+                "if_rx_power_dbm",
+                IfIndex(port),
+                value,
+                MetricKind::Gauge,
+            )];
+            mgr.observe(&r)
+        };
+        let side = |mgr: &AlertManager| mgr.active_alerts()[0].breach.as_ref().map(|b| b.direction);
+
+        assert!(observe(-12.0).is_empty());
+        assert!(observe(-12.0).is_empty());
+        assert!(matches!(observe(-12.0).as_slice(), [NotifyAction::Fire(_)]));
+        assert_eq!(side(&mgr), Some(Direction::Below));
+
+        // Through the band for one sample and over the top for one: noise, not a page.
+        assert!(observe(-5.0).is_empty());
+        assert!(observe(1.0).is_empty());
+        assert!(observe(1.0).is_empty());
+        // Back below breaks the run; the next two above are not enough on their own.
+        assert!(observe(-12.0).is_empty());
+        assert!(observe(1.0).is_empty());
+        assert!(observe(1.0).is_empty());
+        assert_eq!(
+            side(&mgr),
+            Some(Direction::Below),
+            "no side change committed yet"
+        );
+        // The third in a row is.
+        let actions = observe(1.0);
+        let [NotifyAction::Fire(fired)] = actions.as_slice() else {
+            panic!("three samples above must re-fire, got {actions:?}");
+        };
+        assert_eq!(
+            fired.breach.as_ref().map(|b| b.direction),
+            Some(Direction::Above)
+        );
+        assert!(observe(1.0).is_empty(), "one fire per side change");
     }
 
     /// The node-wide fold must keep the sample that is **breaching**, not the largest (ADR-081).
