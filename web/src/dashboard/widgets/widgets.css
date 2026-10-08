@@ -145,25 +145,38 @@
   color: var(--text-tertiary);
 }
 
-/* Geo scatter (dependency-free; no basemap) — pins positioned by normalized lon/lat. Fills the pane
-   height (min 200px) so a taller cell spreads the pins out — see the fill rule in WidgetFrame.css. */
+/* Geo map — the pins over the world coastline (the same generated outline the Geo map page draws),
+   framed around them by an SVG viewBox. Fills the pane height (min 200px); see the fill rule in
+   WidgetFrame.css. Colours match the page's, so the two read as one map. */
 .geo {
-  position: relative;
+  display: block;
   width: 100%;
   min-height: 200px;
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   border-radius: var(--radius-sm);
-  overflow: hidden;
+}
+
+.geo-ocean,
+.geo-lake {
+  fill: var(--bg-secondary);
+}
+
+.geo-land {
+  fill: var(--bg-tertiary);
+}
+
+.geo-land,
+.geo-lake {
+  stroke: var(--border-color);
+  stroke-width: 0.5px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .geo-pin {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  border: 1.5px solid var(--bg-primary);
-  box-shadow: 0 0 0 1px var(--border-color);
+  stroke: var(--bg-primary);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
 }
 
 /* Metric chart — the two pickers (node, then one of its metrics), now inside the frame's ⚙ panel

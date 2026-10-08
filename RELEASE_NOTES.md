@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The dashboard's Geo map widget draws the world coastline behind its pins.** Each site sits at its real position, framed around the sites that have one. The coastline is fetched only when a dashboard holds the widget.
+- **On a phone, Discovery's unregistered-devices list puts Detect next to the address.** It used to sit at the far right of a wide table, out of view.
+
+### Bug Fixes
+
+- **The notification delivery log no longer records a resolve that was never sent.** Webhook and email channels send nothing when an alert resolves, but each recovery was logged as "Delivered · 0 ms". Those rows are no longer written; PagerDuty and JSM closes are logged as before. The `yagra_notification_dispatch_total` metric counts these as `outcome="skipped"` instead of `delivered`.
+- **Chart legends name and format the time row in the interface language.** The row read "Time:" with a US-style clock on a Japanese screen.
+
 ## v0.3.47 — A missing subnet can be marked as intentional, and alerts no longer stall behind a slow notification channel
 
 ### New Features

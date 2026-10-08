@@ -22,7 +22,7 @@ use hysteresis::DwellTracker;
 pub use alert::{Alert, Breach, DedupKey, Subject, SubjectKind};
 pub use notify::{
     Attempt, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, FailureSide,
-    Notification, NotifyChannel, NotifyError, RetryPolicy,
+    Notification, NotifyChannel, NotifyError, ResolveSent, RetryPolicy,
 };
 
 use yagra_common::{CheckId, NodeId, NodeState};

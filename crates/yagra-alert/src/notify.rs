@@ -85,11 +85,27 @@ pub trait NotifyChannel: Send + Sync {
     async fn deliver(&self, notification: &Notification) -> Result<(), NotifyError>;
 
     /// Deliver a resolve for a previously-fired notification. Channels with no lifecycle
-    /// concept (webhook, email) keep this default no-op; incident-style channels
-    /// (PagerDuty, JSM) override it to close the remote incident.
-    async fn deliver_resolve(&self, _notification: &Notification) -> Result<(), NotifyError> {
-        Ok(())
+    /// concept (webhook, email) keep this default, which sends nothing and says so;
+    /// incident-style channels (PagerDuty, JSM) override it to close the remote incident.
+    ///
+    /// "Nothing to send" is an answer rather than an `Ok(())`, because the dispatcher records
+    /// what a channel did: a resolve read as delivered put a `Delivered · 0 ms` row on the
+    /// delivery log for every recovery a webhook never heard about.
+    async fn deliver_resolve(
+        &self,
+        _notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        Ok(ResolveSent::NothingToSend)
     }
+}
+
+/// What a channel did with a resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveSent {
+    /// The channel told its far end the incident is over (PagerDuty, JSM).
+    Sent,
+    /// The channel has nothing to say when an incident ends (webhook, email): no request left.
+    NothingToSend,
 }
 
 /// Lets a boxed/shared trait object be used directly as the `Dispatcher`'s channel — so a
@@ -102,7 +118,10 @@ impl NotifyChannel for std::sync::Arc<dyn NotifyChannel> {
         (**self).deliver(notification).await
     }
 
-    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+    async fn deliver_resolve(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
         (**self).deliver_resolve(notification).await
     }
 }
@@ -233,6 +252,9 @@ pub enum DispatchOutcome {
     Delivered { attempts: u32 },
     /// Suppressed as a duplicate of a still-active alert (channel not called).
     Suppressed,
+    /// The channel has nothing to send for this event — a resolve on a channel with no incident
+    /// to close (webhook, email). Nothing was delivered and nothing failed.
+    Skipped,
     /// All retries exhausted without success.
     Failed { attempts: u32 },
 }
@@ -247,7 +269,7 @@ pub struct Attempt {
 }
 
 /// What one dispatch did: the outcome, and every call it made to reach it. Empty `attempts` means
-/// the channel was never called (a suppressed duplicate).
+/// no request left (a suppressed duplicate, or a resolve the channel had nothing to send for).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchReport {
     pub outcome: DispatchOutcome,
@@ -341,7 +363,16 @@ impl<C: NotifyChannel> Dispatcher<C> {
         for attempt in 1..=max {
             let started = std::time::Instant::now();
             let result = if resolve {
-                self.channel.deliver_resolve(notification).await
+                match self.channel.deliver_resolve(notification).await {
+                    // Asked once: a channel with nothing to send has nothing to retry either.
+                    Ok(ResolveSent::NothingToSend) => {
+                        return DispatchReport {
+                            outcome: DispatchOutcome::Skipped,
+                            attempts: Vec::new(),
+                        };
+                    }
+                    other => other.map(|_| ()),
+                }
             } else {
                 self.channel.deliver(notification).await
             };
@@ -529,20 +560,20 @@ mod tests {
             Ok(())
         }
 
-        async fn deliver_resolve(&self, _n: &Notification) -> Result<(), NotifyError> {
+        async fn deliver_resolve(&self, _n: &Notification) -> Result<ResolveSent, NotifyError> {
             let n = self.resolves.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= self.resolve_fail_first {
                 Err(DeliveryFailure::network("transient").into())
             } else {
-                Ok(())
+                Ok(ResolveSent::Sent)
             }
         }
     }
 
     #[tokio::test]
-    async fn resolve_default_is_noop_for_deliver_only_channels() {
-        // FlakyChannel doesn't override deliver_resolve — the default no-op must succeed
-        // without touching the channel's deliver path.
+    async fn a_resolve_on_a_deliver_only_channel_is_skipped_not_delivered() {
+        // FlakyChannel doesn't override deliver_resolve — the default sends nothing, must not
+        // touch the channel's deliver path, and must not be reported as a delivery.
         let calls = Arc::new(AtomicU32::new(0));
         let d = Dispatcher::new(
             FlakyChannel {
@@ -551,9 +582,11 @@ mod tests {
             },
             no_backoff(),
         );
-        assert_eq!(
-            d.dispatch_resolve(notification()).await.outcome,
-            DispatchOutcome::Delivered { attempts: 1 }
+        let report = d.dispatch_resolve(notification()).await;
+        assert_eq!(report.outcome, DispatchOutcome::Skipped);
+        assert!(
+            report.attempts.is_empty(),
+            "no request left, so no attempt to show"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }

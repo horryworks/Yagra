@@ -92,6 +92,9 @@
     "resetWidths": "列幅を既定に戻す",
     "resetWidthsAria": "この表のすべての列を既定の幅に戻す"
   },
+  "chart": {
+    "time": "時刻"
+  },
   "filter": {
     "allEnabled": "有効・無効の両方",
     "enabled": "有効",

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_alert::{
     Alert, DedupKey, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
-    NotifyChannel, NotifyError, RetryPolicy, Subject,
+    NotifyChannel, NotifyError, ResolveSent, RetryPolicy, Subject,
 };
 use yagra_common::{
     is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
@@ -425,9 +425,13 @@ impl NotifyChannel for PagerDutyChannel {
         self.send_event("trigger", notification, true).await
     }
 
-    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+    async fn deliver_resolve(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
         // Resolve needs only the dedup_key; PD ignores unknown keys (idempotent).
-        self.send_event("resolve", notification, false).await
+        self.send_event("resolve", notification, false).await?;
+        Ok(ResolveSent::Sent)
     }
 }
 
@@ -482,7 +486,10 @@ impl NotifyChannel for JsmChannel {
         vendor_response(resp, None, &self.secrets).await
     }
 
-    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+    async fn deliver_resolve(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
         let url = jsm_close_url(&self.api_url, notification);
         self.guard(&url).await?;
         let resp = self
@@ -495,7 +502,8 @@ impl NotifyChannel for JsmChannel {
             .map_err(delivery_error)?;
         // 404 = no open alert with that alias (already closed / never created) — success,
         // so a resolve is idempotent and never dangles on retry.
-        vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND), &self.secrets).await
+        vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND), &self.secrets).await?;
+        Ok(ResolveSent::Sent)
     }
 }
 
@@ -849,8 +857,8 @@ pub(crate) async fn send_test(
 }
 
 /// One call to a channel, timed, as an [`yagra_alert::Attempt`].
-async fn timed(
-    call: impl std::future::Future<Output = Result<(), NotifyError>>,
+async fn timed<T>(
+    call: impl std::future::Future<Output = Result<T, NotifyError>>,
 ) -> yagra_alert::Attempt {
     let started = std::time::Instant::now();
     let result = call.await;
@@ -905,11 +913,19 @@ impl NotifyChannel for MultiChannel {
 
     // Must forward (not inherit the no-op default) or a lifecycle-aware child channel
     // would never see its resolve.
-    async fn deliver_resolve(&self, notification: &Notification) -> Result<(), NotifyError> {
+    async fn deliver_resolve(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        // Sent when any child sent one: the environment default pairs a webhook with an email,
+        // and neither has anything to close, so that pair answers `NothingToSend`.
+        let mut sent = ResolveSent::NothingToSend;
         for channel in &self.channels {
-            channel.deliver_resolve(notification).await?;
+            if channel.deliver_resolve(notification).await? == ResolveSent::Sent {
+                sent = ResolveSent::Sent;
+            }
         }
-        Ok(())
+        Ok(sent)
     }
 }
 
@@ -1085,6 +1101,7 @@ fn outcome_label(outcome: DispatchOutcome) -> &'static str {
     match outcome {
         DispatchOutcome::Delivered { .. } => "delivered",
         DispatchOutcome::Suppressed => "suppressed",
+        DispatchOutcome::Skipped => "skipped",
         DispatchOutcome::Failed { .. } => "failed",
     }
 }
@@ -1668,8 +1685,9 @@ impl Notifier {
         let delivered = match outcome {
             DispatchOutcome::Delivered { .. } => true,
             DispatchOutcome::Failed { .. } => false,
-            // The channel was never called: nothing was delivered or failed, so nothing to log.
-            DispatchOutcome::Suppressed => return,
+            // No request left: nothing was delivered or failed, so nothing to log (ADR-195
+            // decision 4). A skipped resolve is a webhook or an email, which close nothing.
+            DispatchOutcome::Suppressed | DispatchOutcome::Skipped => return,
         };
         let log = self
             .delivery_log
@@ -2899,6 +2917,7 @@ mod tests {
             "delivered"
         );
         assert_eq!(outcome_label(DispatchOutcome::Suppressed), "suppressed");
+        assert_eq!(outcome_label(DispatchOutcome::Skipped), "skipped");
         assert_eq!(
             outcome_label(DispatchOutcome::Failed { attempts: 3 }),
             "failed"
@@ -2971,9 +2990,9 @@ mod delivery_tests {
             self.0.lock().unwrap().0.push(("fire", n.summary.clone()));
             Ok(())
         }
-        async fn deliver_resolve(&self, n: &Notification) -> Result<(), NotifyError> {
+        async fn deliver_resolve(&self, n: &Notification) -> Result<ResolveSent, NotifyError> {
             self.0.lock().unwrap().0.push(("close", n.summary.clone()));
-            Ok(())
+            Ok(ResolveSent::Sent)
         }
     }
 
@@ -3006,7 +3025,7 @@ mod delivery_tests {
                 .push(("fire", n.summary.clone()));
             Ok(())
         }
-        async fn deliver_resolve(&self, n: &Notification) -> Result<(), NotifyError> {
+        async fn deliver_resolve(&self, n: &Notification) -> Result<ResolveSent, NotifyError> {
             let _ = self.arrived.send("close");
             self.close_gate.notified().await;
             self.seen
@@ -3014,7 +3033,7 @@ mod delivery_tests {
                 .unwrap()
                 .0
                 .push(("close", n.summary.clone()));
-            Ok(())
+            Ok(ResolveSent::Sent)
         }
     }
 
@@ -3140,6 +3159,59 @@ mod delivery_tests {
         }
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].channel_id, Some(bad));
+    }
+
+    /// A webhook-shaped channel: it delivers a fire and keeps the trait's resolve, which sends
+    /// nothing.
+    struct FireOnly(Log);
+
+    #[async_trait]
+    impl NotifyChannel for FireOnly {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().0.push(("fire", n.summary.clone()));
+            Ok(())
+        }
+    }
+
+    /// A resolve is recorded only where a request left. A webhook or an email has no incident to
+    /// close, so its resolve sends nothing — and used to be logged as `Delivered · 0 ms` all the
+    /// same, which read as a recovery message that never existed.
+    #[tokio::test]
+    async fn a_resolve_is_recorded_only_on_a_channel_that_sent_one() {
+        let n = Notifier::with_default(None);
+        let (dlog, mut rx) = crate::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let (plain, closing) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (plain_log, closing_log) = (log(), log());
+        n.install_routing(
+            vec![
+                built(plain, FireOnly(plain_log.clone())),
+                built(closing, Recorder(closing_log.clone())),
+            ],
+            vec![rule(plain, None), rule(closing, None)],
+        );
+        let fire = alert(NodeId::new(), Severity::Critical, None);
+        n.handle(NotifyAction::Fire(fire.clone())).await;
+        while rx.try_recv().is_ok() {}
+
+        n.handle(NotifyAction::Resolve(fire)).await;
+        let mut rows = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            rows.push(r);
+        }
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the channel that closed something is on the log"
+        );
+        assert_eq!(rows[0].channel_id, Some(closing));
+        assert!(rows[0].delivered);
+        assert_eq!(closing_log.lock().unwrap().count("close"), 1);
+        assert_eq!(
+            plain_log.lock().unwrap().count("fire"),
+            1,
+            "the fire still went out"
+        );
     }
 
     #[tokio::test]
@@ -3580,12 +3652,12 @@ mod test_send_tests {
             }
             Ok(())
         }
-        async fn deliver_resolve(&self, _: &Notification) -> Result<(), NotifyError> {
+        async fn deliver_resolve(&self, _: &Notification) -> Result<ResolveSent, NotifyError> {
             self.calls.lock().unwrap().push("close");
             if self.fail_close {
                 return Err(DeliveryFailure::remote(Some(429), "rate limited (429)", None).into());
             }
-            Ok(())
+            Ok(ResolveSent::Sent)
         }
     }
 

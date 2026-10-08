@@ -3,13 +3,16 @@
 // (`useGroupSummary`, A-1) joined to the node-group tree — so they aggregate the WHOLE fleet per
 // group, not the first page of a node slice (the old `useNodes()` path under-counted every group
 // past the first 100 nodes). Site matrix = a tile per group (worst direct-member state + up/total);
-// region rollup = % healthy per top-level group summing descendants; geo map = a pin per group
+// region rollup = % healthy per top-level group summing descendants; geo map = a pin per group,
+// drawn over the world coastline at its true position
 // carrying its own coordinates, coloured by every group that resolves to that pin (geo inheritance
 // — `pinRollupFromCounts`). The site matrix stays direct-member: a folder tile is about that
 // folder, whereas a pin is about a place, and a place contains its racks.
 
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../../lib/format';
+import { MAP_HEIGHT, MAP_WIDTH, placedOnly, project } from '../../pages/geoProjection';
 import { api } from '../../services/api';
 import { RankedBars } from '../primitives/RankedBars';
 import { useGroupSummary } from '../useGroupSummary';
@@ -20,6 +23,7 @@ import {
   topLevelRollupFromCounts,
   worstStateFromCounts,
 } from './util';
+import { geoWidgetBox, loadOutline, pinRadius, type Outline } from './geoWidgetBox';
 
 export function SiteHealthMatrixWidget() {
   const { t } = useTranslation('dashboard');
@@ -87,6 +91,17 @@ export function GeoMapWidget() {
   const { t } = useTranslation('dashboard');
   const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
+  const [outline, setOutline] = useState<Outline | null>(null);
+  useEffect(() => {
+    let live = true;
+    // A failed fetch leaves the pins on the ocean colour: the widget still answers its question.
+    loadOutline()
+      .then((o) => live && setOutline(o))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
   if (error || groups.error) return <p className="muted">{t('widgets.geoMap.error')}</p>;
   if ((loading && !summary) || (groups.loading && !groups.data)) {
     return <p className="muted">{t('common:loading')}</p>;
@@ -94,42 +109,48 @@ export function GeoMapWidget() {
   // A pin per group carrying its OWN coordinates, counting everything that resolves to it — a
   // site whose nodes all sit in rack sub-folders is the normal case, and it read as empty before.
   const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
-  const placed = (groups.data ?? []).filter(
-    (g) => g.latitude != null && g.longitude != null,
-  );
+  const placed = placedOnly(groups.data ?? []);
   if (placed.length === 0) {
     return <p className="muted">{t('widgets.geoMap.empty')}</p>;
   }
-  // Normalize lon→x, lat→y into the box (lat inverted so north is up). A small pad avoids pins
-  // sitting on the edge; a single point lands in the centre.
-  const lats = placed.map((g) => g.latitude as number);
-  const lons = placed.map((g) => g.longitude as number);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const norm = (v: number, lo: number, hi: number) => (hi > lo ? (v - lo) / (hi - lo) : 0.5);
+  // Absolute projection over the coastline (a coordinate means one place), framed around the pins.
+  const box = geoWidgetBox(placed);
+  const r = pinRadius(box);
   return (
-    <div className="geo" role="img" aria-label={t('widgets.geoMap.aria')}>
+    <svg
+      className="geo"
+      role="img"
+      aria-label={t('widgets.geoMap.aria')}
+      viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <rect className="geo-ocean" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
+      {outline?.land.map((d, i) => <path className="geo-land" d={d} key={`l${i}`} />)}
+      {outline?.lakes.map((d, i) => <path className="geo-lake" d={d} key={`w${i}`} />)}
       {placed.map((g) => {
         const c = pins[g.id];
         const worst = c ? worstStateFromCounts(c) : 'ok';
         const count = c ? countsTotal(c) : 0;
-        const x = 6 + norm(g.longitude as number, minLon, maxLon) * 88;
-        const y = 6 + (1 - norm(g.latitude as number, minLat, maxLat)) * 88;
+        const p = project(g.latitude, g.longitude);
         return (
-          <span
+          <circle
             key={g.id}
             className="geo-pin"
-            title={t('widgets.geoMap.pinTitle', {
-              name: g.name,
-              state: stateLabel(worst),
-              count,
-            })}
-            style={{ left: `${x}%`, top: `${y}%`, background: stateColorVar(worst) }}
-          />
+            cx={p.x}
+            cy={p.y}
+            r={r}
+            style={{ fill: stateColorVar(worst) }}
+          >
+            <title>
+              {t('widgets.geoMap.pinTitle', {
+                name: g.name,
+                state: stateLabel(worst),
+                count,
+              })}
+            </title>
+          </circle>
         );
       })}
-    </div>
+    </svg>
   );
 }

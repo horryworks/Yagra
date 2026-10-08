@@ -334,10 +334,53 @@ html[data-viewport='mobile'] .disco-seen-table {
   -webkit-overflow-scrolling: touch;
 }
 
+/* On a phone the setup cell comes straight after the address, so Detect is on screen beside the
+   row it acts on rather than ~900px to the right of it. The MAC and "seen by" move behind it.
+   Placed by explicit tracks (one row each), so the DOM order — and the desktop grid — stay as
+   they are. The filter row is not drawn on a phone (the filter sheet replaces it). */
 html[data-viewport='mobile'] .disco-seen-head,
 html[data-viewport='mobile'] .disco-seen-row {
-  grid-template-columns: 150px 150px 200px 150px 150px 260px;
+  grid-template-columns: 150px 150px 150px 260px 150px 200px;
   width: max-content;
+}
+
+html[data-viewport='mobile'] .disco-seen-head > *,
+html[data-viewport='mobile'] .disco-seen-row > * {
+  grid-row: 1;
+}
+
+html[data-viewport='mobile'] .disco-seen-head > :nth-child(1),
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(1) {
+  grid-column: 1;
+}
+
+html[data-viewport='mobile'] .disco-seen-head > :nth-child(2),
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(2) {
+  grid-column: 5;
+}
+
+html[data-viewport='mobile'] .disco-seen-head > :nth-child(3),
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(3) {
+  grid-column: 6;
+}
+
+html[data-viewport='mobile'] .disco-seen-head > .disco-seen-setup,
+html[data-viewport='mobile'] .disco-seen-row > .disco-seen-setup {
+  grid-column: 2 / 5;
+}
+
+/* An already-monitored row has three cells where the setup cell would be (the node, a spacer,
+   the badge): they take the same three tracks. */
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(4):not(.disco-seen-setup) {
+  grid-column: 2;
+}
+
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(5) {
+  grid-column: 3;
+}
+
+html[data-viewport='mobile'] .disco-seen-row > :nth-child(6) {
+  grid-column: 4;
 }
 
 /* Toolbar checkbox filter ("Answered only" / "Not yet monitored"). Sized like the toolbar's other

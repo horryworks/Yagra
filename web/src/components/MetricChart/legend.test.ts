@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { idleLegendIdx } from './legend';
+import { idleLegendIdx, timeLegend } from './legend';
 
 describe('idleLegendIdx', () => {
   it('returns the last index when every series is filled', () => {
@@ -34,5 +34,27 @@ describe('idleLegendIdx', () => {
   // healthy interface.
   it('treats zero as a value, not a gap', () => {
     expect(idleLegendIdx([[5, 0]])).toBe(1);
+  });
+});
+
+describe('timeLegend', () => {
+  // uPlot's own default for the x row is the English word "Time" and a US clock, whatever the
+  // interface language is — the row has to be named and formatted by the caller.
+  it('names the row with the label it is given', () => {
+    expect(timeLegend('時刻', String).label).toBe('時刻');
+  });
+
+  it('formats the seconds uPlot hands it as milliseconds', () => {
+    const seen: number[] = [];
+    const row = timeLegend('Time', (ms) => {
+      seen.push(ms);
+      return 'x';
+    });
+    expect(row.value(null, 1_700_000_000)).toBe('x');
+    expect(seen).toEqual([1_700_000_000_000]);
+  });
+
+  it('reads a missing instant as --, not as the epoch', () => {
+    expect(timeLegend('Time', String).value(null, null)).toBe('--');
   });
 });

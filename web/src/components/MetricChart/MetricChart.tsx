@@ -9,11 +9,14 @@
 // Supports a single series (`values`) or multiple (`series`), and resizes to its container width.
 
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
 import './MetricChart.css';
 import { applyIdleLegend, resolveColor } from './chartColor';
+import { timeLegend } from './legend';
+import { formatTimestamp } from '../../lib/format';
 import { LABEL_ROTATION, gutterLabels, labelFits, mirrorLayout, type MirrorAxis } from './mirror';
 import { usePrefsStore } from '../../prefs';
 import { PALETTE } from './palette';
@@ -148,6 +151,10 @@ export function MetricChart({
   // while only the axis ink was stale; with a ground painted over half the plot, a dark theme's
   // `rgba(0,0,0,0.2)` left on a light card is a grey slab.
   const theme = usePrefsStore((s) => s.theme);
+  // The legend's time row is named and formatted here, not by uPlot (whose defaults are English).
+  // Its label is in `structKey` for the reason the series labels are: a language switch repaints.
+  const { t, i18n } = useTranslation('common');
+  const timeLabel = t('chart.time');
   // Latest render-varying props, read by the uPlot option closures at draw AND scale time. This is
   // what lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a
   // fresh `referenceLine` object each render don't change the instance, only what its closures read.
@@ -173,7 +180,7 @@ export function MetricChart({
   // construction. Its two words are in as well, for the reason the series labels are: they are
   // translated, so a language switch has to repaint them rather than wait for the next poll tick.
   const structKey =
-    `${title}|${height}|${syncKey ?? ''}|${theme}|` +
+    `${title}|${height}|${syncKey ?? ''}|${theme}|${timeLabel}|${i18n.language}|` +
     `${mirrored ? `mirror:${mirrored.above}/${mirrored.below}` : ''}|` +
     resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
   // Content signature of the optional reference line, so a value/label change redraws in place.
@@ -243,7 +250,7 @@ export function MetricChart({
       scales: buildChartScales(() => live.current),
       ...(syncKey ? { cursor: { sync: { key: syncKey, setSeries: false } } } : {}),
       series: [
-        {},
+        timeLegend(timeLabel, (ms) => formatTimestamp(ms)),
         ...resolved.map((s, i) => ({
           label: s.label,
           stroke: s.color ? resolveColor(s.color, cs, pal[i % pal.length]) : pal[i % pal.length],

@@ -32,3 +32,15 @@ export function idleLegendIdx(
   }
   return best;
 }
+
+/** The legend's time row: the label and the readout of the instant the other rows report.
+ *
+ *  Handed to uPlot as the x series. Left empty, uPlot fills both in from its own English defaults —
+ *  the row read "Time:" and a US-style `9:30am` on a Japanese screen. `format` takes Unix
+ *  milliseconds (the chart's x values are seconds, uPlot's default time scale). */
+export function timeLegend(
+  label: string,
+  format: (unixMs: number) => string,
+): { label: string; value: (u: unknown, v: number | null) => string } {
+  return { label, value: (_u, v) => (v == null ? '--' : format(v * 1000)) };
+}

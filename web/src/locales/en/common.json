@@ -101,6 +101,9 @@
     "resetWidths": "Reset column widths",
     "resetWidthsAria": "Reset every column in this table to its default width"
   },
+  "chart": {
+    "time": "Time"
+  },
   "filter": {
     "allEnabled": "Enabled and disabled",
     "enabled": "Enabled",
