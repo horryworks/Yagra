@@ -9,11 +9,11 @@
 //
 // What to draw is decided in `secretField.ts`, where a test reaches it.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
 import { TextArea, TextInput } from './Field';
-import { secretMode } from './secretField';
+import { secretMode, staysReplacing } from './secretField';
 import './SecretInput.css';
 
 export function SecretInput({
@@ -56,6 +56,20 @@ export function SecretInput({
     onReplacingChange?.(next);
   };
   const mode = secretMode(stored, replacing, mustReplace);
+  // Whether the box was opened by a press of Replace. Only that press may move the focus: the box
+  // also opens by itself when `mustReplace` turns on — on a NetBox edit, while the operator is
+  // still typing the new address — and taking the focus then sent the rest of the address into
+  // the token box (ADR-178 decision 3).
+  const [pressedReplace, setPressedReplace] = useState(false);
+
+  // Once forced open, the box stays open with "Keep stored" when `mustReplace` turns off again
+  // (the address typed back to its old host). Snapping back to the stored mark would hide a typed
+  // value that Save still sends.
+  useEffect(() => {
+    if (staysReplacing(stored, replacing, mustReplace) && !replacing) setReplacing(true);
+    // `setReplacing` is a fresh closure every render; the decision depends only on these three.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stored, replacing, mustReplace]);
 
   if (mode.kind === 'stored') {
     return (
@@ -71,6 +85,7 @@ export function SecretInput({
           disabled={disabled}
           onClick={() => {
             onChange('');
+            setPressedReplace(true);
             setReplacing(true);
           }}
         >
@@ -81,7 +96,9 @@ export function SecretInput({
   }
 
   // Replace is the press that asked for the box, so the box takes the focus it was asked for.
-  const focus = autoFocus || mode.kind === 'replace';
+  // `autoFocus` acts only when the box mounts, which is why the box below never remounts while it
+  // stays open (the Keep button comes and goes beside it instead).
+  const focus = autoFocus || pressedReplace;
   const box =
     rows === undefined ? (
       <TextInput
@@ -109,20 +126,25 @@ export function SecretInput({
         onChange={(e) => onChange(e.target.value)}
       />
     );
-  if (mode.kind === 'new' || !mode.canKeep) return box;
+  if (mode.kind === 'new') return box;
+  // One wrapper whether or not "Keep stored" is offered: switching between a bare box and a wrapped
+  // one would remount the input, dropping the focus and the caret of whoever is typing in it.
   return (
     <span className={rows === undefined ? 'secret-input' : 'secret-input secret-input-multi'}>
       {box}
-      <Button
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          onChange('');
-          setReplacing(false);
-        }}
-      >
-        {t('secret.keep')}
-      </Button>
+      {mode.canKeep && (
+        <Button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            onChange('');
+            setPressedReplace(false);
+            setReplacing(false);
+          }}
+        >
+          {t('secret.keep')}
+        </Button>
+      )}
     </span>
   );
 }

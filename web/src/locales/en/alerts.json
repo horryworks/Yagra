@@ -70,6 +70,7 @@
     },
     "emptyWindow": "No events in the last 24 hours.",
     "emptyPrefixMiss": "No word starts with “{{term}}”.",
+    "emptyInsideWordsMiss": "Nothing contains “{{term}}”, even inside a word.",
     "widened": "No word starts with that term, so these are the events with it anywhere inside a word.",
     "showWeek": "Show the last 7 days",
     "unmatchedKept": "Events that matched no rule are kept only for the period set in <lnk/>, so older ones may be missing."

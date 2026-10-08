@@ -28,6 +28,7 @@ import {
   eventFilterColumns,
   eventFilterQuery,
   eventHighlight,
+  insideWordsMissTerm,
   prefixMissTerm,
   widenedToAWeek,
 } from '../EventLog/eventFilterSpec';
@@ -57,9 +58,11 @@ export function EventsTab({ node }: { node: NodeDetail }) {
   const query = useMemo(() => eventFilterQuery(filters, nowMs), [filters, nowMs]);
   const facets = useEventFacets(filterCols, filters, nowMs, { node_id: node.id });
 
-  const { rows, loading, exhausted, loadMore, widened } = useWidenedEventLog(query, semantics, {
-    node_id: node.id,
-  });
+  const { rows, loading, exhausted, loadMore, widened, searchedInsideWords } = useWidenedEventLog(
+    query,
+    semantics,
+    { node_id: node.id },
+  );
 
   const highlight = useMemo(
     () => eventHighlight(filters, semantics, widened),
@@ -77,6 +80,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
   // `filtered` is the generic sentence on purpose: "no events received from this node yet" is
   // false the moment a filter is set, and this tab has no Source column, so `prefixMiss` (a Source
   // term's whole-word miss) cannot occur here — it is listed only because the map is exhaustive.
+  // `insideWordsMiss` can: the Message column is here, and its widened search runs here too.
   const empty = {
     unfiltered: (
       <EmptyState
@@ -90,7 +94,8 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     ),
     filtered: t('common:filter.noMatch'),
     prefixMiss: t('events.emptyPrefixMiss', { term: prefixMissTerm(filters) }),
-  }[eventEmptyKind(filters, semantics, isAnyFiltered(filterCols, filters))];
+    insideWordsMiss: t('events.emptyInsideWordsMiss', { term: insideWordsMissTerm(filters) }),
+  }[eventEmptyKind(filters, semantics, isAnyFiltered(filterCols, filters), searchedInsideWords)];
 
   return (
     <div className="nd-ev">

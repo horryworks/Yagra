@@ -587,7 +587,7 @@
       "addTitle": "{{port}} にルールを追加",
       "editTitle": "{{port}} のルールを編集",
       "inForce": "効いている",
-      "overridden": "同じメトリクスのより狭いルールに負けている",
+      "overridden": "上書き中",
       "subject": "何を見張るか",
       "subjects": {
         "in_traffic": "受信トラフィック",

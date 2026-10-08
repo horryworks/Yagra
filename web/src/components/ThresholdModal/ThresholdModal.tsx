@@ -16,7 +16,7 @@ import { api } from '../../services/api';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { LIVENESS_METRIC } from '../../lib/format';
-import { splitInterfaceScopeId } from '../../lib/interfaceScope';
+import { interfaceScopeLabel } from '../../lib/interfaceScope';
 import {
   DEFAULT_DWELL,
   isThresholdReady,
@@ -60,9 +60,11 @@ import { groupOptions } from '../../lib/nodeTree';
 function ScopeIdField({
   form,
   onChange,
+  portNames,
 }: {
   form: ThresholdForm;
   onChange: (scopeIds: string[]) => void;
+  portNames?: Readonly<Record<string, string>>;
 }) {
   const { t } = useTranslation('alertsConfig');
   const kind = scopeIdKind(form.level);
@@ -166,10 +168,7 @@ function ScopeIdField({
         // when an existing rule is edited, and its bounds and breach count are editable there.
         <>
           <div className="thresholds-fixed mono">
-            {(() => {
-              const [node, port] = splitInterfaceScopeId(single);
-              return port === null ? single : `${nodeName(node)} · #${port}`;
-            })()}
+            {interfaceScopeLabel(single, nodeName, portNames)}
           </div>
           <input type="hidden" value={single} readOnly />
         </>
@@ -202,11 +201,14 @@ function ScopeIdField({
 export function ThresholdModal({
   mode,
   rule,
+  portNames,
   onClose,
   onSaved,
 }: {
   mode: 'add' | 'edit';
   rule?: StoredThreshold;
+  /** The list's `port_names`, so a port rule's target reads as it does in the row. */
+  portNames?: Readonly<Record<string, string>>;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -296,7 +298,11 @@ export function ThresholdModal({
           ))}
         </Select>
       </div>
-      <ScopeIdField form={form} onChange={(scopeIds) => set('scopeIds', scopeIds)} />
+      <ScopeIdField
+        form={form}
+        onChange={(scopeIds) => set('scopeIds', scopeIds)}
+        portNames={portNames}
+      />
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
         {lockedMetric ? (

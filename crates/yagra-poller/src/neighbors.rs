@@ -19,9 +19,9 @@
 use std::collections::BTreeMap;
 use yagra_bus::SnmpNeighborColumn;
 use yagra_common::{
-    cdp_capabilities, lldp_capabilities, poller_neighbor_columns, render_bare_address,
-    render_chassis_id_kind, render_port_id, render_port_id_kind, render_text, Neighbor,
-    NeighborColumn, NeighborIdKind, NeighborProto, NeighborSet,
+    cdp_capabilities, cdp_unnamed_port, lldp_capabilities, poller_neighbor_columns,
+    render_bare_address, render_chassis_id_kind, render_port_id, render_port_id_kind, render_text,
+    Neighbor, NeighborColumn, NeighborIdKind, NeighborProto, NeighborSet,
 };
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
@@ -235,11 +235,12 @@ fn cdp_neighbor(
     let device_id = text(row, NeighborColumn::CdpCacheDeviceId)?;
     let device_port = text(row, NeighborColumn::CdpCacheDevicePort).unwrap_or_default();
     // CDP names the local side directly, which is why `cdpInterfaceName` is walked at all. Absent
-    // ⇒ the ifIndex itself, so the adjacency still has an identity.
+    // (some IOS images do not implement the column) => the ifIndex itself, so the adjacency still
+    // has an identity; core shows the port's ifName in its place.
     let local_port = interface_names
         .get(&ifindex)
         .cloned()
-        .unwrap_or_else(|| format!("ifindex {ifindex}"));
+        .unwrap_or_else(|| cdp_unnamed_port(ifindex));
 
     let mut n = Neighbor::new(NeighborProto::Cdp, local_port, device_id, device_port);
     // Unlike LLDP, CDP's cache *is* indexed by ifIndex, so this one is exact rather than a guess.

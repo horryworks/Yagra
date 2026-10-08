@@ -33,6 +33,13 @@
 // switch sits under the one it hangs off. A component with no router or switch in it at all keeps
 // the plain layout below (rooted at its best-connected box), so such a level does not move.
 //
+// Since ADR-191 Inc.14 a level keeps a shape a pane can be fitted to. A rank holding more boxes than
+// its component's cap (`rowCap`, about the square root of the component, never under eight) is drawn
+// as several rows, and components that would run past one band's width (`shelfCols`) continue on a
+// band below. Before that, a router with forty switches under it, or a folder of hundreds of
+// islands, was one strip tens of thousands of pixels wide that no zoom could show. A level under
+// both thresholds lays out exactly as before.
+//
 // ⚠️ DETERMINISM IS A REQUIREMENT, NOT A NICETY.
 // The map re-fetches on a timer. A layout that depends on input order, on a random seed, or on
 // iteration-until-converged would reshuffle every cycle and be unusable. So: adjacency lists are
@@ -109,6 +116,37 @@ const COMPONENT_GAP = 2;
 
 export const CELL_W = BOX_W + COL_GAP;
 export const CELL_H = BOX_H + ROW_GAP;
+
+/** A rank never wraps at fewer boxes than this, so a small site draws as it always has. */
+export const ROW_WRAP_MIN = 8;
+/** A level's components never start a second band below this many columns. */
+export const SHELF_MIN_COLS = 16;
+
+/** How many boxes one drawn row of a component of `size` boxes may hold before the rank wraps:
+ *  about the square root, so a component comes out roughly as wide as it is tall in cells (a cell is
+ *  wider than it is tall, which leaves the diagram a little wider than tall, like a screen). */
+export function rowCap(size: number): number {
+  return Math.max(ROW_WRAP_MIN, Math.ceil(Math.sqrt(size)));
+}
+
+/** One rank as the rows it is drawn in: unchanged when it fits `cap`, otherwise cut into the fewest
+ *  rows that fit, as even as possible, the longer ones first. Order is kept. An empty rank is one
+ *  empty row. */
+export function wrapRow<T>(row: readonly T[], cap: number): T[][] {
+  if (row.length <= cap) return [[...row]];
+  const lines = Math.ceil(row.length / cap);
+  const per = Math.ceil(row.length / lines);
+  const out: T[][] = [];
+  for (let i = 0; i < row.length; i += per) out.push(row.slice(i, i + per));
+  return out;
+}
+
+/** How wide, in columns, one band of components may grow before the next starts under it: the
+ *  square root of the area they cover, never narrower than the widest of them or `SHELF_MIN_COLS`. */
+export function shelfCols(blocks: readonly { rows: readonly unknown[]; width: number }[]): number {
+  const area = blocks.reduce((sum, b) => sum + (b.width + COMPONENT_GAP) * b.rows.length, 0);
+  return Math.max(SHELF_MIN_COLS, ...blocks.map((b) => b.width), Math.ceil(Math.sqrt(area)));
+}
 
 /** Fixed barycentre sweeps. Two forward passes and two back; more buys almost nothing on the graph
  *  shapes a network produces, and "iterate until stable" would make the result depend on how the
@@ -430,9 +468,10 @@ export function layoutGraph(input: GraphInput): GraphLayout {
   components.sort((x, y) => y.length - x.length || (x[0] < y[0] ? -1 : 1));
 
   const cell = new Map<string, { col: number; rank: number }>();
-  let xOffsetCells = 0;
   let maxRank = -1;
 
+  // Each component as the rows it is drawn in, top first, before it is given a place.
+  const blocks: { rows: string[][]; width: number }[] = [];
   for (const members of components) {
     // 3-4. Rows. See the file header: role bands when the component holds a router or switch,
     //      otherwise hop distance from one anchor.
@@ -468,15 +507,36 @@ export function layoutGraph(input: GraphInput): GraphLayout {
       }
     }
 
-    // 6. Cells. Each component occupies its own horizontal band, laid out left to right.
-    let width = 0;
-    for (const r of ranks) {
-      const row = rows.get(r)!;
-      width = Math.max(width, row.length);
-      row.forEach((id, i) => cell.set(id, { col: xOffsetCells + i, rank: r }));
-      maxRank = Math.max(maxRank, r);
+    // 6. A rank wider than the component's cap is drawn as several rows, in the order step 5 left
+    //    it, so twenty access switches under one router read as a block rather than a strip a map
+    //    cannot be fitted to (ADR-191 Inc.14). A rank with no box keeps its empty row.
+    const cap = rowCap(members.length);
+    const drawn: string[][] = [];
+    const lastRank = ranks.length > 0 ? ranks[ranks.length - 1] : -1;
+    for (let r = 0; r <= lastRank; r++) drawn.push(...wrapRow(rows.get(r) ?? [], cap));
+    blocks.push({ rows: drawn, width: Math.max(0, ...drawn.map((row) => row.length)) });
+  }
+
+  // 6a. Cells. Components are laid left to right, the biggest first, and a component that would
+  //     take the band past `shelfWidth` starts a new band under the tallest one so far — so a level
+  //     of many islands is a block, not a line (ADR-191 Inc.14). A level narrower than
+  //     `SHELF_MIN_COLS` stays on one band, as before.
+  const shelfWidth = shelfCols(blocks);
+  let xOffsetCells = 0;
+  let shelfTop = 0;
+  let shelfRows = 0;
+  for (const block of blocks) {
+    if (xOffsetCells > 0 && xOffsetCells + block.width > shelfWidth) {
+      shelfTop += shelfRows;
+      xOffsetCells = 0;
+      shelfRows = 0;
     }
-    xOffsetCells += width + COMPONENT_GAP;
+    block.rows.forEach((row, r) => {
+      row.forEach((id, i) => cell.set(id, { col: xOffsetCells + i, rank: shelfTop + r }));
+    });
+    maxRank = Math.max(maxRank, shelfTop + block.rows.length - 1);
+    shelfRows = Math.max(shelfRows, block.rows.length);
+    xOffsetCells += block.width + COMPONENT_GAP;
   }
 
   // 6b. A folder with no link on this level still gets its box — the box is the way down a level.

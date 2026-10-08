@@ -259,8 +259,10 @@ export function edgeShowsChip(edgeId: string, count: number): boolean {
  *  or folder becomes the tree's selection. A stub selects what it stands for — the far node, or the
  *  folder holding the far end. The map in the pane never descends on its own. */
 export function groupMapTarget(boxId: string, level: MapLevel | null): TreeSelection {
-  // A bundle of access points (ADR-191 Inc.9) has no row in the tree; its parent does.
-  if (isBundleId(boxId)) return groupMapTarget(boxId.slice('apgroup:'.length), level);
+  // A bundle of access points (ADR-191 Inc.9) has no row in the tree. The pane lists its members
+  // instead, as the full map does (Inc.14); answering its parent here sent that press to the
+  // switch's detail.
+  if (isBundleId(boxId)) return null;
   const ref = splitGraphId(boxId);
   if (!ref) return null;
   if (ref.kind === 'node') return { kind: 'node', id: ref.id };

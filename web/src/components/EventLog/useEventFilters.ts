@@ -157,5 +157,12 @@ export function useWidenedEventLog(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [widened, key, log.settled, log.rows.length]);
 
-  return { ...log, widened: widened && wide != null && log.rows.length > 0 };
+  return {
+    ...log,
+    widened: widened && wide != null && log.rows.length > 0,
+    // The widened form of *this* query came back empty: the term is not even inside a word. The
+    // empty state says so (`eventEmptyKind`'s `insideWordsMiss`) rather than the generic sentence,
+    // which next to the Message filter's "use Regex" would send the operator to re-ask it.
+    searchedInsideWords: widened && wide != null && log.settled && log.rows.length === 0,
+  };
 }

@@ -229,7 +229,9 @@ pub struct Neighbor {
 
     /// The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP
     /// uses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has
-    /// no row, so the record still has an identity rather than being dropped.
+    /// no row, so the record still has an identity rather than being dropped. The current set
+    /// and the history show a CDP `ifindex <n>` as that port's interface name (`ifName`) when the
+    /// node's interface list has one.
     pub local_port: String,
     /// The peer's chassis id, rendered by subtype: LLDP `lldpRemChassisId`, CDP `cdpCacheDeviceId`.
     pub remote_chassis: String,
@@ -326,6 +328,16 @@ impl Neighbor {
             .filter(|ip| !ip.is_unspecified())
     }
 
+    /// The ifIndex this record's local port is named by **only** — a CDP row whose device had no
+    /// `cdpInterfaceName` row, so the poller wrote [`cdp_unnamed_port`] in its place. `None` for a
+    /// row the device named, and for LLDP, whose `port <n>` is not an ifIndex.
+    #[must_use]
+    pub fn unnamed_local_ifindex(&self) -> Option<u32> {
+        let ifindex = self.local_ifindex?;
+        (self.proto == NeighborProto::Cdp && self.local_port == cdp_unnamed_port(ifindex))
+            .then_some(ifindex)
+    }
+
     /// The identity tuple: what makes two observations "the same link".
     fn identity(&self) -> (&str, &str, &str, NeighborProto) {
         (
@@ -373,6 +385,17 @@ impl Neighbor {
 
 /// Strip control characters, trim, and cap at [`MAX_FIELD_CHARS`] characters (not bytes, so a
 /// multi-byte string is never cut mid-character).
+/// The local port name a CDP record carries when the device has no `cdpInterfaceName` row for
+/// its ifIndex — some IOS images (a Catalyst 2960 among them) do not implement that column at all.
+///
+/// ⚠️ This spelling is part of the record's identity and so of its stored key: changing it moves
+/// every such node's key on the first walk after the upgrade. Core recognises it through
+/// [`Neighbor::unnamed_local_ifindex`] and shows the port's `ifName` in its place.
+#[must_use]
+pub fn cdp_unnamed_port(ifindex: u32) -> String {
+    format!("ifindex {ifindex}")
+}
+
 fn clamp(s: &mut String) {
     let cleaned: String = s
         .chars()
@@ -426,6 +449,72 @@ impl NeighborSet {
         };
         set.canonicalize();
         set
+    }
+
+    /// Every ifIndex a row's local port is named by only ([`Neighbor::unnamed_local_ifindex`]),
+    /// each once — what to look up before [`Self::name_unnamed_ports`].
+    #[must_use]
+    pub fn unnamed_local_ifindexes(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self
+            .neighbors
+            .iter()
+            .filter_map(Neighbor::unnamed_local_ifindex)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Give each row named only by its ifIndex the name `names` holds for that ifIndex — the
+    /// port's `ifName` from the interface inventory — and restore the canonical order.
+    ///
+    /// For **display only**: the stored set keeps the poller's spelling, so its key and history do
+    /// not move when an interface walk catches up. A name two of the set's ports would share is
+    /// not applied to either, so two links never come to read as one.
+    pub fn name_unnamed_ports(&mut self, names: &std::collections::HashMap<u32, String>) {
+        use std::collections::{BTreeSet, HashMap};
+        /// Which port a row sits on: its ifIndex when it has one, else its own name.
+        type Port<'a> = (Option<u32>, &'a str);
+        // The name each row would read as once renamed, and the port it sits on.
+        let proposed: Vec<(Option<String>, Port<'_>)> = self
+            .neighbors
+            .iter()
+            .map(|n| {
+                let name = n
+                    .unnamed_local_ifindex()
+                    .and_then(|i| names.get(&i))
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                let port = match n.local_ifindex {
+                    Some(i) => (Some(i), ""),
+                    None => (None, n.local_port.as_str()),
+                };
+                (name, port)
+            })
+            .collect();
+        let mut ports_per_name: HashMap<&str, BTreeSet<Port<'_>>> = HashMap::new();
+        for (n, (name, port)) in self.neighbors.iter().zip(&proposed) {
+            let reads_as = name.as_deref().unwrap_or(n.local_port.as_str());
+            ports_per_name.entry(reads_as).or_default().insert(*port);
+        }
+        let renamed: Vec<(usize, String)> = proposed
+            .iter()
+            .enumerate()
+            .filter_map(|(at, (name, _))| {
+                let name = name.as_ref()?;
+                (ports_per_name.get(name.as_str())?.len() == 1).then(|| (at, name.clone()))
+            })
+            .collect();
+        if renamed.is_empty() {
+            return;
+        }
+        for (at, name) in renamed {
+            let port = &mut self.neighbors[at].local_port;
+            *port = name;
+            clamp(port);
+        }
+        self.neighbors
+            .sort_by(|a, b| a.identity().cmp(&b.identity()));
     }
 
     /// How many adjacencies the set holds.
@@ -911,6 +1000,107 @@ mod tests {
 
     fn lldp(local: &str, chassis: &str, port: &str) -> Neighbor {
         Neighbor::new(NeighborProto::Lldp, local, chassis, port)
+    }
+
+    /// A CDP row on `ifindex`, named `local` by the device (or by the poller's fallback).
+    fn cdp_on(ifindex: u32, local: &str, chassis: &str) -> Neighbor {
+        let mut n = Neighbor::new(NeighborProto::Cdp, local, chassis, "Gi0/1");
+        n.local_ifindex = Some(ifindex);
+        n
+    }
+
+    fn names(pairs: &[(u32, &str)]) -> std::collections::HashMap<u32, String> {
+        pairs.iter().map(|&(i, n)| (i, n.to_owned())).collect()
+    }
+
+    fn local_ports(set: &NeighborSet) -> Vec<(&str, &str)> {
+        set.neighbors
+            .iter()
+            .map(|n| (n.remote_chassis.as_str(), n.local_port.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn only_a_cdp_row_carrying_the_fallback_spelling_is_unnamed() {
+        assert_eq!(
+            cdp_on(10103, &cdp_unnamed_port(10103), "ap-01").unnamed_local_ifindex(),
+            Some(10103)
+        );
+        // The device named it.
+        assert_eq!(
+            cdp_on(10103, "Gi1/0/3", "ap-01").unnamed_local_ifindex(),
+            None
+        );
+        // A fallback for a different ifIndex is a name, however odd.
+        assert_eq!(
+            cdp_on(10103, &cdp_unnamed_port(7), "ap-01").unnamed_local_ifindex(),
+            None
+        );
+        // LLDP's `port <n>` is lldpLocPortNum, not an ifIndex; and an LLDP row never qualifies.
+        let mut l = lldp("ifindex 3", "aa", "e1");
+        l.local_ifindex = Some(3);
+        assert_eq!(l.unnamed_local_ifindex(), None);
+    }
+
+    #[test]
+    fn an_unnamed_cdp_port_reads_as_the_name_given_for_its_ifindex() {
+        let mut set = NeighborSet::new(
+            vec![
+                cdp_on(10103, &cdp_unnamed_port(10103), "ap-01"),
+                cdp_on(10120, &cdp_unnamed_port(10120), "ap-02"),
+                cdp_on(10101, "Gi1/0/1", "sw-02"),
+                lldp("Gi1/0/2", "aa:bb:cc:dd:ee:01", "e1"),
+            ],
+            0,
+        );
+        assert_eq!(set.unnamed_local_ifindexes(), vec![10103, 10120]);
+        set.name_unnamed_ports(&names(&[(10103, " Gi1/0/3 "), (10101, "Fa0/1")]));
+        // Renamed and re-sorted; a port with no name keeps the poller's spelling, and a port the
+        // device already named is not touched even when a name is offered for it.
+        assert_eq!(
+            local_ports(&set),
+            vec![
+                ("sw-02", "Gi1/0/1"),
+                ("aa:bb:cc:dd:ee:01", "Gi1/0/2"),
+                ("ap-01", "Gi1/0/3"),
+                ("ap-02", "ifindex 10120"),
+            ]
+        );
+        assert_eq!(set.unnamed_local_ifindexes(), vec![10120]);
+    }
+
+    #[test]
+    fn a_name_two_ports_would_share_is_applied_to_neither() {
+        let mut set = NeighborSet::new(
+            vec![
+                cdp_on(5, &cdp_unnamed_port(5), "ap-01"),
+                cdp_on(6, &cdp_unnamed_port(6), "ap-02"),
+                // Two peers on one port share its name, which is no collision.
+                cdp_on(7, &cdp_unnamed_port(7), "ap-03"),
+                cdp_on(7, &cdp_unnamed_port(7), "ap-04"),
+                // A name the device itself already gave another port.
+                cdp_on(8, "Gi0/8", "sw-01"),
+                cdp_on(9, &cdp_unnamed_port(9), "ap-05"),
+            ],
+            0,
+        );
+        set.name_unnamed_ports(&names(&[
+            (5, "Gi0/5"),
+            (6, "Gi0/5"),
+            (7, "Gi0/7"),
+            (9, "Gi0/8"),
+        ]));
+        assert_eq!(
+            local_ports(&set),
+            vec![
+                ("ap-03", "Gi0/7"),
+                ("ap-04", "Gi0/7"),
+                ("sw-01", "Gi0/8"),
+                ("ap-01", "ifindex 5"),
+                ("ap-02", "ifindex 6"),
+                ("ap-05", "ifindex 9"),
+            ]
+        );
     }
 
     fn sample() -> NeighborSet {

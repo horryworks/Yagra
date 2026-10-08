@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EVENT_FILTER_KEYS,
   eventEmptyKind,
+  insideWordsMissTerm,
   prefixMissTerm,
   reachesPastDefaultWindow,
   widenedToAWeek,
@@ -220,6 +221,39 @@ describe('eventEmptyKind', () => {
     expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY', source: 'rtr' }, 'prefix', true)).toBe(
       'prefixMiss',
     );
+  });
+
+  it('says a Message term is not even inside a word once the widened search came back empty', () => {
+    // 🚨 The regression (lab box, 2026-10-08): `zqxwv` on a log-store deployment. The plain search
+    // missed, the screen re-asked it inside words, that missed too — and the list said only
+    // "Nothing matches these filters", right under the Message filter's "use Regex to match further
+    // inside one". The operator was sent to ask again the question the screen had already asked.
+    const state = { ...DEFAULTS, message: 'zqxwv' };
+    expect(eventEmptyKind(state, 'prefix', true, true)).toBe('insideWordsMiss');
+    expect(insideWordsMissTerm(state)).toBe('zqxwv');
+  });
+
+  it('does not claim an inside-word search that has not come back yet', () => {
+    // Between the plain miss and the widened answer the list is empty too; "not even inside a word"
+    // is only true once that second answer is in.
+    expect(eventEmptyKind({ ...DEFAULTS, message: 'zqxwv' }, 'prefix', true, false)).toBe(
+      'filtered',
+    );
+  });
+
+  it('keeps inside-word misses to the terms that were actually widened', () => {
+    // A regex and a negated term are never widened (`widenEventQuery`), and a substring deployment
+    // has no whole-word rule to explain — none of them can end here, whatever the caller passes.
+    expect(eventEmptyKind({ ...DEFAULTS, message: '~zqx' }, 'prefix', true, true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, message: '!zqx' }, 'prefix', true, true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, message: 'zqx' }, 'substring', true, true)).toBe(
+      'filtered',
+    );
+    expect(insideWordsMissTerm({ ...DEFAULTS, message: '!zqx' })).toBe('');
+    // A plain Source term still explains the miss first: the widened search never covered it.
+    expect(
+      eventEmptyKind({ ...DEFAULTS, message: 'zqx', source: 'rtr' }, 'prefix', true, true),
+    ).toBe('prefixMiss');
   });
 
   it('does not blame tokenization for a case it cannot explain', () => {

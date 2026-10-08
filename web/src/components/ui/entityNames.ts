@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
 import type { NodeGroup, ProfileSummary, ScopeLevel } from '../../types/api';
-import { splitInterfaceScopeId } from '../../lib/interfaceScope';
+import { interfaceScopeLabel } from '../../lib/interfaceScope';
 import { createNameBatcher, type NameBatcher } from './entityNameBatch';
 
 /** Resolve an id to a name from a `{id,name}[]` list, falling back to the raw id when no match is
@@ -85,9 +85,13 @@ export function useEntityNames() {
    *  ⚠️ The two group levels are named separately rather than sharing a fallthrough: `group_id` is
    *  a folder in the inventory tree and always resolves, while `group` is a **tag value** that is
    *  already human-readable and is handed to `groupName` only so an older rule carrying a folder
-   *  id still reads as a name. Collapsing them would work today by coincidence. */
+   *  id still reads as a name. Collapsing them would work today by coincidence.
+   *
+   *  `portNames` is the threshold page's `port_names` (scope id → `ifName`): this hook holds no
+   *  node's interface roster, so a port rule's port is named only when the caller passes the names
+   *  the server sent with the rules. */
   const scopeName = useCallback(
-    (level: ScopeLevel, id: string) => {
+    (level: ScopeLevel, id: string, portNames?: Readonly<Record<string, string>>) => {
       switch (level) {
         case 'global':
           return '';
@@ -98,14 +102,10 @@ export function useEntityNames() {
         case 'group_id':
         case 'group':
           return groupName(id);
-        // `<node-uuid>:<ifindex>` (ADR-076). Only the node half is resolvable here — this hook
-        // holds the fleet's node, group and profile names, not any node's interface roster, and
-        // fetching one per row would be a request per rule. The port is shown as its index, which
-        // is also what the alert itself carries.
-        case 'interface': {
-          const [node, port] = splitInterfaceScopeId(id);
-          return port === null ? nodeName(id) : `${nodeName(node)} · #${port}`;
-        }
+        // `<node-uuid>:<ifindex>` (ADR-076). The port by the name the server sent beside the rule
+        // (ADR-196 decision 6), the ifIndex when it sent none.
+        case 'interface':
+          return interfaceScopeLabel(id, nodeName, portNames);
       }
     },
     [nodeName, profileName, groupName],

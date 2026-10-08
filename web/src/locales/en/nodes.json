@@ -589,7 +589,7 @@
       "addTitle": "Add a rule — {{port}}",
       "editTitle": "Edit rule — {{port}}",
       "inForce": "In force",
-      "overridden": "Overridden by a narrower rule on the same metric",
+      "overridden": "Overridden",
       "subject": "What to watch",
       "subjects": {
         "in_traffic": "Inbound traffic",

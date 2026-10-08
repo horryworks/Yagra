@@ -4,7 +4,7 @@
 // that render a blank map with nothing in the console.
 
 import { describe, expect, it } from 'vitest';
-import { clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
+import { clampScale, FIT_FLOOR, fitView, MAX_SCALE, MIN_SCALE, zoomFloor } from './fitView';
 import type { GraphLayout } from './graphLayout';
 
 const layout = (width: number, height: number): GraphLayout =>
@@ -25,9 +25,17 @@ describe('fitView', () => {
     expect(v.scale).toBeCloseTo((500 / 1000) * 0.92);
   });
 
-  it('never zooms past the bounds a gesture is also clamped to', () => {
-    // A huge diagram would otherwise fit at an unreadable scale.
-    expect(fitView(layout(100_000, 100_000), 500, 500).scale).toBe(MIN_SCALE);
+  it('fits a level too big for MIN_SCALE whole, instead of leaving its sides outside the pane', () => {
+    // 8,000 px wide in a 1,200 px pane: the old floor of 0.25 drew 2,000 px of it.
+    const v = fitView(layout(8000, 1000), 1200, 800);
+    expect(v.scale).toBeCloseTo((1200 / 8000) * 0.92);
+    expect(v.scale).toBeLessThan(MIN_SCALE);
+    expect(v.tx).toBeGreaterThanOrEqual(0);
+    expect(v.tx + 8000 * v.scale).toBeLessThanOrEqual(1200);
+  });
+
+  it('never zooms past its own bounds', () => {
+    expect(fitView(layout(100_000_000, 100_000_000), 500, 500).scale).toBe(FIT_FLOOR);
     // A tiny one would otherwise blow up to fill the pane.
     expect(fitView(layout(1, 1), 5000, 5000).scale).toBe(MAX_SCALE);
   });
@@ -61,5 +69,15 @@ describe('clampScale', () => {
     expect(clampScale(0.01)).toBe(MIN_SCALE);
     expect(clampScale(100)).toBe(MAX_SCALE);
     expect(clampScale(1)).toBe(1);
+  });
+
+  it('lets a gesture zoom out as far as a big level’s fit, and no further', () => {
+    const fit = fitView(layout(8000, 1000), 1200, 800).scale;
+    const floor = zoomFloor(fit);
+    expect(floor).toBe(fit);
+    // Zooming out from the fit stays at the fit rather than jumping in to MIN_SCALE.
+    expect(clampScale(fit / 1.1, floor)).toBe(fit);
+    // A level that fits above MIN_SCALE keeps MIN_SCALE as its floor.
+    expect(zoomFloor(fitView(layout(800, 600), 1200, 800).scale)).toBe(MIN_SCALE);
   });
 });

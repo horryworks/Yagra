@@ -1293,6 +1293,7 @@ export function NodesPage() {
             // `groupDeletionReach` keep the shape they expect; the flag is what the tree reads.
             countsPending={groupSummary === null}
             loadedGroups={members.loadedGroups}
+            loadingGroups={members.loadingGroups}
             revealedGroups={members.revealedGroups}
             failedGroups={members.failedGroups}
             onRetryGroup={members.retry}

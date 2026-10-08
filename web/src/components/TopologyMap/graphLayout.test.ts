@@ -12,7 +12,12 @@ import {
   CELL_W,
   NODE_TALL,
   ROW_ORDER,
+  ROW_WRAP_MIN,
+  SHELF_MIN_COLS,
   layoutGraph,
+  rowCap,
+  shelfCols,
+  wrapRow,
   type GraphLink,
   type GraphNode,
 } from './graphLayout';
@@ -625,5 +630,109 @@ describe('layoutGraph — role rows (ADR-191 Inc.6)', () => {
       expect(b.cx).toBeCloseTo(parent.cx, 6);
       expect(b.cy).toBeGreaterThan(parent.cy);
     }
+  });
+});
+
+describe('layoutGraph — a shape a pane can be fitted to (ADR-191 Inc.14)', () => {
+  const pad = (i: number) => String(i).padStart(4, '0');
+  /** A router with `n` switches straight under it, each with `aps` access points. */
+  function star(n: number, aps = 0) {
+    const nodes = [node('r', { role: 'edge' })];
+    const links: GraphLink[] = [];
+    for (let i = 0; i < n; i++) {
+      const sw = `sw${pad(i)}`;
+      nodes.push(node(sw, { role: 'l2_switch' }));
+      links.push(link('r', sw));
+      for (let j = 0; j < aps; j++) {
+        const id = `${sw}-ap${j}`;
+        nodes.push(node(id, { ap: true, role: 'access_point', name: id }));
+        links.push(link(sw, id));
+      }
+    }
+    return { nodes, links };
+  }
+  const rowsOf = (out: ReturnType<typeof layoutGraph>, prefix: string) =>
+    new Set(out.nodes.filter((n) => n.id.startsWith(prefix) && !n.ap).map((n) => n.cy)).size;
+  function expectNoBoxOverlap(out: ReturnType<typeof layoutGraph>) {
+    const rects = out.nodes.map((n) => {
+      const w = n.ap ? AP_PITCH : n.w;
+      return { id: n.id, l: n.cx - w / 2, r: n.cx + w / 2, t: n.cy - n.h / 2, b: n.cy + n.h / 2 };
+    });
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const [p, q] = [rects[i], rects[j]];
+        expect(p.l < q.r && q.l < p.r && p.t < q.b && q.t < p.b, `${p.id} overlaps ${q.id}`).toBe(false);
+      }
+    }
+  }
+
+  it('wraps a rank into the fewest even rows, keeping the order', () => {
+    expect(wrapRow([1, 2, 3], 8)).toEqual([[1, 2, 3]]);
+    expect(wrapRow([], 8)).toEqual([[]]);
+    expect(wrapRow([1, 2, 3, 4, 5, 6, 7, 8, 9], 8)).toEqual([
+      [1, 2, 3, 4, 5],
+      [6, 7, 8, 9],
+    ]);
+    const nineteen = Array.from({ length: 19 }, (_, i) => i);
+    expect(wrapRow(nineteen, 8).map((r) => r.length)).toEqual([7, 7, 5]);
+    expect(wrapRow(nineteen, 8).flat()).toEqual(nineteen);
+  });
+
+  it('caps a row at about the square root of the component, never under the minimum', () => {
+    expect(rowCap(1)).toBe(ROW_WRAP_MIN);
+    expect(rowCap(20)).toBe(ROW_WRAP_MIN);
+    expect(rowCap(400)).toBe(20);
+    expect(rowCap(401)).toBe(21);
+  });
+
+  it('starts a second band only past the widest component and the minimum', () => {
+    expect(shelfCols([{ rows: [[]], width: 3 }])).toBe(SHELF_MIN_COLS);
+    expect(shelfCols([{ rows: [[]], width: 40 }])).toBe(40);
+    // 100 islands of 2×2: area (2 + 2) × 2 × 100 = 800 ⇒ 29 columns.
+    expect(shelfCols(Array.from({ length: 100 }, () => ({ rows: [[], []], width: 2 })))).toBe(29);
+  });
+
+  it('keeps a small site exactly as it was', () => {
+    const out = layoutGraph(star(ROW_WRAP_MIN, 2));
+    expect(rowsOf(out, 'sw')).toBe(1);
+  });
+
+  it('draws twenty switches under one router as a block of rows, not one strip', () => {
+    const out = layoutGraph(star(20, 3));
+    expect(rowsOf(out, 'sw')).toBe(3);
+    expectNoBoxOverlap(out);
+    for (const n of out.nodes) expect(n.cx + (n.ap ? AP_PITCH : n.w) / 2).toBeLessThanOrEqual(out.width);
+    // Narrow enough that a 1280-px pane fits it above the old 0.25 floor.
+    expect(out.width * 0.25).toBeLessThan(1280);
+    // A line to a switch in a lower row bows rather than crossing the row above.
+    const far = out.nodes.filter((n) => n.id.startsWith('sw') && !n.ap).sort((a, b) => b.cy - a.cy)[0];
+    const e = out.edges.find((x) => x.id.length > 0 && Math.abs(x.y2 - far.cy) < 1 && Math.abs(x.x2 - far.cx) < 1)!;
+    expect(e.kind).toBe('bow');
+  });
+
+  it('keeps a fleet-sized star roughly as wide as it is tall', () => {
+    const out = layoutGraph(star(1999));
+    expect(out.width / out.height).toBeLessThan(4);
+    expect(out.height / out.width).toBeLessThan(4);
+  });
+
+  it('stacks many islands into bands instead of one line', () => {
+    const nodes: GraphNode[] = [];
+    const links: GraphLink[] = [];
+    for (let i = 0; i < 120; i++) {
+      nodes.push(node(`a${pad(i)}`), node(`b${pad(i)}`));
+      links.push(link(`a${pad(i)}`, `b${pad(i)}`));
+    }
+    const out = layoutGraph({ nodes, links });
+    expect(out.componentCount).toBe(120);
+    expect(out.width / out.height).toBeLessThan(4);
+    expectNoBoxOverlap(out);
+  });
+
+  it('does not depend on input order once wrapped', () => {
+    const { nodes, links } = star(30, 2);
+    const a = layoutGraph({ nodes, links });
+    const b = layoutGraph({ nodes: shuffle(nodes, 7), links: shuffle(links, 11) });
+    expect(b).toEqual(a);
   });
 });

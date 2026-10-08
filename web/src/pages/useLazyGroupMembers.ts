@@ -52,6 +52,9 @@ export interface LazyGroupMembers {
   nodes: NodeSummary[];
   /** Which groups have been fetched. The tree shows a placeholder row under the others. */
   loadedGroups: Set<string>;
+  /** Which groups are queued or in flight. A reveal waits for the ones above its row, whose
+   *  answer would push the row down after it has been scrolled to (ADR-073 Inc.2). */
+  loadingGroups: ReadonlySet<string>;
   /** The groups the active filter revealed (see `revealedGroupKeys`). Returned rather than derived
    *  a second time by the caller, so the set that gets FETCHED and the set the tree draws loading
    *  rows for cannot disagree. Empty while browsing. */
@@ -439,6 +442,7 @@ export function useLazyGroupMembers(opts: {
   return {
     nodes,
     loadedGroups,
+    loadingGroups,
     revealedGroups,
     failedGroups,
     revealTruncated: revealedGroups.size >= REVEAL_GROUP_CAP,

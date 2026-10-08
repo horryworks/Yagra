@@ -205,35 +205,57 @@ export function eventFilterKey(q: EventQuery): string {
 /**
  * Which empty state the screen should show.
  *
- * Three, not two, and the third is the whole reason `search_semantics` is reported. On a log-store
- * deployment a plain term is matched from the start of a word, so `%%01POLICY/6/POLICYPERMIT` is
- * found by `POLICY` but not by `PERMIT` — and the operator is looking at those letters on screen
+ * Four, and the two text-term ones are the whole reason `search_semantics` is reported. On a
+ * log-store deployment a plain term is matched from the start of a word, so
+ * `%%01POLICY/6/POLICYPERMIT` is found by `POLICY` but not by `PERMIT` — and the operator is looking at those letters on screen
  * while the screen says nothing matched. "Nothing matches these filters" is true and explains none
  * of that.
  *
- * ⚠️ **Only the Source term can end here.** A plain Message term that misses is re-asked inside
- * words automatically (`widenEventQuery`), so by the time the list is empty that search has already
- * been made and found nothing too — "no word starts with it" would be the wrong reason, and the
- * fix it implies (search inside words) is the one that just ran. Source has no regex form on the
- * wire, so its miss is the one the screen still has to name (ADR-200 Inc.16).
+ * ⚠️ **A Message term never ends in `prefixMiss`.** A plain Message term that misses is re-asked
+ * inside words automatically (`widenEventQuery`), so by the time the list is empty that search has
+ * already been made and found nothing too — "no word starts with it" would be the wrong reason, and
+ * the fix it implies (search inside words) is the one that just ran. Source has no regex form on the
+ * wire, so its miss is the one that gets `prefixMiss` (ADR-200 Inc.16).
+ *
+ * 🚨 **But it must not fall to the generic sentence either** — that is `insideWordsMiss`. The
+ * Message filter itself says "this deployment matches from the start of a word, use Regex to match
+ * further inside one", so "Nothing matches these filters" sends the operator to switch to Regex and
+ * ask the very question the screen already asked (reported on a lab box 2026-10-08: `zqxwv`). The
+ * caller passes `searchedInsideWords` — whether the widened form of *this* query has come back
+ * empty (`useWidenedEventLog`) — because only then is "not even inside a word" true.
  */
-export type EventEmptyKind = 'unfiltered' | 'filtered' | 'prefixMiss';
+export type EventEmptyKind = 'unfiltered' | 'filtered' | 'prefixMiss' | 'insideWordsMiss';
 
 export function eventEmptyKind(
   state: FilterState,
   semantics: SearchSemantics,
   anyFiltered: boolean,
+  searchedInsideWords = false,
 ): EventEmptyKind {
   if (!anyFiltered) return 'unfiltered';
-  if (semantics === 'prefix' && prefixMissTerm(state) !== '') return 'prefixMiss';
+  if (semantics !== 'prefix') return 'filtered';
+  // Source first: with both set, the Source term is the one that may have missed for a reason the
+  // widened search did not cover.
+  if (prefixMissTerm(state) !== '') return 'prefixMiss';
+  if (searchedInsideWords && insideWordsMissTerm(state) !== '') return 'insideWordsMiss';
   return 'filtered';
 }
 
-/** The plain Source term a `prefixMiss` names, or `''`. Only a *plain, non-negated* term can miss
- *  this way: a negated term returning nothing means everything matched — a different story. */
-export function prefixMissTerm(state: FilterState): string {
-  const c = decodeCondition(state.source ?? '');
+/** A *plain, non-negated* term, or `''`: a negated term returning nothing means everything matched,
+ *  and a regex already reaches inside words — neither is a whole-word miss. */
+function plainTerm(raw: string | undefined): string {
+  const c = decodeCondition(raw ?? '');
   return c.term !== '' && c.mode === 'contains' && !c.not ? c.term : '';
+}
+
+/** The plain Source term a `prefixMiss` names, or `''`. */
+export function prefixMissTerm(state: FilterState): string {
+  return plainTerm(state.source);
+}
+
+/** The plain Message term an `insideWordsMiss` names, or `''`. */
+export function insideWordsMissTerm(state: FilterState): string {
+  return plainTerm(state.message);
 }
 
 /**

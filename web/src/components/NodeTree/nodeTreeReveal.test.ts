@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   foldersToOpen,
   openFolders,
+  revealHolds,
   revealRequestFor,
   revealStep,
   type RevealRequest,
@@ -139,5 +140,37 @@ describe('revealStep', () => {
     expect(revealStep([groupRow('region')], req, ctx({ folders: ['region'] }))).toEqual({
       kind: 'done',
     });
+  });
+});
+
+describe('revealHolds', () => {
+  // The row the reveal scrolled to is index 3: a folder above it still showing its placeholder.
+  const drawn = [groupRow('above'), loadingRow('above'), groupRow('site'), nodeRow('sw9'), loadingRow('below')];
+  const none = new Set<string>();
+
+  it('stays while a folder above the row is still loading — its rows would push the row down', () => {
+    expect(revealHolds(drawn, 3, new Set(['above']), none)).toBe(true);
+  });
+
+  it('stays while a placeholder above the row is on screen, before its request has gone out', () => {
+    expect(revealHolds(drawn, 3, none, new Set(['above']))).toBe(true);
+  });
+
+  it('lets go once the folders above have answered', () => {
+    const settled = [groupRow('above'), nodeRow('a1'), groupRow('site'), nodeRow('sw9')];
+    expect(revealHolds(settled, 3, none, none)).toBe(false);
+  });
+
+  it('ignores a placeholder nobody is asking for: it stays one row until scrolled to', () => {
+    expect(revealHolds(drawn, 3, new Set(['elsewhere']), new Set(['elsewhere']))).toBe(false);
+  });
+
+  it('ignores folders below the row, which cannot move it', () => {
+    expect(revealHolds(drawn, 3, new Set(['below']), new Set(['below']))).toBe(false);
+  });
+
+  it('ignores a failed folder, whose row never grows', () => {
+    const failed = [groupRow('above'), failedRow('above'), groupRow('site'), nodeRow('sw9')];
+    expect(revealHolds(failed, 3, new Set(['above']), new Set(['above']))).toBe(false);
   });
 });

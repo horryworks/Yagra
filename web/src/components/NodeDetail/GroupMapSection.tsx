@@ -4,6 +4,9 @@
 // subfolder it is filed in — at a height the operator drags (ADR-191 Inc.12), with three differences that come from living in a
 // scrolling pane: the plain wheel scrolls the pane (Ctrl/⌘ + wheel zooms), one finger scrolls it
 // on a touch screen, and pressing a box selects it in the tree instead of descending the map.
+// Pressing a bundle of access points lists them under the map, as the full map's panel does
+// (ADR-191 Inc.14): a bundle has no row in the tree, and selecting its parent instead was a press
+// that took the operator somewhere they had not asked to go.
 //
 // Folding the section is remembered, and a folded map is not fetched at all — the level is the most
 // expensive read the pane makes, so an operator who does not want it does not pay for it.
@@ -24,9 +27,10 @@ import { writeIdParam } from '../../lib/filterParams';
 import { conditionIsActive, decodeCondition } from '../../lib/filterCondition';
 import { TopologyMap } from '../TopologyMap/TopologyMap';
 import { MapEdgeMembers } from '../TopologyMap/MapEdgeMembers';
+import { MapBundleMembers } from '../TopologyMap/MapBundleMembers';
 import { useMapTitles, useTopologyLevel } from '../TopologyMap/useTopologyLevel';
 import { GROUP_MAP_SEARCH_KEY, groupMapTarget, withSearch } from '../TopologyMap/topologyLevel';
-import type { PlacedNode } from '../TopologyMap/graphLayout';
+import { isBundleId, type PlacedNode } from '../TopologyMap/graphLayout';
 import { MapSearchBox } from '../TopologyMap/MapSearchBox';
 import { useMapSearch, type MapSearchState } from '../TopologyMap/useMapSearch';
 import type { TopologyLevelView } from '../TopologyMap/useTopologyLevel';
@@ -227,17 +231,35 @@ function GroupMapBody({
     },
     [committed, setStored],
   );
-  const { level, error, layout, edge: edgeId, selectEdge } = view;
+  const { level, error, layout, edge: edgeId, selectEdge, clearEdge } = view;
   const { boxTitle, edgeTitle, showChip } = useMapTitles(level);
   const edge = edgeId ? (level?.edges.find((e) => e.id === edgeId) ?? null) : null;
+  // A bundle is selected in the pane only, like a line, and only on the folder it was pressed on.
+  // A line and a bundle exclude each other: the list under the map shows one of them.
+  const [bundleSel, setBundleSel] = useState<{ group: string; id: string } | null>(null);
+  const bundleId = bundleSel && bundleSel.group === groupId ? bundleSel.id : null;
+  const bundle = bundleId ? (layout.nodes.find((n) => n.id === bundleId) ?? null) : null;
+  const onSelectEdge = useCallback(
+    (id: string) => {
+      setBundleSel(null);
+      selectEdge(id);
+    },
+    [selectEdge],
+  );
 
   const onActivate = useCallback(
     (box: PlacedNode) => {
+      if (isBundleId(box.id)) {
+        // A second press lets it go (ADR-073).
+        clearEdge();
+        setBundleSel((cur) => (cur?.id === box.id && cur.group === groupId ? null : { group: groupId, id: box.id }));
+        return;
+      }
       const target = groupMapTarget(box.id, level);
       if (target?.kind === 'node') onOpenNode?.(target.id);
       else if (target?.kind === 'group') onOpenGroup?.(target.id);
     },
-    [level, onOpenNode, onOpenGroup],
+    [level, groupId, clearEdge, onOpenNode, onOpenGroup],
   );
 
   if (error && !level) return <p className="nd-muted">{error}</p>;
@@ -249,7 +271,7 @@ function GroupMapBody({
       <div className="nd-grpmap" style={{ ['--nd-grpmap-h' as string]: `${height}px` }}>
         <TopologyMap
           layout={layout}
-          selectedId={null}
+          selectedId={bundle?.id ?? null}
           selectedEdge={edgeId}
           // A new height fits the level to the new pane once the drag ends; mid-drag the view stays.
           fitKey={`${groupId}@${committed}`}
@@ -257,7 +279,7 @@ function GroupMapBody({
           edgeTitle={edgeTitle}
           showChip={showChip}
           onActivate={onActivate}
-          onSelectEdge={selectEdge}
+          onSelectEdge={onSelectEdge}
           viewKey="topoGroup"
           wheelNeedsModifier
           wheelHint={t('groupDetail.map.wheelHint')}
@@ -297,6 +319,12 @@ function GroupMapBody({
       {edge && (
         <div className="nd-grpmap-edge">
           <MapEdgeMembers edge={edge} />
+        </div>
+      )}
+      {!edge && bundle && (
+        <div className="nd-grpmap-edge">
+          <h3 className="topomap-panel-sub">{t('topology:map.panel.bundle.title', { name: bundle.name })}</h3>
+          <MapBundleMembers level={level} bundle={bundle} cond={search.search.matched ? search.cond : null} />
         </div>
       )}
     </>

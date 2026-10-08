@@ -15,7 +15,7 @@ import { stateColorVar, stateLabel } from '../../lib/format';
 import { useStoredMapView } from '../../lib/storedMapView';
 import { useMapViewStore, type MapViewKey } from '../../store';
 import { AP_PITCH, type GraphLayout, type PlacedEdge, type PlacedNode } from './graphLayout';
-import { centerOn, clampScale, fitView, MAX_SCALE, MIN_SCALE } from './fitView';
+import { centerOn, clampScale, fitView, zoomFloor } from './fitView';
 import { boxEmphasis, edgeDimmed, type MapSearch } from './mapSearch';
 import { activateOnKey, fitLabel, wheelZooms } from './topologyLevel';
 import { rimArcs, troubleCounts } from './apBundle';
@@ -360,6 +360,18 @@ export function TopologyMap({
     if (enterLevel(viewKey, fitKey)) setView(null);
   }, [enterLevel, fitKey, viewKey, setView]);
 
+  // The smallest zoom a gesture may reach: the fit itself when the level only fits below MIN_SCALE
+  // (ADR-191 Inc.14). Read at gesture time from the pane as it is now, through a ref so the wheel
+  // listener is not re-attached on every refresh.
+  const layoutRef = useRef(layout);
+  useEffect(() => {
+    layoutRef.current = layout;
+  }, [layout]);
+  const minScale = useCallback(() => {
+    const el = wrapRef.current;
+    return zoomFloor(el ? fitView(layoutRef.current, el.clientWidth, el.clientHeight).scale : 1);
+  }, []);
+
   // Manual "Fit to view" (also the initial fit). Re-measures the current container each call.
   const fit = useCallback(() => {
     const el = wrapRef.current;
@@ -397,7 +409,7 @@ export function TopologyMap({
       setView((v) => {
         if (!v) return v;
         const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-        const scale = clampScale(v.scale * factor);
+        const scale = clampScale(v.scale * factor, minScale());
         const k = scale / v.scale;
         // Keep the point under the cursor fixed while zooming.
         return { scale, tx: mx - (mx - v.tx) * k, ty: my - (my - v.ty) * k };
@@ -408,7 +420,7 @@ export function TopologyMap({
       svg.removeEventListener('wheel', onWheel);
       clearTimeout(hintTimer);
     };
-  }, [setView, wheelNeedsModifier]);
+  }, [setView, wheelNeedsModifier, minScale]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -453,7 +465,7 @@ export function TopologyMap({
       const my = (p1.y + p2.y) / 2 - rect.top;
       setView((v) => {
         if (!v) return v;
-        const scale = clampScale(p.scale * (dist / p.dist));
+        const scale = clampScale(p.scale * (dist / p.dist), minScale());
         const k = scale / p.scale;
         // Zoom anchored on the pinch's start midpoint (keeps that world point fixed), then translate
         // by however far the live midpoint has drifted since — that's the two-finger pan.
@@ -468,7 +480,7 @@ export function TopologyMap({
     const d = drag.current;
     if (!d) return;
     setView((v) => (v ? { ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) } : v));
-  }, [setView]);
+  }, [setView, minScale]);
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     (e.target as Element).releasePointerCapture?.(e.pointerId);
@@ -525,7 +537,7 @@ export function TopologyMap({
         </button>
         <button
           className="topomap-ctl"
-          onClick={() => setView((s) => (s ? { ...s, scale: Math.min(MAX_SCALE, s.scale * 1.2) } : s))}
+          onClick={() => setView((s) => (s ? { ...s, scale: clampScale(s.scale * 1.2, minScale()) } : s))}
           title={t('map.control.zoomIn')}
           aria-label={t('map.control.zoomIn')}
         >
@@ -533,7 +545,7 @@ export function TopologyMap({
         </button>
         <button
           className="topomap-ctl"
-          onClick={() => setView((s) => (s ? { ...s, scale: Math.max(MIN_SCALE, s.scale / 1.2) } : s))}
+          onClick={() => setView((s) => (s ? { ...s, scale: clampScale(s.scale / 1.2, minScale()) } : s))}
           title={t('map.control.zoomOut')}
           aria-label={t('map.control.zoomOut')}
         >

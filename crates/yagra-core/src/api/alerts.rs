@@ -124,14 +124,23 @@ pub(crate) async fn port_names(
     st: &ApiState,
     ports: impl IntoIterator<Item = (Uuid, u32)>,
 ) -> HashMap<(Uuid, u32), String> {
+    match st.admin.as_ref() {
+        Some(admin) => port_names_of(admin, ports).await,
+        None => HashMap::new(),
+    }
+}
+
+/// [`port_names`] for a caller already holding the live write side — the threshold list, which
+/// names a port rule's target the way an alert names its port.
+pub(crate) async fn port_names_of(
+    admin: &super::AdminState,
+    ports: impl IntoIterator<Item = (Uuid, u32)>,
+) -> HashMap<(Uuid, u32), String> {
     let wanted: Vec<(Uuid, u32)> = ports
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    let Some(admin) = st.admin.as_ref() else {
-        return HashMap::new();
-    };
     if wanted.is_empty() {
         return HashMap::new();
     }
@@ -143,6 +152,38 @@ pub(crate) async fn port_names(
             tracing::warn!(error = %e, "failed to read port names for alerts; serving ifIndex only");
             HashMap::new()
         })
+}
+
+/// The `(node, ifindex)` a live alert is about, when it is about one port of a node — the key
+/// [`port_names`] answers by.
+fn port_key(alert: &Alert) -> Option<(Uuid, u32)> {
+    Some((alert.node()?.as_uuid(), alert.ifindex?.0))
+}
+
+/// A live alert with the name of the port it is about (ADR-196 decision 6) — the same `if_name`
+/// [`ActiveAlertView`] carries, for a surface that serves an alert without the rest of that view
+/// (a node's own status).
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct PortNamedAlert {
+    #[serde(flatten)]
+    pub alert: Alert,
+    /// The name of the port this alert is about (`ifName`), read from the interface inventory when
+    /// the alert is read. Absent for an alert about no port, and for a port whose name is not
+    /// known. See [`ActiveAlertView::if_name`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub if_name: Option<String>,
+}
+
+/// Name the ports a list of live alerts is about, through the one lookup every alert surface uses.
+pub(crate) async fn with_port_names(st: &ApiState, alerts: Vec<Alert>) -> Vec<PortNamedAlert> {
+    let ports = port_names(st, alerts.iter().filter_map(port_key)).await;
+    alerts
+        .into_iter()
+        .map(|alert| PortNamedAlert {
+            if_name: port_key(&alert).and_then(|k| ports.get(&k).cloned()),
+            alert,
+        })
+        .collect()
 }
 
 /// The ack map key for one alert identity.
@@ -281,20 +322,10 @@ async fn list_alerts(
     // Filter before decorating: an out-of-scope alert must not reach the ack join either, or the
     // response would be shorter but the work — and the ack lookups — would still name those nodes.
     let mut views = decorate_alerts(visible_active_alerts(&st, &scope), &acks);
-    let ports = port_names(
-        &st,
-        views
-            .iter()
-            .filter_map(|v| Some((v.alert.node()?.as_uuid(), v.alert.ifindex?.0))),
-    )
-    .await;
+    let ports = port_names(&st, views.iter().filter_map(|v| port_key(&v.alert))).await;
     for view in &mut views {
         fill_subject_name(&st, &mut view.subject_name, &view.alert.subject);
-        view.if_name = view
-            .alert
-            .node()
-            .zip(view.alert.ifindex)
-            .and_then(|(n, i)| ports.get(&(n.as_uuid(), i.0)).cloned());
+        view.if_name = port_key(&view.alert).and_then(|k| ports.get(&k).cloned());
     }
     Json(views)
 }
@@ -1581,6 +1612,50 @@ mod tests {
                 .await
                 .is_none(),
             "a port with no name is sent as it was"
+        );
+    }
+
+    /// **A node's own status names its port alerts the way the Active list does** — the Overview
+    /// tab used to show `port 10106` beside an Active list reading `Gi1/0/6` for the same alert,
+    /// because `GET /nodes/{id}/status` served the bare alert (ADR-196 decision 6).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_status_alert_is_named_from_the_inventory(pool: sqlx::PgPool) {
+        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        sqlx::query("INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 7, 'Gi0/7')")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("seed a port");
+        let st = crate::api::tests_support::live_state(pool).await;
+        let alert = |ifindex: Option<u32>| Alert {
+            subject: yagra_alert::Subject::Node(NodeId::from(node)),
+            check: yagra_common::CheckId::from(Uuid::from_u128(3)),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 1,
+            root_cause: None,
+            flapping: false,
+            metric: "if_oper_status".to_string(),
+            breach: None,
+            ifindex: ifindex.map(yagra_common::IfIndex),
+            row: None,
+            row_name: None,
+        };
+        let out = with_port_names(&st, vec![alert(Some(7)), alert(Some(8)), alert(None)]).await;
+        let json: Vec<serde_json::Value> = out
+            .iter()
+            .map(|a| serde_json::to_value(a).unwrap())
+            .collect();
+        assert_eq!(json[0]["if_name"], "Gi0/7");
+        assert_eq!(json[0]["ifindex"], 7, "the alert's own fields stay flat");
+        assert!(
+            json[1].get("if_name").is_none(),
+            "a port with no name keeps its ifIndex alone"
+        );
+        assert!(
+            json[2].get("if_name").is_none(),
+            "a node-level alert has no port"
         );
     }
 

@@ -46,7 +46,13 @@ import {
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import { setNodeTreeCollapsed } from '../../serverPrefs';
-import { foldersToOpen, openFolders, revealStep, type RevealRequest } from './nodeTreeReveal';
+import {
+  foldersToOpen,
+  openFolders,
+  revealHolds,
+  revealStep,
+  type RevealRequest,
+} from './nodeTreeReveal';
 import { useTreeTouchedStore } from '../../store';
 import {
   DURATION_PRESETS,
@@ -152,6 +158,7 @@ const PENDING_SETTLE_MS = 100;
 /** One shared empty working set, so a tree rendered without `checked` reads from a stable value
  *  rather than allocating a new `Map` on every render (which would defeat every memo below it). */
 const EMPTY_CHECKED: CheckedNodes = new Map();
+const NO_GROUPS: ReadonlySet<string> = new Set();
 
 /** The same trick for the folders "Folders with nodes only" keeps regardless (ADR-159): a page that
  *  has created none passes nothing, and a fresh `Set` per render would rebuild the flat list. */
@@ -186,6 +193,9 @@ interface Props {
   /** Ids of groups whose members have been lazily fetched (A-3). An open group not in this set shows
    *  a loading placeholder instead of its members. Omit (with `groupCounts`) ⇒ every group loaded. */
   loadedGroups?: Set<string>;
+  /** Ids of groups whose members are queued or in flight. A reveal stays until the ones above its
+   *  row have answered, since their rows land above it and push it down (ADR-073 Inc.2). */
+  loadingGroups?: ReadonlySet<string>;
   /** Filter mode only: ids of groups whose whole membership is being fetched because the term
    *  matched the group's own NAME (`revealedGroupKeys`). Only these can show a loading row while
    *  filtering — every other group is showing the search page's hits and nothing more. */
@@ -357,7 +367,8 @@ interface Props {
   /** Bring the selection into view once: open the folders above it, wait for its row, scroll to it
    *  (ADR-073 Inc.2). The page makes one when the last narrowing control goes. */
   reveal?: RevealRequest | null;
-  /** The reveal is finished — scrolled, or the row is not coming. */
+  /** The reveal is finished — scrolled and settled, the row is not coming, or the operator took the
+   *  scroll over. */
   onRevealDone?: () => void;
 }
 
@@ -368,6 +379,7 @@ export function NodeTree({
   groupCounts,
   countsPending,
   loadedGroups,
+  loadingGroups,
   revealedGroups,
   failedGroups,
   onRetryGroup,
@@ -1771,8 +1783,25 @@ export function NodeTree({
     const next = openFolders(usePrefsStore.getState().nodeTreeCollapsed, revealFolders);
     if (next !== usePrefsStore.getState().nodeTreeCollapsed) setNodeTreeCollapsed(next);
   }, [reveal, revealFolders]);
+  // 🚨 **The scroll is followed until the rows above it stop changing, not made once** (④, measured
+  // on a lab deployment: ~3,000px short). A folder above the row that answers after the scroll
+  // turns one placeholder into a hundred rows and pushes the row off the pane; `revealHolds` says
+  // how long to stay, and a press, wheel or key in the tree hands the scroll back at once — staying
+  // past that would be the tree scrolling under the operator (ADR-124 Inc.5).
+  const revealScrolled = useRef<{ seq: number; index: number } | null>(null);
+  const [revealHeld, setRevealHeld] = useState<number | null>(null);
+  const onScreenPending = useMemo(
+    () => new Set(pendingKey ? pendingKey.split(',') : []),
+    [pendingKey],
+  );
+  // Read in render so the effect below runs again once the scroll it made has landed.
+  const scrollTop = rowVirtualizer.scrollOffset ?? 0;
   useEffect(() => {
-    if (!reveal) return;
+    if (!reveal) {
+      revealScrolled.current = null;
+      setRevealHeld(null);
+      return;
+    }
     const step = revealStep(drawn, reveal, {
       filtering,
       collapsed,
@@ -1780,11 +1809,49 @@ export function NodeTree({
       loadedGroups,
     });
     if (step.kind === 'wait') return;
-    // Centred, not `auto`: the operator is looking for the row, and a row at the very edge of the
-    // pane — or under the pinned-parents band — is one they would still have to find.
-    if (step.kind === 'scroll') rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
+    if (step.kind === 'done') {
+      onRevealDone?.();
+      return;
+    }
+    const last = revealScrolled.current;
+    if (!last || last.seq !== reveal.seq || last.index !== step.index) {
+      revealScrolled.current = { seq: reveal.seq, index: step.index };
+      setRevealHeld(reveal.seq);
+      // Whether this moves the pane at all. When it does, the placeholders to judge are the ones
+      // around the row's new position, which only exist once the scroll has rendered.
+      const target = rowVirtualizer.getOffsetForIndex(step.index, 'center');
+      const moves = target !== undefined && Math.abs(target[0] - scrollTop) >= 1;
+      // Centred, not `auto`: the operator is looking for the row, and a row at the very edge of the
+      // pane — or under the pinned-parents band — is one they would still have to find.
+      rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
+      if (moves) return;
+    }
+    if (revealHolds(drawn, step.index, loadingGroups ?? NO_GROUPS, onScreenPending)) return;
     onRevealDone?.();
-  }, [reveal, drawn, filtering, collapsed, revealFolders, loadedGroups, rowVirtualizer, onRevealDone]);
+  }, [
+    reveal,
+    drawn,
+    filtering,
+    collapsed,
+    revealFolders,
+    loadedGroups,
+    loadingGroups,
+    onScreenPending,
+    scrollTop,
+    rowVirtualizer,
+    onRevealDone,
+  ]);
+  // The operator taking the scroll over ends a reveal that is still following its row.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (revealHeld === null || !el) return;
+    const letGo = () => onRevealDone?.();
+    const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+    for (const e of events) el.addEventListener(e, letGo, { passive: true });
+    return () => {
+      for (const e of events) el.removeEventListener(e, letGo);
+    };
+  }, [revealHeld, onRevealDone]);
 
   /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
    *  cursor, then the scroll — the one scroll this tree writes (ADR-155 decision 4). */

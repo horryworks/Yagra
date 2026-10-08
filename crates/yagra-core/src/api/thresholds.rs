@@ -84,6 +84,11 @@ pub(crate) struct ThresholdPage {
     /// profile, label or folder holds is read from the alert engine's copy, which can be up to
     /// about 30 seconds old.
     overridden: std::collections::BTreeMap<Uuid, u32>,
+    /// For each port-level rule in `items` whose port has a known name: the scope id
+    /// (`<node-uuid>:<ifindex>`) mapped to the port's name (`ifName`), read from the interface
+    /// inventory the same way an alert's `if_name` is (ADR-196 decision 6). A port with no known
+    /// name has no entry and is shown by its ifIndex.
+    port_names: std::collections::BTreeMap<String, String>,
 }
 
 /// `?limit=` plus the filters, all optional.
@@ -204,12 +209,33 @@ pub(crate) async fn threshold_page(
     } else {
         std::collections::BTreeMap::new()
     };
+    let port_names = rule_port_names(admin, &items).await;
     Ok(ThresholdPage {
         items,
         total,
         truncated,
         overridden,
+        port_names,
     })
+}
+
+/// The names of the ports the port-level rules on one page target, keyed by scope id. Through the
+/// one lookup the alert surfaces use, so a rule and the alert it raises name the port alike.
+async fn rule_port_names(
+    admin: &super::AdminState,
+    items: &[crate::thresholds::StoredThreshold],
+) -> std::collections::BTreeMap<String, String> {
+    let ports: Vec<(Uuid, u32)> = items
+        .iter()
+        .filter(|r| r.level == yagra_common::ScopeLevel::Interface)
+        .flat_map(|r| r.scope_ids.iter())
+        .filter_map(|id| yagra_common::parse_interface_scope_id(id))
+        .collect();
+    super::alerts::port_names_of(admin, ports)
+        .await
+        .into_iter()
+        .map(|((node, ifindex), name)| (yagra_common::interface_scope_id(node, ifindex), name))
+        .collect()
 }
 
 /// The override counts for the rules on one page (ADR-200 Inc.29).

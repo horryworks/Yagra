@@ -1338,7 +1338,9 @@ async fn get_node(
 pub(crate) struct NodeStatus {
     node_id: NodeId,
     state: NodeState,
-    alerts: Vec<yagra_alert::Alert>,
+    /// The alerts attributed to this node, each with the name of the port it is about when it is
+    /// about one (ADR-196 decision 6), as the Active alerts list names it.
+    alerts: Vec<super::alerts::PortNamedAlert>,
     /// Set when `state` is **not a current reading**: what feeds this node has stopped
     /// answering, so `state` is the last one collected. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1445,7 +1447,7 @@ pub(crate) async fn node_status(st: &ApiState, node_id: Uuid) -> NodeStatus {
     NodeStatus {
         node_id: node,
         state: display_state(st, node).await,
-        alerts: st.alerts.alerts_for(node),
+        alerts: super::alerts::with_port_names(st, st.alerts.alerts_for(node)).await,
         collection_fault: collection_fault_of(st, node).await,
     }
 }

@@ -106,9 +106,11 @@ describe('a bundle of access points (ADR-191 Inc.9)', () => {
     expect(groups[1].members.map((m) => m.id)).toEqual([ap(0), ap(1), ap(2)]);
   });
 
-  it('is selected by its box id, and in a folder pane selects its parent in the tree', () => {
+  it('is selected by its box id, and in a folder pane does not select its parent in the tree', () => {
     const id = bundleId(`node:${PARENT}`);
     expect(selectedGraphId({ kind: 'bundle', id })).toBe(id);
-    expect(groupMapTarget(id, null)).toEqual({ kind: 'node', id: PARENT });
+    // The pane lists the bundle's members, as the full map does (ADR-191 Inc.14); answering the
+    // parent sent the press to the switch's detail.
+    expect(groupMapTarget(id, null)).toBeNull();
   });
 });

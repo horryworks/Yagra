@@ -29,6 +29,16 @@ export function secretMode(stored: boolean, replacing: boolean, mustReplace = fa
   return replacing ? { kind: 'replace', canKeep: true } : { kind: 'stored' };
 }
 
+/**
+ * Whether the field should hold its box open from now on. True while `mustReplace` has forced it
+ * open, so that when `mustReplace` turns off again (the NetBox address typed back to its old host)
+ * the box stays, with "Keep stored", instead of folding back to the stored mark over a value the
+ * operator typed — a value the form would still send, invisibly.
+ */
+export function staysReplacing(stored: boolean, replacing: boolean, mustReplace: boolean): boolean {
+  return replacing || (stored && mustReplace);
+}
+
 /** What a form sends for the field: the trimmed value, or `undefined` for "keep the stored one".
  *  An empty box never clears a stored secret — clearing is a separate decision with its own
  *  control, where a screen offers one at all. */

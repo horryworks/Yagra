@@ -10378,7 +10378,9 @@ export interface components {
             /**
              * @description The local port, as the device names it: LLDP renders `lldpLocPortId` by its subtype, CDP
              *     uses `cdpInterfaceName`. Falls back to `port <n>` / `ifindex <n>` when the naming table has
-             *     no row, so the record still has an identity rather than being dropped.
+             *     no row, so the record still has an identity rather than being dropped. The current set
+             *     and the history show a CDP `ifindex <n>` as that port's interface name (`ifName`) when the
+             *     node's interface list has one.
              */
             local_port: string;
             /** @description Which protocol reported this. */
@@ -11190,7 +11192,11 @@ export interface components {
          *     detail can show *why* it is down without re-deriving from the list.
          */
         NodeStatus: {
-            alerts: components["schemas"]["Alert"][];
+            /**
+             * @description The alerts attributed to this node, each with the name of the port it is about when it is
+             *     about one (ADR-196 decision 6), as the Active alerts list names it.
+             */
+            alerts: components["schemas"]["PortNamedAlert"][];
             collection_fault?: null | components["schemas"]["CollectionFault"];
             node_id: components["schemas"]["NodeId"];
             state: components["schemas"]["NodeState"];
@@ -11870,6 +11876,19 @@ export interface components {
              * @description Nodes re-pointed.
              */
             nodes: number;
+        };
+        /**
+         * @description A live alert with the name of the port it is about (ADR-196 decision 6) — the same `if_name`
+         *     [`ActiveAlertView`] carries, for a surface that serves an alert without the rest of that view
+         *     (a node's own status).
+         */
+        PortNamedAlert: components["schemas"]["Alert"] & {
+            /**
+             * @description The name of the port this alert is about (`ifName`), read from the interface inventory when
+             *     the alert is read. Absent for an alert about no port, and for a port whose name is not
+             *     known. See [`ActiveAlertView::if_name`].
+             */
+            if_name?: string | null;
         };
         /** @description A save's acknowledgement. The document is not echoed back — the client already has it. */
         PreferencesSaved: {
@@ -13947,6 +13966,15 @@ export interface components {
              */
             overridden: {
                 [key: string]: number;
+            };
+            /**
+             * @description For each port-level rule in `items` whose port has a known name: the scope id
+             *     (`<node-uuid>:<ifindex>`) mapped to the port's name (`ifName`), read from the interface
+             *     inventory the same way an alert's `if_name` is (ADR-196 decision 6). A port with no known
+             *     name has no entry and is shown by its ifIndex.
+             */
+            port_names: {
+                [key: string]: string;
             };
             /**
              * Format: int64

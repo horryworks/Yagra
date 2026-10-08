@@ -41,7 +41,8 @@
 }
 
 /* Filled = this rule decides; hollow = a narrower rule on the same metric wins. Never colour
-   alone: both carry a title/aria-label saying which (ui-conventions, colour-blind safety). */
+   alone: the losing row carries a visible "Overridden" badge, and the dot an aria-label
+   (ui-conventions, colour-blind safety). */
 .ifrules-dot {
   width: 8px;
   height: 8px;
@@ -68,6 +69,10 @@
 
 .ifrules-subject {
   font-weight: 500;
+}
+.ifrules-overridden {
+  margin-left: var(--space-2);
+  font-weight: normal;
 }
 
 .ifrules-bound {

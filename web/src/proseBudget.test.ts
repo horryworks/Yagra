@@ -64,7 +64,7 @@ import { readSources, SRC } from './testSupport/sources';
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1343, 736],
   alertNames: [166, 97],
-  alerts: [942, 557],
+  alerts: [990, 584], // + events.emptyInsideWordsMiss, an empty state (ADR-053, 2026-10-08)
   alertsConfig: [8360, 4431],
   auth: [79, 43],
   common: [717, 385],

@@ -8,10 +8,13 @@
 
 import type { GraphLayout } from './graphLayout';
 
-/** Zoom bounds. Shared by the initial fit and the pinch/wheel handlers so no gesture can leave the
- *  diagram at a scale the fit could never produce. */
+/** Zoom bounds for a gesture. A level too big to fit at `MIN_SCALE` lowers the floor to its own fit
+ *  (`zoomFloor`), so "Fit" always shows the whole level and zooming out never jumps back in. */
 export const MIN_SCALE = 0.25;
 export const MAX_SCALE = 2.5;
+/** The fit itself never goes below this. The layout keeps a level near the pane's shape (ADR-191
+ *  Inc.14), so only a level far past the server's 2,000-node cap could reach it. */
+export const FIT_FLOOR = 0.02;
 
 /** Fraction of the viewport the fitted diagram fills, leaving a margin so edge nodes are not flush
  *  against the pane border. */
@@ -35,7 +38,7 @@ export function fitView(layout: GraphLayout, vw: number, vh: number): View {
   }
   const scale = Math.min(
     MAX_SCALE,
-    Math.max(MIN_SCALE, Math.min((vw / layout.width) * MARGIN, (vh / layout.height) * MARGIN)),
+    Math.max(FIT_FLOOR, Math.min((vw / layout.width) * MARGIN, (vh / layout.height) * MARGIN)),
   );
   const tx = (vw - layout.width * scale) / 2;
   const ty = (vh - layout.height * scale) / 2;
@@ -48,7 +51,14 @@ export function centerOn(cx: number, cy: number, vw: number, vh: number, scale: 
   return { tx: vw / 2 - cx * scale, ty: vh / 2 - cy * scale, scale };
 }
 
-/** Clamp a proposed zoom to the same bounds the initial fit obeys. */
-export function clampScale(scale: number): number {
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+/** The smallest scale a gesture may reach on a level whose fit is `fitScale`: `MIN_SCALE`, or the fit
+ *  when the level only fits below it. Before ADR-191 Inc.14 the fit was clamped to `MIN_SCALE` as
+ *  well, so on a big folder "Fit" left both sides of the map outside the pane. */
+export function zoomFloor(fitScale: number): number {
+  return Math.min(MIN_SCALE, fitScale);
+}
+
+/** Clamp a proposed zoom to `[floor, MAX_SCALE]`. */
+export function clampScale(scale: number, floor: number = MIN_SCALE): number {
+  return Math.min(MAX_SCALE, Math.max(floor, scale));
 }

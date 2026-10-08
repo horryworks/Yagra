@@ -159,6 +159,9 @@ pub struct AlertConfig {
     /// collide with real port numbers (measured v0.2.15: 30 of 108 vendor readings). Splitting on
     /// the label would therefore invent a per-port check for a chassis-wide reading.
     ///
+    /// ➕ Plus the four metrics Yagra derives per port (`interface_util::DERIVED_INTERFACE_METRICS`),
+    /// which no item collects and so no catalogue entry can name; `alerts/config.rs` adds them.
+    ///
     /// Empty means "nothing is per-interface", which is the pre-ADR-076 behaviour — the safe
     /// direction for a config that failed to load.
     pub(super) per_interface: BTreeSet<String>,
@@ -749,7 +752,8 @@ pub(crate) fn matching_rules(
 ///   rows" — the server does not resolve row names here — so a profile rule with a pattern still
 ///   overrides a global rule on that profile's nodes, and a pattern-only node rule still overrides
 ///   the profile rule on that node. Which rows are affected is not counted.
-/// * **Ports**, only for a metric the catalogue says publishes per interface (`per_interface`): a
+/// * **Ports**, only for a metric that is per interface (`per_interface`: the catalogue's, plus the
+///   derived per-port metrics, which no catalogue entry names): a
 ///   node with any port rule on that metric adds one to each rule in force at the node level,
 ///   because on those ports the port rule wins. A port rule on any other metric never takes
 ///   effect, so it overrides nothing.

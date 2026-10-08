@@ -29,6 +29,7 @@ import {
   eventFilterColumns,
   eventFilterQuery,
   eventHighlight,
+  insideWordsMissTerm,
   prefixMissTerm,
   reachesPastDefaultWindow,
   widenedToAWeek,
@@ -88,9 +89,11 @@ export function EventsPage() {
     node_id: nodeId ?? undefined,
   });
 
-  const { rows, loading, exhausted, loadMore, widened } = useWidenedEventLog(query, semantics, {
-    node_id: nodeId ?? undefined,
-  });
+  const { rows, loading, exhausted, loadMore, widened, searchedInsideWords } = useWidenedEventLog(
+    query,
+    semantics,
+    { node_id: nodeId ?? undefined },
+  );
 
   // Built once per query, not per row: `matchRanges` compiles a pattern, and there are 100 rows on
   // screen. `widened` belongs in here because after the automatic retry the term really was matched
@@ -121,7 +124,8 @@ export function EventsPage() {
     ),
     filtered: t('common:filter.noMatch'),
     prefixMiss: t('events.emptyPrefixMiss', { term: prefixMissTerm(filters) }),
-  }[eventEmptyKind(filters, semantics, anyFiltered)];
+    insideWordsMiss: t('events.emptyInsideWordsMiss', { term: insideWordsMissTerm(filters) }),
+  }[eventEmptyKind(filters, semantics, anyFiltered, searchedInsideWords)];
 
   const setNode = (node: { id: string; name: string } | null) => {
     const params = new URLSearchParams(searchParams);

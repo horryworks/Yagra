@@ -41,6 +41,7 @@ describe('useWidenedEventLog', () => {
 
     await waitFor(() => expect(result.current.widened).toBe(true));
     expect(result.current.rows).toHaveLength(1);
+    expect(result.current.searchedInsideWords).toBe(false);
     // Both forms were asked, in that order — the cheap one first is the whole point.
     expect(listEvents.mock.calls.map((c) => c[0].msg_regex)).toEqual([undefined, true]);
   });
@@ -80,8 +81,10 @@ describe('useWidenedEventLog', () => {
     // Held for a while: a retry keyed on anything that changes per render would keep firing here.
     await new Promise((r) => setTimeout(r, 50));
     expect(listEvents).toHaveBeenCalledTimes(2);
-    // No rows, so the screen must not claim a widened result — it shows the prefix-miss empty state.
+    // No rows, so the screen must not claim a widened result — it says the term is not even inside
+    // a word (`eventEmptyKind`'s `insideWordsMiss`), which needs to know the widened search ran.
     expect(result.current.widened).toBe(false);
+    expect(result.current.searchedInsideWords).toBe(true);
   });
 
   it('never widens on a substring deployment, however empty the result', async () => {
@@ -94,5 +97,6 @@ describe('useWidenedEventLog', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(listEvents).toHaveBeenCalledTimes(1);
     expect(result.current.widened).toBe(false);
+    expect(result.current.searchedInsideWords).toBe(false);
   });
 });

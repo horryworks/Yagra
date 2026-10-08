@@ -32,6 +32,22 @@ export function splitInterfaceScopeId(scopeId: string): [string, number | null] 
   return [node, n];
 }
 
+/** How a port rule's target reads: `sw-01 · Gi1/0/6`. The port by its name when the server sent
+ *  one (`ThresholdPage.port_names`, read from the same inventory an alert's `if_name` is, ADR-196
+ *  decision 6), so a rule and the alert it raises name the port alike; `#10106` (the ifIndex) only
+ *  when no name is known. A malformed id is shown as it is, through `nodeName`, rather than
+ *  inventing a port. */
+export function interfaceScopeLabel(
+  scopeId: string,
+  nodeName: (id: string) => string,
+  portNames?: Readonly<Record<string, string>>,
+): string {
+  const [node, port] = splitInterfaceScopeId(scopeId);
+  if (port === null) return nodeName(scopeId);
+  const name = portNames?.[scopeId];
+  return `${nodeName(node)} · ${name ? name : `#${port}`}`;
+}
+
 /** Whether `scopeId` is a well-formed interface scope id — the same question the server's
  *  `invalid_scope_id` check asks, so a form can disable Save before the round trip. */
 export function isInterfaceScopeId(scopeId: string): boolean {

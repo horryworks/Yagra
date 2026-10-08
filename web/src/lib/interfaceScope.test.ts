@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 import { sourceFiles } from '../testSupport/sources';
 import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { interfaceScopeId, isInterfaceScopeId, splitInterfaceScopeId } from './interfaceScope';
+import {
+  interfaceScopeId,
+  interfaceScopeLabel,
+  isInterfaceScopeId,
+  splitInterfaceScopeId,
+} from './interfaceScope';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
@@ -49,6 +54,32 @@ describe('interface scope ids (ADR-076)', () => {
     // A uuid contains no colon, so this only matters for malformed input — but splitting on the
     // last one would hand back a node id with a colon in it, which resolves to nothing at all.
     expect(splitInterfaceScopeId(`${NODE}:7:9`)).toEqual([NODE, null]);
+  });
+});
+
+describe('a port rule target, by name (ADR-196 decision 6)', () => {
+  const nodeName = (id: string) => (id === NODE ? 'sw-01' : id);
+  const id = interfaceScopeId(NODE, 10106);
+
+  it('names the port the way its alert does when the server knows the name', () => {
+    expect(interfaceScopeLabel(id, nodeName, { [id]: 'Gi1/0/6' })).toBe('sw-01 · Gi1/0/6');
+  });
+
+  it('falls back to the ifIndex only when no name is known', () => {
+    expect(interfaceScopeLabel(id, nodeName)).toBe('sw-01 · #10106');
+    expect(interfaceScopeLabel(id, nodeName, {})).toBe('sw-01 · #10106');
+    // Another port's name is not this one's.
+    expect(interfaceScopeLabel(id, nodeName, { [interfaceScopeId(NODE, 7)]: 'Gi0/7' })).toBe(
+      'sw-01 · #10106',
+    );
+    // Port 0 is a real ifIndex, not "no port".
+    expect(interfaceScopeLabel(interfaceScopeId(NODE, 0), nodeName)).toBe('sw-01 · #0');
+  });
+
+  it('shows a malformed id as it is rather than inventing a port', () => {
+    expect(interfaceScopeLabel(`${NODE}:x`, nodeName, { [`${NODE}:x`]: 'Gi0/1' })).toBe(
+      `${NODE}:x`,
+    );
   });
 });
 

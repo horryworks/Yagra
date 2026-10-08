@@ -422,9 +422,10 @@ pub(crate) async fn current_neighbors(
     let unaddressed = unaddressed_mac_chassis(&current.set);
     let unaddressed_list: Vec<String> = unaddressed.iter().cloned().collect();
     let ports = ports_to_read(&advertised, &claims, &names);
+    let unnamed = [current.set.unnamed_local_ifindexes()];
     // Everything below depends on the addresses or the claims and on nothing else, so it is asked
     // at once — the link-state read in particular must not add its wait to the tab's (decision 8).
-    let (listed, aps, meraki, by_mac, oper) = tokio::join!(
+    let (listed, aps, meraki, by_mac, oper, local_names) = tokio::join!(
         admin
             .discovered
             .listed_among(&addresses, scope.group_filter()),
@@ -432,6 +433,7 @@ pub(crate) async fn current_neighbors(
         admin.meraki_inventory.devices_at(&addresses),
         admin.meraki_inventory.devices_with_mac(&unaddressed_list),
         link_states(store, &ports),
+        local_port_names(&admin.repo, node_id, &unnamed),
     );
     let listed = listed.map_err(|e| {
         ApiError::from_internal(
@@ -495,6 +497,8 @@ pub(crate) async fn current_neighbors(
         end_station_only: end_station_only(&current.set),
         listed_elsewhere,
     };
+    let mut set = current.set;
+    set.name_unnamed_ports(&local_names);
     Ok(CurrentNeighbors {
         chassis_peers: classify_chassis(&unaddressed, &by_mac, scope),
         peers: classify_peers(
@@ -508,8 +512,8 @@ pub(crate) async fn current_neighbors(
                 oper: &oper,
             },
         ),
-        mac_vendors: mac_vendors(&current.set),
-        neighbors: current.set,
+        mac_vendors: mac_vendors(&set),
+        neighbors: set,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),
     })
@@ -803,6 +807,40 @@ fn ports_to_read(
     out.into_iter().collect()
 }
 
+/// The interface names of the ports a CDP device left unnamed — `ifindex <n>`, because it does
+/// not implement `cdpInterfaceName` — read from the node's interface list (`ifName`).
+///
+/// Display only: the stored sets keep the poller's spelling, so neither their key nor the history
+/// moves when the interface walk catches up. A read that fails leaves the ports as the poller named
+/// them rather than failing the tab — the adjacency is still right, only its label is not.
+async fn local_port_names(
+    repo: &crate::repo::NodeRepo,
+    node_id: Uuid,
+    unnamed: &[Vec<u32>],
+) -> HashMap<u32, String> {
+    let pairs: Vec<(Uuid, u32)> = unnamed
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<u32>>()
+        .into_iter()
+        .map(|ifindex| (node_id, ifindex))
+        .collect();
+    if pairs.is_empty() {
+        return HashMap::new();
+    }
+    match repo.port_names_for(&pairs).await {
+        Ok(names) => names
+            .into_iter()
+            .map(|((_, ifindex), name)| (ifindex, name))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(%node_id, error = %e, "could not read interface names for CDP ports");
+            HashMap::new()
+        }
+    }
+}
+
 /// How long the tab waits for link state before answering without it (decision 8). The store's own
 /// client allows ten seconds, which is a fleet-ingest budget, not a tab's.
 const LINK_STATE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
@@ -1036,7 +1074,7 @@ pub(crate) async fn neighbor_history(
     let limit = limit
         .unwrap_or(HISTORY_DEFAULT_LIMIT)
         .clamp(1, HISTORY_MAX_LIMIT);
-    let rows = admin
+    let mut rows = admin
         .neighbors
         .list_changes(node_id, before, limit)
         .await
@@ -1047,6 +1085,14 @@ pub(crate) async fn neighbor_history(
                 "failed to load neighbour history",
             )
         })?;
+    let unnamed: Vec<Vec<u32>> = rows
+        .iter()
+        .map(|r| r.set.unnamed_local_ifindexes())
+        .collect();
+    let local_names = local_port_names(&admin.repo, node_id, &unnamed).await;
+    for row in &mut rows {
+        row.set.name_unnamed_ports(&local_names);
+    }
     // A cursor only when the page came back full — a short page is the end of the history, and
     // handing back a cursor there makes a client fetch an empty page to discover that.
     let next = super::util::cursor_if_full(&rows, limit, |r| NeighborHistoryCursor {
@@ -1500,6 +1546,86 @@ mod tests {
             blocked(&body, "198.51.100.20"),
             (serde_json::json!(true), serde_json::Value::Null)
         );
+    }
+
+    /// A CDP row whose device has no `cdpInterfaceName` (a Catalyst 2960) arrives as
+    /// `ifindex <n>`; the tab and the history show the port's `ifName` instead, and a port the
+    /// interface list does not name keeps the poller's spelling.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_cdp_port_named_only_by_its_ifindex_reads_as_its_ifname(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let here = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        sqlx::query(
+            "INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 10103, 'Gi1/0/3')",
+        )
+        .bind(here)
+        .execute(&pool)
+        .await
+        .expect("interface row");
+        let cdp = |ifindex: u32, peer: &str| {
+            let mut n = yagra_common::Neighbor::new(
+                yagra_common::NeighborProto::Cdp,
+                yagra_common::cdp_unnamed_port(ifindex),
+                peer,
+                "Gi0/1",
+            );
+            n.local_ifindex = Some(ifindex);
+            n
+        };
+        let stored = NeighborSet::new(vec![cdp(10103, "ap-01"), cdp(10120, "ap-02")], 0);
+        crate::neighbors::NeighborRepo::new(pool.clone())
+            .record_observation(here, &stored)
+            .await
+            .expect("record");
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let ports = |rows: &serde_json::Value| -> Vec<(String, String)> {
+            rows.as_array()
+                .expect("rows")
+                .iter()
+                .map(|n| {
+                    (
+                        n["remote_chassis"].as_str().expect("chassis").to_owned(),
+                        n["local_port"].as_str().expect("port").to_owned(),
+                    )
+                })
+                .collect()
+        };
+        let want = vec![
+            ("ap-01".to_owned(), "Gi1/0/3".to_owned()),
+            ("ap-02".to_owned(), "ifindex 10120".to_owned()),
+        ];
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{here}/neighbors"),
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(ports(&body["neighbors"]["neighbors"]), want);
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{here}/neighbors/history"),
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(ports(&body["changes"][0]["neighbors"]["neighbors"]), want);
+
+        // What is stored is the poller's spelling, so the key does not move under the display.
+        let kept = crate::neighbors::NeighborRepo::new(pool.clone())
+            .current(here)
+            .await
+            .expect("read")
+            .expect("a set");
+        assert_eq!(kept.set, stored);
     }
 
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────

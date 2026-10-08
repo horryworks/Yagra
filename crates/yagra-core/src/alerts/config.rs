@@ -243,7 +243,17 @@ pub(crate) async fn load_alert_config_base(
         .collection_items()
         .await
         .map_err(|e| anyhow::anyhow!("load collection items: {e}"))?;
-    let per_interface = crate::collection::per_interface_metric_names(&items);
+    // Plus the four metrics Yagra computes per port (ADR-076 decisions 2 and 9). No item collects
+    // them, so the catalogue cannot name them, yet a port rule on one is exactly what overrides a
+    // node rule on it. Without them the override count on Alerts > Metric alert rules answered
+    // "overridden nowhere" for the very rules the evaluator was overriding port by port. The poll
+    // path never sees a sample of one, so adding them changes nothing there.
+    let mut per_interface = crate::collection::per_interface_metric_names(&items);
+    per_interface.extend(
+        crate::interface_util::DERIVED_INTERFACE_METRICS
+            .iter()
+            .map(|m| (*m).to_owned()),
+    );
     let no_reading = NoReadingMarkers::from_items(&items);
     let mut meta = HashMap::new();
     let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
@@ -737,6 +747,8 @@ mod tests {
         derived_asked: Mutex<bool>,
         /// What `collection_items` answers.
         items: Vec<yagra_common::CollectionItem>,
+        /// What `thresholds` answers.
+        rules: Vec<thresholds::StoredThreshold>,
     }
 
     impl FakeSources {
@@ -748,6 +760,7 @@ mod tests {
                 derived: Topology::new(),
                 derived_asked: Mutex::new(false),
                 items: Vec::new(),
+                rules: Vec::new(),
             }
         }
         fn refuse(&self, which: Fails) -> anyhow::Result<()> {
@@ -762,7 +775,7 @@ mod tests {
     impl AlertConfigSources for FakeSources {
         async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>> {
             self.refuse(Fails::Thresholds)?;
-            Ok(Vec::new())
+            Ok(self.rules.clone())
         }
         async fn nodes(&self) -> anyhow::Result<Vec<Node>> {
             self.refuse(Fails::Nodes)?;
@@ -846,6 +859,11 @@ mod tests {
         let base = load_alert_config_base(&sources).await.expect("healthy");
         assert!(base.per_interface.contains("if_hc_in_octets"));
         assert!(!base.per_interface.contains("huawei_temp"));
+        // The derived per-port metrics are named by no item, and a port rule on one still
+        // overrides a node rule on it (ADR-076) — so the set carries them whatever the items say.
+        for derived in crate::interface_util::DERIVED_INTERFACE_METRICS {
+            assert!(base.per_interface.contains(derived), "{derived}");
+        }
         assert_eq!(
             base.no_reading,
             NoReadingMarkers::from_items(&sources.items),
@@ -855,6 +873,49 @@ mod tests {
             base.no_reading,
             NoReadingMarkers::default(),
             "the shipped catalogue declares a placeholder, so the table cannot be empty"
+        );
+    }
+
+    /// ADR-076: a node rule on a derived per-port metric is overridden on the node whose port has
+    /// its own rule, counted from the config the loader actually builds. The override count on
+    /// Alerts > Metric alert rules reads exactly this set, and with no collection item naming the
+    /// derived metrics it used to answer "overridden nowhere" while the evaluator was letting the
+    /// port rule win.
+    #[tokio::test]
+    async fn a_port_rule_on_a_derived_metric_counts_against_the_node_rule_it_overrides() {
+        use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
+        let a = nid(1);
+        let rule = |level, ids: Vec<String>| {
+            thresholds::StoredThreshold::new(
+                Uuid::new_v4(),
+                level,
+                ids,
+                ThresholdRule::new(
+                    crate::interface_util::METRIC_IF_IN_BPS,
+                    ThresholdBounds::below(Some(1.0), None),
+                    1,
+                ),
+            )
+        };
+        let on_node = rule(ScopeLevel::Node, vec![a.to_string()]);
+        let on_port = rule(
+            ScopeLevel::Interface,
+            vec![yagra_common::interface_scope_id(a.as_uuid(), 3)],
+        );
+        let mut sources = FakeSources::new(
+            Fails::Nothing,
+            vec![node(1, None)],
+            crate::topology_mode::TopologyMode::Manual,
+        );
+        sources.rules = vec![on_node.clone(), on_port.clone()];
+        let base = load_alert_config_base(&sources).await.expect("healthy");
+        let got =
+            super::super::rules::overridden_counts(&base.rules, &base.meta, &base.per_interface);
+        assert_eq!(got.get(&on_node.id), Some(&1), "{got:?}");
+        assert_eq!(
+            got.get(&on_port.id),
+            None,
+            "the port rule is the one in force"
         );
     }
 

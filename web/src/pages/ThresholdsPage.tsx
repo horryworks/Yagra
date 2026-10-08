@@ -52,10 +52,12 @@ import { LoadGate } from '../components/ui/LoadGate';
 /** Confirm + delete a threshold rule (destructive-consent modal). */
 function DeleteThresholdModal({
   rule,
+  portNames,
   onClose,
   onDone,
 }: {
   rule: StoredThreshold;
+  portNames: Readonly<Record<string, string>>;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -86,7 +88,9 @@ function DeleteThresholdModal({
         values={{
           level: t(`thresholds.scopeLevel.${rule.scope_level}`),
           metric: rule.metric === LIVENESS_METRIC ? t('format:liveness') : rule.metric,
-          scope: rule.scope_ids.map((id) => scopeName(rule.scope_level, id)).join(', '),
+          scope: rule.scope_ids
+            .map((id) => scopeName(rule.scope_level, id, portNames))
+            .join(', '),
         }}
         components={{ strong: <strong />, mono: <strong className="mono" /> }}
       />
@@ -109,16 +113,6 @@ export function ThresholdsPage() {
   const [editing, setEditing] = useState<StoredThreshold | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   const { scopeName } = useEntityNames();
-  // The whole target list, for the cell's `title`. Two names are drawn; this is what makes the
-  // other two readable rather than merely counted.
-  // `useCallback` because the columns memo below closes over it. Its only input is `scopeName`,
-  // which that memo already depends on — pinning the identity to the same thing keeps the memo
-  // recomputing exactly when it did before, and lets the dependency be named rather than implied.
-  const scopeTitle = useCallback(
-    (row: StoredThreshold) =>
-      row.scope_ids.map((id) => scopeName(row.scope_level, id)).join(', '),
-    [scopeName],
-  );
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given, `load` depends on
@@ -144,10 +138,30 @@ export function ThresholdsPage() {
   const ruleset = useLoad(
     () => api.listThresholds({ ...queryFor(filterCols, filters), overridden: true }),
     [filterCols, filters],
-    { initial: { items: [], total: 0, truncated: false, overridden: {} } as ThresholdPage },
+    {
+      initial: {
+        items: [],
+        total: 0,
+        truncated: false,
+        overridden: {},
+        port_names: {},
+      } as ThresholdPage,
+    },
   );
   const { data: page, loading, reload: rulesetReload } = ruleset;
   const rows = page.items;
+  /** A port rule's port by its name, as the alert it raises names it (ADR-196 decision 6). */
+  const portNames = page.port_names;
+  // The whole target list, for the cell's `title`. Two names are drawn; this is what makes the
+  // other two readable rather than merely counted.
+  // `useCallback` because the columns memo below closes over it. Its inputs are `scopeName` and
+  // the page's port names, which that memo already depends on — pinning the identity to the same
+  // things keeps the memo recomputing exactly when it did before.
+  const scopeTitle = useCallback(
+    (row: StoredThreshold) =>
+      row.scope_ids.map((id) => scopeName(row.scope_level, id, portNames)).join(', '),
+    [scopeName, portNames],
+  );
   /** On how many nodes a narrower rule on the same metric takes over from each row — counted by
    *  the server across the whole fleet (ADR-200 Inc.29), read in `thresholdOverrides.ts`. */
   const overridden = useMemo(() => overriddenRows(page), [page]);
@@ -210,7 +224,7 @@ export function ThresholdsPage() {
                     // "id", which is not an id anything else accepts.
                     <EntityName
                       key={id}
-                      name={scopeName(row.scope_level, id)}
+                      name={scopeName(row.scope_level, id, portNames)}
                       id={splitInterfaceScopeId(id)[0]}
                     />
                   ) : (
@@ -365,7 +379,7 @@ export function ThresholdsPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [canConfig, overridden, scopeName, scopeTitle, specs, t]);
+  }, [canConfig, overridden, portNames, scopeName, scopeTitle, specs, t]);
   /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
    *
    *  It cannot be read off `rows`: that list is the operator's current filter, capped by the
@@ -521,6 +535,7 @@ export function ThresholdsPage() {
           key={editing.id}
           mode="edit"
           rule={editing}
+          portNames={portNames}
           onClose={() => setEditing(null)}
           onSaved={load}
         />
@@ -528,6 +543,7 @@ export function ThresholdsPage() {
       {deleting && (
         <DeleteThresholdModal
           rule={deleting}
+          portNames={portNames}
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);

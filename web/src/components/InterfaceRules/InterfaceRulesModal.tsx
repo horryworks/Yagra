@@ -38,6 +38,7 @@ import { boundSentence, isOwnRule } from './interfaceRuleText';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
+import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Select, TextInput } from '../ui/Field';
@@ -215,11 +216,11 @@ function RuleRow({
 
   return (
     <div className={`ifrules-row${row.in_force ? '' : ' overridden'}`}>
+      {/* The dot is the at-a-glance mark; the losing row also says so in words (ADR-076
+          decision 11), because a hollow dot with a hover title was all it had, and a title cannot
+          be read on touch (ADR-055 R4) — the row read as in force. */}
       <span
         className="ifrules-dot"
-        title={
-          row.in_force ? t('interfaces.rules.inForce') : t('interfaces.rules.overridden')
-        }
         aria-label={
           row.in_force ? t('interfaces.rules.inForce') : t('interfaces.rules.overridden')
         }
@@ -232,6 +233,11 @@ function RuleRow({
             // No subject says this rule, so it is shown as what it is. Rounding it into the
             // nearest subject would retarget it the next time anyone pressed Save.
             <span className="mono">{row.rule.metric}</span>
+          )}
+          {!row.in_force && (
+            <span className="ifrules-overridden">
+              <Badge>{t('interfaces.rules.overridden')}</Badge>
+            </span>
           )}
         </span>
         <span className="ifrules-bound">{boundSentence(row.rule, form, speedBps, t)}</span>

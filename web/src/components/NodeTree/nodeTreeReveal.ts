@@ -8,9 +8,11 @@
 // that was lost.
 //
 // So the page asks for a reveal once, at the moment the last narrowing control goes, and the tree
-// opens the folders above the selection, waits for the row to exist, and scrolls to it ONE time.
-// It never follows the row afterwards — scrolling the tree for the operator is what ADR-124 Inc.5
-// refused, and this is the exception only because the operator's own press is what hid the row.
+// opens the folders above the selection, waits for the row to exist, and scrolls to it. It follows
+// the row only while folders above it are still filling in (`revealHolds`), and lets go the moment
+// the operator wheels, presses or types in the tree — scrolling the tree for the operator is what
+// ADR-124 Inc.5 refused, and this is the exception only because the operator's own press is what
+// hid the row.
 //
 // ⚠️ Every decision is here, in a `.ts`, because Vitest never loads a `.tsx` (testing.md).
 
@@ -117,4 +119,38 @@ export function revealStep(
       ? -1
       : drawn.findIndex((r) => r.kind === 'group' && r.group.id === req.groupId);
   return folder >= 0 ? { kind: 'scroll', index: folder } : { kind: 'done' };
+}
+
+/**
+ * Whether a reveal that has scrolled may let go, or must stay to scroll again (ADR-073 Inc.2, ④).
+ *
+ * 🚨 **One scroll was not enough, and the lab measured why.** The scroll lands on the row's index
+ * at that moment, and nothing anchors it afterwards: a folder ABOVE the row whose members arrive
+ * later turns its one placeholder row into a hundred, and the row slides a hundred rows down — off
+ * the pane, ~3,000px short on a deployment of ~3,000 nodes. The target's own folder is a single
+ * request the reveal asks for at once; the folders on screen before the scroll go out together
+ * after the viewport settles, so a big target folder easily answers FIRST.
+ *
+ * So the reveal holds while any placeholder above the row can still turn into rows:
+ *  - one whose members are queued or in flight (`loading`), and
+ *  - one the virtualizer is drawing now (`onScreen`) — it is about to be asked for, once the
+ *    viewport settles, and is not in `loading` yet.
+ * A placeholder that is neither stays one row until the operator scrolls to it, and an operator
+ * scrolling ends the reveal anyway. A failed folder draws `group-failed`, which never grows.
+ *
+ * ⚠️ Rows BELOW the target are not waited on: they cannot move it.
+ */
+export function revealHolds(
+  drawn: readonly FlatRow[],
+  index: number,
+  loading: ReadonlySet<string>,
+  onScreen: ReadonlySet<string>,
+): boolean {
+  for (let i = 0; i < index && i < drawn.length; i++) {
+    const row = drawn[i];
+    if (row.kind === 'group-loading' && (loading.has(row.groupId) || onScreen.has(row.groupId))) {
+      return true;
+    }
+  }
+  return false;
 }

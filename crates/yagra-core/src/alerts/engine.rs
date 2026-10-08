@@ -1349,7 +1349,7 @@ impl AlertManager {
         }
 
         let Some(t) = transition else {
-            return Vec::new();
+            return self.refresh_breached_side(check, raw, at_unix_ms, eval);
         };
 
         // Who this alert's incident belongs to (ADR-015, widened by ADR-087).
@@ -1400,16 +1400,7 @@ impl AlertManager {
                 alert.row = row;
                 alert.row_name = row_name.map(str::to_owned);
                 if let Some(ev) = eval {
-                    let threshold = match alert.severity {
-                        Severity::Critical => ev.critical,
-                        Severity::Warning => ev.warning,
-                        Severity::Info => ev.warning.or(ev.critical),
-                    };
-                    alert.breach = Some(Breach {
-                        value: ev.value,
-                        threshold,
-                        direction: ev.direction,
-                    });
+                    alert.breach = Some(breach_for(alert.severity, ev));
                 }
                 self.active
                     .lock()
@@ -1442,6 +1433,55 @@ impl AlertManager {
             actions.extend(self.resweep_suppression(node));
         }
         actions
+    }
+
+    /// An open threshold alert whose sample now breaches the **other side** of its band, at the
+    /// same severity, is re-fired with the side it is actually crossing.
+    ///
+    /// 🚨 The dwell tracker only reports a change of *state*, and `Critical` below and `Critical`
+    /// above are the same state — so without this the breach described at fire time was frozen for
+    /// the life of the alert. Measured on a lab deployment: a port rule on `if_rx_power_dbm` fired
+    /// "below -3.7 (was -4.7)"; the operator then edited the same rule to `critical_below -40,
+    /// critical_above -5.7`, the value now breached the upper side, and for as long as it stayed
+    /// there the alert went on saying "below -3.7" with no "above" row ever reaching History.
+    ///
+    /// Re-fired rather than edited in place, the same shape as a warning→critical escalation: the
+    /// check id (and so the external dedup key) is unchanged, History gains the row that says what
+    /// is now wrong, and the notification names the side the operator has to act on.
+    ///
+    /// Only the side decides. A same-side change of value is every poll and must stay silent; a
+    /// same-side change of bound (a rule edit) is left as it was, so editing a rule never pages by
+    /// itself. A sample whose state differs from the alert's is dwell still in progress, which the
+    /// state machine will commit on its own.
+    fn refresh_breached_side(
+        &self,
+        check: CheckId,
+        raw: NodeState,
+        at_unix_ms: i64,
+        eval: Option<ThresholdEval>,
+    ) -> Vec<NotifyAction> {
+        let Some(ev) = eval else {
+            return Vec::new();
+        };
+        let updated = {
+            let mut active = self.active.lock().expect("alerts mutex poisoned");
+            let Some(alert) = active.get_mut(&check) else {
+                return Vec::new();
+            };
+            // A breach-less alert (liveness, or a row restored without its value) has no side to
+            // compare, and inventing one would re-page every such alert after an upgrade.
+            let Some(previous) = alert.breach.as_ref() else {
+                return Vec::new();
+            };
+            if alert.state != raw || previous.direction == ev.direction {
+                return Vec::new();
+            }
+            alert.breach = Some(breach_for(alert.severity, ev));
+            alert.at_unix_ms = at_unix_ms;
+            alert.clone()
+        };
+        self.broadcast(&updated, false);
+        vec![NotifyAction::Fire(updated)]
     }
 
     /// Re-evaluate dependency suppression for active liveness alerts after `changed`'s down-set
@@ -2647,6 +2687,22 @@ impl Default for AlertManager {
     }
 }
 
+/// The breach an alert of `severity` describes, from one sample's [`ThresholdEval`]: the bound on
+/// the side that sample crossed, at that severity. One function so a fire and a side refresh
+/// (`AlertManager::refresh_breached_side`) cannot name different bounds for the same sample.
+fn breach_for(severity: Severity, ev: ThresholdEval) -> Breach {
+    let threshold = match severity {
+        Severity::Critical => ev.critical,
+        Severity::Warning => ev.warning,
+        Severity::Info => ev.warning.or(ev.critical),
+    };
+    Breach {
+        value: ev.value,
+        threshold,
+        direction: ev.direction,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::testkit::*;
@@ -3234,6 +3290,121 @@ mod tests {
             high[0].check, check,
             "both sides of one rule must be one check"
         );
+    }
+
+    /// An open alert whose breach moves to the other side of the band, without ever passing
+    /// through it, must say so — and the case that does this in practice is a rule edit.
+    ///
+    /// Reproduces a lab finding on an SFP port: `if_rx_power_dbm` at -4.7 fired "below -3.7";
+    /// the same port rule was then edited to `critical_below -40, critical_above -5.7`, so -4.7 now
+    /// breaches the UPPER side. Both are `Critical`, the dwell tracker saw no transition, and the
+    /// alert kept saying "below -3.7" for as long as it stayed open, with no "above" row in History.
+    #[test]
+    fn an_open_alert_follows_its_breach_to_the_other_side_of_the_band() {
+        use yagra_bus::Sample;
+        use yagra_common::{
+            interface_scope_id, Direction, IfIndex, MetricKind, ThresholdBounds, ThresholdRule,
+        };
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let port = 10;
+        let set_bounds = |bounds: ThresholdBounds| {
+            let mut meta = HashMap::new();
+            meta.insert(node, NodeMeta::default());
+            mgr.set_config(
+                cfg(
+                    vec![StoredThreshold::new(
+                        // One rule, edited in place: the id does not change across the edits.
+                        Uuid::nil(),
+                        ScopeLevel::Interface,
+                        vec![interface_scope_id(node.as_uuid(), port)],
+                        ThresholdRule::new("if_rx_power_dbm", bounds, 1),
+                    )],
+                    meta,
+                )
+                .with_per_interface(["if_rx_power_dbm".to_owned()].into_iter().collect()),
+            );
+        };
+        let observe = |at: i64| {
+            let mut r = result(node, CheckOutcome::Reachable, at);
+            r.samples = vec![Sample::interface(
+                "if_rx_power_dbm",
+                IfIndex(port),
+                -4.7,
+                MetricKind::Gauge,
+            )];
+            mgr.observe(&r)
+        };
+
+        // The rule as first written: only a lower bound, and -4.7 is under it.
+        set_bounds(ThresholdBounds {
+            warning_below: None,
+            critical_below: Some(-3.7),
+            warning_above: None,
+            critical_above: None,
+        });
+        assert!(matches!(observe(0).as_slice(), [NotifyAction::Fire(_)]));
+        let low = mgr.active_alerts();
+        assert_eq!(
+            low[0].breach.as_ref().map(|b| (b.direction, b.threshold)),
+            Some((Direction::Below, Some(-3.7)))
+        );
+        let check = low[0].check;
+
+        // The edit: the same value is now inside the lower bound and over the upper one.
+        set_bounds(ThresholdBounds {
+            warning_below: None,
+            critical_below: Some(-40.0),
+            warning_above: None,
+            critical_above: Some(-5.7),
+        });
+        let actions = observe(60_000);
+        let [NotifyAction::Fire(fired)] = actions.as_slice() else {
+            panic!("a breach that changed sides must be re-fired, got {actions:?}");
+        };
+        assert_eq!(
+            fired
+                .breach
+                .as_ref()
+                .map(|b| (b.direction, b.threshold, b.value)),
+            Some((Direction::Above, Some(-5.7), -4.7)),
+            "the alert must name the side the value is crossing now"
+        );
+        assert_eq!(fired.check, check, "still one rule, so still one check");
+        assert_eq!(fired.ifindex, Some(IfIndex(port)));
+        let active = mgr.active_alerts();
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            active[0].breach.as_ref().map(|b| b.direction),
+            Some(Direction::Above),
+            "the active alert (what the WebUI shows) must carry the new side too"
+        );
+
+        // Staying on the new side is not a new event: one fire per side change, not one per poll.
+        assert!(observe(120_000).is_empty());
+
+        // A same-side bound edit is not a page by itself.
+        set_bounds(ThresholdBounds {
+            warning_below: None,
+            critical_below: Some(-40.0),
+            warning_above: None,
+            critical_above: Some(-5.0),
+        });
+        assert!(observe(180_000).is_empty());
+
+        // And the band that contains the value closes it.
+        set_bounds(ThresholdBounds {
+            warning_below: None,
+            critical_below: Some(-40.0),
+            warning_above: None,
+            critical_above: Some(0.0),
+        });
+        assert!(matches!(
+            observe(240_000).as_slice(),
+            [NotifyAction::Resolve(_)]
+        ));
+        assert!(mgr.active_alerts().is_empty());
     }
 
     /// The node-wide fold must keep the sample that is **breaching**, not the largest (ADR-081).
