@@ -64,8 +64,8 @@ function inSpans(spans: readonly VlanSpan[], v: number): boolean {
   return spans.some((s) => v >= s.first && v <= s.last);
 }
 
-/** Whether VLAN `v` crosses this port by its own configuration. A member says no here; ask
- *  [`carries`] with the aggregate to answer for it. */
+/** Whether VLAN `v` crosses this port by its own configuration. A member says no here; its
+ *  aggregate answers for it, through [`effectiveVlan`]. */
 function carriesOwn(vlan: InterfaceVlan, v: number): boolean {
   switch (vlan.mode) {
     case 'access':
@@ -79,23 +79,6 @@ function carriesOwn(vlan: InterfaceVlan, v: number): boolean {
     case 'unknown':
       return false;
   }
-}
-
-/** Whether VLAN `v` crosses this port — a member answers through the aggregate it is bundled into,
- *  found by `ifindex` in `byIfindex`. */
-export function carries(
-  row: Pick<InterfaceRow, 'vlan'>,
-  byIfindex: ReadonlyMap<number, Pick<InterfaceRow, 'vlan'>>,
-  v: number,
-): boolean {
-  const vlan = vlanOf(row);
-  if (vlan == null) return false;
-  if (vlan.mode === 'member' && vlan.lag) {
-    const agg = byIfindex.get(vlan.lag.ifindex);
-    const aggVlan = agg ? vlanOf(agg) : null;
-    return aggVlan != null && carriesOwn(aggVlan, v);
-  }
-  return carriesOwn(vlan, v);
 }
 
 /** A VLAN ID as the filter accepts it, or `null`. */

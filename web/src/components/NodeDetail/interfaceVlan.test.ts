@@ -1,8 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { InterfaceVlan } from '../../types/api';
 import {
   carriedVlanTokens,
-  carries,
   effectiveVlan,
   formatSpans,
   memberNames,
@@ -119,6 +119,10 @@ describe('the VLAN cell', () => {
 });
 
 describe('which VLANs a port carries', () => {
+  // The filter's own path: the row's effective VLAN facts, expanded into tokens.
+  const carries = (row: { vlan: InterfaceVlan }, map: typeof byIfindex, id: number) =>
+    carriedVlanTokens(effectiveVlan(row, map)).includes(String(id));
+
   it('reads a trunk’s native VLAN and its ranges', () => {
     expect(carries(trunk, byIfindex, 1)).toBe(true);
     expect(carries(trunk, byIfindex, 850)).toBe(true);

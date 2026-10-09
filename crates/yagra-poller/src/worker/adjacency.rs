@@ -165,11 +165,14 @@ pub(super) async fn execute_vlans(
         .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_WALK_ROWS)
         .await
     {
-        Ok(walk) if walk.every_column_answered => {
+        // The row budget ends a column as answered (the walker stops asking, it does not fail), so
+        // the column flag alone cannot tell a full table from one cut at the cap — the same
+        // reasoning as the ENTITY index walk in `physical.rs`.
+        Ok(walk) if walk.every_column_answered && walk.rows.len() < MAX_VLAN_WALK_ROWS => {
             r.vlans = Some(crate::vlans::assemble(dialect, &walk.rows));
         }
         Ok(walk) => {
-            // A row bound that was reached also lands here: the walk stopped before a column ended.
+            // A walk that filled its row budget lands here too, whichever column it was cut in.
             metrics::counter!("yagra_vlan_walk_incomplete_total").increment(1);
             tracing::debug!(
                 job_id = %job.job_id,
@@ -684,5 +687,55 @@ mod tests {
         let r = execute(&job, &FakeTransport::reachable(1.0), 0).await;
         assert!(r.observational);
         assert!(r.neighbors.is_some());
+    }
+
+    /// A Cisco access-port VLAN job, as core builds it for a v2c node.
+    fn vlan_job() -> PollJob {
+        PollJob::snmp_vlans(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpVlanCheck {
+                community: "public".into(),
+                dialect: yagra_common::VlanDialect::Cisco,
+                timeout_ms: 2000,
+            },
+            3600,
+        )
+    }
+
+    /// `vmVlan` rows (CISCO-VLAN-MEMBERSHIP-MIB): `count` access ports, each in VLAN 10.
+    fn access_ports(count: u32) -> Vec<yagra_transport::SnmpInstanceRow> {
+        (1..=count)
+            .map(|ifindex| yagra_transport::SnmpInstanceRow {
+                oid_base: "1.3.6.1.4.1.9.9.68.1.2.2.1.2".into(),
+                instance: vec![ifindex],
+                value: yagra_transport::SnmpValue::Int(10),
+            })
+            .collect()
+    }
+
+    /// The ADR-201 property in the direction that sends: every column answered, under the cap.
+    #[tokio::test]
+    async fn a_complete_vlan_walk_sends_its_snapshot() {
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = access_ports(3);
+        let r = execute(&vlan_job(), &fake, 0).await;
+        assert!(r.observational);
+        assert_eq!(r.vlans.map(|s| s.ports.len()), Some(3));
+    }
+
+    /// The row budget ends a column as answered (the walker stops asking, it does not fail), so a
+    /// walk cut at the cap would otherwise pass as complete — and the stored snapshot would be
+    /// replaced by one missing whatever the last column had left to say.
+    #[tokio::test]
+    async fn a_vlan_walk_that_filled_its_row_budget_sends_nothing() {
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = access_ports(u32::try_from(MAX_VLAN_WALK_ROWS).expect("fits"));
+        let r = execute(&vlan_job(), &fake, 0).await;
+        assert!(
+            r.vlans.is_none(),
+            "a table that filled the budget may have lost rows; no snapshot replaces the stored one"
+        );
     }
 }

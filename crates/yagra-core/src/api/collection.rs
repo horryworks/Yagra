@@ -681,7 +681,8 @@ pub(crate) struct InterfaceRow {
     stale: bool,
     addresses: Vec<InterfaceAddress>,
     /// The port's mode and VLANs (ADR-201). `null` when the device's VLANs are not reported — the
-    /// walk has not run yet, or the device is of a make whose VLAN tables this build does not read.
+    /// walk has not run yet, the device is of a make whose VLAN tables this build does not read, or
+    /// the device answers none of those tables.
     vlan: Option<InterfaceVlan>,
 }
 
@@ -816,8 +817,9 @@ impl VlanJoin {
     /// sends (a firewall, a controller, or a switch whose SNMP view hides them — measured on the
     /// lab's recordings), and calling every one of its ports "not a switch port" would be a claim
     /// the walk never made. A port missing from a snapshot that does list ports answers `not_l2`:
-    /// both dialects list every switch port, so it is one that does not switch (a routed port, a
-    /// VLAN interface).
+    /// both SNMP dialects list every switch port, and the Meraki collect sends every port it lists
+    /// (one whose configuration was not read as `unknown`), so it is one that does not switch (a
+    /// routed port, a VLAN interface).
     pub(crate) fn for_port(&self, ifindex: u32) -> Option<InterfaceVlan> {
         use yagra_common::PortMode;
         let snapshot = self.snapshot.as_ref().filter(|s| !s.ports.is_empty())?;

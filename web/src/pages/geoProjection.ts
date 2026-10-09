@@ -5,11 +5,11 @@
 // `TopologyMap` makes between `layout.ts`/`fitView.ts` and its component. Everything here is a pure
 // function of numbers, which is the half that can be silently wrong.
 //
-// ⚠️ **This is an absolute projection, and it must be.** The Geo map *widget* (`dashboard/widgets/
-// sites.tsx`) normalizes min/max lat/lon into its box, which is right for a widget with no map
-// behind it: it is a scatter plot, and two sites always land at opposite corners. Reuse that here
-// and every pin sits on the wrong country, which reads as an operator typo rather than a bug. The
-// page draws a coastline, so a coordinate has to mean one place.
+// ⚠️ **This is an absolute projection, and it must be.** Normalizing min/max lat/lon into the box
+// turns the map into a scatter plot where two sites always land at opposite corners, and every pin
+// then sits on the wrong country, which reads as an operator typo rather than a bug. The page and
+// the Geo map *widget* (`dashboard/widgets/sites.tsx`) both draw a coastline, so both project
+// through here and a coordinate means one place.
 
 /** A point in the map's own coordinate space (the same space `worldOutline` is drawn in). */
 export interface Point {

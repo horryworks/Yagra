@@ -95,20 +95,6 @@ impl PortVlan {
             lag_ifindex: None,
         }
     }
-
-    /// Whether VLAN `v` crosses this port by its own configuration (a LAG member answers through
-    /// its aggregate, which the caller resolves).
-    #[must_use]
-    pub fn carries(&self, v: u16) -> bool {
-        match self.mode {
-            PortMode::Access => self.access_vlan == Some(v) || self.voice_vlan == Some(v),
-            PortMode::Trunk => self.native == Some(v) || ranges_contain(&self.allowed, v),
-            PortMode::Hybrid => {
-                ranges_contain(&self.untagged, v) || ranges_contain(&self.tagged, v)
-            }
-            PortMode::NotL2 | PortMode::Unknown => false,
-        }
-    }
 }
 
 /// Every port's VLAN facts on one observation of one node.
@@ -173,27 +159,6 @@ impl VlanDialect {
             None
         }
     }
-}
-
-/// Whether `v` falls in any of `ranges`.
-#[must_use]
-pub fn ranges_contain(ranges: &[VlanRange], v: u16) -> bool {
-    ranges.iter().any(|&(lo, hi)| v >= lo && v <= hi)
-}
-
-/// How many VLANs `ranges` covers.
-#[must_use]
-pub fn ranges_len(ranges: &[VlanRange]) -> u32 {
-    ranges
-        .iter()
-        .map(|&(lo, hi)| u32::from(hi) - u32::from(lo) + 1)
-        .sum()
-}
-
-/// Whether `ranges` is every usable VLAN.
-#[must_use]
-pub fn is_all(ranges: &[VlanRange]) -> bool {
-    ranges == [(VLAN_MIN, VLAN_MAX)]
 }
 
 /// Sorted, merged ranges from any list of VLAN IDs. IDs outside 1..=4094 are dropped.
@@ -269,22 +234,6 @@ pub fn parse_vlan_list(text: &str) -> Option<Vec<VlanRange>> {
     Some(ranges_from_ids(ids))
 }
 
-/// Ranges written the way a switch CLI writes them: `700,801-869,872-889`.
-#[must_use]
-pub fn format_ranges(ranges: &[VlanRange]) -> String {
-    ranges
-        .iter()
-        .map(|&(lo, hi)| {
-            if lo == hi {
-                lo.to_string()
-            } else {
-                format!("{lo}-{hi}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,29 +281,6 @@ mod tests {
         );
         assert_eq!(parse_vlan_list("x"), None);
         assert_eq!(parse_vlan_list("9-3"), None);
-    }
-
-    #[test]
-    fn ranges_format_like_a_switch_cli() {
-        assert_eq!(
-            format_ranges(&[(700, 700), (801, 869), (872, 889)]),
-            "700,801-869,872-889"
-        );
-        assert!(is_all(&[(1, 4094)]));
-        assert_eq!(ranges_len(&[(700, 700), (801, 869), (872, 889)]), 88);
-    }
-
-    #[test]
-    fn a_trunk_carries_its_native_and_its_allowed_vlans() {
-        let mut p = PortVlan::new(1, PortMode::Trunk);
-        p.native = Some(1);
-        p.allowed = vec![(700, 700), (801, 869)];
-        assert!(p.carries(1) && p.carries(850) && !p.carries(870));
-        let mut a = PortVlan::new(2, PortMode::Access);
-        a.access_vlan = Some(100);
-        a.voice_vlan = Some(200);
-        assert!(a.carries(100) && a.carries(200) && !a.carries(1));
-        assert!(!PortVlan::new(3, PortMode::NotL2).carries(1));
     }
 
     #[test]

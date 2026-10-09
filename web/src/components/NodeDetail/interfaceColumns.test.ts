@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TFunction } from 'i18next';
+import { MAX_STORED_COLUMNS } from '../../lib/columnWidths';
 import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
 import { interfaceColumns } from './tabFilters';
 
@@ -32,6 +33,12 @@ function cssFallback(): string {
 }
 
 describe('the Interfaces column list', () => {
+  it('fits under the per-table column cap', () => {
+    // A drag writes every column's width at once and the cap evicts the first-inserted key, so a
+    // fourteenth column under a cap of 14 would lose a width on every drag (`columnWidths.ts`).
+    expect(INTERFACE_COLUMNS.length).toBeLessThanOrEqual(MAX_STORED_COLUMNS);
+  });
+
   it('has the thirteen columns the header draws', () => {
     // The accepting case first: a list that had lost a column would satisfy the comparison below
     // just as well, because the CSS would be edited to match it.

@@ -1092,10 +1092,11 @@ const M_DISPATCH: &str = "yagra_notification_dispatch_total";
 const M_DELIVERY_SECONDS: &str = "yagra_notification_delivery_seconds";
 
 /// The `outcome` label for one dispatch result: `delivered`, `suppressed` (a duplicate of a
-/// still-active alert, so the channel was never called) or `failed` (every retry exhausted).
+/// still-active alert, so the channel was never called), `skipped` (a resolve on a channel that
+/// has nothing to close, because it was never sent the alert) or `failed` (every retry exhausted).
 ///
 /// A named function rather than a `match` inside [`record_dispatch`] so the mapping is testable,
-/// and exhaustive rather than wildcarded so a fourth outcome cannot be filed under whichever arm
+/// and exhaustive rather than wildcarded so a new outcome cannot be filed under whichever arm
 /// happened to be last.
 fn outcome_label(outcome: DispatchOutcome) -> &'static str {
     match outcome {

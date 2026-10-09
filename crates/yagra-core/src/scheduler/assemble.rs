@@ -1279,4 +1279,62 @@ mod tests {
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
     }
+
+    /// The port VLAN walk (ADR-201) goes only to a maker whose tables this build reads, rides the
+    /// interface-address switch and cadence, and names the dialect for both auth schemes.
+    #[test]
+    fn the_vlan_walk_follows_the_vendor_and_the_address_walk() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        let policy = AdjacencyPolicy::default();
+        let mut huawei = node("sw");
+        huawei.vendor = Some("Huawei".to_owned());
+
+        let v2c = assemble_node_jobs(
+            &huawei,
+            Some(&SnmpAuth::V2c("public".to_owned())),
+            &items,
+            None,
+            30,
+            &policy,
+        );
+        let (job, _) = v2c
+            .iter()
+            .find(|(_, k)| *k == "snmp_vlans")
+            .expect("a Huawei node gets a VLAN walk");
+        assert_eq!(job.interval_secs, policy.l3_interval_secs);
+        assert!(matches!(
+            &job.check,
+            CheckSpec::SnmpVlans(c) if c.dialect == VlanDialect::Huawei
+        ));
+
+        let v3 = assemble_node_jobs(
+            &huawei,
+            Some(&SnmpAuth::V3(v3_secret())),
+            &items,
+            None,
+            30,
+            &policy,
+        );
+        assert!(v3.iter().any(|(j, k)| *k == "snmp_v3_vlans"
+            && matches!(&j.check, CheckSpec::SnmpV3Vlans(c) if c.dialect == VlanDialect::Huawei)));
+
+        let auth = SnmpAuth::V2c("public".to_owned());
+        let mut other = node("fw");
+        other.vendor = Some("Juniper".to_owned());
+        for n in [&node("unknown"), &other] {
+            let jobs = assemble_node_jobs(n, Some(&auth), &items, None, 30, &policy);
+            assert!(!kinds(&jobs).contains(&"snmp_vlans"), "{:?}", n.vendor);
+        }
+
+        let no_l3 = AdjacencyPolicy {
+            l3_enabled: false,
+            ..AdjacencyPolicy::default()
+        };
+        let jobs = assemble_node_jobs(&huawei, Some(&auth), &items, None, 30, &no_l3);
+        assert!(!kinds(&jobs).contains(&"snmp_vlans"));
+    }
 }

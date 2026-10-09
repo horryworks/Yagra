@@ -408,7 +408,8 @@ impl YagraMcp {
                        the access and voice VLANs, and the trunk's allowed VLANs as configured, \
                        with every VLAN written as the single span 1-4094. It is read about once an \
                        hour for Cisco Catalyst, Huawei and Meraki MS switches; null means not \
-                       reported (not walked yet, or another make), not that the port has no VLAN. \
+                       reported (not walked yet, another make, or a device that answers none of the \
+                       VLAN tables), not that the port has no VLAN. \
                        `snmp_configured` says whether SNMP polling is CONFIGURED for this node — a \
                        credential bound to it, or the deployment-wide fallback community — and NOT \
                        whether the device is answering. False means no ifTable or CDP/LLDP walk \

@@ -33033,7 +33033,7 @@
               },
               {
                 "$ref": "#/components/schemas/InterfaceVlan",
-                "description": "The port's mode and VLANs (ADR-201). `null` when the device's VLANs are not reported — the\nwalk has not run yet, or the device is of a make whose VLAN tables this build does not read."
+                "description": "The port's mode and VLANs (ADR-201). `null` when the device's VLANs are not reported — the\nwalk has not run yet, the device is of a make whose VLAN tables this build does not read, or\nthe device answers none of those tables."
               }
             ]
           }

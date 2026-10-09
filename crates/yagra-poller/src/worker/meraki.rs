@@ -153,10 +153,20 @@ pub async fn execute_meraki(
             set
         });
         // The switch's port VLANs (ADR-201), on the collect that read the port configuration — the
-        // hourly one. Any other collect sends none, so the stored snapshot stays.
+        // hourly one. Any other collect sends none, so the stored snapshot stays. Every port goes
+        // in: core reads a port absent from a snapshot as one that does not switch, which is what
+        // the SNMP dialects mean by leaving a port out, so a port whose configuration row was not
+        // read goes in as `Unknown` ("not reported") rather than being left to read as "n/a".
         let vlans = obs.ports.iter().any(|p| p.vlan.is_some()).then(|| {
             yagra_common::VlanSnapshot::new(
-                obs.ports.iter().filter_map(|p| p.vlan.clone()).collect(),
+                obs.ports
+                    .iter()
+                    .map(|p| {
+                        p.vlan.clone().unwrap_or_else(|| {
+                            yagra_common::PortVlan::new(p.ifindex, yagra_common::PortMode::Unknown)
+                        })
+                    })
+                    .collect(),
             )
         });
         let interfaces = obs
@@ -631,14 +641,16 @@ mod tests {
         assert!(r.samples.iter().any(|s| s.metric == "if_oper_status"
             && s.ifindex == Some(IfIndex(2))
             && s.value == 2.0));
-        // The configuration round read port 1's VLANs (ADR-201); port 2 said nothing, so the
-        // snapshot holds port 1 alone rather than inventing a mode for port 2.
+        // The configuration round read port 1's VLANs (ADR-201); port 2 said nothing, so it goes
+        // in as `Unknown` rather than with an invented mode — and rather than absent, which core
+        // reads as a port that does not switch.
         let vlans = r
             .vlans
             .as_ref()
             .expect("a configuration round sends a snapshot");
-        assert_eq!(vlans.ports.len(), 1);
+        assert_eq!(vlans.ports.len(), 2);
         assert_eq!(vlans.port(1).unwrap().native, Some(20));
+        assert_eq!(vlans.port(2).unwrap().mode, yagra_common::PortMode::Unknown);
         let first = &r.interfaces[0];
         assert_eq!(first.ifindex, IfIndex(1));
         assert_eq!(first.if_name.as_deref(), Some("Port 1"));

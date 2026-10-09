@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-08
-# counts: MA-L=40208 MA-L-repeats-dropped=3 MA-M=6547 MA-S=7189 withheld=3
+# fetched: 2026-10-09
+# counts: MA-L=40208 MA-L-repeats-dropped=3 MA-M=6549 MA-S=7192 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -35881,6 +35881,7 @@
 8C1F64017	Farmote Limited
 8C1F64018	Rax-Tech International
 8C1F6401A	Paragraf
+8C1F6401B	Fujitsu Defense & National Security Limited
 8C1F6401C	Suzhou Nihone Electronic Technology Co.,Ltd.
 8C1F6401D	Nordson Corporation
 8C1F6401E	SCIREQ Scientific Respiratory Equipment Inc
@@ -36095,6 +36096,7 @@
 8C1F64133	Vtron Pty Ltd
 8C1F64134	LyconSys GmbH & Co.KG
 8C1F64135	Yuval Fichman
+8C1F64137	Altronics Distributors Pty Ltd
 8C1F64138	Vissavi sp. z o.o.
 8C1F6413B	SDELcc
 8C1F6413C	SiFive Inc
@@ -38363,6 +38365,7 @@
 8C1F64DA4	Foenix Coding Ltd
 8C1F64DA5	DAOM
 8C1F64DA6	Power Electronics Espana, S.L.
+8C1F64DA9	AllLinkX inc
 8C1F64DAA	Davetech Limited
 8C1F64DAE	Mainco automotion s.l.
 8C1F64DAF	Zhuhai Lonl electric Co.,Ltd
@@ -47693,6 +47696,8 @@ CCF55F	E FOCUS INSTRUMENTS INDIA PRIVATE LIMITED
 CCF67A	Ayecka Communication Systems LTD
 CCF722	IEEE Registration Authority
 CCF7221	Lucky Tone Technology Co., Ltd.
+CCF7225	Foritec GmbH
+CCF722C	Walnut Medical Private Limited
 CCF735	Amazon Technologies Inc.
 CCF826	Samsung Electronics Co.,Ltd
 CCF841	Lumewave

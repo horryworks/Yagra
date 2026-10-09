@@ -2,7 +2,7 @@
 // Unit tests for the three node-detail tab filters (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';
-import type { Neighbor, NodeMetricEntry } from '../../types/api';
+import type { InterfaceVlan, Neighbor, NodeMetricEntry } from '../../types/api';
 import {
   IF_STATES,
   ifState,
@@ -119,6 +119,44 @@ describe('the interfaces filter row', () => {
     for (const c of IF_COLS) {
       expect(isAnyFiltered(IF_COLS, iff({ [c.key]: c.key === 'oper' ? 'up' : 'x' }))).toBe(true);
     }
+  });
+});
+
+describe('the interfaces VLAN filters (ADR-201)', () => {
+  const vlan = (over: Partial<InterfaceVlan>): InterfaceVlan => ({
+    mode: 'not_l2',
+    native: null,
+    access_vlan: null,
+    voice_vlan: null,
+    allowed: [],
+    untagged: [],
+    tagged: [],
+    lag: null,
+    members: [],
+    ...over,
+  });
+  const trunkVlan = vlan({ mode: 'trunk', native: 1, allowed: [{ first: 801, last: 869 }] });
+  const trunk = iface({ ifindex: 215, vlan: trunkVlan });
+  const member = iface({
+    ifindex: 55,
+    vlan: vlan({ mode: 'member', lag: { ifindex: 215, name: 'Eth-Trunk0' } }),
+    vlan_effective: trunkVlan,
+  });
+  const access = iface({ ifindex: 7, vlan: vlan({ mode: 'access', access_vlan: 100 }) });
+
+  it('filters by the word the MODE cell shows, and calls a row with no facts not reported', () => {
+    expect(hasIf(trunk, iff({ mode: 'trunk' }))).toBe(true);
+    expect(hasIf(access, iff({ mode: 'trunk' }))).toBe(false);
+    expect(hasIf(iface(), iff({ mode: 'not_reported' }))).toBe(true);
+  });
+
+  it('matches a VLAN inside a range, and a member through its aggregate', () => {
+    expect(hasIf(trunk, iff({ vlan: '850' }))).toBe(true);
+    expect(hasIf(trunk, iff({ vlan: '870' }))).toBe(false);
+    // The member's own facts carry no VLAN; `vlan_effective` is what the filter must read.
+    expect(hasIf(member, iff({ vlan: '850' }))).toBe(true);
+    expect(hasIf(access, iff({ vlan: '100' }))).toBe(true);
+    expect(hasIf(iface(), iff({ vlan: '100' }))).toBe(false);
   });
 });
 

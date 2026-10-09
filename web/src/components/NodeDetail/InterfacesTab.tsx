@@ -1322,7 +1322,10 @@ function InterfaceDock({
               </span>
             )}
             {members.length > 0 && (
-              <span className="nd-if-dock-vlan">
+              <span
+                className="nd-if-dock-vlan"
+                title={members.map((m) => m.name).join(', ')}
+              >
                 <span className="nd-muted">{t('interfaces.vlan.members')}</span>{' '}
                 {members.map((m, i) => (
                   <span key={m.ifindex}>
