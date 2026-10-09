@@ -783,9 +783,23 @@ mod tests {
 
     type BoxedTask = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
+    /// Held by every test that panics and by the one that reads the panic hook's log line, so they
+    /// never run at the same time.
+    ///
+    /// The hook logs through one `tracing::error!` callsite, and `tracing-core` caches each
+    /// callsite's interest the first time it fires. A supervised task panicking on a tokio worker
+    /// can register that callsite while the only dispatcher is the worker's no-op one: it reads
+    /// "nobody listens", and if it stores that after `a_panic_is_written_to_the_log` has
+    /// registered its scoped subscriber and the cache was rebuilt, the cached `never` wins and the
+    /// panic is not logged (seen once under `flash-verify.sh`, 2026-10-09). Production is not
+    /// exposed: `init` installs a global subscriber before anything runs, so every thread's
+    /// default is the real one.
+    static PANICKING_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// A panic no longer ends a supervised task for good: the next start runs (ADR-158).
     #[tokio::test]
     async fn a_panicking_task_is_restarted() {
+        let _serial = PANICKING_TESTS.lock().await;
         let token = CancellationToken::new();
         let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<usize>();
@@ -817,6 +831,7 @@ mod tests {
     /// graceful stop. By the fourth start the next wait is 800 ms, twice the time allowed here.
     #[tokio::test]
     async fn supervision_stops_on_cancel_even_during_backoff() {
+        let _serial = PANICKING_TESTS.lock().await;
         let token = CancellationToken::new();
         let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = starts.clone();
@@ -916,6 +931,7 @@ mod tests {
             }
         }
 
+        let _serial = PANICKING_TESTS.blocking_lock();
         install_panic_hook();
         install_panic_hook(); // idempotent: one report per panic, not two
         let capture = Capture::default();
