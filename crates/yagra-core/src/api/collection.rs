@@ -800,12 +800,16 @@ impl VlanJoin {
     /// One port's VLAN facts.
     ///
     /// `None` when no snapshot was ever stored — the device has not been walked, or is of a make
-    /// this build does not read — which the WebUI shows as "not reported". A port the snapshot does
-    /// not list answers `not_l2`: both dialects list every switch port, so a port missing from a
-    /// complete snapshot is one that does not switch (a routed port, a VLAN interface).
+    /// this build does not read — which the WebUI shows as "not reported". An **empty** snapshot
+    /// answers `None` too: it is what a device that does not implement the vendor's VLAN tables
+    /// sends (a firewall, a controller, or a switch whose SNMP view hides them — measured on the
+    /// lab's recordings), and calling every one of its ports "not a switch port" would be a claim
+    /// the walk never made. A port missing from a snapshot that does list ports answers `not_l2`:
+    /// both dialects list every switch port, so it is one that does not switch (a routed port, a
+    /// VLAN interface).
     pub(crate) fn for_port(&self, ifindex: u32) -> Option<InterfaceVlan> {
         use yagra_common::PortMode;
-        let snapshot = self.snapshot.as_ref()?;
+        let snapshot = self.snapshot.as_ref().filter(|s| !s.ports.is_empty())?;
         let spans = |r: &[yagra_common::VlanRange]| -> Vec<VlanSpan> {
             r.iter()
                 .map(|&(first, last)| VlanSpan { first, last })
@@ -1039,6 +1043,14 @@ mod vlan_join_tests {
         assert_eq!(join().for_port(40).unwrap().mode, InterfaceVlanMode::NotL2);
         assert_eq!(join().for_port(7).unwrap().access_vlan, Some(875));
         assert!(VlanJoin::new(None, &[]).for_port(7).is_none());
+    }
+
+    /// A device that implements none of the vendor's VLAN tables sends an empty snapshot; its
+    /// ports are not reported, not "not a switch port".
+    #[test]
+    fn an_empty_snapshot_reports_nothing_rather_than_n_a() {
+        let join = VlanJoin::new(Some(VlanSnapshot::default()), &[meta(7, "Gi0/7")]);
+        assert!(join.for_port(7).is_none());
     }
 }
 

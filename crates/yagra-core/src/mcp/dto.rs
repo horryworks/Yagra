@@ -399,7 +399,7 @@ pub struct InterfaceDto {
     pub addresses: Vec<crate::api::collection::InterfaceAddress>,
     /// The port's mode and VLANs, as configured on the device (ADR-201) — the same value the
     /// WebUI's Interfaces tab shows. `null` when the node's VLANs are not reported: the walk has not
-    /// run yet, or the device is not a make whose VLAN tables Yagra reads (today Cisco Catalyst,
+    /// run yet, the device answers none of the VLAN tables, or it is not a make whose tables Yagra reads (today Cisco Catalyst,
     /// Huawei and Meraki MS). `mode` is `access`, `trunk`, `hybrid`, `member` (bundled into the
     /// aggregate named by `lag`, whose VLANs it carries), `not_l2` or `unknown`.
     pub vlan: Option<crate::api::collection::InterfaceVlan>,
