@@ -25,7 +25,7 @@ export interface InterfaceColumn {
 }
 
 /**
- * The eleven columns, in the order the header draws them.
+ * The thirteen columns, in the order the header draws them.
  *
  * ⚠️ The order is load-bearing three times over: it is the grid, it is the order of
  * `ColumnFilterRow`'s slots (derived by `filterSlots` below), and it is the index a resize grip is
@@ -38,13 +38,18 @@ export interface InterfaceColumn {
  */
 export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'if_name', width: 'minmax(140px, 1.4fr)' },
+  // Beside the name since ADR-201 (user decision): whether the port is up is the first thing read.
+  { key: 'oper', width: '94px' },
   { key: 'if_alias', width: 'minmax(88px, 1.3fr)' },
   { key: 'addresses', width: 'minmax(168px, 1fr)' },
   { key: 'neighbors', width: 'minmax(120px, 1fr)' },
-  { key: 'oper', width: '94px' },
   { key: 'media', width: 'minmax(112px, 1fr)' },
   { key: 'speed', width: '84px' },
   { key: 'duplex', width: '104px' },
+  // ADR-201. MODE renders from a closed set whose widest word is "not reported"; VLAN is device
+  // configuration of any length, so it flexes and ellipsizes, and the dock carries it whole.
+  { key: 'mode', width: '112px' },
+  { key: 'vlan', width: 'minmax(164px, 1.2fr)' },
   { key: 'throughput', width: '132px' },
   { key: 'in', width: 'minmax(74px, 0.7fr)' },
   { key: 'out', width: 'minmax(74px, 0.7fr)' },

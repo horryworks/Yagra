@@ -1245,6 +1245,10 @@ export type MerakiNetwork = components['schemas']['MerakiNetworkView'];
  *  Rates/utilization are derived at query time; `null` when there's no data or no known speed. */
 export type InterfaceRow = components['schemas']['InterfaceRow'];
 export type InterfaceAddress = components['schemas']['InterfaceAddress'];
+/** A port's mode and VLANs (ADR-201); `null` on a row whose VLANs are not reported. */
+export type InterfaceVlan = components['schemas']['InterfaceVlan'];
+/** One inclusive VLAN range. */
+export type VlanSpan = components['schemas']['VlanSpan'];
 
 /** Per-interface time-series for the detail pane (`GET /nodes/:id/interfaces/:ifindex/series`).
  *  All arrays share the `timestamps` x-axis; `null` is a gap. `*_bps` are bits/sec (rate of

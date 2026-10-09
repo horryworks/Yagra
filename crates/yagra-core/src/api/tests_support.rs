@@ -448,6 +448,7 @@ async fn live_state_with(
         dns_checks,
         neighbors: Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
         l3: l3_repo,
+        vlans: Arc::new(crate::vlans::VlanRepo::new(pool.clone())),
         routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
         arp: Arc::new(crate::arp::ArpRepo::new(pool.clone())),
         discovered: Arc::new(crate::arp::DiscoveredRepo::new(pool.clone())),

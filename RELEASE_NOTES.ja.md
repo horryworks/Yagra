@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### 新機能
+
+- **Interfaces タブに、スイッチのポートのモードと VLAN が出るようになりました。** Duplex の後ろに 2 列が増えます。**Mode**（アクセス・トランク・ハイブリッド、または Eth-Trunk / Port-channel のメンバー）と **VLAN**（アクセスの VLAN と音声 VLAN、またはトランクの native VLAN と許可 VLAN を設定どおりに。全 VLAN を許可していれば `すべて`）です。メンバーのポートは所属先へのリンクになり、所属先の行の下の欄にはメンバーの一覧が出ます。Mode で絞り込めるほか、VLAN 番号を入れると、その VLAN が通るポートだけに絞れます。Cisco Catalyst と Huawei のスイッチは SNMP で、Meraki MS はポート名のためにすでに読んでいる Dashboard の応答から、1 時間に 1 回ほど読みます。それ以外の機器は `報告なし` と出ます。Oper 列はポート名のすぐ後ろに移りました。
+- **API: `GET /api/v1/nodes/{node_id}/interfaces` と MCP の `get_node_status` が、各インターフェースに `vlan` を返します。** `mode`、`native`、`access_vlan`、`voice_vlan`、`{first, last}` の範囲の並びの `allowed` / `untagged` / `tagged`、所属先の `lag` かメンバーの `members` です。`null` は報告なしです。
+
 ### 改善
 
 - **ダッシュボードの Geo map 部品が、点の後ろに世界地図の海岸線を描くようになりました。** 拠点は本当の位置に出て、表示範囲は位置のある拠点に合わせます。海岸線のデータは、この部品を置いたダッシュボードでだけ読み込みます。

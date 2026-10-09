@@ -13,15 +13,15 @@ use yagra_bus::{
     SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMauCheck, SnmpMetaColumn, SnmpNeighborCheck,
     SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn,
     SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3MauCheck,
-    SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck,
-    SnmpV3WlanApCheck, SnmpWlanApCheck,
+    SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SnmpV3VlanCheck,
+    SnmpV3WlanApCheck, SnmpVlanCheck, SnmpWlanApCheck,
 };
 use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
     builtin_neighbor_columns, builtin_routing_columns, route_probe_columns, route_probe_oid,
     CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node, OpticalFlavor, UrlCheckConfig,
-    WlanFlavor, MAX_APS_PER_CONTROLLER_DEFAULT, METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM,
-    METRIC_IF_TX_POWER_DBM,
+    VlanDialect, WlanFlavor, MAX_APS_PER_CONTROLLER_DEFAULT, METRIC_CISCO_TEMP_C,
+    METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
 };
 
 /// Build an ICMP poll job targeting a node's management address.
@@ -422,6 +422,35 @@ pub fn build_snmp_v3_l3_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3L
     SnmpV3L3Check {
         auth: secret.auth(),
         columns: l3_columns(),
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v2c port VLAN check (ADR-201). The dialect is the whole request: the poller owns
+/// which columns each one reads.
+#[must_use]
+pub fn build_snmp_vlan_check(
+    community: &str,
+    dialect: VlanDialect,
+    timeout_ms: u32,
+) -> SnmpVlanCheck {
+    SnmpVlanCheck {
+        community: community.to_owned(),
+        dialect,
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v3 (USM) port VLAN check — the v3 analogue of [`build_snmp_vlan_check`].
+#[must_use]
+pub fn build_snmp_v3_vlan_check(
+    secret: &SnmpV3Secret,
+    dialect: VlanDialect,
+    timeout_ms: u32,
+) -> SnmpV3VlanCheck {
+    SnmpV3VlanCheck {
+        auth: secret.auth(),
+        dialect,
         timeout_ms,
     }
 }

@@ -403,6 +403,12 @@ impl YagraMcp {
                        answer the IP address tables — not that the device has no addresses — and \
                        a change made on the device can take up to an hour to show. An address \
                        the device attributes to no interface is not listed. \
+                       `vlan` is the port's VLAN configuration — `mode` (access, trunk, hybrid, \
+                       member of the aggregate named by `lag`, not_l2, unknown), the native VLAN, \
+                       the access and voice VLANs, and the trunk's allowed VLANs as configured, \
+                       with every VLAN written as the single span 1-4094. It is read about once an \
+                       hour for Cisco Catalyst, Huawei and Meraki MS switches; null means not \
+                       reported (not walked yet, or another make), not that the port has no VLAN. \
                        `snmp_configured` says whether SNMP polling is CONFIGURED for this node — a \
                        credential bound to it, or the deployment-wide fallback community — and NOT \
                        whether the device is answering. False means no ifTable or CDP/LLDP walk \
@@ -484,6 +490,12 @@ impl YagraMcp {
         // than failing the whole status.
         let l3 = admin.l3.current(p.node_id).await.unwrap_or(None);
         let mut addresses = crate::api::collection::addresses_by_ifindex(l3.as_ref());
+        // Each port's mode and VLANs, from the same stored snapshot the REST list joins (ADR-201).
+        // Best effort like the addresses: a failed read leaves every port's `vlan` null.
+        let vlans = crate::api::collection::VlanJoin::new(
+            admin.vlans.current(p.node_id).await.unwrap_or(None),
+            &interfaces,
+        );
         let now_s = crate::api::util::now_unix_s();
         let kind = crate::api::nodes::node_kinds(admin, &[p.node_id])
             .await
@@ -569,6 +581,9 @@ impl YagraMcp {
                             .ok()
                             .and_then(|i| addresses.remove(&i))
                             .unwrap_or_default(),
+                        u32::try_from(m.ifindex)
+                            .ok()
+                            .and_then(|i| vlans.for_port(i)),
                     )
                 })
                 .collect(),

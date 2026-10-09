@@ -21,7 +21,7 @@ use super::checks::*;
 use super::{SnmpAuth, SNMP_TIMEOUT_MS};
 use yagra_bus::{CheckSpec, IcmpCheck, PollJob};
 use yagra_common::{
-    CollectionItem, DnsCheckConfig, HttpAuth, Node, NodeKind, NodeRows, UrlCheckConfig,
+    CollectionItem, DnsCheckConfig, HttpAuth, Node, NodeKind, NodeRows, UrlCheckConfig, VlanDialect,
 };
 
 /// Whether this deployment collects connectivity data, and how often — resolved once per sweep and
@@ -227,6 +227,8 @@ trait SnmpJobSource {
     fn routing(&self, targets: &[std::net::IpAddr], timeout_ms: u32) -> LabelledSpec;
     /// The wireless controller AP walks, one per dialect the collection set names (ADR-064).
     fn wlan(&self, items: &[CollectionItem], timeout_ms: u32) -> Vec<LabelledSpec>;
+    /// The port VLAN walk in one vendor's dialect (ADR-201).
+    fn vlans(&self, dialect: VlanDialect, timeout_ms: u32) -> LabelledSpec;
 }
 
 /// SNMP v2c: the credential is a community string.
@@ -287,6 +289,12 @@ impl SnmpJobSource for V2c<'_> {
             .map(|c| (CheckSpec::SnmpWlanAp(c), "snmp_wlan_ap"))
             .collect()
     }
+    fn vlans(&self, dialect: VlanDialect, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpVlans(build_snmp_vlan_check(self.0, dialect, timeout_ms)),
+            "snmp_vlans",
+        )
+    }
 }
 
 impl SnmpJobSource for V3<'_> {
@@ -341,6 +349,12 @@ impl SnmpJobSource for V3<'_> {
             .into_iter()
             .map(|c| (CheckSpec::SnmpV3WlanAp(c), "snmp_v3_wlan_ap"))
             .collect()
+    }
+    fn vlans(&self, dialect: VlanDialect, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3Vlans(build_snmp_v3_vlan_check(self.0, dialect, timeout_ms)),
+            "snmp_v3_vlans",
+        )
     }
 }
 
@@ -406,6 +420,16 @@ fn push_snmp_jobs<S: SnmpJobSource>(
     }
     if neighbors.l3_enabled {
         jobs.push(job(src.l3(SNMP_TIMEOUT_MS), neighbors.l3_interval_secs));
+        // The port VLAN walk rides the interface-address switch and cadence (ADR-201): both
+        // describe what a port is configured as, and both change when someone edits the device.
+        // Only a maker whose tables this build reads gets one; any other device's VLAN cells
+        // read "not reported".
+        if let Some(dialect) = node.vendor.as_deref().and_then(VlanDialect::for_vendor) {
+            jobs.push(job(
+                src.vlans(dialect, SNMP_TIMEOUT_MS),
+                neighbors.l3_interval_secs,
+            ));
+        }
     }
     if neighbors.arp_enabled {
         jobs.push(job(src.arp(SNMP_TIMEOUT_MS), neighbors.arp_interval_secs));

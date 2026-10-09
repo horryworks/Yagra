@@ -397,6 +397,12 @@ pub struct InterfaceDto {
     /// walk, so empty until it has run and for a port that carries no address. The same list the
     /// WebUI's Interfaces tab shows.
     pub addresses: Vec<crate::api::collection::InterfaceAddress>,
+    /// The port's mode and VLANs, as configured on the device (ADR-201) — the same value the
+    /// WebUI's Interfaces tab shows. `null` when the node's VLANs are not reported: the walk has not
+    /// run yet, or the device is not a make whose VLAN tables Yagra reads (today Cisco Catalyst,
+    /// Huawei and Meraki MS). `mode` is `access`, `trunk`, `hybrid`, `member` (bundled into the
+    /// aggregate named by `lag`, whose VLANs it carries), `not_l2` or `unknown`.
+    pub vlan: Option<crate::api::collection::InterfaceVlan>,
 }
 
 impl InterfaceDto {
@@ -412,6 +418,7 @@ impl InterfaceDto {
         now_s: i64,
         stale_after_s: i64,
         addresses: Vec<crate::api::collection::InterfaceAddress>,
+        vlan: Option<crate::api::collection::InterfaceVlan>,
     ) -> Self {
         let in_bps = live.in_bps.map(|r| r * 8.0);
         let out_bps = live.out_bps.map(|r| r * 8.0);
@@ -443,6 +450,7 @@ impl InterfaceDto {
             tx_power_high_dbm: meta.tx_power_high_dbm,
             stale: meta.last_seen_s.is_none_or(|s| now_s - s > stale_after_s),
             addresses,
+            vlan,
         }
     }
 }
@@ -1234,6 +1242,24 @@ mod tests {
                     ip: "192.0.2.1".to_owned(),
                     prefix_len: Some(24),
                 }],
+                // Populated, including a nested reference, for the same reason (ADR-201).
+                vlan: Some(crate::api::collection::InterfaceVlan {
+                    mode: crate::api::collection::InterfaceVlanMode::Trunk,
+                    native: Some(1),
+                    access_vlan: None,
+                    voice_vlan: None,
+                    allowed: vec![crate::api::collection::VlanSpan {
+                        first: 10,
+                        last: 20,
+                    }],
+                    untagged: Vec::new(),
+                    tagged: Vec::new(),
+                    lag: None,
+                    members: vec![crate::api::collection::InterfaceRef {
+                        ifindex: 3,
+                        name: Some("Gi1/0/1".to_owned()),
+                    }],
+                }),
             }],
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&status).unwrap(), "NodeStatus");

@@ -52,6 +52,7 @@ pub mod thresholds;
 pub mod topology;
 pub mod trap;
 pub mod url_check;
+pub mod vlan;
 pub mod wlan;
 
 pub use arp::{
@@ -153,6 +154,10 @@ pub use url_check::{
     HTTP_AUTH_SCHEMES, JSON_PATH_MAX_LEN, MAX_JSON_EXTRACTS, METRIC_HTTP_BODY_MATCH,
     METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE,
     METRIC_HTTP_UP, METRIC_NAME_MAX_LEN, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
+};
+pub use vlan::{
+    format_ranges, ids_from_bitmap, is_all, parse_vlan_list, ranges_contain, ranges_from_ids,
+    ranges_len, PortMode, PortVlan, VlanDialect, VlanRange, VlanSnapshot, VLAN_MAX, VLAN_MIN,
 };
 pub use wlan::{
     ap_id, assign_radio_slots, cisco_airespace_run_state, huawei_run_state, sanitize_wlan_text,

@@ -32868,6 +32868,27 @@
           }
         }
       },
+      "InterfaceRef": {
+        "type": "object",
+        "description": "Another interface of the same node, by `ifindex` and by name.",
+        "required": [
+          "ifindex"
+        ],
+        "properties": {
+          "ifindex": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ifName`, when the node has reported this interface's name."
+          }
+        }
+      },
       "InterfaceRow": {
         "type": "object",
         "description": "One interface row for the node-detail Interfaces tab: stored metadata joined with query-time\n`rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).\n\nThe four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module\nreports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist\nso a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is\nfine on one module and failing on another. They are `null` for every interface that is not\noptical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR\n-MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.\nA pair the module reported implausibly (low above high, or outside a transceiver's physical\nrange) is dropped by the poller rather than passed on, because a wrong window accuses a healthy\nlink. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).\n\n`if_duplex` and `if_type` describe the physical link (ADR-063 Inc.1). `if_duplex` is `half` or\n`full` as the device negotiated it, and `null` whenever that is not known — which covers a device\nthat does not implement EtherLike-MIB, a port that is down and so has negotiated nothing, and a\ndevice answering `unknown`. ⚠️ Expect `null` on optical ports and do not read it as a fault:\nIEEE 802.3 defines no half duplex above 1 Gbit/s, so there is nothing to negotiate. The field\nearns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the\nIANAifType integer (6 = ethernetCsmacd); it is what distinguishes \"duplex does not apply to this\ninterface\" — a loopback, a tunnel, a dialer — from \"we could not read it\".\n\n`addresses` lists every IP address configured on the interface — secondaries included — as\nthe device reports them in its IP address tables (ADR-157). Read from the hourly address walk\n(ADR-043), so a change shows within an hour; empty until that walk has run, and for a port the\ndevice reports no address on. An address the device attributes to no interface is not listed.",
@@ -33004,6 +33025,17 @@
               "null"
             ],
             "format": "double"
+          },
+          "vlan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InterfaceVlan",
+                "description": "The port's mode and VLANs (ADR-201). `null` when the device's VLANs are not reported — the\nwalk has not run yet, or the device is of a make whose VLAN tables this build does not read."
+              }
+            ]
           }
         }
       },
@@ -33180,6 +33212,100 @@
             "description": "bits/sec for throughput metrics, errors|discards per second otherwise."
           }
         }
+      },
+      "InterfaceVlan": {
+        "type": "object",
+        "description": "A port's VLAN configuration, as the device reports it (ADR-201). Values are the configuration,\nnot the traffic: `native` is the configured native VLAN (Huawei's PVID) even when that VLAN is\nnot in `allowed`, and `allowed` is the trunk's allow list as written, including VLANs the device\nhas not created. Every VLAN (1-4094) is the single span `{first: 1, last: 4094}`.",
+        "required": [
+          "mode",
+          "allowed",
+          "untagged",
+          "tagged",
+          "members"
+        ],
+        "properties": {
+          "access_vlan": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Access: the port's VLAN.",
+            "minimum": 0
+          },
+          "allowed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VlanSpan"
+            },
+            "description": "Trunk: the allowed VLANs."
+          },
+          "lag": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InterfaceRef",
+                "description": "Member: the aggregate this port is bundled into."
+              }
+            ]
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterfaceRef"
+            },
+            "description": "An aggregate's member ports, in `ifindex` order. Empty for any other port."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/InterfaceVlanMode"
+          },
+          "native": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Trunk and hybrid: the native VLAN. `null` when the device reports none.",
+            "minimum": 0
+          },
+          "tagged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VlanSpan"
+            },
+            "description": "Hybrid: the VLANs sent tagged."
+          },
+          "untagged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VlanSpan"
+            },
+            "description": "Hybrid: the VLANs sent untagged."
+          },
+          "voice_vlan": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Access: the voice VLAN (Cisco, Meraki), when one is configured.",
+            "minimum": 0
+          }
+        }
+      },
+      "InterfaceVlanMode": {
+        "type": "string",
+        "description": "How a port forwards VLANs, as the Interfaces list shows it (ADR-201).\n\n`member` is a port bundled into an aggregate (Eth-Trunk, Port-channel): its VLANs are the\naggregate's, named by [`InterfaceVlan::lag`]. `not_l2` is a port that does not switch — a routed\nport, a stack port, a VLAN interface. `unknown` is a port the device answered for in a way this\nbuild cannot place.",
+        "enum": [
+          "access",
+          "trunk",
+          "hybrid",
+          "member",
+          "not_l2",
+          "unknown"
+        ]
       },
       "InventoryMatch": {
         "type": "object",
@@ -44203,6 +44329,26 @@
         "properties": {
           "core": {
             "type": "string"
+          }
+        }
+      },
+      "VlanSpan": {
+        "type": "object",
+        "description": "One inclusive VLAN range — `{first: 801, last: 869}`; a single VLAN has `first == last`.",
+        "required": [
+          "first",
+          "last"
+        ],
+        "properties": {
+          "first": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },

@@ -170,6 +170,7 @@ mod poller_logs;
 mod poller_upgrade;
 mod upgrade;
 mod url_check;
+mod vlans;
 mod volatile;
 // Storage + volume materialization for the WebUI's certificate (ADR-044). `server_cert` decides
 // what is acceptable; this decides where it lives.
@@ -708,6 +709,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
     let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
+    let vlan_repo = Arc::new(vlans::VlanRepo::new(repo.pool()));
     let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
     let routing_repo = Arc::new(l3_routing::RoutingRepo::new(repo.pool()));
     let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
@@ -919,6 +921,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dns_checks: dns_checks.clone(),
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
+        vlans: vlan_repo.clone(),
         arp: arp_repo.clone(),
         routing: routing_repo.clone(),
         discovered: discovered_repo.clone(),
@@ -975,6 +978,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dns_checks,
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
+        vlans: vlan_repo.clone(),
         // Read by the map for where each node's default route points (ADR-191 Inc.10). It adds no
         // endpoint: the answer reaches the API as a node's role on `/topology/map`, so the route
         // ledger gains no line and the MCP gap does not move (ADR-042).
@@ -1217,6 +1221,7 @@ struct LeaderTasks {
     dns_checks: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
+    vlans: Arc<vlans::VlanRepo>,
     arp: Arc<arp::ArpRepo>,
     routing: Arc<l3_routing::RoutingRepo>,
     discovered: Arc<arp::DiscoveredRepo>,
@@ -1369,6 +1374,7 @@ impl LeaderTasks {
                 dns: self.dns_checks.clone(),
                 neighbors: self.neighbors.clone(),
                 l3: self.l3.clone(),
+                vlans: self.vlans.clone(),
                 arp: self.arp.clone(),
                 routing: self.routing.clone(),
                 wireless: self.wireless.clone(),

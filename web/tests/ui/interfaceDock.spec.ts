@@ -73,7 +73,9 @@ test.use({
 async function openDock(page: import('@playwright/test').Page) {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces`);
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
-  await page.locator('.nd-if-row').first().click();
+  // The port name, not the row's centre: since ADR-201 the row is wider than this viewport and its
+  // centre lands on the Neighbors cell, whose own button opens a popover instead of the dock.
+  await page.locator('.nd-if-row .nd-if-name').first().click();
   await expect(page.locator('.nd-if-dock')).toBeVisible({ timeout: 15_000 });
 }
 

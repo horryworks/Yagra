@@ -78,7 +78,7 @@ test.use({
 async function openRules(page: import('@playwright/test').Page) {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces`);
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
-  await page.locator('.nd-if-row').first().click();
+  await page.locator('.nd-if-row .nd-if-name').first().click();
   await expect(page.locator('.nd-if-dock')).toBeVisible({ timeout: 15_000 });
   await page.locator('.nd-if-dock-rule').click();
   await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
@@ -89,7 +89,7 @@ test('the port button carries the rule count and opens the rules that govern the
 }) => {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces`);
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
-  await page.locator('.nd-if-row').first().click();
+  await page.locator('.nd-if-row .nd-if-name').first().click();
   await expect(page.locator('.nd-if-dock')).toBeVisible({ timeout: 15_000 });
 
   // The count is the discoverability half: without it an operator has to click to learn that

@@ -209,6 +209,8 @@ pub struct AdminState {
     /// Observed interface addresses per node (ADR-043). Read here to place a poller on a segment
     /// when the shadow preview resolves anchors.
     pub l3: Arc<crate::l3::L3Repo>,
+    /// Observed port modes and VLANs per node (ADR-201), joined onto the Interfaces list by ifIndex.
+    pub vlans: Arc<crate::vlans::VlanRepo>,
     /// Observed routing adjacency and default routes per node (ADR-043, ADR-191 Inc.10). Read here
     /// for where each node's default route points, which tells a site's way out on the map.
     pub routing: Arc<crate::l3_routing::RoutingRepo>,

@@ -32,19 +32,21 @@ function cssFallback(): string {
 }
 
 describe('the Interfaces column list', () => {
-  it('has the eleven columns the header draws', () => {
+  it('has the thirteen columns the header draws', () => {
     // The accepting case first: a list that had lost a column would satisfy the comparison below
     // just as well, because the CSS would be edited to match it.
-    expect(INTERFACE_COLUMNS).toHaveLength(11);
+    expect(INTERFACE_COLUMNS).toHaveLength(13);
     expect(INTERFACE_COLUMNS.map((c) => c.key)).toEqual([
       'if_name',
+      'oper',
       'if_alias',
       'addresses',
       'neighbors',
-      'oper',
       'media',
       'speed',
       'duplex',
+      'mode',
+      'vlan',
       'throughput',
       'in',
       'out',
@@ -74,13 +76,15 @@ describe('filterSlots', () => {
     // ADDRESSES (ADR-157) went in ahead of it with a control of its own.
     expect(filterSlots(FILTER_KEYS)).toEqual([
       'if_name',
+      'oper',
       'if_alias',
       'addresses',
       null,
-      'oper',
       'media',
       'speed',
       'duplex',
+      'mode',
+      'vlan',
       null,
       null,
       null,

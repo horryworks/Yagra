@@ -53,6 +53,7 @@ mod store_forward;
 mod support_logs;
 mod timers;
 mod upgrade;
+mod vlans;
 mod wlan;
 mod worker;
 mod working_set;

@@ -525,6 +525,9 @@ pub(crate) struct MetaRecord {
     /// The interface addresses observed on this poll (L3 walks only, ADR-043). Same tier again.
     /// `None` means no snapshot was observed and nothing is written — never "no addresses".
     l3: Option<yagra_common::L3Snapshot>,
+    /// Each switch port's mode and VLANs observed on this poll (ADR-201). Same tier again. `None`
+    /// means no complete snapshot arrived and nothing is written — never "no switch ports".
+    vlans: Option<yagra_common::VlanSnapshot>,
     /// The ARP/ND cache observed on this poll (ARP walks only, ADR-043 Increment 3). Same tier
     /// again. `None` means no summary was observed and nothing is written — never "no endpoints".
     arp: Option<yagra_common::ArpSummary>,
@@ -754,6 +757,8 @@ fn persist_metrics_and_meta(
     let neighbors = result.neighbors.clone();
     // Interface addresses ride the same shed-able tier, for the same reason again.
     let l3 = result.l3.clone();
+    // And the port VLAN snapshot (ADR-201): re-observed on the next walk, like the addresses.
+    let vlans = result.vlans.clone();
     // And the ARP summary, for the fourth time: an endpoint dropped here is re-observed on the next
     // walk, and the endpoint table's `last_seen` simply does not advance in the meantime.
     let arp = result.arp.clone();
@@ -782,6 +787,7 @@ fn persist_metrics_and_meta(
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
+        || vlans.is_some()
         || arp.is_some()
         || routing.is_some()
         || wlan.is_some()
@@ -799,6 +805,7 @@ fn persist_metrics_and_meta(
             dns_chain,
             neighbors,
             l3,
+            vlans,
             arp,
             routing,
             wlan,
@@ -1128,6 +1135,7 @@ pub(crate) struct MetaStores {
     pub(crate) dns: Arc<dns_check::DnsCheckRepo>,
     pub(crate) neighbors: Arc<neighbors::NeighborRepo>,
     pub(crate) l3: Arc<l3::L3Repo>,
+    pub(crate) vlans: Arc<crate::vlans::VlanRepo>,
     pub(crate) arp: Arc<arp::ArpRepo>,
     pub(crate) routing: Arc<l3_routing::RoutingRepo>,
     pub(crate) wireless: Arc<crate::wireless::WirelessRepo>,
@@ -1243,6 +1251,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         dns,
         neighbors,
         l3,
+        vlans,
         arp,
         routing,
         wireless,
@@ -1261,6 +1270,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
+    let mut vlan_rows: Vec<(Uuid, yagra_common::VlanSnapshot)> = Vec::new();
     let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
     let mut routing_rows: Vec<(Uuid, yagra_common::RoutingSnapshot)> = Vec::new();
     let mut wlan_rows: Vec<(Uuid, yagra_common::WlanInventory)> = Vec::new();
@@ -1297,6 +1307,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(snapshot) = rec.l3 {
             l3_rows.push((rec.node_id, snapshot));
+        }
+        if let Some(snapshot) = rec.vlans {
+            vlan_rows.push((rec.node_id, snapshot));
         }
         if let Some(summary) = rec.arp {
             arp_rows.push((rec.node_id, summary));
@@ -1377,6 +1390,16 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     }
     if !l3_rows.is_empty() {
         metrics::counter!("yagra_l3_persisted_total").increment(l3_rows.len() as u64);
+    }
+    // Each snapshot replaces the node's stored one whole (ADR-201). Two in one batch for one node
+    // are written in order, so the later observation is what stays.
+    for (node_id, snapshot) in &vlan_rows {
+        if let Err(e) = vlans.record_observation(*node_id, snapshot).await {
+            tracing::warn!(node = %node_id, error = %e, "port VLAN observation failed");
+        }
+    }
+    if !vlan_rows.is_empty() {
+        metrics::counter!("yagra_vlans_persisted_total").increment(vlan_rows.len() as u64);
     }
     // ARP is the one member of this tier whose observations are *not* a sequence — an ARP cache is
     // current state and the previous read is worthless — but it is still written one statement per

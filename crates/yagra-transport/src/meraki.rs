@@ -1264,6 +1264,7 @@ fn parse_switch_port_statuses(
                     alias: None,
                     speed_bps,
                     duplex,
+                    vlan: None,
                 },
             );
         }
@@ -1372,8 +1373,54 @@ fn name_switch_ports(items: &[Value], spine: &mut BTreeMap<String, BTreeMap<u32,
             };
             let name = p.get("name").and_then(Value::as_str).unwrap_or("").trim();
             port.alias = Some(name.to_owned());
+            port.vlan = Some(port_vlan_from_config(port.ifindex, p));
         }
     }
+}
+
+/// One port's mode and VLANs out of its `switch/ports/bySwitch` row (ADR-201 decision 5).
+///
+/// `type` is `access`, `trunk` or `stack`; `vlan` is the access VLAN or the trunk's native one
+/// (`null` on a trunk is "no native VLAN"); `allowedVlans` is `"all"` or `"20,68,70"` and means
+/// something on a trunk only; `voiceVlan` means something on an access port only. Measured on a
+/// recording of 25,092 ports: the Dashboard writes `allowedVlans: "all"` on every access port and
+/// leaves a stale `voiceVlan` on a few trunks, so each is read only where its mode gives it a meaning.
+/// A type this build does not know reads as unknown rather than being guessed.
+fn port_vlan_from_config(ifindex: u32, p: &Value) -> yagra_common::PortVlan {
+    use yagra_common::{PortMode, PortVlan};
+    let vlan_of = |key: &str| {
+        p.get(key)
+            .and_then(Value::as_u64)
+            .and_then(|v| u16::try_from(v).ok())
+            .filter(|v| (yagra_common::VLAN_MIN..=yagra_common::VLAN_MAX).contains(v))
+    };
+    let mode = match p.get("type").and_then(Value::as_str) {
+        Some("access") => PortMode::Access,
+        Some("trunk") => PortMode::Trunk,
+        Some("stack") => PortMode::NotL2,
+        _ => PortMode::Unknown,
+    };
+    let mut out = PortVlan::new(ifindex, mode);
+    match mode {
+        PortMode::Access => {
+            out.access_vlan = vlan_of("vlan");
+            out.voice_vlan = vlan_of("voiceVlan");
+        }
+        PortMode::Trunk => {
+            out.native = vlan_of("vlan");
+            match p
+                .get("allowedVlans")
+                .and_then(Value::as_str)
+                .and_then(yagra_common::parse_vlan_list)
+            {
+                Some(allowed) => out.allowed = allowed,
+                // An allow list this build cannot read is not "no VLANs".
+                None => out.mode = PortMode::Unknown,
+            }
+        }
+        PortMode::Hybrid | PortMode::NotL2 | PortMode::Unknown => {}
+    }
+    out
 }
 
 /// Hand each switch its ports, creating the observation for a switch that has ports but no sample.
@@ -2669,6 +2716,7 @@ mod tests {
             alias: None,
             speed_bps: None,
             duplex: None,
+            vlan: None,
         };
         let radio = |slot: u32| MerakiRadio {
             slot,
@@ -3200,6 +3248,58 @@ mod tests {
         assert_eq!(ports[&3].alias, None, "not in the answer: nothing said");
         assert!(!ports.contains_key(&7));
         assert!(!spine.contains_key("Q2SW-OFF"));
+        assert!(ports[&1].vlan.is_some(), "read with the names");
+        assert_eq!(ports[&3].vlan, None, "not in the answer: nothing said");
+    }
+
+    /// The shapes measured on a recording of a real organization's switch ports (ADR-201).
+    #[test]
+    fn a_ports_configured_vlans_are_read_where_its_mode_gives_them_a_meaning() {
+        use yagra_common::PortMode;
+        let access = port_vlan_from_config(
+            1,
+            &serde_json::json!({"type":"access","vlan":20,"voiceVlan":200,"allowedVlans":"all"}),
+        );
+        assert_eq!(access.mode, PortMode::Access);
+        assert_eq!(
+            (access.access_vlan, access.voice_vlan),
+            (Some(20), Some(200))
+        );
+        assert!(
+            access.allowed.is_empty(),
+            "an access port's allow list means nothing"
+        );
+
+        let trunk = port_vlan_from_config(
+            2,
+            &serde_json::json!({"type":"trunk","vlan":20,"voiceVlan":200,"allowedVlans":"158-159,192"}),
+        );
+        assert_eq!(trunk.mode, PortMode::Trunk);
+        assert_eq!(trunk.native, Some(20));
+        assert_eq!(trunk.allowed, vec![(158, 159), (192, 192)]);
+        assert_eq!(
+            trunk.voice_vlan, None,
+            "a trunk's stale voice VLAN is ignored"
+        );
+
+        let all = port_vlan_from_config(
+            3,
+            &serde_json::json!({"type":"trunk","vlan":null,"allowedVlans":"all"}),
+        );
+        assert_eq!((all.native, all.allowed.clone()), (None, vec![(1, 4094)]));
+
+        assert_eq!(
+            port_vlan_from_config(4, &serde_json::json!({"type":"stack","vlan":1})).mode,
+            PortMode::NotL2
+        );
+        assert_eq!(
+            port_vlan_from_config(5, &serde_json::json!({"type":"routed"})).mode,
+            PortMode::Unknown
+        );
+        assert_eq!(
+            port_vlan_from_config(6, &serde_json::json!({"type":"trunk","allowedVlans":"x"})).mode,
+            PortMode::Unknown
+        );
     }
 
     /// Both directions of the split between the two readers. The lenient one keeps its old

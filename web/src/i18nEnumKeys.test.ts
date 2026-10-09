@@ -143,6 +143,7 @@ import { PREFIX_GAP_KINDS } from './components/NodeDetail/prefixGaps';
 import { GAP_STATUSES, MISSING_PREFIX_VIEWS, SITE_GAP_STATUSES } from './pages/missingPrefixes';
 import { FAULT_SERIES, OPTICAL_SERIES } from './components/NodeDetail/interfaceMetrics';
 import { DUPLEX_STATES, LINK_BLANK_REASONS, SPEED_TIERS } from './components/NodeDetail/linkMode';
+import { VLAN_MODE_KEYS } from './components/NodeDetail/interfaceVlan';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
@@ -431,6 +432,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('speed tier', locales, 'interfaces.speed.', SPEED_TIERS);
     expectKeys('duplex bucket', locales, 'interfaces.duplex.', DUPLEX_STATES);
     expectKeys('empty link cell', locales, 'interfaces.blank.', LINK_BLANK_REASONS);
+  });
+
+  it('every port mode has a word (nodes:interfaces.vlanMode.*)', () => {
+    // Built at runtime from the mode (ADR-201): the MODE cell, the mode filter's options and the
+    // VLAN cell's empty words all read it, so a missing string is a raw key in three places.
+    expectKeys('port mode', { en: enNodes, ja: jaNodes }, 'interfaces.vlanMode.', VLAN_MODE_KEYS);
   });
 
   it('every discovery scan state has a badge label (monitoring:discovery.scans.state.*)', () => {

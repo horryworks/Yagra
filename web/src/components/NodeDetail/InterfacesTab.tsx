@@ -91,6 +91,18 @@ import {
   peerLabelIsChassis,
 } from './neighbors';
 import { addressCellText, addressesOf, formatAddress } from './interfaceAddresses';
+import {
+  effectiveVlan,
+  memberNames,
+  spanCount,
+  vlanCell,
+  vlanModeKey,
+  vlanOf,
+  vlanText,
+  type VlanCell,
+  type VlanModeKey,
+  type VlanWords,
+} from './interfaceVlan';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
@@ -195,9 +207,15 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     return () => ro.disconnect();
   }, [rootEl, error]);
 
+  // Each row with the VLAN facts the VLAN filter reads (ADR-201): a member port's are its
+  // aggregate's, and only the whole list can see the aggregate.
+  const vrows = useMemo(() => {
+    const byIfindex = new Map(rows.map((r) => [r.ifindex, r]));
+    return rows.map((r) => ({ ...r, vlan_effective: effectiveVlan(r, byIfindex) }));
+  }, [rows]);
   const shown = useMemo(
-    () => rows.filter(buildPredicate(columns, filters, Date.now())),
-    [rows, columns, filters],
+    () => vrows.filter(buildPredicate(columns, filters, Date.now())),
+    [vrows, columns, filters],
   );
   // What each port is connected to (ADR-145), on the node detail's shared refresh clock. A failure
   // is deliberately silent: the Neighbors tab owns that error surface, and here it only leaves the
@@ -227,9 +245,9 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       Object.fromEntries(
         columns
           .filter((c) => c.filter.kind === 'enum')
-          .map((c) => [c.key, facetCounts(rows, columns, filters, c.key, Date.now())]),
+          .map((c) => [c.key, facetCounts(vrows, columns, filters, c.key, Date.now())]),
       ),
-    [rows, columns, filters],
+    [vrows, columns, filters],
   );
   // Keyed by the column each control sits under. ⚠️ Untyped, exactly like `DataTable`'s
   // `specs[c.key]` lookup: rename a key in `tabFilters.ts` and the cell silently stops rendering.
@@ -245,6 +263,8 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     media: t('interfaces.colMedia'),
     speed: t('interfaces.colSpeed'),
     duplex: t('interfaces.colDuplex'),
+    mode: t('interfaces.colMode'),
+    vlan: t('interfaces.colVlan'),
     throughput: t('interfaces.colThroughput'),
     in: t('interfaces.colIn'),
     out: t('interfaces.colOut'),
@@ -444,23 +464,23 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             {t('interfaces.colInterface')}
           </div>
           <div className="nd-if-h" style={{ gridColumn: 2, gridRow: 1 }}>
+            {t('interfaces.colOper')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }}>
             {t('interfaces.colDescription')}
           </div>
           {/* Three headers open their own meaning when pressed (ADR-200 Inc.19): these headers do
               not sort, so the label itself can be the button. Only where the meaning changes what
               an operator concludes from a cell; the rest name themselves. */}
-          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
             <InfoPress infoKey="nodes:interfaces.addressesCol.info">
               {t('interfaces.colAddresses')}
             </InfoPress>
           </div>
-          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
+          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
             <InfoPress infoKey="nodes:interfaces.neighborsCol.info">
               {t('interfaces.colNeighbors')}
             </InfoPress>
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
-            {t('interfaces.colOper')}
           </div>
           <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }}>
             {t('interfaces.colMedia')}
@@ -474,12 +494,18 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             </InfoPress>
           </div>
           <div className="nd-if-h" style={{ gridColumn: 9, gridRow: 1 }}>
+            {t('interfaces.colMode')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 10, gridRow: 1 }}>
+            {t('interfaces.colVlan')}
+          </div>
+          <div className="nd-if-h" style={{ gridColumn: 11, gridRow: 1 }}>
             {t('interfaces.colThroughput')}
           </div>
-          <div className="nd-if-h right" style={{ gridColumn: 10, gridRow: 1 }}>
+          <div className="nd-if-h right" style={{ gridColumn: 12, gridRow: 1 }}>
             {t('interfaces.colIn')}
           </div>
-          <div className="nd-if-h right" style={{ gridColumn: 11, gridRow: 1 }}>
+          <div className="nd-if-h right" style={{ gridColumn: 13, gridRow: 1 }}>
             {t('interfaces.colOut')}
           </div>
           <ColumnResizeHandles control={colResize} columns={INTERFACE_COLUMNS} labels={labels} />
@@ -528,6 +554,10 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                   {portName}
                 </button>
               </span>
+              <span className="nd-if-oper">
+                <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
+                {operLabel(r.oper_status ?? null, t)}
+              </span>
               {/* The title carries the whole alias: this column's floor dropped to 88px when
                   ADR-126 split In/Out, and it is the one that ellipsizes first. Device-supplied
                   text, so it is an attribute and never markup. */}
@@ -536,10 +566,6 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               </span>
               <AddressCell port={portName} addresses={addressesOf(r)} />
               <NeighborCell port={portName} neighbors={byPort.get(r.ifindex)} />
-              <span className="nd-if-oper">
-                <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
-                {operLabel(r.oper_status ?? null, t)}
-              </span>
               {/* The transceiver's part string is the tooltip, not the cell: it is a different
                   fact (a vendor part number, not a medium), and it is present on plenty of ports
                   whose medium could not be resolved — showing it in the cell would read as a
@@ -563,6 +589,10 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                   blank={duplexEmptyReason(r.if_duplex, r.if_type)}
                 />
               </span>
+              <span className="nd-if-mode">
+                <ModeChip mode={vlanModeKey(r)} />
+              </span>
+              <VlanCellView cell={vlanCell(r)} onSelectLag={setSelected} />
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
               </span>
@@ -633,12 +663,119 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           nodeId={nodeId}
           row={selectedRow}
           onClose={() => setSelected(null)}
+          onSelect={setSelected}
           resize={resize}
         />
       ) : (
         <div className="nd-if-dockhint">{t('interfaces.dockHint')}</div>
       )}
     </div>
+  );
+}
+
+/** The words the VLAN cells are written with (ADR-201). */
+function useVlanWords(): VlanWords {
+  const { t } = useTranslation('nodes');
+  return {
+    native: t('interfaces.vlan.native'),
+    noNative: t('interfaces.vlan.noNative'),
+    all: t('interfaces.vlan.all'),
+    untagged: t('interfaces.vlan.untagged'),
+    tagged: t('interfaces.vlan.tagged'),
+    voice: t('interfaces.vlan.voice'),
+    inLag: t('interfaces.vlan.inLag'),
+    notL2: t('interfaces.vlanMode.not_l2'),
+    notReported: t('interfaces.vlanMode.not_reported'),
+  };
+}
+
+/** The MODE cell (ADR-201): a chip for the three switching modes, a plain word otherwise. */
+function ModeChip({ mode }: { mode: VlanModeKey }) {
+  const { t } = useTranslation('nodes');
+  const word = t(`interfaces.vlanMode.${mode}`);
+  if (mode === 'access' || mode === 'trunk' || mode === 'hybrid') {
+    return <span className={`nd-if-modechip ${mode}`}>{word}</span>;
+  }
+  return <span className="nd-if-blank">{word}</span>;
+}
+
+/** The VLAN cell (ADR-201). What it says is decided in `interfaceVlan.ts`; this only draws it. A
+ *  member's aggregate is a button that selects the aggregate's row, and stops its click so the row
+ *  under it does not toggle as well. Every value is configuration text, rendered as text. */
+function VlanCellView({
+  cell,
+  onSelectLag,
+}: {
+  cell: VlanCell;
+  onSelectLag: (ifindex: number) => void;
+}) {
+  const w = useVlanWords();
+  const title = vlanText(cell, w);
+  const n = (v: number | string) => <span className="nd-if-vlan-n">{v}</span>;
+  const k = (word: string) => <span className="nd-if-vlan-k">{word}</span>;
+  let body: React.ReactNode;
+  switch (cell.kind) {
+    case 'access':
+      body = (
+        <>
+          {cell.vlan == null ? k(w.notReported) : n(cell.vlan)}
+          {cell.voice != null && (
+            <>
+              {' '}
+              {k(`+ ${w.voice}`)} {n(cell.voice)}
+            </>
+          )}
+        </>
+      );
+      break;
+    case 'trunk':
+      body = (
+        <>
+          {cell.native == null ? (
+            k(w.noNative)
+          ) : (
+            <>
+              {k(w.native)} {n(cell.native)}
+            </>
+          )}{' '}
+          {k('·')} {cell.all ? k(w.all) : n(cell.allowed || '—')}
+        </>
+      );
+      break;
+    case 'hybrid':
+      body = (
+        <>
+          {k(w.untagged)} {n(cell.untagged || '—')} {k('·')} {k(w.tagged)}{' '}
+          {n(cell.tagged || '—')}
+        </>
+      );
+      break;
+    case 'member':
+      body = (
+        <>
+          {k(w.inLag)}{' '}
+          <button
+            type="button"
+            className="nd-if-vlan-lag"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectLag(cell.lagIfindex);
+            }}
+          >
+            {cell.lag}
+          </button>
+        </>
+      );
+      break;
+    case 'not_l2':
+    case 'not_reported':
+      body = <span className="nd-if-blank">{title}</span>;
+      break;
+  }
+  return (
+    <span className="nd-if-vlan" title={title}>
+      {body}
+    </span>
   );
 }
 
@@ -906,11 +1043,14 @@ function InterfaceDock({
   nodeId,
   row,
   onClose,
+  onSelect,
   resize,
 }: {
   nodeId: string;
   row: InterfaceRow;
   onClose: () => void;
+  /** Select another row — an aggregate's member, from its tile (ADR-201). */
+  onSelect: (ifindex: number) => void;
   /** Desktop only; `null` on mobile, where the dock is content-sized (see NodeDetail.css). */
   resize: DockResize | null;
 }) {
@@ -928,6 +1068,13 @@ function InterfaceDock({
   const portLabel = row.if_name ?? `if${row.ifindex}`;
   // Every address of the port, in the `ip/prefix` spelling the list's column uses (ADR-157).
   const portAddresses = addressesOf(row).map(formatAddress);
+  // The port's VLANs in full (ADR-201): the list cell ellipsizes, and on a phone this is the only
+  // place they are shown at all.
+  const vlanWords = useVlanWords();
+  const vlan = vlanOf(row);
+  const vlanFull = vlan == null ? null : vlanText(vlanCell(row), vlanWords);
+  const vlanCount = vlan?.mode === 'trunk' ? spanCount(vlan.allowed) : null;
+  const members = memberNames(row);
 
   useEffect(() => {
     // Reading the ruleset is `ManageConfig` (a threshold decides when the fleet pages someone), so
@@ -1159,6 +1306,35 @@ function InterfaceDock({
                 the charts' floor (`interfaceDock.spec.ts`), and a tile that wraps eats that floor
                 — the first version did, 113px of chrome became 193. The phone's head wraps
                 already, so there the tile takes its own line and shows them all. */}
+            {vlanFull != null && (
+              <span className="nd-if-dock-vlan" title={vlanFull}>
+                <span className="nd-muted">{t('interfaces.colVlan')}</span>{' '}
+                <ModeChip mode={vlanModeKey(row)} /> {vlanFull}
+                {vlanCount != null && vlanCount > 1 && (
+                  <span className="nd-muted">
+                    {' '}
+                    ({t('interfaces.vlan.count', { count: vlanCount })})
+                  </span>
+                )}
+              </span>
+            )}
+            {members.length > 0 && (
+              <span className="nd-if-dock-vlan">
+                <span className="nd-muted">{t('interfaces.vlan.members')}</span>{' '}
+                {members.map((m, i) => (
+                  <span key={m.ifindex}>
+                    {i > 0 && ', '}
+                    <button
+                      type="button"
+                      className="nd-if-vlan-lag"
+                      onClick={() => onSelect(m.ifindex)}
+                    >
+                      {m.name}
+                    </button>
+                  </span>
+                ))}
+              </span>
+            )}
             {portAddresses.length > 0 && (
               <span className="nd-if-dock-addrs" title={portAddresses.join('\n')}>
                 <span className="nd-muted">{t('interfaces.dockAddresses')}</span>{' '}

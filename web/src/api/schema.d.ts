@@ -8962,6 +8962,13 @@ export interface components {
             timestamps: number[];
             values: number[][];
         };
+        /** @description Another interface of the same node, by `ifindex` and by name. */
+        InterfaceRef: {
+            /** Format: int32 */
+            ifindex: number;
+            /** @description `ifName`, when the node has reported this interface's name. */
+            name?: string | null;
+        };
         /**
          * @description One interface row for the node-detail Interfaces tab: stored metadata joined with query-time
          *     `rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).
@@ -9024,6 +9031,7 @@ export interface components {
             tx_power_high_dbm?: number | null;
             /** Format: double */
             tx_power_low_dbm?: number | null;
+            vlan?: null | components["schemas"]["InterfaceVlan"];
         };
         /**
          * @description Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per
@@ -9103,6 +9111,49 @@ export interface components {
              */
             value: number;
         };
+        /**
+         * @description A port's VLAN configuration, as the device reports it (ADR-201). Values are the configuration,
+         *     not the traffic: `native` is the configured native VLAN (Huawei's PVID) even when that VLAN is
+         *     not in `allowed`, and `allowed` is the trunk's allow list as written, including VLANs the device
+         *     has not created. Every VLAN (1-4094) is the single span `{first: 1, last: 4094}`.
+         */
+        InterfaceVlan: {
+            /**
+             * Format: int32
+             * @description Access: the port's VLAN.
+             */
+            access_vlan?: number | null;
+            /** @description Trunk: the allowed VLANs. */
+            allowed: components["schemas"]["VlanSpan"][];
+            lag?: null | components["schemas"]["InterfaceRef"];
+            /** @description An aggregate's member ports, in `ifindex` order. Empty for any other port. */
+            members: components["schemas"]["InterfaceRef"][];
+            mode: components["schemas"]["InterfaceVlanMode"];
+            /**
+             * Format: int32
+             * @description Trunk and hybrid: the native VLAN. `null` when the device reports none.
+             */
+            native?: number | null;
+            /** @description Hybrid: the VLANs sent tagged. */
+            tagged: components["schemas"]["VlanSpan"][];
+            /** @description Hybrid: the VLANs sent untagged. */
+            untagged: components["schemas"]["VlanSpan"][];
+            /**
+             * Format: int32
+             * @description Access: the voice VLAN (Cisco, Meraki), when one is configured.
+             */
+            voice_vlan?: number | null;
+        };
+        /**
+         * @description How a port forwards VLANs, as the Interfaces list shows it (ADR-201).
+         *
+         *     `member` is a port bundled into an aggregate (Eth-Trunk, Port-channel): its VLANs are the
+         *     aggregate's, named by [`InterfaceVlan::lag`]. `not_l2` is a port that does not switch — a routed
+         *     port, a stack port, a VLAN interface. `unknown` is a port the device answered for in a way this
+         *     build cannot place.
+         * @enum {string}
+         */
+        InterfaceVlanMode: "access" | "trunk" | "hybrid" | "member" | "not_l2" | "unknown";
         /**
          * @description One candidate address that is already a device node.
          *
@@ -14628,6 +14679,13 @@ export interface components {
         /** @description Build version for Settings ▸ About. */
         VersionInfo: {
             core: string;
+        };
+        /** @description One inclusive VLAN range — `{first: 801, last: 869}`; a single VLAN has `first == last`. */
+        VlanSpan: {
+            /** Format: int32 */
+            first: number;
+            /** Format: int32 */
+            last: number;
         };
         /** @description A certificate chain and its private key, in PEM. */
         WebTlsImport: {

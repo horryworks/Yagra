@@ -24,6 +24,7 @@ import {
   NEIGHBOR_PROTOS,
   WLAN_AP_STATES,
   type InterfaceAddress,
+  type InterfaceVlan,
   type Neighbor,
   type NodeMetricEntry,
   type WirelessApRow,
@@ -39,6 +40,7 @@ import {
   type NeighborLookups,
 } from './neighbors';
 import { DUPLEX_STATES, duplexState, mediaText, SPEED_TIERS, speedTier } from './linkMode';
+import { carriedVlanTokens, parseVlanId, VLAN_MODE_KEYS, vlanModeKey } from './interfaceVlan';
 
 // ───────────────────────────────────────────────────────────────── interfaces
 
@@ -85,6 +87,11 @@ export interface FilterableInterface {
   if_speed_bps?: number | null;
   if_duplex?: string | null;
   addresses?: InterfaceAddress[] | null;
+  /** The port's own VLAN facts (ADR-201). */
+  vlan?: InterfaceVlan | null;
+  /** The facts that decide which VLANs it carries — a member's are its aggregate's. Attached by the
+   *  Interfaces tab (`effectiveVlan`), because a row alone cannot see its aggregate. */
+  vlan_effective?: InterfaceVlan | null;
 }
 
 /**
@@ -111,6 +118,15 @@ export function interfaceFilters(
       containsSemantics: 'substring',
       placeholder: t('interfaces.colInterface'),
     },
+    oper: {
+      kind: 'enum',
+      options: IF_STATES.map((s) => ({ value: s, label: t(`interfaces.state.${s}`) })),
+      // Through `ifState`, so the control and the row's dot can never disagree about what "up"
+      // means — `oper_status` is an integer where 1 is up and `null` is "never answered".
+      readValue: (r) => ifState(r.oper_status),
+      allLabel: t('interfaces.allStates'),
+      counts: 'client',
+    },
     if_alias: {
       kind: 'text',
       modes: ['contains', 'regex'],
@@ -130,15 +146,6 @@ export function interfaceFilters(
       containsSemantics: 'substring',
       placeholder: t('interfaces.colAddresses'),
       hint: t('interfaces.addressesHint'),
-    },
-    oper: {
-      kind: 'enum',
-      options: IF_STATES.map((s) => ({ value: s, label: t(`interfaces.state.${s}`) })),
-      // Through `ifState`, so the control and the row's dot can never disagree about what "up"
-      // means — `oper_status` is an integer where 1 is up and `null` is "never answered".
-      readValue: (r) => ifState(r.oper_status),
-      allLabel: t('interfaces.allStates'),
-      counts: 'client',
     },
     // ⚠️ Text, where its two neighbours are enums, and the asymmetry is forced rather than chosen:
     // `dot3MauType` is an IANA registry of 250-and-growing designations, so there is no closed
@@ -173,6 +180,23 @@ export function interfaceFilters(
       // No `hint`: what the column means, and why "not reported" is normal on fibre, is said once
       // by the column header itself, which opens it when pressed (ADR-200 Inc.19). The header is
       // drawn on every screen; the filter row only when it is open.
+    },
+    // ADR-201. Through `vlanModeKey`, so the option and the MODE cell agree on every word.
+    mode: {
+      kind: 'enum',
+      options: VLAN_MODE_KEYS.map((m) => ({ value: m, label: t(`interfaces.vlanMode.${m}`) })),
+      readValue: (r) => vlanModeKey(r),
+      allLabel: t('interfaces.allModes'),
+      counts: 'client',
+    },
+    // A VLAN ID, matched exactly against every VLAN the port carries — so 850 finds a trunk allowing
+    // 801-869, and a member port answers through its aggregate (`vlan_effective`).
+    vlan: {
+      kind: 'values',
+      parse: parseVlanId,
+      readValues: (r) => carriedVlanTokens(r.vlan_effective ?? r.vlan),
+      placeholder: t('interfaces.vlanPlaceholder'),
+      max: 20,
     },
   };
 }

@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **The Interfaces tab shows each switch port's mode and VLANs.** Two columns follow Duplex: **Mode** (access, trunk, hybrid, or member of an Eth-Trunk / Port-channel) and **VLAN** — the access VLAN and voice VLAN, or a trunk's native VLAN and allowed VLANs exactly as configured (`all` when every VLAN is allowed). A member port links to its aggregate, and the aggregate's dock lists its members. Mode is filterable, and typing a VLAN ID shows only the ports that carry it. Read about once an hour from Cisco Catalyst and Huawei switches over SNMP, and from Meraki MS switches out of the Dashboard response Yagra already reads for port names; other makes show `not reported`. The Oper column moved next to the port name.
+- **API: `GET /api/v1/nodes/{node_id}/interfaces` and the MCP `get_node_status` tool return `vlan` on each interface** — `mode`, `native`, `access_vlan`, `voice_vlan`, `allowed` / `untagged` / `tagged` as `{first, last}` spans, and the aggregate (`lag`) or its `members`. `null` means not reported.
+
 ### Improvements
 
 - **The dashboard's Geo map widget draws the world coastline behind its pins.** Each site sits at its real position, framed around the sites that have one. The coastline is fetched only when a dashboard holds the widget.

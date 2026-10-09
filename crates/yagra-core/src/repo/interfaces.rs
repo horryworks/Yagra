@@ -142,7 +142,7 @@ pub(super) static UPSERT_SQL: LazyLock<String> = LazyLock::new(|| {
 /// that would be forgotten. Serializing the repo type means the field names *are* the column
 /// names, which is what a diagnostic reader wants anyway. It carries no `ToSchema`, so this does
 /// not put the type into the published OpenAPI contract.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct InterfaceMeta {
     pub ifindex: i32,
     pub if_name: Option<String>,

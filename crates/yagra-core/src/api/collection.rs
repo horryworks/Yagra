@@ -680,6 +680,9 @@ pub(crate) struct InterfaceRow {
     last_seen_unix: Option<i64>,
     stale: bool,
     addresses: Vec<InterfaceAddress>,
+    /// The port's mode and VLANs (ADR-201). `null` when the device's VLANs are not reported — the
+    /// walk has not run yet, or the device is of a make whose VLAN tables this build does not read.
+    vlan: Option<InterfaceVlan>,
 }
 
 /// One IP address configured on an interface, as the device reports it (ADR-157).
@@ -704,6 +707,156 @@ impl InterfaceAddress {
             ip: a.ip.to_string(),
             prefix_len: (a.prefix_len != 0).then_some(a.prefix_len),
         }
+    }
+}
+
+/// How a port forwards VLANs, as the Interfaces list shows it (ADR-201).
+///
+/// `member` is a port bundled into an aggregate (Eth-Trunk, Port-channel): its VLANs are the
+/// aggregate's, named by [`InterfaceVlan::lag`]. `not_l2` is a port that does not switch — a routed
+/// port, a stack port, a VLAN interface. `unknown` is a port the device answered for in a way this
+/// build cannot place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InterfaceVlanMode {
+    Access,
+    Trunk,
+    Hybrid,
+    Member,
+    NotL2,
+    Unknown,
+}
+
+/// One inclusive VLAN range — `{first: 801, last: 869}`; a single VLAN has `first == last`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct VlanSpan {
+    pub(crate) first: u16,
+    pub(crate) last: u16,
+}
+
+/// Another interface of the same node, by `ifindex` and by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct InterfaceRef {
+    pub(crate) ifindex: u32,
+    /// `ifName`, when the node has reported this interface's name.
+    pub(crate) name: Option<String>,
+}
+
+/// A port's VLAN configuration, as the device reports it (ADR-201). Values are the configuration,
+/// not the traffic: `native` is the configured native VLAN (Huawei's PVID) even when that VLAN is
+/// not in `allowed`, and `allowed` is the trunk's allow list as written, including VLANs the device
+/// has not created. Every VLAN (1-4094) is the single span `{first: 1, last: 4094}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct InterfaceVlan {
+    pub(crate) mode: InterfaceVlanMode,
+    /// Trunk and hybrid: the native VLAN. `null` when the device reports none.
+    pub(crate) native: Option<u16>,
+    /// Access: the port's VLAN.
+    pub(crate) access_vlan: Option<u16>,
+    /// Access: the voice VLAN (Cisco, Meraki), when one is configured.
+    pub(crate) voice_vlan: Option<u16>,
+    /// Trunk: the allowed VLANs.
+    pub(crate) allowed: Vec<VlanSpan>,
+    /// Hybrid: the VLANs sent untagged.
+    pub(crate) untagged: Vec<VlanSpan>,
+    /// Hybrid: the VLANs sent tagged.
+    pub(crate) tagged: Vec<VlanSpan>,
+    /// Member: the aggregate this port is bundled into.
+    pub(crate) lag: Option<InterfaceRef>,
+    /// An aggregate's member ports, in `ifindex` order. Empty for any other port.
+    pub(crate) members: Vec<InterfaceRef>,
+}
+
+/// Each port's VLAN facts out of one node's stored snapshot — the join the Interfaces list and
+/// `get_node_status` both perform (ADR-201), the twin of [`addresses_by_ifindex`].
+pub(crate) struct VlanJoin {
+    snapshot: Option<yagra_common::VlanSnapshot>,
+    names: std::collections::BTreeMap<u32, Option<String>>,
+}
+
+impl VlanJoin {
+    /// `names` is every interface the node has, so a member can name its aggregate and an
+    /// aggregate its members.
+    pub(crate) fn new(
+        snapshot: Option<yagra_common::VlanSnapshot>,
+        metas: &[crate::repo::InterfaceMeta],
+    ) -> Self {
+        Self {
+            snapshot,
+            names: metas
+                .iter()
+                .filter_map(|m| Some((u32::try_from(m.ifindex).ok()?, m.if_name.clone())))
+                .collect(),
+        }
+    }
+
+    fn reference(&self, ifindex: u32) -> InterfaceRef {
+        InterfaceRef {
+            ifindex,
+            name: self.names.get(&ifindex).cloned().flatten(),
+        }
+    }
+
+    /// One port's VLAN facts.
+    ///
+    /// `None` when no snapshot was ever stored — the device has not been walked, or is of a make
+    /// this build does not read — which the WebUI shows as "not reported". A port the snapshot does
+    /// not list answers `not_l2`: both dialects list every switch port, so a port missing from a
+    /// complete snapshot is one that does not switch (a routed port, a VLAN interface).
+    pub(crate) fn for_port(&self, ifindex: u32) -> Option<InterfaceVlan> {
+        use yagra_common::PortMode;
+        let snapshot = self.snapshot.as_ref()?;
+        let spans = |r: &[yagra_common::VlanRange]| -> Vec<VlanSpan> {
+            r.iter()
+                .map(|&(first, last)| VlanSpan { first, last })
+                .collect()
+        };
+        let members: Vec<InterfaceRef> = snapshot
+            .ports
+            .iter()
+            .filter(|p| p.lag_ifindex == Some(ifindex))
+            .map(|p| self.reference(p.ifindex))
+            .collect();
+        let mut out = InterfaceVlan {
+            mode: InterfaceVlanMode::NotL2,
+            native: None,
+            access_vlan: None,
+            voice_vlan: None,
+            allowed: Vec::new(),
+            untagged: Vec::new(),
+            tagged: Vec::new(),
+            lag: None,
+            members,
+        };
+        let Some(port) = snapshot.port(ifindex) else {
+            return Some(out);
+        };
+        if let Some(lag) = port.lag_ifindex {
+            out.mode = InterfaceVlanMode::Member;
+            out.lag = Some(self.reference(lag));
+            return Some(out);
+        }
+        match port.mode {
+            PortMode::Access => {
+                out.mode = InterfaceVlanMode::Access;
+                out.access_vlan = port.access_vlan;
+                out.voice_vlan = port.voice_vlan;
+            }
+            PortMode::Trunk => {
+                out.mode = InterfaceVlanMode::Trunk;
+                out.native = port.native;
+                out.allowed = spans(&port.allowed);
+            }
+            PortMode::Hybrid => {
+                out.mode = InterfaceVlanMode::Hybrid;
+                out.native = port.native;
+                out.untagged = spans(&port.untagged);
+                out.tagged = spans(&port.tagged);
+            }
+            PortMode::NotL2 => out.mode = InterfaceVlanMode::NotL2,
+            PortMode::Unknown => out.mode = InterfaceVlanMode::Unknown,
+        }
+        Some(out)
     }
 }
 
@@ -764,6 +917,13 @@ async fn list_node_interfaces(
         )
     })?;
     let mut addresses = addresses_by_ifindex(l3.as_ref());
+    // The node's stored port VLAN snapshot, once for the whole list (ADR-201), and a 500 on a
+    // failed read for the same reason as the addresses: a blank VLAN column on every port would
+    // read as a device whose VLANs are not reported.
+    let vlans = admin.vlans.current(node_id).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "read port VLANs", "failed to read port VLANs")
+    })?;
+    let vlans = VlanJoin::new(vlans, &metas);
     let now = now_unix_s();
     // One batched fetch for the whole node (3 TSDB round-trips), not 3 per interface — a 48-port
     // switch refreshing for every open client would otherwise be ~150 sequential queries.
@@ -807,9 +967,79 @@ async fn list_node_interfaces(
             last_seen_unix: m.last_seen_s,
             stale,
             addresses: addresses.remove(&ifindex).unwrap_or_default(),
+            vlan: vlans.for_port(ifindex),
         });
     }
     Ok(Json(out))
+}
+
+#[cfg(test)]
+mod vlan_join_tests {
+    use super::*;
+    use yagra_common::{PortMode, PortVlan, VlanSnapshot};
+
+    fn meta(ifindex: i32, name: &str) -> crate::repo::InterfaceMeta {
+        crate::repo::InterfaceMeta {
+            ifindex,
+            if_name: Some(name.to_owned()),
+            ..crate::repo::InterfaceMeta::default()
+        }
+    }
+
+    fn join() -> VlanJoin {
+        let mut trunk = PortVlan::new(215, PortMode::Trunk);
+        trunk.native = Some(1);
+        trunk.allowed = vec![(700, 700), (801, 869)];
+        let mut m1 = PortVlan::new(55, PortMode::NotL2);
+        m1.lag_ifindex = Some(215);
+        let mut m2 = PortVlan::new(159, PortMode::Trunk);
+        m2.lag_ifindex = Some(215);
+        let mut access = PortVlan::new(7, PortMode::Access);
+        access.access_vlan = Some(875);
+        let metas = [
+            meta(215, "Eth-Trunk0"),
+            meta(55, "XGE0/0/1"),
+            meta(159, "XGE2/0/1"),
+            meta(7, "GE0/0/2"),
+            meta(40, "Vlanif875"),
+        ];
+        VlanJoin::new(Some(VlanSnapshot::new(vec![trunk, m1, m2, access])), &metas)
+    }
+
+    #[test]
+    fn an_aggregate_lists_its_members_by_name() {
+        let v = join().for_port(215).unwrap();
+        assert_eq!(v.mode, InterfaceVlanMode::Trunk);
+        assert_eq!(v.native, Some(1));
+        assert_eq!(
+            v.allowed[1],
+            VlanSpan {
+                first: 801,
+                last: 869
+            }
+        );
+        let names: Vec<_> = v.members.iter().map(|m| m.name.as_deref()).collect();
+        assert_eq!(names, vec![Some("XGE0/0/1"), Some("XGE2/0/1")]);
+    }
+
+    /// A member shows its aggregate, whatever mode the device gave the member itself (Huawei
+    /// reports a member as not switching, Cisco repeats the aggregate's trunk settings on it).
+    #[test]
+    fn a_member_points_at_its_aggregate_whatever_its_own_mode() {
+        for ifindex in [55, 159] {
+            let v = join().for_port(ifindex).unwrap();
+            assert_eq!(v.mode, InterfaceVlanMode::Member);
+            assert_eq!(v.lag.unwrap().name.as_deref(), Some("Eth-Trunk0"));
+            assert!(v.allowed.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_port_missing_from_a_snapshot_is_not_l2_and_no_snapshot_is_not_reported() {
+        assert_eq!(join().for_port(40).unwrap().mode, InterfaceVlanMode::NotL2);
+        assert_eq!(join().for_port(7).unwrap().access_vlan, Some(875));
+        assert!(VlanJoin::new(None, &[]).for_port(7).is_none());
+    }
 }
 
 #[cfg(test)]

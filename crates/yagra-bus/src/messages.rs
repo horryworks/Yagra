@@ -577,6 +577,42 @@ impl PollJob {
         )
     }
 
+    /// Build an SNMP v2c port VLAN walk job (ADR-201).
+    #[must_use]
+    pub fn snmp_vlans(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpVlanCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self::for_spec(
+            job_id,
+            node_id,
+            target,
+            CheckSpec::SnmpVlans(check),
+            interval_secs,
+        )
+    }
+
+    /// Build an SNMP v3 (USM) port VLAN walk job (ADR-201).
+    #[must_use]
+    pub fn snmp_v3_vlans(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3VlanCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self::for_spec(
+            job_id,
+            node_id,
+            target,
+            CheckSpec::SnmpV3Vlans(check),
+            interval_secs,
+        )
+    }
+
     /// Build an SNMP v2c ARP / IPv6-neighbour walk job (ADR-043 Increment 3).
     #[must_use]
     pub fn snmp_arp(
@@ -1335,6 +1371,16 @@ pub enum CheckSpec {
     SnmpWlanAp(SnmpWlanApCheck),
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpWlanAp`].
     SnmpV3WlanAp(SnmpV3WlanApCheck),
+    /// SNMP v2c walk of each switch port's mode and VLANs (ADR-201), on the slow adjacency cadence.
+    ///
+    /// The job names a vendor **dialect** rather than a column list: Cisco's and Huawei's tables
+    /// share no OID, the poller owns which columns each dialect means (`yagra-poller/src/vlans.rs`),
+    /// and core's only decision is which dialect a device gets — from its stored `sysObjectID`.
+    /// The result is **observational** ([`PollResult::observational`]), and it carries a snapshot
+    /// only when every column answered, so a half-read table never reads as ports losing VLANs.
+    SnmpVlans(SnmpVlanCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpVlans`].
+    SnmpV3Vlans(SnmpV3VlanCheck),
 }
 
 impl CheckSpec {
@@ -1380,6 +1426,8 @@ impl CheckSpec {
             Self::SnmpV3Routing(_) => "snmp_v3_routing",
             Self::SnmpWlanAp(_) => "snmp_wlan_ap",
             Self::SnmpV3WlanAp(_) => "snmp_v3_wlan_ap",
+            Self::SnmpVlans(_) => "snmp_vlans",
+            Self::SnmpV3Vlans(_) => "snmp_v3_vlans",
         }
     }
 
@@ -1417,6 +1465,7 @@ impl CheckSpec {
             Self::SnmpArp(c) => vec![c.community.as_str()],
             Self::SnmpRouting(c) => vec![c.community.as_str()],
             Self::SnmpWlanAp(c) => vec![c.community.as_str()],
+            Self::SnmpVlans(c) => vec![c.community.as_str()],
             Self::SnmpV3(c) => c.auth.secret_literals(),
             Self::SnmpV3Table(c) => c.auth.secret_literals(),
             Self::SnmpV3Optical(c) => c.auth.secret_literals(),
@@ -1426,6 +1475,7 @@ impl CheckSpec {
             Self::SnmpV3Arp(c) => c.auth.secret_literals(),
             Self::SnmpV3Routing(c) => c.auth.secret_literals(),
             Self::SnmpV3WlanAp(c) => c.auth.secret_literals(),
+            Self::SnmpV3Vlans(c) => c.auth.secret_literals(),
             // Only the secret half of each scheme. The username, the header *name* and the URL are
             // structural — they identify which account, not how to use it — and are exactly what a
             // log has to keep saying for a misconfiguration to stay diagnosable. `HttpAuth`'s manual
@@ -1840,6 +1890,38 @@ pub struct SnmpV3L3Check {
     /// Address table columns to walk.
     #[serde(default)]
     pub columns: Vec<SnmpL3Column>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v2c port VLAN walk parameters (ADR-201).
+///
+/// Carries a dialect, not a column list (see [`CheckSpec::SnmpVlans`]). A dialect this poller does
+/// not know decodes as `VlanDialect::Unknown`, and the poller then sends nothing — the spec is not
+/// lost, the walk is simply not made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpVlanCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Which vendor's tables to walk.
+    pub dialect: yagra_common::VlanDialect,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) port VLAN walk parameters — the v3 analogue of [`SnmpVlanCheck`]. Auth/priv keys
+/// are resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the secret
+/// store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3VlanCheck {
+    /// USM credentials, resolved and decrypted by core (ADR-018/020). Flattened, like every other
+    /// v3 check's, so the six fields sit at the top level of the JSON object.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
+    /// Which vendor's tables to walk.
+    pub dialect: yagra_common::VlanDialect,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -2330,6 +2412,16 @@ pub struct PollResult {
     /// disappeared" — and, one derivation later, as "every link disappeared".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l3: Option<L3Snapshot>,
+    /// Each switch port's mode and VLANs observed on this poll (VLAN walks and the Meraki port-name
+    /// round, ADR-201). Same tier as `l3` — relational metadata for PostgreSQL, **never** a TSDB
+    /// label.
+    ///
+    /// `None` and `Some(empty)` mean different things, exactly as for `l3`: `None` = "no complete
+    /// observation this poll" and nothing is written; `Some(empty)` = "this device reports no
+    /// switch ports", which replaces the stored snapshot. A walk in which any column went
+    /// unanswered sends `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlans: Option<yagra_common::VlanSnapshot>,
     /// The ARP / IPv6-neighbour cache observed on this poll (ARP walks only, ADR-043 Increment 3).
     /// Same tier as `l3` again — relational metadata, **never** a TSDB label.
     ///
@@ -2459,6 +2551,7 @@ impl PollResult {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            vlans: None,
             arp: None,
             routing: None,
             wlan: None,
@@ -4351,6 +4444,47 @@ mod tests {
         let spec3 = CheckSpec::SnmpV3L3(v3);
         let wire3 = serde_json::to_string(&spec3).unwrap();
         assert!(wire3.contains(r#""kind":"snmp_v3_l3""#), "{wire3}");
+    }
+
+    /// ADR-201's result field: an N-1 poller sends none, and a result without one is byte-identical.
+    #[test]
+    fn a_vlans_result_field_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.vlans.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("vlans"), "{wire}");
+
+        // An empty snapshot is an observation and survives the wire as one.
+        let mut r = result;
+        r.vlans = Some(yagra_common::VlanSnapshot::default());
+        let back: PollResult = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back.vlans, Some(yagra_common::VlanSnapshot::default()));
+    }
+
+    /// ADR-201's checks: a future field is ignored, an unknown dialect still decodes, and the tags
+    /// an N-1 poller skips on are the expected snake_case.
+    #[test]
+    fn a_vlan_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpVlanCheck =
+            serde_json::from_str(r#"{"community":"public","dialect":"cisco","future":1}"#).unwrap();
+        assert_eq!(v2c.dialect, yagra_common::VlanDialect::Cisco);
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        let v3: SnmpV3VlanCheck = serde_json::from_str(
+            r#"{"user":"monitor","security_level":"authpriv","dialect":"juniper"}"#,
+        )
+        .unwrap();
+        assert_eq!(v3.dialect, yagra_common::VlanDialect::Unknown);
+        let wire = serde_json::to_string(&CheckSpec::SnmpVlans(v2c)).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_vlans""#), "{wire}");
+        let wire3 = serde_json::to_string(&CheckSpec::SnmpV3Vlans(v3)).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_vlans""#), "{wire3}");
     }
 
     /// ADR-062's optical check, N-1 sensitive in the same way every other check spec is.

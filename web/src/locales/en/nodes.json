@@ -644,7 +644,31 @@
     },
     "heatLegend": "of link speed",
     "unitAria": "Unit",
-    "scaleAria": "Y-axis"
+    "scaleAria": "Y-axis",
+    "colMode": "Mode",
+    "colVlan": "VLAN",
+    "allModes": "All modes",
+    "vlanPlaceholder": "VLAN ID",
+    "vlanMode": {
+      "access": "access",
+      "trunk": "trunk",
+      "hybrid": "hybrid",
+      "member": "member",
+      "not_l2": "n/a",
+      "not_reported": "not reported"
+    },
+    "vlan": {
+      "native": "native",
+      "noNative": "no native",
+      "all": "all",
+      "untagged": "untagged",
+      "tagged": "tagged",
+      "voice": "voice",
+      "inLag": "in",
+      "members": "Members",
+      "count_one": "{{count}} VLAN",
+      "count_other": "{{count}} VLANs"
+    }
   },
   "collection": {
     "statusOk": "Collecting normally",

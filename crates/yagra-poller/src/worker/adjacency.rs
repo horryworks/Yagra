@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The adjacency walks: who this device is next to, at layer 2 and layer 3 (ADR-038, ADR-043).
+//! The adjacency walks: who this device is next to, at layer 2 and layer 3 (ADR-038, ADR-043), and
+//! how its ports are configured to carry VLANs (ADR-201).
 //!
-//! Four checks — CDP/LLDP neighbours, interface addresses, ARP / IPv6 neighbours, and routing
-//! adjacency — that share one contract: **they are observational**. Each sets
+//! Five checks — CDP/LLDP neighbours, interface addresses, ARP / IPv6 neighbours, routing
+//! adjacency and port VLANs — that share one contract: **they are observational**. Each sets
 //! `PollResult.observational`, so the result is persisted and never reaches the liveness state
 //! machine. That is not tidiness. An hourly neighbour walk that failed would otherwise page someone
 //! for a healthy device, and one that succeeded would cancel a real outage ICMP had already found.
 //!
-//! ⚠️ Like [`super::physical`], the interpretation lives in pure siblings —
-//! [`crate::neighbors`], [`crate::l3`], [`crate::arp`], [`crate::routing`] — which take walked
-//! rows and return a normalized set. This file holds the sessions and nothing else.
+//! ⚠️ Like [`super::physical`], the interpretation lives in pure siblings — [`crate::neighbors`],
+//! [`crate::l3`], [`crate::arp`], [`crate::routing`], [`crate::vlans`] — which take walked rows and
+//! return a normalized set. This file holds the sessions and nothing else.
 //!
 //! Each also reports `Some(empty)` and `None` differently on purpose: a device with no neighbours
 //! replaces the stored set (a real observation), while a failed walk sends nothing at all, so core
@@ -135,6 +136,58 @@ pub(super) async fn execute_l3(
     }
     r
 }
+
+/// Execute a port VLAN walk (v2c or v3, selected by `walker`) — ADR-201.
+///
+/// Observational like the walks above, with one difference that matters: the snapshot is sent
+/// **only when every column answered**. The other walks read each column on its own, but this one
+/// reads a port across several (Cisco's status beside its allowed list, Huawei's port number beside
+/// its ifIndex), and a column that timed out between two that answered reads exactly like a device
+/// that does not implement it — a whole switch of trunks would then read as access ports, or as
+/// no switch ports at all. An agent answering that it does not implement a column still counts as
+/// answered, which is what lets YunShan, with no operating-mode column, through.
+pub(super) async fn execute_vlans(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    dialect: yagra_common::VlanDialect,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
+    r.observational = true;
+    let columns = crate::vlans::columns(dialect);
+    if columns.is_empty() {
+        tracing::debug!(job_id = %job.job_id, "VLAN walk for a dialect this poller does not know");
+        return r;
+    }
+    match walker
+        .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_WALK_ROWS)
+        .await
+    {
+        Ok(walk) if walk.every_column_answered => {
+            r.vlans = Some(crate::vlans::assemble(dialect, &walk.rows));
+        }
+        Ok(walk) => {
+            // A row bound that was reached also lands here: the walk stopped before a column ended.
+            metrics::counter!("yagra_vlan_walk_incomplete_total").increment(1);
+            tracing::debug!(
+                job_id = %job.job_id,
+                rows = walk.rows.len(),
+                "VLAN walk incomplete; nothing sent"
+            );
+        }
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "VLAN walk failed");
+        }
+    }
+    r
+}
+
+/// The most rows one VLAN walk may collect across all its columns. Estimated, not measured: the
+/// largest device walked for ADR-201 (a four-member Huawei stack, 220 interfaces) has about 2,000
+/// rows across these columns, about ten per port, so this leaves room for a chassis of 3,000 ports.
+const MAX_VLAN_WALK_ROWS: usize = 32_768;
 
 /// Execute an ARP / IPv6-neighbour walk (v2c or v3, selected by `walker`) — ADR-043 Increment 3.
 ///

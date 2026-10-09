@@ -66,6 +66,8 @@ const SPEC_OWNERSHIP: &[(&str, &[&str])] = &[
             "SnmpV3Routing",
             "SnmpWlanAp",
             "SnmpV3WlanAp",
+            "SnmpVlans",
+            "SnmpV3Vlans",
         ],
     ),
     // The loop, and the three kinds whose *scheduling* differs — see the doc above.

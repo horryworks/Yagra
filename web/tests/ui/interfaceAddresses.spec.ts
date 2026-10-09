@@ -97,7 +97,7 @@ test('each port shows its first address as ip/prefix, +N for the rest, and a das
   page,
 }) => {
   await openTab(page);
-  await expect(page.locator('.nd-if-head .nd-if-h').nth(2)).toHaveText('IP addresses');
+  await expect(page.locator('.nd-if-head .nd-if-h').nth(3)).toHaveText('IP addresses');
 
   const svi = row(page, 'Vlanif100');
   await expect(svi.locator('.nd-if-addr-first')).toHaveText('10.204.29.254/24');
@@ -167,7 +167,7 @@ test('the address filter finds a secondary hidden behind +N', async ({ page }) =
   await expect(row(page, 'Vlanif100')).toBeVisible();
 });
 
-test('header, filter row and data rows still share one eleven-track template', async ({ page }) => {
+test('header, filter row and data rows still share one thirteen-track template', async ({ page }) => {
   await openTab(page);
   const [head, filters, dataRow] = await Promise.all(
     ['.nd-if-head', '.nd-if-filters', '.nd-if-row'].map((sel) =>
@@ -177,7 +177,7 @@ test('header, filter row and data rows still share one eleven-track template', a
         .evaluate((el) => getComputedStyle(el).gridTemplateColumns),
     ),
   );
-  expect(head.split(' ')).toHaveLength(11);
+  expect(head.split(' ')).toHaveLength(13);
   expect(filters).toBe(head);
   expect(dataRow).toBe(head);
 });

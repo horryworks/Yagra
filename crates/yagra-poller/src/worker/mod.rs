@@ -62,7 +62,9 @@ mod wlan;
 
 // Re-exported so a sibling's `use super::*` sees them: a private `use` here is visible to every
 // descendant, which is what keeps each conversation file free of its own import block.
-use adjacency::{execute_arp, execute_l3, execute_neighbors, execute_routing, RoutingAsk};
+use adjacency::{
+    execute_arp, execute_l3, execute_neighbors, execute_routing, execute_vlans, RoutingAsk,
+};
 use identity::IdentityRead;
 use interfaces::{execute_snmp_table, execute_snmp_v3_table};
 use meraki::execute_meraki;
@@ -205,6 +207,16 @@ pub(crate) async fn execute_reading(
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
             let walker = SnmpWalker::V3(check.auth.clone());
             execute_neighbors(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
+        }
+        CheckSpec::SnmpVlans(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_vlans(job, transport, at_unix_ms, check.dialect, timeout, &walker).await
+        }
+        CheckSpec::SnmpV3Vlans(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(check.auth.clone());
+            execute_vlans(job, transport, at_unix_ms, check.dialect, timeout, &walker).await
         }
         CheckSpec::SnmpL3(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));

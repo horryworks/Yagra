@@ -369,6 +369,9 @@ pub struct MerakiPort {
     pub speed_bps: Option<i64>,
     /// Negotiated duplex; `None` while the port has no link.
     pub duplex: Option<yagra_common::Duplex>,
+    /// The port's mode and VLANs from its Dashboard configuration (ADR-201). Read with the names,
+    /// so `None` on a collect that did not read them — and the stored snapshot stays.
+    pub vlan: Option<yagra_common::PortVlan>,
 }
 
 /// What one Meraki collect brought back, and why it ended early if it did (ADR-164 decision 18).

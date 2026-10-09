@@ -1237,6 +1237,10 @@ fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
         // complete inventory or none. Nothing is ever answered wrongly.
         | CheckSpec::SnmpWlanAp(_)
         | CheckSpec::SnmpV3WlanAp(_)
+        // The VLAN walk likewise (ADR-201): an older poller skips the spec and the ports keep their
+        // last snapshot; a newer one sends a complete snapshot or none.
+        | CheckSpec::SnmpVlans(_)
+        | CheckSpec::SnmpV3Vlans(_)
         | CheckSpec::Dns(_)
         | CheckSpec::MerakiCollect(_) => Vec::new(),
     }

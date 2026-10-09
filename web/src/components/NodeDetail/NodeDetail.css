@@ -891,8 +891,9 @@ html[data-viewport='mobile'] .nd-extract-row {
      file and fails when the two disagree. */
   grid-template-columns: var(
     --nd-if-cols,
-    minmax(140px, 1.4fr) minmax(88px, 1.3fr) minmax(168px, 1fr) minmax(120px, 1fr) 94px
-      minmax(112px, 1fr) 84px 104px 132px minmax(74px, 0.7fr) minmax(74px, 0.7fr)
+    minmax(140px, 1.4fr) 94px minmax(88px, 1.3fr) minmax(168px, 1fr) minmax(120px, 1fr)
+      minmax(112px, 1fr) 84px 104px 112px minmax(164px, 1.2fr) 132px minmax(74px, 0.7fr)
+      minmax(74px, 0.7fr)
   );
   align-items: center;
 }
@@ -1239,6 +1240,77 @@ html[data-viewport='mobile'] .nd-extract-row {
    step further back than a value, so a column of blanks does not read as a column of answers. */
 .nd-if-blank {
   color: var(--text-tertiary);
+}
+
+/* ADR-201: the port's mode and its VLANs. The mode is a chip so a trunk stands out in a column of
+   access ports; the three switching modes take the categorical series colours (a mode is not a
+   status), and the words that say there is nothing to show stay plain and muted like `.nd-if-blank`. */
+.nd-if-mode,
+.nd-if-vlan {
+  min-width: 0;
+  padding: 0 14px;
+  font-size: var(--font-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-if-vlan {
+  color: var(--text-secondary);
+}
+
+.nd-if-modechip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--series-1) 18%, transparent);
+}
+
+.nd-if-modechip.trunk {
+  background: color-mix(in srgb, var(--series-2) 22%, transparent);
+}
+
+.nd-if-modechip.hybrid {
+  background: color-mix(in srgb, var(--series-3) 22%, transparent);
+}
+
+.nd-if-vlan-k {
+  color: var(--text-tertiary);
+}
+
+.nd-if-vlan-n {
+  color: var(--text-primary);
+  font-family: var(--font-family);
+}
+
+/* A member's link to its aggregate: a real button, so it is reachable by keyboard, styled as text. */
+.nd-if-vlan-lag {
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent-color);
+  font: inherit;
+  cursor: pointer;
+}
+
+.nd-if-vlan-lag:hover {
+  text-decoration: underline;
+}
+
+.nd-if-vlan-lag:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.nd-if-dock-vlan {
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* In-row throughput sparkline cell (cheap, no axes/interaction). */
@@ -2046,7 +2118,8 @@ html[data-viewport='mobile'] .nd-if-oper {
   padding: 0;
 }
 
-/* The description and the three physical-link cells are dropped on a phone, not reflowed.
+/* The description, the three physical-link cells and the two VLAN cells (ADR-201) are dropped on a
+   phone, not reflowed.
    The row above is a named 2×2 grid, so an unplaced cell would auto-place itself into a third
    implicit row and push every row past the touch target. Media / speed / duplex are reference
    facts rather than triage signals — the phone's job here is "which port is down and how busy is
@@ -2056,7 +2129,9 @@ html[data-viewport='mobile'] .nd-if-addr,
 html[data-viewport='mobile'] .nd-if-nb,
 html[data-viewport='mobile'] .nd-if-media,
 html[data-viewport='mobile'] .nd-if-speed,
-html[data-viewport='mobile'] .nd-if-duplex {
+html[data-viewport='mobile'] .nd-if-duplex,
+html[data-viewport='mobile'] .nd-if-mode,
+html[data-viewport='mobile'] .nd-if-vlan {
   display: none;
 }
 
@@ -2116,6 +2191,7 @@ html[data-viewport='mobile'] .nd-if-dock-stats {
   flex-wrap: wrap;
 }
 
+html[data-viewport='mobile'] .nd-if-dock-vlan,
 html[data-viewport='mobile'] .nd-if-dock-addrs {
   flex-basis: 100%;
   max-width: none;

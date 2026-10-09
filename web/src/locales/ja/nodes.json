@@ -642,7 +642,31 @@
     },
     "heatLegend": "回線速度に対する使用率",
     "unitAria": "単位",
-    "scaleAria": "Y 軸"
+    "scaleAria": "Y 軸",
+    "colMode": "モード",
+    "colVlan": "VLAN",
+    "allModes": "すべてのモード",
+    "vlanPlaceholder": "VLAN 番号",
+    "vlanMode": {
+      "access": "アクセス",
+      "trunk": "トランク",
+      "hybrid": "ハイブリッド",
+      "member": "メンバー",
+      "not_l2": "該当なし",
+      "not_reported": "報告なし"
+    },
+    "vlan": {
+      "native": "native",
+      "noNative": "native なし",
+      "all": "すべて",
+      "untagged": "untagged",
+      "tagged": "tagged",
+      "voice": "音声",
+      "inLag": "所属",
+      "members": "メンバー",
+      "count_one": "VLAN {{count}} 個",
+      "count_other": "VLAN {{count}} 個"
+    }
   },
   "collection": {
     "statusOk": "正常に収集中",

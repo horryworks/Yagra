@@ -72,10 +72,13 @@ export const MAX_STORED_TABLES = 24;
 
 /** How many columns one table may keep.
  *
- *  12 covers every table in the product — Interfaces is the widest at 9 columns, and no `DataTable`
- *  caller declares more than 8 — so this never fires in normal use; it is the second half of the
- *  budget arithmetic above, and a bound on a bug that writes keys in a loop. */
-export const MAX_STORED_COLUMNS = 12;
+ *  14 covers every table in the product — Interfaces is the widest at 13 columns since ADR-201, and
+ *  no `DataTable` caller declares more than 8 — so this never fires in normal use; it is the second
+ *  half of the budget arithmetic above, and a bound on a bug that writes keys in a loop.
+ *  🚨 It must stay above the widest table: a drag writes every column's width at once, and the
+ *  first-inserted key is the one evicted, so a cap of 12 under 13 columns lost the Interface
+ *  column's width on every drag. */
+export const MAX_STORED_COLUMNS = 14;
 
 /** Stored widths for one table, keyed by `Column.key`.
  *

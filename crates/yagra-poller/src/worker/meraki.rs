@@ -152,6 +152,13 @@ pub async fn execute_meraki(
             }
             set
         });
+        // The switch's port VLANs (ADR-201), on the collect that read the port configuration — the
+        // hourly one. Any other collect sends none, so the stored snapshot stays.
+        let vlans = obs.ports.iter().any(|p| p.vlan.is_some()).then(|| {
+            yagra_common::VlanSnapshot::new(
+                obs.ports.iter().filter_map(|p| p.vlan.clone()).collect(),
+            )
+        });
         let interfaces = obs
             .uplinks
             .into_iter()
@@ -178,6 +185,7 @@ pub async fn execute_meraki(
             samples,
             interfaces,
             neighbors,
+            vlans,
             row_names,
             observational,
             judge_samples,
@@ -589,6 +597,12 @@ mod tests {
                     alias: Some("to core".into()),
                     speed_bps: Some(1_000_000_000),
                     duplex: Some(yagra_common::Duplex::Full),
+                    vlan: Some({
+                        let mut v = yagra_common::PortVlan::new(1, yagra_common::PortMode::Trunk);
+                        v.native = Some(20);
+                        v.allowed = vec![(1, 4094)];
+                        v
+                    }),
                 },
                 MerakiPort {
                     ifindex: 2,
@@ -596,6 +610,7 @@ mod tests {
                     alias: None,
                     speed_bps: None,
                     duplex: None,
+                    vlan: None,
                 },
             ],
         }]);
@@ -616,6 +631,14 @@ mod tests {
         assert!(r.samples.iter().any(|s| s.metric == "if_oper_status"
             && s.ifindex == Some(IfIndex(2))
             && s.value == 2.0));
+        // The configuration round read port 1's VLANs (ADR-201); port 2 said nothing, so the
+        // snapshot holds port 1 alone rather than inventing a mode for port 2.
+        let vlans = r
+            .vlans
+            .as_ref()
+            .expect("a configuration round sends a snapshot");
+        assert_eq!(vlans.ports.len(), 1);
+        assert_eq!(vlans.port(1).unwrap().native, Some(20));
         let first = &r.interfaces[0];
         assert_eq!(first.ifindex, IfIndex(1));
         assert_eq!(first.if_name.as_deref(), Some("Port 1"));
