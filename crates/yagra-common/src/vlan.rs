@@ -114,12 +114,10 @@ impl PortVlan {
 /// Every port's VLAN facts on one observation of one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VlanSnapshot {
-    /// The ports, ordered by `ifIndex`.
+    /// The ports, ordered by `ifIndex`. Always the whole set: a walk that hits its row bound sends
+    /// no snapshot at all rather than a partial one.
     #[serde(default)]
     pub ports: Vec<PortVlan>,
-    /// Whether the walk hit its row bound and ports were dropped.
-    #[serde(default)]
-    pub truncated: bool,
 }
 
 impl VlanSnapshot {
@@ -128,10 +126,7 @@ impl VlanSnapshot {
     pub fn new(mut ports: Vec<PortVlan>) -> Self {
         ports.sort_by_key(|p| p.ifindex);
         ports.dedup_by_key(|p| p.ifindex);
-        Self {
-            ports,
-            truncated: false,
-        }
+        Self { ports }
     }
 
     /// The port with this `ifIndex`, if the snapshot has one.
@@ -146,7 +141,7 @@ impl VlanSnapshot {
 
 /// Which vendor's tables a VLAN walk reads (ADR-201 decisions 3 and 4).
 ///
-/// Chosen by core from the node's stored `sysObjectID`, never guessed by the poller: the two
+/// Chosen by core from the node's recorded vendor, never guessed by the poller: the two
 /// vendors' tables share no OID, and walking both on every device would cost each one a walk of a
 /// subtree it does not have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -163,32 +158,16 @@ pub enum VlanDialect {
 
 impl VlanDialect {
     /// The dialect for a device, from the maker identification recorded on the node (`"Cisco"`,
-    /// `"Huawei"` — what `yagra_discovery::identify` and the classification rules write). This is
-    /// what the scheduler uses: the node row the sweep holds carries the vendor, not the
-    /// `sysObjectID`.
+    /// `"Huawei"` — what `yagra_discovery::identify` and the classification rules write). The node
+    /// row the scheduler's sweep holds carries the vendor, not the `sysObjectID`, so editing a
+    /// node's vendor also changes which tables are walked. Any other maker gets no VLAN job, and its
+    /// VLAN cells read "not reported".
     #[must_use]
     pub fn for_vendor(vendor: &str) -> Option<Self> {
         let v = vendor.trim().to_ascii_lowercase();
         if v.starts_with("cisco") {
             Some(Self::Cisco)
         } else if v.starts_with("huawei") {
-            Some(Self::Huawei)
-        } else {
-            None
-        }
-    }
-
-    /// The dialect for a device, from its `sysObjectID` (dotted decimal, no leading dot).
-    ///
-    /// The enterprise number is the vendor, not the platform: every Catalyst and every Huawei
-    /// switch walked for ADR-201 sits under these two. A device of any other vendor gets no VLAN
-    /// job, and its VLAN cells read "not reported".
-    #[must_use]
-    pub fn for_sys_object_id(oid: &str) -> Option<Self> {
-        let oid = oid.strip_prefix('.').unwrap_or(oid);
-        if oid.starts_with("1.3.6.1.4.1.9.") {
-            Some(Self::Cisco)
-        } else if oid.starts_with("1.3.6.1.4.1.2011.") {
             Some(Self::Huawei)
         } else {
             None
@@ -379,20 +358,10 @@ mod tests {
     }
 
     #[test]
-    fn the_dialect_is_the_enterprise_number() {
-        assert_eq!(
-            VlanDialect::for_sys_object_id("1.3.6.1.4.1.9.1.2134"),
-            Some(VlanDialect::Cisco)
-        );
-        assert_eq!(
-            VlanDialect::for_sys_object_id(".1.3.6.1.4.1.2011.2.23.1"),
-            Some(VlanDialect::Huawei)
-        );
-        assert_eq!(VlanDialect::for_sys_object_id("1.3.6.1.4.1.90.1"), None);
+    fn the_dialect_is_the_recorded_vendor() {
         assert_eq!(VlanDialect::for_vendor("Huawei"), Some(VlanDialect::Huawei));
         assert_eq!(VlanDialect::for_vendor(" cisco "), Some(VlanDialect::Cisco));
         assert_eq!(VlanDialect::for_vendor("Juniper"), None);
-        assert_eq!(VlanDialect::for_sys_object_id("1.3.6.1.4.1.20110.1"), None);
     }
 
     #[test]

@@ -143,6 +143,12 @@ export function vlanCell(row: Pick<InterfaceRow, 'vlan'>): VlanCell {
   }
 }
 
+/** Whether a cell says more than its MODE word — `not_l2` and `not_reported` are the word itself,
+ *  so a surface that draws the mode beside the cell would only repeat it. */
+export function vlanCellHasDetail(cell: VlanCell): boolean {
+  return cell.kind !== 'not_l2' && cell.kind !== 'not_reported';
+}
+
 /** An aggregate's member ports by name, or `[]` for any other port. */
 export function memberNames(row: Pick<InterfaceRow, 'vlan'>): { name: string; ifindex: number }[] {
   return (vlanOf(row)?.members ?? []).map((m) => ({

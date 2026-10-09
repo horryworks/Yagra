@@ -772,6 +772,9 @@ pub(crate) struct InterfaceVlan {
 pub(crate) struct VlanJoin {
     snapshot: Option<yagra_common::VlanSnapshot>,
     names: std::collections::BTreeMap<u32, Option<String>>,
+    /// Each aggregate's member ports in `ifindex` order, built once so a list of N ports does not
+    /// rescan the snapshot N times.
+    members: std::collections::BTreeMap<u32, Vec<u32>>,
 }
 
 impl VlanJoin {
@@ -781,12 +784,20 @@ impl VlanJoin {
         snapshot: Option<yagra_common::VlanSnapshot>,
         metas: &[crate::repo::InterfaceMeta],
     ) -> Self {
+        let mut members: std::collections::BTreeMap<u32, Vec<u32>> =
+            std::collections::BTreeMap::new();
+        for p in snapshot.iter().flat_map(|s| &s.ports) {
+            if let Some(lag) = p.lag_ifindex {
+                members.entry(lag).or_default().push(p.ifindex);
+            }
+        }
         Self {
             snapshot,
             names: metas
                 .iter()
                 .filter_map(|m| Some((u32::try_from(m.ifindex).ok()?, m.if_name.clone())))
                 .collect(),
+            members,
         }
     }
 
@@ -815,11 +826,12 @@ impl VlanJoin {
                 .map(|&(first, last)| VlanSpan { first, last })
                 .collect()
         };
-        let members: Vec<InterfaceRef> = snapshot
-            .ports
-            .iter()
-            .filter(|p| p.lag_ifindex == Some(ifindex))
-            .map(|p| self.reference(p.ifindex))
+        let members: Vec<InterfaceRef> = self
+            .members
+            .get(&ifindex)
+            .into_iter()
+            .flatten()
+            .map(|&m| self.reference(m))
             .collect();
         let mut out = InterfaceVlan {
             mode: InterfaceVlanMode::NotL2,

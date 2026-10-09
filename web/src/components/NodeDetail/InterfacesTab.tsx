@@ -96,6 +96,7 @@ import {
   memberNames,
   spanCount,
   vlanCell,
+  vlanCellHasDetail,
   vlanModeKey,
   vlanOf,
   vlanText,
@@ -1073,6 +1074,8 @@ function InterfaceDock({
   const vlanWords = useVlanWords();
   const vlan = vlanOf(row);
   const vlanFull = vlan == null ? null : vlanText(vlanCell(row), vlanWords);
+  // The chip already says "n/a" / "not reported"; the text beside it would only repeat the word.
+  const vlanDetail = vlanCellHasDetail(vlanCell(row)) ? vlanFull : null;
   const vlanCount = vlan?.mode === 'trunk' ? spanCount(vlan.allowed) : null;
   const members = memberNames(row);
 
@@ -1309,7 +1312,7 @@ function InterfaceDock({
             {vlanFull != null && (
               <span className="nd-if-dock-vlan" title={vlanFull}>
                 <span className="nd-muted">{t('interfaces.colVlan')}</span>{' '}
-                <ModeChip mode={vlanModeKey(row)} /> {vlanFull}
+                <ModeChip mode={vlanModeKey(row)} /> {vlanDetail}
                 {vlanCount != null && vlanCount > 1 && (
                   <span className="nd-muted">
                     {' '}

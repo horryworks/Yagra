@@ -8,6 +8,7 @@ import {
   memberNames,
   parseVlanId,
   vlanCell,
+  vlanCellHasDetail,
   vlanModeKey,
   vlanText,
   type VlanWords,
@@ -103,6 +104,13 @@ describe('the VLAN cell', () => {
   it('lists an aggregate’s members, and nobody else’s', () => {
     expect(memberNames(trunk).map((m) => m.name)).toEqual(['XGE0/0/1', 'XGE2/0/1']);
     expect(memberNames(access)).toEqual([]);
+  });
+
+  it('has nothing to add beside the MODE word for a port that does not switch or is not reported', () => {
+    expect(vlanCellHasDetail(vlanCell(routed))).toBe(false);
+    expect(vlanCellHasDetail(vlanCell({ vlan: v({ mode: 'unknown' }) }))).toBe(false);
+    expect(vlanCellHasDetail(vlanCell({ vlan: null }))).toBe(false);
+    for (const row of [trunk, member, access, hybrid]) expect(vlanCellHasDetail(vlanCell(row))).toBe(true);
   });
 
   it('formats single VLANs and ranges', () => {

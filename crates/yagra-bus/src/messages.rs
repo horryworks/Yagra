@@ -1375,7 +1375,7 @@ pub enum CheckSpec {
     ///
     /// The job names a vendor **dialect** rather than a column list: Cisco's and Huawei's tables
     /// share no OID, the poller owns which columns each dialect means (`yagra-poller/src/vlans.rs`),
-    /// and core's only decision is which dialect a device gets — from its stored `sysObjectID`.
+    /// and core's only decision is which dialect a device gets — from its recorded vendor.
     /// The result is **observational** ([`PollResult::observational`]), and it carries a snapshot
     /// only when every column answered, so a half-read table never reads as ports losing VLANs.
     SnmpVlans(SnmpVlanCheck),
