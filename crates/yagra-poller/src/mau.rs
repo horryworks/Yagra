@@ -49,15 +49,7 @@ pub fn cisco_media_by_ifindex(
             }
         }
     }
-    // ifIndex -> bits/sec, from ifHighSpeed's megabits.
-    let mut speed: BTreeMap<u32, i64> = BTreeMap::new();
-    for row in rows.iter().filter(|r| r.oid_base == speed_oid) {
-        if let (Some(&ifindex), Some(mbps)) = (row.instance.first(), int_of(row)) {
-            if mbps > 0 {
-                speed.insert(ifindex, mbps.saturating_mul(1_000_000));
-            }
-        }
-    }
+    let speed = speed_by_ifindex(rows, speed_oid);
 
     let mut out = BTreeMap::new();
     for row in rows.iter().filter(|r| r.oid_base == type_oid) {
@@ -76,10 +68,33 @@ pub fn cisco_media_by_ifindex(
     out
 }
 
+/// ifIndex -> bits/sec, from `ifHighSpeed`'s megabits. Zero (not stated) is left out.
+///
+/// One reading shared by the three sources in the media job that need a rate: the Cisco capability
+/// `portType`, the copper vendor type, and an optic's description cross-checked against its port.
+#[must_use]
+pub fn speed_by_ifindex(rows: &[SnmpInstanceRow], speed_oid: &str) -> BTreeMap<u32, i64> {
+    let mut speed: BTreeMap<u32, i64> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == speed_oid) {
+        if let (Some(&ifindex), SnmpValue::Int(mbps)) = (row.instance.first(), &row.value) {
+            if *mbps > 0 {
+                speed.insert(ifindex, mbps.saturating_mul(1_000_000));
+            }
+        }
+    }
+    speed
+}
+
+/// `entPhysicalClass` value for `port(10)`.
+const ENT_CLASS_PORT: i64 = 10;
+
 /// `entPhysicalClass` value for `sensor(8)` — the one class that can never be a transceiver, and
 /// the one that produced a convincing-looking wrong answer on real hardware.
 const ENT_CLASS_SENSOR: i64 = 8;
-use yagra_common::{mau_subid, media_from_mau_oid, media_from_transceiver_text, Duplex};
+use yagra_common::{
+    copper_designation, mau_subid, media_from_mau_oid, media_from_optic_description,
+    media_from_transceiver_text, vendor_type_is_copper_port, Duplex, OID_ENT_PHYSICAL_VENDOR_TYPE,
+};
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
 /// What one poll learned about one port's physical media.
@@ -234,10 +249,14 @@ pub fn entity_text(
     }
 
     let mut out: BTreeMap<u32, String> = BTreeMap::new();
-    for row in rows
-        .iter()
-        .filter(|r| r.oid_base != name_oid && r.oid_base != fru_oid && r.oid_base != class_oid)
-    {
+    for row in rows.iter().filter(|r| {
+        r.oid_base != name_oid
+                && r.oid_base != fru_oid
+                && r.oid_base != class_oid
+                // A yardstick for `copper_port_entities`, never a description. Its values are
+                // OIDs, which `read` would refuse anyway; saying so here is what keeps it that way.
+                && r.oid_base != OID_ENT_PHYSICAL_VENDOR_TYPE
+    }) {
         let Some((ent, text)) = read(row) else {
             continue;
         };
@@ -276,10 +295,14 @@ pub fn entity_text(
 ///   overwrite a registry designation with a part number.
 /// - **The part string is always kept, the media only sometimes.** `transceiver_model` records what
 ///   the device said, verbatim. `media` is filled only when that string genuinely contains a
-///   canonical designation — see `media_from_transceiver_text`, which refuses when unsure.
+///   canonical designation — see `media_from_transceiver_text`, which refuses when unsure — or,
+///   failing that, when it is an optic description in the shape
+///   `media_from_optic_description` reads (ADR-063 Inc.8 decision 2). `speed` is the port's rate,
+///   which that second reader checks the module's class against.
 pub fn merge_entity_fallback(
     out: &mut BTreeMap<u32, MediaRow>,
     text_by_entity: &BTreeMap<u32, String>,
+    speed: &BTreeMap<u32, i64>,
     mut resolve_ifindex: impl FnMut(u32) -> Option<u32>,
 ) {
     for (&ent, text) in text_by_entity {
@@ -291,7 +314,9 @@ pub fn merge_entity_fallback(
         if out.contains_key(&ifindex) {
             continue;
         }
-        let media = media_from_transceiver_text(text).map(str::to_owned);
+        let media = media_from_transceiver_text(text)
+            .or_else(|| media_from_optic_description(text, speed.get(&ifindex).copied()))
+            .map(str::to_owned);
         if media.is_none() && text.is_empty() {
             continue;
         }
@@ -301,6 +326,76 @@ pub fn merge_entity_fallback(
                 media,
                 duplex: None,
                 transceiver_model: Some(text.clone()),
+            },
+        );
+    }
+}
+
+/// Port entities whose `entPhysicalVendorType` says twisted pair (ADR-063 Inc.8 decision 3).
+///
+/// Only entities of class `port(10)` count: a vendor type is a claim about one component, and the
+/// copper value attached to a module or a chassis would say nothing about a port. Which values count
+/// is `vendor_type_is_copper_port`'s allow-list, never a pattern — a 2960L calls its copper ports
+/// fibre.
+#[must_use]
+pub fn copper_port_entities(
+    rows: &[SnmpInstanceRow],
+    vendor_type_oid: &str,
+    class_oid: &str,
+) -> std::collections::BTreeSet<u32> {
+    let ports: std::collections::BTreeSet<u32> = rows
+        .iter()
+        .filter(|r| r.oid_base == class_oid)
+        .filter_map(|r| match (r.instance.first(), &r.value) {
+            (Some(&ent), SnmpValue::Int(ENT_CLASS_PORT)) => Some(ent),
+            _ => None,
+        })
+        .collect();
+    rows.iter()
+        .filter(|r| r.oid_base == vendor_type_oid)
+        .filter_map(|r| match (r.instance.first(), &r.value) {
+            (Some(&ent), SnmpValue::Oid(v))
+                if ports.contains(&ent) && vendor_type_is_copper_port(v) =>
+            {
+                Some(ent)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fill copper ports the vendor type names, **last** and only where nothing else answered.
+///
+/// Last because every other source is better evidence: `ifMauType` and `portType` are the device
+/// stating the medium of that port, and a transceiver string means a module is in the socket —
+/// which is exactly the case a port-level vendor type cannot see (a 2960X's fibre ports carry the
+/// same copper value as its RJ45 ports). So a port already in `out` is left alone **even when its
+/// row has no media**: a module that was found but not recognised is not evidence of copper.
+///
+/// The designation comes from the port's rate, like a capability `portType`. A port with no rate
+/// gets nothing.
+pub fn merge_copper_ports(
+    out: &mut BTreeMap<u32, MediaRow>,
+    copper_entities: &std::collections::BTreeSet<u32>,
+    speed: &BTreeMap<u32, i64>,
+    mut resolve_ifindex: impl FnMut(u32) -> Option<u32>,
+) {
+    for &ent in copper_entities {
+        let Some(ifindex) = resolve_ifindex(ent) else {
+            continue;
+        };
+        if out.contains_key(&ifindex) {
+            continue;
+        }
+        let Some(media) = speed.get(&ifindex).copied().and_then(copper_designation) else {
+            continue;
+        };
+        out.insert(
+            ifindex,
+            MediaRow {
+                media: Some(media.to_owned()),
+                duplex: None,
+                transceiver_model: None,
             },
         );
     }
@@ -721,7 +816,7 @@ mod tests {
             (102, "SFP-1000BaseSX".to_owned()),
         ]);
         // entity 101 -> ifIndex 7 (already answered by MAU), entity 102 -> ifIndex 8 (not).
-        merge_entity_fallback(&mut out, &text, |ent| match ent {
+        merge_entity_fallback(&mut out, &text, &BTreeMap::new(), |ent| match ent {
             101 => Some(7),
             102 => Some(8),
             _ => None,
@@ -740,7 +835,7 @@ mod tests {
         // string. An operator reading "OMXD30000" learns which module is in the port.
         let mut out = BTreeMap::new();
         let text = BTreeMap::from([(101, "OMXD30000".to_owned())]);
-        merge_entity_fallback(&mut out, &text, |_| Some(4));
+        merge_entity_fallback(&mut out, &text, &BTreeMap::new(), |_| Some(4));
         assert_eq!(out[&4].media, None);
         assert_eq!(out[&4].transceiver_model.as_deref(), Some("OMXD30000"));
     }
@@ -749,7 +844,117 @@ mod tests {
     fn an_entity_that_maps_to_no_interface_is_dropped() {
         let mut out = BTreeMap::new();
         let text = BTreeMap::from([(101, "SFP-1000BaseLX".to_owned())]);
-        merge_entity_fallback(&mut out, &text, |_| None);
+        merge_entity_fallback(&mut out, &text, &BTreeMap::new(), |_| None);
         assert!(out.is_empty(), "a fan tray is not a port");
+    }
+    // ── ADR-063 Inc.8 ────────────────────────────────────────────────────────────────────────
+
+    const BASE_T: &str = "1.3.6.1.4.1.9.12.3.1.10.150";
+
+    fn vendor_row(ent: u32, oid: &str) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned(),
+            instance: vec![ent],
+            value: SnmpValue::Oid(oid.to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_huawei_optic_description_fills_the_media_beside_the_model() {
+        let mut out = BTreeMap::new();
+        let text = BTreeMap::from([
+            (201, "1300Mb/sec-1310nm-LC-10000(9um/125um SMF)".to_owned()),
+            (202, "10300Mb/sec--nm---0.5(Copper)".to_owned()),
+        ]);
+        let speed = BTreeMap::from([(5, 1_000_000_000), (6, 10_000_000_000)]);
+        merge_entity_fallback(&mut out, &text, &speed, |ent| match ent {
+            201 => Some(5),
+            202 => Some(6),
+            _ => None,
+        });
+        assert_eq!(out[&5].media.as_deref(), Some("1000BASE-LX"));
+        assert_eq!(
+            out[&5].transceiver_model.as_deref(),
+            Some("1300Mb/sec-1310nm-LC-10000(9um/125um SMF)"),
+        );
+        // A direct-attach cable keeps its string and names no medium.
+        assert_eq!(out[&6].media, None);
+        assert!(out[&6].transceiver_model.is_some());
+    }
+
+    #[test]
+    fn only_port_entities_with_an_allowed_vendor_type_are_copper() {
+        let rows = vec![
+            class_row(1, 10),
+            vendor_row(1, BASE_T),
+            // A port whose vendor type is the 2960L's "1000BASE-EX fibre": not copper.
+            class_row(2, 10),
+            vendor_row(2, "1.3.6.1.4.1.9.12.3.1.10.317"),
+            // The copper value on a module, not a port: not a port claim.
+            class_row(3, 9),
+            vendor_row(3, BASE_T),
+            // A port with the value but no class row: not known to be a port.
+            vendor_row(4, BASE_T),
+        ];
+        let got = copper_port_entities(&rows, OID_ENT_PHYSICAL_VENDOR_TYPE, CLASS_OID);
+        assert_eq!(got.into_iter().collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn a_copper_port_takes_its_name_from_its_rate() {
+        let mut out = BTreeMap::new();
+        let ports = std::collections::BTreeSet::from([1, 2, 3]);
+        let speed = BTreeMap::from([(11, 1_000_000_000), (12, 100_000_000)]);
+        merge_copper_ports(&mut out, &ports, &speed, |ent| Some(10 + ent));
+        assert_eq!(out[&11].media.as_deref(), Some("1000BASE-T"));
+        assert_eq!(out[&12].media.as_deref(), Some("100BASE-TX"));
+        // No rate, no name.
+        assert!(!out.contains_key(&13));
+        assert!(out
+            .values()
+            .all(|r| r.transceiver_model.is_none() && r.duplex.is_none()));
+    }
+
+    #[test]
+    fn the_vendor_type_never_overrides_a_stated_medium_or_a_module() {
+        let mut out = BTreeMap::new();
+        // portType said fibre (a 2960X's SFP port carries the same copper vendor type).
+        out.insert(
+            11,
+            MediaRow {
+                media: Some("1000BASE-SX".to_owned()),
+                duplex: None,
+                transceiver_model: None,
+            },
+        );
+        // A module was found and not recognised: still not evidence of copper.
+        out.insert(
+            12,
+            MediaRow {
+                media: None,
+                duplex: None,
+                transceiver_model: Some("OMXD30000".to_owned()),
+            },
+        );
+        let ports = std::collections::BTreeSet::from([1, 2]);
+        let speed = BTreeMap::from([(11, 1_000_000_000), (12, 1_000_000_000)]);
+        merge_copper_ports(&mut out, &ports, &speed, |ent| Some(10 + ent));
+        assert_eq!(out[&11].media.as_deref(), Some("1000BASE-SX"));
+        assert_eq!(out[&12].media, None);
+    }
+
+    #[test]
+    fn the_vendor_type_column_is_never_read_as_a_description() {
+        let rows = vec![
+            text_row(1, "SFP-10G-SR"),
+            SnmpInstanceRow {
+                oid_base: OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned(),
+                instance: vec![2],
+                value: SnmpValue::Bytes(b"1.3.6.1.4.1.9.12.3.1.10.150".to_vec()),
+            },
+        ];
+        let got = entity_text(&rows, NAME_OID, FRU_OID, CLASS_OID);
+        assert!(got.contains_key(&1));
+        assert!(!got.contains_key(&2), "{got:?}");
     }
 }

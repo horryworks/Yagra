@@ -242,6 +242,53 @@ pub fn copper_designation(bps: i64) -> Option<&'static str> {
     }
 }
 
+/// Every speed [`copper_designation`] has an answer for, so its outputs can be enumerated rather
+/// than copied into a second list.
+const COPPER_DESIGNATION_SPEEDS: [i64; 4] =
+    [10_000_000, 100_000_000, 1_000_000_000, 10_000_000_000];
+
+/// Whether `media` is a name this crate derives from a port's *speed* rather than one a device or a
+/// module stated outright.
+fn is_speed_derived_copper(media: &str) -> bool {
+    COPPER_DESIGNATION_SPEEDS
+        .iter()
+        .any(|bps| copper_designation(*bps) == Some(media))
+}
+
+/// What a port's duplex and media cells show, given whether its link is up (ADR-063 Inc.8 decision 1).
+///
+/// A port whose link is down has negotiated nothing, so "it is running as `1000BASE-T`, full duplex"
+/// is a statement about nothing. Two of the stored values are worse than that, and are the reason
+/// this exists: a down Cisco port reports `ifHighSpeed` = 10, which the capability `portType` turns
+/// into `10BASE-T`; a down Huawei port answers `hwEthernetDuplex` = full. Both read as facts.
+///
+/// So, **only when the port is known to be down** (`oper_status` present and not `up(1)`):
+/// - duplex is hidden;
+/// - media is hidden when it is one of the four names derived from speed **and** no transceiver was
+///   found. A module that was detected is still there with the link down, and its designation is a
+///   statement about the module — the operator asked to keep that.
+///
+/// `oper_status` absent (the TSDB had no reading) hides nothing: "we do not know" is not "down".
+///
+/// ⚠️ This decides what is *shown*. The stored row is not touched, deliberately — the multi-writer
+/// upsert keeps the last non-NULL value, so a port that comes back up is rewritten by the next walk,
+/// and a migration could not tell which stored values were taken while the port was down.
+#[must_use]
+pub fn link_mode_shown<'a>(
+    oper_status: Option<f64>,
+    duplex: Option<&'a str>,
+    media: Option<&'a str>,
+    transceiver_model: Option<&str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    let down = oper_status.is_some_and(|s| (s - 1.0).abs() > 1e-6);
+    if !down {
+        return (duplex, media);
+    }
+    let has_module = transceiver_model.is_some_and(|t| !t.trim().is_empty());
+    let media = media.filter(|m| has_module || !is_speed_derived_copper(m));
+    (None, media)
+}
+
 // ── Media, from CISCO-STACK-MIB (ADR-063 Inc.7) ──────────────────────────────────────────────
 
 /// `portType` — CISCO-STACK-MIB, what a Cisco port physically is.
@@ -282,10 +329,11 @@ pub const OID_CISCO_PORT_IFINDEX: &str = "1.3.6.1.4.1.9.5.1.4.1.1.11";
 /// means "no GBIC installed"; rendering it as a medium would put a designation on an empty cage.
 /// It reads as "unknown", which is what it is.
 ///
-/// ⚠️ Three values state a *capability* rather than a negotiated medium — `e10a100BaseTX(18)`,
-/// `e10a100a1000BaseT(61)`, `e1000BaseT(33)` on a multi-rate port — so they resolve through
-/// [`copper_designation`] with the port's actual speed rather than being pinned to one rate. That
-/// is handled by [`CISCO_PORT_COPPER`], not here.
+/// ⚠️ Four values state a *capability* rather than a negotiated medium — `e10a100BaseTX(18)`,
+/// `e10a100a1000BaseT(61)`, `e1000BaseT(33)` on a multi-rate port, and `1116` — so they resolve
+/// through [`copper_designation`] with the port's actual speed rather than being pinned to one rate.
+/// That is handled by [`CISCO_PORT_COPPER`], not here. On a down port the speed is the device's
+/// fallback (10 Mbit/s on the Catalysts measured), which is why [`link_mode_shown`] exists.
 const CISCO_PORT_MEDIA: &[(i64, &str)] = &[
     (8, "10BASE-T"),
     (9, "10BASE-FL"),
@@ -339,6 +387,138 @@ pub fn media_from_cisco_port_type(value: f64, speed_bps: Option<i64>) -> Option<
         .iter()
         .find(|(v, _)| *v == code)
         .map(|(_, media)| *media)
+}
+
+// ── Media, from a port entity's vendor type (ADR-063 Inc.8 decision 3) ─────────────────────
+
+/// `entPhysicalVendorType` — ENTITY-MIB's "what kind of component is this", as an OID the vendor
+/// registers.
+///
+/// # Why this, when the media columns are absent
+///
+/// Measured on 2026-10-09 against a Catalyst 3650 (IOS-XE 3.6), a C890 and a C800: `ifMauType`,
+/// `portType` and LLDP-EXT-DOT3's `lldpXdot3LocPortOperMauType` all answer `No Such Object`. The
+/// medium the CLI prints is not in any column those devices serve. What they *do* serve is a vendor
+/// type on every port entity, and on the Catalysts it names the medium: `cevPortBaseTEther`,
+/// registered as "Ethernet 10/100/1000 BaseT port".
+pub const OID_ENT_PHYSICAL_VENDOR_TYPE: &str = "1.3.6.1.2.1.47.1.1.1.1.3";
+
+/// Vendor types that say "this port is twisted pair", one at a time.
+///
+/// 🚨 **An allow-list of single values, never a pattern, because devices lie here.** The same
+/// recordings show a 2960L reporting every one of its copper ports as `cevPortGigBaseEX` (`…10.317`,
+/// "1000 Base EX Fiber") — a vendor type is the device's own claim about its parts, and that claim is
+/// only as good as the platform. A value joins this list after it has been seen on a real port of the
+/// medium it names. C890/C800 (`cevPortEswitch` 69, `cevPortGEIP` 100) and ASAv (`cevPortGe` 109)
+/// name no medium and are not here.
+///
+/// | value | registered as | seen on |
+/// |---|---|---|
+/// | `…9.12.3.1.10.150` | `cevPortBaseTEther` — Ethernet 10/100/1000 BaseT port | 3650, 2960S, 2960 Gi |
+const COPPER_PORT_VENDOR_TYPES: &[&str] = &["1.3.6.1.4.1.9.12.3.1.10.150"];
+
+/// Whether a port entity's `entPhysicalVendorType` says the port is copper.
+///
+/// Like a capability `portType`, this states the medium and not the rate, so the caller pairs it
+/// with the port's speed through [`copper_designation`].
+#[must_use]
+pub fn vendor_type_is_copper_port(value: &str) -> bool {
+    let v = value.trim().trim_start_matches('.');
+    COPPER_PORT_VENDOR_TYPES.contains(&v)
+}
+
+// ── Media, from a pluggable's own description (ADR-063 Inc.8 decision 2) ───────────────────
+
+/// Which kind of fibre an optical module's description names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fibre {
+    Single,
+    Multi,
+}
+
+/// Turn an optical module's structured description into a designation, or `None`.
+///
+/// Huawei describes a pluggable in ENTITY-MIB as `<rate>Mb/sec-<wavelength>nm-<connector>-<reach>
+/// (<fibre>)` — measured on PoC switches:
+///
+/// | description | means | designation |
+/// |---|---|---|
+/// | `1300Mb/sec-1310nm-LC-10000(9um/125um SMF)` | 1G, 1310 nm, single-mode, 10 km | `1000BASE-LX` |
+/// | `2100Mb/sec-850nm-LC-275(OM1),550(OM2),1000(OM3)` | 1G-class, 850 nm, multimode | `1000BASE-SX` |
+/// | `10300Mb/sec-850nm-LC-30(…OM1),…,400(…OM4)` | 10G, 850 nm, multimode | `10GBASE-SR` |
+/// | `10300Mb/sec--nm---0.5(Copper)` | a direct-attach cable | none |
+///
+/// `media_from_transceiver_text` cannot read these — there is no `BASE` in them — and that is why
+/// every Huawei fibre port's media cell was empty while its transceiver cell held the answer.
+///
+/// The table is deliberately short and everything outside it is `None`: a direct-attach cable,
+/// a BiDi module (two wavelengths), an 80 km 1550 nm module (`10GBASE-ZR` is not an IEEE
+/// registration), any rate class but 1G and 10G, and any text not in this shape. `1310 nm SMF` at
+/// 1G is `1000BASE-LX` rather than `1000BASE-LX10`: both fit a 10 km module, and LX is the name
+/// MAU-MIB and Cisco's `portType` give the same part.
+///
+/// `port_bps` is the port's `ifHighSpeed`. A port running at a different rate than the module's
+/// class — a 10G module clocked down to 1G — answers `None` rather than naming the module's
+/// standard as what the port runs. Zero or absent means "not stated" and does not refuse.
+///
+/// Single writer: the description is read only by the hourly media job's ENTITY fallback. The fast
+/// walk drops fibre and the optical-power job writes no media, so ADR-063 Inc.4's reason for leaving
+/// fibre empty — two writers alternating the cell — does not arise.
+#[must_use]
+pub fn media_from_optic_description(text: &str, port_bps: Option<i64>) -> Option<&'static str> {
+    let text = text.trim();
+    let (rate, rest) = leading_number(text)?;
+    let rest = rest
+        .strip_prefix("Mb/sec-")
+        .or_else(|| rest.strip_prefix("Mb/s-"))?;
+    let (wavelength, rest) = leading_number(rest)?;
+    // Exactly one wavelength: a BiDi module writes two, and an empty field is a copper cable.
+    let rest = rest.strip_prefix("nm-")?;
+    // Connector, then the first reach in metres.
+    let (_, after_connector) = rest.split_once('-')?;
+    let (reach_m, _) = leading_number(after_connector)?;
+    let fibre = fibre_of(after_connector)?;
+
+    let class_bps: i64 = match rate {
+        1_000..=2_500 => 1_000_000_000,
+        9_950..=11_300 => 10_000_000_000,
+        _ => return None,
+    };
+    if port_bps.is_some_and(|b| b > 0 && b != class_bps) {
+        return None;
+    }
+    let media = match (class_bps, wavelength, fibre) {
+        (1_000_000_000, 850, Fibre::Multi) => "1000BASE-SX",
+        (1_000_000_000, 1310, Fibre::Single) => "1000BASE-LX",
+        (10_000_000_000, 850, Fibre::Multi) => "10GBASE-SR",
+        (10_000_000_000, 1310, Fibre::Single) if reach_m <= 10_000 => "10GBASE-LR",
+        (10_000_000_000, 1550, Fibre::Single) if reach_m <= 40_000 => "10GBASE-ER",
+        _ => return None,
+    };
+    Some(media)
+}
+
+/// The decimal integer a string starts with, and what follows it.
+fn leading_number(s: &str) -> Option<(u32, &str)> {
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let n = s[..end].parse().ok()?;
+    Some((n, &s[end..]))
+}
+
+/// Single- or multimode, from the fibre part of a description; `None` when it says neither or both.
+fn fibre_of(s: &str) -> Option<Fibre> {
+    let upper = s.to_ascii_uppercase();
+    let single = upper.contains("SMF") || upper.contains("9UM");
+    let multi = upper.contains("MMF")
+        || upper.contains("(OM")
+        || upper.contains(" OM")
+        || upper.contains("50UM")
+        || upper.contains("62.5UM");
+    match (single, multi) {
+        (true, false) => Some(Fibre::Single),
+        (false, true) => Some(Fibre::Multi),
+        _ => None,
+    }
 }
 
 /// Coerce an SNMP numeric reading to an `ifType` code, or `None` if it is not a plausible one.
@@ -1287,5 +1467,174 @@ mod tests {
         assert_eq!(mau_subid("1.3.6.1.2.1.26.4.103"), Some(103));
         assert_eq!(mau_subid("1.3.6.1.2.1.26.4.30"), Some(30));
         assert_eq!(mau_subid("1.3.6.1.2.1.2.2.1.3"), None);
+    }
+    // ── ADR-063 Inc.8 ────────────────────────────────────────────────────────────────────────
+
+    /// Descriptions measured on PoC Huawei switches (shape only — no identity in them).
+    const HW_LX: &str = "1300Mb/sec-1310nm-LC-10000(9um/125um SMF)";
+    const HW_SX_2G: &str = "2100Mb/sec-850nm-LC-275(OM1),550(OM2),1000(OM3)";
+    const HW_SR: &str = "10300Mb/sec-850nm-LC-30(62.5um/125um OM1),80(50um/125um OM2),300(50um/125um OM3),400(50um/125um OM4)";
+    const HW_DAC: &str = "10300Mb/sec--nm---0.5(Copper)";
+
+    #[test]
+    fn a_huawei_optic_description_names_its_standard() {
+        assert_eq!(
+            media_from_optic_description(HW_LX, Some(1_000_000_000)),
+            Some("1000BASE-LX")
+        );
+        assert_eq!(
+            media_from_optic_description(HW_SX_2G, Some(1_000_000_000)),
+            Some("1000BASE-SX")
+        );
+        assert_eq!(
+            media_from_optic_description(HW_SR, Some(10_000_000_000)),
+            Some("10GBASE-SR")
+        );
+        // Speed not stated (0 or absent) does not refuse.
+        assert_eq!(
+            media_from_optic_description(HW_LX, None),
+            Some("1000BASE-LX")
+        );
+        assert_eq!(
+            media_from_optic_description(HW_SR, Some(0)),
+            Some("10GBASE-SR")
+        );
+        // The two long-reach 10G rows of the table.
+        assert_eq!(
+            media_from_optic_description("10300Mb/sec-1310nm-LC-10000(9um/125um SMF)", None),
+            Some("10GBASE-LR"),
+        );
+        assert_eq!(
+            media_from_optic_description("10300Mb/s-1550nm-LC-40000(9um/125um SMF)", None),
+            Some("10GBASE-ER"),
+        );
+    }
+
+    #[test]
+    fn an_optic_description_outside_the_table_names_nothing() {
+        for text in [
+            HW_DAC,                                             // direct-attach copper
+            "10000Mb/s-1200nm-Copper Pigtail-10m",              // NE8000's copper pigtail
+            "1300Mb/sec-1310nm/1490nm-LC-10000(9um/125um SMF)", // BiDi: two wavelengths
+            "10300Mb/sec-1550nm-LC-80000(9um/125um SMF)",       // 80 km: no IEEE registration
+            "10300Mb/sec-1310nm-LC-220(50um/125um OM3)", // 1310 on multimode (LRM): not in the table
+            "25780Mb/sec-850nm-LC-100(50um/125um OM4)",  // 25G: rate class not covered
+            "1300Mb/sec-1310nm-LC-10000",                // fibre not stated
+            "SFP-1000BaseLX",                            // a part number, not this shape
+            "",
+        ] {
+            assert_eq!(media_from_optic_description(text, None), None, "{text:?}");
+        }
+        // A 10G module on a port running at 1G names the module, not what the port runs: refuse.
+        assert_eq!(
+            media_from_optic_description(HW_SR, Some(1_000_000_000)),
+            None
+        );
+        assert_eq!(
+            media_from_optic_description(HW_LX, Some(10_000_000_000)),
+            None
+        );
+    }
+
+    #[test]
+    fn every_optic_designation_is_a_real_registration() {
+        let samples = [
+            (HW_LX, None),
+            (HW_SX_2G, None),
+            (HW_SR, None),
+            ("10300Mb/sec-1310nm-LC-10000(9um/125um SMF)", None),
+            ("10300Mb/sec-1550nm-LC-40000(9um/125um SMF)", None),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for (text, bps) in samples {
+            let d = media_from_optic_description(text, bps)
+                .unwrap_or_else(|| panic!("{text} must resolve"));
+            assert!(
+                MAU_TYPES.iter().any(|(_, media, _)| *media == d),
+                "{d} is not a dot3MauType registration",
+            );
+            seen.insert(d);
+        }
+        assert_eq!(
+            seen.len(),
+            5,
+            "every row of the table was reached: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_vendor_type_seen_on_a_copper_port_says_copper() {
+        assert!(vendor_type_is_copper_port("1.3.6.1.4.1.9.12.3.1.10.150"));
+        assert!(vendor_type_is_copper_port(".1.3.6.1.4.1.9.12.3.1.10.150"));
+        // 2960L calls its copper ports 1000BASE-EX fibre; C890/C800/ASAv name no medium.
+        for v in [
+            "1.3.6.1.4.1.9.12.3.1.10.317",
+            "1.3.6.1.4.1.9.12.3.1.10.69",
+            "1.3.6.1.4.1.9.12.3.1.10.100",
+            "1.3.6.1.4.1.9.12.3.1.10.109",
+            "1.3.6.1.4.1.9.12.3.1.10.1500",
+            "",
+        ] {
+            assert!(!vendor_type_is_copper_port(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn a_down_port_shows_no_duplex_and_no_speed_derived_media() {
+        // The two lies this exists for: Cisco's 10 Mbit/s fallback and Huawei's full duplex.
+        assert_eq!(
+            link_mode_shown(Some(2.0), Some("full"), Some("10BASE-T"), None),
+            (None, None),
+        );
+        for media in ["10BASE-T", "100BASE-TX", "1000BASE-T", "10GBASE-T"] {
+            assert_eq!(
+                link_mode_shown(Some(2.0), None, Some(media), None).1,
+                None,
+                "{media}"
+            );
+        }
+        // Any non-up status counts as down (lowerLayerDown here).
+        assert_eq!(
+            link_mode_shown(Some(7.0), Some("full"), None, None),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_down_port_keeps_what_a_module_or_a_device_stated() {
+        // A detected module: kept, even a copper one (an RJ45 SFP).
+        assert_eq!(
+            link_mode_shown(Some(2.0), Some("full"), Some("1000BASE-T"), Some("GLC-T")).1,
+            Some("1000BASE-T"),
+        );
+        // An optical designation is never derived from speed: kept.
+        assert_eq!(
+            link_mode_shown(Some(2.0), None, Some("10GBASE-SR"), None).1,
+            Some("10GBASE-SR"),
+        );
+        // A blank transceiver string is no module.
+        assert_eq!(
+            link_mode_shown(Some(2.0), None, Some("1000BASE-T"), Some("  ")).1,
+            None
+        );
+    }
+
+    #[test]
+    fn an_up_port_or_an_unknown_status_shows_everything() {
+        let both = (Some("full"), Some("10BASE-T"));
+        assert_eq!(link_mode_shown(Some(1.0), both.0, both.1, None), both);
+        assert_eq!(link_mode_shown(None, both.0, both.1, None), both);
+    }
+
+    #[test]
+    fn the_speed_derived_names_are_exactly_copper_designations_outputs() {
+        // `is_speed_derived_copper` enumerates `copper_designation` instead of copying its outputs;
+        // pin that every speed it lists resolves, so the enumeration cannot go stale silently.
+        for bps in COPPER_DESIGNATION_SPEEDS {
+            let d = copper_designation(bps).unwrap_or_else(|| panic!("{bps} must resolve"));
+            assert!(is_speed_derived_copper(d));
+        }
+        assert!(!is_speed_derived_copper("1000BASE-SX"));
+        assert!(!is_speed_derived_copper("2.5GBASE-T"));
     }
 }

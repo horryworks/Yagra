@@ -878,6 +878,22 @@ impl VlanJoin {
     }
 }
 
+/// The duplex and media one interface shows, given its live `oper_status` — the rule the Interfaces
+/// list and `get_node_status` both apply (ADR-063 Inc.8 decision 1, `yagra_common::link_mode_shown`).
+/// The stored row is not changed; only what is served.
+pub(crate) fn shown_link_mode(
+    meta: &crate::repo::InterfaceMeta,
+    oper_status: Option<f64>,
+) -> (Option<String>, Option<String>) {
+    let (duplex, media) = yagra_common::link_mode_shown(
+        oper_status,
+        meta.if_duplex.as_deref(),
+        meta.if_media.as_deref(),
+        meta.transceiver_model.as_deref(),
+    );
+    (duplex.map(str::to_owned), media.map(str::to_owned))
+}
+
 /// Each interface's addresses out of one node's stored address set, keyed by `ifIndex` — the
 /// join the Interfaces list and `get_node_status` both perform (ADR-157 decision 3).
 pub(crate) fn addresses_by_ifindex(
@@ -964,14 +980,16 @@ async fn list_node_interfaces(
             _ => None,
         };
         let stale = m.last_seen_s.is_none_or(|s| now - s > INTERFACE_STALE_SECS);
+        // A down port negotiated nothing: hide what was derived rather than stated (ADR-063 Inc.8).
+        let (if_duplex, if_media) = shown_link_mode(&m, l.oper_status);
         out.push(InterfaceRow {
             ifindex,
             if_name: m.if_name,
             if_alias: m.if_alias,
             if_speed_bps: m.if_speed,
-            if_duplex: m.if_duplex,
+            if_duplex,
             if_type: m.if_type,
-            if_media: m.if_media,
+            if_media,
             transceiver_model: m.transceiver_model,
             oper_status: l.oper_status,
             in_bps,

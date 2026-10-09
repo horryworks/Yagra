@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Interfaces tab fills Media on more ports.** Huawei fibre ports now show their standard (`1000BASE-LX`, `1000BASE-SX`, `10GBASE-SR`, `10GBASE-LR`, `10GBASE-ER`), read from the optic's own description. Cisco Catalyst copper ports whose media columns are absent (the 3650, for one) now show `1000BASE-T` and the like, from the port's ENTITY-MIB vendor type. Direct-attach cables, BiDi optics and Cisco ISR / ASAv ports still show nothing: the device does not state a medium. Filled within an hour, by the media walk.
+
+### Bug Fixes
+
+- **A port whose link is down no longer shows a duplex or a speed-derived medium.** A down Cisco port reported `10BASE-T` (the port's 10 Mbit/s fallback) and a down Huawei port `full` duplex. Both are now blank while the link is down; a port with a detected transceiver still shows the module's medium. The same applies to `GET /api/v1/nodes/{node_id}/interfaces` (`if_duplex`, `if_media`) and to the MCP `get_node_status` tool (`duplex`, `media`).
+
 ## v0.3.48 — The Interfaces tab shows each switch port's mode and VLANs, and YunShan switches show their real model
 
 ### New Features

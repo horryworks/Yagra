@@ -84,11 +84,13 @@ pub use l3::{
     MAX_ADDRESSES_PER_NODE, MAX_L3_WALK_ROWS, METRIC_SNMP_L3_ADDRESS_COUNT,
 };
 pub use link_mode::{
-    copper_designation, duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, mau_subid,
-    media_from_cisco_port_type, media_from_mau_oid, media_from_transceiver_text,
-    medium_from_huawei, Duplex, MauMedia, Medium, DOT3_MAU_TYPE_ROOT, IF_TYPE_ETHERNET_CSMACD,
-    OID_CISCO_PORT_IFINDEX, OID_CISCO_PORT_TYPE, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
-    OID_HW_ETHERNET_PORT_TYPE, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE, OID_IF_TYPE,
+    copper_designation, duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, link_mode_shown,
+    mau_subid, media_from_cisco_port_type, media_from_mau_oid, media_from_optic_description,
+    media_from_transceiver_text, medium_from_huawei, vendor_type_is_copper_port, Duplex, MauMedia,
+    Medium, DOT3_MAU_TYPE_ROOT, IF_TYPE_ETHERNET_CSMACD, OID_CISCO_PORT_IFINDEX,
+    OID_CISCO_PORT_TYPE, OID_DOT3_DUPLEX_STATUS, OID_ENT_PHYSICAL_VENDOR_TYPE,
+    OID_HW_ETHERNET_DUPLEX, OID_HW_ETHERNET_PORT_TYPE, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE,
+    OID_IF_TYPE,
 };
 pub use mac::parse_mac;
 pub use meraki::{

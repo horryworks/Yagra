@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### 改善
+
+- **Interfaces タブの Media が、より多くのポートで埋まるようになりました。** Huawei の光ポートは、光モジュール自身の説明文から規格名（`1000BASE-LX`、`1000BASE-SX`、`10GBASE-SR`、`10GBASE-LR`、`10GBASE-ER`）を出します。Media の列を返さない Cisco Catalyst（3650 など）の銅ポートは、ENTITY-MIB のポートの種類（vendor type）から `1000BASE-T` などを出します。DAC（銅の直結ケーブル）・BiDi の光モジュール・Cisco ISR と ASAv のポートは、機器が媒体を答えないので空のままです。毎時の媒体の取得で、1 時間以内に埋まります。
+
+### バグ修正
+
+- **リンクが落ちているポートに、duplex と速度から作った媒体名を出さなくなりました。** down の Cisco のポートに `10BASE-T`（ポートが申告する 10 Mbit/s の仮の速度から作った名前）が、down の Huawei のポートに duplex の `full` が出ていました。リンクが落ちている間はどちらも空になります。トランシーバが検出できているポートは、down でもモジュールの媒体名を出します。`GET /api/v1/nodes/{node_id}/interfaces`（`if_duplex`・`if_media`）と MCP の `get_node_status`（`duplex`・`media`）も同じです。
+
 ## v0.3.48 — Interfaces タブにスイッチのポートのモードと VLAN が出て、YunShan のスイッチに本当の型番が出る
 
 ### 新機能

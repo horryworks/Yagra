@@ -581,12 +581,19 @@ pub(super) async fn execute_mau(
     }
 
     if entity_fallback {
-        let text = walk_entity_media_text(job, transport, walker, timeout).await;
-        if !text.is_empty() {
+        let speed = crate::mau::speed_by_ifindex(&rows, yagra_common::OID_IF_HIGH_SPEED);
+        let entity = walk_entity_media_text(job, transport, walker, timeout).await;
+        if !entity.text.is_empty() || !entity.copper_ports.is_empty() {
             // Only what the index FOUND is used here — a part attached to a port — so a partial
             // index is safe (see `EntityIndexWalk`).
             let walk = walk_entity_index(job, transport, walker, timeout).await;
-            crate::mau::merge_entity_fallback(&mut media, &text, |ent| walk.index.ifindex_for(ent));
+            crate::mau::merge_entity_fallback(&mut media, &entity.text, &speed, |ent| {
+                walk.index.ifindex_for(ent)
+            });
+            // Last, so a module or a stated medium always wins (ADR-063 Inc.8 decision 3).
+            crate::mau::merge_copper_ports(&mut media, &entity.copper_ports, &speed, |ent| {
+                walk.index.ifindex_for(ent)
+            });
         }
     }
 
@@ -629,18 +636,28 @@ fn mau_result(job: &PollJob, at_unix_ms: i64, interfaces: Vec<DiscoveredInterfac
     }
 }
 
+/// What one ENTITY-MIB media walk found: describing text per entity, and the port entities whose
+/// vendor type says copper.
+struct EntityMedia {
+    text: BTreeMap<u32, String>,
+    copper_ports: std::collections::BTreeSet<u32>,
+}
+
 /// Walk the ENTITY-MIB text columns that can name a pluggable.
 ///
 /// Two describing columns because which one carries a designation varies by vendor, plus
 /// `entPhysicalName` — which is **not** a candidate but the yardstick: `mau::entity_text` throws
 /// away any description that merely restates the component's own name. Without that third column
 /// this walk reported every port as its own transceiver (see that function's 🚨).
+///
+/// `entPhysicalVendorType` rides the same walk (ADR-063 Inc.8 decision 3): on a Catalyst whose media
+/// columns are all absent, it is the one place the device says a port is twisted pair.
 async fn walk_entity_media_text(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     timeout: Duration,
-) -> BTreeMap<u32, String> {
+) -> EntityMedia {
     let columns = vec![
         ENT_PHYSICAL_MODEL_NAME.to_owned(),
         optical::ENT_PHYSICAL_DESCR.to_owned(),
@@ -648,6 +665,7 @@ async fn walk_entity_media_text(
         // Not describing columns either — the two yardsticks. See `mau::entity_text`'s 🚨.
         ENT_PHYSICAL_IS_FRU.to_owned(),
         ENT_PHYSICAL_CLASS.to_owned(),
+        yagra_common::OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned(),
     ];
     match walker
         .walk_instances(
@@ -659,15 +677,25 @@ async fn walk_entity_media_text(
         )
         .await
     {
-        Ok(rows) => crate::mau::entity_text(
-            &rows,
-            optical::ENT_PHYSICAL_NAME,
-            ENT_PHYSICAL_IS_FRU,
-            ENT_PHYSICAL_CLASS,
-        ),
+        Ok(rows) => EntityMedia {
+            text: crate::mau::entity_text(
+                &rows,
+                optical::ENT_PHYSICAL_NAME,
+                ENT_PHYSICAL_IS_FRU,
+                ENT_PHYSICAL_CLASS,
+            ),
+            copper_ports: crate::mau::copper_port_entities(
+                &rows,
+                yagra_common::OID_ENT_PHYSICAL_VENDOR_TYPE,
+                ENT_PHYSICAL_CLASS,
+            ),
+        },
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity media text walk failed");
-            BTreeMap::new()
+            EntityMedia {
+                text: BTreeMap::new(),
+                copper_ports: std::collections::BTreeSet::new(),
+            }
         }
     }
 }

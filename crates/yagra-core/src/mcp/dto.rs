@@ -347,14 +347,18 @@ pub struct InterfaceDto {
     /// when it is not known (ADR-063 Inc.2).
     ///
     /// ⚠️ `None` is the common case, and does **not** mean the port has no medium — it means no
-    /// source Yagra reads named one. There are four, in precedence order: MAU-MIB's `ifMauType`
-    /// (canonical, and rarely implemented); CISCO-STACK-MIB's `portType`, which names medium and
-    /// reach together; Huawei's `hwEthernetPortType`, from which a **copper** port's designation
-    /// follows from its speed (802.3 registers one twisted-pair standard per rate) while a fibre
-    /// one deliberately does not, since "1000BASE-X" would fight the MAU spelling on the same
-    /// cell; and an ENTITY-MIB pluggable part string that happens to contain a designation. A
-    /// fixed copper port therefore fills on Huawei and on Cisco stack platforms, and stays empty
-    /// elsewhere.
+    /// source Yagra reads named one. In precedence order: MAU-MIB's `ifMauType` (canonical, and
+    /// rarely implemented); CISCO-STACK-MIB's `portType`, which names medium and reach together;
+    /// Huawei's `hwEthernetPortType`, from which a **copper** port's designation follows from its
+    /// speed (802.3 registers one twisted-pair standard per rate); an ENTITY-MIB pluggable string
+    /// that contains a designation, or a Huawei optic description (`1300Mb/sec-1310nm-…(SMF)`)
+    /// read as rate, wavelength and fibre (ADR-063 Inc.8); and last a Cisco port whose ENTITY
+    /// vendor type says "BaseT", named from its speed. Cisco ISR routers and ASAv state no medium
+    /// anywhere, so theirs stay empty.
+    ///
+    /// On a port whose link is down (`oper_status` not 1) a designation derived from speed is
+    /// withheld — the port is running as nothing — unless a transceiver was found, in which case
+    /// the module's designation is still reported.
     pub media: Option<String>,
     /// The pluggable transceiver's vendor part string, verbatim — `SFP-1000BaseLX`.
     ///
@@ -429,14 +433,16 @@ impl InterfaceDto {
             (Some(b), Some(s)) => Some(b / s as f64 * 100.0),
             _ => None,
         };
+        // The same display rule as the Interfaces list (ADR-063 Inc.8 decision 1).
+        let (duplex, media) = crate::api::collection::shown_link_mode(meta, live.oper_status);
         Self {
             ifindex: meta.ifindex,
             name: meta.if_name.clone(),
             alias: meta.if_alias.clone(),
             speed: meta.if_speed,
-            duplex: meta.if_duplex.clone(),
+            duplex,
             if_type: meta.if_type,
-            media: meta.if_media.clone(),
+            media,
             transceiver_model: meta.transceiver_model.clone(),
             last_seen: meta.last_seen_s.map(unix_s_to_rfc3339),
             oper_status: live.oper_status,
