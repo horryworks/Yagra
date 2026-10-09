@@ -70,10 +70,37 @@ pub fn identify(sysdescr: &str) -> DeviceIdentity {
         } else {
             (None, &[])
         };
+    let yunshan = (vendor == Some("Huawei"))
+        .then(|| yunshan_model(sysdescr))
+        .flatten();
     DeviceIdentity {
         vendor: vendor.map(str::to_owned),
-        model: extract_model(sysdescr, prefixes),
+        model: yunshan.or_else(|| extract_model(sysdescr, prefixes)),
     }
+}
+
+/// The model a YunShan OS device names on the last line of its `sysDescr` (ADR-147 Increment 7).
+///
+/// The second line carries the *software family* in parentheses — `(S5700 V600R022C01SPC500)` on a
+/// CloudEngine S5735-L-V2 — and [`extract_model`] takes the first token that looks like a model, so
+/// it stored the family. The device's own model is the last line: `HUAWEI CloudEngine S5735-L-V2`.
+/// The `CloudEngine ` brand is dropped so the model reads like a VRP switch's (`S5731-S48P4X`).
+/// `None` unless the description is YunShan's and that line holds something with a digit in it, so
+/// a shape not seen yet falls back to the old rule rather than to an invented model.
+fn yunshan_model(sysdescr: &str) -> Option<String> {
+    if !sysdescr.contains("YunShan OS") {
+        return None;
+    }
+    let last = sysdescr
+        .lines()
+        .map(|l| l.trim().trim_matches('"').trim())
+        .rfind(|l| !l.is_empty())?;
+    let rest = last.strip_prefix("HUAWEI ")?.trim();
+    let model = rest.strip_prefix("CloudEngine ").unwrap_or(rest).trim();
+    model
+        .chars()
+        .any(|c| c.is_ascii_digit())
+        .then(|| model.to_owned())
 }
 
 /// Pull a model token out of `sysDescr`: the first whitespace/punctuation-delimited token whose
@@ -189,6 +216,57 @@ mod tests {
 
         // A device with no recognised vendor keyword yields nothing.
         assert_eq!(identify("Linux server 5.10 net-snmp").vendor, None);
+    }
+
+    /// The three YunShan descriptions in `testdata/os_version_fixtures.json`: the model is the last
+    /// line, not the software family in the parentheses (ADR-147 Increment 7).
+    #[test]
+    fn a_yunshan_model_comes_from_the_last_line_not_the_software_family() {
+        for (descr, model) in [
+            (
+                "\"Huawei YunShan OS
+Version 1.22.0.1 (S5700 V600R022C01SPC500) 
+Copyright (C) 2021-2022 Huawei Technologies Co., Ltd. 
+HUAWEI CloudEngine S5735-L-V2 
+\"",
+                "S5735-L-V2",
+            ),
+            (
+                "\"Huawei YunShan OS
+Version 1.24.0.1 (S6700 V600R024C00SPC100) 
+Copyright (C) 2021-2024 Huawei Technologies Co., Ltd. 
+HUAWEI CloudEngine S6750-H 
+\"",
+                "S6750-H",
+            ),
+            (
+                "Huawei YunShan OS 
+Version 1.24.0.1 (USG V600R024C00SPC100) 
+Copyright (C) 2021-2024 Huawei Technologies Co., Ltd. 
+HUAWEI USG6530F-D 
+",
+                "USG6530F-D",
+            ),
+        ] {
+            let id = identify(descr);
+            assert_eq!(id.vendor.as_deref(), Some("Huawei"), "{descr:?}");
+            assert_eq!(id.model.as_deref(), Some(model), "{descr:?}");
+        }
+    }
+
+    /// A last line that names no model falls back to the old rule; VRP never reaches the new one.
+    #[test]
+    fn a_yunshan_description_without_a_model_line_keeps_the_old_rule() {
+        let bare = "Huawei YunShan OS
+Version 1.22.0.1 (S5700 V600R022C01SPC500)
+HUAWEI
+";
+        assert_eq!(identify(bare).model.as_deref(), Some("S5700"));
+        let vrp = "S5731-S48P4X
+Huawei Versatile Routing Platform Software
+VRP (R) software, Version 5.170 (S5731 V200R021C10SPC600)
+Copyright (C) 2000-2022 HUAWEI TECH Co., Ltd";
+        assert_eq!(identify(vrp).model.as_deref(), Some("S5731-S48P4X"));
     }
 
     #[test]

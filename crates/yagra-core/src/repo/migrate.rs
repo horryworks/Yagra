@@ -620,6 +620,75 @@ mod tests {
         );
     }
 
+    /// **0148 clears a YunShan device's model only where it is the software family the old rule
+    /// took** (ADR-147 Inc.7). The harness has applied 0148 to an empty table, so the fixture
+    /// writes the pre-0148 rows and applies the file's own statement: the guessed family goes, a
+    /// model an operator typed and a VRP switch's model stay.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_yunshan_model_migration_clears_only_the_guessed_software_family(
+        pool: sqlx::PgPool,
+    ) {
+        let yunshan = "Huawei YunShan OS\r\nVersion 1.22.0.1 (S5700 V600R022C01SPC500)\r\n\
+                       Copyright (C) 2021-2022 Huawei Technologies Co., Ltd.\r\n\
+                       HUAWEI CloudEngine S5735-L-V2";
+        let vrp = "S5731-S48P4X\r\nHuawei Versatile Routing Platform Software\r\n\
+                   VRP (R) software, Version 5.170 (S5731 V200R021C10SPC600)";
+        let mut ids = Vec::new();
+        for (n, (name, descr, model)) in [
+            ("guessed", yunshan, "S5700"),
+            ("typed", yunshan, "CE-S5735 core"),
+            ("vrp", vrp, "S5731-S48P4X"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = crate::pgtest::node(&pool, name, u8::try_from(n + 1).expect("n"), None).await;
+            sqlx::query("UPDATE nodes SET sys_descr = $2, model = $3 WHERE id = $1")
+                .bind(id)
+                .bind(descr)
+                .bind(model)
+                .execute(&pool)
+                .await
+                .expect("the pre-0148 row");
+            ids.push(id);
+        }
+
+        let sql = include_str!("../../../../migrations/0148_yunshan_model_from_last_line.sql");
+        let code = sql
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut applied = 0u64;
+        for stmt in code.split(';').filter(|s| !s.trim().is_empty()) {
+            applied += sqlx::query(stmt)
+                .execute(&pool)
+                .await
+                .expect("the migration's statement applies")
+                .rows_affected();
+        }
+        assert_eq!(applied, 1, "exactly the guessed row changes");
+
+        let model = |id: uuid::Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<String>>("SELECT model FROM nodes WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("the node exists")
+            }
+        };
+        assert_eq!(
+            model(ids[0]).await,
+            None,
+            "the software family is forgotten"
+        );
+        assert_eq!(model(ids[1]).await.as_deref(), Some("CE-S5735 core"));
+        assert_eq!(model(ids[2]).await.as_deref(), Some("S5731-S48P4X"));
+    }
+
     /// Foreign-key columns deliberately left without an index, and why each one is safe.
     ///
     /// PostgreSQL runs one referential action per deleted row against every table whose foreign

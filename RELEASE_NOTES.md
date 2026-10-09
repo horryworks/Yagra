@@ -24,6 +24,7 @@
 
 - **The notification delivery log no longer records a resolve that was never sent.** Webhook and email channels send nothing when an alert resolves, but each recovery was logged as "Delivered · 0 ms". Those rows are no longer written; PagerDuty and JSM closes are logged as before. The `yagra_notification_dispatch_total` metric counts these as `outcome="skipped"` instead of `delivered`.
 - **Chart legends name and format the time row in the interface language.** The row read "Time:" with a US-style clock on a Japanese screen.
+- **Huawei switches on YunShan OS show their real model.** A CloudEngine S5735-L-V2 was stored as `S5700` (or `S5750`) — the software family its system description names first. The model now comes from the line that names the device. Models already stored that way are cleared on upgrade and read again within the hour; a model typed by hand is kept.
 
 ## v0.3.47 — A missing subnet can be marked as intentional, and alerts no longer stall behind a slow notification channel
 
