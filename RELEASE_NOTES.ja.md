@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.48 — Interfaces タブにスイッチのポートのモードと VLAN が出て、YunShan のスイッチに本当の型番が出る
+
 ### 新機能
 
 - **Interfaces タブに、スイッチのポートのモードと VLAN が出るようになりました。** Duplex の後ろに 2 列が増えます。**Mode**（アクセス・トランク・ハイブリッド、または Eth-Trunk / Port-channel のメンバー）と **VLAN**（アクセスの VLAN と音声 VLAN、またはトランクの native VLAN と許可 VLAN を設定どおりに。全 VLAN を許可していれば `すべて`）です。メンバーのポートは所属先へのリンクになり、所属先の行の下の欄にはメンバーの一覧が出ます。Mode で絞り込めるほか、VLAN 番号を入れると、その VLAN が通るポートだけに絞れます。Cisco Catalyst と Huawei のスイッチは SNMP で、Meraki MS はポート名のためにすでに読んでいる Dashboard の応答から、1 時間に 1 回ほど読みます。それ以外の機器は `報告なし` と出ます。Oper 列はポート名のすぐ後ろに移りました。
