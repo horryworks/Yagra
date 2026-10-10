@@ -25,6 +25,8 @@ tokio = { workspace = true }
 metrics = { workspace = true }
 async-trait = { workspace = true }
 rand = { workspace = true }
+# The outbound HTTP client (`http.rs`), shared by core and `yagra-netbox`.
+reqwest = { workspace = true }
 # The table vocabulary's statement scan (`sql_tables`, behind `test-util`).
 regex = { workspace = true, optional = true }
 # The folder, credential and profile summaries are returned by the northbound API, so they carry
@@ -38,6 +40,8 @@ yagra-common = { path = "../yagra-common", features = ["test-util"] }
 # `pool_takeover`'s tests name the default pool, which `yagra-bus` exports with its NATS client.
 yagra-bus = { path = "../yagra-bus", features = ["nats"] }
 regex = { workspace = true }
+# `http.rs`'s redirect tests stand a server up.
+axum = { workspace = true }
 
 [features]
 # The real-PostgreSQL test convention (`pgtest`), the table vocabulary (`sql_tables`) and the

@@ -463,7 +463,7 @@ async fn live_state_with(
         meraki_inventory,
         meraki_import,
         meraki_sync,
-        netbox: Arc::new(crate::netbox::NetboxRepo::new(pool.clone())),
+        netbox: Arc::new(yagra_netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,
         events: events_repo,
         coordinator: Arc::new(crate::coordinator::Coordinator::new(

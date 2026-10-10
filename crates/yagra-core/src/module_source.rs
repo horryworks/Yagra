@@ -45,30 +45,36 @@ pub(crate) fn crate_code() -> Vec<(String, String)> {
     yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join("src"))
 }
 
-/// Where the database layer's sources are, relative to this crate (ADR-202 Inc.5).
-const YAGRA_BASE_SRC: &str = "../yagra-base/src";
+/// The crates split out of core (ADR-202 Inc.5), as `(name, src directory relative to this crate)`.
+/// A new split adds a row here, and every whole-program check reads it from then on.
+const SPLIT_OUT: &[(&str, &str)] = &[
+    ("yagra-base", "../yagra-base/src"),
+    ("yagra-netbox", "../yagra-netbox/src"),
+];
 
-/// The `src` directories of the program: core's and `yagra-base`'s.
+/// The `src` directories of the program: core's and those of the crates split out of it.
 ///
 /// For a check whose claim is about the program rather than about one crate — see
 /// `program_guards.rs`. A walk of [`BASE`] alone stopped seeing the repositories the day they
 /// moved, and nothing failed.
 pub(crate) fn program_src_dirs() -> Vec<PathBuf> {
-    vec![
-        Path::new(BASE).join("src"),
-        Path::new(BASE).join(YAGRA_BASE_SRC),
-    ]
+    std::iter::once(Path::new(BASE).join("src"))
+        .chain(SPLIT_OUT.iter().map(|(_, dir)| Path::new(BASE).join(dir)))
+        .collect()
 }
 
-/// [`crate_code`] over the whole program: core's files named as they are, `yagra-base`'s with a
-/// `yagra-base/` prefix (`yagra-base/repo/mod.rs`), so an exemption list says which crate it means.
+/// [`crate_code`] over the whole program: core's files named as they are, a split-out crate's
+/// with its name as a prefix (`yagra-base/repo/mod.rs`, `yagra-netbox/lib.rs`), so an exemption
+/// list says which crate it means.
 pub(crate) fn program_code() -> Vec<(String, String)> {
     let mut out = crate_code();
-    out.extend(
-        yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join(YAGRA_BASE_SRC))
-            .into_iter()
-            .map(|(name, code)| (format!("yagra-base/{name}"), code)),
-    );
+    for (name, dir) in SPLIT_OUT {
+        out.extend(
+            yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join(dir))
+                .into_iter()
+                .map(|(file, code)| (format!("{name}/{file}"), code)),
+        );
+    }
     out
 }
 

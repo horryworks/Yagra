@@ -5,9 +5,9 @@
 //! written". When the database layer left core for `yagra-base`, every such check kept compiling
 //! and quietly stopped seeing a third of the code it was about: `env!("CARGO_MANIFEST_DIR")`
 //! expands to the crate a check is written in, so a walk of "this crate" is a walk of one tree.
-//! They are gathered here and read **both** trees through
+//! They are gathered here and read **every** tree — core's, `yagra-base`'s and `yagra-netbox`'s — through
 //! [`crate::module_source::program_src_dirs`] and [`crate::module_source::program_code`], which
-//! name `yagra-base`'s files with a `yagra-base/` prefix.
+//! name a split-out crate's files with its name as a prefix.
 //!
 //! A check about one module of `yagra-base` stays in that crate and reads through its own
 //! `module_source`. The rule for which side a check goes on: does its claim name the program, or
@@ -423,7 +423,7 @@ const HAND_WRITTEN: &[(&str, &str)] = &[
         "`EventStatGroup::parse` reads a query parameter one way; it has no stored token and no `as_str`",
     ),
     (
-        "netbox.rs",
+        "yagra-netbox/lib.rs",
         "`NetboxField` has a `Custom(String)` variant, so it is not a fieldless enum",
     ),
     (
@@ -567,4 +567,86 @@ fn every_insert_into_a_tree_table_names_sort_order() {
          column's DEFAULT 0 and sits above everything in its scope (ADR-162):\n  {}",
         offenders.join("\n  ")
     );
+}
+
+// ---- outbound HTTP clients (ADR-184 Inc.2), formerly in `http.rs` ----
+
+/// Files that build a client, with why each one is allowed to. Everything else in the program
+/// goes through `yagra_base::http::builder` or `client`.
+const BUILDS_ITS_OWN: &[&str] = &["yagra-base/http.rs"];
+
+/// ADR-184: nobody else in the program builds an outbound client.
+///
+/// The spellings searched for are the three ways `reqwest` offers one. They are put together at
+/// run time so that this file's own production text — which has to contain one of them — is
+/// the only place a literal exists.
+#[test]
+fn every_outbound_client_is_built_here() {
+    let files = crate::module_source::program_code();
+    assert!(files.len() >= 150, "only {} files were read", files.len());
+    let spellings = [
+        format!("{}::builder()", "Client"),
+        format!("{}::new()", "reqwest::Client"),
+        format!("{}::new()", "ClientBuilder"),
+    ];
+    let offenders: Vec<String> = files
+        .iter()
+        .filter(|(name, _)| !BUILDS_ITS_OWN.contains(&name.as_str()))
+        .flat_map(|(name, code)| {
+            spellings
+                .iter()
+                .filter(|s| code.contains(s.as_str()))
+                .map(move |s| format!("{name}: {s}"))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} build an HTTP client of their own. Use `yagra_base::http::client` (or \
+         `builder`, to add to it) so the timeout and the redirect policy are decided in the \
+         open — the last client built by hand had no timeout at all"
+    );
+    // The floor: the callers this was written for were found using it, so "no offenders" was
+    // measured over the real crate.
+    let callers = files
+        .iter()
+        .filter(|(_, code)| {
+            code.contains(&format!("http::{}(", "client"))
+                || code.contains(&format!("http::{}(", "builder"))
+        })
+        .count();
+    assert!(
+        callers >= 9,
+        "only {callers} files build a client through this module"
+    );
+}
+
+/// The callers whose URL comes from an operator or a third party. Each must refuse redirects.
+const NEVER_FOLLOWS: &[&str] = &["alerts/notify.rs", "yagra-netbox/lib.rs", "oidc.rs"];
+
+/// ADR-184: the three callers that must not follow a redirect still say so.
+///
+/// Since the policy became an argument, relaxing it is a one-word edit that compiles, runs and
+/// passes every behavioural test that does not happen to redirect.
+#[test]
+fn the_no_redirect_callers_still_say_so() {
+    let files = crate::module_source::program_code();
+    let refuse = format!("Redirects::{}", "None");
+    let follow = format!("Redirects::{}", "Follow");
+    let mut inspected = 0;
+    for name in NEVER_FOLLOWS {
+        let (_, code) = files
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name} is gone; NEVER_FOLLOWS names a file that moved"));
+        assert!(
+            code.contains(&refuse),
+            "{name} no longer builds its client with `{refuse}`"
+        );
+        assert!(
+            !code.contains(&follow),
+            "{name} builds a client that follows redirects, and its URL is not core's to trust"
+        );
+        inspected += 1;
+    }
+    assert_eq!(inspected, NEVER_FOLLOWS.len());
 }

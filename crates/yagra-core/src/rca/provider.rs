@@ -236,7 +236,7 @@ pub trait LlmProvider: Send + Sync {
 /// # Errors
 /// Returns operator-facing text when the client cannot be constructed.
 pub(crate) fn http_client() -> Result<reqwest::Client, String> {
-    crate::http::builder(REQUEST_TIMEOUT, crate::http::Redirects::Follow)
+    yagra_base::http::builder(REQUEST_TIMEOUT, yagra_base::http::Redirects::Follow)
         .build()
         .map_err(|e| format!("HTTP client: {e}"))
 }

@@ -141,7 +141,7 @@ impl BigQueryClient {
     pub fn new(target: &str, service_account_json: Option<&str>) -> Result<Self, String> {
         let target = BigQueryTarget::parse(target)?;
         let tokens = TokenSource::new(SERVICE, crate::gcp::SCOPE_BIGQUERY, service_account_json)?;
-        let http = crate::http::builder(HTTP_TIMEOUT, crate::http::Redirects::Follow)
+        let http = yagra_base::http::builder(HTTP_TIMEOUT, yagra_base::http::Redirects::Follow)
             .build()
             .map_err(|e| format!("HTTP client: {e}"))?;
         Ok(Self {
@@ -399,7 +399,7 @@ mod tests {
     /// address, and the requests it saw as `(method, path, body)`.
     struct FakeGoogle {
         replies: Mutex<Vec<(u16, String)>>,
-        seen: Mutex<Option<Arc<Mutex<Vec<crate::httpfake::Seen>>>>>,
+        seen: Mutex<Option<Arc<Mutex<Vec<yagra_base::httpfake::Seen>>>>>,
     }
 
     impl FakeGoogle {
@@ -428,7 +428,7 @@ mod tests {
 
     async fn serve(fake: Arc<FakeGoogle>) -> SocketAddr {
         let replies = std::mem::take(&mut *fake.replies.lock().unwrap());
-        let (addr, seen) = crate::httpfake::serve(replies).await;
+        let (addr, seen) = yagra_base::httpfake::serve(replies).await;
         *fake.seen.lock().unwrap() = Some(seen);
         addr
     }

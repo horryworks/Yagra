@@ -26,7 +26,7 @@ use std::time::Duration;
 /// classic way an allowed address becomes a request to a loopback or metadata address, and the
 /// check at the API edge only ever saw the first hop (SSRF, `security.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Redirects {
+pub enum Redirects {
     /// Never follow one.
     None,
     /// Follow them, as `reqwest` does by default. For core's own stores, whose address is static
@@ -48,7 +48,7 @@ const USER_AGENT: &str = "Yagra-core";
 
 /// A builder with the three shared decisions made. For a caller that has more to add (a private
 /// CA) or that reports a build failure to its own caller; everyone else wants [`client`].
-pub(crate) fn builder(timeout: Duration, redirects: Redirects) -> reqwest::ClientBuilder {
+pub fn builder(timeout: Duration, redirects: Redirects) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(redirects.policy())
@@ -63,7 +63,7 @@ pub(crate) fn builder(timeout: Duration, redirects: Redirects) -> reqwest::Clien
 /// caller forbade is not. If that attempt fails too, this panics rather than hand back
 /// `reqwest::Client::default()`, which follows redirects. This is the only place in the crate a
 /// build failure falls back.
-pub(crate) fn client(timeout: Duration, redirects: Redirects) -> reqwest::Client {
+pub fn client(timeout: Duration, redirects: Redirects) -> reqwest::Client {
     builder(timeout, redirects).build().unwrap_or_else(|error| {
         tracing::error!(%error, "could not build an outbound HTTP client; retrying without a timeout");
         reqwest::Client::builder()
@@ -148,85 +148,5 @@ mod tests {
             .expect_err("nothing was ever sent back");
         assert!(err.is_timeout(), "{err}");
         assert!(started.elapsed() < Duration::from_secs(5));
-    }
-
-    /// Files that build a client, with why each one is allowed to. Everything else in the crate
-    /// goes through [`builder`] or [`client`].
-    const BUILDS_ITS_OWN: &[&str] = &["http.rs"];
-
-    /// ADR-184: nobody else in this crate builds an outbound client.
-    ///
-    /// The spellings searched for are the three ways `reqwest` offers one. They are put together at
-    /// run time so that this file's own production text — which has to contain one of them — is
-    /// the only place a literal exists.
-    #[test]
-    fn every_outbound_client_is_built_here() {
-        let files = crate::module_source::crate_code();
-        assert!(files.len() >= 150, "only {} files were read", files.len());
-        let spellings = [
-            format!("{}::builder()", "Client"),
-            format!("{}::new()", "reqwest::Client"),
-            format!("{}::new()", "ClientBuilder"),
-        ];
-        let offenders: Vec<String> = files
-            .iter()
-            .filter(|(name, _)| !BUILDS_ITS_OWN.contains(&name.as_str()))
-            .flat_map(|(name, code)| {
-                spellings
-                    .iter()
-                    .filter(|s| code.contains(s.as_str()))
-                    .map(move |s| format!("{name}: {s}"))
-            })
-            .collect();
-        assert!(
-            offenders.is_empty(),
-            "{offenders:?} build an HTTP client of their own. Use `crate::http::client` (or \
-             `builder`, to add to it) so the timeout and the redirect policy are decided in the \
-             open — the last client built by hand had no timeout at all"
-        );
-        // The floor: the callers this was written for were found using it, so "no offenders" was
-        // measured over the real crate.
-        let callers = files
-            .iter()
-            .filter(|(_, code)| {
-                code.contains(&format!("http::{}(", "client"))
-                    || code.contains(&format!("http::{}(", "builder"))
-            })
-            .count();
-        assert!(
-            callers >= 9,
-            "only {callers} files build a client through this module"
-        );
-    }
-
-    /// The callers whose URL comes from an operator or a third party. Each must refuse redirects.
-    const NEVER_FOLLOWS: &[&str] = &["alerts/notify.rs", "netbox.rs", "oidc.rs"];
-
-    /// ADR-184: the three callers that must not follow a redirect still say so.
-    ///
-    /// Since the policy became an argument, relaxing it is a one-word edit that compiles, runs and
-    /// passes every behavioural test that does not happen to redirect.
-    #[test]
-    fn the_no_redirect_callers_still_say_so() {
-        let files = crate::module_source::crate_code();
-        let refuse = format!("Redirects::{}", "None");
-        let follow = format!("Redirects::{}", "Follow");
-        let mut inspected = 0;
-        for name in NEVER_FOLLOWS {
-            let (_, code) = files
-                .iter()
-                .find(|(n, _)| n == name)
-                .unwrap_or_else(|| panic!("{name} is gone; NEVER_FOLLOWS names a file that moved"));
-            assert!(
-                code.contains(&refuse),
-                "{name} no longer builds its client with `{refuse}`"
-            );
-            assert!(
-                !code.contains(&follow),
-                "{name} builds a client that follows redirects, and its URL is not core's to trust"
-            );
-            inspected += 1;
-        }
-        assert_eq!(inspected, NEVER_FOLLOWS.len());
     }
 }

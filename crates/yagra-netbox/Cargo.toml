@@ -1,0 +1,34 @@
+[package]
+name = "yagra-netbox"
+description = "Yagra-netbox — the NetBox integration: mirror the site hierarchy and its prefixes into Yagra's folder tree, read-only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+# The folder tree it writes, the NetBox token it reads sealed, and the outbound client it builds.
+yagra-base = { path = "../yagra-base" }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+# A pasted CA is parsed and checked before it is stored (ADR-100 decision 8).
+rustls = { workspace = true }
+x509-parser = { workspace = true }
+
+[dev-dependencies]
+# `srcread`, the real-PostgreSQL fixtures and the HTTP stand-in. Dev-dependencies only, so a
+# release build carries none of them.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
+yagra-base = { path = "../yagra-base", features = ["test-util"] }
+# Self-signed certificates for the pasted-CA tests.
+rcgen = { workspace = true }

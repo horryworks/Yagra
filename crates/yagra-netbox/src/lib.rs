@@ -68,6 +68,9 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+#[cfg(test)]
+mod module_source;
+
 use yagra_base::groups::GroupType;
 use yagra_base::secrets::{CredentialStore, NetboxTokenSecret, KIND_NETBOX_TOKEN};
 
@@ -471,7 +474,7 @@ pub fn validate_ca_pem(pem: &str) -> Result<(), &'static str> {
     // A private key pasted into a certificate field would land in a plaintext column the API
     // returns. Refusing is the only safe answer — silently stripping it leaves the operator
     // believing a key they exposed is still private. Same rule, same helper, as ADR-044's.
-    if crate::server_cert::contains_private_key_block(pem) {
+    if yagra_base::pem::contains_private_key_block(pem) {
         return Err("ca_cert_pem contains a private key block; paste only the certificate");
     }
     let mut n = 0usize;
@@ -782,7 +785,8 @@ impl NetboxClient {
             .map_err(|e| anyhow::anyhow!("netbox base_url refused: {}", e.message()))?;
         // No redirect following: a 302 is the classic way an allowed base URL becomes a request
         // somewhere else, and `validate_base_url` only ever saw the first hop.
-        let mut builder = crate::http::builder(REQUEST_TIMEOUT, crate::http::Redirects::None);
+        let mut builder =
+            yagra_base::http::builder(REQUEST_TIMEOUT, yagra_base::http::Redirects::None);
         if let Some(pem) = ca_pem {
             let cert = reqwest::Certificate::from_pem(pem.as_bytes())
                 .map_err(|_| anyhow::anyhow!("ca_cert_pem is not a valid PEM certificate"))?;
@@ -3129,7 +3133,7 @@ mod tests {
     /// the failure `assert_no_file_matches_a_literal_against_its_own_text` exists for.
     #[test]
     fn the_client_only_ever_issues_reads() {
-        let src = crate::module_source::code("src", "netbox");
+        let src = crate::module_source::code("src", "lib");
         for forbidden in [".post(", ".put(", ".patch(", ".send_form("] {
             assert!(
                 !src.contains(forbidden),
@@ -3148,7 +3152,7 @@ mod tests {
     /// Decision 2's centre, as a build failure rather than as a comment.
     #[test]
     fn the_folder_upsert_never_writes_the_operators_column() {
-        let src = crate::module_source::code("src", "netbox");
+        let src = crate::module_source::code("src", "lib");
         // Slice exactly the one statement, from its INSERT to the start of the next one. A
         // fixed-length window would drift with formatting and could silently include or exclude
         // the clause under test.
@@ -3952,7 +3956,7 @@ mod tests {
                      "latitude":null,"longitude":null}}]}}"#
             )
         };
-        let (addr, seen) = crate::httpfake::serve(vec![
+        let (addr, seen) = yagra_base::httpfake::serve(vec![
             (
                 200,
                 page(
@@ -3987,7 +3991,7 @@ mod tests {
     /// listing and an error for a required one.
     #[tokio::test]
     async fn a_refused_first_page_is_an_answer_only_where_the_listing_is_optional() {
-        let (addr, _) = crate::httpfake::serve(vec![(403, "{}".to_owned())]).await;
+        let (addr, _) = yagra_base::httpfake::serve(vec![(403, "{}".to_owned())]).await;
         let client =
             NetboxClient::new(&format!("http://localhost:{}", addr.port()), "t", None).unwrap();
         assert!(client
@@ -3995,7 +3999,7 @@ mod tests {
             .await
             .expect("a refusal is an answer")
             .is_none());
-        let (addr, _) = crate::httpfake::serve(vec![(403, "{}".to_owned())]).await;
+        let (addr, _) = yagra_base::httpfake::serve(vec![(403, "{}".to_owned())]).await;
         let client =
             NetboxClient::new(&format!("http://localhost:{}", addr.port()), "t", None).unwrap();
         assert!(

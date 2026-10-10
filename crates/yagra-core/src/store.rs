@@ -592,9 +592,9 @@ impl VmStore {
         // A bounded timeout is load-bearing: `write`/`healthy`/`query_*` all run on the single
         // result-ingest task, so a hung VM socket (no timeout) would stall the entire fleet's
         // ingest indefinitely. Matches the 10s discipline on the notifier client (`WebhookChannel`).
-        let http = crate::http::client(
+        let http = yagra_base::http::client(
             std::time::Duration::from_secs(10),
-            crate::http::Redirects::Follow,
+            yagra_base::http::Redirects::Follow,
         );
         Self {
             http,

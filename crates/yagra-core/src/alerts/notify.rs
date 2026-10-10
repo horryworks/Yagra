@@ -125,12 +125,12 @@ pub(crate) fn dedup_string(key: &yagra_alert::DedupKey) -> String {
 }
 
 /// The outbound client every notification channel uses: bounded timeout, **no redirect
-/// following** (SSRF). A build failure keeps the no-redirect policy — see [`crate::http::client`],
+/// following** (SSRF). A build failure keeps the no-redirect policy — see [`yagra_base::http::client`],
 /// which is where that became true; the fallback that used to be written here followed redirects.
 fn hardened_client() -> reqwest::Client {
-    crate::http::client(
+    yagra_base::http::client(
         std::time::Duration::from_secs(10),
-        crate::http::Redirects::None,
+        yagra_base::http::Redirects::None,
     )
 }
 

@@ -263,7 +263,7 @@ impl VlStore {
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
         Self {
-            http: crate::http::client(QUERY_TIMEOUT, crate::http::Redirects::Follow),
+            http: yagra_base::http::client(QUERY_TIMEOUT, yagra_base::http::Redirects::Follow),
             base: base.into(),
             write_timeout: WRITE_TIMEOUT,
         }
@@ -2681,7 +2681,7 @@ mod tests {
         // The caller counts persisted and dropped from this answer; before, every batch was
         // counted as persisted whatever the store said.
         let (addr, _) =
-            crate::httpfake::serve(vec![(500, String::new()), (204, String::new())]).await;
+            yagra_base::httpfake::serve(vec![(500, String::new()), (204, String::new())]).await;
         let store = VlStore::new(format!("http://{addr}"));
         let batch = [record(Uuid::nil(), "link down", 0, EventAction::None)];
         assert!(!store.ingest_batch(&batch).await, "a 500 is not accepted");

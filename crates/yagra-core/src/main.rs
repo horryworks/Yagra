@@ -50,12 +50,6 @@ mod forward;
 mod forward_store;
 mod gcp;
 mod host_collector;
-// The outbound HTTP client core builds for its own stores and integrations (ADR-184). Apart from
-// `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.
-mod http;
-// The HTTP stand-in outbound-client tests point at (ADR-184).
-#[cfg(test)]
-mod httpfake;
 mod interface_util;
 mod ipasn;
 mod l3;
@@ -76,14 +70,13 @@ mod metric_meaning;
 mod mib;
 #[cfg(test)]
 mod module_source;
-// The source-text checks whose claim is about the whole program, reading core's tree and
-// `yagra-base`'s together (ADR-202 Inc.5).
 mod neighbors;
-mod netbox;
 mod node_display;
 mod oidc;
 /// Per-account pins on the inventory tree (ADR-146).
 mod pins;
+// The source-text checks whose claim is about the whole program, reading core's tree and the
+// crates split out of it together (ADR-202 Inc.5).
 #[cfg(test)]
 mod program_guards;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
@@ -259,7 +252,12 @@ async fn run_healthcheck() -> i32 {
     let addr = config::api_addr_from_env();
     let port = addr.rsplit(':').next().unwrap_or("8080");
     let url = format!("http://127.0.0.1:{port}/healthz");
-    let client = match http::builder(Duration::from_secs(3), http::Redirects::Follow).build() {
+    let client = match yagra_base::http::builder(
+        Duration::from_secs(3),
+        yagra_base::http::Redirects::Follow,
+    )
+    .build()
+    {
         Ok(c) => c,
         Err(_) => return 1,
     };
@@ -501,7 +499,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // (ADR-169; shared by the Meraki scheduler and the result consumer, which clears a lane on the
     // collect's first result). Read-only integration.
     let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
-    let netbox = Arc::new(netbox::NetboxRepo::new(repo.pool()));
+    let netbox = Arc::new(yagra_netbox::NetboxRepo::new(repo.pool()));
     let meraki_devices = Arc::new(meraki::MerakiDeviceRepo::new(repo.pool()));
     let meraki_inflight = Arc::new(meraki::MerakiInflight::new());
 
@@ -1161,7 +1159,7 @@ struct LeaderTasks {
     meraki_sync: Arc<meraki::sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
-    netbox: Arc<netbox::NetboxRepo>,
+    netbox: Arc<yagra_netbox::NetboxRepo>,
     /// Which poller pool Meraki collection jobs are published to (moved: read once at startup).
     meraki_pool: String,
     /// Retention for ClickHouse's own system logs (ADR-031 Inc.4); `0` leaves `system.*` alone.
@@ -1535,7 +1533,7 @@ impl LeaderTasks {
         // gives; the loop itself decides which servers are due.
         spawn_cancellable(
             &self.shutdown,
-            netbox::run_sync_loop(self.netbox.clone(), self.creds.clone()),
+            yagra_netbox::run_sync_loop(self.netbox.clone(), self.creds.clone()),
         );
     }
 

@@ -243,7 +243,7 @@ pub struct AdminState {
     pub meraki_sync: Arc<crate::meraki::sync::MerakiSync>,
     /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
     /// and outbound from core; the API token lives sealed in `creds`, never on this row.
-    pub netbox: Arc<crate::netbox::NetboxRepo>,
+    pub netbox: Arc<yagra_netbox::NetboxRepo>,
     /// Per-node Cisco Meraki device bindings.
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).

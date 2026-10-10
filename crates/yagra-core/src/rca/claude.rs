@@ -476,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_completion_sends_the_documented_headers() {
-        let (addr, seen) = crate::httpfake::serve(vec![(
+        let (addr, seen) = yagra_base::httpfake::serve(vec![(
             200,
             json!({
                 "content": [{ "type": "text", "text": "hello" }],
@@ -503,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_401_is_an_auth_error_carrying_the_providers_reason() {
-        let (addr, _) = crate::httpfake::serve(vec![(
+        let (addr, _) = yagra_base::httpfake::serve(vec![(
             401,
             json!({ "error": { "type": "authentication_error", "message": "invalid x-api-key" } })
                 .to_string(),
@@ -521,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_429_is_reported_as_rate_limiting() {
-        let (addr, _) = crate::httpfake::serve(vec![(429, "{}".to_owned())]).await;
+        let (addr, _) = yagra_base::httpfake::serve(vec![(429, "{}".to_owned())]).await;
         let err = ClaudeProvider::new("sk-ant-x", "claude-opus-5")
             .unwrap()
             .with_url(format!("http://{addr}/v1/messages"))

@@ -450,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_completion_sends_the_api_key_header() {
-        let (addr, seen) = crate::httpfake::serve(vec![(
+        let (addr, seen) = yagra_base::httpfake::serve(vec![(
             200,
             json!({
                 "candidates": [{ "content": { "parts": [{ "text": "hi" }] }, "finishReason": "STOP" }],
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_403_is_an_auth_error_with_googles_status() {
-        let (addr, _) = crate::httpfake::serve(vec![(
+        let (addr, _) = yagra_base::httpfake::serve(vec![(
             403,
             json!({ "error": { "status": "PERMISSION_DENIED", "message": "API key not valid" } })
                 .to_string(),

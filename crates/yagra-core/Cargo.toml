@@ -21,6 +21,8 @@ yagra-topology = { path = "../yagra-topology" }
 yagra-alert = { path = "../yagra-alert" }
 # The database layer (ADR-202 Inc.5): repositories, folders, sealed secrets, the config generation.
 yagra-base = { path = "../yagra-base" }
+# The NetBox integration (ADR-100), its own crate since ADR-202 Inc.5.
+yagra-netbox = { path = "../yagra-netbox" }
 yagra-discovery = { path = "../yagra-discovery" }
 # Forwarding filters + wire renderers for the passive-data tee (ADR-034).
 yagra-forward = { path = "../yagra-forward" }

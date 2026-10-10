@@ -5110,10 +5110,12 @@ version = "0.3.48"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "metrics",
  "rand 0.8.6",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -5212,6 +5214,7 @@ dependencies = [
  "yagra-forward",
  "yagra-hoststats",
  "yagra-ingest",
+ "yagra-netbox",
  "yagra-oui",
  "yagra-secrets",
  "yagra-telemetry",
@@ -5261,6 +5264,26 @@ version = "0.3.48"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
+ "yagra-common",
+]
+
+[[package]]
+name = "yagra-netbox"
+version = "0.3.48"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+ "x509-parser 0.16.0",
+ "yagra-base",
  "yagra-common",
 ]
 

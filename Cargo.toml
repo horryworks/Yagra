@@ -8,6 +8,7 @@
 #   crates/yagra-discovery = Discovery & classification      [lib]
 #   crates/yagra-alert     = Alert engine                    [lib]
 #   crates/yagra-base      = Database layer under core       [lib]
+#   crates/yagra-netbox    = NetBox integration (read-only)  [lib]
 #   crates/yagra-ingest    = Passive-event parsing (syslog/trap) [lib]
 #   crates/yagra-forward   = Forwarding filters + renderers  [lib]
 #   crates/yagra-bus       = Task queue / bus                [lib]
@@ -32,6 +33,7 @@ members = [
     "crates/yagra-discovery",
     "crates/yagra-alert",
     "crates/yagra-base",
+    "crates/yagra-netbox",
     "crates/yagra-ingest",
     "crates/yagra-forward",
     "crates/yagra-poller",

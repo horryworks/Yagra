@@ -540,9 +540,9 @@ impl ChStore {
     /// retention (days).
     #[must_use]
     pub fn with_retention(base: impl Into<String>, retention_days: u32) -> Self {
-        let http = crate::http::client(
+        let http = yagra_base::http::client(
             std::time::Duration::from_secs(15),
-            crate::http::Redirects::Follow,
+            yagra_base::http::Redirects::Follow,
         );
         Self {
             http,

@@ -19,13 +19,13 @@
 //!
 //! # Three guards protect the operator, and each one has a different failure it prevents
 //!
-//! - **[`crate::netbox::validate_base_url`]** — the base URL is operator-entered, which no other
+//! - **[`yagra_netbox::validate_base_url`]** — the base URL is operator-entered, which no other
 //!   integration's is (Meraki pins an allow-list of vendor hosts; ADR-034 made BigQuery's a
 //!   constant). Without it, anyone who can reach this endpoint could point core at a server they
 //!   control and have it deliver the API token there. The rule lives in `netbox.rs` and is called
 //!   from here rather than restated, because a second copy of a URL check is exactly the shape
 //!   this workspace has already shipped a hole in (`extensibility.md` §3).
-//! - **[`crate::netbox::validate_ca_pem`]** — a pasted CA lands in a plaintext, API-readable
+//! - **[`yagra_netbox::validate_ca_pem`]** — a pasted CA lands in a plaintext, API-readable
 //!   column, so a private key pasted into that box would be published. Refused, never stripped.
 //! - **[`upstream_error`]** — a NetBox error body can quote the request, and the request carries
 //!   the `Authorization: Token …` header. So upstream detail is logged and never returned.
@@ -38,7 +38,6 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView};
 use super::ApiState;
-use crate::netbox::{self, NetboxClient, NetboxRepo, NetboxServer};
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -48,6 +47,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_base::secrets::KIND_NETBOX_TOKEN;
+use yagra_netbox::{self as netbox, NetboxClient, NetboxRepo, NetboxServer};
 
 /// Bounds on the operator-set sync cadence. The floor is not the same as
 /// `netbox::MIN_SYNC_INTERVAL`'s: that one is a safety net inside the loop, this one is the form's
@@ -490,7 +490,7 @@ async fn update_netbox_server(
         .netbox
         .update(
             id,
-            crate::netbox::ServerUpdate {
+            yagra_netbox::ServerUpdate {
                 name: body.name.trim(),
                 base_url: &base,
                 credential_id,
@@ -1244,7 +1244,7 @@ mod tests {
     /// Every built-in the parser accepts must reach the wire, or the form cannot offer it.
     ///
     /// 🚨 [`SiteIdBuiltIn::of`] is a `filter_map`, so a variant added to
-    /// [`crate::netbox::SiteIdField`] and not to that match is **silently dropped** — the API would
+    /// [`yagra_netbox::SiteIdField`] and not to that match is **silently dropped** — the API would
     /// accept a field the picker never shows. The assertion counts what was mapped against what
     /// exists, which is the only form of this check that cannot pass by inspecting nothing.
     #[test]
@@ -1252,7 +1252,7 @@ mod tests {
         let choices = super::site_id_choices(Some(Vec::new()));
         assert_eq!(
             choices.built_ins.len(),
-            crate::netbox::SiteIdField::BUILT_INS.len(),
+            yagra_netbox::SiteIdField::BUILT_INS.len(),
             "a built-in the parser accepts is missing from SiteIdBuiltIn::of"
         );
         assert!(
@@ -1274,7 +1274,7 @@ mod tests {
         // Built-ins survive a refusal: they are known from the code, so the picker is never empty.
         assert_eq!(
             refused.built_ins.len(),
-            crate::netbox::SiteIdField::BUILT_INS.len()
+            yagra_netbox::SiteIdField::BUILT_INS.len()
         );
 
         let none = super::site_id_choices(Some(Vec::new()));
@@ -1289,7 +1289,7 @@ mod tests {
     /// A custom field with no label is offered under its key rather than as a blank row.
     #[test]
     fn a_custom_field_is_labelled_by_netbox_or_by_its_own_key() {
-        let def = |name: &str, label: &str| crate::netbox::CustomFieldDef {
+        let def = |name: &str, label: &str| yagra_netbox::CustomFieldDef {
             name: name.to_owned(),
             label: label.to_owned(),
             data_type: "string".to_owned(),

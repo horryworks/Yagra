@@ -369,7 +369,7 @@ impl OidcFlight {
 /// Build the outbound HTTP client for OIDC calls. `redirect(none)` is required by openidconnect to
 /// prevent SSRF via redirects; TLS is the in-tree rustls (workspace reqwest).
 fn http_client() -> anyhow::Result<reqwest::Client> {
-    crate::http::builder(Duration::from_secs(10), crate::http::Redirects::None)
+    yagra_base::http::builder(Duration::from_secs(10), yagra_base::http::Redirects::None)
         .build()
         .map_err(|e| anyhow::anyhow!("build OIDC http client: {e}"))
 }

@@ -6,7 +6,7 @@
 //! queue — `200 {}` once the queue is empty. The LLM adapters, the BigQuery sink and the NetBox
 //! paginator each had, or needed, one; the first two were the same eighty lines.
 //!
-//! Test-only: `main.rs` declares it under `#[cfg(test)]`.
+//! Behind `test-util`: core and `yagra-netbox` reach it from their dev-dependencies (ADR-202 Inc.5).
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -15,7 +15,7 @@ use tokio::net::TcpListener;
 
 /// One request as the fake saw it.
 #[derive(Debug, Clone)]
-pub(crate) struct Seen {
+pub struct Seen {
     /// `GET`, `POST`, …
     pub method: String,
     /// The request target: path and query, exactly as sent.
@@ -28,7 +28,7 @@ pub(crate) struct Seen {
 
 /// Start a server that answers from a scripted queue of `(status, body)` and records what it was
 /// asked. Returns its address and the shared log.
-pub(crate) async fn serve(replies: Vec<(u16, String)>) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
+pub async fn serve(replies: Vec<(u16, String)>) -> (SocketAddr, Arc<Mutex<Vec<Seen>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
