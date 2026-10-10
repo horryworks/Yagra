@@ -309,7 +309,7 @@ async fn live_state_with(
     // Boot's seeding, in boot's order. Demo nodes excluded — see the doc above.
     repo.seed_builtin_profiles().await.expect("seed profiles");
     repo.seed_app_settings(
-        crate::config::DEFAULT_POLL_INTERVAL_SECS,
+        crate::repo::DEFAULT_POLL_INTERVAL_SECS,
         crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS,
     )
     .await
@@ -435,7 +435,7 @@ async fn live_state_with(
                 settings: repo.clone(),
                 l3: l3_repo.clone(),
                 env_community,
-                interval_secs: crate::config::DEFAULT_POLL_INTERVAL_SECS,
+                interval_secs: crate::repo::DEFAULT_POLL_INTERVAL_SECS,
             },
         )),
         analysis: analysis.clone(),

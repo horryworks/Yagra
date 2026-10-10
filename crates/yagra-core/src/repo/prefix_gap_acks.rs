@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! `prefix_gap_acks` — the missing subnets an operator marked as intentional (ADR-170 Inc.4).
 //!
-//! The gaps themselves are never stored: `crate::prefix_gaps` recomputes them on every read. Only
+//! The gaps themselves are never stored: `prefix_gaps` recomputes them on every read. Only
 //! the person's decision lives here.
 
 use super::*;

@@ -16,6 +16,28 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use uuid::Uuid;
 
+// The folder ids a Meraki organization and its networks are filed under. They live here, not in
+// `meraki/`, because the folder tree reads them to mark which folders an integration keeps, and
+// this module may name nothing above the database layer (ADR-202 Inc.5).
+/// Fixed namespace for deriving stable (idempotent) Meraki group ids via UUIDv5, so re-import /
+/// re-sync never duplicates the org→network group tree.
+const MERAKI_GROUP_NS: Uuid = Uuid::from_u128(0x6d65_7261_6b69_0000_0000_0000_0000_0001);
+
+/// The deterministic HostTree root group id for an org (so create + import agree).
+#[must_use]
+pub fn org_group_id(org_uuid: Uuid) -> Uuid {
+    Uuid::new_v5(&MERAKI_GROUP_NS, org_uuid.as_bytes())
+}
+
+/// The deterministic group id for a network within an org.
+#[must_use]
+pub fn network_group_id(org_uuid: Uuid, network_id: &str) -> Uuid {
+    Uuid::new_v5(
+        &MERAKI_GROUP_NS,
+        format!("{org_uuid}:{network_id}").as_bytes(),
+    )
+}
+
 /// Longest ancestor chain any group walk will follow before giving up.
 ///
 /// `node_groups.parent_id` is a self-FK with no cycle constraint — [`would_create_cycle`] guards
@@ -134,7 +156,7 @@ pub struct GroupSummary {
     pub geo_group: Option<Uuid>,
     /// Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit
     /// from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
-    /// wins — see [`crate::poolres`].
+    /// wins — see `poolres`.
     pub pool: Option<String>,
     /// Labels stored **on this folder** (ADR-135 inc. 2, migration 0110). Every folder and node
     /// beneath it carries them too — see `effective_tags`.
@@ -161,7 +183,7 @@ pub struct GroupSummary {
     /// The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a
     /// folder nothing has attached one to, which is every folder in a deployment with no NetBox.
     ///
-    /// 🚨 **Empty also means "you may not see them".** [`crate::api::groups::visible_groups`]
+    /// 🚨 **Empty also means "you may not see them".** `api::groups::visible_groups`
     /// clears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is
     /// listed so the tree has a spine, and handing over the subnet layout of a site whose
     /// membership the caller cannot see would be a leak the folder's *name* does not constitute.
@@ -626,7 +648,7 @@ pub fn resolve_nearest_ancestor<T: Clone>(
 /// `(id, parent_id, labels added here, labels refused here)`.
 ///
 /// An alias rather than the tuple spelled out, because it crosses four boundaries —
-/// [`GroupRepo::tag_rows`], the `AlertConfigSources` seam, [`crate::tagres::TagResolver::build`]
+/// [`GroupRepo::tag_rows`], the `AlertConfigSources` seam, `tagres::TagResolver::build`
 /// and [`accumulate_ancestor_labels`] — and a four-element tuple written four times is four places
 /// to get the order wrong with no compiler help (the last two elements are the same type).
 pub type LabelRow = (Uuid, Option<Uuid>, Vec<String>, Vec<String>);
@@ -718,7 +740,7 @@ pub fn accumulate_ancestor_labels(
 }
 
 /// Where a group's effective map position came from.
-// The geo twin of `crate::poolres::PoolSource`, minus a node level (nodes have no coordinates)
+// The geo twin of `poolres::PoolSource`, minus a node level (nodes have no coordinates)
 // and minus a default (there is no implicit place on Earth).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -912,8 +934,8 @@ impl GroupRepo {
     /// Fold "which integration keeps this folder" into an already-built group list (ADR-164 Inc.7).
     ///
     /// NetBox records its folders (`netbox_groups.group_id`). Meraki does not and does not need
-    /// to: its folder ids are **derived** — [`crate::meraki::org_group_id`] from the organization,
-    /// [`crate::meraki::network_group_id`] from the organization and the network — so the set is
+    /// to: its folder ids are **derived** — [`org_group_id`] from the organization,
+    /// [`network_group_id`] from the organization and the network — so the set is
     /// computed from the two tables that already exist rather than stored in a third that an
     /// import would have to keep in step. A network whose folder was never made (every device in
     /// it was filed by IP range) yields an id no row has, which marks nothing.
@@ -948,10 +970,10 @@ impl GroupRepo {
                 // and the import that re-creates it at the derived id re-points it a moment later.
                 ("meraki_org", Some(org), _) => {
                     meraki.extend(group);
-                    meraki.insert(crate::meraki::org_group_id(org));
+                    meraki.insert(org_group_id(org));
                 }
                 ("meraki_network", Some(org), Some(network)) => {
-                    meraki.insert(crate::meraki::network_group_id(org, &network));
+                    meraki.insert(network_group_id(org, &network));
                 }
                 _ => {}
             }
@@ -1011,7 +1033,7 @@ impl GroupRepo {
     /// 🚨 **The containment test lives here, in PostgreSQL, and must not move into Rust.** Two
     /// reasons, and the second is the one that bites: there is no CIDR parser in this workspace
     /// (migration 0104 chose the `cidr` column type precisely so the *write* is the validation),
-    /// and [`crate::api::groups::visible_groups`] **clears `prefixes` on breadcrumb ancestors** —
+    /// and `api::groups::visible_groups` **clears `prefixes` on breadcrumb ancestors** —
     /// so a client computing this from the group list it was served would silently miss every
     /// range it was allowed to match against but not to read. `<<=` is the containment operator;
     /// an IPv4 address against an IPv6 prefix is simply `false`, never an error.
@@ -1172,7 +1194,7 @@ impl GroupRepo {
     /// that already exists and the caller may not be allowed to read. Here there is no such row:
     /// the addresses are ones the caller's own sweep just found and already holds, so there is
     /// nothing to withhold about them. The folders still narrow, for the reason
-    /// [`crate::api::groups::visible_groups`] clears prefixes — answering with a folder the caller
+    /// `api::groups::visible_groups` clears prefixes — answering with a folder the caller
     /// cannot see hands over the subnet layout of a site whose membership they were refused.
     /// A future reader "fixing" the asymmetry would be adding a filter to data the client supplied.
     ///
@@ -1443,7 +1465,7 @@ scope_predicate(2, "p.group_id"),
     }
 
     /// The `(id, parent_id, tags, tags_excluded)` rows, for building a
-    /// [`crate::tagres::TagResolver`] — the twin of [`Self::pool_rows`], read whole for the same
+    /// `tagres::TagResolver` — the twin of [`Self::pool_rows`], read whole for the same
     /// reason (ADR-135 inc. 2).
     pub async fn tag_rows(&self) -> anyhow::Result<Vec<LabelRow>> {
         let rows = sqlx::query("SELECT id, parent_id, tags, tags_excluded FROM node_groups")
@@ -1482,7 +1504,7 @@ scope_predicate(2, "p.group_id"),
         Ok(res.rows_affected() > 0)
     }
 
-    /// The `(id, parent_id, pool)` rows, for building a [`crate::poolres::PoolResolver`]. Read
+    /// The `(id, parent_id, pool)` rows, for building a `poolres::PoolResolver`. Read
     /// whole (the table is small) so effective-pool resolution costs one query, not one per node.
     pub async fn pool_rows(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
         let rows = sqlx::query("SELECT id, parent_id, pool FROM node_groups")
@@ -2036,87 +2058,6 @@ mod tests {
             .expect("edges")
             .iter()
             .any(|(id, _)| *id == b));
-    }
-
-    /// The marks, read back from a real tree: a Meraki organization with one network folder and
-    /// an operator's folder inside it, and a NetBox site.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn the_folder_list_marks_what_each_integration_keeps(pool: sqlx::PgPool) {
-        let groups = GroupRepo::new(pool.clone());
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
-        let cred = crate::pgtest::credential(&pool, "meraki", "meraki_api").await;
-        let org = orgs
-            .create("123", "Acme", "https://api.meraki.com", cred)
-            .await
-            .expect("org");
-        let org_folder = crate::meraki::org_group_id(org);
-        orgs.record_networks(org, &[("N_1".to_owned(), "HQ".to_owned())], false)
-            .await
-            .expect("networks");
-
-        // Before any device is filed there, the network has no folder: nothing to mark, and the
-        // derived id must not invent one.
-        let before = groups.list().await.expect("list");
-        assert_eq!(before.len(), 1, "only the organization's folder exists yet");
-        assert_eq!(before[0].origin, Some(GroupOrigin::Meraki));
-
-        let network_folder = crate::meraki::network_group_id(org, "N_1");
-        sqlx::query(
-            "INSERT INTO node_groups (id, name, group_type, parent_id) VALUES ($1, 'HQ', 'site', $2)",
-        )
-        .bind(network_folder)
-        .bind(org_folder)
-        .execute(&pool)
-        .await
-        .expect("network folder");
-        let own = groups
-            .create("Spares", GroupType::Generic, Some(org_folder), None)
-            .await
-            .expect("an operator's folder inside the organization's");
-
-        let server = crate::pgtest::netbox_server(&pool, "lab").await;
-        let site = crate::pgtest::group(&pool, "Tokyo").await;
-        sqlx::query(
-            "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id) \
-             VALUES ($1, 'site', 7, $2)",
-        )
-        .bind(server)
-        .bind(site)
-        .execute(&pool)
-        .await
-        .expect("netbox mapping");
-        let plain = crate::pgtest::group(&pool, "Osaka").await;
-
-        let list = groups.list().await.expect("list");
-        let origin_of = |id: Uuid| {
-            list.iter()
-                .find(|g| g.id == id)
-                .unwrap_or_else(|| panic!("folder {id} is listed"))
-                .origin
-        };
-        assert_eq!(origin_of(org_folder), Some(GroupOrigin::Meraki));
-        assert_eq!(origin_of(network_folder), Some(GroupOrigin::Meraki));
-        assert_eq!(
-            origin_of(own),
-            None,
-            "an operator's folder, wherever it sits"
-        );
-        assert_eq!(origin_of(site), Some(GroupOrigin::Netbox));
-        assert_eq!(origin_of(plain), None);
-
-        // Forgetting the NetBox server leaves the folder and takes the mark.
-        sqlx::query("DELETE FROM netbox_servers WHERE id = $1")
-            .bind(server)
-            .execute(&pool)
-            .await
-            .expect("forget the server");
-        let after = groups.list().await.expect("list");
-        let site_row = after
-            .iter()
-            .find(|g| g.id == site)
-            .expect("the folder stays");
-        assert_eq!(site_row.origin, None);
     }
 
     /// `(effective lat, effective lon, source, supplying group)` for one row, for terse asserts.

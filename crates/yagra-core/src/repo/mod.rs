@@ -111,6 +111,7 @@ pub use pools::{PoolCarry, PoolRow};
 pub use prefix_gap_acks::StoredGapAck;
 pub use profiles::ProfileSummary;
 pub use row_names::RowNameRow;
+pub use settings::DEFAULT_POLL_INTERVAL_SECS;
 pub use subnet_overlaps::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
@@ -196,7 +197,7 @@ pub struct NodeFacts {
     ///
     /// 🚨 **This field means two things at two moments, and the boundary is one type.** As
     /// [`NodeRepo::node_facts`] returns it, it is the node's OWN labels. The only production
-    /// [`crate::alerts::notify_facts::AlertFactsSource`] replaces it with the effective set before any
+    /// `alerts::notify_facts::AlertFactsSource` replaces it with the effective set before any
     /// caller sees it, so everything downstream — the template context, PagerDuty, JSM — reads the
     /// resolved one. Do not add a second reader of the repository method that skips that step.
     pub tags: Vec<String>,

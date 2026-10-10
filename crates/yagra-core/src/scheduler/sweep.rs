@@ -205,7 +205,7 @@ pub(crate) async fn run_scheduler(
         let overrides_read = repo.profile_interval_overrides().await;
         // Whether this round's intervals may be published — see `IntervalSnapshot::publishable`.
         let intervals_read = default_read.is_ok() && overrides_read.is_ok();
-        let default_secs = default_read.unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
+        let default_secs = default_read.unwrap_or(crate::repo::DEFAULT_POLL_INTERVAL_SECS);
         let overrides = overrides_read.unwrap_or_default();
         // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
         // no per-node settings query enters the sweep. Degrades to the compiled default.

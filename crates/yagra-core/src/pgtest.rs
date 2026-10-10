@@ -203,7 +203,7 @@ pub async fn rows(pool: &PgPool, table: &str) -> i64 {
 /// A fixed in-memory key, the same one `api::tests_support` uses and for the same reason: the
 /// sealed value round-trips inside one test and nowhere else, so nothing here says anything about
 /// a real deployment's KEK handling. Two stores now take one ([`CredentialStore`] and
-/// [`crate::alerts::notifications::NotificationRepo`]), which is why it is spelled once.
+/// `alerts::notifications::NotificationRepo`), which is why it is spelled once.
 ///
 /// [`CredentialStore`]: crate::secrets::CredentialStore
 #[must_use]

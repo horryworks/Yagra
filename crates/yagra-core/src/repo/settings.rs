@@ -21,6 +21,17 @@ use super::topology_mode::TopologyMode;
 
 use super::*;
 
+/// Default polling interval when `YAGRA_POLL_INTERVAL_SECS` is unset/invalid, and the fallback
+/// when the DB-backed `app_settings` row is somehow absent (skeleton mode / pre-seed).
+///
+/// Five minutes since ADR-144 (thirty seconds before). It reaches only a **new** installation:
+/// `seed_app_settings` writes it once and never over an existing row, so a deployment that was
+/// polling every thirty seconds keeps doing so. Migration 0117 sets the column default to match.
+///
+/// Here, beside the getter that falls back to it, so the database layer names nothing above it
+/// (ADR-202 Inc.5); `config.rs` reads it from here.
+pub const DEFAULT_POLL_INTERVAL_SECS: u32 = 300;
+
 impl NodeRepo {
     /// The global default polling interval (seconds) from the singleton `app_settings` row. Falls
     /// back to the compiled default if the row is somehow absent (it is seeded at startup).
@@ -32,9 +43,9 @@ impl NodeRepo {
         match row {
             Some(r) => {
                 let secs: i32 = r.try_get("default_poll_interval_secs")?;
-                Ok(u32::try_from(secs).unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS))
+                Ok(u32::try_from(secs).unwrap_or(DEFAULT_POLL_INTERVAL_SECS))
             }
-            None => Ok(crate::config::DEFAULT_POLL_INTERVAL_SECS),
+            None => Ok(DEFAULT_POLL_INTERVAL_SECS),
         }
     }
 
@@ -329,7 +340,7 @@ impl NodeRepo {
     ///
     /// Reads **fail-closed**: a missing row, an unreadable value or any error reports `false`.
     /// That is the opposite direction from [`Self::get_meraki_polling_enabled`] and the same one
-    /// [`crate::upgrade`]'s switch chose, for the same reason — a database core cannot read is not
+    /// `upgrade`'s switch chose, for the same reason — a database core cannot read is not
     /// a reason to keep authentication switched off. The cost of being wrong here is strangers
     /// reading the fleet; the cost of being wrong the other way is a dashboard that needs a retry.
     pub async fn get_public_dashboard_enabled(&self) -> bool {
@@ -391,14 +402,14 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         let repo = pgtest::repo(pool.clone());
-        repo.seed_app_settings(crate::config::DEFAULT_POLL_INTERVAL_SECS, 7)
+        repo.seed_app_settings(DEFAULT_POLL_INTERVAL_SECS, 7)
             .await
             .expect("first boot");
         assert_eq!(repo.get_default_poll_interval().await.expect("read"), 300);
 
         // A deployment that was polling every thirty seconds before the upgrade.
         repo.set_default_poll_interval(30).await.expect("stored");
-        repo.seed_app_settings(crate::config::DEFAULT_POLL_INTERVAL_SECS, 7)
+        repo.seed_app_settings(DEFAULT_POLL_INTERVAL_SECS, 7)
             .await
             .expect("boot after the upgrade");
         assert_eq!(

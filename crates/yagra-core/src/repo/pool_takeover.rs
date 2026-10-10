@@ -2,7 +2,7 @@
 //! **Covering a pool that lost its poller, reversibly** (ADR-107 Inc.4).
 //!
 //! When a poller pool has nodes and no live poller, those nodes stop being polled and
-//! [`crate::pool_coverage`] raises a `Subject::Pool` alert saying so. One of the two things an
+//! `pool_coverage` raises a `Subject::Pool` alert saying so. One of the two things an
 //! operator can do about it is point the pool's members at a pool that *does* have a poller —
 //! usually the co-located one — until the site is back.
 //!
@@ -73,7 +73,7 @@ impl NodeRepo {
     /// success.
     ///
     /// `carry.fall_through` carries the inheriting ids, resolved by
-    /// [`crate::poolres::PoolResolver`] at the call site for the reason [`PoolCarry`] gives: there
+    /// `poolres::PoolResolver` at the call site for the reason [`PoolCarry`] gives: there
     /// is no predicate over `nodes` that finds them without re-implementing the inheritance rule.
     /// Those rows are recorded with `previous_pool = NULL`.
     ///

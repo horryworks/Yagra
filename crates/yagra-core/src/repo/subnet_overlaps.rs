@@ -2,7 +2,7 @@
 //! `subnet_overlap_rules` / `subnet_overlap_acks` — what an operator has said about ranges two
 //! sites both use (ADR-187), and the one inventory read the comparison needs.
 //!
-//! The overlaps themselves are never stored: `crate::subnet_overlaps` recomputes them from
+//! The overlaps themselves are never stored: `subnet_overlaps` recomputes them from
 //! `node_l3` on every read. Only the person's decisions live here.
 
 use super::*;

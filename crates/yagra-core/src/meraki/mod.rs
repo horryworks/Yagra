@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+pub(crate) use crate::groups::{network_group_id, org_group_id};
 use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
 use yagra_common::{MerakiDeviceConfig, MerakiTier};
 
@@ -34,25 +36,6 @@ use crate::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
 const DEFAULT_PER_PAGE: u32 = 1000;
 /// Default per-request timeout for a collect job (ms).
 const DEFAULT_COLLECT_TIMEOUT_MS: u32 = 30_000;
-
-/// Fixed namespace for deriving stable (idempotent) Meraki group ids via UUIDv5, so re-import /
-/// re-sync never duplicates the org→network group tree.
-const MERAKI_GROUP_NS: Uuid = Uuid::from_u128(0x6d65_7261_6b69_0000_0000_0000_0000_0001);
-
-/// The deterministic HostTree root group id for an org (so create + import agree).
-#[must_use]
-pub fn org_group_id(org_uuid: Uuid) -> Uuid {
-    Uuid::new_v5(&MERAKI_GROUP_NS, org_uuid.as_bytes())
-}
-
-/// The deterministic group id for a network within an org.
-#[must_use]
-pub fn network_group_id(org_uuid: Uuid, network_id: &str) -> Uuid {
-    Uuid::new_v5(
-        &MERAKI_GROUP_NS,
-        format!("{org_uuid}:{network_id}").as_bytes(),
-    )
-}
 
 /// Namespace for the node ids below. Its own, so a node id can never equal a folder id whatever a
 /// serial happens to spell.
@@ -3525,5 +3508,558 @@ mod tests {
             !repo.purge(acme).await.expect("purge"),
             "purging an org that is already gone reported success"
         );
+    }
+
+    // Moved out of `groups.rs` and `repo/migrate.rs` (ADR-202 Inc.5): they drive `MerakiOrgRepo`,
+    // which the database layer cannot name now that it is its own crate.
+    /// The marks, read back from a real tree: a Meraki organization with one network folder and
+    /// an operator's folder inside it, and a NetBox site.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_folder_list_marks_what_each_integration_keeps(pool: sqlx::PgPool) {
+        let groups = crate::groups::GroupRepo::new(pool.clone());
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let cred = crate::pgtest::credential(&pool, "meraki", "meraki_api").await;
+        let org = orgs
+            .create("123", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("org");
+        let org_folder = org_group_id(org);
+        orgs.record_networks(org, &[("N_1".to_owned(), "HQ".to_owned())], false)
+            .await
+            .expect("networks");
+
+        // Before any device is filed there, the network has no folder: nothing to mark, and the
+        // derived id must not invent one.
+        let before = groups.list().await.expect("list");
+        assert_eq!(before.len(), 1, "only the organization's folder exists yet");
+        assert_eq!(before[0].origin, Some(crate::groups::GroupOrigin::Meraki));
+
+        let network_folder = network_group_id(org, "N_1");
+        sqlx::query(
+            "INSERT INTO node_groups (id, name, group_type, parent_id) VALUES ($1, 'HQ', 'site', $2)",
+        )
+        .bind(network_folder)
+        .bind(org_folder)
+        .execute(&pool)
+        .await
+        .expect("network folder");
+        let own = groups
+            .create(
+                "Spares",
+                crate::groups::GroupType::Generic,
+                Some(org_folder),
+                None,
+            )
+            .await
+            .expect("an operator's folder inside the organization's");
+
+        let server = crate::pgtest::netbox_server(&pool, "lab").await;
+        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        sqlx::query(
+            "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id) \
+             VALUES ($1, 'site', 7, $2)",
+        )
+        .bind(server)
+        .bind(site)
+        .execute(&pool)
+        .await
+        .expect("netbox mapping");
+        let plain = crate::pgtest::group(&pool, "Osaka").await;
+
+        let list = groups.list().await.expect("list");
+        let origin_of = |id: Uuid| {
+            list.iter()
+                .find(|g| g.id == id)
+                .unwrap_or_else(|| panic!("folder {id} is listed"))
+                .origin
+        };
+        assert_eq!(
+            origin_of(org_folder),
+            Some(crate::groups::GroupOrigin::Meraki)
+        );
+        assert_eq!(
+            origin_of(network_folder),
+            Some(crate::groups::GroupOrigin::Meraki)
+        );
+        assert_eq!(
+            origin_of(own),
+            None,
+            "an operator's folder, wherever it sits"
+        );
+        assert_eq!(origin_of(site), Some(crate::groups::GroupOrigin::Netbox));
+        assert_eq!(origin_of(plain), None);
+
+        // Forgetting the NetBox server leaves the folder and takes the mark.
+        sqlx::query("DELETE FROM netbox_servers WHERE id = $1")
+            .bind(server)
+            .execute(&pool)
+            .await
+            .expect("forget the server");
+        let after = groups.list().await.expect("list");
+        let site_row = after
+            .iter()
+            .find(|g| g.id == site)
+            .expect("the folder stays");
+        assert_eq!(site_row.origin, None);
+    }
+
+    /// **Migration 0125 leaves an organization that already exists OFF and starts a new one ON**
+    /// (ADR-164 Inc.4).
+    ///
+    /// The file does it with two statements — `ADD COLUMN … DEFAULT FALSE`, which is what fills the
+    /// existing rows, then `SET DEFAULT TRUE` — and the order is the whole decision: every
+    /// organization in a deployment today was imported by hand, and switching automatic import on
+    /// for it would add every device somebody chose to leave out. A harness that migrates first can
+    /// only ever see the second half, and no lab box holds an organization to see the first on, so
+    /// this applies the history in two steps with a row created in between.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0125_leaves_existing_meraki_organizations_off_and_starts_new_ones_on(
+        pool: sqlx::PgPool,
+    ) {
+        const IMPORT_SETTINGS: i64 = 125;
+        // 0134 raises the cap's default for organizations added after it (ADR-164 decision 33), which
+        // is its own test below; this one stops before it, so it pins what 0125 did and nothing after.
+        const CAP_DEFAULT: i64 = 134;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .filter(|m| m.version < CAP_DEFAULT)
+            .partition(|m| m.version < IMPORT_SETTINGS);
+        assert!(
+            from.iter().any(|m| m.version == IMPORT_SETTINGS),
+            "migration 0125 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create(
+                "1",
+                "Imported by hand",
+                "https://api.meraki.com",
+                credential,
+            )
+            .await
+            .expect("an organization from before 0125");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create(
+                "2",
+                "Added afterwards",
+                "https://api.meraki.com",
+                credential,
+            )
+            .await
+            .expect("an organization from after 0125");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert!(
+            !old.import_devices,
+            "an organization imported by hand was switched to automatic import by the upgrade"
+        );
+        assert!(
+            new.import_devices,
+            "a new organization must import on its own"
+        );
+        // The other three are the same for both.
+        for o in [&old, &new] {
+            assert!(o.file_by_prefix, "{}", o.name);
+            assert_eq!((o.max_devices, o.devices_over_cap), (1000, 0), "{}", o.name);
+        }
+    }
+
+    /// **Migration 0134 raises the import cap only for an organization added after it** (ADR-164
+    /// decision 33).
+    ///
+    /// It changes nothing but the column's default, so an organization already added keeps the 1,000
+    /// it was given — which may be one an operator chose, and nothing tells the two apart — while
+    /// one added afterwards starts at 10,000. The history is applied in two steps with an
+    /// organization created in between, for the reason the 0125 test above gives.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0134_raises_the_cap_only_for_organizations_added_after_it(
+        pool: sqlx::PgPool,
+    ) {
+        const CAP_DEFAULT: i64 = 134;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < CAP_DEFAULT);
+        assert!(
+            from.iter().any(|m| m.version == CAP_DEFAULT),
+            "migration 0134 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create("1", "Added before", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from before 0134");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create("2", "Added after", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from after 0134");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert_eq!(
+            old.max_devices, 1000,
+            "the upgrade changed the cap of an organization already added"
+        );
+        assert_eq!(new.max_devices, 10_000);
+    }
+
+    /// **Migration 0135 shortens the traffic interval only for an organization added after it**
+    /// (ADR-164 decision 34).
+    ///
+    /// Like 0134 it changes nothing but the column's default: an organization already added keeps
+    /// the 1,800 seconds it was given — which may be one an operator chose — while one added
+    /// afterwards collects its MX uplinks' traffic every 300. The history is applied in two steps
+    /// with an organization created in between, for the reason the 0125 test above gives.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0135_shortens_the_traffic_interval_only_for_organizations_added_after_it(
+        pool: sqlx::PgPool,
+    ) {
+        const TRAFFIC_DEFAULT: i64 = 135;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) =
+            embedded.iter().partition(|m| m.version < TRAFFIC_DEFAULT);
+        assert!(
+            from.iter().any(|m| m.version == TRAFFIC_DEFAULT),
+            "migration 0135 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let old = orgs
+            .create("1", "Added before", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from before 0135");
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let new = orgs
+            .create("2", "Added after", "https://api.meraki.com", credential)
+            .await
+            .expect("an organization from after 0135");
+
+        let old = orgs.get(old).await.expect("get").expect("old");
+        let new = orgs.get(new).await.expect("get").expect("new");
+        assert_eq!(
+            old.traffic_secs, 1800,
+            "the upgrade changed the traffic interval of an organization already added"
+        );
+        assert_eq!(new.traffic_secs, 300);
+    }
+
+    /// **Migration 0126 gives availability back to an organization saved without it, and touches no
+    /// other row** (ADR-164 decision 17).
+    ///
+    /// Since Inc.3 that tier is the only one that says whether a Meraki device is up, so such an
+    /// organization's nodes could never be reported down. The API refuses the shape from here on,
+    /// but a stored value never fixes itself — and no lab box holds an organization to see this on,
+    /// so the history is applied in two steps with the rows written in between.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0126_gives_the_availability_tier_back_and_touches_no_other_row(
+        pool: sqlx::PgPool,
+    ) {
+        const AVAILABILITY_ALWAYS_ON: i64 = 126;
+        // 0130 appends the switch-port tier to every row (ADR-167), which is its own test below;
+        // this one stops before it, so it pins what 0126 did and nothing after.
+        const SWITCH_PORTS: i64 = 130;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .filter(|m| m.version < SWITCH_PORTS)
+            .partition(|m| m.version < AVAILABILITY_ALWAYS_ON);
+        assert!(
+            from.iter().any(|m| m.version == AVAILABILITY_ALWAYS_ON),
+            "migration 0126 is not embedded"
+        );
+
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            ("1", vec!["uplink", "traffic"]),
+            ("2", vec![]),
+            ("3", vec!["traffic", "availability"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0126");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers an older release accepted");
+            made.push(id);
+        }
+
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
+        // Read raw: the repository's reader names columns later migrations add.
+        let mut after: Vec<Vec<String>> = Vec::new();
+        for id in made {
+            after.push(
+                sqlx::query_scalar("SELECT enabled_tiers FROM meraki_orgs WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("the row"),
+            );
+        }
+        assert_eq!(
+            after[0],
+            vec!["availability", "uplink", "traffic"],
+            "an organization saved without availability still has nothing that says a device is down"
+        );
+        assert_eq!(after[1], vec!["availability"], "the empty set");
+        assert_eq!(
+            after[2],
+            vec!["traffic", "availability"],
+            "a row that already carried the tier was rewritten"
+        );
+    }
+
+    /// **Migration 0130 starts every existing organization collecting its switch ports** (ADR-167
+    /// decision 12, the user's decision): the tier is appended once, whatever else the row holds, the
+    /// interval takes its default, and a new organization gets both from the column defaults.
+    /// Applied in two steps with the rows written in between, like 0126's test.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0130_adds_the_switch_port_tier_to_every_organization_once(
+        pool: sqlx::PgPool,
+    ) {
+        const SWITCH_PORTS: i64 = 130;
+        // 0131 appends the wireless tier to every row (ADR-168), which is its own test below; this
+        // one stops before it, so it pins what 0130 did and nothing after.
+        const WIRELESS: i64 = 131;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded
+            .iter()
+            .filter(|m| m.version < WIRELESS)
+            .partition(|m| m.version < SWITCH_PORTS);
+        assert!(
+            from.iter().any(|m| m.version == SWITCH_PORTS),
+            "migration 0130 is not embedded"
+        );
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            ("1", vec!["availability", "uplink", "traffic"]),
+            ("2", vec!["availability"]),
+            // Already carrying it (a core that had it, rolled back and forward again).
+            ("3", vec!["availability", "switch_ports"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0130");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers");
+            made.push(id);
+        }
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
+        // Read raw: the repository's reader names columns later migrations add.
+        let read = |id: uuid::Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (Vec<String>, i32)>(
+                    "SELECT enabled_tiers, switch_ports_secs FROM meraki_orgs WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("the row")
+            }
+        };
+        let mut after = Vec::new();
+        for id in &made {
+            after.push(read(*id).await);
+        }
+        assert_eq!(
+            after[0].0,
+            ["availability", "uplink", "traffic", "switch_ports"]
+        );
+        assert_eq!(after[1].0, ["availability", "switch_ports"]);
+        assert_eq!(
+            after[2].0,
+            ["availability", "switch_ports"],
+            "a row that already carried the tier got it twice"
+        );
+        assert!(after.iter().all(|o| o.1 == 300));
+
+        // A new organization gets the tier and the interval from the column defaults.
+        let fresh = orgs
+            .create("4", "4", "https://api.meraki.com", credential)
+            .await
+            .expect("a new organization");
+        let fresh = read(fresh).await;
+        assert!(fresh.0.iter().any(|t| t == "switch_ports"));
+        assert_eq!(fresh.1, 300);
+    }
+
+    /// **Migration 0131 starts every existing organization collecting its access points' readings**
+    /// (ADR-168 decision 10): the tier is appended once, whatever else the row holds, the interval takes
+    /// its default, and a new organization gets both from the column defaults. Applied in two steps
+    /// with the rows written in between, like 0130's test.
+    #[sqlx::test(migrations = false)]
+    #[ignore = "needs DATABASE_URL"]
+    async fn migration_0131_adds_the_wireless_tier_to_every_organization_once(pool: sqlx::PgPool) {
+        const WIRELESS: i64 = 131;
+        let embedded = crate::repo::embedded_migrations();
+        let (before, from): (Vec<_>, Vec<_>) = embedded.iter().partition(|m| m.version < WIRELESS);
+        assert!(
+            from.iter().any(|m| m.version == WIRELESS),
+            "migration 0131 is not embedded"
+        );
+        for m in before {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let mut made = Vec::new();
+        for (org_id, tiers) in [
+            (
+                "1",
+                vec!["availability", "uplink", "traffic", "switch_ports"],
+            ),
+            ("2", vec!["availability"]),
+            // Already carrying it (a core that had it, rolled back and forward again).
+            ("3", vec!["availability", "wireless"]),
+        ] {
+            let id = orgs
+                .create(org_id, org_id, "https://api.meraki.com", credential)
+                .await
+                .expect("an organization from before 0131");
+            sqlx::query("UPDATE meraki_orgs SET enabled_tiers = $2 WHERE id = $1")
+                .bind(id)
+                .bind(&tiers)
+                .execute(&pool)
+                .await
+                .expect("store the tiers");
+            made.push(id);
+        }
+        for m in from {
+            sqlx::raw_sql(&m.sql)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
+        }
+
+        let mut after = Vec::new();
+        for id in &made {
+            after.push(orgs.get(*id).await.expect("get").expect("org"));
+        }
+        assert_eq!(
+            after[0].enabled_tiers,
+            [
+                "availability",
+                "uplink",
+                "traffic",
+                "switch_ports",
+                "wireless"
+            ]
+        );
+        assert_eq!(after[1].enabled_tiers, ["availability", "wireless"]);
+        assert_eq!(
+            after[2].enabled_tiers,
+            ["availability", "wireless"],
+            "a row that already carried the tier got it twice"
+        );
+        assert!(after.iter().all(|o| o.wireless_secs == 300));
+
+        // A new organization gets the tier and the interval from the column defaults.
+        let fresh = orgs
+            .create("4", "4", "https://api.meraki.com", credential)
+            .await
+            .expect("a new organization");
+        let fresh = orgs.get(fresh).await.expect("get").expect("org");
+        assert!(fresh.enabled_tiers.iter().any(|t| t == "wireless"));
+        assert_eq!(fresh.wireless_secs, 300);
+
+        // The band is the database's too, not only the API's.
+        for outside in [299, 601] {
+            let refused = sqlx::query("UPDATE meraki_orgs SET wireless_secs = $2 WHERE id = $1")
+                .bind(made[0])
+                .bind(outside)
+                .execute(&pool)
+                .await;
+            assert!(refused.is_err(), "{outside} s was stored");
+        }
     }
 }

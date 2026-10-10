@@ -6,13 +6,8 @@
 //! falls back to the in-memory **skeleton** so a bare `cargo run` still serves the API.
 //! Compose always injects all three.
 
-/// Default polling interval when `YAGRA_POLL_INTERVAL_SECS` is unset/invalid, and the fallback
-/// when the DB-backed `app_settings` row is somehow absent (skeleton mode / pre-seed).
-///
-/// Five minutes since ADR-144 (thirty seconds before). It reaches only a **new** installation:
-/// `seed_app_settings` writes it once and never over an existing row, so a deployment that was
-/// polling every thirty seconds keeps doing so. Migration 0117 sets the column default to match.
-pub const DEFAULT_POLL_INTERVAL_SECS: u32 = 300;
+use crate::repo::DEFAULT_POLL_INTERVAL_SECS;
+
 /// Smallest polling interval (seconds) an operator may configure. A tight floor protects both the
 /// monitored devices and Yagra, and keeps the anti-stampede jitter window from collapsing.
 pub const MIN_POLL_INTERVAL_SECS: u32 = 10;

@@ -433,7 +433,7 @@ impl NodeRepo {
 
     /// The advisory lock [`Self::import_nodes`] serialises on.
     ///
-    /// 🚨 **Never [`crate::leader`]'s key.** The leader holds that one as a *session* lock for its
+    /// 🚨 **Never `leader`'s key.** The leader holds that one as a *session* lock for its
     /// whole life, so an import taking it on the leader core would wait forever. Transaction-scoped
     /// (`pg_advisory_xact_lock`), so a failed import cannot leave it held.
     const IMPORT_LOCK_KEY: i64 = 0x5941_4752_494d_5054;

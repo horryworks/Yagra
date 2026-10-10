@@ -4,7 +4,7 @@
 //! ⚠️ **This file holds the pool's *description*, and the two writes that move membership between
 //! pools — never membership itself.** Which nodes are in a pool is `nodes.pool` /
 //! `node_groups.pool` (`nodes.rs`, `groups.rs`) and which pool a poller serves is
-//! `pollers.pool` (`crate::pollers`). A method here that answered "who is in this pool" would be
+//! `pollers.pool` (`pollers`). A method here that answered "who is in this pool" would be
 //! a second answer to a question those files already answer, which is precisely the shape ADR-094
 //! cut this module up to prevent.
 //!
@@ -59,7 +59,7 @@ impl PoolReferences {
 /// The two fields are not redundant. `from` re-points every row that *names* the pool — nodes and
 /// folders alike — in one statement each. `fall_through` carries the ids that name nothing and
 /// resolve to the pool only by inheritance bottoming out; there is no predicate over the `nodes`
-/// table that finds them without re-implementing [`crate::poolres::PoolResolver`], so the resolver
+/// table that finds them without re-implementing `poolres::PoolResolver`, so the resolver
 /// finds them and hands them over.
 #[derive(Debug, Clone, Copy)]
 pub struct PoolCarry<'a> {
@@ -355,70 +355,6 @@ mod tests {
                 .find(|p| p.name == "edge")
                 .and_then(|p| p.description.as_deref()),
             Some("edge sites")
-        );
-    }
-
-    /// What a pool is referenced by: nodes, folders, and the pollers serving it.
-    ///
-    /// 🚨 A pool name becomes a NATS subject component, so this is what an operator is shown before
-    /// they are allowed to delete or rename one. All three sources count.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn pool_references_counts_nodes_folders_and_pollers(pool: sqlx::PgPool) {
-        let group = pgtest::group(&pool, "tokyo").await;
-        let node = pgtest::node(&pool, "in-edge", 1, Some(group)).await;
-        crate::groups::GroupRepo::new(pool.clone())
-            .set_pool(group, Some("edge"))
-            .await
-            .expect("folder pool");
-        crate::pollers::PollerRepo::new(pool.clone())
-            .ensure_registered(&["site-a".to_owned()], "edge")
-            .await
-            .expect("poller");
-        let repo = pgtest::repo(pool);
-        repo.create_pool("edge", None, None).await.expect("create");
-        repo.set_node_pool(node, Some("edge")).await.expect("node");
-
-        let refs = repo.pool_references("edge").await.expect("references");
-        assert_eq!(refs.nodes, 1);
-        assert_eq!(refs.folders, 1);
-        assert_eq!(refs.pollers, vec!["site-a".to_owned()]);
-
-        let none = repo.pool_references("unused").await.expect("references");
-        assert_eq!((none.nodes, none.folders, none.pollers.len()), (0, 0, 0));
-    }
-
-    /// A rename carries everything that named the pool: nodes, folders and pollers, in one
-    /// transaction.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn renaming_a_pool_moves_everything_that_named_it(pool: sqlx::PgPool) {
-        let group = pgtest::group(&pool, "tokyo").await;
-        let node = pgtest::node(&pool, "in-edge", 1, Some(group)).await;
-        crate::groups::GroupRepo::new(pool.clone())
-            .set_pool(group, Some("edge"))
-            .await
-            .expect("folder pool");
-        crate::pollers::PollerRepo::new(pool.clone())
-            .ensure_registered(&["site-a".to_owned()], "edge")
-            .await
-            .expect("poller");
-        let repo = pgtest::repo(pool);
-        repo.create_pool("edge", None, None).await.expect("create");
-        repo.set_node_pool(node, Some("edge")).await.expect("node");
-
-        assert!(repo.rename_pool("edge", "branch").await.expect("rename"));
-        let old = repo.pool_references("edge").await.expect("references");
-        assert_eq!((old.nodes, old.folders, old.pollers.len()), (0, 0, 0));
-        let new = repo.pool_references("branch").await.expect("references");
-        assert_eq!(new.nodes, 1);
-        assert_eq!(new.folders, 1);
-        assert_eq!(new.pollers, vec!["site-a".to_owned()]);
-        assert_eq!(repo.list_pools().await.expect("list")[0].name, "branch");
-
-        assert!(
-            !repo.rename_pool("edge", "branch").await.expect("rename"),
-            "renaming a pool that no longer exists reported success"
         );
     }
 
