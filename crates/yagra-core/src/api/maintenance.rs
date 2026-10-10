@@ -19,7 +19,7 @@ use super::extract::{
 use super::scope::ScopeTarget;
 use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
-use crate::maintenance::{inherited_maintenance_end, inherited_mute_end, CoverageFacts};
+use crate::alerts::maintenance::{inherited_maintenance_end, inherited_mute_end, CoverageFacts};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -152,8 +152,8 @@ pub(crate) fn check_order(starts: DateTime<Utc>, ends: DateTime<Utc>) -> Result<
 /// **is** the folder group. Both serialize as `"group"`. A converter keyed on that string would read
 /// a window's tag as a folder id — an operator may perfectly well tag nodes with a UUID — and hand a
 /// scoped caller somebody else's window. Only the decision is shared; the reading is per row type.
-fn window_target(w: &crate::maintenance::StoredWindow) -> ScopeTarget {
-    use crate::maintenance::WindowScope;
+fn window_target(w: &crate::alerts::maintenance::StoredWindow) -> ScopeTarget {
+    use crate::alerts::maintenance::WindowScope;
     match w.level {
         WindowScope::Node => w
             .scope_id
@@ -173,8 +173,8 @@ fn window_target(w: &crate::maintenance::StoredWindow) -> ScopeTarget {
 }
 
 /// A mute's target. `StoredMute` keeps the id in a column per kind, so there is nothing to parse.
-fn mute_target(m: &crate::maintenance::StoredMute) -> ScopeTarget {
-    use crate::maintenance::MuteScope;
+fn mute_target(m: &crate::alerts::maintenance::StoredMute) -> ScopeTarget {
+    use crate::alerts::maintenance::MuteScope;
     match m.scope_kind {
         MuteScope::Node => m.node_id.map_or(ScopeTarget::Unbounded, |n| {
             ScopeTarget::Node(yagra_common::NodeId::from(n))
@@ -188,7 +188,7 @@ fn mute_target(m: &crate::maintenance::StoredMute) -> ScopeTarget {
 /// For a scoped caller, confirm `id` names a window they can see; otherwise `404` — the same answer
 /// they get for a window that does not exist, so the endpoint is not an id-enumeration oracle.
 ///
-/// Reads the list rather than one row because [`crate::maintenance::MaintenanceRepo`] has no by-id
+/// Reads the list rather than one row because [`crate::alerts::maintenance::MaintenanceRepo`] has no by-id
 /// read, and windows are a table an operator populates by hand (tens of rows). An unrestricted
 /// caller returns before the query, so the common path is unchanged.
 async fn require_visible_window(
@@ -279,7 +279,7 @@ async fn validate_group_scope(admin: &super::AdminState, scope_id: &str) -> Resu
 #[utoipa::path(
     get, path = "/api/v1/maintenance-windows", tag = "maintenance",
     responses(
-        (status = 200, description = "Every maintenance window", body = Vec<crate::maintenance::StoredWindow>),
+        (status = 200, description = "Every maintenance window", body = Vec<crate::alerts::maintenance::StoredWindow>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -290,7 +290,7 @@ async fn list_maintenance_windows(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::maintenance::StoredWindow>>> {
+) -> ApiResult<Json<Vec<crate::alerts::maintenance::StoredWindow>>> {
     Ok(Json(visible_windows(&st, &scope, &admin).await?))
 }
 
@@ -303,7 +303,7 @@ pub(crate) async fn visible_windows(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     admin: &super::AdminState,
-) -> Result<Vec<crate::maintenance::StoredWindow>, ApiError> {
+) -> Result<Vec<crate::alerts::maintenance::StoredWindow>, ApiError> {
     let windows = admin.maintenance.list_windows().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -813,7 +813,7 @@ async fn clear_ended_maintenance_windows(
 #[utoipa::path(
     get, path = "/api/v1/mutes", tag = "maintenance",
     responses(
-        (status = 200, description = "Every mute", body = Vec<crate::maintenance::StoredMute>),
+        (status = 200, description = "Every mute", body = Vec<crate::alerts::maintenance::StoredMute>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -824,7 +824,7 @@ async fn list_mutes(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::maintenance::StoredMute>>> {
+) -> ApiResult<Json<Vec<crate::alerts::maintenance::StoredMute>>> {
     Ok(Json(visible_mutes(&st, &scope, &admin).await?))
 }
 
@@ -833,7 +833,7 @@ pub(crate) async fn visible_mutes(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     admin: &super::AdminState,
-) -> Result<Vec<crate::maintenance::StoredMute>, ApiError> {
+) -> Result<Vec<crate::alerts::maintenance::StoredMute>, ApiError> {
     let mutes =
         admin.maintenance.list_mutes().await.map_err(|e| {
             ApiError::from_internal(e.as_ref(), "list mutes", "failed to list mutes")
@@ -981,7 +981,7 @@ async fn delete_mute(
 // Two rules make it safe to hand to an operator, and both are enforced here rather than in the
 // browser:
 //
-//  1. **It never cancels coverage that names the node.** `crate::maintenance::scope_covers`'
+//  1. **It never cancels coverage that names the node.** `crate::alerts::maintenance::scope_covers`'
 //     `WindowScope::Node` arm and a `MuteScope::Node` mute are excluded below, so an operator can
 //     still put a released node into maintenance deliberately.
 //  2. **It expires with the coverage it was carved out of.** The expiry is computed *here* from
@@ -989,13 +989,13 @@ async fn delete_mute(
 //     window would silently exclude the node from the next one, which is the monitoring blind spot
 //     this feature must not create. Computing it once is not enough, because coverage can stop
 //     sooner than it said it would: ending, disabling or deleting a window, and lifting a mute,
-//     each re-derive every release through `crate::maintenance::reconcile_exemptions`, which is
+//     each re-derive every release through `crate::alerts::maintenance::reconcile_exemptions`, which is
 //     also run on the refresh cycle so no future path can reopen that hole by forgetting to call
 //     it.
 
 /// Resolve one node's coverage-relevant facts. `404` if the node is gone.
 ///
-/// The facts and the rules over them live in [`crate::maintenance`] — three callers need them
+/// The facts and the rules over them live in [`crate::alerts::maintenance`] — three callers need them
 /// (this grant, the alert engine's refresh, and the reconcile that keeps a release from outliving
 /// its coverage), so they must not live inside any one of the three (`api-conventions.md`).
 async fn coverage_facts(
@@ -1031,9 +1031,12 @@ async fn coverage_facts(
 /// the worst case of a failure here is that the operator's markers lag by one cycle. Called inline
 /// anyway because the screen that just ended the window is the screen looking at those markers.
 async fn reconcile_after_coverage_change(admin: &super::AdminState) {
-    if let Err(e) =
-        crate::maintenance::reconcile_exemptions(&admin.maintenance, &admin.groups, &admin.repo)
-            .await
+    if let Err(e) = crate::alerts::maintenance::reconcile_exemptions(
+        &admin.maintenance,
+        &admin.groups,
+        &admin.repo,
+    )
+    .await
     {
         tracing::warn!(error = %e, "failed to reconcile suppression exemptions");
     }
@@ -1082,7 +1085,7 @@ async fn set_node_maintenance_exemption(
     Path(node_id): Path<Uuid>,
     Json(body): Json<ExemptionBody>,
 ) -> ApiResult<StatusCode> {
-    use crate::maintenance::ExemptionKind;
+    use crate::alerts::maintenance::ExemptionKind;
     if !body.exempt {
         admin
             .maintenance
@@ -1144,7 +1147,7 @@ async fn set_node_mute_exemption(
     Path(node_id): Path<Uuid>,
     Json(body): Json<ExemptionBody>,
 ) -> ApiResult<StatusCode> {
-    use crate::maintenance::ExemptionKind;
+    use crate::alerts::maintenance::ExemptionKind;
     if !body.exempt {
         admin
             .maintenance
@@ -1181,7 +1184,7 @@ async fn set_node_mute_exemption(
 #[utoipa::path(
     get, path = "/api/v1/suppression-exemptions", tag = "maintenance",
     responses(
-        (status = 200, description = "Every unexpired exemption", body = Vec<crate::maintenance::StoredExemption>),
+        (status = 200, description = "Every unexpired exemption", body = Vec<crate::alerts::maintenance::StoredExemption>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -1192,7 +1195,7 @@ async fn list_suppression_exemptions(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::maintenance::StoredExemption>>> {
+) -> ApiResult<Json<Vec<crate::alerts::maintenance::StoredExemption>>> {
     Ok(Json(visible_exemptions(&st, &scope, &admin).await?))
 }
 
@@ -1203,7 +1206,7 @@ pub(crate) async fn visible_exemptions(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     admin: &super::AdminState,
-) -> Result<Vec<crate::maintenance::StoredExemption>, ApiError> {
+) -> Result<Vec<crate::alerts::maintenance::StoredExemption>, ApiError> {
     let rows = admin.maintenance.list_exemptions().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -1244,8 +1247,8 @@ mod tests {
     }
 
     use super::*;
+    use crate::alerts::maintenance::{StoredMute, StoredWindow};
     use crate::api::tests_support::{private_state, public_state, status_with};
-    use crate::maintenance::{StoredMute, StoredWindow};
     use yagra_common::{Principal, Role, Scope};
 
     #[test]
@@ -1304,7 +1307,7 @@ mod tests {
 
     // ── Group scope over stored rows ────────────────────────────────────────
 
-    fn window(level: crate::maintenance::WindowScope, scope_id: &str) -> StoredWindow {
+    fn window(level: crate::alerts::maintenance::WindowScope, scope_id: &str) -> StoredWindow {
         StoredWindow {
             id: Uuid::new_v4(),
             name: "w".to_owned(),
@@ -1318,7 +1321,7 @@ mod tests {
     }
 
     fn mute(
-        kind: crate::maintenance::MuteScope,
+        kind: crate::alerts::maintenance::MuteScope,
         node: Option<Uuid>,
         group: Option<Uuid>,
     ) -> StoredMute {
@@ -1340,7 +1343,7 @@ mod tests {
         // operator is perfectly entitled to tag nodes with a UUID-shaped string, so a helper keyed
         // on the scope text would parse a window's tag as a folder id, compare it against the
         // caller's visible set, and hand them a window belonging to a group they cannot see.
-        use crate::maintenance::{MuteScope, WindowScope};
+        use crate::alerts::maintenance::{MuteScope, WindowScope};
         let g = Uuid::from_u128(42);
 
         // Same text, same shape, two different meanings — and they must not resolve alike.
@@ -1371,7 +1374,7 @@ mod tests {
         // Fail-closed: a row whose target cannot be read is treated as unbounded, so only an
         // unrestricted caller sees it. The inversion — defaulting to some node id — would expose
         // the row to whoever happened to hold that node.
-        use crate::maintenance::{MuteScope, WindowScope};
+        use crate::alerts::maintenance::{MuteScope, WindowScope};
         assert_eq!(
             window_target(&window(WindowScope::Node, "not-a-uuid")),
             ScopeTarget::Unbounded
@@ -1451,7 +1454,7 @@ mod tests {
 
     // ── Exemptions ──────────────────────────────────────────────────────────
     //
-    // What may be released from, and for how long, is `crate::maintenance`'s to answer and is
+    // What may be released from, and for how long, is `crate::alerts::maintenance`'s to answer and is
     // tested there — three callers share those rules now. What is tested here is the edge: the
     // refusal, the guards, and the paths.
 

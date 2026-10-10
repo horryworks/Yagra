@@ -150,7 +150,7 @@ fn node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Node> {
 /// Lives beside [`node_from_row`] rather than in `nodes.rs` because it *is* `node_from_row` plus
 /// one column, and two readers of the same projection in two files is how a column comes to be
 /// named in one and not the other — the failure `both_statements_project_the_columns_the_reader_names`
-/// exists for in `history.rs`.
+/// exists for in `alerts/history.rs`.
 fn ordered_node_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<nodes::OrderedNode> {
     Ok(nodes::OrderedNode {
         node: node_from_row(row)?,
@@ -193,7 +193,7 @@ pub struct NodeFacts {
     ///
     /// 🚨 **This field means two things at two moments, and the boundary is one type.** As
     /// [`NodeRepo::node_facts`] returns it, it is the node's OWN labels. The only production
-    /// [`crate::notify_facts::AlertFactsSource`] replaces it with the effective set before any
+    /// [`crate::alerts::notify_facts::AlertFactsSource`] replaces it with the effective set before any
     /// caller sees it, so everything downstream — the template context, PagerDuty, JSM — reads the
     /// resolved one. Do not add a second reader of the repository method that skips that step.
     pub tags: Vec<String>,

@@ -57,7 +57,7 @@ use async_trait::async_trait;
 use yagra_alert::Alert;
 
 use super::{history_row, notify::Notifier, NotifyAction};
-use crate::history::AlertHistoryStore;
+use crate::alerts::history::AlertHistoryStore;
 
 /// Where a component sends an alert transition.
 #[async_trait]

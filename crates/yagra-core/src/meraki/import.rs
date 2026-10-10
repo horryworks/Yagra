@@ -7,7 +7,7 @@
 //! differ in anything else, so everything after the pick lives here, once:
 //! - [`ImportResolver::filings`] — where a device goes. The IP-range match is PostgreSQL's
 //!   (`GroupRepo::match_address_prefixes`), the fold and the plan are pure
-//!   ([`crate::meraki_filing`]); this only strings them together. The organization's device list
+//!   ([`crate::meraki::filing`]); this only strings them together. The organization's device list
 //!   calls it as well, to say where a device *would* go, so the page cannot promise one folder and
 //!   the import use another.
 //! - [`ImportResolver::resolve`] — the profile, the name a nameless device goes by, the filing.
@@ -23,9 +23,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::groups::GroupRepo;
+use crate::meraki::filing::{addresses_to_match, plan_filing, Filing};
+use crate::meraki::inventory::{takes_lan_from_vlans, DeviceRecord, MerakiDeviceState};
 use crate::meraki::MerakiImportDevice;
-use crate::meraki_filing::{addresses_to_match, plan_filing, Filing};
-use crate::meraki_inventory::{takes_lan_from_vlans, DeviceRecord, MerakiDeviceState};
 use crate::repo::NodeRepo;
 
 /// One device somebody — an operator or the sync — picked for import, before anything about it has
@@ -237,7 +237,7 @@ impl ImportResolver {
             // A device with no name is identified by its serial, which is always present. The rule is
             // `node_name_for`'s and not written here: the sync recognises a later rename by
             // comparing a node's name with what this produced (ADR-164 decision 14).
-            let name = crate::meraki_inventory::node_name_for(&c.name, &c.serial);
+            let name = crate::meraki::inventory::node_name_for(&c.name, &c.serial);
             let network_name = c
                 .network_name
                 .filter(|n| !n.trim().is_empty())

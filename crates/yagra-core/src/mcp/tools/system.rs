@@ -358,7 +358,7 @@ pub(super) struct ConfigParams {
     limit: Option<i64>,
 }
 
-/// The owned halves of a [`crate::thresholds::ThresholdFilter`], parsed from one `get_config` call.
+/// The owned halves of a [`crate::alerts::thresholds::ThresholdFilter`], parsed from one `get_config` call.
 ///
 /// An owning struct because `ThresholdFilter` borrows all three of its fields — building one inline
 /// would borrow from temporaries that die at the end of the expression.
@@ -370,8 +370,8 @@ pub(super) struct ThresholdFilterOwned {
 }
 
 impl ThresholdFilterOwned {
-    pub(super) fn as_filter(&self) -> crate::thresholds::ThresholdFilter<'_> {
-        crate::thresholds::ThresholdFilter {
+    pub(super) fn as_filter(&self) -> crate::alerts::thresholds::ThresholdFilter<'_> {
+        crate::alerts::thresholds::ThresholdFilter {
             metric: self.metric.as_deref(),
             level: &self.levels,
             direction: &self.directions,
@@ -1226,7 +1226,7 @@ mod tests {
     /// proves neither).
     #[test]
     fn every_threshold_filter_dimension_is_reachable_from_get_config() {
-        const SRC: &str = include_str!("../../thresholds.rs");
+        const SRC: &str = include_str!("../../alerts/thresholds.rs");
         let declared: Vec<&str> = SRC
             .split("pub struct ThresholdFilter<'a> {")
             .nth(1)

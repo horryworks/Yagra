@@ -133,7 +133,7 @@ mod tests {
     /// This module's code, comments stripped — see
     /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
-        crate::module_source::code_no_comments("src", "ack")
+        crate::module_source::code_no_comments("src/alerts", "ack")
     }
 
     #[test]

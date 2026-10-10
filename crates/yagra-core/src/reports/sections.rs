@@ -390,7 +390,7 @@ mod tests {
     /// ⚠️ What moved out of reach in exchange: "a resolved row is not a fire" and "a row from
     /// before the window is not a fire *in the window*" used to be assertions here, over a fold. In
     /// SQL a fake cannot see them — the same limit `ReportsRepo` has. They are one `const` in
-    /// `history.rs` now, shared with the ranking below, which is why the trade is worth taking.
+    /// `alerts/history.rs` now, shared with the ranking below, which is why the trade is worth taking.
     #[tokio::test]
     async fn the_store_counts_the_fires_and_this_file_places_them() {
         let h = harness()

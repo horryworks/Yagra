@@ -20,7 +20,7 @@
 //! the one control that instantly halts all Meraki collection without losing configuration.
 //!
 //! **Nothing here asks the Dashboard API what an organization holds.** That is the inventory sync's
-//! (`meraki_sync.rs`); the device list and an import both read what it recorded. The import
+//! (`meraki/sync.rs`); the device list and an import both read what it recorded. The import
 //! wizard's own `POST …/enumerate` did ask, leniently, and was removed with the wizard (ADR-164
 //! Inc.5) — two readers of one listing, one of which accepted a partial answer.
 //!
@@ -44,10 +44,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::meraki_filing::{Filing, FilingReason, MerakiFiled};
-use crate::meraki_import::ImportCandidate;
-use crate::meraki_inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
-use crate::meraki_sync::MerakiSyncFailure;
+use crate::meraki::filing::{Filing, FilingReason, MerakiFiled};
+use crate::meraki::import::ImportCandidate;
+use crate::meraki::inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
+use crate::meraki::sync::MerakiSyncFailure;
 
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
@@ -435,7 +435,7 @@ pub(crate) struct MerakiCollectFailureView {
 }
 
 impl MerakiCollectFailureView {
-    fn of(f: &crate::meraki_health::TierFailure) -> Self {
+    fn of(f: &crate::meraki::health::TierFailure) -> Self {
         Self {
             tier: f.tier.as_str().to_owned(),
             reason: f.reason,
@@ -2593,7 +2593,7 @@ mod tests {
     ///
     /// ⚠️ The fixture's Dashboard is [`crate::api::tests_support::EmptyDashboard`], so this proves
     /// the endpoint — the request, the view, the two 409s, the stamp — and nothing about what a sync
-    /// does with devices. That is `meraki_sync.rs`'s, against its own fake.
+    /// does with devices. That is `meraki/sync.rs`'s, against its own fake.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn syncing_an_organization_is_accepted_and_recorded_on_its_row(pool: sqlx::PgPool) {
@@ -3390,7 +3390,7 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
-        use crate::meraki_health::TierFailure;
+        use crate::meraki::health::TierFailure;
         use std::collections::HashMap;
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
@@ -3655,7 +3655,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn the_device_list_says_where_each_device_is_or_would_go(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::meraki_inventory::{DeviceWrite, SeenDevice, SyncPlan};
+        use crate::meraki::inventory::{DeviceWrite, SeenDevice, SyncPlan};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
         let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -3860,7 +3860,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::meraki_sync::MerakiDirectory for TwoOrgDashboard {
+    impl crate::meraki::sync::MerakiDirectory for TwoOrgDashboard {
         async fn organizations(
             &self,
             _base_url: &str,

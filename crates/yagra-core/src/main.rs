@@ -19,7 +19,6 @@
 #[global_allocator]
 static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-mod ack;
 mod alerts;
 mod analysis;
 mod api;
@@ -53,7 +52,6 @@ mod forward;
 mod forward_store;
 mod gcp;
 mod groups;
-mod history;
 mod host_collector;
 // The outbound HTTP client core builds for its own stores and integrations (ADR-184). Apart from
 // `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.
@@ -69,7 +67,6 @@ mod ldap;
 mod leader;
 mod link_overrides;
 mod logstore;
-mod maintenance;
 mod mcp;
 // ⚠️ **This line used to live at the bottom of the file, and the position was load-bearing.**
 // Twenty-one files in this crate computed "production code" as everything above the first test
@@ -78,12 +75,6 @@ mod mcp;
 // all twenty-one onto `module_source`, which removes each test-only item instead of cutting at
 // the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
-mod meraki_filing;
-mod meraki_health;
-mod meraki_import;
-mod meraki_inventory;
-mod meraki_schedule;
-mod meraki_sync;
 mod metric_meaning;
 mod mib;
 #[cfg(test)]
@@ -91,11 +82,6 @@ mod module_source;
 mod neighbors;
 mod netbox;
 mod no_reading_filter;
-mod notification_log;
-mod notifications;
-mod notify_facts;
-mod notify_render;
-mod notify_text;
 mod oidc;
 /// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
 /// that keep the convention honest (ADR-114). Test-only, like `module_source` above.
@@ -156,7 +142,6 @@ mod support_bundle;
 /// Effective label resolution (own + every ancestor folder's − excluded). The accumulating
 /// counterpart to `poolres`, which resolves one value from the nearest folder that carries it.
 mod tagres;
-mod thresholds;
 mod tls;
 mod token;
 mod topology_level;
@@ -185,7 +170,11 @@ use std::time::Duration;
 
 use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
-use ack::AckRepo;
+use alerts::ack::AckRepo;
+use alerts::history::AlertHistoryStore;
+use alerts::maintenance::MaintenanceRepo;
+use alerts::notifications::NotificationRepo;
+use alerts::thresholds::ThresholdStore;
 use alerts::{AlertManager, Notifier};
 use api::{AdminState, ApiState};
 use audit::AuditRepo;
@@ -197,19 +186,15 @@ use coordinator::Coordinator;
 use dashboard::{DashboardRepo, PublicDashboardRepo, SharedDashboardRepo};
 use discovery::DiscoveryRunner;
 use flowstore::{ChStore, FlowRow, FlowStore};
-use history::AlertHistoryStore;
 use logstore::{LogStore, VlStore};
-use maintenance::MaintenanceRepo;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
-use notifications::NotificationRepo;
 use pollers::PollerRepo;
 use preferences::UserPrefsRepo;
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
-use thresholds::ThresholdStore;
 use uuid::Uuid;
 use volatile::VolatileStore;
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
@@ -509,7 +494,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let alerts = Arc::new(AlertManager::with_poll_intervals(poll_intervals.clone()));
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
-    let deliveries = Arc::new(notification_log::DeliveryLogRepo::new(repo.pool()));
+    let deliveries = Arc::new(alerts::notification_log::DeliveryLogRepo::new(repo.pool()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
     // Give the engine back what it knew before this process started (ADR-097). Awaited here, and
     // here rather than in a task, because it has to finish before the first poll result arrives:
@@ -570,8 +555,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // The notification delivery log (ADR-195): the writer needs the shutdown token so it can flush
     // on the way down, which is why it is attached here and not where the notifier is built. On
-    // every core; `notification_log::start` carries why.
-    notifier.set_delivery_log(notification_log::start(deliveries.clone(), &shutdown));
+    // every core; `alerts::notification_log::start` carries why.
+    notifier.set_delivery_log(alerts::notification_log::start(
+        deliveries.clone(),
+        &shutdown,
+    ));
 
     // IP→ASN periodic reloader (ADR-031). Nothing starts unless a dataset and a non-zero interval
     // are both configured; on every core when they are. `ipasn::start_reload` carries why.
@@ -669,14 +657,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
     // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
     // the "Sync now" endpoint must go through the same lanes, which live in this value.
-    let meraki_inventory = Arc::new(meraki_inventory::MerakiInventoryRepo::new(repo.pool()));
+    let meraki_inventory = Arc::new(meraki::inventory::MerakiInventoryRepo::new(repo.pool()));
     // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
     // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
     // IP ranges — one hierarchy, read in several places.
     let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
     // What a Meraki import resolves before it writes (ADR-164 Inc.4). One value, because the
     // sync's automatic import and the API's manual one must file a device the same way.
-    let meraki_import = Arc::new(meraki_import::ImportResolver::new(
+    let meraki_import = Arc::new(meraki::import::ImportResolver::new(
         group_repo.clone(),
         repo.clone(),
     ));
@@ -686,11 +674,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let meraki_wire = yagra_transport::MerakiWireOrigin::from_env()?;
     #[cfg(not(feature = "lab-meraki-mock"))]
     let meraki_wire = None;
-    let meraki_sync = Arc::new(meraki_sync::MerakiSync::new(
+    let meraki_sync = Arc::new(meraki::sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
-        Arc::new(meraki_sync::DashboardApi::new(meraki_wire)),
+        Arc::new(meraki::sync::DashboardApi::new(meraki_wire)),
         meraki_inflight.clone(),
         meraki_import.clone(),
         Arc::new(neighbors::NeighborRepo::new(repo.pool())),
@@ -795,7 +783,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // an `Alert` carries. Wired once, here, because it needs the write side; a skeleton-mode core
     // never reaches this and renders ids instead. It is only consulted when a channel actually has
     // a template, so a deployment with none issues no extra query.
-    notifier.set_facts_source(Arc::new(notify_facts::CachedNodeFacts::new(
+    notifier.set_facts_source(Arc::new(alerts::notify_facts::CachedNodeFacts::new(
         repo.clone(),
         group_repo.clone(),
     )));
@@ -1182,11 +1170,11 @@ struct LeaderTasks {
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
     /// The organizations' device listings: the topology derivation reads each bound device's MAC
     /// from it (ADR-191 Inc.7).
-    meraki_inventory: Arc<meraki_inventory::MerakiInventoryRepo>,
+    meraki_inventory: Arc<meraki::inventory::MerakiInventoryRepo>,
     /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
     /// an organization's lanes live in this process, so two cores syncing would each believe they
     /// held one alone.
-    meraki_sync: Arc<meraki_sync::MerakiSync>,
+    meraki_sync: Arc<meraki::sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
     netbox: Arc<netbox::NetboxRepo>,
@@ -1237,7 +1225,7 @@ struct LeaderTasks {
     llm: Arc<rca::store::RcaRepo>,
     /// The notification delivery log - held only so the retention loop can prune it
     /// (`retention::Subject::NotificationDeliveries`); writing it is the notifier's.
-    deliveries: Arc<notification_log::DeliveryLogRepo>,
+    deliveries: Arc<alerts::notification_log::DeliveryLogRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -1557,7 +1545,7 @@ impl LeaderTasks {
         // the two never hold one organization at once; the loop decides which are due.
         spawn_cancellable(
             &self.shutdown,
-            meraki_sync::run_sync_loop(self.meraki_sync.clone(), self.repo.clone()),
+            meraki::sync::run_sync_loop(self.meraki_sync.clone(), self.repo.clone()),
         );
         // NetBox's folder-tree pull (ADR-100 Inc.1). Leader-only for the reason the field's doc
         // gives; the loop itself decides which servers are due.
@@ -1707,7 +1695,7 @@ impl LeaderTasks {
         // it shares `meraki_inflight` with the collect scheduler and the sync above.
         spawn_cancellable(
             &self.shutdown,
-            meraki_health::run_meraki_collect_watch(
+            meraki::health::run_meraki_collect_watch(
                 self.meraki_orgs.clone(),
                 self.repo.clone(),
                 self.meraki_inflight.clone(),
@@ -1837,7 +1825,7 @@ struct TimelineSources {
     analyses: Arc<analysis::AnalysisRepo>,
     rca_reports: Arc<rca::store::RcaRepo>,
     pollers: Arc<PollerRepo>,
-    deliveries: Arc<notification_log::DeliveryLogRepo>,
+    deliveries: Arc<alerts::notification_log::DeliveryLogRepo>,
 }
 
 /// Leader-only loop: snapshot the node-state counts every few minutes into PostgreSQL so the
@@ -1945,7 +1933,7 @@ async fn run_topology_derivation(stores: TopologyStores) {
             l3_mark,
             nb_mark,
             rt_mark,
-            meraki_inventory::inventory_generation(),
+            meraki::inventory::inventory_generation(),
         );
         if last_signal.as_ref() == Some(&signal) {
             metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
@@ -1968,7 +1956,7 @@ struct TopologyStores {
     routing: Arc<l3_routing::RoutingRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
     overrides: Arc<link_overrides::LinkOverrideRepo>,
-    meraki_inventory: Arc<meraki_inventory::MerakiInventoryRepo>,
+    meraki_inventory: Arc<meraki::inventory::MerakiInventoryRepo>,
 }
 
 /// What one derivation cycle did.
@@ -2281,7 +2269,7 @@ struct MerakiScheduler {
 /// the SSID read. Each lane holds one collect at a time, so an organization is asked by two
 /// sessions at most, each paced at half its rate budget (`MerakiOrg::lane_rps`). Separate from the
 /// per-node scheduler so that loop is untouched. Each short tick: honour the global kill switch,
-/// then for every enabled org ask [`meraki_schedule::MerakiSchedule::plan`] what each free lane
+/// then for every enabled org ask [`meraki::schedule::MerakiSchedule::plan`] what each free lane
 /// sends, and dispatch it (serial→node_id map + monitored networks inlined). Tiers have their own
 /// cadences (free of the per-node 1h cap); a collect's result clears its lane (a lease is the
 /// backstop). An org with no imported devices of a kind is skipped to save budget.
@@ -2294,7 +2282,7 @@ struct MerakiScheduler {
 /// collect of their own in the slow lane (`ssid_only`), which publishes no client count or
 /// utilization, so the fast lane's wireless rounds keep their spacing (ADR-169 decision 2).
 ///
-/// ⚠️ Every decision below is [`meraki_schedule::MerakiSchedule`]'s, which is what a test drives;
+/// ⚠️ Every decision below is [`meraki::schedule::MerakiSchedule`]'s, which is what a test drives;
 /// this loop reads the stores and publishes.
 async fn run_meraki_scheduler(s: MerakiScheduler) {
     use std::time::Instant;
@@ -2312,7 +2300,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
     } = s;
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
-    let mut schedule = meraki_schedule::MerakiSchedule::new();
+    let mut schedule = meraki::schedule::MerakiSchedule::new();
 
     loop {
         tokio::time::sleep(TICK).await;
@@ -2397,7 +2385,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki_sync::MerakiSyncFailure::Internal,
+                                meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2436,7 +2424,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki_sync::MerakiSyncFailure::Internal,
+                                meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2455,7 +2443,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                         inflight.health.record_failed(
                             org.id,
                             tier,
-                            meraki_sync::MerakiSyncFailure::Credential,
+                            meraki::sync::MerakiSyncFailure::Credential,
                             pool_coverage::now_unix_ms(),
                         );
                     }
@@ -2515,7 +2503,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki_sync::MerakiSyncFailure::Internal,
+                                meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2852,7 +2840,7 @@ mod tests {
             routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
             links: Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone())),
             overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
-            meraki_inventory: Arc::new(crate::meraki_inventory::MerakiInventoryRepo::new(
+            meraki_inventory: Arc::new(crate::meraki::inventory::MerakiInventoryRepo::new(
                 pool.clone(),
             )),
         }

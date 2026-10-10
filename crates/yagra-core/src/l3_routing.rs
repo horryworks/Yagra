@@ -5,7 +5,7 @@
 //! **Named `l3_routing`, not `routing`, on purpose** (ADR-083): this is layer-3 routing between
 //! devices, and 40 files under `api/` import `axum::routing::{get, post}`. Under the shorter name
 //! a search for `routing::` returned the web framework and buried this module — and "routing" also
-//! already means notification routing here (`notifications.rs::RoutingRule`), so the short name was
+//! already means notification routing here (`alerts/notifications.rs::RoutingRule`), so the short name was
 //! ambiguous in two directions at once.
 //!
 //! Structured observations, so this is PostgreSQL (store separation) — a peer address in a

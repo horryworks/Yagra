@@ -39,9 +39,9 @@ use yagra_telemetry::CancellationToken;
 
 use tokio::sync::mpsc::error::TrySendError;
 
+use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
 use crate::coordinator::Coordinator;
-use crate::history::AlertHistoryStore;
 use crate::no_reading_filter::{Admitted, NoReadingHandle};
 use crate::repo::{self, NodeRepo};
 use crate::store::MetricStore;
@@ -1850,7 +1850,7 @@ mod tests {
 
     fn temperature_engine(node: NodeId) -> Arc<AlertManager> {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
-        let rule = crate::thresholds::StoredThreshold::new(
+        let rule = crate::alerts::thresholds::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),
@@ -2235,7 +2235,7 @@ mod tests {
     /// per-interface, as the shipped one does.
     fn optical_engine(node: NodeId) -> Arc<AlertManager> {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
-        let rule = crate::thresholds::StoredThreshold::new(
+        let rule = crate::alerts::thresholds::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),
@@ -2376,7 +2376,7 @@ mod tests {
     async fn a_slow_walks_count_sample_is_not_judged() {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
         let node = NodeId::new();
-        let rule = crate::thresholds::StoredThreshold::new(
+        let rule = crate::alerts::thresholds::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),

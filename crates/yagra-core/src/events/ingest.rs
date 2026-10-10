@@ -17,8 +17,8 @@ use yagra_alert::Alert;
 use yagra_bus::EventMsg;
 use yagra_telemetry::CancellationToken;
 
+use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::{Notifier, NotifyAction};
-use crate::history::AlertHistoryStore;
 
 use crate::logstore::LogStore;
 

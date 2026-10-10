@@ -649,7 +649,7 @@ mod tests {
     /// missing here can only make the search *fail* (loudly, naming the subject), never pass, which
     /// is the safe direction for a hand-maintained list.
     const PRUNE_SITES: [&str; 11] = [
-        include_str!("history.rs"),
+        include_str!("alerts/history.rs"),
         // ADR-094 split `repo.rs` by the table each method's SQL names, so the `node_state_snapshots`
         // delete this list wants is in the file for that table. Same shape as the `analysis/` entry
         // below, and same safety: a wrong path can only make the search fail.
@@ -671,7 +671,7 @@ mod tests {
         // the subject — which is why a hand-maintained list is tolerable at all.
         include_str!("analysis/repo.rs"),
         include_str!("rca/store.rs"),
-        include_str!("notification_log.rs"),
+        include_str!("alerts/notification_log.rs"),
     ];
 
     /// The module doc claims "this module declares the table, and every prune site implements it".

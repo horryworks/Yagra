@@ -33,13 +33,13 @@ use uuid::Uuid;
 use yagra_common::NodeId;
 
 use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
-use crate::maintenance::MaintenanceRepo;
+use crate::alerts::maintenance::MaintenanceRepo;
+use crate::alerts::notifications::NotificationRepo;
+use crate::alerts::thresholds::ThresholdStore;
 use crate::no_reading_filter::{NoReadingHandle, NoReadingMarkers};
-use crate::notifications::NotificationRepo;
 use crate::repo::NodeRepo;
-use crate::thresholds::ThresholdStore;
 use crate::{
-    classification, config_gen, events, groups, maintenance, poolres, thresholds,
+    alerts::maintenance, alerts::thresholds, classification, config_gen, events, groups, poolres,
     topology_projection,
 };
 use yagra_topology::Topology;

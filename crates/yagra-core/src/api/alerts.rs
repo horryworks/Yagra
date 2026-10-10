@@ -19,8 +19,8 @@
 use super::extract::{RequireAckAlerts, RequireView, Scoped};
 use super::util::Ranked;
 use super::{ApiError, ApiResult, ApiState};
-use crate::ack::{AckKey, AckView};
-use crate::history::AlertHistoryRow;
+use crate::alerts::ack::{AckKey, AckView};
+use crate::alerts::history::AlertHistoryRow;
 use axum::{
     extract::{Query, State},
     response::{
@@ -562,7 +562,7 @@ pub(crate) async fn history_page(
     let Some(history) = st.history.as_ref() else {
         return Ok(Vec::new());
     };
-    let filter = crate::history::HistoryFilter {
+    let filter = crate::alerts::history::HistoryFilter {
         before,
         before_id: input.before_id,
         since,

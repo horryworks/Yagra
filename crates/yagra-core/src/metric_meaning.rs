@@ -290,7 +290,7 @@ pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 2] = [
         AlertName::Value("Too few pollers in pool"),
     ),
     (
-        crate::meraki_health::COLLECT_METRIC,
+        crate::meraki::health::COLLECT_METRIC,
         AlertName::Flag("Meraki Dashboard collection failing"),
     ),
 ];
@@ -850,7 +850,7 @@ mod tests {
             "Too few pollers in pool"
         );
         assert_eq!(
-            alert_title(crate::meraki_health::COLLECT_METRIC),
+            alert_title(crate::meraki::health::COLLECT_METRIC),
             "Meraki Dashboard collection failing"
         );
         assert_eq!(

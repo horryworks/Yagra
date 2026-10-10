@@ -17,7 +17,7 @@ use yagra_common::{
     resolve_effective, Direction, EffectiveThreshold, IfIndex, NodeId, ScopeLevel, ScopedThreshold,
 };
 
-use crate::thresholds::StoredThreshold;
+use crate::alerts::thresholds::StoredThreshold;
 
 use super::rules::{folder_depth, nearest_folder_depth, seeded_liveness_rule, threshold_applies};
 use super::{AlertConfig, AlertManager, NodeMeta};

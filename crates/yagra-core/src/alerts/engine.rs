@@ -21,8 +21,8 @@ use yagra_common::{
     CheckId, Direction, EffectiveThreshold, IfIndex, MetricKind, NodeId, NodeState, Severity,
 };
 
+use crate::alerts::thresholds::StoredThreshold;
 use crate::poll_interval::{self, PollIntervals};
-use crate::thresholds::StoredThreshold;
 
 use super::reported::{is_current, Report, ReportLedger};
 use super::rules::*;
@@ -1692,7 +1692,7 @@ impl AlertManager {
             .get(&node)?;
         let check = subject_check_id(
             &Subject::MerakiOrg(org),
-            crate::meraki_health::COLLECT_METRIC,
+            crate::meraki::health::COLLECT_METRIC,
         );
         self.active
             .lock()
@@ -2597,7 +2597,7 @@ impl AlertManager {
         at_unix_ms: i64,
     ) -> Option<NotifyAction> {
         let subject = Subject::MerakiOrg(org);
-        let check = subject_check_id(&subject, crate::meraki_health::COLLECT_METRIC);
+        let check = subject_check_id(&subject, crate::meraki::health::COLLECT_METRIC);
         self.raise_event_alert(Alert {
             subject,
             check,
@@ -2606,10 +2606,10 @@ impl AlertManager {
             at_unix_ms,
             root_cause: None,
             flapping: false,
-            metric: crate::meraki_health::COLLECT_METRIC.to_owned(),
+            metric: crate::meraki::health::COLLECT_METRIC.to_owned(),
             breach: Some(Breach {
                 value: f64::from(failures),
-                threshold: Some(f64::from(crate::meraki_health::RAISE_AFTER_FAILURES)),
+                threshold: Some(f64::from(crate::meraki::health::RAISE_AFTER_FAILURES)),
                 direction: Direction::Above,
             }),
             // An organization is not a port, nor a table row.
@@ -2623,7 +2623,7 @@ impl AlertManager {
     pub fn resolve_meraki_collect_alert(&self, org: Uuid) -> Option<NotifyAction> {
         self.resolve_event_alert(subject_check_id(
             &Subject::MerakiOrg(org),
-            crate::meraki_health::COLLECT_METRIC,
+            crate::meraki::health::COLLECT_METRIC,
         ))
     }
 
@@ -5762,7 +5762,7 @@ mod tests {
         };
         assert_eq!(alert.subject, Subject::MerakiOrg(org));
         assert_eq!(alert.severity, Severity::Critical);
-        assert_eq!(alert.metric, crate::meraki_health::COLLECT_METRIC);
+        assert_eq!(alert.metric, crate::meraki::health::COLLECT_METRIC);
 
         assert!(
             mgr.node_states().is_empty(),

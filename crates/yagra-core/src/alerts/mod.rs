@@ -60,10 +60,18 @@ use uuid::Uuid;
 
 use yagra_alert::{Alert, Subject};
 
+pub(crate) mod ack;
 pub(crate) mod config;
 pub(crate) mod deleted;
 pub(crate) mod engine;
+pub(crate) mod history;
+pub(crate) mod maintenance;
+pub(crate) mod notification_log;
+pub(crate) mod notifications;
 pub(crate) mod notify;
+pub(crate) mod notify_facts;
+pub(crate) mod notify_render;
+pub(crate) mod notify_text;
 pub(crate) mod reported;
 pub(crate) mod restore;
 pub(crate) mod rules;
@@ -71,6 +79,7 @@ pub(crate) mod sink;
 pub(crate) mod stale;
 #[cfg(test)]
 pub(crate) mod testkit;
+pub(crate) mod thresholds;
 
 pub(crate) use engine::AlertManager;
 // Only what the rest of the crate actually imports. The four channel types, `RuleCoverage` and

@@ -26,9 +26,9 @@ use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{Node, NodeKind, NodeState};
 
+use crate::alerts::history::AlertHistoryRow;
 use crate::analysis::{AnalysisFinding, AnalysisJob};
 use crate::events::EventRow;
-use crate::history::AlertHistoryRow;
 use crate::repo::InterfaceMeta;
 
 /// Render an optional rolled-up state to its stable lowercase string (unobserved ⇒ `"unknown"`).
@@ -704,9 +704,9 @@ impl NodeGroupDto {
 /// opposite.
 #[derive(Debug, Clone, Serialize)]
 pub struct SuppressionsDto {
-    pub maintenance_windows: Vec<crate::maintenance::StoredWindow>,
-    pub mutes: Vec<crate::maintenance::StoredMute>,
-    pub exemptions: Vec<crate::maintenance::StoredExemption>,
+    pub maintenance_windows: Vec<crate::alerts::maintenance::StoredWindow>,
+    pub mutes: Vec<crate::alerts::maintenance::StoredMute>,
+    pub exemptions: Vec<crate::alerts::maintenance::StoredExemption>,
 }
 
 /// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
@@ -1154,7 +1154,7 @@ mod tests {
                 cause: crate::api::nodes::CollectionFaultCause::MerakiApi,
                 meraki_org: Some(Uuid::new_v4()),
                 meraki_org_name: Some("Acme".to_owned()),
-                reason: Some(crate::meraki_sync::MerakiSyncFailure::Auth),
+                reason: Some(crate::meraki::sync::MerakiSyncFailure::Auth),
                 since_unix_ms: 1,
             }),
             snmp_configured: true,
@@ -1573,28 +1573,28 @@ mod tests {
         // ── ADR-042 I2 tool results ─────────────────────────────────────────────────────────────
 
         let suppressions = SuppressionsDto {
-            maintenance_windows: vec![crate::maintenance::StoredWindow {
+            maintenance_windows: vec![crate::alerts::maintenance::StoredWindow {
                 id: uuid::Uuid::new_v4(),
                 name: "core upgrade".to_owned(),
-                level: crate::maintenance::WindowScope::Node,
+                level: crate::alerts::maintenance::WindowScope::Node,
                 scope_id: node.id.0.to_string(),
                 starts_at: "1970-01-01T00:00:00Z".to_owned(),
                 ends_at: "1970-01-01T01:00:00Z".to_owned(),
                 enabled: true,
                 active: false,
             }],
-            mutes: vec![crate::maintenance::StoredMute {
+            mutes: vec![crate::alerts::maintenance::StoredMute {
                 id: uuid::Uuid::new_v4(),
-                scope_kind: crate::maintenance::MuteScope::Node,
+                scope_kind: crate::alerts::maintenance::MuteScope::Node,
                 node_id: Some(node.id.0),
                 group_id: None,
                 check_name: Some("icmp_rtt_ms".to_owned()),
                 until_at: "1970-01-01T02:00:00Z".to_owned(),
                 reason: Some("known noisy link".to_owned()),
             }],
-            exemptions: vec![crate::maintenance::StoredExemption {
+            exemptions: vec![crate::alerts::maintenance::StoredExemption {
                 id: uuid::Uuid::new_v4(),
-                kind: crate::maintenance::ExemptionKind::Maintenance,
+                kind: crate::alerts::maintenance::ExemptionKind::Maintenance,
                 node_id: node.id.0,
                 until_at: "1970-01-01T01:00:00Z".to_owned(),
             }],

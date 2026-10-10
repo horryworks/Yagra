@@ -3,7 +3,7 @@
 //!
 //! Every endpoint is `ManageConfig`: a threshold decides when the fleet pages someone, so reading
 //! the ruleset is as sensitive as writing it. Resolution (most-specific-wins, ADR-013) lives in
-//! `yagra_common`; this module is only the CRUD surface over [`crate::thresholds::ThresholdStore`].
+//! `yagra_common`; this module is only the CRUD surface over [`crate::alerts::thresholds::ThresholdStore`].
 //!
 //! **The list is capped.** Thresholds are the one configuration table that grows with the fleet —
 //! a node-level override is per (node × metric), so tens of thousands of nodes means a response
@@ -65,7 +65,7 @@ pub(super) fn routes() -> Router<ApiState> {
 /// two — a client that forgets the comparison shows a complete-looking list.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ThresholdPage {
-    items: Vec<crate::thresholds::StoredThreshold>,
+    items: Vec<crate::alerts::thresholds::StoredThreshold>,
     /// Rules matching the filter, ignoring the cap.
     total: i64,
     /// Whether `items` is a prefix of the matching rules rather than all of them.
@@ -154,7 +154,7 @@ async fn list_thresholds(
             &admin,
             &st.alerts,
             q.limit,
-            &crate::thresholds::ThresholdFilter {
+            &crate::alerts::thresholds::ThresholdFilter {
                 metric: metric.as_deref(),
                 level: &levels,
                 direction: &directions,
@@ -187,7 +187,7 @@ pub(crate) async fn threshold_page(
     admin: &super::AdminState,
     alerts: &std::sync::Arc<crate::alerts::AlertManager>,
     limit: Option<i64>,
-    filter: &crate::thresholds::ThresholdFilter<'_>,
+    filter: &crate::alerts::thresholds::ThresholdFilter<'_>,
     count_overrides: bool,
 ) -> ApiResult<ThresholdPage> {
     let limit = super::util::page_limit(limit, THRESHOLDS_MAX, THRESHOLDS_MAX);
@@ -223,7 +223,7 @@ pub(crate) async fn threshold_page(
 /// one lookup the alert surfaces use, so a rule and the alert it raises name the port alike.
 async fn rule_port_names(
     admin: &super::AdminState,
-    items: &[crate::thresholds::StoredThreshold],
+    items: &[crate::alerts::thresholds::StoredThreshold],
 ) -> std::collections::BTreeMap<String, String> {
     let ports: Vec<(Uuid, u32)> = items
         .iter()
@@ -246,7 +246,7 @@ async fn rule_port_names(
 async fn overridden_on_page(
     admin: &super::AdminState,
     alerts: &std::sync::Arc<crate::alerts::AlertManager>,
-    items: &[crate::thresholds::StoredThreshold],
+    items: &[crate::alerts::thresholds::StoredThreshold],
 ) -> ApiResult<std::collections::BTreeMap<Uuid, u32>> {
     if items.is_empty() {
         return Ok(std::collections::BTreeMap::new());
@@ -278,7 +278,7 @@ async fn overridden_on_page(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MatchingThreshold {
     /// The stored rule, in the same shape the rules list serves.
-    rule: crate::thresholds::StoredThreshold,
+    rule: crate::alerts::thresholds::StoredThreshold,
     /// Whether this rule sits at the **winning** scope level for its metric — the most specific
     /// level that reaches this port, and among folder-group rules only the nearest group in the
     /// chain (ADR-013 + ADR-075 decision 11).
@@ -781,7 +781,7 @@ async fn create_threshold(
     reject_duplicate_rule(&admin, &p, &body.metric, None).await?;
     let id = admin
         .thresholds
-        .create(crate::thresholds::ThresholdWrite {
+        .create(crate::alerts::thresholds::ThresholdWrite {
             scope_level: p.scope_level,
             scope_ids: &p.scope_ids,
             metric: &body.metric,
@@ -822,7 +822,7 @@ async fn update_threshold(
         .thresholds
         .update(
             id,
-            crate::thresholds::ThresholdWrite {
+            crate::alerts::thresholds::ThresholdWrite {
                 scope_level: p.scope_level,
                 scope_ids: &p.scope_ids,
                 metric: &body.metric,

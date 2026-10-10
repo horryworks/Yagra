@@ -21,7 +21,7 @@ use yagra_common::{
 };
 use yagra_topology::Topology;
 
-use crate::thresholds::StoredThreshold;
+use crate::alerts::thresholds::StoredThreshold;
 
 use super::NodeMeta;
 

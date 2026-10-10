@@ -1276,7 +1276,7 @@ impl UpgradeRepo {
     pub async fn settle_finished_run(
         &self,
         audit: &crate::audit::AuditRepo,
-        maintenance: &crate::maintenance::MaintenanceRepo,
+        maintenance: &crate::alerts::maintenance::MaintenanceRepo,
     ) -> Option<RunStatus> {
         let dir = self.dir.as_deref()?;
         let deadline = tokio::time::Instant::now()
@@ -1618,7 +1618,7 @@ pub(crate) struct SettleHandles {
     /// Where the run's outcome, and each poller's, is recorded.
     pub audit: std::sync::Arc<crate::audit::AuditRepo>,
     /// The fleet-wide window the run opened, which settling closes.
-    pub maintenance: std::sync::Arc<crate::maintenance::MaintenanceRepo>,
+    pub maintenance: std::sync::Arc<crate::alerts::maintenance::MaintenanceRepo>,
     /// Where upgrade commands to the pollers go.
     pub bus: std::sync::Arc<yagra_bus::NatsBus>,
     /// The live poller registry.

@@ -52,7 +52,7 @@
 //! The record ([`MerakiCollectHealth`]) is written from the result-ingest hot path and therefore
 //! does no I/O; deciding, persisting and dispatching belong to the leader-gated loop below.
 
-use crate::meraki_sync::MerakiSyncFailure;
+use crate::meraki::sync::MerakiSyncFailure;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;

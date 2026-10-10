@@ -17,7 +17,7 @@ use uuid::Uuid;
 use yagra_common::{NodeId, Permission};
 
 use super::YagraMcp;
-use crate::ack::AckView;
+use crate::alerts::ack::AckView;
 use crate::api::scope::NodeScope;
 use crate::mcp::dto::{AlertDto, AlertHistoryDto};
 

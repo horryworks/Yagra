@@ -108,7 +108,7 @@ impl FilingReason {
 
 /// The addresses worth asking the match about: each usable one, once.
 ///
-/// The unspecified address never reaches here — [`crate::meraki_inventory::usable_address`] drops it
+/// The unspecified address never reaches here — [`crate::meraki::inventory::usable_address`] drops it
 /// where the address is parsed — because the importer writes `0.0.0.0` on a node that has none, and
 /// a folder carrying `0.0.0.0/0` would otherwise collect every address-less device.
 #[must_use]

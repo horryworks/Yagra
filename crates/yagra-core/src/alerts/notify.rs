@@ -6,9 +6,9 @@
 //! turns it into an outbound request; **it names no engine type at all**, which is the property
 //! that made ADR-083's split provably behaviour-free and the one to preserve.
 //!
-//! The neighbouring notification modules and what each owns: [`crate::notifications`] the stored
-//! channel and routing rows, [`crate::notify_facts`] the facts a template may reference,
-//! [`crate::notify_render`] the rendering itself. This module is the dispatcher over them.
+//! The neighbouring notification modules and what each owns: [`crate::alerts::notifications`] the stored
+//! channel and routing rows, [`crate::alerts::notify_facts`] the facts a template may reference,
+//! [`crate::alerts::notify_render`] the rendering itself. This module is the dispatcher over them.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,10 +24,10 @@ use yagra_common::{
     is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
 };
 
-use crate::notification_log::{DeliveryLog, DeliveryRecord};
-use crate::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
-use crate::notify_facts::{context_for, node_ids_for, AlertFactsSource};
-use crate::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
+use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
+use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
+use crate::alerts::notify_facts::{context_for, node_ids_for, AlertFactsSource};
+use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 
 use super::rules::check_id;
 use super::NotifyAction;
@@ -753,10 +753,11 @@ pub(crate) struct TestDelivery {
 ///   test into an incident opened by an earlier one.
 pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -> Notification {
     let (mut alert, resolved) =
-        crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
+        crate::alerts::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
     alert.check = CheckId::from(Uuid::new_v4());
     let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
-    facts.if_name = crate::notify_facts::preview_port_name(yagra_common::PreviewSample::Threshold);
+    facts.if_name =
+        crate::alerts::notify_facts::preview_port_name(yagra_common::PreviewSample::Threshold);
     let builtin = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&facts));
     let builtin = Notification {
         payload: mark_as_test(kind, &builtin.payload),
@@ -789,7 +790,10 @@ pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -
 /// unchanged - the built-in payload always is one, but this must not be the place that breaks it.
 fn mark_as_test(kind: ChannelKind, payload: &str) -> String {
     if !body_must_be_json(kind) {
-        return format!("{}\n\n{payload}", crate::notify_text::TEST_BODY_LINE);
+        return format!(
+            "{}\n\n{payload}",
+            crate::alerts::notify_text::TEST_BODY_LINE
+        );
     }
     match serde_json::from_str::<serde_json::Value>(payload) {
         Ok(serde_json::Value::Object(mut obj)) => {
@@ -999,7 +1003,7 @@ fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
 struct ChannelOverride {
     template: ChannelTemplate,
     /// Whether this channel carries the body as JSON (webhook/PagerDuty) — see
-    /// [`crate::notify_render::body_must_be_json`].
+    /// [`crate::alerts::notify_render::body_must_be_json`].
     needs_json: bool,
 }
 
@@ -1746,7 +1750,7 @@ fn with_subject_facts(n: Notification, facts: Option<&AlertFacts>) -> Notificati
     match facts {
         Some(f) => n
             .with_tags(f.tags.clone())
-            .with_details(crate::notify_text::details(f)),
+            .with_details(crate::alerts::notify_text::details(f)),
         None => n,
     }
 }
@@ -1795,8 +1799,8 @@ fn text_notification(
     with_subject_facts(
         Notification::for_alert(
             alert,
-            crate::notify_text::subject(alert, facts),
-            crate::notify_text::body(alert, facts),
+            crate::alerts::notify_text::subject(alert, facts),
+            crate::alerts::notify_text::body(alert, facts),
         ),
         Some(facts),
     )
@@ -1810,7 +1814,9 @@ pub(crate) const fn builtin_subject_template_for(
 ) -> &'static str {
     match kind {
         ChannelKind::Webhook | ChannelKind::PagerDuty => builtin_node_subject_template(event),
-        ChannelKind::Jsm | ChannelKind::Email => crate::notify_text::node_subject_template(event),
+        ChannelKind::Jsm | ChannelKind::Email => {
+            crate::alerts::notify_text::node_subject_template(event)
+        }
     }
 }
 
@@ -1822,7 +1828,7 @@ pub(crate) fn builtin_body_template_for(kind: ChannelKind, event: NotifyEvent) -
     match kind {
         ChannelKind::Webhook | ChannelKind::PagerDuty => None,
         ChannelKind::Jsm | ChannelKind::Email => {
-            Some(crate::notify_text::node_body_template(event))
+            Some(crate::alerts::notify_text::node_body_template(event))
         }
     }
 }
@@ -1855,7 +1861,7 @@ fn json_notification(
                     &fallback
                 }
             };
-            crate::notify_text::subject(alert, facts)
+            crate::alerts::notify_text::subject(alert, facts)
         }
         (Subject::Pool(pool), NotifyEvent::Fire) => {
             format!("poller pool \"{pool}\" has no live poller — its nodes are not being monitored")
@@ -1902,7 +1908,7 @@ fn json_notification(
 /// editor stores no template in that case.
 #[must_use]
 pub(crate) const fn builtin_node_subject_template(event: NotifyEvent) -> &'static str {
-    crate::notify_text::node_subject_template(event)
+    crate::alerts::notify_text::node_subject_template(event)
 }
 
 /// Counter for a template that could not be used and fell back to the built-in format (ADR-039).
@@ -1961,8 +1967,8 @@ fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severi
 #[cfg(test)]
 mod template_tests {
     use super::*;
-    use crate::notify_facts::tests::threshold_alert;
-    use crate::notify_render::FailureKind;
+    use crate::alerts::notify_facts::tests::threshold_alert;
+    use crate::alerts::notify_render::FailureKind;
     use yagra_common::{sample_facts, NodeId};
 
     fn over(subject: Option<&str>, body: Option<&str>, needs_json: bool) -> ChannelOverride {
@@ -1992,11 +1998,11 @@ mod template_tests {
             ChannelKind::Jsm,
         ] {
             for sample in yagra_common::PreviewSample::ALL {
-                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                let (alert, resolved) = crate::alerts::notify_facts::preview_sample(sample);
                 for resolved in [resolved, HashMap::new()] {
                     for event in NotifyEvent::ALL {
                         let mut facts = context_for(&alert, event, &resolved);
-                        facts.if_name = crate::notify_facts::preview_port_name(sample);
+                        facts.if_name = crate::alerts::notify_facts::preview_port_name(sample);
                         let template = ChannelTemplate {
                             free_layout: false,
                             subject: Some(builtin_subject_template_for(kind, event).to_owned()),
@@ -2037,11 +2043,11 @@ mod template_tests {
         }
         for kind in [ChannelKind::Email, ChannelKind::Jsm] {
             for sample in yagra_common::PreviewSample::ALL {
-                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                let (alert, resolved) = crate::alerts::notify_facts::preview_sample(sample);
                 for resolved in [resolved, HashMap::new()] {
                     for event in NotifyEvent::ALL {
                         let mut base = context_for(&alert, event, &resolved);
-                        base.if_name = crate::notify_facts::preview_port_name(sample);
+                        base.if_name = crate::alerts::notify_facts::preview_port_name(sample);
                         // Every optional line, on and off: no port name beside an index, a row
                         // name, a flapping node, no labels.
                         let mut no_name = base.clone();
@@ -2093,7 +2099,7 @@ mod template_tests {
     /// `web/src/pages/laidOutBuiltin.json`, with one writer per half: this test writes `builtin`
     /// (what `GET …/builtin-template` serves), and `freeLayout.test.ts` writes `laid` (what the
     /// editor makes of it) and fails when the function no longer makes that. What this test proves
-    /// is that [`crate::notify_render::lay_out`] turns `laid` back into the built-in, line breaks
+    /// is that [`crate::alerts::notify_render::lay_out`] turns `laid` back into the built-in, line breaks
     /// and all. Regenerate `builtin` with `UPDATE_LAID_OUT_BUILTIN=1`, then `laid` with
     /// `UPDATE_LAID_OUT_BUILTIN=1 npx vitest run src/pages/freeLayout.test.ts` in `web/`.
     #[test]
@@ -2155,10 +2161,10 @@ mod template_tests {
             };
             assert!(template.subject.as_deref().unwrap().contains("\n  "));
             for sample in yagra_common::PreviewSample::ALL {
-                let (alert, resolved) = crate::notify_facts::preview_sample(sample);
+                let (alert, resolved) = crate::alerts::notify_facts::preview_sample(sample);
                 for event in NotifyEvent::ALL {
                     let mut facts = context_for(&alert, event, &resolved);
-                    facts.if_name = crate::notify_facts::preview_port_name(sample);
+                    facts.if_name = crate::alerts::notify_facts::preview_port_name(sample);
                     let rendered =
                         render_with_fallback(Some(&template), &facts, false, "FELL", "FELL");
                     assert!(rendered.failures.is_empty(), "{:?}", rendered.failures);
@@ -2187,7 +2193,10 @@ mod template_tests {
                 let n = builtin_for_kind(kind, &alert, event, None);
                 assert_eq!(n.payload, json, "{kind:?} {event:?}");
                 let facts = context_for(&alert, event, &HashMap::new());
-                assert_eq!(n.summary, crate::notify_text::subject(&alert, &facts));
+                assert_eq!(
+                    n.summary,
+                    crate::alerts::notify_text::subject(&alert, &facts)
+                );
             }
         }
     }
@@ -2272,7 +2281,7 @@ mod template_tests {
     /// query per alert on every webhook-only deployment) as much as stuck shut.
     #[test]
     fn a_vendor_channel_opens_the_facts_gate_and_a_webhook_does_not() {
-        use crate::notifications::ChannelConfig;
+        use crate::alerts::notifications::ChannelConfig;
         let pagerduty = ChannelConfig::PagerDuty {
             routing_key: "rk".to_owned(),
             api_url: None,
@@ -2404,10 +2413,10 @@ mod template_tests {
     #[test]
     fn the_json_rule_comes_from_the_channel_kind() {
         for (kind, want) in [
-            (crate::notifications::ChannelKind::Webhook, true),
-            (crate::notifications::ChannelKind::PagerDuty, true),
-            (crate::notifications::ChannelKind::Jsm, false),
-            (crate::notifications::ChannelKind::Email, false),
+            (crate::alerts::notifications::ChannelKind::Webhook, true),
+            (crate::alerts::notifications::ChannelKind::PagerDuty, true),
+            (crate::alerts::notifications::ChannelKind::Jsm, false),
+            (crate::alerts::notifications::ChannelKind::Email, false),
         ] {
             assert_eq!(body_must_be_json(kind), want);
         }
@@ -3117,7 +3126,7 @@ mod delivery_tests {
     async fn each_delivery_is_recorded_with_where_it_failed() {
         let (ok_log, _) = (log(), log());
         let n = Notifier::with_default(None);
-        let (dlog, mut rx) = crate::notification_log::DeliveryLog::for_test();
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
         n.set_delivery_log(dlog);
         let (good, bad) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let mut refusing = built(bad, Refuser);
@@ -3180,7 +3189,7 @@ mod delivery_tests {
     #[tokio::test]
     async fn a_resolve_is_recorded_only_on_a_channel_that_sent_one() {
         let n = Notifier::with_default(None);
-        let (dlog, mut rx) = crate::notification_log::DeliveryLog::for_test();
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
         n.set_delivery_log(dlog);
         let (plain, closing) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let (plain_log, closing_log) = (log(), log());
@@ -3686,8 +3695,10 @@ mod test_send_tests {
             let n = test_notification(kind, &ChannelTemplate::default());
             assert!(n.summary.starts_with(TEST_SUBJECT_PREFIX), "{}", n.summary);
             assert!(
-                n.payload
-                    .starts_with(&format!("{}\n\n", crate::notify_text::TEST_BODY_LINE)),
+                n.payload.starts_with(&format!(
+                    "{}\n\n",
+                    crate::alerts::notify_text::TEST_BODY_LINE
+                )),
                 "{}",
                 n.payload
             );
@@ -3745,7 +3756,7 @@ mod test_send_tests {
         let b = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
         assert_ne!(dedup_string(&a.dedup_key), dedup_string(&b.dedup_key));
         let (sample, _) =
-            crate::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
+            crate::alerts::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
         assert_ne!(a.dedup_key, sample.dedup_key());
     }
 

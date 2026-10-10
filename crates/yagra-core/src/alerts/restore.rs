@@ -29,7 +29,7 @@ use std::time::Instant;
 use yagra_alert::{Alert, Breach};
 use yagra_common::IfIndex;
 
-use crate::history::{AlertHistoryRow, AlertHistoryStore};
+use crate::alerts::history::{AlertHistoryRow, AlertHistoryStore};
 
 use super::{check_id, AlertManager, LIVENESS};
 

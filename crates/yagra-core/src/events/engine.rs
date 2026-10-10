@@ -527,8 +527,8 @@ impl EventEngine {
 mod tests {
     use super::super::testkit::{stored_rule, syslog_msg, trap_msg};
     use super::*;
+    use crate::alerts::history::AlertHistoryStore;
     use crate::alerts::Notifier;
-    use crate::history::AlertHistoryStore;
 
     #[test]
     fn min_count_window_gate() {

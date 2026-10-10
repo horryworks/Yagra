@@ -884,7 +884,7 @@ mod tests {
     /// SQL string and there is no database in unit tests, so nothing else can catch a rewrite
     /// that drops one of them.
     fn production_source() -> String {
-        crate::module_source::code_no_comments("src", "maintenance")
+        crate::module_source::code_no_comments("src/alerts", "maintenance")
     }
 
     #[test]

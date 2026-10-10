@@ -15,8 +15,8 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem};
 use super::util::{CreatedId, EnabledBody};
 use super::ApiState;
-use crate::notifications::{ChannelConfig, ChannelKind};
-use crate::notify_render::ChannelTemplate;
+use crate::alerts::notifications::{ChannelConfig, ChannelKind};
+use crate::alerts::notify_render::ChannelTemplate;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -219,7 +219,7 @@ fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
 #[utoipa::path(
     get, path = "/api/v1/notification-channels", tag = "notifications",
     responses(
-        (status = 200, description = "Every channel, without its sealed connection config", body = Vec<crate::notifications::ChannelSummary>),
+        (status = 200, description = "Every channel, without its sealed connection config", body = Vec<crate::alerts::notifications::ChannelSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -228,7 +228,7 @@ fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
 async fn list_notification_channels(
     _guard: RequireManageSystem,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::notifications::ChannelSummary>>> {
+) -> ApiResult<Json<Vec<crate::alerts::notifications::ChannelSummary>>> {
     let list = admin.notifications.list_channels().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -413,7 +413,7 @@ async fn set_notification_template(
 ) -> ApiResult<StatusCode> {
     let template = body.into_template();
     check_template_size(&template)?;
-    crate::notify_render::validate(&template).map_err(|e| {
+    crate::alerts::notify_render::validate(&template).map_err(|e| {
         ApiError::bad_request(
             "invalid_template",
             format!("{} template: {}", e.field.as_str(), e.message),
@@ -547,8 +547,8 @@ fn test_records(
     outcome: &crate::alerts::notify::TestDelivery,
     at: chrono::DateTime<chrono::Utc>,
     started: std::time::Instant,
-) -> Vec<crate::notification_log::DeliveryRecord> {
-    use crate::notification_log::{DeliveryEvent, DeliveryRecord};
+) -> Vec<crate::alerts::notification_log::DeliveryRecord> {
+    use crate::alerts::notification_log::{DeliveryEvent, DeliveryRecord};
     let row = |event, attempt: &yagra_alert::Attempt, at| DeliveryRecord {
         at,
         channel_id: Some(channel),
@@ -625,7 +625,7 @@ pub(crate) struct DeliveryFilterInput<'a> {
     get, path = "/api/v1/notification-deliveries", tag = "notifications",
     params(DeliveryQuery),
     responses(
-        (status = 200, description = "One page of deliveries, newest first", body = Vec<crate::notification_log::DeliveryRow>),
+        (status = 200, description = "One page of deliveries, newest first", body = Vec<crate::alerts::notification_log::DeliveryRow>),
         (status = 400, description = "A cursor or range bound is not RFC 3339, the cursor is half a pair, or a filter names a value that is not listed", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
@@ -639,7 +639,7 @@ async fn list_notification_deliveries(
     _guard: RequireManageSystem,
     Query(q): Query<DeliveryQuery>,
     State(st): State<ApiState>,
-) -> ApiResult<Json<Vec<crate::notification_log::DeliveryRow>>> {
+) -> ApiResult<Json<Vec<crate::alerts::notification_log::DeliveryRow>>> {
     Ok(Json(
         delivery_page(
             &st,
@@ -670,9 +670,9 @@ enum ChannelPick {
 pub(crate) async fn delivery_page(
     st: &ApiState,
     input: DeliveryFilterInput<'_>,
-) -> Result<Vec<crate::notification_log::DeliveryRow>, ApiError> {
+) -> Result<Vec<crate::alerts::notification_log::DeliveryRow>, ApiError> {
     use super::util::ts_param as ts;
-    use crate::notification_log::{
+    use crate::alerts::notification_log::{
         DeliveryEvent, DeliveryFilter, DeliveryResult, DeliverySide, DEFAULT_LIMIT,
     };
     use crate::stored_enum::{filter_token_list, parse_filter_token};
@@ -863,12 +863,12 @@ async fn preview_notification_template(
     _guard: RequireManageSystem,
     Json(req): Json<PreviewRequest>,
 ) -> Json<PreviewResult> {
-    let needs_json = crate::notify_render::body_must_be_json(req.kind);
+    let needs_json = crate::alerts::notify_render::body_must_be_json(req.kind);
     // The same sample alert, the same context builder and the same built-in wording the delivery
     // path uses — a preview that agreed only with a second copy of the rules would be worthless.
-    let (alert, resolved) = crate::notify_facts::preview_sample(req.sample);
-    let mut facts = crate::notify_facts::context_for(&alert, req.event, &resolved);
-    facts.if_name = crate::notify_facts::preview_port_name(req.sample);
+    let (alert, resolved) = crate::alerts::notify_facts::preview_sample(req.sample);
+    let mut facts = crate::alerts::notify_facts::context_for(&alert, req.event, &resolved);
+    facts.if_name = crate::alerts::notify_facts::preview_port_name(req.sample);
     let builtin = crate::alerts::builtin_for_kind(req.kind, &alert, req.event, Some(&facts));
     let template = TemplateBody {
         subject: req.subject,
@@ -876,7 +876,7 @@ async fn preview_notification_template(
         free_layout: req.free_layout,
     }
     .into_template();
-    let rendered = crate::notify_render::render_with_fallback(
+    let rendered = crate::alerts::notify_render::render_with_fallback(
         Some(&template),
         &facts,
         needs_json,
@@ -978,7 +978,7 @@ async fn get_builtin_template(
 #[utoipa::path(
     get, path = "/api/v1/routing-rules", tag = "notifications",
     responses(
-        (status = 200, description = "Every routing rule and the channels it fans out to", body = Vec<crate::notifications::RoutingRule>),
+        (status = 200, description = "Every routing rule and the channels it fans out to", body = Vec<crate::alerts::notifications::RoutingRule>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -987,7 +987,7 @@ async fn get_builtin_template(
 async fn list_routing_rules(
     _guard: RequireManageSystem,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::notifications::RoutingRule>>> {
+) -> ApiResult<Json<Vec<crate::alerts::notifications::RoutingRule>>> {
     let list = admin.notifications.list_rules().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -1447,7 +1447,7 @@ at 2026-08-04T09:41:07+00:00"
                 .lines()
                 .find(|l| l.trim_start().starts_with(&format!("{token}: {{")))
                 .unwrap_or_else(|| panic!("TEMPLATE_FORMS has no row for {token}"));
-            let json = crate::notify_render::body_must_be_json(kind);
+            let json = crate::alerts::notify_render::body_must_be_json(kind);
             assert!(
                 row.contains(&format!("json: {json}")),
                 "{token}: delivery says json = {json}, the editor's row is `{}`",
@@ -1556,7 +1556,7 @@ at 2026-08-04T09:41:07+00:00"
             subject: None,
             body: Some("{% if severity %}unclosed".to_owned()),
         };
-        let err = crate::notify_render::validate(&bad).expect_err("must not compile");
+        let err = crate::alerts::notify_render::validate(&bad).expect_err("must not compile");
         assert_eq!(err.field.as_str(), "body");
         let resp = ApiError::bad_request(
             "invalid_template",
@@ -1565,13 +1565,14 @@ at 2026-08-04T09:41:07+00:00"
         .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         // …and a template that compiles is accepted, including the empty pair (= built-in).
-        crate::notify_render::validate(&ChannelTemplate {
+        crate::alerts::notify_render::validate(&ChannelTemplate {
             free_layout: false,
             subject: Some("{{ severity }} {{ node_name }}".to_owned()),
             body: Some("{% if event == 'resolve' %}ok{% endif %}".to_owned()),
         })
         .expect("valid template");
-        crate::notify_render::validate(&ChannelTemplate::default()).expect("empty is valid");
+        crate::alerts::notify_render::validate(&ChannelTemplate::default())
+            .expect("empty is valid");
     }
 
     /// Blank is how an operator clears an override, and it has to mean "built-in" rather than

@@ -506,8 +506,8 @@ mod tests {
         }
     }
 
-    fn rule(node: NodeId, metric: &str) -> crate::thresholds::StoredThreshold {
-        crate::thresholds::StoredThreshold::new(
+    fn rule(node: NodeId, metric: &str) -> crate::alerts::thresholds::StoredThreshold {
+        crate::alerts::thresholds::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Node,
             vec![node.to_string()],

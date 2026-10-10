@@ -1056,7 +1056,7 @@ pub(super) struct Handoff {
 /// backstop for the run that never reports at all.
 pub(super) async fn open_window_then_request(
     upgrade: Arc<crate::upgrade::UpgradeRepo>,
-    maintenance: Arc<crate::maintenance::MaintenanceRepo>,
+    maintenance: Arc<crate::alerts::maintenance::MaintenanceRepo>,
     handoff: Handoff,
 ) -> Result<Option<uuid::Uuid>, ApiError> {
     tokio::spawn(hand_off(upgrade, maintenance, handoff))
@@ -1080,7 +1080,7 @@ pub(super) async fn open_window_then_request(
 /// for its fifteen minutes behind a 500.
 pub(super) async fn hand_off(
     upgrade: Arc<crate::upgrade::UpgradeRepo>,
-    maintenance: Arc<crate::maintenance::MaintenanceRepo>,
+    maintenance: Arc<crate::alerts::maintenance::MaintenanceRepo>,
     h: Handoff,
 ) -> Result<Option<uuid::Uuid>, ApiError> {
     let extra: Vec<(&str, &str)> = h
@@ -1100,8 +1100,8 @@ pub(super) async fn hand_off(
     let window = maintenance
         .create_window(
             &h.window_name,
-            crate::maintenance::WindowScope::System.as_str(),
-            crate::maintenance::UPGRADE_SCOPE_ID,
+            crate::alerts::maintenance::WindowScope::System.as_str(),
+            crate::alerts::maintenance::UPGRADE_SCOPE_ID,
             chrono::Utc::now(),
             ends,
         )
@@ -1523,7 +1523,7 @@ mod tests {
 #[cfg(test)]
 mod hand_off_tests {
     use super::{hand_off, Handoff};
-    use crate::maintenance::MaintenanceRepo;
+    use crate::alerts::maintenance::MaintenanceRepo;
     use crate::upgrade::{Command, UpgradeRepo};
     use std::sync::Arc;
 

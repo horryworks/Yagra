@@ -256,7 +256,7 @@ impl MerakiSchedule {
     }
 
     /// Whether a failure core found itself for `(org, tier)` should be counted now — at most once
-    /// per `cadence` ([`crate::meraki_health::count_once_per_cadence`]). Both lanes can pick the
+    /// per `cadence` ([`crate::meraki::health::count_once_per_cadence`]). Both lanes can pick the
     /// same tier on different ticks — a wireless round and an SSID read — and they share this
     /// record, so it is still counted once.
     pub fn count_core_failure(
@@ -266,7 +266,7 @@ impl MerakiSchedule {
         cadence: Duration,
         now: Instant,
     ) -> bool {
-        crate::meraki_health::count_once_per_cadence(
+        crate::meraki::health::count_once_per_cadence(
             &mut self.core_failures,
             org,
             tier,

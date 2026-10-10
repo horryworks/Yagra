@@ -469,10 +469,10 @@ async fn add_node_section(
     match st.history.as_ref() {
         Some(store) => {
             match store
-                .search(&crate::history::HistoryFilter {
+                .search(&crate::alerts::history::HistoryFilter {
                     node_id: Some(node_id),
                     limit: NODE_HISTORY_ROWS,
-                    ..crate::history::HistoryFilter::default()
+                    ..crate::alerts::history::HistoryFilter::default()
                 })
                 .await
             {

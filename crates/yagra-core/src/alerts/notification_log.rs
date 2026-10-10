@@ -24,7 +24,7 @@ use uuid::Uuid;
 use yagra_alert::{Attempt, FailureSide};
 use yagra_common::{NotifyEvent, Severity};
 
-use crate::notifications::ChannelKind;
+use crate::alerts::notifications::ChannelKind;
 
 // The three enums below derive `ToSchema`, so their doc comments are published to API clients.
 // Each is both a column value and a JSON tag; `token_enum!` gives them one token list, and

@@ -110,7 +110,10 @@ pub(crate) use extract::bearer;
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
 
-use crate::ack::AckRepo;
+use crate::alerts::ack::AckRepo;
+use crate::alerts::history::AlertHistoryStore;
+use crate::alerts::maintenance::MaintenanceRepo;
+use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
 use crate::audit::AuditRepo;
@@ -121,20 +124,17 @@ use crate::coordinator::Coordinator;
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
 use crate::groups::GroupRepo;
-use crate::history::AlertHistoryStore;
 use crate::logstore::LogStore;
-use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
-use crate::notifications::NotificationRepo;
 use crate::pollers::PollerRepo;
 use crate::preferences::UserPrefsRepo;
 
+use crate::alerts::thresholds::ThresholdStore;
 use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{ReportRunner, ReportsRepo};
 use crate::scheduler::PollDispatcher;
 use crate::secrets::CredentialStore;
 use crate::store::MetricStore;
-use crate::thresholds::ThresholdStore;
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
     http::StatusCode,
@@ -157,7 +157,7 @@ pub struct AdminState {
     pub notifications: Arc<NotificationRepo>,
     /// The notification delivery log (ADR-195): read by the Notification delivery screen and
     /// written directly by a test send. Real deliveries are written by the notifier's own writer.
-    pub deliveries: Arc<crate::notification_log::DeliveryLogRepo>,
+    pub deliveries: Arc<crate::alerts::notification_log::DeliveryLogRepo>,
     /// The kinds of channel this core's env default route is made of (ADR-200 Inc.28), copied
     /// from its `Notifier` at startup. Kinds only: the URL and the mail settings stay where they are.
     pub notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
@@ -232,12 +232,12 @@ pub struct AdminState {
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
     /// What the Dashboard says each organization holds, kept between syncs (ADR-164).
-    pub meraki_inventory: Arc<crate::meraki_inventory::MerakiInventoryRepo>,
+    pub meraki_inventory: Arc<crate::meraki::inventory::MerakiInventoryRepo>,
     /// What a Meraki import resolves before it writes — shared with the sync (ADR-164 Inc.4).
-    pub meraki_import: Arc<crate::meraki_import::ImportResolver>,
+    pub meraki_import: Arc<crate::meraki::import::ImportResolver>,
     /// The inventory sync itself — the same value the leader's loop runs, so "Sync now" and the
     /// loop share the organization's lanes (ADR-169).
-    pub meraki_sync: Arc<crate::meraki_sync::MerakiSync>,
+    pub meraki_sync: Arc<crate::meraki::sync::MerakiSync>,
     /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
     /// and outbound from core; the API token lives sealed in `creds`, never on this row.
     pub netbox: Arc<crate::netbox::NetboxRepo>,

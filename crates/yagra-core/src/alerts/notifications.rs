@@ -15,7 +15,7 @@ use uuid::Uuid;
 use yagra_common::Severity;
 use yagra_secrets::EnvelopeCipher;
 
-use crate::notify_render::ChannelTemplate;
+use crate::alerts::notify_render::ChannelTemplate;
 use crate::sealed_row::{sealed_from_row, BindSealed};
 use crate::secrets::Kek;
 

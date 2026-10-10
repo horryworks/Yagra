@@ -1386,7 +1386,7 @@ pub(crate) struct CollectionFault {
     pub(crate) meraki_org_name: Option<String>,
     /// Why the most recent availability collect failed, when it is known. Only with `meraki_api`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<crate::meraki_sync::MerakiSyncFailure>,
+    pub(crate) reason: Option<crate::meraki::sync::MerakiSyncFailure>,
     /// `meraki_api`: when the organization's alert was raised — three failed collects after the
     /// last answer, so the state shown is older than this. `wireless_controller`: when a controller
     /// last reported the access point — nothing has been heard about it since.

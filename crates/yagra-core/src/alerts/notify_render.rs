@@ -26,7 +26,7 @@
 use minijinja::{Environment, UndefinedBehavior};
 use yagra_common::AlertFacts;
 
-use crate::notifications::ChannelKind;
+use crate::alerts::notifications::ChannelKind;
 
 /// Longest rendered subject accepted, in characters. A subject is a headline; past this it is not
 /// one, and every downstream channel truncates it anyway.
@@ -149,7 +149,7 @@ fn environment() -> Environment<'static> {
     // `{{ threshold | number }}` prints `90`, not `90.0` — the rule the built-in text uses
     // (ADR-197 decision 1). The built-in body template needs it to render byte for byte what the
     // code writes, and an operator who copies that template keeps it.
-    env.add_filter("number", crate::notify_text::fmt_num);
+    env.add_filter("number", crate::alerts::notify_text::fmt_num);
     env
 }
 

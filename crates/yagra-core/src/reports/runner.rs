@@ -21,8 +21,8 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
-use crate::history::AlertHistoryStore;
 use crate::repo::NodeRepo;
 use crate::store::MetricStore;
 

@@ -619,7 +619,7 @@ impl MerakiFetchError {
     /// reads it back with that type's `from_token`, and a token it does not know becomes
     /// `internal` ("Yagra could not read or write its own database") — a wrong sentence on
     /// screen. This crate cannot see that enum, so
-    /// `meraki_sync.rs::a_collect_failure_token_is_the_one_the_sync_stores` holds the two
+    /// `yagra-core`'s `meraki/sync.rs::a_collect_failure_token_is_the_one_the_sync_stores` holds the two
     /// together from the other side.
     #[must_use]
     pub const fn token(self) -> &'static str {

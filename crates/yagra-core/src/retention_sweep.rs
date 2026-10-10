@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::history::AlertHistoryStore;
+use crate::alerts::history::AlertHistoryStore;
 use crate::pollers::PollerRepo;
 use crate::repo::NodeRepo;
 use crate::retention::RetentionSettings;
@@ -39,7 +39,7 @@ pub(crate) struct Targets {
     pub analyses: Arc<analysis::AnalysisRepo>,
     pub rca_reports: Arc<rca::store::RcaRepo>,
     pub pollers: Arc<PollerRepo>,
-    pub deliveries: Arc<crate::notification_log::DeliveryLogRepo>,
+    pub deliveries: Arc<crate::alerts::notification_log::DeliveryLogRepo>,
 }
 
 /// Delete everything past its retention window, warning and continuing on each failure.

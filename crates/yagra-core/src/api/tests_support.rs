@@ -137,7 +137,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// | Redis | `VolatileStore::disabled` | the liveness mirror is a no-op; PostgreSQL still holds the durable copy |
 /// | the KEK | `StaticKeyProvider::single` | a sealed value round-trips inside this test and nowhere else |
 /// | the notifier | `Notifier::with_default(None)` | nothing is delivered — see below |
-/// | the Meraki Dashboard | [`EmptyDashboard`] | a key sees no organizations and every organization holds no devices; what a sync *finds* is `meraki_sync.rs`'s to test, and onboarding brings its own through [`live_state_with_dashboard`] |
+/// | the Meraki Dashboard | [`EmptyDashboard`] | a key sees no organizations and every organization holds no devices; what a sync *finds* is `meraki/sync.rs`'s to test, and onboarding brings its own through [`live_state_with_dashboard`] |
 ///
 /// 🚨 **The notifier is never `Notifier::from_env()`.** That reader takes `YAGRA_WEBHOOK_URL` and
 /// `YAGRA_SMTP_*` from the process environment, so a developer who happens to have one exported
@@ -169,7 +169,7 @@ pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
 /// can show that a request was accepted, never that a saved key was the one that was used.
 pub(crate) async fn live_state_with_dashboard(
     pool: sqlx::PgPool,
-    dashboard: Arc<dyn crate::meraki_sync::MerakiDirectory>,
+    dashboard: Arc<dyn crate::meraki::sync::MerakiDirectory>,
 ) -> ApiState {
     live_state_with(pool, None, None, Some(dashboard), Vec::new()).await
 }
@@ -179,11 +179,11 @@ pub(crate) async fn live_state_with_dashboard(
 /// 🚨 Never the real `DashboardApi`. A test that pressed "Sync now" would otherwise send a request
 /// to `api.meraki.com` from whatever machine runs the suite. It answers a *complete* empty listing
 /// rather than an error so the endpoint's accepted path is reachable; it therefore says nothing
-/// about what a sync does with devices, which `meraki_sync.rs` tests against its own fake.
+/// about what a sync does with devices, which `meraki/sync.rs` tests against its own fake.
 pub(crate) struct EmptyDashboard;
 
 #[async_trait::async_trait]
-impl crate::meraki_sync::MerakiDirectory for EmptyDashboard {
+impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
     /// No organizations either: a key this Dashboard accepts, that can see nothing.
     async fn organizations(
         &self,
@@ -290,7 +290,7 @@ async fn live_state_with(
     pool: sqlx::PgPool,
     env_community: Option<String>,
     upgrade_dir: Option<std::path::PathBuf>,
-    dashboard: Option<Arc<dyn crate::meraki_sync::MerakiDirectory>>,
+    dashboard: Option<Arc<dyn crate::meraki::sync::MerakiDirectory>>,
     notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
     use crate::alerts::Notifier;
@@ -319,7 +319,7 @@ async fn live_state_with(
     mib.seed_builtin().await.expect("seed mib");
 
     let alerts = Arc::new(AlertManager::new());
-    let history = Arc::new(crate::history::AlertHistoryStore::new(pool.clone()));
+    let history = Arc::new(crate::alerts::history::AlertHistoryStore::new(pool.clone()));
     let group_repo = Arc::new(crate::groups::GroupRepo::new(pool.clone()));
     let events_repo = Arc::new(crate::events::EventRepo::new(pool.clone()));
     let poller_repo = Arc::new(crate::pollers::PollerRepo::new(pool.clone()));
@@ -333,14 +333,14 @@ async fn live_state_with(
     let dns_checks = Arc::new(crate::dns_check::DnsCheckRepo::new(pool.clone()));
     let meraki_devices = Arc::new(crate::meraki::MerakiDeviceRepo::new(pool.clone()));
     let meraki_orgs = Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone()));
-    let meraki_inventory = Arc::new(crate::meraki_inventory::MerakiInventoryRepo::new(
+    let meraki_inventory = Arc::new(crate::meraki::inventory::MerakiInventoryRepo::new(
         pool.clone(),
     ));
-    let meraki_import = Arc::new(crate::meraki_import::ImportResolver::new(
+    let meraki_import = Arc::new(crate::meraki::import::ImportResolver::new(
         group_repo.clone(),
         repo.clone(),
     ));
-    let meraki_sync = Arc::new(crate::meraki_sync::MerakiSync::new(
+    let meraki_sync = Arc::new(crate::meraki::sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
@@ -396,20 +396,24 @@ async fn live_state_with(
         repo: repo.clone(),
         creds: creds.clone(),
         users: Arc::new(crate::auth::UserStore::new(pool.clone())),
-        thresholds: Arc::new(crate::thresholds::ThresholdStore::new(pool.clone())),
+        thresholds: Arc::new(crate::alerts::thresholds::ThresholdStore::new(pool.clone())),
         collection: collection.clone(),
-        notifications: Arc::new(crate::notifications::NotificationRepo::new(
+        notifications: Arc::new(crate::alerts::notifications::NotificationRepo::new(
             pool.clone(),
             kek.clone(),
         )),
-        deliveries: Arc::new(crate::notification_log::DeliveryLogRepo::new(pool.clone())),
+        deliveries: Arc::new(crate::alerts::notification_log::DeliveryLogRepo::new(
+            pool.clone(),
+        )),
         notify_default_route,
         mib,
         discovery: Arc::new(crate::discovery::DiscoveryRunner::new(
             discovery_bus,
             classifier.clone(),
         )),
-        maintenance: Arc::new(crate::maintenance::MaintenanceRepo::new(pool.clone())),
+        maintenance: Arc::new(crate::alerts::maintenance::MaintenanceRepo::new(
+            pool.clone(),
+        )),
         classification: Arc::new(crate::classification::ClassificationRepo::new(pool.clone())),
         classifier,
         groups: group_repo.clone(),
@@ -494,7 +498,7 @@ async fn live_state_with(
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),
         history: Some(history),
-        ack: Some(Arc::new(crate::ack::AckRepo::new(pool.clone()))),
+        ack: Some(Arc::new(crate::alerts::ack::AckRepo::new(pool.clone()))),
         event_engine: Some(event_engine),
         // Closed: `live_state` exists to test writes being *accepted* (ADR-115), and anonymous
         // access has nothing to do with that. A test that wants the public surface builds it with

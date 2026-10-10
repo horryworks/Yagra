@@ -10,6 +10,13 @@
 //! The integration is strictly **read-only**: this module only resolves/inlines the API key and
 //! shapes jobs; every byte of Meraki I/O goes through `yagra_transport::meraki` (GET-only).
 
+pub(crate) mod filing;
+pub(crate) mod health;
+pub(crate) mod import;
+pub(crate) mod inventory;
+pub(crate) mod schedule;
+pub(crate) mod sync;
+
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Mutex;
@@ -20,7 +27,7 @@ use uuid::Uuid;
 use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
 use yagra_common::{MerakiDeviceConfig, MerakiTier};
 
-use crate::meraki_filing::{Filing, MerakiFiled};
+use crate::meraki::filing::{Filing, MerakiFiled};
 use crate::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
 
 /// Default page-size cap sent to paginated Dashboard endpoints.
@@ -92,7 +99,7 @@ pub struct MerakiOrg {
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     /// `None` until a sync has run: "has not synced yet" is not "failed".
     pub last_sync_ok: Option<bool>,
-    /// Why the last sync failed — a [`crate::meraki_sync::MerakiSyncFailure`] token, never upstream
+    /// Why the last sync failed — a [`crate::meraki::sync::MerakiSyncFailure`] token, never upstream
     /// text. `None` after a success.
     pub last_sync_error: Option<String>,
     /// Whether the sync turns newly listed devices into nodes (ADR-164 Inc.4, migration 0125).
@@ -107,7 +114,7 @@ pub struct MerakiOrg {
     pub devices_over_cap: u32,
     /// The collect tiers that are failing right now, as the health loop last wrote them
     /// (migration 0127, ADR-164 decision 18). Empty means none is *known* to be failing.
-    pub collect_failures: Vec<crate::meraki_health::TierFailure>,
+    pub collect_failures: Vec<crate::meraki::health::TierFailure>,
     /// When "Sync now" asked for a whole-organization read that has not ended yet (ADR-164 decision 32,
     /// migration 0133). The leader's sync loop runs it once the slow lane is free.
     pub full_sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -162,7 +169,7 @@ impl MerakiOrg {
             // Read leniently: an entry a newer core wrote with a tier or a shape this build does
             // not know costs that entry, never the organization (the row is read by the
             // scheduler, and failing it here would stop the collects it describes).
-            collect_failures: crate::meraki_health::TierFailure::from_stored(
+            collect_failures: crate::meraki::health::TierFailure::from_stored(
                 row.try_get::<sqlx::types::Json<serde_json::Value>, _>("collect_failures")?
                     .0,
             ),
@@ -184,7 +191,7 @@ impl MerakiOrg {
 
     /// The enabled tiers parsed to [`MerakiTier`], in [`MerakiTier::ALL`]'s cadence order rather
     /// than the stored one (unknown tokens skipped, duplicates collapsed). Inventory is never a
-    /// collect tier — it is read by the periodic sync (`meraki_sync.rs`), on `inventory_secs` — so
+    /// collect tier — it is read by the periodic sync (`meraki/sync.rs`), on `inventory_secs` — so
     /// it is filtered out here.
     ///
     /// 🚨 **The order is load-bearing, and the stored column must not decide it.** The fast collect
@@ -215,7 +222,7 @@ impl MerakiOrg {
     /// setting — up to twice the floor more than a setting near zero. The inventory sync paces at
     /// this too, in the slow lane — except the LAN reads of an organization that has no node yet,
     /// which take the whole of `target_rps`: nothing is collected for it, so the fast lane is idle
-    /// (ADR-164 decision 30, `meraki_sync.rs`).
+    /// (ADR-164 decision 30, `meraki/sync.rs`).
     #[must_use]
     pub fn lane_rps(&self) -> f64 {
         (self.target_rps / 2.0).max(yagra_transport::MERAKI_MIN_RPS)
@@ -496,7 +503,7 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// its shared API rate budget is never exceeded (the #1 safeguard — each lane paces at half of it).
 /// Acquired at dispatch and cleared when the collect's first result returns (all fan-out results
 /// share the job's id); a lease deadline is the backstop if a result never arrives (poller crash),
-/// so a lane can't wedge forever. The inventory sync takes a lane too (`meraki_sync.rs`).
+/// so a lane can't wedge forever. The inventory sync takes a lane too (`meraki/sync.rs`).
 ///
 /// Since ADR-164 decision 18 it also knows **which job, and which tier, holds the flight**, for two
 /// reasons:
@@ -511,16 +518,16 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// - A collect flight whose lease runs out **unanswered** is evidence: a poller from before the
 ///   collect report existed fails silently, a pool with no live poller never picks the job up, a
 ///   poller can crash mid-collect. [`Self::take_unanswered`] hands those to
-///   [`crate::meraki_health`], which counts them as failures (`no_answer`).
+///   [`crate::meraki::health`], which counts them as failures (`no_answer`).
 ///
-/// It carries the [`crate::meraki_health::MerakiCollectHealth`] record for the same reason it
+/// It carries the [`crate::meraki::health::MerakiCollectHealth`] record for the same reason it
 /// exists at all: it is the one Meraki handle the result-ingest path already holds.
 #[derive(Default)]
 pub struct MerakiInflight {
     flights: Mutex<HashMap<(Uuid, MerakiLane), Flight>>, // (org, lane) → who holds it
     unanswered: Mutex<Vec<(Uuid, MerakiTier)>>,
     /// How each organization's collects have been ending (decision 18).
-    pub health: crate::meraki_health::MerakiCollectHealth,
+    pub health: crate::meraki::health::MerakiCollectHealth,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1048,7 +1055,7 @@ impl MerakiOrgRepo {
     pub async fn network_lans(
         &self,
         org_uuid: Uuid,
-    ) -> anyhow::Result<HashMap<String, crate::meraki_inventory::NetworkLan>> {
+    ) -> anyhow::Result<HashMap<String, crate::meraki::inventory::NetworkLan>> {
         let rows = sqlx::query(
             "SELECT network_id, lan_ips, lan_read_at FROM meraki_org_networks \
              WHERE org_id = $1 AND lan_read_at IS NOT NULL",
@@ -1061,11 +1068,11 @@ impl MerakiOrgRepo {
                 let ips: Option<Vec<String>> = r.try_get("lan_ips")?;
                 Ok((
                     r.try_get("network_id")?,
-                    crate::meraki_inventory::NetworkLan {
+                    crate::meraki::inventory::NetworkLan {
                         ips: ips
                             .unwrap_or_default()
                             .iter()
-                            .filter_map(|ip| crate::meraki_inventory::usable_address(ip))
+                            .filter_map(|ip| crate::meraki::inventory::usable_address(ip))
                             .collect(),
                         read_at: r.try_get("lan_read_at")?,
                     },
@@ -1163,7 +1170,7 @@ impl MerakiOrgRepo {
     pub async fn record_collect_failures(
         &self,
         org_uuid: Uuid,
-        failures: &[crate::meraki_health::TierFailure],
+        failures: &[crate::meraki::health::TierFailure],
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE meraki_orgs SET collect_failures = $2, updated_at = now() \
@@ -1438,7 +1445,7 @@ pub fn is_mesh_repeater(product_type: &str, listed: bool, lan_ip: Option<&str>) 
     is_access_point_product(product_type)
         && listed
         && lan_ip
-            .and_then(crate::meraki_inventory::usable_address)
+            .and_then(crate::meraki::inventory::usable_address)
             .is_none()
 }
 
@@ -2964,8 +2971,8 @@ mod tests {
     async fn the_failing_collects_are_kept_on_the_row_and_written_only_on_change(
         pool: sqlx::PgPool,
     ) {
-        use crate::meraki_health::TierFailure;
-        use crate::meraki_sync::MerakiSyncFailure;
+        use crate::meraki::health::TierFailure;
+        use crate::meraki::sync::MerakiSyncFailure;
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let repo = MerakiOrgRepo::new(pool.clone());
         let id = repo

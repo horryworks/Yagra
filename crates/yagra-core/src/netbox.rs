@@ -352,7 +352,7 @@ impl BaseUrlError {
 ///
 /// The policy is ADR-047's, unchanged: an NMS legitimately reaches **private** addresses, so
 /// RFC1918 / ULA are allowed and only the SSRF-escalation surface is refused. That is why
-/// `notifications.rs::validate_vendor_url`'s host allow-list cannot be reused — there is no list of
+/// `alerts/notifications.rs::validate_vendor_url`'s host allow-list cannot be reused — there is no list of
 /// legitimate NetBox hosts to write down.
 ///
 /// ⚠️ **A hostname is not resolved.** `netbox.internal` pointing at `127.0.0.1` passes here. That

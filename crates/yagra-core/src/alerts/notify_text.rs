@@ -275,7 +275,7 @@ pub(crate) fn node_body_template(event: NotifyEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notify_facts::{context_for, preview_sample};
+    use crate::alerts::notify_facts::{context_for, preview_sample};
     use std::collections::HashMap;
     use yagra_common::PreviewSample;
 

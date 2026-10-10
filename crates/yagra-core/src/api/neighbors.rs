@@ -947,7 +947,7 @@ fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
 /// name, and a chassis no organization lists is left out.
 fn classify_chassis(
     chassis: &BTreeSet<String>,
-    by_mac: &HashMap<String, crate::meraki_inventory::DeviceWithMac>,
+    by_mac: &HashMap<String, crate::meraki::inventory::DeviceWithMac>,
     scope: &NodeScope,
 ) -> Vec<NeighborChassisPeer> {
     chassis
@@ -2353,7 +2353,7 @@ mod peer_tests {
 
     #[test]
     fn a_chassis_mac_gets_the_state_of_the_meraki_device_listed_under_it() {
-        use crate::meraki_inventory::{DeviceWithMac, MacNode};
+        use crate::meraki::inventory::{DeviceWithMac, MacNode};
         let org = Uuid::from_u128(9);
         let folder = Uuid::from_u128(7);
         let node = Uuid::from_u128(5);

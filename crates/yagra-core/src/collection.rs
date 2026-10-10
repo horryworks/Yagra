@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Collection-set persistence: which OIDs/metrics to collect, per profile and per node.
 //!
-//! Mirrors [`crate::thresholds::ThresholdStore`]: scope-based rows that the scheduler
+//! Mirrors [`crate::alerts::thresholds::ThresholdStore`]: scope-based rows that the scheduler
 //! resolves into an effective per-node set via [`yagra_common::resolve_collection_set`]
 //! (a node-level item overrides the profile default with the same metric name). This is
 //! the I/O adapter only; resolution and the built-in catalog live in `yagra-common`.

@@ -172,7 +172,7 @@ fn every_shared_filter_seam_is_passed_through_whole() {
         /// `(seam field, the tool's parameter name)`
         renamed: &'static [(&'static str, &'static str)],
     }
-    // ⚠️ `crate::thresholds::ThresholdFilter` is deliberately **not** here, and its absence is
+    // ⚠️ `crate::alerts::thresholds::ThresholdFilter` is deliberately **not** here, and its absence is
     // what let `get_config(kind=thresholds)` pass `&Default::default()` unnoticed until
     // ADR-079. It does not fit this harness — three fields against the `>= 5` floor that keeps
     // a broken parser from passing, and the tool builds it in two steps (params → owned →
