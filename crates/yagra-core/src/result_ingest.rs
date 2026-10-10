@@ -42,11 +42,11 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
 use crate::coordinator::Coordinator;
-use crate::no_reading_filter::{Admitted, NoReadingHandle};
 use crate::repo::{self, NodeRepo};
 use crate::store::MetricStore;
 use crate::wireless_fanout::{ApFanout, Replay};
 use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
+use yagra_alert::no_reading::{Admitted, NoReadingHandle};
 
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
 /// mirroring the event pipeline's ADR-024 split). Like events, sustained overload sheds the newest
@@ -1742,12 +1742,12 @@ mod tests {
     /// Built with a real `AlertManager` rather than a fake because the property under test is a
     /// property of the engine's own liveness machine — a stub would just assert the stub.
     async fn drive_ingest(results: Vec<PollResult>) -> Vec<crate::alerts::NotifyAction> {
-        let alerts = Arc::new(AlertManager::new());
+        let alerts = Arc::new(crate::alerts::new_manager());
         // Up/down alerting is rule-driven (ADR-075), so a bare manager commits state and pages
         // nobody. Install what `repo.rs` seeds, or every liveness assertion below would pass for
         // the wrong reason — "no Fire" is what a missing rule and a working suppression look like.
         alerts.set_config(crate::alerts::AlertConfig::new(
-            vec![crate::alerts::seeded_liveness_rule()],
+            vec![yagra_alert::rules::seeded_liveness_rule()],
             std::collections::HashMap::new(),
         ));
         drive_ingest_into(&alerts, &NoReadingHandle::default(), results)
@@ -1842,7 +1842,7 @@ mod tests {
     fn ac6508_polls(node: NodeId, ats: std::ops::Range<i64>) -> Vec<PollResult> {
         ats.map(|at| {
             let mut r = liveness_result(node, CheckOutcome::Reachable, at);
-            r.samples = crate::no_reading_filter::ac6508_temperature_rows();
+            r.samples = yagra_alert::no_reading::ac6508_temperature_rows();
             r
         })
         .collect()
@@ -1850,7 +1850,7 @@ mod tests {
 
     fn temperature_engine(node: NodeId) -> Arc<AlertManager> {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
-        let rule = crate::alerts::thresholds::StoredThreshold::new(
+        let rule = yagra_common::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),
@@ -1860,17 +1860,17 @@ mod tests {
                 2,
             ),
         );
-        let alerts = Arc::new(AlertManager::new());
-        alerts.set_config(crate::alerts::testkit::cfg(
+        let alerts = Arc::new(crate::alerts::new_manager());
+        alerts.set_config(yagra_alert::testkit::cfg(
             vec![rule],
-            crate::alerts::testkit::meta_for(node),
+            yagra_alert::testkit::meta_for(node),
         ));
         alerts
     }
 
     fn ac6508_handle() -> NoReadingHandle {
         let handle = NoReadingHandle::default();
-        handle.publish(crate::no_reading_filter::NoReadingMarkers::from_items(
+        handle.publish(yagra_alert::no_reading::NoReadingMarkers::from_items(
             &yagra_common::builtin_templates()
                 .into_iter()
                 .flat_map(|t| t.items)
@@ -1939,7 +1939,7 @@ mod tests {
             .iter()
             .map(|row| Alert {
                 subject: yagra_alert::Subject::Node(node),
-                check: crate::alerts::rules::row_check_id(node, *row, "huawei_temp"),
+                check: yagra_alert::rules::row_check_id(node, *row, "huawei_temp"),
                 severity: yagra_common::Severity::Critical,
                 state: yagra_common::NodeState::Critical,
                 at_unix_ms: 0,
@@ -2131,9 +2131,9 @@ mod tests {
                 1_001 + i * 2,
             ));
         }
-        let alerts = Arc::new(AlertManager::new());
+        let alerts = Arc::new(crate::alerts::new_manager());
         alerts.set_config(crate::alerts::AlertConfig::new(
-            vec![crate::alerts::seeded_liveness_rule()],
+            vec![yagra_alert::rules::seeded_liveness_rule()],
             std::collections::HashMap::new(),
         ));
         let out = drive_ingest_with(&alerts, &NoReadingHandle::default(), fanout, stream).await;
@@ -2211,9 +2211,9 @@ mod tests {
                 now + i,
             ));
         }
-        let alerts = Arc::new(AlertManager::new());
+        let alerts = Arc::new(crate::alerts::new_manager());
         alerts.set_config(crate::alerts::AlertConfig::new(
-            vec![crate::alerts::seeded_liveness_rule()],
+            vec![yagra_alert::rules::seeded_liveness_rule()],
             std::collections::HashMap::new(),
         ));
         let out = drive_ingest_with(&alerts, &NoReadingHandle::default(), fanout, stream).await;
@@ -2235,7 +2235,7 @@ mod tests {
     /// per-interface, as the shipped one does.
     fn optical_engine(node: NodeId) -> Arc<AlertManager> {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
-        let rule = crate::alerts::thresholds::StoredThreshold::new(
+        let rule = yagra_common::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),
@@ -2248,9 +2248,9 @@ mod tests {
                 2,
             ),
         );
-        let alerts = Arc::new(AlertManager::new());
+        let alerts = Arc::new(crate::alerts::new_manager());
         alerts.set_config(
-            crate::alerts::testkit::cfg(vec![rule], crate::alerts::testkit::meta_for(node))
+            yagra_alert::testkit::cfg(vec![rule], yagra_alert::testkit::meta_for(node))
                 .with_per_interface(
                     [yagra_common::METRIC_IF_RX_POWER_DBM.to_owned()]
                         .into_iter()
@@ -2376,7 +2376,7 @@ mod tests {
     async fn a_slow_walks_count_sample_is_not_judged() {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
         let node = NodeId::new();
-        let rule = crate::alerts::thresholds::StoredThreshold::new(
+        let rule = yagra_common::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Global,
             Vec::new(),
@@ -2389,10 +2389,10 @@ mod tests {
                 1,
             ),
         );
-        let alerts = Arc::new(AlertManager::new());
-        alerts.set_config(crate::alerts::testkit::cfg(
+        let alerts = Arc::new(crate::alerts::new_manager());
+        alerts.set_config(yagra_alert::testkit::cfg(
             vec![rule],
-            crate::alerts::testkit::meta_for(node),
+            yagra_alert::testkit::meta_for(node),
         ));
         let results = (1..4)
             .map(|at| {

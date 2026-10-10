@@ -7,28 +7,58 @@
 //! bucketing that keeps that answer from costing O(all rules) per sample. It also owns the
 //! deterministic check ids, because an id is a function of scope, not of state.
 //!
-//! **Pure.** No I/O, no clock, no locks — [`super::engine`] holds all of that. That is what lets
+//! **Pure.** No I/O, no clock, no locks — [`crate::engine`] holds all of that. That is what lets
 //! `the_indexed_resolve_agrees_with_the_reference_implementation` run the fast path and a naive
 //! one over the same inputs and demand the same answer.
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::Subject;
 use uuid::Uuid;
-use yagra_alert::Subject;
 use yagra_common::{
     resolve_effective, CheckId, Direction, EffectiveThreshold, IfIndex, NodeId, NodeState,
     ScopeLevel, ScopedThreshold,
 };
 use yagra_topology::Topology;
 
-use crate::alerts::thresholds::StoredThreshold;
+use yagra_common::StoredThreshold;
 
-use super::NodeMeta;
+/// Per-node metadata used to resolve threshold scope, and to answer "may this caller see this
+/// node" without a database round-trip (`api/scope.rs`).
+///
+/// ⚠️ **The two group fields are different concepts and must not be confused.** [`Self::tag_groups`]
+/// holds *tag values* — free-form labels an operator puts on a node, which `ScopeLevel::Group`
+/// thresholds match against. [`Self::folder_group`] is the node's row in the inventory folder tree,
+/// which is what RBAC visibility is defined over (ADR-014).
+///
+/// The field was called `groups` until group scoping landed, and the collision was a live hazard:
+/// `Scope::allows` takes a `BTreeSet<String>`, so `principal.can_see(&meta.groups)` compiled, ran,
+/// and would have scoped visibility by *threshold tags* — failing **open** for any node whose tags
+/// happened to match, with nothing to catch it. Hence the rename and
+/// `node_meta_group_is_the_folder_group_not_a_tag_value`.
+#[derive(Debug, Clone, Default)]
+pub struct NodeMeta {
+    /// Profile id (as text) the node belongs to, if any.
+    pub profile: Option<String>,
+    /// Node **tag values**, for group-scoped thresholds. Not the folder tree — see the type docs.
+    pub tag_groups: BTreeSet<String>,
+    /// The node's folder group (`nodes.group_id`), for RBAC visibility. `None` = ungrouped, which
+    /// a scoped principal may **not** see.
+    pub folder_group: Option<Uuid>,
+    /// The node's folder group and every group above it, **nearest first** — the chain a
+    /// `ScopeLevel::FolderGroup` threshold is matched against (ADR-075 Inc.3).
+    ///
+    /// Ordered, not a set, because the position *is* the specificity: a rule on the node's own
+    /// group must beat one on its grandparent. `folder_group` stays separate and stays first here;
+    /// RBAC is defined over the node's own group only, and widening it to the chain would let a
+    /// principal scoped to a parent see a child it was not granted.
+    pub folder_chain: Vec<Uuid>,
+}
 
-/// Liveness check name (distinct from any metric name). `pub(crate)` so anything that has to
+/// Liveness check name (distinct from any metric name). Public so anything that has to
 /// recognise the sentinel — the RCA prompt renders it as "liveness" rather than showing an operator
 /// an internal token — tests against this rather than re-spelling the literal.
-pub(crate) const LIVENESS: &str = "__liveness__";
+pub const LIVENESS: &str = "__liveness__";
 /// Consecutive failed polls the **seeded fleet-default** liveness rule asks for (ADR-075).
 ///
 /// This is the seed's value, not the engine's. The engine reads the dwell off whichever
@@ -40,15 +70,15 @@ pub(crate) const LIVENESS: &str = "__liveness__";
 /// and is not "the rule is still there": the committed state drives the Nodes page, the down-set
 /// and dependency suppression, none of which an operator asked to switch off by deleting an
 /// alert rule. Deleting the rule stops the paging, not the bookkeeping.
-pub(crate) const DEFAULT_LIVENESS_DWELL: u32 = 3;
+pub const DEFAULT_LIVENESS_DWELL: u32 = 3;
 /// The fleet-default liveness rule every deployment is seeded with (`repo.rs`, ADR-075).
 ///
 /// Test-only, and shared rather than re-spelled: up/down alerting is rule-driven now, so an
 /// `AlertManager` with no config commits state and pages nobody. Any test that expects a node to
 /// fire has to install this, and two modules needed it — a second copy would be a second chance
 /// to disagree with what `repo.rs` actually seeds.
-#[cfg(test)]
-pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
+#[cfg(any(test, feature = "test-util"))]
+pub fn seeded_liveness_rule() -> StoredThreshold {
     StoredThreshold::new(
         uuid::Uuid::nil(),
         ScopeLevel::Global,
@@ -159,8 +189,9 @@ pub struct AlertConfig {
     /// collide with real port numbers (measured v0.2.15: 30 of 108 vendor readings). Splitting on
     /// the label would therefore invent a per-port check for a chassis-wide reading.
     ///
-    /// ➕ Plus the four metrics Yagra derives per port (`interface_util::DERIVED_INTERFACE_METRICS`),
-    /// which no item collects and so no catalogue entry can name; `alerts/config.rs` adds them.
+    /// ➕ Plus the four metrics Yagra derives per port
+    /// (`yagra_common::derived_metric::DERIVED_INTERFACE_METRICS`), which no item collects and so no
+    /// catalogue entry can name; core's `alerts/config.rs` adds them.
     ///
     /// Empty means "nothing is per-interface", which is the pre-ADR-076 behaviour — the safe
     /// direction for a config that failed to load.
@@ -564,7 +595,7 @@ impl AlertConfig {
 /// 80 on the I/O pool — the rule written to loosen one pool could never loosen it. **Scope still
 /// comes first**: a node rule without a pattern beats a profile rule with one, because whoever wrote
 /// a rule for this node meant this node. So this only narrows within the level that already won.
-pub(crate) fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThreshold> {
+pub fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThreshold> {
     let Some(winning) = matched.iter().map(|t| t.level).max() else {
         return matched;
     };
@@ -582,7 +613,7 @@ pub(crate) fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThr
 
 /// Whether one stored rule applies to `(node, ifindex)`, and to the table row named `row_name`.
 ///
-/// Free rather than a method, and `pub(crate)` rather than private, because two places have to
+/// Free rather than a method, and public rather than private, because two places have to
 /// answer this identically: the engine, resolving a sample, and `GET
 /// /nodes/{id}/interfaces/{ifindex}/thresholds`, showing an operator which rules reach a port
 /// (ADR-076 decision 11). A second copy of scope inheritance is exactly the mirror `extensibility.md`
@@ -590,7 +621,7 @@ pub(crate) fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThr
 ///
 /// `meta` is the node's own metadata (profile, tag values, folder chain); `None` for a node the
 /// snapshot has never seen, which matches only the global level.
-pub(crate) fn threshold_applies(
+pub fn threshold_applies(
     t: &StoredThreshold,
     node: NodeId,
     ifindex: Option<IfIndex>,
@@ -657,7 +688,7 @@ fn scope_applies(
 /// How far up the node's folder chain `t` sits — `0` is the node's own group. `None` when `t`
 /// is not a folder-group rule, or names a group the node is not under (which `threshold_applies`
 /// has already excluded, so in practice only the former).
-pub(crate) fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Option<usize> {
+pub fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Option<usize> {
     if t.level != ScopeLevel::FolderGroup {
         return None;
     }
@@ -673,7 +704,7 @@ pub(crate) fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Opti
 }
 
 /// The smallest depth any matched folder-group rule sits at, or `None` when there are none.
-pub(crate) fn nearest_folder_depth(
+pub fn nearest_folder_depth(
     matched: &[&StoredThreshold],
     meta: Option<&NodeMeta>,
 ) -> Option<usize> {
@@ -694,7 +725,7 @@ pub(crate) fn nearest_folder_depth(
 /// *current* ruleset — a rule created two seconds ago is not in the engine's snapshot yet, and a
 /// list that omitted it would be a list that answers the question wrongly for the person who just
 /// pressed Save.
-pub(crate) fn matching_rules(
+pub fn matching_rules(
     rules: &[StoredThreshold],
     node: NodeId,
     ifindex: Option<IfIndex>,
@@ -764,7 +795,7 @@ pub(crate) fn matching_rules(
 /// visits only the nodes its node rules name. The port bucket is never scanned per node — it is
 /// reduced to the set of nodes that have one, which is what keeps ~9,600 port rules out of the
 /// loop (the reason [`MetricRules`] exists).
-pub(crate) fn overridden_counts(
+pub fn overridden_counts(
     rules: &[StoredThreshold],
     node_meta: &HashMap<NodeId, NodeMeta>,
     per_interface: &BTreeSet<String>,
@@ -894,7 +925,7 @@ pub(super) struct CheckSpec<'a> {
 ///
 /// A rule's dwell means consecutive **polls**. A check fed by the poll path sees each poll once, so
 /// the number needs no conversion; a check fed by an evaluator that ticks on its own clock can read
-/// one poll several times, so [`crate::poll_interval::dwell_ticks`] converts it. An enum rather
+/// one poll several times, so [`yagra_common::poll_interval::dwell_ticks`] converts it. An enum rather
 /// than an `Option<Duration>` so each call site has to say which it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Cadence {
@@ -907,7 +938,7 @@ pub(super) enum Cadence {
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
 /// stable dedup identity across restarts. Also used by the event pipeline (`events/engine.rs`)
 /// with `event:<rule-id>` names, keeping event alerts in the same identity space.
-pub(crate) fn check_id(node: NodeId, name: &str) -> CheckId {
+pub fn check_id(node: NodeId, name: &str) -> CheckId {
     subject_check_id(&Subject::Node(node), name)
 }
 
@@ -920,7 +951,7 @@ pub(crate) fn check_id(node: NodeId, name: &str) -> CheckId {
 // operator-authored free text on the mute path (`mutes.check_name`) and is any metric a poller
 // emits on the threshold path, so a prefix there would be forgeable. A `NodeId` renders as a bare
 // hyphenated UUID and contains no `:`, so no node can impersonate a pool or vice versa.
-pub(crate) fn subject_check_id(subject: &Subject, name: &str) -> CheckId {
+pub fn subject_check_id(subject: &Subject, name: &str) -> CheckId {
     CheckId::from(Uuid::new_v5(
         &Uuid::NAMESPACE_OID,
         format!("{subject}:{name}").as_bytes(),
@@ -978,7 +1009,7 @@ pub(super) fn resolve_key<'a>(
 /// `check_id(node, metric)` keeps returning exactly the bytes it always did: ADR-075 decision 2
 /// hangs dependency-suppression selection and the PagerDuty/JSM dedup key off that value, and an
 /// open external incident that stops matching is one nothing will ever close.
-pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -> CheckId {
+pub fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -> CheckId {
     subject_check_id(&Subject::Node(node), &format!("{metric}@{ifindex}"))
 }
 
@@ -989,7 +1020,7 @@ pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -
 /// per interface or once per table row, never both (`yagra_common::item_publishes_per_interface`
 /// decides which), so the two can share the form without two checks ever sharing an id. One
 /// function rather than a second `format!`, so the form cannot drift between the two.
-pub(crate) fn row_check_id(node: NodeId, row: u32, metric: &str) -> CheckId {
+pub fn row_check_id(node: NodeId, row: u32, metric: &str) -> CheckId {
     interface_check_id(node, IfIndex(row), metric)
 }
 
@@ -1008,8 +1039,8 @@ pub(super) fn severity_rank(state: NodeState) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testkit::*;
     use super::*;
+    use crate::testkit::*;
     use yagra_common::ThresholdBounds;
     #[test]
     fn a_folder_group_rule_covers_that_group_and_every_group_inside_it() {
@@ -1836,8 +1867,8 @@ mod tests {
 /// ADR-143: rules that pick table rows by name.
 #[cfg(test)]
 mod row_rule_tests {
-    use super::super::testkit::*;
     use super::*;
+    use crate::testkit::*;
     use yagra_common::{ThresholdBounds, ThresholdRule};
 
     const M: &str = "cisco_mem_used_pct";

@@ -188,7 +188,7 @@ pub enum MetricUnit {
     Counted(&'static str),
     /// **The stored number is not the number to show.** The payload names the unit the value is
     /// stored in, because that is what a threshold bound has to be written in
-    /// (`alerts/rules.rs::lowest_bound`); the WebUI's `scalarValueFormat` owns the displayed string
+    /// (`ThresholdBounds::lowest_bound`); the WebUI's `scalarValueFormat` owns the displayed string
     /// end to end and ignores any suffix.
     ///
     /// 🚨 **The consequence is that the screen and the rule speak different units** — the card says
@@ -214,7 +214,7 @@ impl MetricUnit {
     ///
     /// ⚠️ **Stored, not displayed**, and the two differ for [`MetricUnit::Scaled`]. This is the one
     /// an API client wants: `query_metrics` returns the stored value, and a threshold bound is
-    /// written in the stored unit (`alerts/rules.rs::lowest_bound`). The WebUI's card is the only
+    /// written in the stored unit (`ThresholdBounds::lowest_bound`). The WebUI's card is the only
     /// surface that shows the scaled form, and it does its own formatting.
     #[must_use]
     pub fn stored(self) -> Option<&'static str> {
@@ -286,11 +286,11 @@ impl AlertName {
 /// by the modules that raise them; the event-rule prefix is handled by [`alert_title`] itself.
 pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 2] = [
     (
-        crate::pool_coverage::COVERAGE_METRIC,
+        yagra_alert::engine::POOL_COVERAGE_METRIC,
         AlertName::Value("Too few pollers in pool"),
     ),
     (
-        crate::meraki::health::COLLECT_METRIC,
+        yagra_alert::engine::MERAKI_COLLECT_METRIC,
         AlertName::Flag("Meraki Dashboard collection failing"),
     ),
 ];
@@ -316,7 +316,7 @@ pub fn alert_name(metric: &str) -> Option<AlertName> {
 /// non-empty metric, so a caller can always print it.
 #[must_use]
 pub fn alert_title(metric: &str) -> String {
-    if let Some(rule) = metric.strip_prefix(crate::events::EVENT_METRIC_PREFIX) {
+    if let Some(rule) = metric.strip_prefix(yagra_alert::engine::EVENT_METRIC_PREFIX) {
         return format!("Event rule: {rule}");
     }
     alert_name(metric).map_or_else(|| metric.to_owned(), |n| n.text().to_owned())
@@ -507,8 +507,8 @@ pub fn metric_source(metric: &str) -> &'static str {
     if CHECK_METRICS.contains(&metric) {
         // Emitted by one of Yagra's own probes rather than read off a device.
         "check"
-    } else if crate::interface_util::DERIVED_INTERFACE_METRICS.contains(&metric)
-        || crate::derived::derived_node_metric(metric).is_some()
+    } else if yagra_common::derived_metric::DERIVED_INTERFACE_METRICS.contains(&metric)
+        || yagra_common::derived_metric::derived_node_metric(metric).is_some()
     {
         // Computed at evaluation time — per port (ADR-076) or per node (ADR-105); queryable
         // through no series either way.
@@ -563,8 +563,8 @@ mod tests {
         assert_eq!(counts["check"], CHECK_METRICS.len());
         assert_eq!(
             counts["derived"],
-            crate::interface_util::DERIVED_INTERFACE_METRICS.len()
-                + crate::derived::DERIVED_NODE_METRICS.len()
+            yagra_common::derived_metric::DERIVED_INTERFACE_METRICS.len()
+                + yagra_common::derived_metric::DERIVED_NODE_METRICS.len()
         );
         // `__liveness__` is the one an MCP client is most likely to meet first, and the one whose
         // source is least guessable from its name.
@@ -631,8 +631,12 @@ mod tests {
             })
             .collect();
         expected.extend(CHECK_METRICS);
-        expected.extend(crate::interface_util::DERIVED_INTERFACE_METRICS);
-        expected.extend(crate::derived::DERIVED_NODE_METRICS.iter().map(|d| d.name));
+        expected.extend(yagra_common::derived_metric::DERIVED_INTERFACE_METRICS);
+        expected.extend(
+            yagra_common::derived_metric::DERIVED_NODE_METRICS
+                .iter()
+                .map(|d| d.name),
+        );
 
         // A floor, so "the catalogue query stopped matching" cannot pass as "everything is
         // explained": an empty expectation would make the comparison below vacuous.
@@ -846,15 +850,18 @@ mod tests {
         assert_eq!(alert_title(crate::alerts::LIVENESS), "Node not responding");
         assert_eq!(alert_title("cisco_cpu_5min"), "CPU usage (5 min)");
         assert_eq!(
-            alert_title(crate::pool_coverage::COVERAGE_METRIC),
+            alert_title(yagra_alert::engine::POOL_COVERAGE_METRIC),
             "Too few pollers in pool"
         );
         assert_eq!(
-            alert_title(crate::meraki::health::COLLECT_METRIC),
+            alert_title(yagra_alert::engine::MERAKI_COLLECT_METRIC),
             "Meraki Dashboard collection failing"
         );
         assert_eq!(
-            alert_title(&format!("{}BGP flap", crate::events::EVENT_METRIC_PREFIX)),
+            alert_title(&format!(
+                "{}BGP flap",
+                yagra_alert::engine::EVENT_METRIC_PREFIX
+            )),
             "Event rule: BGP flap"
         );
         // A metric a newer core introduced still prints something truthful.
@@ -900,5 +907,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The engine's event-prefix exclusion (`yagra_alert::engine::EVENT_METRIC_PREFIX`) is only sound
+    /// if no metric a poller can emit collides with it. Here rather than beside the constant because
+    /// the catalogues it reads are core's (ADR-202 Inc.4).
+    #[test]
+    fn no_catalogue_metric_name_starts_with_the_event_prefix() {
+        let prefix = yagra_alert::engine::EVENT_METRIC_PREFIX;
+        let mut checked = 0usize;
+        for name in CHECK_METRICS {
+            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
+            checked += 1;
+        }
+        for d in yagra_common::derived_metric::DERIVED_NODE_METRICS {
+            assert!(
+                !d.name.starts_with(prefix),
+                "{} collides with `{prefix}`",
+                d.name
+            );
+            checked += 1;
+        }
+        for name in yagra_common::derived_metric::DERIVED_INTERFACE_METRICS {
+            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
+            checked += 1;
+        }
+        for (item, _) in crate::mib::builtin_mib_rows() {
+            assert!(
+                !item.metric_name.starts_with(prefix),
+                "{} collides with `{prefix}`",
+                item.metric_name
+            );
+            checked += 1;
+        }
+        // A floor, because everything above asks whether something is *absent*: over an empty
+        // iteration that is a claim about nothing.
+        assert!(
+            checked >= 100,
+            "only {checked} metric names were inspected; the catalogues did not load"
+        );
     }
 }

@@ -6,91 +6,9 @@
 //! ADR-013). This is the I/O adapter; the resolution + evaluation logic is in `yagra-common`
 //! (tested there) and the firing logic in [`crate::alerts`].
 
-use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_common::{Direction, ScopeLevel, ThresholdBounds, ThresholdRule};
-
-/// A stored threshold rule with its scope and id (id is for the API; the engine ignores it).
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct StoredThreshold {
-    pub id: Uuid,
-    // Serialized as `scope_level` so the GET response matches the POST body field name.
-    #[serde(rename = "scope_level")]
-    pub level: ScopeLevel,
-    /// Every profile, folder group, node or port this rule applies to — `scope_level` says which
-    /// of those they are. Empty for a `global` rule, which applies to every node.
-    //
-    // ⚠️ Replaces the single `scope_id` this used to carry, in the API response as well (ADR-078).
-    // The database COLUMN of that name is still written (see `ThresholdWrite::primary`) because a
-    // core predating migration 0096 resolves by it — but it is deliberately not a second field
-    // here. Two spellings of "which target" is the mirror `extensibility.md` §2 forbids, and the
-    // copy that would rot is the one a future resolver reaches for by habit: on a rule naming
-    // four profiles it answers about one of them, quietly covering a quarter of the fleet.
-    //
-    // (The two notes above are `//` on purpose: this type derives `ToSchema`, so a `///` line is
-    // published verbatim to every API client. The line that IS `///` is written for them.)
-    pub scope_ids: Vec<String>,
-    /// Which way this rule’s `warning`/`critical` face. Superseded by the four bounds on the rule
-    /// itself, which describe both sides; on a rule bounding both, this names the **primary side
-    /// only** and describes half of what the rule does.
-    //
-    // ⚠️ These three are on `StoredThreshold` rather than on `ThresholdRule`, where they used to
-    // be fields, because ADR-081 made them *derived*: the four bounds are the truth and these are
-    // a reading of them. Keeping them as fields would let a literal set the two to different
-    // things — the divergence `extensibility.md` §2 is about, and the one that made a rule get
-    // stored facing one way while its bounds faced the other. They are written out here so the
-    // published JSON keeps every key it had; dropping them would have been a breaking change to
-    // every client, which is the opposite of what this ADR's N-1 story promises.
-    pub direction: yagra_common::Direction,
-    /// The primary side’s warning bound. See `direction`.
-    pub warning: Option<f64>,
-    /// The primary side’s critical bound. See `direction`.
-    pub critical: Option<f64>,
-    #[serde(flatten)]
-    pub rule: ThresholdRule,
-    /// Which rows of a vendor table this rule applies to, by the row's name — `I/O`, or
-    /// `MPU Board *`. Case-insensitive, and `*` matches any run of characters. Absent means every
-    /// row, and every metric that has no rows. At the same scope, a rule with a pattern wins over
-    /// one without for the rows it matches.
-    //
-    // (ADR-143.) Not on `ThresholdRule`: that type is the four bounds and a dwell, shared with the
-    // engine's resolution and with every literal in the workspace, and which rows a rule reaches is
-    // a matter of scope — which is what this type already carries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub row_match: Option<String>,
-}
-
-impl StoredThreshold {
-    /// Build a row, deriving the legacy triple from the rule's bounds.
-    ///
-    /// The only way to make one, so `direction`/`warning`/`critical` cannot be set to something the
-    /// bounds do not say. A struct literal could, and a row describing a rule the engine does not
-    /// run is precisely the failure ADR-081 is about.
-    ///
-    /// The row starts with no row-name pattern; [`Self::with_row_match`] sets one.
-    #[must_use]
-    pub fn new(id: Uuid, level: ScopeLevel, scope_ids: Vec<String>, rule: ThresholdRule) -> Self {
-        let bounds = rule.bounds();
-        Self {
-            id,
-            level,
-            scope_ids,
-            direction: bounds.direction(),
-            warning: bounds.warning(),
-            critical: bounds.critical(),
-            rule,
-            row_match: None,
-        }
-    }
-
-    /// The same row, reaching only the table rows whose name matches `row_match` (ADR-143).
-    #[must_use]
-    pub fn with_row_match(mut self, row_match: Option<String>) -> Self {
-        self.row_match = row_match;
-        self
-    }
-}
+use yagra_common::{Direction, ScopeLevel, StoredThreshold, ThresholdBounds, ThresholdRule};
 
 /// The fields one save writes — the body of both [`ThresholdStore::create`] and
 /// [`ThresholdStore::update`].
@@ -350,14 +268,14 @@ impl ThresholdStore {
     }
 
     /// Every rule that could conceivably reach one port — the input to
-    /// `alerts::rules::matching_rules`, which then decides which of them actually do.
+    /// `yagra_alert::rules::matching_rules`, which then decides which of them actually do.
     ///
     /// Not `list_all()`: that is the engine's uncapped read of the whole table, and a browser
     /// opening one port must not pull a fleet's node-level overrides across. Not `list_page`
     /// either: its cap would silently drop rules, and "which rules govern this port" is a question
     /// a prefix cannot answer.
     ///
-    /// The predicate is the exact complement of what [`crate::alerts::rules::threshold_applies`] can
+    /// The predicate is the exact complement of what [`yagra_alert::rules::threshold_applies`] can
     /// reject cheaply. The four broad levels are taken whole because whether one matches depends
     /// on the node's profile, tags and folder chain, which live in the engine's snapshot rather
     /// than in this table; the two narrow levels are matched by their `scope_id`, which is this

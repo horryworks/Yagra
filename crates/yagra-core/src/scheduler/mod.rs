@@ -182,6 +182,40 @@ mod tests {
         assert_eq!(resolve_interval(None, &overrides, 30), 30);
     }
 
+    /// `poll_interval`'s snapshot is a second copy of this module's answer, so it is pinned to the
+    /// function that produces the first. It lives here since the snapshot moved to `yagra-common`
+    /// (ADR-202 Inc.4), which cannot see the scheduler.
+    #[test]
+    fn the_snapshot_agrees_with_the_schedulers_resolution_for_every_node() {
+        use yagra_common::poll_interval::{IntervalSnapshot, PollIntervals};
+        let id = Uuid::from_u128;
+        let fast = Uuid::from_u128(100);
+        let slow = Uuid::from_u128(101);
+        let overrides: HashMap<Uuid, u32> = [(fast, 30), (slow, 900)].into_iter().collect();
+        let profiles = [
+            None,
+            Some(ProfileId(fast)),
+            Some(ProfileId(slow)),
+            Some(ProfileId(id(7))),
+        ];
+        let nodes: Vec<(Uuid, Option<ProfileId>)> = (0..40u128)
+            .map(|n| (id(n), profiles[(n % 4) as usize]))
+            .collect();
+        let resolved = nodes
+            .iter()
+            .map(|(node, profile)| (*node, resolve_interval(*profile, &overrides, 300)));
+        let snap = IntervalSnapshot::build(300, resolved);
+        for (node, profile) in &nodes {
+            assert_eq!(
+                snap.for_node(*node),
+                resolve_interval(*profile, &overrides, 300)
+            );
+        }
+        let intervals = PollIntervals::unknown();
+        intervals.publish(snap);
+        assert_eq!(intervals.fleet_max(), Some(900));
+    }
+
     fn pools(names: &[&str]) -> HashSet<String> {
         names.iter().map(|p| (*p).to_owned()).collect()
     }

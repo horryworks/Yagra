@@ -30,6 +30,7 @@ use crate::groups::GroupRepo;
 use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
 use crate::repo::NodeRepo;
+use yagra_alert::engine::POOL_COVERAGE_METRIC as COVERAGE_METRIC;
 use yagra_alert::Alert;
 use yagra_common::Node;
 // Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
@@ -71,9 +72,6 @@ const M_POOLS_UNCOVERED: &str = "yagra_pools_without_live_poller";
 const M_POOL_NODES_UNCOVERED: &str = "yagra_pool_nodes_without_live_poller";
 /// Counter: coverage notifications emitted, by lifecycle point.
 const M_NOTIFICATIONS: &str = "yagra_pool_coverage_notifications_total";
-
-/// The metric name a coverage alert reports, and the check name its id is derived from.
-pub const COVERAGE_METRIC: &str = "live_pollers";
 
 /// One pool's polling coverage: how many nodes depend on it, and how many live pollers serve it.
 #[derive(Debug, Clone, PartialEq, Eq)]

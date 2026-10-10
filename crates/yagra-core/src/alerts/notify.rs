@@ -29,8 +29,8 @@ use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, Rout
 use crate::alerts::notify_facts::{context_for, node_ids_for, AlertFactsSource};
 use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 
-use super::rules::check_id;
 use super::NotifyAction;
+use yagra_alert::rules::check_id;
 
 /// A Webhook [`NotifyChannel`]: POSTs the alert JSON to a configured URL.
 pub struct WebhookChannel {
@@ -2432,8 +2432,8 @@ mod template_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rules::interface_check_id;
     use super::*;
+    use yagra_alert::rules::interface_check_id;
     use yagra_common::NodeState;
 
     #[tokio::test]
@@ -2502,7 +2502,7 @@ mod tests {
             );
         }
     }
-    use super::super::testkit::*;
+    use yagra_alert::testkit::*;
     #[test]
     fn routing_rule_severity_match() {
         // None severity ⇒ matches every alert severity.

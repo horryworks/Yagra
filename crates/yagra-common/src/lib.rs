@@ -15,6 +15,7 @@ pub mod clock;
 pub mod collection;
 #[cfg(test)]
 mod comment_language;
+pub mod derived_metric;
 pub mod dns_check;
 pub mod env;
 pub mod host;
@@ -30,6 +31,7 @@ pub mod node;
 mod node_kind;
 mod notify_template;
 pub mod oid;
+pub mod poll_interval;
 pub mod profile;
 pub mod ratelimit;
 mod rbac;
@@ -142,7 +144,7 @@ pub use snmp_auth::SnmpV3Auth;
 pub use state::NodeState;
 pub use thresholds::{
     interface_scope_id, parse_interface_scope_id, resolve_effective, Direction, EffectiveThreshold,
-    ScopeLevel, ScopedThreshold, ThresholdBounds, ThresholdRule,
+    ScopeLevel, ScopedThreshold, StoredThreshold, ThresholdBounds, ThresholdRule,
 };
 pub use topology::{
     DerivedLink, LinkDirection, LinkOverride, LinkOverrideAction, LinkSource, TopologyLinkSummary,

@@ -23,10 +23,10 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_common::{CheckId, NodeKind};
 
-use super::engine::FreshnessCandidate;
 use super::sink::AlertSink;
 use super::AlertManager;
 use crate::store::MetricStore;
+use yagra_alert::engine::FreshnessCandidate;
 
 /// How often the two questions are asked.
 ///
@@ -321,9 +321,9 @@ pub(crate) async fn run_stale_check_watch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alerts::testkit::{cfg, manager, meta_for, open_alert, result};
     use crate::alerts::NotifyAction;
     use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, TopAgg};
+    use yagra_alert::testkit::{cfg, manager, meta_for, open_alert, result};
     use yagra_common::{NodeId, NodeState, ScopeLevel, SeriesKey, ThresholdBounds, ThresholdRule};
 
     /// A store holding exactly the `(metric, node)` series named — and able to go blind partway
@@ -506,8 +506,8 @@ mod tests {
         }
     }
 
-    fn rule(node: NodeId, metric: &str) -> crate::alerts::thresholds::StoredThreshold {
-        crate::alerts::thresholds::StoredThreshold::new(
+    fn rule(node: NodeId, metric: &str) -> yagra_common::StoredThreshold {
+        yagra_common::StoredThreshold::new(
             Uuid::new_v4(),
             ScopeLevel::Node,
             vec![node.to_string()],
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn every_derived_node_metric_has_inputs_of_its_own() {
         let mut checked = 0usize;
-        for d in crate::derived::DERIVED_NODE_METRICS {
+        for d in yagra_common::derived_metric::DERIVED_NODE_METRICS {
             let [x, y] = d.formula.inputs();
             assert_ne!(x, d.name, "{} would ask about itself", d.name);
             assert_ne!(y, d.name, "{} would ask about itself", d.name);
@@ -729,7 +729,7 @@ mod tests {
         }
         assert_eq!(
             checked,
-            crate::derived::DERIVED_NODE_METRICS.len(),
+            yagra_common::derived_metric::DERIVED_NODE_METRICS.len(),
             "the table did not load"
         );
         assert!(

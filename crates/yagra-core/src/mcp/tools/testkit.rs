@@ -17,7 +17,6 @@ use crate::api::ApiState;
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
 // re-exported by `mod.rs` so no file has to name where a sibling keeps a thing.
 use super::*;
-use crate::alerts::AlertManager;
 use crate::auth::{LoginThrottle, SessionStore};
 use crate::sink::InMemorySink;
 use crate::store::MetricStore;
@@ -35,7 +34,7 @@ pub(super) fn skeleton_state() -> ApiState {
         ipasn: crate::ipasn::empty_handle(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(crate::repo::StaticNodeList::demo()),
-        alerts: Arc::new(AlertManager::new()),
+        alerts: Arc::new(crate::alerts::new_manager()),
         admin: None,
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),

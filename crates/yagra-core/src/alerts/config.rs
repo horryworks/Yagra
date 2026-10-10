@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Assembling the alert engine's config from the database, and keeping it fresh.
 //!
-//! [`super::rules::AlertConfig`] is the thing the engine resolves every check against: the
+//! [`yagra_alert::rules::AlertConfig`] is the thing the engine resolves every check against: the
 //! thresholds, the per-node metadata scope resolution needs, the dependency topology suppression
 //! walks, and the nodes currently inside a maintenance window. This module is where those four come
 //! out of PostgreSQL and become one snapshot — the *write* side of the type the sibling modules
@@ -19,7 +19,7 @@
 //!
 //! 🚨 **A failed read must never become an empty value here** (ADR-080). A ruleset that comes back
 //! empty is indistinguishable from "every rule was deleted", and
-//! [`super::engine::AlertManager::observe_with_no_reading`] closes every alert on one of those — so one failed
+//! [`yagra_alert::engine::AlertManager::observe_with_no_reading`] closes every alert on one of those — so one failed
 //! threshold query would resolve the whole fleet's alerts and page a recovery for each. Every load
 //! in [`load_alert_config_base`] therefore propagates with `?` rather than carrying its own
 //! `unwrap_or`, and `guards.rs`-style structural tests at the bottom of this file pin both that
@@ -36,12 +36,11 @@ use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::thresholds::ThresholdStore;
-use crate::no_reading_filter::{NoReadingHandle, NoReadingMarkers};
 use crate::repo::NodeRepo;
 use crate::{
-    alerts::maintenance, alerts::thresholds, classification, config_gen, events, groups, poolres,
-    topology_projection,
+    alerts::maintenance, classification, config_gen, events, groups, poolres, topology_projection,
 };
+use yagra_alert::no_reading::{NoReadingHandle, NoReadingMarkers};
 use yagra_topology::Topology;
 
 /// The config-derived half of the alert config: all thresholds + a full node scan folded into the
@@ -50,7 +49,7 @@ use yagra_topology::Topology;
 /// an actual config change rather than every 30s refresh (S6). The raw node list is retained so the
 /// time-dependent maintenance resolution can run each cycle without re-scanning the DB.
 pub(crate) struct AlertConfigBase {
-    rules: Vec<thresholds::StoredThreshold>,
+    rules: Vec<yagra_common::StoredThreshold>,
     nodes: Vec<yagra_common::Node>,
     meta: HashMap<NodeId, NodeMeta>,
     /// Folder groups holding at least one node in each **effective** poll pool — what makes a
@@ -102,7 +101,7 @@ pub(crate) struct AlertConfigBase {
 #[async_trait::async_trait]
 pub(crate) trait AlertConfigSources: Send + Sync {
     /// Every threshold rule in the deployment.
-    async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>>;
+    async fn thresholds(&self) -> anyhow::Result<Vec<yagra_common::StoredThreshold>>;
     /// The whole inventory. The expensive one, and why this is generation-gated.
     async fn nodes(&self) -> anyhow::Result<Vec<yagra_common::Node>>;
     /// `(group, parent, pool)` for every folder group — folder-pool inheritance (migration 0054).
@@ -140,7 +139,7 @@ pub(crate) struct LiveConfigSources {
 
 #[async_trait::async_trait]
 impl AlertConfigSources for LiveConfigSources {
-    async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>> {
+    async fn thresholds(&self) -> anyhow::Result<Vec<yagra_common::StoredThreshold>> {
         self.thresholds.list_all().await
     }
     async fn nodes(&self) -> anyhow::Result<Vec<yagra_common::Node>> {
@@ -250,7 +249,7 @@ pub(crate) async fn load_alert_config_base(
     // path never sees a sample of one, so adding them changes nothing there.
     let mut per_interface = crate::collection::per_interface_metric_names(&items);
     per_interface.extend(
-        crate::interface_util::DERIVED_INTERFACE_METRICS
+        yagra_common::derived_metric::DERIVED_INTERFACE_METRICS
             .iter()
             .map(|m| (*m).to_owned()),
     );
@@ -748,7 +747,7 @@ mod tests {
         /// What `collection_items` answers.
         items: Vec<yagra_common::CollectionItem>,
         /// What `thresholds` answers.
-        rules: Vec<thresholds::StoredThreshold>,
+        rules: Vec<yagra_common::StoredThreshold>,
     }
 
     impl FakeSources {
@@ -777,7 +776,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AlertConfigSources for FakeSources {
-        async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>> {
+        async fn thresholds(&self) -> anyhow::Result<Vec<yagra_common::StoredThreshold>> {
             self.refuse(Fails::Thresholds)?;
             Ok(self.rules.clone())
         }
@@ -865,7 +864,7 @@ mod tests {
         assert!(!base.per_interface.contains("huawei_temp"));
         // The derived per-port metrics are named by no item, and a port rule on one still
         // overrides a node rule on it (ADR-076) — so the set carries them whatever the items say.
-        for derived in crate::interface_util::DERIVED_INTERFACE_METRICS {
+        for derived in yagra_common::derived_metric::DERIVED_INTERFACE_METRICS {
             assert!(base.per_interface.contains(derived), "{derived}");
         }
         assert_eq!(
@@ -890,12 +889,12 @@ mod tests {
         use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
         let a = nid(1);
         let rule = |level, ids: Vec<String>| {
-            thresholds::StoredThreshold::new(
+            yagra_common::StoredThreshold::new(
                 Uuid::new_v4(),
                 level,
                 ids,
                 ThresholdRule::new(
-                    crate::interface_util::METRIC_IF_IN_BPS,
+                    yagra_common::derived_metric::METRIC_IF_IN_BPS,
                     ThresholdBounds::below(Some(1.0), None),
                     1,
                 ),
@@ -914,7 +913,7 @@ mod tests {
         sources.rules = vec![on_node.clone(), on_port.clone()];
         let base = load_alert_config_base(&sources).await.expect("healthy");
         let got =
-            super::super::rules::overridden_counts(&base.rules, &base.meta, &base.per_interface);
+            yagra_alert::rules::overridden_counts(&base.rules, &base.meta, &base.per_interface);
         assert_eq!(got.get(&on_node.id), Some(&1), "{got:?}");
         assert_eq!(
             got.get(&on_port.id),

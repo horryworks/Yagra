@@ -484,7 +484,10 @@ impl YagraMcp {
         let live = self
             .state
             .store
-            .node_interface_live(p.node_id, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
+            .node_interface_live(
+                p.node_id,
+                yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS,
+            )
             .await;
         // Each port's addresses, from the same stored set the REST list joins (ADR-157). Best
         // effort like the interface list above it: a failed read leaves the lists empty rather

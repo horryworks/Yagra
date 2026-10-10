@@ -119,4 +119,7 @@ lab-meraki-mock = ["yagra-transport/lab-meraki-mock"]
 # under resolver v2 the feature is not unified into a normal `cargo build`, so the shipped core
 # still links a `yagra-common` with no filesystem reader in it.
 yagra-common = { path = "../yagra-common", features = ["test-util"] }
+# The shared alert fixtures and the engine's test-only hooks (ADR-202 Inc.4). Same arrangement as
+# the line above: a dev-dependency, so a release build carries none of it.
+yagra-alert = { path = "../yagra-alert", features = ["test-util"] }
 tower = { workspace = true }

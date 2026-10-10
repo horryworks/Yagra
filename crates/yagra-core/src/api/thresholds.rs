@@ -65,7 +65,7 @@ pub(super) fn routes() -> Router<ApiState> {
 /// two — a client that forgets the comparison shows a complete-looking list.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ThresholdPage {
-    items: Vec<crate::alerts::thresholds::StoredThreshold>,
+    items: Vec<yagra_common::StoredThreshold>,
     /// Rules matching the filter, ignoring the cap.
     total: i64,
     /// Whether `items` is a prefix of the matching rules rather than all of them.
@@ -223,7 +223,7 @@ pub(crate) async fn threshold_page(
 /// one lookup the alert surfaces use, so a rule and the alert it raises name the port alike.
 async fn rule_port_names(
     admin: &super::AdminState,
-    items: &[crate::alerts::thresholds::StoredThreshold],
+    items: &[yagra_common::StoredThreshold],
 ) -> std::collections::BTreeMap<String, String> {
     let ports: Vec<(Uuid, u32)> = items
         .iter()
@@ -246,7 +246,7 @@ async fn rule_port_names(
 async fn overridden_on_page(
     admin: &super::AdminState,
     alerts: &std::sync::Arc<crate::alerts::AlertManager>,
-    items: &[crate::alerts::thresholds::StoredThreshold],
+    items: &[yagra_common::StoredThreshold],
 ) -> ApiResult<std::collections::BTreeMap<Uuid, u32>> {
     if items.is_empty() {
         return Ok(std::collections::BTreeMap::new());
@@ -278,7 +278,7 @@ async fn overridden_on_page(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MatchingThreshold {
     /// The stored rule, in the same shape the rules list serves.
-    rule: crate::alerts::thresholds::StoredThreshold,
+    rule: yagra_common::StoredThreshold,
     /// Whether this rule sits at the **winning** scope level for its metric — the most specific
     /// level that reaches this port, and among folder-group rules only the nearest group in the
     /// chain (ADR-013 + ADR-075 decision 11).
@@ -417,7 +417,7 @@ pub(super) struct ThresholdBody {
 /// Most targets one rule may name (ADR-078 decision 3).
 ///
 /// The largest built-in fan-out is four (the Huawei VRP profiles), so this is room rather than a
-/// constraint. It exists because [`crate::alerts::rules::threshold_applies`] walks the set for every
+/// constraint. It exists because [`yagra_alert::rules::threshold_applies`] walks the set for every
 /// sample: an unbounded list is a per-poll cost an operator can set from a text field.
 /// ⚠️ Not measured — chosen as headroom over the built-ins. Someone wanting more targets than
 /// this wants a folder group, which is one target that grows on its own.
@@ -740,8 +740,8 @@ async fn reject_counter_metric(admin: &super::AdminState, metric: &str, op: &str
     // answer at all — `metric_declared_counter` would say "not a counter" for a typo just as
     // readily. Two lists because there are two dimensions: per port (ADR-076) and per node
     // (ADR-105).
-    if crate::interface_util::derived_metric_kind(metric).is_some()
-        || crate::derived::derived_node_metric_kind(metric).is_some()
+    if yagra_common::derived_metric::derived_interface_metric_kind(metric).is_some()
+        || yagra_common::derived_metric::derived_node_metric_kind(metric).is_some()
     {
         return Ok(());
     }

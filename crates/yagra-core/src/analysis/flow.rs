@@ -448,7 +448,7 @@ impl Engine {
     async fn node_throughput_bps(&self, node: Uuid) -> Option<f64> {
         let live = self
             .store
-            .node_interface_live(node, crate::poll_interval::RATE_WINDOW_FLOOR_SECS)
+            .node_interface_live(node, yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS)
             .await;
         if live.is_empty() {
             return None;

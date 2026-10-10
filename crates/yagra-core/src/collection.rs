@@ -262,7 +262,7 @@ impl CollectionRepo {
     /// rather than stored: which metric names publish **one series per interface**
     /// ([`per_interface_metric_names`], ADR-076 — `ifindex` is a row key rather than a port number,
     /// ADR-011) and which carry a vendor **no-reading placeholder**
-    /// ([`crate::no_reading_filter::NoReadingMarkers::from_items`], ADR-156). One read means the two
+    /// ([`yagra_alert::no_reading::NoReadingMarkers::from_items`], ADR-156). One read means the two
     /// can never be built from different states of the tables.
     ///
     /// Both item tables are consulted, exactly as [`Self::metric_declared_counter`] does: an item
@@ -1143,7 +1143,7 @@ mod tests {
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_no_reading_table_follows_the_items_in_both_tables(pool: sqlx::PgPool) {
-        use crate::no_reading_filter::NoReadingMarkers;
+        use yagra_alert::no_reading::NoReadingMarkers;
         let repo = CollectionRepo::new(pool.clone());
         let node = crate::pgtest::node(&pool, "S90001wac002", 12, None).await;
         let template = match repo

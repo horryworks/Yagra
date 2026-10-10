@@ -565,7 +565,7 @@ mod tests {
             .expect("lazy pool");
         EventEngine::new(
             Arc::new(EventRepo::new(pool.clone())),
-            Arc::new(AlertManager::new()),
+            Arc::new(crate::alerts::new_manager()),
             Arc::new(crate::alerts::sink::RecordingSink::new(
                 Arc::new(AlertHistoryStore::new(pool)),
                 Arc::new(Notifier::from_env()),
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn raise_and_resolve_event_alert_in_manager() {
-        let manager = AlertManager::new();
+        let manager = crate::alerts::new_manager();
         let node = NodeId::from(Uuid::new_v4());
         let check = check_id(node, "event:test");
         let alert = Alert {

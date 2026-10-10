@@ -5,7 +5,7 @@
 //! The placeholder is declared per column OID in [`yagra_common::no_reading`]. Core never sees an
 //! OID — a sample carries only its metric name — so this module turns the declaration into a
 //! **metric name → marker** table from the same collection items the per-interface names come from
-//! ([`crate::collection::per_interface_metric_names`]), and applies it once per result at the
+//! (core's `collection::per_interface_metric_names`), and applies it once per result at the
 //! ingest boundary.
 //!
 //! ## The shape worth knowing before editing
@@ -30,7 +30,7 @@ use yagra_common::CollectionItem;
 
 /// Metric name → the value that means "this row has no reading".
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct NoReadingMarkers {
+pub struct NoReadingMarkers {
     by_metric: HashMap<String, f64>,
     /// Every distinct marker, so a sample whose value is not one of them is passed without hashing
     /// its name — the common case by far, on the hottest path core has.
@@ -45,7 +45,7 @@ impl NoReadingMarkers {
     /// column of their own — and core cannot tell their samples apart. Applying the marker to the name
     /// would then drop a reading from a column nobody measured. So a disagreement falls back to
     /// today's behaviour for that name, and says so in the log.
-    pub(crate) fn from_items(items: &[CollectionItem]) -> Self {
+    pub fn from_items(items: &[CollectionItem]) -> Self {
         // name → the marker every item so far agrees on (`None` once any item disagrees)
         let mut agreed: HashMap<&str, Option<f64>> = HashMap::new();
         let mut declared: Vec<&str> = Vec::new();
@@ -97,13 +97,13 @@ impl NoReadingMarkers {
 /// The marker table currently in force, shared by the config refresh (which publishes it) and both
 /// result consumers (which read it once per result).
 ///
-/// Cheap to clone and to read, the same shape as [`crate::poll_interval::PollIntervals`].
+/// Cheap to clone and to read, the same shape as [`yagra_common::poll_interval::PollIntervals`].
 #[derive(Debug, Clone, Default)]
-pub(crate) struct NoReadingHandle(Arc<RwLock<Arc<NoReadingMarkers>>>);
+pub struct NoReadingHandle(Arc<RwLock<Arc<NoReadingMarkers>>>);
 
 impl NoReadingHandle {
     /// Replace the table. Called only with a table built from reads that all succeeded (ADR-080).
-    pub(crate) fn publish(&self, markers: NoReadingMarkers) {
+    pub fn publish(&self, markers: NoReadingMarkers) {
         // A poisoned lock can only come from a panic while holding it, and nothing panics under it.
         *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(markers);
     }
@@ -112,7 +112,7 @@ impl NoReadingHandle {
     ///
     /// Allocates nothing for a result without a placeholder — every result, on a deployment whose
     /// devices send none.
-    pub(crate) fn admit(&self, mut result: PollResult) -> Admitted {
+    pub fn admit(&self, mut result: PollResult) -> Admitted {
         let markers = self
             .0
             .read()
@@ -145,19 +145,19 @@ impl NoReadingHandle {
 /// Only [`NoReadingHandle::admit`] builds one, which is what makes "filtered exactly once, before
 /// anything reads the samples" a property of the types rather than of the call sites.
 #[derive(Debug)]
-pub(crate) struct Admitted {
+pub struct Admitted {
     result: Arc<PollResult>,
     no_reading: Vec<Sample>,
 }
 
 impl Admitted {
     /// The result with its placeholder samples removed.
-    pub(crate) fn result(&self) -> &Arc<PollResult> {
+    pub fn result(&self) -> &Arc<PollResult> {
         &self.result
     }
 
     /// The placeholder samples, in the order the result carried them.
-    pub(crate) fn no_reading(&self) -> &[Sample] {
+    pub fn no_reading(&self) -> &[Sample] {
         &self.no_reading
     }
 }
@@ -165,8 +165,8 @@ impl Admitted {
 /// The fifteen `hwEntityTemperature` rows the PoC AC6508 (S90001wac002) answered on 2026-09-17, in
 /// walk order: twelve placeholders, the one sensor at 58, and two XGE ports at 0. Shared by every test
 /// of ADR-156 so none of them re-types the measurement.
-#[cfg(test)]
-pub(crate) fn ac6508_temperature_rows() -> Vec<Sample> {
+#[cfg(any(test, feature = "test-util"))]
+pub fn ac6508_temperature_rows() -> Vec<Sample> {
     let row = |r: u32, value: f64| {
         Sample::interface(
             "huawei_temp",
@@ -185,13 +185,13 @@ pub(crate) fn ac6508_temperature_rows() -> Vec<Sample> {
 }
 
 /// The placeholder in [`ac6508_temperature_rows`].
-#[cfg(test)]
-pub(crate) const AC6508_MARKER: f64 = 2_147_483_647.0;
+#[cfg(any(test, feature = "test-util"))]
+pub const AC6508_MARKER: f64 = 2_147_483_647.0;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alerts::testkit::result;
+    use crate::testkit::result;
     use yagra_bus::CheckOutcome;
     use yagra_common::{CollectionKind, IfIndex, MetricKind, NodeId};
 

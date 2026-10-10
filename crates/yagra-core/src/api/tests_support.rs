@@ -6,7 +6,6 @@
 //! repeating the ~20-field literal. Compiled only under `cfg(test)`.
 
 use super::ApiState;
-use crate::alerts::AlertManager;
 use crate::auth::{LoginThrottle, SessionStore};
 use crate::repo::StaticNodeList;
 use crate::sink::InMemorySink;
@@ -33,7 +32,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         flows: None,
         ipasn: crate::ipasn::empty_handle(),
         nodes: Arc::new(StaticNodeList::demo()),
-        alerts: Arc::new(AlertManager::new()),
+        alerts: Arc::new(crate::alerts::new_manager()),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         admin: None,
         sessions: Arc::new(SessionStore::new()),
@@ -318,7 +317,7 @@ async fn live_state_with(
     let mib = Arc::new(crate::mib::MibRepo::new(pool.clone()));
     mib.seed_builtin().await.expect("seed mib");
 
-    let alerts = Arc::new(AlertManager::new());
+    let alerts = Arc::new(crate::alerts::new_manager());
     let history = Arc::new(crate::alerts::history::AlertHistoryStore::new(pool.clone()));
     let group_repo = Arc::new(crate::groups::GroupRepo::new(pool.clone()));
     let events_repo = Arc::new(crate::events::EventRepo::new(pool.clone()));

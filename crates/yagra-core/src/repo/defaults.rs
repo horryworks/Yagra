@@ -120,11 +120,11 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
     (
         0,
         FLEET,
-        crate::alerts::LIVENESS,
+        yagra_alert::rules::LIVENESS,
         "below",
         None,
         None,
-        crate::alerts::DEFAULT_LIVENESS_DWELL as i32,
+        yagra_alert::rules::DEFAULT_LIVENESS_DWELL as i32,
     ),
     // The SNMP agent stopped answering while the device itself is fine. Two polls
     // rather than three: SNMP intervals are longer than ICMP, so three would be a long
@@ -451,7 +451,7 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
     // a week (measured on the PoC fleet, 2026-09-15) because it holds the packet buffers the switch
     // pre-allocates, so offset 24's 80/90 paged about it without end while the pool that runs out
     // in an incident, `Processor`, sat at 56%. At the same profile scope this rule wins for `I/O`
-    // alone (`alerts::rules::prefer_row_rules`) and offset 24 keeps every other pool.
+    // alone (`yagra_alert::rules::prefer_row_rules`) and offset 24 keeps every other pool.
     //
     // ⚠️ Only this one. The other pools measured — an ASA's DP System memory at 14% and a Huawei's
     // MPU boards — gave no reason to move a bound, and a default not written from a measurement is
@@ -542,7 +542,7 @@ mod tests {
             // and the answer has to be computed at the profile rather than the template level —
             // `ucd_load_per_core` divides a UCD-SNMP-MIB reading by a HOST-RESOURCES-MIB row count,
             // so no single template carries it and a template-level fold would find nothing.
-            let needs: Vec<&str> = match crate::derived::derived_node_metric(metric) {
+            let needs: Vec<&str> = match yagra_common::derived_metric::derived_node_metric(metric) {
                 Some(d) => {
                     let [a, b] = d.formula.inputs();
                     if a == b {
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(
             fleet,
             vec![
-                crate::alerts::LIVENESS,
+                yagra_alert::rules::LIVENESS,
                 yagra_common::METRIC_SNMP_UP,
                 "icmp_loss_pct",
                 "icmp_rtt_ms",
@@ -654,9 +654,10 @@ mod tests {
                 !targets.is_empty(),
                 "offset {offset}: a row pattern on a fleet-wide rule"
             );
-            let derived = crate::derived::derived_node_metric(metric).unwrap_or_else(|| {
-                panic!("offset {offset}: {metric} is not a derived node metric")
-            });
+            let derived =
+                yagra_common::derived_metric::derived_node_metric(metric).unwrap_or_else(|| {
+                    panic!("offset {offset}: {metric} is not a derived node metric")
+                });
             assert!(
                 derived.per_row,
                 "offset {offset}: {metric} has no rows to pick from"

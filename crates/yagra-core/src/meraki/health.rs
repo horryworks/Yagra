@@ -58,16 +58,11 @@ use std::sync::Mutex;
 use uuid::Uuid;
 use yagra_common::{MerakiListing, MerakiTier};
 
-/// Consecutive failed availability collects before the organization's alert is raised.
-///
-/// At the default 300 s cadence that is about a quarter of an hour. The liveness rule's own dwell is
-/// the same number (`alerts/rules.rs::DEFAULT_LIVENESS_DWELL`), which is the intent: an
-/// organization is not called unreachable on less evidence than a node is.
-pub const RAISE_AFTER_FAILURES: u32 = 3;
-
-/// The metric name the organization's alert carries. Not a collected series — a label for the
-/// alert row, like `pool_coverage::COVERAGE_METRIC`.
-pub const COLLECT_METRIC: &str = "meraki_api_collect";
+// The alert's metric name and how many failed collects raise it are the engine's: it builds the
+// alert row (ADR-202 Inc.4).
+use yagra_alert::engine::{
+    MERAKI_COLLECT_METRIC as COLLECT_METRIC, MERAKI_RAISE_AFTER_FAILURES as RAISE_AFTER_FAILURES,
+};
 
 /// One tier of one organization that is currently failing. Also the shape stored in
 /// `meraki_orgs.collect_failures` (migration 0127).

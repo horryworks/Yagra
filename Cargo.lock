@@ -5078,13 +5078,17 @@ name = "yagra-alert"
 version = "0.3.48"
 dependencies = [
  "async-trait",
+ "metrics",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "utoipa",
  "uuid",
+ "yagra-bus",
  "yagra-common",
+ "yagra-topology",
 ]
 
 [[package]]

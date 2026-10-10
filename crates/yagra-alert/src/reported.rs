@@ -13,7 +13,7 @@
 //! for when that is too long:
 //!
 //! - **What counts as a report** is a result `wireless_fanout` produced for the node, noted by the
-//!   live consumer as it hands the result on ([`crate::result_ingest`]). A replayed result is hours
+//!   live consumer as it hands the result on (core's `result_ingest`). A replayed result is hours
 //!   old and is never noted.
 //! - **When it is stale**: older than `max(600 s, 3 × the reporter's poll interval)` —
 //!   [`fresh_for_ms`]. 600 s is [`FRESH_FLOOR_SECS`], the window the display fallback already asks
@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use yagra_common::NodeId;
 
-use super::AlertManager;
+use crate::engine::AlertManager;
 
 /// The shortest time a report stays current, in seconds.
 ///
@@ -40,19 +40,19 @@ use super::AlertManager;
 /// decides `ok`/`unknown` from whether a liveness sample is this recent; a different floor here
 /// would make one outage read differently depending on whether core had restarted — the defect
 /// this module exists to remove.
-pub(crate) const FRESH_FLOOR_SECS: u64 = 600;
+pub const FRESH_FLOOR_SECS: u64 = 600;
 
 /// How many of the reporter's polls a report may miss before it is stale. Three, so one slow or
 /// incomplete walk (decision 9b drops an incomplete inventory whole) does not grey a controller's APs.
 const FRESH_POLLS: u64 = 3;
 
 /// How often [`run_report_watch`] looks for reports that went stale, or came back.
-pub(crate) const WATCH_TICK: Duration = Duration::from_secs(15);
+pub const WATCH_TICK: Duration = Duration::from_secs(15);
 
 /// How long a report stays current, for a reporter polled every `interval` seconds:
 /// `max(FRESH_FLOOR_SECS, 3 × interval)`. `None` (no interval published yet) is the floor.
 #[must_use]
-pub(crate) fn fresh_for_ms(interval: Option<u32>) -> i64 {
+pub fn fresh_for_ms(interval: Option<u32>) -> i64 {
     let secs = interval.map_or(FRESH_FLOOR_SECS, |s| {
         FRESH_FLOOR_SECS.max(u64::from(s).saturating_mul(FRESH_POLLS))
     });
@@ -62,17 +62,17 @@ pub(crate) fn fresh_for_ms(interval: Option<u32>) -> i64 {
 /// Whether a report made at `at_unix_ms` by a reporter polled every `interval` seconds is still
 /// current at `now_ms`. The boundary itself is current.
 #[must_use]
-pub(crate) fn is_current(at_unix_ms: i64, interval: Option<u32>, now_ms: i64) -> bool {
+pub fn is_current(at_unix_ms: i64, interval: Option<u32>, now_ms: i64) -> bool {
     now_ms.saturating_sub(at_unix_ms) <= fresh_for_ms(interval)
 }
 
 /// The last report about one node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Report {
+pub struct Report {
     /// When it was made — the controller's poll time, not when core read it.
-    pub(crate) at_unix_ms: i64,
+    pub at_unix_ms: i64,
     /// Who made it: the controller node, whose poll interval sizes the window.
-    pub(crate) by: NodeId,
+    pub by: NodeId,
     /// Whether the node-state stream was last told this report is stale. What stops
     /// [`ReportLedger::flips`] announcing the same node on every tick.
     announced_stale: bool,
@@ -81,14 +81,14 @@ pub(crate) struct Report {
 /// Every node some controller reports, and its last report. Memory only: rebuilt from the live
 /// results, and seeded at startup from what PostgreSQL recorded ([`Self::seed`]).
 #[derive(Debug, Default)]
-pub(crate) struct ReportLedger {
+pub struct ReportLedger {
     reports: HashMap<NodeId, Report>,
 }
 
 impl ReportLedger {
     /// `by` reported `node` at `at_unix_ms`. A report older than the one held is ignored: results
     /// from two members of an HA pair can arrive out of order, and the newer one is what counts.
-    pub(crate) fn note(&mut self, node: NodeId, by: NodeId, at_unix_ms: i64) {
+    pub fn note(&mut self, node: NodeId, by: NodeId, at_unix_ms: i64) {
         let entry = self.reports.entry(node).or_insert(Report {
             at_unix_ms,
             by,
@@ -102,7 +102,7 @@ impl ReportLedger {
 
     /// What PostgreSQL last recorded, for a node this process has not heard about yet. Never
     /// overrides a live [`Self::note`] — the seed is older by construction.
-    pub(crate) fn seed(&mut self, node: NodeId, by: NodeId, at_unix_ms: i64) {
+    pub fn seed(&mut self, node: NodeId, by: NodeId, at_unix_ms: i64) {
         self.reports.entry(node).or_insert(Report {
             at_unix_ms,
             by,
@@ -111,32 +111,32 @@ impl ReportLedger {
     }
 
     #[must_use]
-    pub(crate) fn get(&self, node: &NodeId) -> Option<&Report> {
+    pub fn get(&self, node: &NodeId) -> Option<&Report> {
         self.reports.get(node)
     }
 
     #[must_use]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.reports.len()
     }
 
     #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.reports.is_empty()
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&NodeId, &Report)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&NodeId, &Report)> {
         self.reports.iter()
     }
 
     /// Drop every node `keep` says no longer exists.
-    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&NodeId) -> bool) {
+    pub fn retain(&mut self, mut keep: impl FnMut(&NodeId) -> bool) {
         self.reports.retain(|node, _| keep(node));
     }
 
     /// The nodes whose report went stale, or came back, since the stream was last told — each
     /// named once per change, never once per tick. `interval_of` is the reporter's poll interval.
-    pub(crate) fn flips(
+    pub fn flips(
         &mut self,
         now_ms: i64,
         interval_of: impl Fn(NodeId) -> Option<u32>,
@@ -166,28 +166,28 @@ impl ReportLedger {
 ///
 /// The same reason as the deleted-node and stale-check watches: poll-result ingest is leader-only,
 /// so only the leader's engine holds a ledger. A standby's is empty and this would do nothing there.
-pub(crate) async fn run_report_watch(alerts: Arc<AlertManager>) {
+pub async fn run_report_watch(alerts: Arc<AlertManager>) {
     let mut tick = tokio::time::interval(WATCH_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
-        alerts.announce_report_staleness(crate::pool_coverage::now_unix_ms());
+        alerts.announce_report_staleness(yagra_common::clock::now_unix_ms());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::testkit::{cfg, meta_for, open_alert, result};
     use super::*;
-    use crate::poll_interval::{IntervalSnapshot, PollIntervals};
+    use crate::testkit::{cfg, meta_for, open_alert, result, untitled};
     use std::collections::HashMap;
     use yagra_bus::CheckOutcome;
+    use yagra_common::poll_interval::{IntervalSnapshot, PollIntervals};
     use yagra_common::NodeState;
 
     const MIN: i64 = 60_000;
 
     fn now() -> i64 {
-        crate::pool_coverage::now_unix_ms()
+        yagra_common::clock::now_unix_ms()
     }
 
     /// A manager whose AP node has committed `outcome`, reported by `controller` at `at`: the
@@ -207,7 +207,7 @@ mod tests {
     }
 
     fn manager_with(intervals: PollIntervals) -> AlertManager {
-        let mgr = AlertManager::with_poll_intervals(intervals);
+        let mgr = AlertManager::with_poll_intervals(intervals, untitled);
         mgr.set_config(cfg(Vec::new(), HashMap::new()));
         mgr
     }
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn maintenance_stays_maintenance() {
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         let (ap, ctl) = (NodeId::new(), NodeId::new());
         mgr.set_config(cfg(Vec::new(), meta_for(ap)).with_maintenance([ap].into_iter().collect()));
         reported(&mgr, ap, ctl, CheckOutcome::Reachable, now() - 20 * MIN);
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn a_deleted_node_is_forgotten() {
         let (ap, gone, ctl) = (NodeId::new(), NodeId::new(), NodeId::new());
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(Vec::new(), meta_for(ap)));
         let old = now() - 20 * MIN;
         mgr.seed_reports([(ap, ctl, old), (gone, ctl, old)]);

@@ -81,7 +81,6 @@ mod mib;
 mod module_source;
 mod neighbors;
 mod netbox;
-mod no_reading_filter;
 mod node_display;
 mod oidc;
 /// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
@@ -94,7 +93,6 @@ mod pins;
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
 /// How far apart each node's polls are, shared with the readers outside the scheduler (ADR-144).
-mod poll_interval;
 mod pollers;
 mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
@@ -442,10 +440,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // the two readers that size a `rate()` window, a dwell or a flap window from it. Only the
     // leader's scheduler publishes, so until its first rebuild — and on a standby — every reader
     // answers exactly as it did before the handle existed.
-    let poll_intervals = poll_interval::PollIntervals::unknown();
+    let poll_intervals = yagra_common::poll_interval::PollIntervals::unknown();
     // Vendor no-reading placeholders by metric name (ADR-156). Published by the config load below and
     // the leader's refresh loop; read by both result consumers before they store or judge a sample.
-    let no_reading = no_reading_filter::NoReadingHandle::default();
+    let no_reading = yagra_alert::no_reading::NoReadingHandle::default();
 
     // TSDB + bus.
     let store: Arc<dyn MetricStore> =
@@ -489,7 +487,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let ipasn: crate::ipasn::IpAsnHandle = ipasn::open(cfg.ipasn_db_path.as_deref());
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
-    let alerts = Arc::new(AlertManager::with_poll_intervals(poll_intervals.clone()));
+    let alerts = Arc::new(alerts::manager_with(poll_intervals.clone()));
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
     let deliveries = Arc::new(alerts::notification_log::DeliveryLogRepo::new(repo.pool()));
@@ -1159,10 +1157,10 @@ struct LeaderTasks {
     alerts: Arc<AlertManager>,
     scheduler_stats: Arc<scheduler::SchedulerStats>,
     /// Published into by the scheduler after every rebuild whose reads all succeeded (ADR-144).
-    poll_intervals: poll_interval::PollIntervals,
+    poll_intervals: yagra_common::poll_interval::PollIntervals,
     /// Vendor no-reading placeholders (ADR-156): published by the config refresh, read by both result
     /// consumers.
-    no_reading: no_reading_filter::NoReadingHandle,
+    no_reading: yagra_alert::no_reading::NoReadingHandle,
     meraki_inflight: Arc<meraki::MerakiInflight>,
     meraki_devices: Arc<meraki::MerakiDeviceRepo>,
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
@@ -1662,7 +1660,7 @@ impl LeaderTasks {
         // Leader-only because the ledger it reads is filled by the leader's ingest.
         spawn_cancellable(
             &self.shutdown,
-            alerts::reported::run_report_watch(self.alerts.clone()),
+            yagra_alert::reported::run_report_watch(self.alerts.clone()),
         );
         // Checks nothing is evaluating any more (ADR-097 Increment 6). Two shapes with one owner:
         // a collected metric whose threshold rule was deleted — which the poll path was believed to
@@ -1761,7 +1759,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         ipasn: crate::ipasn::empty_handle(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
-        alerts: Arc::new(AlertManager::new()),
+        alerts: Arc::new(crate::alerts::new_manager()),
         admin: None,
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),

@@ -136,7 +136,7 @@ pub(crate) async fn run_scheduler(
     stats: Arc<scheduler::SchedulerStats>,
     elsewhere: CollectedElsewhere,
     coordinator: Arc<Coordinator>,
-    intervals: crate::poll_interval::PollIntervals,
+    intervals: yagra_common::poll_interval::PollIntervals,
 ) {
     use std::collections::HashSet;
     use std::time::Instant;
@@ -286,7 +286,7 @@ pub(crate) async fn run_scheduler(
                 for (_, secs) in &resolved {
                     min_interval = min_interval.min(*secs);
                 }
-                if let Some(snapshot) = crate::poll_interval::IntervalSnapshot::publishable(
+                if let Some(snapshot) = yagra_common::poll_interval::IntervalSnapshot::publishable(
                     intervals_read,
                     default_secs,
                     resolved

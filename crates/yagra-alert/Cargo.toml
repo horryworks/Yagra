@@ -19,6 +19,19 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 # `Subject` parses a node id back out of its flat string form (the wire/dedup representation).
 uuid = { workspace = true }
-
-[dev-dependencies]
+# The engine (ADR-202 Inc.4) reads poll results off the bus types and resolves dependency
+# suppression against the topology graph. Neither crate depends on this one, so no cycle.
+yagra-bus = { path = "../yagra-bus" }
+yagra-topology = { path = "../yagra-topology" }
+# The engine serializes each SSE frame itself, logs a frame it had to drop, and the no-reading
+# filter counts what it removed.
 serde_json = { workspace = true }
+tracing = { workspace = true }
+metrics = { workspace = true }
+
+[features]
+# The shared alert fixtures (`testkit`) and the test-only engine hooks. `yagra-core` enables it from
+# **dev-dependencies** only, which resolver v2 does not unify into a normal build, so none of it
+# reaches a release binary (the same arrangement as `yagra-common`'s `test-util`).
+test-util = []
+

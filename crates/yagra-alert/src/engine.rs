@@ -1,35 +1,122 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Has anything changed? — the state-machine half of the alert module (ADR-083).
 //!
-//! Drives the tested [`yagra_alert`] machine from live poll results: dwell-time hysteresis,
+//! Drives this crate's [`CheckState`] machine from live poll results: dwell-time hysteresis,
 //! flapping detection, dependency suppression, maintenance windows, the in-memory active set and
 //! the SSE broadcast. Everything here is stateful and lock-bearing; the pure "which rule applies"
-//! half is [`super::rules`] and the "who gets told" half is [`super::notify`].
+//! half is [`crate::rules`] and the "who gets told" half is core's `alerts/notify.rs`.
 //!
-//! 🚨 This module names **no** delivery type. An alert leaves here as a [`super::NotifyAction`]
-//! and nothing more — the module doc on [`super`] says why that boundary is load-bearing.
+//! 🚨 This module names **no** delivery type. An alert leaves here as a [`NotifyAction`]
+//! and nothing more — core's `alerts/mod.rs` doc says why that boundary is load-bearing. Since
+//! ADR-202 Inc.4 this module lives in its own crate, so naming one would not even compile.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
+use crate::action::{NotifyAction, StreamFrame};
+use crate::reported::{is_current, Report, ReportLedger};
+use crate::rules::*;
+use crate::{Alert, Breach, CheckState, Subject};
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use yagra_alert::CheckState;
-use yagra_alert::{Alert, Breach, Subject};
 use yagra_bus::{CheckOutcome, PollResult, RowName, Sample};
 use yagra_common::{
     CheckId, Direction, EffectiveThreshold, IfIndex, MetricKind, NodeId, NodeState, Severity,
 };
 
-use crate::alerts::thresholds::StoredThreshold;
-use crate::poll_interval::{self, PollIntervals};
+use yagra_common::derived_metric::{derived_interface_metric_name, derived_node_metric};
+use yagra_common::poll_interval::{self, PollIntervals};
+use yagra_common::StoredThreshold;
 
-use super::reported::{is_current, Report, ReportLedger};
-use super::rules::*;
-use super::{NotifyAction, StreamFrame};
+/// The metric a pool-coverage alert reports, and the check name its id is derived from.
+///
+/// Not a collected series — a label for the alert row. Core's `pool_coverage` decides when a pool
+/// has too few pollers; the engine raises and resolves the alert ([`AlertManager::raise_pool_coverage_alert`]),
+/// so the name is the engine's (ADR-202 Inc.4).
+pub const POOL_COVERAGE_METRIC: &str = "live_pollers";
+
+/// The metric name a Meraki organization's collect alert carries. Not a collected series — a label
+/// for the alert row, like [`POOL_COVERAGE_METRIC`].
+pub const MERAKI_COLLECT_METRIC: &str = "meraki_api_collect";
+
+/// Consecutive failed availability collects before a Meraki organization's alert is raised.
+///
+/// At the default 300 s cadence that is about a quarter of an hour. The liveness rule's own dwell is
+/// the same number ([`DEFAULT_LIVENESS_DWELL`]), which is the intent: an organization is not called
+/// unreachable on less evidence than a node is. Core's Meraki health watch counts the failures; the
+/// alert records this as its threshold, so the two read one constant.
+pub const MERAKI_RAISE_AFTER_FAILURES: u32 = 3;
+
+/// The prefix every passive-event alert carries in its `metric`, and the marker that says
+/// **this alert has no time series behind it**.
+///
+/// An event alert is raised by core's event engine from a syslog line or a trap, not from a poll
+/// result, so nothing ever writes `event:<rule name>` to the TSDB. Anything that reasons about an
+/// alert by asking the store whether its metric is still arriving therefore has to recognise and
+/// skip these — otherwise every one of them reads as "the data stopped" on the very first look.
+///
+/// 🚨 **Closing one from outside the event engine is worse than a wrong answer.** It mutates the
+/// manager's alert and its own `runtime.active` under one lock precisely because the two must not
+/// diverge: a manager-side resolve that leaves the runtime entry behind makes the rule's re-fire
+/// **permanently** suppressed. The freshness sweep (ADR-097 Increment 6) excludes them by this
+/// constant, with a test.
+pub const EVENT_METRIC_PREFIX: &str = "event:";
+
+/// How often core's interface-utilisation evaluator ticks, and so the cadence the engine converts a
+/// port rule's breach count by.
+///
+/// The engine converts a rule's breach count into ticks (ADR-144, `poll_interval::dwell_ticks`):
+/// never fewer ticks than breaches — "5 breaches" damps for five minutes on a node polling at least
+/// once a minute, which is what an operator is told — and enough ticks to span that many polls on a
+/// slower node, where every tick between two polls re-reads the same counters and would otherwise
+/// let one poll satisfy the whole count. 60s is chosen against the five-minute `rate()` floor —
+/// ticking faster would re-read the same VictoriaMetrics window without adding information.
+pub const INTERFACE_WATCH_TICK: Duration = Duration::from_secs(60);
+
+/// How often core's derived-metric evaluator ticks (ADR-105).
+///
+/// The same cadence as the interface evaluator, and the same conversion (ADR-144,
+/// `poll_interval::dwell_ticks`): a rule's `dwell_samples` counts ticks on a node polling at least
+/// once a minute — "3 consecutive breaches" is three minutes — and enough ticks to span that many
+/// polls on a slower node, where every tick between two polls re-reads the same values.
+pub const DERIVED_WATCH_TICK: Duration = Duration::from_secs(60);
+
+/// Whether core's interface evaluator may feed this node's ports an observation, given its **liveness** state.
+///
+/// The rule ADR-076 decision 3 wrote down is "freeze while the node is not `Ok`", and the intent was
+/// always liveness: an unreachable device must keep its port alerts open and honest while its own
+/// liveness alert does the paging, and a device in an `Unknown` state must not add "utilisation
+/// unknown" noise on top of the outage.
+///
+/// 🚨 **What is passed in must be the liveness state, never the display roll-up.** The first
+/// implementation asked `AlertManager::node_state`, which is the worse of liveness *and every active
+/// alert on the node* — so a port alert made its own node read as `Warning`, the evaluator stopped
+/// looking at that node, and nothing could resolve the alert afterwards at any traffic level or any
+/// threshold (ADR-076 Inc.7). This takes a bare state rather than an `AlertManager` precisely so the
+/// mistake can only live at the call site.
+///
+/// `Maintenance` is let **through**, not frozen — decision 3's other half. Inside a window the
+/// evaluator feeds `Maintenance`, so an open port alert resolves the way a node-level one does;
+/// freezing here made port alerts the only kind a maintenance window could not silence.
+///
+/// `None` — never observed — is frozen: a node the engine has no opinion about is one whose liveness
+/// has not been established, and raising a congestion alert about a device that may not be there is
+/// the wrong way round.
+#[must_use]
+pub fn may_observe_ports(liveness: Option<NodeState>) -> bool {
+    matches!(liveness, Some(NodeState::Ok) | Some(NodeState::Maintenance))
+}
+
+/// How the engine titles an alert in its stream frame — core passes `metric_meaning::alert_title_of`.
+///
+/// A function the engine is handed rather than one it calls, because the titles are a 154-row table
+/// of English sentences that also feeds the generated locale file, and they stay with core. Taken by
+/// the constructor, so a manager without titles cannot be built by forgetting one.
+pub type AlertTitles = fn(&str) -> Option<String>;
 
 /// How many transitions inside the flap window make a check flapping. The window itself follows the
-/// node's poll interval ([`crate::poll_interval::flap_window_ms`], ADR-144).
+/// node's poll interval ([`yagra_common::poll_interval::flap_window_ms`], ADR-144).
 const FLAP_THRESHOLD: usize = 5;
 
 /// SSE broadcast buffer. Sized generously so a briefly-slow subscriber doesn't lag past the
@@ -70,7 +157,7 @@ enum Reading {
     /// A measured value, judged against the rule.
     Value,
     /// The column's no-reading placeholder, taken out of the result by
-    /// [`crate::no_reading_filter::NoReadingHandle::admit`].
+    /// [`crate::no_reading::NoReadingHandle::admit`].
     NoReading,
 }
 
@@ -143,7 +230,7 @@ pub struct AlertManager {
     /// per observation to size the flap window and, for a check read once a tick, the dwell.
     intervals: PollIntervals,
     /// When each node some controller reports — a wireless AP — was last reported, and by whom
-    /// (ADR-064 Inc.G, [`super::reported`]). What turns a committed `ok` nobody is confirming any
+    /// (ADR-064 Inc.G, [`crate::reported`]). What turns a committed `ok` nobody is confirming any
     /// more into `unknown` on every display surface. Never read by the state machine.
     reports: Mutex<ReportLedger>,
     /// How many consecutive samples each open threshold alert has seen on the **other** side of its
@@ -154,6 +241,8 @@ pub struct AlertManager {
     /// check is observed again: at most one `u32` per check, and harmless, because a new alert
     /// only opens through a committed transition, which clears it first.
     side_pending: Mutex<HashMap<CheckId, u32>>,
+    /// What an alert is called in its stream frame ([`AlertTitles`]).
+    titles: AlertTitles,
 }
 
 /// One open alert a store can still be asked about, and the series that would answer.
@@ -179,14 +268,14 @@ impl AlertManager {
     /// New manager with an empty config (no thresholds until [`Self::set_config`]) and no poll
     /// intervals, so every dwell and flap window is what it was before ADR-144.
     #[must_use]
-    pub fn new() -> Self {
-        Self::with_poll_intervals(PollIntervals::unknown())
+    pub fn new(titles: AlertTitles) -> Self {
+        Self::with_poll_intervals(PollIntervals::unknown(), titles)
     }
 
     /// New manager that reads each node's poll interval from `intervals` — the handle the scheduler
     /// publishes into (ADR-144).
     #[must_use]
-    pub fn with_poll_intervals(intervals: PollIntervals) -> Self {
+    pub fn with_poll_intervals(intervals: PollIntervals, titles: AlertTitles) -> Self {
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         let (node_tx, _) = broadcast::channel(NODE_EVENT_BUFFER);
         Self {
@@ -203,6 +292,7 @@ impl AlertManager {
             intervals,
             reports: Mutex::new(ReportLedger::default()),
             side_pending: Mutex::new(HashMap::new()),
+            titles,
         }
     }
 
@@ -332,7 +422,7 @@ impl AlertManager {
     /// active alert's node**, so an alert restored here still contributes a node the inventory does
     /// not have, and `api::fleet::state_tally` — whose total comes from PostgreSQL — can therefore
     /// report a breakdown that sums to more than its own total. It lasts until the first sweep
-    /// after the config loads (bounded by [`crate::alerts::deleted`]'s startup cadence, seconds
+    /// after the config loads (bounded by the deleted-node watch's startup cadence in core, seconds
     /// rather than the steady-state minute) and then corrects itself. The alternative was leaving
     /// the incidents open forever, so the transient is the price and it is written down rather than
     /// smoothed over.
@@ -475,7 +565,7 @@ impl AlertManager {
     #[must_use]
     pub fn node_states(&self) -> HashMap<NodeId, NodeState> {
         let mut out = self.live.lock().expect("live mutex poisoned").clone();
-        self.unconfirmed_ok_is_unknown(&mut out, crate::pool_coverage::now_unix_ms());
+        self.unconfirmed_ok_is_unknown(&mut out, yagra_common::clock::now_unix_ms());
         for alert in self.active.lock().expect("alerts mutex poisoned").values() {
             let Some(node) = alert.node() else { continue };
             out.entry(node)
@@ -514,7 +604,7 @@ impl AlertManager {
                 .filter_map(|n| live.get(n).map(|s| (*n, *s)))
                 .collect()
         };
-        self.unconfirmed_ok_is_unknown(&mut out, crate::pool_coverage::now_unix_ms());
+        self.unconfirmed_ok_is_unknown(&mut out, yagra_common::clock::now_unix_ms());
         // Same rollup as `node_states`: the worst of the committed liveness and any active alert on
         // the node, and alerts whose subject is not a node belong to no node's display state.
         let wanted: BTreeSet<NodeId> = nodes.iter().copied().collect();
@@ -540,7 +630,7 @@ impl AlertManager {
     /// calls this per request, so at fleet scale the clone was pure waste.
     #[must_use]
     pub fn node_state(&self, node: NodeId) -> Option<NodeState> {
-        self.node_state_at(node, crate::pool_coverage::now_unix_ms())
+        self.node_state_at(node, yagra_common::clock::now_unix_ms())
     }
 
     /// [`Self::node_state`] as of `now_ms` — the clock the report watch ticks on, so the frame it
@@ -581,7 +671,7 @@ impl AlertManager {
 
     /// ADR-064 Inc.G (G3): a committed `ok` that nobody is confirming any more reads `unknown`.
     ///
-    /// Only for a node some controller reports ([`super::reported`]) whose last report is past its
+    /// Only for a node some controller reports ([`crate::reported`]) whose last report is past its
     /// window. `unreachable` and `maintenance` are left as committed — the first is the last thing
     /// anyone knew and its alert is still open, the second is an operator's word. It runs on the
     /// committed map **before** the active alerts are rolled up, so an open alert colours the node
@@ -670,7 +760,7 @@ impl AlertManager {
             .lock()
             .expect("reports mutex poisoned")
             .get(&node)?;
-        let now_ms = crate::pool_coverage::now_unix_ms();
+        let now_ms = yagra_common::clock::now_unix_ms();
         (!is_current(
             report.at_unix_ms,
             self.intervals.for_node(report.by.as_uuid()),
@@ -681,7 +771,7 @@ impl AlertManager {
 
     /// Tell the node-state stream about every reported node whose report went stale, or came back,
     /// since it was last told (G6). Returns the number of frames sent. Called by
-    /// [`super::reported::run_report_watch`].
+    /// [`crate::reported::run_report_watch`].
     ///
     /// A node the engine has no opinion about (only a seed) gets no frame: what a browser shows for
     /// it comes from the fallback, which already reads `unknown`.
@@ -727,7 +817,7 @@ impl AlertManager {
     /// Tests' shorthand for [`Self::observe_with_no_reading`] on a result that carried no vendor
     /// placeholder — every result but the ones ADR-156 is about. Production always goes through the
     /// ingest boundary, which is why this does not exist outside tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn observe(&self, result: &PollResult) -> Vec<NotifyAction> {
         self.observe_with_no_reading(result, &[])
     }
@@ -744,7 +834,7 @@ impl AlertManager {
     /// This is the engine's entry point from `result_ingest`, for a result whose vendor placeholders
     /// were taken out at ingest (ADR-156).
     ///
-    /// `no_reading` is what [`crate::no_reading_filter::NoReadingHandle::admit`] removed. Each one is
+    /// `no_reading` is what [`crate::no_reading::NoReadingHandle::admit`] removed. Each one is
     /// resolved exactly like a sample, and then observed only where it is evidence: on a table row
     /// that already holds a state, as `Ok` through the rule's dwell. 🚨 **A row that is merely absent
     /// from the result is not evidence and closes nothing** (ADR-156 decision 3) — a poller defect, a
@@ -1690,10 +1780,7 @@ impl AlertManager {
             .expect("config rwlock poisoned")
             .meraki_node_orgs
             .get(&node)?;
-        let check = subject_check_id(
-            &Subject::MerakiOrg(org),
-            crate::meraki::health::COLLECT_METRIC,
-        );
+        let check = subject_check_id(&Subject::MerakiOrg(org), MERAKI_COLLECT_METRIC);
         self.active
             .lock()
             .expect("alerts mutex poisoned")
@@ -1771,7 +1858,7 @@ impl AlertManager {
     /// [`Self::observe_with_no_reading`] and ask about a *node* — the operator window's set, and
     /// ADR-160's pause — so a [`Subject::Pool`] could never fall in either by accident; the question
     /// is whether to add a second gate here, and the answer is no on three counts. The debounce is
-    /// already the mechanism for this exact case — [`crate::pool_coverage::DEFAULT_RAISE_AFTER`] is
+    /// already the mechanism for this exact case — core's `pool_coverage::DEFAULT_RAISE_AFTER` is
     /// 300s precisely so an ordinary restart cannot page anyone, against a measured 65s upgrade. A
     /// window long enough to matter would be hiding the one outcome worth paging about, "the
     /// upgrade left a site unmonitored", during the exact window in which it just became true. And
@@ -1779,7 +1866,7 @@ impl AlertManager {
     /// syslog/trap-derived alert — silencing far more than the upgrade ever asked for.
     pub fn raise_pool_coverage_alert(&self, pool: &str, at_unix_ms: i64) -> Option<NotifyAction> {
         let subject = Subject::Pool(pool.to_owned());
-        let check = subject_check_id(&subject, crate::pool_coverage::COVERAGE_METRIC);
+        let check = subject_check_id(&subject, POOL_COVERAGE_METRIC);
         self.raise_event_alert(Alert {
             subject,
             check,
@@ -1788,7 +1875,7 @@ impl AlertManager {
             at_unix_ms,
             root_cause: None,
             flapping: false,
-            metric: crate::pool_coverage::COVERAGE_METRIC.to_owned(),
+            metric: POOL_COVERAGE_METRIC.to_owned(),
             breach: Some(Breach {
                 value: 0.0,
                 threshold: Some(1.0),
@@ -1825,7 +1912,7 @@ impl AlertManager {
     /// honest while the node's own alert does the paging.
     ///
     /// [`Self::node_liveness`] is the question, read through
-    /// [`crate::interface_util::may_observe_ports`] — **never [`Self::node_state`]**, which folds in
+    /// [`may_observe_ports`] — **never [`Self::node_state`]**, which folds in
     /// the very alert this call is about to raise and therefore freezes the evaluator on its own
     /// output (ADR-076 Inc.7). A maintenance window is let through rather than frozen, because the
     /// substitution below is exactly what a window is supposed to do to an open port alert.
@@ -1882,7 +1969,7 @@ impl AlertManager {
                 row: None,
                 row_name: None,
                 // Read once a tick by the utilisation evaluator, not once a poll (ADR-144).
-                cadence: Cadence::EveryTick(crate::interface_util::WATCH_TICK),
+                cadence: Cadence::EveryTick(INTERFACE_WATCH_TICK),
                 interval: self.intervals.for_node(node.as_uuid()),
             },
         ))
@@ -1905,7 +1992,7 @@ impl AlertManager {
     ///
     /// 🚨 A node whose **liveness** is not `Ok` must not be observed at all, for the reasons spelled
     /// out on [`Self::observe_interface_metric`]. Read [`Self::node_liveness`] through
-    /// [`crate::interface_util::may_observe_ports`] — **never [`Self::node_state`]**, which folds in
+    /// [`may_observe_ports`] — **never [`Self::node_state`]**, which folds in
     /// the very alert this call is about to raise.
     pub fn observe_derived_metric(
         &self,
@@ -1914,14 +2001,14 @@ impl AlertManager {
         rows: &[(i64, f64)],
         at_unix_ms: i64,
     ) -> Option<Vec<NotifyAction>> {
-        if !crate::interface_util::may_observe_ports(self.node_liveness(node)) {
+        if !may_observe_ports(self.node_liveness(node)) {
             // Frozen, not observed. Feeding a value would either resolve a real alert the moment
             // the device went unreachable, or page about memory on a box that is already down.
             return None;
         }
         // A table metric is one check per row (ADR-143); only a metric computed from scalars still
         // folds its rows — which is one row — into the node's check below.
-        if crate::derived::derived_node_metric(metric).is_some_and(|d| d.per_row) {
+        if derived_node_metric(metric).is_some_and(|d| d.per_row) {
             return self.observe_derived_rows(node, metric, rows, at_unix_ms);
         }
         let values: Vec<f64> = rows.iter().map(|(_, v)| *v).collect();
@@ -1977,7 +2064,7 @@ impl AlertManager {
                 row: None,
                 row_name: None,
                 // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
-                cadence: Cadence::EveryTick(crate::derived::WATCH_TICK),
+                cadence: Cadence::EveryTick(DERIVED_WATCH_TICK),
                 interval: self.intervals.for_node(node.as_uuid()),
             },
         ))
@@ -1994,7 +2081,7 @@ impl AlertManager {
         rows: &[(i64, f64)],
         at_unix_ms: i64,
     ) -> Option<Vec<NotifyAction>> {
-        let input = crate::derived::derived_node_metric(metric).map(|d| d.formula.inputs()[0])?;
+        let input = derived_node_metric(metric).map(|d| d.formula.inputs()[0])?;
         let names = self.row_names.read().expect("row names rwlock poisoned");
         let input_names = names.get(&node).and_then(|m| m.get(input));
         // A key outside `u32` cannot have come from a walk; it is dropped rather than wrapped onto
@@ -2048,7 +2135,7 @@ impl AlertManager {
             at_unix_ms,
             in_maintenance,
             // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
-            cadence: Cadence::EveryTick(crate::derived::WATCH_TICK),
+            cadence: Cadence::EveryTick(DERIVED_WATCH_TICK),
             interval: self.intervals.for_node(node.as_uuid()),
         };
         Some(self.observe_rows(node, moment, observed))
@@ -2094,7 +2181,7 @@ impl AlertManager {
     }
 
     /// On how many nodes each of `rules` is overridden by a narrower rule (ADR-200 Inc.29) — see
-    /// [`super::rules::overridden_counts`] for what counts.
+    /// [`crate::rules::overridden_counts`] for what counts.
     ///
     /// The same split as [`Self::matching_rules`]: the **rules** come from the caller, read fresh,
     /// so a rule saved a second ago is counted; **membership** (profile, tags, folder chain) and
@@ -2104,7 +2191,7 @@ impl AlertManager {
         // A copy of the pointer, not the guard: the walk below is fleet-sized, and nothing that
         // evaluates an alert should wait behind it.
         let config = Arc::clone(&self.config.read().expect("config rwlock poisoned"));
-        super::rules::overridden_counts(rules, &config.node_meta, &config.per_interface)
+        crate::rules::overridden_counts(rules, &config.node_meta, &config.per_interface)
     }
 
     /// A node's committed **liveness** state — what its liveness check settled on, with no alert
@@ -2193,7 +2280,7 @@ impl AlertManager {
                 .filter_map(|a| {
                     let node = a.node()?;
                     let ifindex = a.ifindex?;
-                    let metric = crate::interface_util::derived_metric_name(&a.metric)?;
+                    let metric = derived_interface_metric_name(&a.metric)?;
                     config
                         .resolve(node, Some(ifindex), None, metric)
                         .is_none()
@@ -2227,7 +2314,7 @@ impl AlertManager {
                     if a.ifindex.is_some() {
                         return None;
                     }
-                    let metric = crate::derived::derived_node_metric(&a.metric)?.name;
+                    let metric = derived_node_metric(&a.metric)?.name;
                     // A row alert asks under the name it fired under (ADR-143): a rule scoped to
                     // that name is still a rule for it, and asking with no name would call it gone.
                     config
@@ -2326,7 +2413,7 @@ impl AlertManager {
         }
         // A passive-event alert has no series and no threshold rule; `events::engine` owns its
         // whole lifecycle, and closing one from outside permanently suppresses the rule's re-fire.
-        if a.metric.starts_with(crate::events::EVENT_METRIC_PREFIX) {
+        if a.metric.starts_with(EVENT_METRIC_PREFIX) {
             return false;
         }
         true
@@ -2340,8 +2427,8 @@ impl AlertManager {
     /// never stored (see [`Self::freshness_candidates`]).
     fn is_collected_threshold_alert(a: &Alert) -> bool {
         Self::is_threshold_alert(a)
-            && crate::derived::derived_node_metric(&a.metric).is_none()
-            && crate::interface_util::derived_metric_name(&a.metric).is_none()
+            && derived_node_metric(&a.metric).is_none()
+            && derived_interface_metric_name(&a.metric).is_none()
     }
 
     /// Every open alert whose metric a store could still be asked about, and the series that would
@@ -2397,7 +2484,7 @@ impl AlertManager {
                 if !Self::is_threshold_alert(a) || a.ifindex.is_some() {
                     return None;
                 }
-                let inputs = match crate::derived::derived_node_metric(&a.metric) {
+                let inputs = match derived_node_metric(&a.metric) {
                     Some(d) => {
                         let [x, y] = d.formula.inputs();
                         // `Formula::Complement` repeats its one input; the array is fixed-width so
@@ -2597,7 +2684,7 @@ impl AlertManager {
         at_unix_ms: i64,
     ) -> Option<NotifyAction> {
         let subject = Subject::MerakiOrg(org);
-        let check = subject_check_id(&subject, crate::meraki::health::COLLECT_METRIC);
+        let check = subject_check_id(&subject, MERAKI_COLLECT_METRIC);
         self.raise_event_alert(Alert {
             subject,
             check,
@@ -2606,10 +2693,10 @@ impl AlertManager {
             at_unix_ms,
             root_cause: None,
             flapping: false,
-            metric: crate::meraki::health::COLLECT_METRIC.to_owned(),
+            metric: MERAKI_COLLECT_METRIC.to_owned(),
             breach: Some(Breach {
                 value: f64::from(failures),
-                threshold: Some(f64::from(crate::meraki::health::RAISE_AFTER_FAILURES)),
+                threshold: Some(f64::from(MERAKI_RAISE_AFTER_FAILURES)),
                 direction: Direction::Above,
             }),
             // An organization is not a port, nor a table row.
@@ -2623,7 +2710,7 @@ impl AlertManager {
     pub fn resolve_meraki_collect_alert(&self, org: Uuid) -> Option<NotifyAction> {
         self.resolve_event_alert(subject_check_id(
             &Subject::MerakiOrg(org),
-            crate::meraki::health::COLLECT_METRIC,
+            MERAKI_COLLECT_METRIC,
         ))
     }
 
@@ -2631,7 +2718,7 @@ impl AlertManager {
     pub fn resolve_pool_coverage_alert(&self, pool: &str) -> Option<NotifyAction> {
         self.resolve_event_alert(subject_check_id(
             &Subject::Pool(pool.to_owned()),
-            crate::pool_coverage::COVERAGE_METRIC,
+            POOL_COVERAGE_METRIC,
         ))
     }
 
@@ -2667,7 +2754,7 @@ impl AlertManager {
         };
         event["subject_kind"] = serde_json::json!(alert.subject.kind());
         event["subject_name"] = serde_json::json!(self.subject_display_name(&alert.subject));
-        if let Some(title) = crate::metric_meaning::alert_title_of(&alert.metric) {
+        if let Some(title) = (self.titles)(&alert.metric) {
             event["title"] = serde_json::Value::String(title);
         }
         event[lifecycle] = value;
@@ -2705,15 +2792,9 @@ impl AlertManager {
     /// need to control which subject each frame names without first driving a real alert to dwell —
     /// including naming a node the engine has never observed, which is precisely the fail-closed
     /// case worth covering.
-    #[cfg(test)]
-    pub(crate) fn broadcast_test_frame(&self, subject: Subject, body: &str) {
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn broadcast_test_frame(&self, subject: Subject, body: &str) {
         let _ = self.tx.send((subject, Arc::from(body)));
-    }
-}
-
-impl Default for AlertManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -2735,17 +2816,42 @@ fn breach_for(severity: Severity, ev: ThresholdEval) -> Breach {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testkit::*;
-    use super::super::NodeMeta;
     use super::*;
+    use crate::rules::NodeMeta;
+    use crate::testkit::*;
     use yagra_common::{ScopeLevel, ThresholdBounds};
     use yagra_topology::Topology;
     /// ADR-075, the half that is easy to get wrong: with no `__liveness__` rule the engine must
     /// still commit the node's state, keep the down-set current and run dependency suppression —
     /// only the paging stops. Deleting an *alert rule* is not a request to blank the Nodes page.
+    /// [`may_observe_ports`]'s whole state table, because the gate is one line at two call sites in
+    /// core's interface watch and the interesting
+    /// half is what it *rejects*.
+    #[test]
+    fn the_freeze_gate_answers_for_every_liveness_state() {
+        assert!(may_observe_ports(Some(NodeState::Ok)));
+        // A window must not freeze the loop, or an open port alert can never be silenced by one.
+        assert!(may_observe_ports(Some(NodeState::Maintenance)));
+
+        // The device is not there, or we could not run the check: keep the port alert open and
+        // honest and let the node's own liveness alert do the paging.
+        assert!(!may_observe_ports(Some(NodeState::Unreachable)));
+        assert!(!may_observe_ports(Some(NodeState::Unknown)));
+        // Never observed is "no opinion", not "fine".
+        assert!(!may_observe_ports(None));
+
+        // Those four plus `None` are the whole domain: the liveness map is written only from a
+        // reachability outcome (`Reachable`/`Unreachable`/`Error`) or a maintenance substitution,
+        // so it never holds `Warning` or `Critical`. They are pinned as frozen anyway — the
+        // conservative answer — so that a caller regressing to the display roll-up produces a
+        // visibly wrong monitoring gap rather than a silently different rule.
+        assert!(!may_observe_ports(Some(NodeState::Warning)));
+        assert!(!may_observe_ports(Some(NodeState::Critical)));
+    }
+
     #[test]
     fn without_a_liveness_rule_the_state_still_commits_and_nobody_is_paged() {
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(AlertConfig::new(Vec::new(), HashMap::new()));
         let node = NodeId::new();
         for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
@@ -2814,7 +2920,7 @@ mod tests {
             r.rule.dwell_samples = n;
             AlertConfig::new(vec![r], HashMap::new())
         };
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(with_dwell(1));
         let node = NodeId::new();
         let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 0));
@@ -4622,7 +4728,7 @@ mod tests {
     /// The state a core comes back to after an upgrade: the node was down, its `snmp_up` was rolled
     /// into that outage, and both were restored from `alert_history` (ADR-097).
     fn restored_outage(node: NodeId) -> AlertManager {
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
         mgr.restore(vec![
             open_alert(node, LIVENESS, NodeState::Unreachable),
@@ -4760,7 +4866,7 @@ mod tests {
     #[test]
     fn an_open_threshold_alert_is_not_resolved_by_the_pause() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(vec![snmp_up_rule(2)], meta_for(node)));
         // The agent is dead but the device answers ICMP, so this alert stands on its own.
         mgr.restore(vec![open_alert(
@@ -4957,7 +5063,7 @@ mod tests {
         topo.add_dependency(child, parent);
         let mut meta = meta_for(parent);
         meta.insert(child, NodeMeta::default());
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(Vec::new(), meta.clone()).with_topology(topo.clone()));
 
         // Both down, the child rolled up under the parent's outage.
@@ -5039,7 +5145,7 @@ mod tests {
     fn a_restored_outage_is_not_closed_before_the_config_loads() {
         let node = NodeId::new();
         // No `set_config` at all: what the engine holds when priming the config failed.
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
 
         for i in 0..5 {
@@ -5129,7 +5235,7 @@ mod tests {
     #[test]
     fn an_alert_on_a_node_that_is_already_down_rolls_into_that_nodes_outage() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
 
         // Commit the outage first: liveness needs its full dwell.
@@ -5174,7 +5280,7 @@ mod tests {
     #[test]
     fn an_alert_that_beat_the_outage_is_closed_when_the_outage_commits() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
 
         // Sample 1: SNMP is gone but the outage has not committed (dwell 3), so this pages on its
@@ -5217,7 +5323,7 @@ mod tests {
     #[test]
     fn when_the_node_comes_back_a_still_broken_check_pages_on_its_own() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
 
         for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
@@ -5261,7 +5367,7 @@ mod tests {
 
         let down_node = NodeId::new();
         let other = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         let mut meta = meta_for(down_node);
         meta.extend(meta_for(other));
         mgr.set_config(cfg(
@@ -5595,7 +5701,8 @@ mod tests {
         use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
-        let mgr = manager();
+        // Handed a title source, as core hands it `metric_meaning::alert_title_of`.
+        let mgr = AlertManager::new(titled);
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(
@@ -5644,7 +5751,8 @@ mod tests {
         );
         assert_eq!(
             frame["title"],
-            serde_json::json!(crate::metric_meaning::alert_title("if_oper_status"))
+            serde_json::json!(titled("if_oper_status")),
+            "the title is whatever the manager was handed for the metric"
         );
         assert_eq!(frame["subject_kind"], "node");
         assert_eq!(frame["resolved"], false);
@@ -5739,7 +5847,7 @@ mod tests {
     fn meraki_cfg(org: Uuid, name: &str, group: Option<Uuid>, nodes: &[NodeId]) -> AlertConfig {
         cfg(Vec::new(), HashMap::new()).with_meraki_orgs(HashMap::from([(
             org,
-            crate::alerts::MerakiOrgScope {
+            crate::rules::MerakiOrgScope {
                 name: name.to_owned(),
                 groups: group.into_iter().collect(),
                 nodes: nodes.iter().copied().collect(),
@@ -5762,7 +5870,7 @@ mod tests {
         };
         assert_eq!(alert.subject, Subject::MerakiOrg(org));
         assert_eq!(alert.severity, Severity::Critical);
-        assert_eq!(alert.metric, crate::meraki::health::COLLECT_METRIC);
+        assert_eq!(alert.metric, MERAKI_COLLECT_METRIC);
 
         assert!(
             mgr.node_states().is_empty(),
@@ -5799,7 +5907,7 @@ mod tests {
             cfg(Vec::new(), HashMap::new()).with_meraki_orgs(HashMap::from([
                 (
                     acme,
-                    crate::alerts::MerakiOrgScope {
+                    crate::rules::MerakiOrgScope {
                         name: "Acme".to_owned(),
                         groups: BTreeSet::new(),
                         nodes: BTreeSet::from([mine]),
@@ -5807,7 +5915,7 @@ mod tests {
                 ),
                 (
                     other,
-                    crate::alerts::MerakiOrgScope {
+                    crate::rules::MerakiOrgScope {
                         name: "Other".to_owned(),
                         groups: BTreeSet::new(),
                         nodes: BTreeSet::from([theirs]),
@@ -5884,7 +5992,7 @@ mod tests {
         // 🚨 The acceptance case. Every other test here checks that something does NOT match, and
         // a suite of only-rejections passes just as happily when the index drops everything.
         let node = NodeId::from(Uuid::new_v4());
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(
             vec![StoredThreshold::new(
                 Uuid::new_v4(),
@@ -5924,7 +6032,7 @@ mod tests {
         let node = NodeId::from(Uuid::new_v4());
         let port = IfIndex(7);
         let metric = "if_in_util_pct";
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(
             vec![StoredThreshold::new(
                 Uuid::new_v4(),
@@ -5973,13 +6081,16 @@ mod tests {
     /// A manager whose every node polls every `secs` seconds — or one nothing was published into.
     fn manager_polling_every(
         secs: Option<u32>,
-    ) -> (AlertManager, crate::poll_interval::PollIntervals) {
-        let intervals = crate::poll_interval::PollIntervals::unknown();
+    ) -> (AlertManager, yagra_common::poll_interval::PollIntervals) {
+        let intervals = yagra_common::poll_interval::PollIntervals::unknown();
         if let Some(secs) = secs {
-            intervals.publish(crate::poll_interval::IntervalSnapshot::build(secs, []));
+            intervals.publish(yagra_common::poll_interval::IntervalSnapshot::build(
+                secs,
+                [],
+            ));
         }
         (
-            AlertManager::with_poll_intervals(intervals.clone()),
+            AlertManager::with_poll_intervals(intervals.clone(), untitled),
             intervals,
         )
     }
@@ -6097,7 +6208,10 @@ mod tests {
         };
         assert!(!breach(1));
         assert!(!breach(2));
-        intervals.publish(crate::poll_interval::IntervalSnapshot::build(300, []));
+        intervals.publish(yagra_common::poll_interval::IntervalSnapshot::build(
+            300,
+            [],
+        ));
         assert_eq!((3..=30_i64).find(|tick| breach(*tick)), Some(15));
     }
 
@@ -6220,7 +6334,7 @@ mod tests {
                 ));
             }
 
-            let mgr = AlertManager::new();
+            let mgr = AlertManager::new(untitled);
             mgr.set_config(AlertConfig::new(rules, meta));
 
             let t0 = std::time::Instant::now();
@@ -6669,7 +6783,7 @@ mod tests {
         let node = NodeId::new();
         let mgr = manager();
         mgr.set_config(cfg(Vec::new(), meta_for(node)));
-        let metric = format!("{}link flap", crate::events::EVENT_METRIC_PREFIX);
+        let metric = format!("{}link flap", EVENT_METRIC_PREFIX);
         mgr.restore(vec![open_alert(node, &metric, NodeState::Critical)]);
 
         assert!(
@@ -6677,43 +6791,6 @@ mod tests {
             "an event alert belongs to events::engine, whole lifecycle"
         );
         assert_eq!(mgr.active_alerts().len(), 1);
-    }
-
-    /// The prefix exclusion is only sound if no metric a poller can emit collides with it.
-    #[test]
-    fn no_catalogue_metric_name_starts_with_the_event_prefix() {
-        let prefix = crate::events::EVENT_METRIC_PREFIX;
-        let mut checked = 0usize;
-        for name in crate::metric_meaning::CHECK_METRICS {
-            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
-            checked += 1;
-        }
-        for d in crate::derived::DERIVED_NODE_METRICS {
-            assert!(
-                !d.name.starts_with(prefix),
-                "{} collides with `{prefix}`",
-                d.name
-            );
-            checked += 1;
-        }
-        for name in crate::interface_util::DERIVED_INTERFACE_METRICS {
-            assert!(!name.starts_with(prefix), "{name} collides with `{prefix}`");
-            checked += 1;
-        }
-        for (item, _) in crate::mib::builtin_mib_rows() {
-            assert!(
-                !item.metric_name.starts_with(prefix),
-                "{} collides with `{prefix}`",
-                item.metric_name
-            );
-            checked += 1;
-        }
-        // A floor, because everything above asks whether something is *absent*: over an empty
-        // iteration that is a claim about nothing.
-        assert!(
-            checked >= 100,
-            "only {checked} metric names were inspected; the catalogues did not load"
-        );
     }
 
     /// A pool-coverage alert is `pool_coverage`'s, and it has no node to resolve a rule against.
@@ -6741,7 +6818,7 @@ mod tests {
     #[test]
     fn an_engine_with_no_config_installed_sweeps_no_collected_alert() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.restore(vec![open_alert(node, "snmp_up", NodeState::Critical)]);
 
         assert!(
@@ -6766,7 +6843,7 @@ mod tests {
         nodes: &[NodeId],
         meta: HashMap<NodeId, NodeMeta>,
     ) -> AlertManager {
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(Vec::new(), meta));
         for node in nodes {
             for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
@@ -6873,7 +6950,7 @@ mod tests {
 
         // No liveness rule, so the state commits and the down-set moves while nobody is paged
         // (ADR-075). That is what makes this an alert-free case.
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(AlertConfig::new(Vec::new(), meta));
         for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
             mgr.observe(&result(gone, CheckOutcome::Unreachable, i));
@@ -6904,7 +6981,7 @@ mod tests {
     #[test]
     fn a_pool_subject_is_never_swept_as_a_deleted_node() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(Vec::new(), meta_for(node)));
         assert!(mgr.raise_pool_coverage_alert("site-a", 1).is_some());
         assert_eq!(mgr.active_alerts().len(), 1);
@@ -6954,7 +7031,7 @@ mod tests {
         let live_node = NodeId::new();
         let gone_node = NodeId::new();
 
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.restore(vec![open_alert(
             live_node,
             LIVENESS,
@@ -6970,7 +7047,7 @@ mod tests {
             "and suppression knows about it"
         );
 
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.restore_deleted(vec![open_alert(
             gone_node,
             LIVENESS,
@@ -7003,7 +7080,7 @@ mod tests {
     fn an_alert_restored_about_a_node_deleted_while_core_was_down_is_closed() {
         let kept = NodeId::new();
         let gone = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         // The config the restart loads: the deleted node is simply not in it.
         mgr.set_config(cfg(Vec::new(), meta_for(kept)));
         mgr.restore_deleted(vec![open_alert(gone, LIVENESS, NodeState::Unreachable)]);
@@ -7027,7 +7104,7 @@ mod tests {
     #[test]
     fn a_restored_alert_about_a_live_node_is_not_closed() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = AlertManager::new(untitled);
         mgr.set_config(cfg(Vec::new(), meta_for(node)));
         mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
 
@@ -7046,8 +7123,8 @@ mod tests {
 /// share (a percentage table metric, a named row) are not what the rest of the engine's tests use.
 #[cfg(test)]
 mod row_tests {
-    use super::super::testkit::*;
     use super::*;
+    use crate::testkit::*;
     use yagra_common::{ScopeLevel, ThresholdBounds, ThresholdRule};
 
     const MEM: &str = "huawei_mem_usage";
@@ -7378,7 +7455,7 @@ mod row_tests {
     /// started from, where the Processor pool is healthy and the I/O pool is not.
     #[test]
     fn a_derived_metric_alerts_per_row_under_its_input_rows_name() {
-        let pct = crate::derived::METRIC_CISCO_MEM_USED_PCT;
+        let pct = yagra_common::derived_metric::METRIC_CISCO_MEM_USED_PCT;
         let node = NodeId::new();
         let mgr = manager();
         let base = StoredThreshold::new(
@@ -7427,7 +7504,7 @@ mod row_tests {
     /// moves for a Net-SNMP host.
     #[test]
     fn a_scalar_derived_metric_keeps_its_node_wide_check() {
-        let pct = crate::derived::METRIC_UCD_MEM_USED_PCT;
+        let pct = yagra_common::derived_metric::METRIC_UCD_MEM_USED_PCT;
         let node = NodeId::new();
         let mgr = manager();
         mgr.set_config(cfg(
@@ -7458,11 +7535,11 @@ mod row_tests {
 /// like.
 #[cfg(test)]
 mod no_reading_tests {
-    use super::super::testkit::*;
     use super::*;
-    use crate::no_reading_filter::{
+    use crate::no_reading::{
         ac6508_temperature_rows, NoReadingHandle, NoReadingMarkers, AC6508_MARKER,
     };
+    use crate::testkit::*;
     use yagra_common::{
         CollectionItem, CollectionKind, ScopeLevel, ThresholdBounds, ThresholdRule,
     };

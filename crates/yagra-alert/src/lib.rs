@@ -6,9 +6,24 @@
 //! ([`alert`]). Dependency suppression (parent-down roll-up) is computed against the
 //! topology and recorded as an alert's `root_cause`. Escalation/on-call is
 //! external — Yagra produces the quality signal and forwards its lifecycle (ADR-015).
+//!
+//! Since ADR-202 Inc.4 this crate holds the engine itself, not only its primitives:
+//! [`rules`] (which threshold applies, and the check ids), [`engine`] (`AlertManager`: dwell,
+//! flapping, suppression, maintenance, the SSE streams), [`reported`] (whether anyone still reports
+//! a node Yagra never polls) and [`no_reading`] (the vendor placeholder filter at ingest). All of it
+//! is in-memory and reaches no store, so it is tested here without a database and without
+//! `yagra-core`. What reads and writes the stores — the config load, delivery, history, the watch
+//! loops — stays in core's `alerts/`.
 
+pub mod action;
 pub mod alert;
+pub mod engine;
+pub mod no_reading;
 pub mod notify;
+pub mod reported;
+pub mod rules;
+#[cfg(any(test, feature = "test-util"))]
+pub mod testkit;
 
 // The dwell and flap primitives are `CheckState`'s internals, not part of this crate's surface:
 // `CheckState::new` takes primitives and nothing outside constructs either directly. Their tests

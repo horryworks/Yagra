@@ -19,7 +19,7 @@ use yagra_common::{NodeKind, NodeState};
 /// AP whose controller has not reported it within that window as `unknown`, and after a restart
 /// this fallback is what decides the same AP. Two numbers would make one outage read differently
 /// depending on whether core had restarted.
-pub(crate) const FALLBACK_FRESH_SECS: u64 = crate::alerts::reported::FRESH_FLOOR_SECS;
+pub(crate) const FALLBACK_FRESH_SECS: u64 = yagra_alert::reported::FRESH_FLOOR_SECS;
 
 /// The metrics the fallback probe asks about: **every node kind's liveness series**, because a URL
 /// monitor, a DNS monitor and a Meraki device are never pinged and so have no `icmp_rtt_ms` at all.

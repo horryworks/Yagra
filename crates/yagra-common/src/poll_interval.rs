@@ -446,39 +446,6 @@ mod tests {
         );
     }
 
-    /// The snapshot is a second copy of the scheduler's answer, so it is pinned to the function
-    /// that produces the first.
-    #[test]
-    fn the_snapshot_agrees_with_the_schedulers_resolution_for_every_node() {
-        use yagra_common::ProfileId;
-        let fast = Uuid::from_u128(100);
-        let slow = Uuid::from_u128(101);
-        let overrides: HashMap<Uuid, u32> = [(fast, 30), (slow, 900)].into_iter().collect();
-        let profiles = [
-            None,
-            Some(ProfileId(fast)),
-            Some(ProfileId(slow)),
-            Some(ProfileId(id(7))),
-        ];
-        let nodes: Vec<(Uuid, Option<ProfileId>)> = (0..40u128)
-            .map(|n| (id(n), profiles[(n % 4) as usize]))
-            .collect();
-        let resolved = nodes.iter().map(|(node, profile)| {
-            (
-                *node,
-                crate::scheduler::resolve_interval(*profile, &overrides, 300),
-            )
-        });
-        let snap = IntervalSnapshot::build(300, resolved);
-        for (node, profile) in &nodes {
-            assert_eq!(
-                snap.for_node(*node),
-                crate::scheduler::resolve_interval(*profile, &overrides, 300)
-            );
-        }
-        assert_eq!(snap.fleet_max, 900);
-    }
-
     #[test]
     fn an_unpublished_handle_answers_unknown_and_splits_nothing() {
         let intervals = PollIntervals::unknown();

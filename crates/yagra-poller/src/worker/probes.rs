@@ -253,9 +253,10 @@ pub(super) async fn execute_dns(
             // threshold fires), while a timeout — no answer at all — is Unreachable.
             //
             // 🚨 Listed variant by variant on purpose. This value drives the **liveness
-            // state machine** (`alerts/engine.rs::observe` folds every `outcome` into the dwell
-            // window), so a wildcard here decides for a failure mode nobody has thought
-            // about yet — and it decided `Reachable`, i.e. "the device is up". A new
+            // state machine** (`yagra_alert::engine::AlertManager::observe` folds every
+            // `outcome` into the dwell window), so a wildcard here decides for a failure
+            // mode nobody has thought about yet — and it decided `Reachable`, i.e. "the
+            // device is up". A new
             // transport-level variant (connection refused, network unreachable, TLS
             // failure on DoT) is exactly the kind that would land there, and it would
             // cancel a real outage ICMP had already found. Adding a `DnsFailure` variant

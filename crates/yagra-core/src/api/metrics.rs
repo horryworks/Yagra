@@ -803,7 +803,7 @@ pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) 
     let step = clamp_range_step(from, to, requested.unwrap_or((span / 120).max(60)), 1);
     (
         step,
-        (step * 4).max(crate::poll_interval::RATE_WINDOW_FLOOR_SECS),
+        (step * 4).max(yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS),
     )
 }
 

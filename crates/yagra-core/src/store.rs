@@ -582,7 +582,7 @@ pub struct VmStore {
     base: String,
     /// How far apart each node's polls are (ADR-144). Every counter read widens its `rate()` window
     /// to hold two polls; until the scheduler publishes, the windows are exactly what callers ask.
-    intervals: crate::poll_interval::PollIntervals,
+    intervals: yagra_common::poll_interval::PollIntervals,
 }
 
 impl VmStore {
@@ -599,13 +599,16 @@ impl VmStore {
         Self {
             http,
             base: base.into(),
-            intervals: crate::poll_interval::PollIntervals::unknown(),
+            intervals: yagra_common::poll_interval::PollIntervals::unknown(),
         }
     }
 
     /// Read poll intervals from `intervals`, the handle the scheduler publishes into (ADR-144).
     #[must_use]
-    pub fn with_poll_intervals(mut self, intervals: crate::poll_interval::PollIntervals) -> Self {
+    pub fn with_poll_intervals(
+        mut self,
+        intervals: yagra_common::poll_interval::PollIntervals,
+    ) -> Self {
         self.intervals = intervals;
         self
     }
@@ -613,13 +616,13 @@ impl VmStore {
     /// The `rate()` window for a read about one node: the caller's `floor`, widened to hold two of
     /// that node's polls.
     fn node_window(&self, floor: u64, node: Uuid) -> u64 {
-        crate::poll_interval::rate_window_secs(floor, self.intervals.for_node(node))
+        yagra_common::poll_interval::rate_window_secs(floor, self.intervals.for_node(node))
     }
 
     /// The `rate()` window for a fleet-wide read: the caller's `floor`, widened to hold two polls of
     /// the slowest node. A faster node's rate is smoothed by it; none is blanked.
     fn fleet_window(&self, floor: u64) -> u64 {
-        crate::poll_interval::rate_window_secs(floor, self.intervals.fleet_max())
+        yagra_common::poll_interval::rate_window_secs(floor, self.intervals.fleet_max())
     }
 
     /// Send one read and judge the reply — transport, HTTP status, JSON, envelope, in that order.
@@ -1191,7 +1194,7 @@ fn topk_query(metric: &str, agg: TopAgg, limit: usize) -> String {
 /// Step of the subquery a counter Top-N and the candidate query take their instant value from.
 ///
 /// The `rate()` window used to double as this step — both were 300. Since ADR-144 the window follows
-/// the poll interval ([`crate::poll_interval::rate_window_secs`]) and the step stays where it was,
+/// the poll interval ([`yagra_common::poll_interval::rate_window_secs`]) and the step stays where it was,
 /// so widening a window never thins how often the subquery samples.
 const RATE_SUBQUERY_STEP_SECS: u64 = 300;
 
@@ -2066,7 +2069,7 @@ impl MetricStore for VmStore {
         agg: TopAgg,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)> {
-        let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
+        let w = self.fleet_window(yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS);
         let query = topk_interface_query(metric, agg, limit, w);
         // Timed around the call: a refused read still cost the round trip it measures.
         let started = std::time::Instant::now();
@@ -2091,9 +2094,10 @@ impl MetricStore for VmStore {
         // class, and the query is exactly what it was before.
         let classes = self
             .intervals
-            .window_classes(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, nodes);
+            .window_classes(yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS, nodes);
         // Only a split query can answer about a node twice, so only a split query is filtered.
-        let owners = (classes.len() > 1).then(|| crate::poll_interval::ClassOwners::of(&classes));
+        let owners =
+            (classes.len() > 1).then(|| yagra_common::poll_interval::ClassOwners::of(&classes));
         let mut all = Vec::new();
         // 🚨 Every `return None` below abandons the **whole** call, not just this batch, and that
         // is deliberate. The caller reads "absent from the candidate set" as "below its bound", so
@@ -2211,7 +2215,7 @@ impl MetricStore for VmStore {
         // rate (ADR-167) — sampled at the requested step across the range. The window is at least
         // five minutes (robust to poll jitter) and at least two polls of the slowest node, or that
         // node drops out of the sum every other window (ADR-144).
-        let w = self.fleet_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS);
+        let w = self.fleet_window(yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS);
         let in_q = fleet_throughput_query(PortDirection::In, w);
         let out_q = fleet_throughput_query(PortDirection::Out, w);
         // The in/out range queries are independent — run them concurrently.
@@ -2234,7 +2238,7 @@ impl MetricStore for VmStore {
     ) -> Vec<MetricPoint> {
         // node is a UUID and ifindex an i32 (both bounded types from the topk result), so they're
         // safe to interpolate into the thin-label selector.
-        let w = self.node_window(crate::poll_interval::RATE_WINDOW_FLOOR_SECS, node);
+        let w = self.node_window(yagra_common::poll_interval::RATE_WINDOW_FLOOR_SECS, node);
         let q = interface_throughput_query(node, ifindex, w);
         self.query_range_points(q, from_s, to_s, step_s).await
     }
@@ -3128,7 +3132,7 @@ mod tests {
 
     #[test]
     fn the_store_widens_a_callers_window_only_once_intervals_are_published() {
-        let intervals = crate::poll_interval::PollIntervals::unknown();
+        let intervals = yagra_common::poll_interval::PollIntervals::unknown();
         let store = VmStore::new("http://vm.invalid").with_poll_intervals(intervals.clone());
         let slow = Uuid::from_u128(1);
         let fast = Uuid::from_u128(2);
@@ -3139,7 +3143,7 @@ mod tests {
         );
         assert_eq!(store.fleet_window(60), 60);
 
-        intervals.publish(crate::poll_interval::IntervalSnapshot::build(
+        intervals.publish(yagra_common::poll_interval::IntervalSnapshot::build(
             30,
             [(slow, 600)],
         ));

@@ -479,12 +479,11 @@ const REPO_MAY_NAME: &[&str] = &[
 
 /// Names outside [`REPO_MAY_NAME`] that one `repo/` file still reaches for, with the reason.
 /// Checked both ways, like every exemption list in this crate.
-const REPO_NAMES_ABOVE: &[(&str, &str, &str)] = &[(
-    "defaults.rs",
-    "alerts",
-    "the seeded liveness rule names the engine's `__liveness__` sentinel and its default dwell; \
-     both belong to the alert engine and move with it (ADR-202 Inc.4)",
-)];
+///
+/// Empty since ADR-202 Inc.4: its one row was `defaults.rs` naming the engine's `__liveness__`
+/// sentinel and default dwell, which now come from the `yagra-alert` crate rather than from a
+/// module above `repo/`. A new row needs its reason, and is a step back from that.
+const REPO_NAMES_ABOVE: &[(&str, &str, &str)] = &[];
 
 /// The crate-level modules a piece of code names: `crate::x::…` and each head of a grouped
 /// `use crate::{x, y::z}`.

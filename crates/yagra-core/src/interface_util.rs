@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use uuid::Uuid;
 
@@ -23,116 +22,8 @@ use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
 use crate::repo::NodeRepo;
 use crate::store::{self, MetricStore};
-use yagra_common::{IfIndex, MetricKind, NodeId, NodeState};
-
-/// Derived metric: receive utilisation as a percentage of the port's own speed.
-pub const METRIC_IF_IN_UTIL_PCT: &str = "if_in_util_pct";
-/// Derived metric: transmit utilisation as a percentage of the port's own speed.
-pub const METRIC_IF_OUT_UTIL_PCT: &str = "if_out_util_pct";
-
-/// Derived metric: receive traffic in bits per second.
-pub const METRIC_IF_IN_BPS: &str = "if_in_bps";
-/// Derived metric: transmit traffic in bits per second.
-pub const METRIC_IF_OUT_BPS: &str = "if_out_bps";
-
-/// The two derived metrics for one direction: the percentage and the absolute rate.
-///
-/// They are computed from **the same** VictoriaMetrics answer — the percentage is that answer
-/// divided by the port's speed — so the evaluator queries per direction and observes both, rather
-/// than querying once per metric. A pair rather than a naming convention, so a future direction
-/// has to say which rate it is, instead of inheriting one by string coincidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DerivedPair {
-    /// Percentage of the port's own speed. Needs a denominator.
-    pub pct: &'static str,
-    /// Bits per second. Needs no denominator, so it covers the ports that report no speed.
-    pub bps: &'static str,
-}
-
-/// Receive and transmit, in the order the evaluator ticks them.
-///
-/// Receive and transmit are **separate metrics rather than one "utilisation"**, because a link is
-/// asymmetric far more often than not: an uplink saturated inbound and idle outbound is one
-/// problem, not half of one, and collapsing them to `max` would leave an operator unable to tell
-/// which direction is congested without opening the chart.
-pub const DERIVED_PAIRS: [DerivedPair; 2] = [
-    DerivedPair {
-        pct: METRIC_IF_IN_UTIL_PCT,
-        bps: METRIC_IF_IN_BPS,
-    },
-    DerivedPair {
-        pct: METRIC_IF_OUT_UTIL_PCT,
-        bps: METRIC_IF_OUT_BPS,
-    },
-];
-
-/// Every derived interface metric, flat — what the API's threshold validation and the WebUI's
-/// metric picker enumerate.
-pub const DERIVED_INTERFACE_METRICS: [&str; 4] = [
-    METRIC_IF_IN_UTIL_PCT,
-    METRIC_IF_OUT_UTIL_PCT,
-    METRIC_IF_IN_BPS,
-    METRIC_IF_OUT_BPS,
-];
-
-/// The kind every derived interface metric is, for the API's threshold validation.
-///
-/// A gauge: a percentage is a level, not an odometer, so `above`/`below` both mean what they say
-/// and the counter rejection (`reject_counter_metric`) must not catch it. `None` for a name this
-/// module does not define — the caller then falls back to the collection catalogue.
-#[must_use]
-pub fn derived_metric_kind(metric: &str) -> Option<MetricKind> {
-    DERIVED_INTERFACE_METRICS
-        .contains(&metric)
-        .then_some(MetricKind::Gauge)
-}
-
-/// The interned name for a derived interface metric, or `None` for anything else.
-///
-/// Maps a name that arrived as a `String` — off an `Alert`, out of the database — back to the
-/// `&'static str` that [`CheckKey`] and the threshold lookup are keyed by. Derived from
-/// [`DERIVED_INTERFACE_METRICS`] rather than a hand-written `match`, so a fifth derived metric is
-/// covered by adding it to that one list.
-#[must_use]
-pub fn derived_metric_name(metric: &str) -> Option<&'static str> {
-    DERIVED_INTERFACE_METRICS.into_iter().find(|m| *m == metric)
-}
-
-/// Whether the evaluator may feed this node's ports an observation, given its **liveness** state.
-///
-/// The rule ADR-076 decision 3 wrote down is "freeze while the node is not `Ok`", and the intent was
-/// always liveness: an unreachable device must keep its port alerts open and honest while its own
-/// liveness alert does the paging, and a device in an `Unknown` state must not add "utilisation
-/// unknown" noise on top of the outage.
-///
-/// 🚨 **What is passed in must be the liveness state, never the display roll-up.** The first
-/// implementation asked `AlertManager::node_state`, which is the worse of liveness *and every active
-/// alert on the node* — so a port alert made its own node read as `Warning`, the evaluator stopped
-/// looking at that node, and nothing could resolve the alert afterwards at any traffic level or any
-/// threshold (ADR-076 Inc.7). This takes a bare state rather than an `AlertManager` precisely so the
-/// mistake can only live at the call site.
-///
-/// `Maintenance` is let **through**, not frozen — decision 3's other half. Inside a window the
-/// evaluator feeds `Maintenance`, so an open port alert resolves the way a node-level one does;
-/// freezing here made port alerts the only kind a maintenance window could not silence.
-///
-/// `None` — never observed — is frozen: a node the engine has no opinion about is one whose liveness
-/// has not been established, and raising a congestion alert about a device that may not be there is
-/// the wrong way round.
-#[must_use]
-pub fn may_observe_ports(liveness: Option<NodeState>) -> bool {
-    matches!(liveness, Some(NodeState::Ok) | Some(NodeState::Maintenance))
-}
-
-/// How often the evaluator ticks.
-///
-/// The engine converts a rule's breach count into ticks (ADR-144, `poll_interval::dwell_ticks`):
-/// never fewer ticks than breaches — "5 breaches" damps for five minutes on a node polling at least
-/// once a minute, which is what an operator is told — and enough ticks to span that many polls on a
-/// slower node, where every tick between two polls re-reads the same counters and would otherwise
-/// let one poll satisfy the whole count. 60s is chosen against the five-minute `rate()` floor —
-/// ticking faster would re-read the same VictoriaMetrics window without adding information.
-pub const WATCH_TICK: Duration = Duration::from_secs(60);
+use yagra_common::derived_metric::{DerivedPair, DERIVED_PAIRS};
+use yagra_common::{IfIndex, NodeId};
 
 /// Utilisation as a percentage of a port's own speed.
 ///
@@ -400,18 +291,9 @@ pub fn evaluate(
 /// is the dimension, which `interface_util` cannot name — it is the pure half and knows nothing
 /// about the store. The index-to-direction pairing is what
 /// `the_dimensions_match_their_metric_pairs` exists to pin.
-pub(crate) const INTERFACE_DIMENSIONS: [(
-    crate::interface_util::DerivedPair,
-    store::InterfaceTopMetric,
-); 2] = [
-    (
-        crate::interface_util::DERIVED_PAIRS[0],
-        store::InterfaceTopMetric::InBps,
-    ),
-    (
-        crate::interface_util::DERIVED_PAIRS[1],
-        store::InterfaceTopMetric::OutBps,
-    ),
+pub(crate) const INTERFACE_DIMENSIONS: [(DerivedPair, store::InterfaceTopMetric); 2] = [
+    (DERIVED_PAIRS[0], store::InterfaceTopMetric::InBps),
+    (DERIVED_PAIRS[1], store::InterfaceTopMetric::OutBps),
 ];
 
 /// Evaluate per-interface bandwidth utilisation against the threshold rules, on the leader
@@ -439,7 +321,7 @@ pub(crate) async fn run_interface_utilization_watch(
 
     let mut tracked = util::TrackedChecks::default();
     loop {
-        tokio::time::sleep(util::WATCH_TICK).await;
+        tokio::time::sleep(yagra_alert::engine::INTERFACE_WATCH_TICK).await;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // One action list per tick, drained once at the bottom. The orphan sweep below runs even
@@ -456,9 +338,11 @@ pub(crate) async fn run_interface_utilization_watch(
             // shrink (Inc.6d), and the recovery sweep below is skipped entirely when a metric has
             // no rule left — so without this the key would outlive the rule forever.
             if let crate::alerts::NotifyAction::Resolve(a) = &action {
-                if let (Some(node), Some(idx), Some(m)) =
-                    (a.node(), a.ifindex, util::derived_metric_name(&a.metric))
-                {
+                if let (Some(node), Some(idx), Some(m)) = (
+                    a.node(),
+                    a.ifindex,
+                    yagra_common::derived_metric::derived_interface_metric_name(&a.metric),
+                ) {
                     tracked.forget(&(node, idx, m));
                 }
             }
@@ -580,7 +464,7 @@ pub(crate) async fn run_interface_utilization_watch(
                 // alert, so gating on it froze the evaluator on its own output and the alert could
                 // never clear (ADR-076 Inc.7 decision 13). A maintenance window is let through, so an
                 // open port alert resolves inside one the way a node-level alert does.
-                if !util::may_observe_ports(alerts.node_liveness(r.node)) {
+                if !yagra_alert::engine::may_observe_ports(alerts.node_liveness(r.node)) {
                     continue;
                 }
                 // ⚠️ The mark comes *after* the observation, and that ordering is the point
@@ -630,14 +514,11 @@ pub(crate) async fn run_interface_utilization_watch(
                 if !can_fire || has_below {
                     continue;
                 }
-                absent.extend(
-                    tracked
-                        .absent(metric, &present)
-                        .into_iter()
-                        .filter(|(node, _, _)| {
-                            util::may_observe_ports(alerts.node_liveness(*node))
-                        }),
-                );
+                absent.extend(tracked.absent(metric, &present).into_iter().filter(
+                    |(node, _, _)| {
+                        yagra_alert::engine::may_observe_ports(alerts.node_liveness(*node))
+                    },
+                ));
             }
             let mut held: BTreeMap<&'static str, usize> = BTreeMap::new();
             if !absent.is_empty() {
@@ -735,6 +616,9 @@ pub(crate) async fn run_interface_utilization_watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yagra_common::derived_metric::{
+        METRIC_IF_IN_BPS, METRIC_IF_IN_UTIL_PCT, METRIC_IF_OUT_BPS, METRIC_IF_OUT_UTIL_PCT,
+    };
 
     // The one structural assertion below reads this file's own code through `crate::module_source`,
     // which since ADR-091 removes each test-only item rather than truncating at the first one.
@@ -748,18 +632,13 @@ mod tests {
     /// evaluate receive rules against transmit traffic and never fail anywhere.
     #[test]
     fn the_dimensions_match_their_metric_pairs() {
-        use crate::interface_util as util;
         use store::InterfaceTopMetric;
 
-        assert_eq!(INTERFACE_DIMENSIONS.len(), util::DERIVED_PAIRS.len());
+        assert_eq!(INTERFACE_DIMENSIONS.len(), DERIVED_PAIRS.len());
         for (pair, dimension) in INTERFACE_DIMENSIONS {
             let want = match dimension {
-                InterfaceTopMetric::InBps => {
-                    ("in", util::METRIC_IF_IN_UTIL_PCT, util::METRIC_IF_IN_BPS)
-                }
-                InterfaceTopMetric::OutBps => {
-                    ("out", util::METRIC_IF_OUT_UTIL_PCT, util::METRIC_IF_OUT_BPS)
-                }
+                InterfaceTopMetric::InBps => ("in", METRIC_IF_IN_UTIL_PCT, METRIC_IF_IN_BPS),
+                InterfaceTopMetric::OutBps => ("out", METRIC_IF_OUT_UTIL_PCT, METRIC_IF_OUT_BPS),
                 // The loop reads one direction at a time; a combined or per-error dimension has
                 // no percentage to divide and no pair to observe.
                 InterfaceTopMetric::Throughput
@@ -808,43 +687,6 @@ mod tests {
             body.contains("resolve_orphaned_interface_alerts()"),
             "without the sweep, deleting a port rule strands its alert for the life of the process"
         );
-    }
-
-    #[test]
-    fn every_derived_metric_is_a_gauge_and_is_not_collected() {
-        for m in DERIVED_INTERFACE_METRICS {
-            assert!(
-                yagra_common::is_valid_metric_name(m),
-                "{m} must be spellable as a series name"
-            );
-            assert_eq!(derived_metric_kind(m), Some(MetricKind::Gauge));
-            // They are computed, never walked — a name that also existed in the catalogue would
-            // mean two different things wrote the same series.
-            assert_eq!(
-                yagra_common::builtin_metric_kind(m),
-                None,
-                "{m} must not be a collected metric"
-            );
-        }
-        assert_eq!(derived_metric_kind("if_hc_in_octets"), None);
-        // The names say which half they count, because they are not each other's complement.
-        assert_ne!(METRIC_IF_IN_UTIL_PCT, METRIC_IF_OUT_UTIL_PCT);
-        assert_ne!(METRIC_IF_IN_BPS, METRIC_IF_OUT_BPS);
-
-        // The pairs cover the flat list exactly, in both directions. A metric in one and not the
-        // other is a metric the evaluator either never ticks or never validates.
-        let paired: BTreeSet<&str> = DERIVED_PAIRS.iter().flat_map(|d| [d.pct, d.bps]).collect();
-        assert_eq!(
-            paired,
-            DERIVED_INTERFACE_METRICS
-                .into_iter()
-                .collect::<BTreeSet<_>>()
-        );
-        // The pair's two halves are different metrics — a pair whose `pct` and `bps` collapsed to
-        // one name would make the evaluator observe the same check twice with different units.
-        for d in DERIVED_PAIRS {
-            assert_ne!(d.pct, d.bps);
-        }
     }
 
     /// The floor over both families. Its job is to admit every port any rule could fire on.
@@ -1125,46 +967,5 @@ mod tests {
                 "the sweep observes an invented zero ({zero}) — that closes an alert on absence"
             );
         }
-    }
-
-    /// The whole state table, because the gate is one line at two call sites and the interesting
-    /// half is what it *rejects*.
-    #[test]
-    fn the_freeze_gate_answers_for_every_liveness_state() {
-        assert!(may_observe_ports(Some(NodeState::Ok)));
-        // A window must not freeze the loop, or an open port alert can never be silenced by one.
-        assert!(may_observe_ports(Some(NodeState::Maintenance)));
-
-        // The device is not there, or we could not run the check: keep the port alert open and
-        // honest and let the node's own liveness alert do the paging.
-        assert!(!may_observe_ports(Some(NodeState::Unreachable)));
-        assert!(!may_observe_ports(Some(NodeState::Unknown)));
-        // Never observed is "no opinion", not "fine".
-        assert!(!may_observe_ports(None));
-
-        // Those four plus `None` are the whole domain: the liveness map is written only from a
-        // reachability outcome (`Reachable`/`Unreachable`/`Error`) or a maintenance substitution,
-        // so it never holds `Warning` or `Critical`. They are pinned as frozen anyway — the
-        // conservative answer — so that a caller regressing to the display roll-up produces a
-        // visibly wrong monitoring gap rather than a silently different rule.
-        assert!(!may_observe_ports(Some(NodeState::Warning)));
-        assert!(!may_observe_ports(Some(NodeState::Critical)));
-    }
-
-    /// The interning that lets a runtime `String` off an `Alert` become a `CheckKey`.
-    #[test]
-    fn only_the_four_derived_names_intern() {
-        for m in DERIVED_INTERFACE_METRICS {
-            // The `&'static str` is what matters: `CheckKey` is keyed by it, so a `String` here
-            // would not compile at the call site.
-            let interned: &'static str = derived_metric_name(m).expect("a derived metric interns");
-            assert_eq!(interned, m);
-        }
-        // A collected per-interface metric belongs to the poll path, not to this module's sweep.
-        assert_eq!(derived_metric_name("if_oper_status"), None);
-        assert_eq!(derived_metric_name("icmp_rtt_ms"), None);
-        assert_eq!(derived_metric_name(""), None);
-        // Not a prefix match: a longer name starting with a derived one is a different metric.
-        assert_eq!(derived_metric_name("if_in_util_pct_avg"), None);
     }
 }
