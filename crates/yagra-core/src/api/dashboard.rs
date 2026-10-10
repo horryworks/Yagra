@@ -201,11 +201,8 @@ async fn put_shared_dashboard(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request, StatusCode};
-    use tower::ServiceExt;
+    use crate::api::tests_support::{private_state, public_state, status_with};
+    use axum::http::StatusCode;
     use uuid::Uuid;
     use yagra_common::{Principal, Role, Scope};
 
@@ -216,18 +213,7 @@ mod tests {
         token: Option<&str>,
         body: &str,
     ) -> StatusCode {
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from(body.to_owned())).unwrap())
-            .await
-            .unwrap()
-            .status()
+        status_with(st, method, path, token, Some(body)).await
     }
 
     #[tokio::test]

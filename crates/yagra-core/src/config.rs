@@ -53,8 +53,21 @@ pub const MERAKI_MAX_DEVICES_HARD: i32 = 50_000;
 /// dial polling up to a level that would starve the customer's own Dashboard API usage.
 pub const MERAKI_TARGET_RPS_MAX: f64 = 10.0;
 
-/// Default API bind address.
-const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
+/// Default API bind address. Also what skeleton mode binds, which reads no environment at all.
+pub(crate) const DEFAULT_API_ADDR: &str = "0.0.0.0:8080";
+
+/// `YAGRA_API_ADDR`, or [`DEFAULT_API_ADDR`]. The one reader: the server binds it and the container
+/// healthcheck derives its port from it, so the two cannot disagree on the default (ADR-202).
+pub(crate) fn api_addr_from_env() -> String {
+    std::env::var("YAGRA_API_ADDR").unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned())
+}
+
+/// `YAGRA_BUS_URL` as this process was started with it. The one reader: [`Config::from_env`] requires
+/// it, and the bus settings card reads it again to report whether this core's own connection is
+/// encrypted — the running state, which is the point (ADR-202).
+pub(crate) fn bus_url_from_env() -> Option<String> {
+    std::env::var("YAGRA_BUS_URL").ok()
+}
 
 /// Default idle window, in days, after which an API token owned by an **externally-authenticated**
 /// account stops working.
@@ -183,15 +196,14 @@ impl Config {
     /// Build live config from the environment, or `None` if a required URL is missing.
     pub fn from_env() -> Option<Self> {
         let database_url = std::env::var("YAGRA_DATABASE_URL").ok()?;
-        let bus_url = std::env::var("YAGRA_BUS_URL").ok()?;
+        let bus_url = bus_url_from_env()?;
         let tsdb_url = std::env::var("YAGRA_TSDB_URL").ok()?;
         Some(Self {
             database_url,
             bus_url,
             tsdb_url,
             poll_interval_secs: parse_interval(std::env::var("YAGRA_POLL_INTERVAL_SECS").ok()),
-            api_addr: std::env::var("YAGRA_API_ADDR")
-                .unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned()),
+            api_addr: api_addr_from_env(),
             pat_oidc_idle_days: parse_idle_days(std::env::var("YAGRA_PAT_OIDC_IDLE_DAYS").ok()),
             // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
             // affecting the live/skeleton gating above.

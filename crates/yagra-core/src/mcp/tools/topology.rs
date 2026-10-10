@@ -317,7 +317,7 @@ impl YagraMcp {
         };
         // Same assembly as the REST handlers; only the page bound differs, because an AI client
         // wants a handful of edges where the graph view wants the fleet.
-        let limit = p.limit.unwrap_or(200).clamp(1, 1000);
+        let limit = crate::api::util::page_limit(p.limit, 200, 1000);
         match topology_kind(p.kind.as_deref()) {
             TopologyKind::Dependency => {
                 let after = match p.after.as_deref().map(str::parse::<Uuid>) {

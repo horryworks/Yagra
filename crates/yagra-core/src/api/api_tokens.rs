@@ -327,11 +327,7 @@ async fn revoke_api_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request};
-    use tower::ServiceExt;
+    use crate::api::tests_support::{private_state, public_state, status_of};
     use yagra_common::{Principal, Scope};
 
     const ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -342,21 +338,6 @@ mod tests {
             ("POST", "/api/v1/api-tokens".to_owned()),
             ("DELETE", format!("/api/v1/api-tokens/{ID}")),
         ]
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from("{}")).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     #[tokio::test]

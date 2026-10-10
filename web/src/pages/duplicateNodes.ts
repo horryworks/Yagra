@@ -15,6 +15,7 @@ import type {
   DuplicateMember,
   DuplicateNodesView,
 } from '../types/api';
+import { keepListed } from '../lib/selection';
 
 /** What each group badge opens: what put the group at that confidence. The likely-duplicate one
  *  also carries the case where deleting is wrong — two routers sharing a VRRP/HSRP address join on
@@ -85,8 +86,10 @@ export function pruneSelection(
   selected: ReadonlySet<string>,
   view: DuplicateNodesView | null,
 ): ReadonlySet<string> {
-  const listed = new Set(flattenRows(view).map((r) => r.member.node_id));
-  return new Set([...selected].filter((id) => listed.has(id)));
+  return keepListed(
+    selected,
+    flattenRows(view).map((r) => r.member.node_id),
+  );
 }
 
 /** The groups (1-based numbers) whose every member is selected: deleting them would remove the device

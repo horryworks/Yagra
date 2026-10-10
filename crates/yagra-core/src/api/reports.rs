@@ -498,7 +498,7 @@ pub(crate) async fn report_runs(
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Vec::new());
     };
-    let limit = limit.unwrap_or(50).clamp(1, 500);
+    let limit = super::util::page_limit(limit, 50, 500);
     admin
         .reports_repo
         .list_runs(limit, filter)

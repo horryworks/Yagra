@@ -25,6 +25,7 @@
 mod credential_finder;
 pub mod os_version;
 pub mod serial;
+pub mod text;
 
 pub use credential_finder::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 

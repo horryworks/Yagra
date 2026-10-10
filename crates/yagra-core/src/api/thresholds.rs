@@ -190,7 +190,7 @@ pub(crate) async fn threshold_page(
     filter: &crate::thresholds::ThresholdFilter<'_>,
     count_overrides: bool,
 ) -> ApiResult<ThresholdPage> {
-    let limit = limit.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
+    let limit = super::util::page_limit(limit, THRESHOLDS_MAX, THRESHOLDS_MAX);
     let (items, total) = admin
         .thresholds
         .list_page(limit, filter)
@@ -878,11 +878,7 @@ async fn delete_threshold(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request};
-    use tower::ServiceExt;
+    use crate::api::tests_support::{private_state, public_state, status_with};
     use yagra_common::{Principal, Role, Scope};
 
     const ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -903,21 +899,8 @@ mod tests {
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder().method(method).uri(path);
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        let body = if method == "POST" || method == "PUT" {
-            b = b.header("content-type", "application/json");
-            Body::from("{}")
-        } else {
-            Body::empty()
-        };
-        router(st)
-            .oneshot(b.body(body).unwrap())
-            .await
-            .unwrap()
-            .status()
+        let body = matches!(method, "POST" | "PUT").then_some("{}");
+        status_with(st, method, path, token, body).await
     }
 
     #[tokio::test]
@@ -1164,8 +1147,10 @@ mod tests {
     #[test]
     fn the_page_limit_is_clamped_to_the_cap_in_both_directions() {
         // The clamp is the DoS guard: `?limit=` is operator-supplied, so an unbounded or zero/
-        // negative value must never reach the query.
-        let clamp = |n: Option<i64>| n.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
+        // negative value must never reach the query. Exercises the helper the handler calls, not a
+        // copy of the expression (this test used to hold its own copy, which proved nothing).
+        let clamp =
+            |n: Option<i64>| super::super::util::page_limit(n, THRESHOLDS_MAX, THRESHOLDS_MAX);
         assert_eq!(clamp(None), THRESHOLDS_MAX);
         assert_eq!(clamp(Some(10)), 10);
         assert_eq!(clamp(Some(0)), 1);

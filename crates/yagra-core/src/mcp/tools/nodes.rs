@@ -279,7 +279,7 @@ impl YagraMcp {
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "list_nodes";
-        let limit = p.limit.unwrap_or(50).clamp(1, 100);
+        let limit = crate::api::util::page_limit(p.limit, 50, 100);
         // Parsed through the REST edge's own function, not a copy of it. Rejected, never ignored:
         // an unrecognised token dropped here would widen the answer, and a model that asked for the
         // URL monitors would reason over every node believing it had the narrower set. Since

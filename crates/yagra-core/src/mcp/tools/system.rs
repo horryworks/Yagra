@@ -1125,7 +1125,11 @@ impl YagraMcp {
             }
             ConfigKind::DiscoveryScans => {
                 let limit = p.limit.and_then(|n| usize::try_from(n).ok());
-                ok_json(TOOL, &a.discovery.list(limit.unwrap_or(20).clamp(1, 50)))
+                ok_json(
+                    TOOL,
+                    &a.discovery
+                        .list(crate::api::util::page_limit(limit, 20, 50)),
+                )
             }
             // ── Meraki ───────────────────────────────────────────────────────
             ConfigKind::MerakiOrgs => match crate::api::meraki::org_views(a).await {

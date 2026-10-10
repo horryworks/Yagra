@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import { api } from '../services/api';
 import type { AnalysisJob, AnalysisJobInput } from '../types/api';
 import { shouldNotify } from './notifyWatch';
+import { byNewestCreated } from '../lib/sort';
 
 export interface Toast {
   /** Already-translated text. Empty when [`msgKey`] carries the message instead. */
@@ -53,17 +54,13 @@ interface TroubleshootStore {
   dismissToast: () => void;
 }
 
-function byNewest(a: AnalysisJob, b: AnalysisJob): number {
-  return b.created_ms - a.created_ms;
-}
-
 export const useTroubleshootStore = create<TroubleshootStore>((set, get) => ({
   jobs: [],
   loaded: false,
   loadFailed: false,
   setLoadFailed: (loadFailed) => set({ loadFailed }),
 
-  setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewest), loaded: true, loadFailed: false }),
+  setJobs: (jobs) => set({ jobs: [...jobs].sort(byNewestCreated), loaded: true, loadFailed: false }),
 
   watched: new Set<string>(),
   watchJob: (id) => set((s) => ({ watched: new Set(s.watched).add(id) })),
@@ -72,7 +69,7 @@ export const useTroubleshootStore = create<TroubleshootStore>((set, get) => ({
     set((s) => {
       const prev = s.jobs.find((j) => j.id === job.id);
       const rest = s.jobs.filter((j) => j.id !== job.id);
-      const next: Partial<TroubleshootStore> = { jobs: [job, ...rest].sort(byNewest) };
+      const next: Partial<TroubleshootStore> = { jobs: [job, ...rest].sort(byNewestCreated) };
       // Completion notice for a watched job. Computed here rather than in the stream hook so it
       // fires for every route into the store (SSE tick, cancel, create) and exactly once — the
       // previous row is only available at this point.

@@ -1870,11 +1870,7 @@ async fn set_meraki_polling(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request};
-    use tower::ServiceExt;
+    use crate::api::tests_support::{private_state, public_state, status_of};
     use yagra_common::{Principal, Role, Scope};
 
     /// One device as this organization's sync would have recorded it, in a network whose LAN side
@@ -1933,21 +1929,6 @@ mod tests {
             ("POST", "/api/v1/meraki/import".to_owned()),
             ("PUT", "/api/v1/meraki/polling".to_owned()),
         ]
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from("{}")).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ import {
   type DeliverySide,
   type NotificationChannel,
 } from '../types/api';
+import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
 /** URL-key prefix for this table. The route already has `channels.` and `rules.`, and all three
  *  would otherwise share a `status`-style key; `filterSpecRegistry.test.ts` checks they are
@@ -102,8 +103,7 @@ export interface DeliveryCursor {
 }
 
 export function nextCursor(rows: readonly DeliveryRow[]): DeliveryCursor | null {
-  const last = rows.at(-1);
-  return rows.length < PAGE_SIZE || !last ? null : { before: last.at, before_id: last.id };
+  return nextCursorFrom(rows, PAGE_SIZE, (last) => ({ before: last.at, before_id: last.id }));
 }
 
 /**
@@ -131,10 +131,7 @@ export function queryFor(
 }
 
 /** Append a page, dropping rows already held (a duplicate React key misrenders silently). */
-export function appendPage(have: readonly DeliveryRow[], page: readonly DeliveryRow[]): DeliveryRow[] {
-  const seen = new Set(have.map((r) => r.id));
-  return [...have, ...page.filter((r) => !seen.has(r.id))];
-}
+export { appendPage };
 
 /** What the channel column says: the channel's name, the default route, or - for a channel deleted
  *  since - its kind, so the row is still readable. */

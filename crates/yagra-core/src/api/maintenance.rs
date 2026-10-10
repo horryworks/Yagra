@@ -1244,12 +1244,8 @@ mod tests {
     }
 
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_with};
     use crate::maintenance::{StoredMute, StoredWindow};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request};
-    use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
 
     #[test]
@@ -1412,21 +1408,8 @@ mod tests {
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder().method(method).uri(path);
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        let body = if method == "POST" {
-            b = b.header("content-type", "application/json");
-            Body::from("{}")
-        } else {
-            Body::empty()
-        };
-        router(st)
-            .oneshot(b.body(body).unwrap())
-            .await
-            .unwrap()
-            .status()
+        let body = (method == "POST").then_some("{}");
+        status_with(st, method, path, token, body).await
     }
 
     #[tokio::test]

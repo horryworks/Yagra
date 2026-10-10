@@ -28,6 +28,7 @@ import {
   type AuditRow,
   type RetentionRow,
 } from '../types/api';
+import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
 /**
  * Rows per request. Matches the backend's default and stays under its 500 ceiling, so a page is one
@@ -112,8 +113,7 @@ export function exportUrl(columns: AuditColumns, s: FilterState, nowMs: number):
  * page could still yield nothing visible, so "short page" said nothing about the end of the log.
  */
 export function nextCursor(rows: readonly { at: string }[]): string | null {
-  const last = rows.at(-1);
-  return rows.length < PAGE_SIZE || !last ? null : last.at;
+  return nextCursorFrom(rows, PAGE_SIZE, (last) => last.at);
 }
 
 /**
@@ -125,10 +125,7 @@ export function nextCursor(rows: readonly { at: string }[]): string | null {
  * composite cursor.) This dedup is the cheap insurance against that residual case: a duplicate React
  * key is a silent misrender rather than a visible error.
  */
-export function appendPage<T extends { id: string }>(have: readonly T[], page: readonly T[]): T[] {
-  const seen = new Set(have.map((r) => r.id));
-  return [...have, ...page.filter((r) => !seen.has(r.id))];
-}
+export { appendPage };
 
 /** How long the audit log is kept, as the line under the table says it. */
 export type AuditRetention = { kind: 'indefinite' } | { kind: 'days'; days: number };

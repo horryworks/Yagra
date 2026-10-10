@@ -358,6 +358,17 @@ impl SourceKind {
 }
 
 impl DestKind {
+    /// Every destination kind, in declaration order. Tests iterate this rather than listing the
+    /// variants by hand; `every_dest_kind_is_in_all` ties it to an exhaustive `match` (ADR-202).
+    pub const ALL: [Self; 6] = [
+        Self::SyslogUdp,
+        Self::SyslogTcp,
+        Self::SyslogTls,
+        Self::SnmpTrapUdp,
+        Self::FlowUdp,
+        Self::BigQuery,
+    ];
+
     /// Stable string form (matches the serde tag and the `dest_kind` DB column).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -392,14 +403,28 @@ impl DestKind {
     /// only sensible) answer and there is nothing for an operator to pin.
     #[must_use]
     pub const fn is_tls(self) -> bool {
-        matches!(self, Self::SyslogTls)
+        match self {
+            Self::SyslogTls => true,
+            Self::SyslogUdp
+            | Self::SyslogTcp
+            | Self::SnmpTrapUdp
+            | Self::FlowUdp
+            | Self::BigQuery => false,
+        }
     }
 
     /// Whether the destination is addressed as `host:port`. BigQuery is not — its target names a
     /// table (`project.dataset.table`) and its endpoint is fixed.
     #[must_use]
     pub const fn is_host_port(self) -> bool {
-        !matches!(self, Self::BigQuery)
+        match self {
+            Self::SyslogUdp
+            | Self::SyslogTcp
+            | Self::SyslogTls
+            | Self::SnmpTrapUdp
+            | Self::FlowUdp => true,
+            Self::BigQuery => false,
+        }
     }
 
     /// Whether `source` can be delivered to this destination kind. Traps may be shipped to a syslog
@@ -1586,14 +1611,7 @@ mod tests {
                 format!("\"{}\"", kind.as_str())
             );
         }
-        for kind in [
-            DestKind::SyslogUdp,
-            DestKind::SyslogTcp,
-            DestKind::SyslogTls,
-            DestKind::SnmpTrapUdp,
-            DestKind::FlowUdp,
-            DestKind::BigQuery,
-        ] {
+        for kind in DestKind::ALL {
             assert_eq!(DestKind::parse(kind.as_str()), Some(kind));
             assert_eq!(
                 serde_json::to_string(&kind).unwrap(),
@@ -1601,5 +1619,25 @@ mod tests {
             );
         }
         assert_eq!(DestKind::parse("carrier_pigeon"), None);
+    }
+
+    /// `DestKind::ALL` holds every variant exactly once. The `match` is exhaustive, so a new variant
+    /// does not compile until it is given a position here — and then this fails until it is in
+    /// `ALL` at that position. `ARMS` is the number of arms, kept beside them on purpose.
+    #[test]
+    fn every_dest_kind_is_in_all() {
+        const ARMS: usize = 6;
+        let position = |k: DestKind| match k {
+            DestKind::SyslogUdp => 0,
+            DestKind::SyslogTcp => 1,
+            DestKind::SyslogTls => 2,
+            DestKind::SnmpTrapUdp => 3,
+            DestKind::FlowUdp => 4,
+            DestKind::BigQuery => 5,
+        };
+        assert_eq!(DestKind::ALL.len(), ARMS);
+        for (i, k) in DestKind::ALL.into_iter().enumerate() {
+            assert_eq!(position(k), i, "{k:?} is out of place in DestKind::ALL");
+        }
     }
 }

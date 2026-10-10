@@ -765,7 +765,7 @@ pub(crate) async fn top_alerting_nodes(
     };
     let window = window.unwrap_or(86_400).clamp(60, 30 * 86_400);
     let since_ms = (super::now_unix_s() - window) * 1000;
-    let limit = limit.unwrap_or(6).clamp(1, 50) as usize;
+    let limit = super::util::page_limit(limit, 6, 50) as usize;
     // Ranked by fire count in SQL, filtered by scope afterwards — same shape and same trade-off as
     // the TSDB rankings in `api/metrics.rs`. Over-fetch so a scoped list is usually still full.
     let fetched = super::scope::ranking_fetch_limit(scope, limit);

@@ -287,7 +287,7 @@ impl WirelessApRequest {
                 ..ApFilter::default()
             },
             after,
-            limit: limit.unwrap_or(AP_DEFAULT_LIMIT).clamp(1, AP_MAX_LIMIT),
+            limit: super::util::page_limit(limit, AP_DEFAULT_LIMIT, AP_MAX_LIMIT),
         })
     }
 }

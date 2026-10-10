@@ -18,7 +18,7 @@ import {
 import { formatBps } from '../../lib/format';
 import type { DeltaRow } from '../primitives/DeltaBars';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
-import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
+import { SEVERITY_ORDER, emptyStateCounts, worstState } from '../../lib/nodeState';
 import type { WidgetSettings } from '../types';
 
 /** The now / trailing-1h-peak window every Top-N widget stores in its settings bag, defaulting to
@@ -30,12 +30,7 @@ export function topAggOf(settings: WidgetSettings | undefined): MetricTopAgg {
 }
 
 /** The worst (most severe) state in a set, or `ok` when empty. Used for site/region tiles. */
-export function worstState(states: NodeState[]): NodeState {
-  for (const s of SEVERITY_ORDER) {
-    if (states.includes(s)) return s;
-  }
-  return 'ok';
-}
+export { worstState };
 
 /** A per-state tally of a group's direct members — the `fleet/group-summary` value shape (A-1). */
 export type StateCounts = Record<NodeState, number>;

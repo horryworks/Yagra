@@ -534,9 +534,28 @@ pub(crate) fn bounded_name<'a>(
     Ok(name)
 }
 
+/// A list endpoint's row count: the caller's `limit`, or `default` when absent, held to `1..=max`.
+///
+/// Every list endpoint keeps its own `default` and `max` — they differ on purpose (a top-N widget
+/// asks for 6, a map page for 2,000) and changing one changes what a client receives. What is shared
+/// is the shape, so a lower bound of 0 or a missing upper bound cannot creep into one of them
+/// (ADR-202). An unbounded top-N is a DoS vector (`api-conventions.md`).
+pub(crate) fn page_limit<T: Ord + From<u8>>(asked: Option<T>, default: T, max: T) -> T {
+    asked.unwrap_or(default).clamp(T::from(1), max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_limit_defaults_and_stays_within_one_and_the_maximum() {
+        assert_eq!(page_limit(None, 6_u32, 50), 6);
+        assert_eq!(page_limit(Some(0_i64), 6, 50), 1);
+        assert_eq!(page_limit(Some(-5_i64), 6, 50), 1);
+        assert_eq!(page_limit(Some(51_usize), 6, 50), 50);
+        assert_eq!(page_limit(Some(20_u32), 6, 50), 20);
+    }
 
     fn refusal(r: Result<&str, ApiError>) -> String {
         let e = r.expect_err("must be refused");

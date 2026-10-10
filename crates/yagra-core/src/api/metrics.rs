@@ -1052,7 +1052,7 @@ pub(crate) async fn ranked_nodes(
 ) -> ApiResult<Ranked<TopEntry>> {
     let selector = top_selector(metric)?;
     let agg = parse_top_agg(agg)?;
-    let limit = limit.unwrap_or(5).clamp(1, 50);
+    let limit = super::util::page_limit(limit, 5, 50);
     // The TSDB ranks by value and knows nothing about groups, so scoping happens after the ranking
     // — over-fetch first so a scoped caller usually still gets a full list. See RANKING_OVERFETCH.
     let fetched = super::scope::ranking_fetch_limit(scope, limit);
@@ -1196,7 +1196,7 @@ pub(crate) async fn ranked_interfaces(
     rank: InterfaceRanking,
     limit: Option<usize>,
 ) -> Ranked<InterfaceTopEntry> {
-    let limit = limit.unwrap_or(6).clamp(1, 50);
+    let limit = super::util::page_limit(limit, 6, 50);
     let fetched = super::scope::ranking_fetch_limit(scope, limit);
     let ranked = match rank {
         InterfaceRanking::Metric(metric, agg) => {
@@ -1384,7 +1384,7 @@ async fn interface_heatmap(
     State(st): State<ApiState>,
     Query(q): Query<HeatmapQuery>,
 ) -> Json<InterfaceHeatmap> {
-    let limit = q.limit.unwrap_or(8).clamp(1, 20);
+    let limit = super::util::page_limit(q.limit, 8, 20);
     let to = q.to.unwrap_or_else(super::now_unix_s);
     let from = q.from.unwrap_or(to - 6 * 3600);
     let step = clamp_range_step(from, to, q.step.unwrap_or(600), 60);

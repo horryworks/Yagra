@@ -1143,27 +1143,7 @@ fn expand(pattern: &str, template: &str, text: &str, first_line: bool) -> Option
 /// poller that sent it is this one.
 #[must_use]
 pub fn sanitize(raw: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut count = 0usize;
-    let mut gap = false;
-    for c in raw.chars() {
-        if c.is_whitespace() || c.is_control() {
-            gap = count > 0;
-            continue;
-        }
-        let needed = if gap { 2 } else { 1 };
-        if count + needed > OS_VERSION_MAX_CHARS {
-            break;
-        }
-        if gap {
-            out.push(' ');
-            count += 1;
-            gap = false;
-        }
-        out.push(c);
-        count += 1;
-    }
-    (!out.is_empty()).then_some(out)
+    crate::text::fold_and_cap(raw, OS_VERSION_MAX_CHARS)
 }
 
 /// Split an instance OID into the column a v2c walk reads it from and its trailing index:

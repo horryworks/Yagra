@@ -365,7 +365,7 @@ async fn list_analysis_jobs(
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
-    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let limit = super::util::page_limit(q.limit, 50, 200);
     let jobs = admin.analysis.list(limit, &filter).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -682,7 +682,7 @@ pub(crate) async fn search_saved_findings(
         // see is contradictory.
         min_score: q.min_score,
         max_score: q.max_score,
-        limit: q.limit.unwrap_or(100).clamp(1, FINDINGS_PAGE_MAX),
+        limit: super::util::page_limit(q.limit, 100, FINDINGS_PAGE_MAX),
     };
     admin.analysis.search_findings(&filter).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "search findings", "failed to search findings")

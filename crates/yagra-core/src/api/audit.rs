@@ -309,24 +309,13 @@ pub(crate) async fn audit_page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::Body;
-    use axum::http::{header::AUTHORIZATION, Request, StatusCode};
-    use tower::ServiceExt;
+    use crate::api::tests_support::{private_state, public_state, status_with};
+    use axum::http::StatusCode;
     use uuid::Uuid;
     use yagra_common::{Principal, Role, Scope};
 
     async fn status_of(st: ApiState, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder().method("GET").uri(path);
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::empty()).unwrap())
-            .await
-            .unwrap()
-            .status()
+        status_with(st, "GET", path, token, None).await
     }
 
     #[tokio::test]

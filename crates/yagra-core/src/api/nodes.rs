@@ -3079,7 +3079,7 @@ mod tests {
     use super::*;
 
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_with};
     use axum::body::Body;
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt;
@@ -3093,6 +3093,11 @@ mod tests {
             b = b.header(AUTHORIZATION, format!("Bearer {t}"));
         }
         b.body(Body::empty()).unwrap()
+    }
+
+    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
+        let body = matches!(method, "POST" | "PUT").then_some("{}");
+        status_with(st, method, path, token, body).await
     }
 
     #[tokio::test]
@@ -3393,24 +3398,6 @@ mod tests {
         let status = node_status(&st, fresh).await;
         assert_eq!(status.state, NodeState::Ok);
         assert!(status.collection_fault.is_none());
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder().method(method).uri(path);
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        let body = if matches!(method, "POST" | "PUT") {
-            b = b.header("content-type", "application/json");
-            Body::from("{}")
-        } else {
-            Body::empty()
-        };
-        router(st)
-            .oneshot(b.body(body).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     /// Every config write this module serves. A route missing here is a route whose authorization

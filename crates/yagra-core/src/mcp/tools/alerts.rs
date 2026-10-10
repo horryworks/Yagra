@@ -156,7 +156,7 @@ impl YagraMcp {
             alerts.retain(|a| a.severity >= min);
         }
         alerts.sort_by_key(|a| std::cmp::Reverse(a.at_unix_ms));
-        let limit = p.limit.unwrap_or(100).clamp(1, 500);
+        let limit = crate::api::util::page_limit(p.limit, 100, 500);
         alerts.truncate(limit);
         let names = self
             .resolve_names(scope, alerts.iter().filter_map(|a| Some(a.node()?.0)))

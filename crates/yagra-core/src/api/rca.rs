@@ -302,12 +302,9 @@ async fn test_llm_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
-    use axum::body::{to_bytes, Body};
-    use axum::http::{header::AUTHORIZATION, Request};
+    use crate::api::tests_support::{private_state, public_state, status_with};
+    use axum::body::to_bytes;
     use axum::response::IntoResponse;
-    use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
 
     const ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -338,18 +335,7 @@ mod tests {
         } else {
             "{}".to_owned()
         };
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from(body)).unwrap())
-            .await
-            .unwrap()
-            .status()
+        status_with(st, method, path, token, Some(&body)).await
     }
 
     #[tokio::test]

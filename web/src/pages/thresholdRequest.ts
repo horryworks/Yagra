@@ -51,7 +51,7 @@ export const DEFAULT_DWELL = 3;
  *  into "warn at zero" — which on an `above` rule never fires and on a `below` rule fires forever.
  *  A value that is not a number at all is also absent rather than `NaN`, which would serialize to
  *  `null` and be rejected by the edge. */
-function optionalNumber(s: string): number | undefined {
+export function optionalNumber(s: string): number | undefined {
   const trimmed = s.trim();
   if (trimmed === '') return undefined;
   const n = Number(trimmed);

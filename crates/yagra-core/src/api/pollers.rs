@@ -653,7 +653,7 @@ pub(crate) async fn poller_nodes_page(
     let Some(owned) = admin.coordinator.published_nodes(&id, now) else {
         return empty(id, "offline");
     };
-    let limit = limit.unwrap_or(POLLER_NODES_MAX).clamp(1, POLLER_NODES_MAX);
+    let limit = super::util::page_limit(limit, POLLER_NODES_MAX, POLLER_NODES_MAX);
     // Filter before counting, not after: `total` and `truncated` are part of the answer, so
     // deriving them from the poller's full working set would tell a scoped caller how many nodes it
     // holds outside their scope — the count is as much of a leak as the ids would be.
@@ -1353,7 +1353,7 @@ async fn set_poller_anchor(
 mod tests {
     use super::*;
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_with};
     use axum::body::Body;
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt;
@@ -1367,6 +1367,10 @@ mod tests {
     /// used JavaScript's `trim` and `toLowerCase`, which disagree with Rust's in both directions:
     /// an address pasted with a U+0085 in it was marked uncovered and the Issue button held,
     /// although core strips that character and would have issued the kit.
+    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
+        status_with(st, method, path, token, None).await
+    }
+
     #[test]
     fn uncovered_bus_host_answers_the_case_table_the_kit_dialog_shares() {
         #[derive(Deserialize)]
@@ -1690,18 +1694,6 @@ mod tests {
         fn uncovered(&self) -> bool {
             self.is_uncovered()
         }
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder().method(method).uri(path);
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::empty()).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     #[tokio::test]

@@ -27,7 +27,8 @@
 
 import { interfaceScopeId } from './interfaceScope';
 import type { Direction, StoredThreshold, ThresholdInput } from '../types/api';
-import { DEFAULT_DWELL } from '../pages/thresholdRequest';
+// `optionalNumber`: a number the operator did not type is absent, never zero (`Number('')` is 0).
+import { DEFAULT_DWELL, optionalNumber } from '../pages/thresholdRequest';
 
 /** What the operator says they want to watch. */
 export const PORT_RULE_SUBJECTS = [
@@ -155,19 +156,6 @@ export function newPortRuleForm(subject: PortRuleSubject = 'in_traffic'): PortRu
     unit: 'Mbps',
     dwell: String(DEFAULT_DWELL),
   };
-}
-
-/**
- * A number the operator did not type is absent, never zero.
- *
- * The same rule `thresholdRequest.ts` states and for the same reason: `Number('')` is `0`, which on
- * an `above` rule never fires and on a `below` rule fires forever.
- */
-function optionalNumber(s: string): number | undefined {
-  const trimmed = s.trim();
-  if (trimmed === '') return undefined;
-  const n = Number(trimmed);
-  return Number.isFinite(n) ? n : undefined;
 }
 
 /** Whether the form can be submitted: it needs at least one bound, unless the subject fixes them. */

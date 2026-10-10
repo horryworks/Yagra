@@ -3,6 +3,7 @@
 // runs a `.tsx` (`testing.md`). `ReclassifyPage.tsx` is layout plus the calls.
 
 import type { ReclassifyProposal, ReclassifyView } from '../types/api';
+import { keepListed } from '../lib/selection';
 
 /** What the empty list says, and the number it says it with.
  *
@@ -53,8 +54,10 @@ export function pruneSelection(
   selected: ReadonlySet<string>,
   proposals: readonly ReclassifyProposal[],
 ): ReadonlySet<string> {
-  const listed = new Set(proposals.map((p) => p.node_id));
-  return new Set([...selected].filter((id) => listed.has(id)));
+  return keepListed(
+    selected,
+    proposals.map((p) => p.node_id),
+  );
 }
 
 /** The rule that chose a proposal, written the way its two matchers combine — `prefix + regex`, or

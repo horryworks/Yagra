@@ -191,7 +191,7 @@ async fn get_topology(
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodePageQuery>,
 ) -> ApiResult<Json<TopologyPage>> {
-    let limit = q.limit.unwrap_or(2000).clamp(1, 5000);
+    let limit = super::util::page_limit(q.limit, 2000, 5000);
     Ok(Json(
         topology_page(&st, &admin, &scope, q.cursor, limit).await?,
     ))
@@ -337,7 +337,7 @@ async fn get_topology_links(
     admin: Admin,
     Query(q): Query<LinkPageQuery>,
 ) -> ApiResult<Json<TopologyLinkPage>> {
-    let limit = q.limit.unwrap_or(2000).clamp(1, 2000);
+    let limit = super::util::page_limit(q.limit, 2000, 2000);
     Ok(Json(
         topology_link_page(&admin, &scope, q.cursor, limit).await?,
     ))
@@ -1314,7 +1314,7 @@ async fn set_topology_mode(
 mod tests {
     use super::*;
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_with};
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -1324,11 +1324,7 @@ mod tests {
     }
 
     async fn status_of_path(st: ApiState, path: &str) -> StatusCode {
-        router(st)
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap()
-            .status()
+        status_with(st, "GET", path, None, None).await
     }
 
     #[tokio::test]

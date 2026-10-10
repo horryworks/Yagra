@@ -23,6 +23,12 @@ export const SEVERITY_ORDER: readonly NodeState[] = [
   'ok',
 ];
 
+/** The worst of some states, by {@link SEVERITY_ORDER}; `ok` for none. Site/region tiles and map
+ *  boxes roll their members up through this one function (ADR-202). */
+export function worstState(states: readonly NodeState[]): NodeState {
+  return SEVERITY_ORDER.find((s) => states.includes(s)) ?? 'ok';
+}
+
 /** The order states are shown in a health bar / legend (best → worst, with the neutral states
  *  trailing). Stable so the bar segments and legend read consistently everywhere. */
 export const DISPLAY_ORDER: readonly NodeState[] = [

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The helpers this crate holds for the whole workspace have no second copy anywhere in it
+//! The helpers this crate holds for the whole workspace (and the few shared helpers held by another
+//! crate, named with their home below) have no second copy anywhere in it
 //! (ADR-184). Test-only.
 //!
 //! One check over every crate rather than one per crate, because a copy is as likely to reappear
@@ -19,6 +20,7 @@ const ONE_HOME: &[(&str, &str)] = &[
     ("SYS_UPTIME_0: &str =", "yagra-common/src/oid.rs"),
     ("tokens -= 1.0", "yagra-common/src/ratelimit.rs"),
     ("attempt += 1", "yagra-common/src/retry.rs"),
+    ("let needed = if gap", "yagra-discovery/src/text.rs"),
 ];
 
 /// Reading the wall clock as "time since 1970" — the one place allowed, and the two readings that

@@ -361,7 +361,7 @@ async fn switch_ready(upgrade: Option<&crate::upgrade::UpgradeRepo>) -> bool {
 /// Reads `YAGRA_BUS_URL`, which the composition sets per service. Reporting the running state rather
 /// than a stored intent is the whole point — see [`BusResponse::remote_enabled`].
 fn remote_enabled() -> bool {
-    std::env::var("YAGRA_BUS_URL")
+    crate::config::bus_url_from_env()
         .unwrap_or_default()
         .trim()
         .starts_with("tls://")

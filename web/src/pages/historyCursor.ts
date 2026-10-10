@@ -6,6 +6,7 @@
 // (testing.md). Everything that decides *what is asked for* lives here; the page is layout.
 
 import type { AlertHistoryRow } from '../types/api';
+import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
 /** Rows per request. Matches the backend default and stays under its 1000 ceiling, so one page is
  *  one round trip and a short page is the end-of-log signal. */
@@ -24,9 +25,7 @@ export const PAGE_SIZE = 100;
 export function nextCursor(
   rows: readonly AlertHistoryRow[],
 ): { before: string; before_id: string } | null {
-  const last = rows.at(-1);
-  if (rows.length < PAGE_SIZE || !last) return null;
-  return { before: last.recorded_at, before_id: last.id };
+  return nextCursorFrom(rows, PAGE_SIZE, (last) => ({ before: last.recorded_at, before_id: last.id }));
 }
 
 /**
@@ -37,10 +36,4 @@ export function nextCursor(
  * cost of being wrong about "impossible" here is a screen that silently misrenders — which is the
  * same class of failure this whole change exists to remove.
  */
-export function appendPage(
-  have: readonly AlertHistoryRow[],
-  page: readonly AlertHistoryRow[],
-): AlertHistoryRow[] {
-  const seen = new Set(have.map((r) => r.id));
-  return [...have, ...page.filter((r) => !seen.has(r.id))];
-}
+export { appendPage };

@@ -324,3 +324,97 @@ fn the_detectors_still_recognise_what_they_are_for() {
         "error.rs builds no live state; the test detector matches anything"
     );
 }
+
+/// The refusal-test probe (`status_of`) is written out once, in `tests_support.rs` (ADR-202).
+///
+/// Twenty-three domain files each held their own copy, in nine variants that differed only in
+/// which verbs carried `{}`. A domain may still keep a one-line `status_of` that picks its body —
+/// that choice is a fact about the domain — but the request itself is built in one place. Read
+/// raw (the probes are test-only) and as code only, with every needle assembled at runtime.
+#[test]
+fn the_status_probe_builds_its_request_in_one_place() {
+    // `fn status_` covers `status_of`, `status_of_path` and the shared `status_with`.
+    let probe = format!("fn {}", "status_");
+    let builder = format!("Request::{}", "builder");
+    let mut home_builds = false;
+    let mut copies = Vec::new();
+    for (name, text) in files() {
+        let code = code_only(&text);
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find(&probe) {
+            let body = &rest[at..];
+            // A probe ends at the first line closing a block at its own indentation: top level in
+            // `tests_support.rs`, four spaces inside a domain's `mod tests`.
+            let end = ["\n}", "\n    }"]
+                .iter()
+                .filter_map(|close| body.find(close).map(|e| e + close.len()))
+                .min()
+                .unwrap_or(body.len());
+            if body[..end].contains(&builder) {
+                if name == "tests_support.rs" {
+                    home_builds = true;
+                } else {
+                    copies.push(name.clone());
+                }
+            }
+            rest = &body[end..];
+        }
+    }
+    // The accept side, and the reason this check carries no count: the reader must still
+    // recognise the one probe that does build a request. A floor on probes found would shrink as
+    // copies are removed, which is the work succeeding.
+    assert!(
+        home_builds,
+        "the shared probe in tests_support.rs was not recognised; the reader is broken"
+    );
+    assert!(
+        copies.is_empty(),
+        "{copies:?} build the status probe's request by hand — call \
+         `tests_support::status_with` (or `status_of`) and pass the body instead (ADR-202)"
+    );
+}
+
+/// A list endpoint's row count goes through `util::page_limit`, on both surfaces (ADR-202).
+///
+/// The defaults and maxima differ per endpoint on purpose; the shape did not need to, and twenty
+/// hand-written `unwrap_or(N).clamp(1, M)` lines are twenty places a lower bound of `0` or a
+/// missing upper bound can slip in. The needle is a `limit` that is clamped on the same line.
+#[test]
+fn every_list_limit_is_clamped_through_page_limit() {
+    let mcp = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("mcp")
+        .join("tools");
+    let mut sources = files();
+    for entry in std::fs::read_dir(&mcp).expect("read src/mcp/tools") {
+        let p = entry.expect("dir entry").path();
+        if p.extension().is_some_and(|x| x == "rs") {
+            let name = format!(
+                "mcp/tools/{}",
+                p.file_name().expect("name").to_string_lossy()
+            );
+            sources.push((name, std::fs::read_to_string(&p).expect("read source")));
+        }
+    }
+    let clamp = format!(".{}(1,", "clamp");
+    let helper = format!("{}(", "page_limit");
+    let mut callers = 0usize;
+    let mut hand_written = Vec::new();
+    for (name, text) in &sources {
+        let production = code_only(halves(text).0);
+        callers += production.matches(&helper).count();
+        for line in production.lines() {
+            if line.contains("limit") && line.contains(&clamp) {
+                hand_written.push(format!("{name}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        callers >= 15,
+        "only {callers} calls to the helper were found; the reader no longer sees them"
+    );
+    assert!(
+        hand_written.is_empty(),
+        "{hand_written:#?} clamp a limit by hand — use `api::util::page_limit` (ADR-202)"
+    );
+}

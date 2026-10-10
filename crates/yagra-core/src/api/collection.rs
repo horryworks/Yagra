@@ -1090,9 +1090,9 @@ mod vlan_join_tests {
 mod tests {
     use super::*;
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_of};
     use axum::body::{to_bytes, Body};
-    use axum::http::{header::AUTHORIZATION, Request};
+    use axum::http::Request;
     use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
 
@@ -1207,21 +1207,6 @@ mod tests {
             ("GET", format!("/api/v1/profiles/{ID}/templates")),
             ("PUT", format!("/api/v1/profiles/{ID}/templates")),
         ]
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from("{}")).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     #[tokio::test]

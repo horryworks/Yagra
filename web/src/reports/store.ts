@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import type { ReportRun } from '../types/api';
+import { byNewestCreated } from '../lib/sort';
 
 interface ReportRunsStore {
   runs: ReportRun[];
@@ -21,20 +22,16 @@ interface ReportRunsStore {
   removeRun: (id: string) => void;
 }
 
-function byNewest(a: ReportRun, b: ReportRun): number {
-  return b.created_ms - a.created_ms;
-}
-
 export const useReportRunsStore = create<ReportRunsStore>((set) => ({
   runs: [],
   loaded: false,
   loadFailed: false,
   setLoadFailed: (loadFailed) => set({ loadFailed }),
-  setRuns: (runs) => set({ runs: [...runs].sort(byNewest), loaded: true, loadFailed: false }),
+  setRuns: (runs) => set({ runs: [...runs].sort(byNewestCreated), loaded: true, loadFailed: false }),
   upsertRun: (run) =>
     set((s) => {
       const rest = s.runs.filter((r) => r.id !== run.id);
-      return { runs: [run, ...rest].sort(byNewest) };
+      return { runs: [run, ...rest].sort(byNewestCreated) };
     }),
   removeRun: (id) => set((s) => ({ runs: s.runs.filter((r) => r.id !== id) })),
 }));

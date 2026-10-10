@@ -28,6 +28,7 @@ import { sinceIso, unset } from '../lib/filterQuery';
 import { rangePresets, type RangeToken } from '../lib/filterPresets';
 import { FINDING_SEVERITIES } from '../types/api';
 import { TOOLS } from './data';
+import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
 /**
  * Rows per request. Matches the backend's default and stays under its 200 ceiling, so a page is
@@ -110,9 +111,7 @@ export function queryFor(
  * is a real set, not a theoretical one — and the page would appear to repeat itself.
  */
 export function nextCursor(rows: SavedFinding[]): FindingCursor | null {
-  const last = rows.at(-1);
-  if (rows.length < PAGE_SIZE || !last) return null;
-  return { before: last.at, before_id: last.id };
+  return nextCursorFrom(rows, PAGE_SIZE, (last) => ({ before: last.at, before_id: last.id }));
 }
 
 /**
@@ -122,10 +121,7 @@ export function nextCursor(rows: SavedFinding[]): FindingCursor | null {
  * duplicate `key` in React is a rendering bug rather than a visible one, and the cost of being
  * wrong about "impossible" here is a screen that silently misrenders.
  */
-export function appendPage(have: SavedFinding[], page: SavedFinding[]): SavedFinding[] {
-  const seen = new Set(have.map((f) => f.id));
-  return [...have, ...page.filter((f) => !seen.has(f.id))];
-}
+export { appendPage };
 
 /**
  * Split a `ScopeValue` from the shared [`ScopePicker`] into the two filter fields.

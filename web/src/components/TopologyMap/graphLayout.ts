@@ -52,7 +52,7 @@
 // moving underneath a preserved viewport. Removing either one brings the jumping back.
 
 import { MAP_ROLES, type MapRole, type NodeState } from '../../types/api';
-import { SEVERITY_ORDER } from '../../lib/nodeState';
+import { worstState } from '../../lib/nodeState';
 
 /** What a box on the map stands for: a node, a subfolder drawn as one box, or a stub for links
  *  that leave the level. */
@@ -91,10 +91,8 @@ export function isBundleId(id: string): boolean {
   return id.startsWith('apgroup:');
 }
 
-/** The worst of some states, by the canonical severity order; `ok` for none. */
-export function worstState(states: readonly NodeState[]): NodeState {
-  return SEVERITY_ORDER.find((s) => states.includes(s)) ?? 'ok';
-}
+/** Re-exported for the map's own modules; the rule lives in `lib/nodeState`. */
+export { worstState };
 
 /** The size one box is drawn at. */
 export function boxSize(n: Pick<GraphNode, 'kind' | 'sub' | 'ap' | 'bundle'>): { w: number; h: number } {

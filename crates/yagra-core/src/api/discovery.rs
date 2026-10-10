@@ -1162,7 +1162,7 @@ pub(crate) fn recent_candidates(
     };
     admin
         .discovery
-        .recent_candidates(limit.unwrap_or(10).clamp(1, 50))
+        .recent_candidates(super::util::page_limit(limit, 10, 50))
 }
 
 // ── Endpoints seen on the network (ADR-043 Increment 3) ─────────────────────
@@ -1720,9 +1720,9 @@ async fn import_discovered_endpoint(
 mod tests {
     use super::*;
     use crate::api::router;
-    use crate::api::tests_support::{private_state, public_state};
+    use crate::api::tests_support::{private_state, public_state, status_of};
     use axum::body::{to_bytes, Body};
-    use axum::http::{header::AUTHORIZATION, Request};
+    use axum::http::Request;
     use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
 
@@ -1743,21 +1743,6 @@ mod tests {
             // is gated exactly as the import it precedes (ADR-131 decision 7).
             ("POST", "/api/v1/discovery/import-preview".to_owned()),
         ]
-    }
-
-    async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
-        let mut b = Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json");
-        if let Some(t) = token {
-            b = b.header(AUTHORIZATION, format!("Bearer {t}"));
-        }
-        router(st)
-            .oneshot(b.body(Body::from("{}")).unwrap())
-            .await
-            .unwrap()
-            .status()
     }
 
     #[tokio::test]

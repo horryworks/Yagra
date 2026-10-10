@@ -23,6 +23,7 @@ import {
   type MerakiNetwork,
   type MerakiOrg,
 } from '../../types/api';
+import { keepListed } from '../../lib/selection';
 
 // ───────────────────────────────────────────────────────────────────── states
 
@@ -248,9 +249,10 @@ export function pruneSelection(
   selected: ReadonlySet<string>,
   devices: readonly MerakiDevice[],
 ): ReadonlySet<string> {
-  const importable = new Set(devices.filter(isImportable).map((d) => d.serial));
-  const kept = [...selected].filter((serial) => importable.has(serial));
-  return kept.length === selected.size ? selected : new Set(kept);
+  return keepListed(
+    selected,
+    devices.filter(isImportable).map((d) => d.serial),
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────── the cap

@@ -604,6 +604,49 @@ pub(crate) async fn send(
     (status, json)
 }
 
+/// One request through the whole router, answering only its status — the probe every domain's
+/// refusal tests make (an anonymous caller, a role lacking the permission, an absent subsystem).
+///
+/// `token: None` sends no `Authorization` header at all, which [`send`] cannot express. `body:
+/// Some(json)` sends it with `content-type: application/json`; `None` sends an empty body and no
+/// content type. Domains differ on which verbs carry `{}`, and each keeps its own choice by passing
+/// it here rather than by writing the request out again (ADR-202; `guards.rs` refuses a copy).
+pub(crate) async fn status_with(
+    st: ApiState,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> axum::http::StatusCode {
+    use tower::ServiceExt as _;
+    let mut req = axum::http::Request::builder().method(method).uri(path);
+    if let Some(t) = token {
+        req = req.header(axum::http::header::AUTHORIZATION, format!("Bearer {t}"));
+    }
+    let req = match body {
+        Some(json) => req
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(json.to_owned())),
+        None => req.body(axum::body::Body::empty()),
+    }
+    .expect("request");
+    super::router(st)
+        .oneshot(req)
+        .await
+        .expect("response")
+        .status()
+}
+
+/// [`status_with`] sending `{}` as JSON on every verb — what most domains' probes send.
+pub(crate) async fn status_of(
+    st: ApiState,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+) -> axum::http::StatusCode {
+    status_with(st, method, path, token, Some("{}")).await
+}
+
 /// A token for an account that actually exists in `users`, and its id.
 ///
 /// [`token`] mints a session for a random uuid, which is enough for every permission check but not

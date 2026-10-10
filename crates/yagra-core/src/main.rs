@@ -287,7 +287,7 @@ async fn main() -> anyhow::Result<()> {
 /// endpoint answers 2xx, 1 otherwise. Derives the port from the configured API address (default
 /// 8080) so a custom `YAGRA_API_ADDR` still works.
 async fn run_healthcheck() -> i32 {
-    let addr = std::env::var("YAGRA_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let addr = config::api_addr_from_env();
     let port = addr.rsplit(':').next().unwrap_or("8080");
     let url = format!("http://127.0.0.1:{port}/healthz");
     let client = match http::builder(Duration::from_secs(3), http::Redirects::Follow).build() {
@@ -1812,7 +1812,13 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         started: std::time::SystemTime::now(),
         poller_logs: None,
     };
-    serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
+    serve(
+        state,
+        config::DEFAULT_API_ADDR,
+        metrics,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 /// Everything [`run_fleet_health_timeline`] snapshots or prunes.

@@ -221,3 +221,49 @@ describe('a screen reads through useLoad', () => {
     expect(callers.length).toBeGreaterThanOrEqual(Object.keys(PERMANENT).length);
   });
 });
+
+/**
+ * ADR-202: thirteen files keep their own `[loading, setLoading]` instead of reading through
+ * `useLoad`. Measured, not reviewed: some are reads that could move, some may be a spinner for an
+ * action (a save, a run) where `useLoad` does not apply. Until each is looked at, the list is a
+ * ratchet — a fourteenth fails, and a file that stops hand-rolling has to leave the list.
+ *
+ * ⚠️ The needle is assembled at runtime, for the reason the guards above give.
+ */
+describe('hand-rolled loading state does not spread', () => {
+  const NEEDLE = `[${'loading'}, setLoading] = useState`;
+
+  /** Not yet reviewed (ADR-202 remaining work). Shrinks only. */
+  const UNREVIEWED = [
+    'components/CollectionEditor/CollectionEditor.tsx',
+    'components/EventLog/useEventLog.ts',
+    'components/NodeDetail/FlowTab.tsx',
+    'components/Rca/RcaModal.tsx',
+    'lib/useNodeSearch.ts',
+    'pages/AiSettingsPage.tsx',
+    'pages/AuditPage.tsx',
+    'pages/AuthSettingsPage.tsx',
+    'pages/DeliveryLog.tsx',
+    'pages/NodesPage.tsx',
+    'pages/useFilterSearch.ts',
+    'troubleshoot/SavedFindingsPage.tsx',
+    'troubleshoot/ScheduledPage.tsx',
+  ];
+
+  const holders = readSources()
+    .filter(([, src]) => codeOnly(src).includes(NEEDLE))
+    .map(([p]) => p);
+
+  it('no new file holds its own loading flag', () => {
+    const fresh = holders.filter((p) => !UNREVIEWED.includes(p));
+    expect(
+      fresh,
+      `read through useLoad (lib/useLoad.ts) instead of a hand-rolled loading flag:\n  ${fresh.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('a file that moved to useLoad leaves the list', () => {
+    const stale = UNREVIEWED.filter((p) => !holders.includes(p));
+    expect(stale, 'no longer hand-rolls loading — take it off the list').toEqual([]);
+  });
+});

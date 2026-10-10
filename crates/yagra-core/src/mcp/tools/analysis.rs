@@ -401,7 +401,7 @@ impl YagraMcp {
         };
         // A smaller page than the REST default (50): an AI client reads the runs list to orient,
         // not to render a table.
-        let limit = p.limit.unwrap_or(20).clamp(1, 100);
+        let limit = crate::api::util::page_limit(p.limit, 20, 100);
         let jobs = match admin.analysis.list(limit, &filter).await {
             Ok(js) => js,
             Err(e) => return tool_error(TOOL, "list analyses", &e),
