@@ -72,6 +72,8 @@ pub(crate) mod pools;
 mod preferences;
 pub(crate) mod prefix_gaps;
 mod profiles;
+/// What an anonymous caller may reach, derived from the widgets on the public board (ADR-123).
+pub(crate) mod public_access;
 /// The public board an anonymous visitor sees, and the switch that serves it (ADR-123). Apart from
 /// `dashboard` on purpose: this board is an access-control list, not presentation state.
 mod public_dashboard;
@@ -97,6 +99,8 @@ pub(crate) mod system;
 pub(crate) mod tests_support;
 pub(crate) mod thresholds;
 pub(crate) mod topology;
+/// One folder level of the network map (ADR-191) — the pure half of `topology.rs`'s level route.
+pub(crate) mod topology_level;
 pub(crate) mod upgrade;
 pub(crate) mod users;
 pub(crate) mod util;
@@ -144,7 +148,6 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
-use yagra_common::HostSample;
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -177,7 +180,7 @@ pub struct AdminState {
     /// The "Public Dashboard" layout — the one board an anonymous visitor sees (ADR-123).
     ///
     /// ⚠️ Not a third presentation store. What this board carries decides which API routes an
-    /// unauthenticated request may reach ([`crate::public_access`]), which is why its write takes
+    /// unauthenticated request may reach ([`crate::api::public_access`]), which is why its write takes
     /// `manage_system` while its shared-board sibling takes `manage_config`.
     pub public_dashboard: Arc<crate::dashboard::PublicDashboardRepo>,
     /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
@@ -292,10 +295,6 @@ pub(crate) fn clamp_range_step(from: i64, to: i64, step: u64, min_step: u64) -> 
     step.max(min_step).max(needed).max(1)
 }
 
-/// Core's own latest host-resource sample (self-observability), refreshed by the collector task in
-/// `main`. Read by `GET /api/v1/system/hosts`; `None` until the first sample (or in skeleton mode).
-pub type CoreHostSample = Arc<std::sync::Mutex<Option<HostSample>>>;
-
 /// Shared API state: the metric store, the node inventory source, and the alert engine.
 #[derive(Clone)]
 pub struct ApiState {
@@ -314,7 +313,7 @@ pub struct ApiState {
     /// unset.
     pub ipasn: crate::ipasn::IpAsnHandle,
     /// Core's own latest host-resource sample (CPU/load/mem/disk/network), for the System Health page.
-    pub host_sample: CoreHostSample,
+    pub host_sample: crate::host_collector::CoreHostSample,
     /// Inventory read seam.
     pub nodes: Arc<dyn NodeListing>,
     /// Alert engine (active alerts + live event stream).
@@ -342,7 +341,7 @@ pub struct ApiState {
     /// change at runtime: the switch is a row an admin toggles (`app_settings`), and the allow-list
     /// changes whenever the public board is edited. A refresh loop keeps standby cores in step
     /// (ADR-123 decision 5); reads go through `public_access::current`.
-    pub public_access: crate::public_access::PublicAccessHandle,
+    pub public_access: crate::api::public_access::PublicAccessHandle,
     /// HA leadership (ADR-016): `true` when this core holds the advisory lock and runs the
     /// coordinator + ingest + alert/notify singletons. Drives `/readyz` (so a load balancer routes
     /// only to the leader) and gates the event-ingest handlers that would otherwise enqueue to an
@@ -863,8 +862,8 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_access: crate::public_access::handle(
-                crate::public_access::PublicAccess::skeleton_open(),
+            public_access: crate::api::public_access::handle(
+                crate::api::public_access::PublicAccess::skeleton_open(),
             ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
@@ -905,8 +904,8 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_access: crate::public_access::handle(
-                crate::public_access::PublicAccess::closed(),
+            public_access: crate::api::public_access::handle(
+                crate::api::public_access::PublicAccess::closed(),
             ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
@@ -945,8 +944,8 @@ mod tests {
             history: None,
             ack: None,
             event_engine: None,
-            public_access: crate::public_access::handle(
-                crate::public_access::PublicAccess::closed(),
+            public_access: crate::api::public_access::handle(
+                crate::api::public_access::PublicAccess::closed(),
             ),
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,

@@ -3808,7 +3808,7 @@ export interface paths {
         /**
          * The public board's layout, or JSON `null` when no admin has composed one.
          * @description 🚨 **The one route anonymous callers reach whatever the board says** (`ALWAYS_OPEN` in
-         *     [`crate::public_access`]): the page cannot draw itself without knowing which widgets to place.
+         *     [`crate::api::public_access`]): the page cannot draw itself without knowing which widgets to place.
          *     It carries the board's *shape* and no monitoring data — every widget fetches its own content
          *     through a route the board had to open.
          */

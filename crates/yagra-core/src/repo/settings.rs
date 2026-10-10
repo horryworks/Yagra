@@ -15,9 +15,9 @@
 use sqlx::Row;
 
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
-use crate::neighbors::AdjacencySettings;
-use crate::retention::RetentionSettings;
-use crate::topology_mode::TopologyMode;
+use super::adjacency_settings::AdjacencySettings;
+use super::retention_settings::RetentionSettings;
+use super::topology_mode::TopologyMode;
 
 use super::*;
 
@@ -108,7 +108,7 @@ impl NodeRepo {
     }
 
     /// Set every retention window at once, upserting the singleton row. The API edge validates the
-    /// bounds (`retention::days_in_bounds` / `hours_in_bounds`); the table CHECKs are the backstop.
+    /// bounds (`retention_settings::days_in_bounds` / `hours_in_bounds`); the table CHECKs are the backstop.
     pub async fn set_retention_settings(&self, s: &RetentionSettings) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO app_settings (id, alert_linked_retention_days, \
@@ -215,7 +215,7 @@ impl NodeRepo {
     }
 
     /// Set the connectivity-discovery settings, upserting the singleton row. The API edge validates
-    /// both cadences (`neighbors::interval_in_bounds`); the table CHECKs are the backstop.
+    /// both cadences (`adjacency_settings::interval_in_bounds`); the table CHECKs are the backstop.
     pub async fn set_adjacency_settings(&self, s: &AdjacencySettings) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO app_settings \
@@ -423,7 +423,7 @@ mod tests {
     async fn the_retention_windows_round_trip(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool);
         repo.seed_app_settings(30, 7).await.expect("seed");
-        let want = crate::retention::RetentionSettings {
+        let want = crate::repo::retention_settings::RetentionSettings {
             alert_linked_days: 45,
             unmatched_event_hours: 12,
             report_run_days: 60,
@@ -443,7 +443,7 @@ mod tests {
     async fn every_adjacency_switch_round_trips_in_its_own_column(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool);
         repo.seed_app_settings(30, 7).await.expect("seed");
-        let want = crate::neighbors::AdjacencySettings {
+        let want = crate::repo::adjacency_settings::AdjacencySettings {
             neighbors_enabled: true,
             // Distinct values inside the 300..=86400 each column is CHECKed into, so a bind in
             // the wrong position swaps two numbers this test can tell apart.

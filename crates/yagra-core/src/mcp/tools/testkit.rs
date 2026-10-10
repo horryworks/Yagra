@@ -42,7 +42,9 @@ pub(super) fn skeleton_state() -> ApiState {
         history: None,
         ack: None,
         event_engine: None,
-        public_access: crate::public_access::handle(crate::public_access::PublicAccess::closed()),
+        public_access: crate::api::public_access::handle(
+            crate::api::public_access::PublicAccess::closed(),
+        ),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,
         oidc: None,

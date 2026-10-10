@@ -66,6 +66,11 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ("mod.rs", &[]),
     // A `const` table of seeded alert rules. `super::seed` is what writes it.
     ("defaults.rs", &[]),
+    // The shapes three `app_settings` columns are read into (ADR-202 Inc.3): types, defaults and
+    // bands, no SQL. `settings.rs` is what reads and writes them.
+    ("adjacency_settings.rs", &[]),
+    ("retention_settings.rs", &[]),
+    ("topology_mode.rs", &[]),
     // The two joins are for display names (`node_facts` answers "what is this node called, in
     // which folder, on which profile"), not a second file's worth of `profiles` logic.
     // `url_checks` / `dns_checks` are named only by `DEVICE_NODE_PREDICATE` (ADR-139): a URL or DNS
@@ -450,4 +455,117 @@ fn every_group_scope_predicate_is_the_helper_or_declared() {
         .map(|(_, c)| c.matches(&format!("{}(", "scope_predicate")).count())
         .sum();
     assert!(calls >= 13, "only {calls} statements ask scope_predicate");
+}
+
+/// The modules of this crate that `repo/`'s production code may name: the database layer itself
+/// and the foundations under it. Everything else is a module that *uses* the repository.
+const REPO_MAY_NAME: &[&str] = &[
+    "cadence",
+    "change_feed",
+    "config",
+    "config_gen",
+    "groups",
+    "http",
+    "leader",
+    "module_source",
+    "pgtest",
+    "repo",
+    "sealed_row",
+    "secrets",
+    "seed_ids",
+    "sql_tables",
+    "stored_enum",
+];
+
+/// Names outside [`REPO_MAY_NAME`] that one `repo/` file still reaches for, with the reason.
+/// Checked both ways, like every exemption list in this crate.
+const REPO_NAMES_ABOVE: &[(&str, &str, &str)] = &[(
+    "defaults.rs",
+    "alerts",
+    "the seeded liveness rule names the engine's `__liveness__` sentinel and its default dwell; \
+     both belong to the alert engine and move with it (ADR-202 Inc.4)",
+)];
+
+/// The crate-level modules a piece of code names: `crate::x::…` and each head of a grouped
+/// `use crate::{x, y::z}`.
+fn crate_modules_named(code: &str) -> BTreeSet<String> {
+    let path = regex::Regex::new(r"\bcrate::([a-z_][a-z0-9_]*)").expect("a valid pattern");
+    let grouped = regex::Regex::new(r"\bcrate::\{([^}]*)\}").expect("a valid pattern");
+    let mut out: BTreeSet<String> = path.captures_iter(code).map(|c| c[1].to_owned()).collect();
+    for c in grouped.captures_iter(code) {
+        for item in c[1].split(',') {
+            let head = item.trim().split("::").next().unwrap_or_default().trim();
+            if !head.is_empty() {
+                out.insert(head.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// **The repository imports nothing above it** (ADR-202 Inc.3).
+///
+/// `repo/` is what every domain module stands on. A type it borrows from one of them — a settings
+/// shape, a cap, a sentinel — ties the whole database layer to that module and, through it, to
+/// whatever that module imports. Three files did that before ADR-202 moved the types down; this
+/// keeps the layer from collecting them again.
+///
+/// Production code only, through [`crate::module_source::crate_code`]: a test may build a fixture
+/// from anywhere in the crate.
+#[test]
+fn repo_imports_no_domain_module() {
+    let files = crate::module_source::crate_code();
+    let repo: Vec<&(String, String)> = files
+        .iter()
+        .filter(|(name, _)| name.starts_with("repo/"))
+        .collect();
+    assert!(
+        repo.len() >= 15,
+        "only {} repo/ files were read; the walk no longer sees the module",
+        repo.len()
+    );
+    let mut named = 0usize;
+    let mut found: BTreeSet<(String, String)> = BTreeSet::new();
+    for (name, code) in &repo {
+        let file = name.trim_start_matches("repo/");
+        for module in crate_modules_named(code) {
+            named += 1;
+            if !REPO_MAY_NAME.contains(&module.as_str()) {
+                found.insert((file.to_owned(), module));
+            }
+        }
+    }
+    // The accept side: `nodes.rs` names `groups` for the folder tree, so a detector that stopped
+    // matching would report a count of zero here rather than a clean layer.
+    assert!(
+        named >= 3,
+        "only {named} crate-level names were found in repo/; the detector has stopped matching"
+    );
+    let declared: BTreeSet<(String, String)> = REPO_NAMES_ABOVE
+        .iter()
+        .map(|(f, m, _)| ((*f).to_owned(), (*m).to_owned()))
+        .collect();
+    let undeclared: Vec<&(String, String)> = found.difference(&declared).collect();
+    assert!(
+        undeclared.is_empty(),
+        "{undeclared:?}: repo/ names a module above it. Move the type or constant it needs into \
+         repo/ (the module that used to own it imports it from there)"
+    );
+    let stale: Vec<&(String, String)> = declared.difference(&found).collect();
+    assert!(
+        stale.is_empty(),
+        "{stale:?} no longer reach above repo/ — take them out of REPO_NAMES_ABOVE"
+    );
+}
+
+#[test]
+fn the_crate_module_detector_reads_paths_and_groups() {
+    let got = crate_modules_named(
+        "use crate::groups::GroupType;\nuse crate::{config, seed_ids::A};\nlet x = crate::leader::is();",
+    );
+    let want: BTreeSet<String> = ["config", "groups", "leader", "seed_ids"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    assert_eq!(got, want);
 }

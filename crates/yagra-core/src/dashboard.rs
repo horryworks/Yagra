@@ -108,7 +108,7 @@ impl SharedDashboardRepo {
 ///
 /// 🚨 **This is not another presentation store.** It round-trips an opaque JSON document like its
 /// two siblings, but core also reads the widget *types* out of it to derive which API routes an
-/// anonymous request may reach (ADR-123 decision 5, [`crate::public_access`]). Saving a board with one
+/// anonymous request may reach (ADR-123 decision 5, [`crate::api::public_access`]). Saving a board with one
 /// more widget on it opens the routes that widget reads; removing one closes them. That is why the
 /// write is `manage_system` at the API edge while [`SharedDashboardRepo`]'s is `manage_config` —
 /// composing this board is an access-control act, not a layout preference.

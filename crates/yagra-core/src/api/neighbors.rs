@@ -21,7 +21,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::scope::NodeScope;
 use super::ApiState;
-use crate::neighbors::{self, AdjacencySettings};
+use crate::repo::adjacency_settings::{self, AdjacencySettings};
 use crate::repo::AddressClaim;
 use crate::store::MetricStore;
 use axum::extract::{Path, Query, State};
@@ -1204,8 +1204,8 @@ pub(crate) async fn adjacency_config(admin: &super::AdminState) -> NeighborConfi
         routing_interval_secs: Some(s.routing_interval_secs),
         media_enabled: Some(s.media_enabled),
         media_interval_secs: Some(s.media_interval_secs),
-        min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
-        max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
+        min_interval_secs: adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
+        max_interval_secs: adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
     }
 }
 
@@ -1256,8 +1256,8 @@ async fn update_neighbor_settings(
             "invalid_neighbor_interval",
             format!(
                 "the neighbour and interface-address intervals must be between {} and {} seconds",
-                neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
-                neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
+                adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
+                adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
             ),
         ));
     }
@@ -1352,7 +1352,12 @@ mod tests {
     /// surface as a 500 with no usable message.
     #[test]
     fn the_cadence_band_is_the_one_the_module_declares() {
-        for bad in [0, 1, neighbors::MIN_NEIGHBOR_INTERVAL_SECS - 1, 999_999] {
+        for bad in [
+            0,
+            1,
+            adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS - 1,
+            999_999,
+        ] {
             assert!(
                 !AdjacencySettings {
                     neighbors_interval_secs: bad,
@@ -1380,9 +1385,9 @@ mod tests {
             );
         }
         for ok in [
-            neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
+            adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
             3600,
-            neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
+            adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
         ] {
             assert!(AdjacencySettings {
                 neighbors_interval_secs: ok,
@@ -1432,13 +1437,21 @@ mod tests {
             routing_interval_secs: Some(3600),
             media_enabled: Some(true),
             media_interval_secs: Some(3600),
-            min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
-            max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
+            min_interval_secs: adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
+            max_interval_secs: adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
         };
-        assert!(neighbors::interval_in_bounds(cfg.min_interval_secs));
-        assert!(neighbors::interval_in_bounds(cfg.max_interval_secs));
-        assert!(!neighbors::interval_in_bounds(cfg.min_interval_secs - 1));
-        assert!(!neighbors::interval_in_bounds(cfg.max_interval_secs + 1));
+        assert!(adjacency_settings::interval_in_bounds(
+            cfg.min_interval_secs
+        ));
+        assert!(adjacency_settings::interval_in_bounds(
+            cfg.max_interval_secs
+        ));
+        assert!(!adjacency_settings::interval_in_bounds(
+            cfg.min_interval_secs - 1
+        ));
+        assert!(!adjacency_settings::interval_in_bounds(
+            cfg.max_interval_secs + 1
+        ));
     }
 
     /// ADR-179 Inc.9: a neighbour on the list only through a node outside the caller's folders

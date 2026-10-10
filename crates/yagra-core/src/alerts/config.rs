@@ -125,7 +125,7 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     ///
     /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
     /// changes nothing — see [`NodeRepo::get_topology_mode`] before copying that.
-    async fn topology_mode(&self) -> crate::topology_mode::TopologyMode;
+    async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode;
     /// The derived connectivity graph for these nodes (ADR-043). Only called when the mode says so.
     async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology;
 }
@@ -168,7 +168,7 @@ impl AlertConfigSources for LiveConfigSources {
             .alert_bindings()
             .await
     }
-    async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
+    async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode {
         self.repo.get_topology_mode().await
     }
     async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology {
@@ -740,7 +740,7 @@ mod tests {
     struct FakeSources {
         fails: Fails,
         nodes: Vec<Node>,
-        mode: crate::topology_mode::TopologyMode,
+        mode: crate::repo::topology_mode::TopologyMode,
         /// The graph `derived_topology` hands back…
         derived: Topology,
         /// …and whether it was asked for at all, which is half of ADR-043 decision 5's property.
@@ -752,7 +752,11 @@ mod tests {
     }
 
     impl FakeSources {
-        fn new(fails: Fails, nodes: Vec<Node>, mode: crate::topology_mode::TopologyMode) -> Self {
+        fn new(
+            fails: Fails,
+            nodes: Vec<Node>,
+            mode: crate::repo::topology_mode::TopologyMode,
+        ) -> Self {
             Self {
                 fails,
                 nodes,
@@ -801,7 +805,7 @@ mod tests {
             self.refuse(Fails::MerakiOrgs)?;
             Ok(Vec::new())
         }
-        async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
+        async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode {
             self.mode
         }
         async fn derived_topology(&self, _nodes: &[Node]) -> Topology {
@@ -832,7 +836,7 @@ mod tests {
         let sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None), node(2, Some(1))],
-            crate::topology_mode::TopologyMode::Manual,
+            crate::repo::topology_mode::TopologyMode::Manual,
         );
         let base = load_alert_config_base(&sources)
             .await
@@ -849,7 +853,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None)],
-            crate::topology_mode::TopologyMode::Manual,
+            crate::repo::topology_mode::TopologyMode::Manual,
         );
         sources.items = yagra_common::builtin_templates()
             .into_iter()
@@ -905,7 +909,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None)],
-            crate::topology_mode::TopologyMode::Manual,
+            crate::repo::topology_mode::TopologyMode::Manual,
         );
         sources.rules = vec![on_node.clone(), on_port.clone()];
         let base = load_alert_config_base(&sources).await.expect("healthy");
@@ -937,7 +941,7 @@ mod tests {
             let sources = FakeSources::new(
                 which,
                 vec![node(1, None)],
-                crate::topology_mode::TopologyMode::Manual,
+                crate::repo::topology_mode::TopologyMode::Manual,
             );
             assert!(
                 load_alert_config_base(&sources).await.is_err(),
@@ -980,8 +984,8 @@ mod tests {
         let nodes = vec![node(1, None), node(2, Some(1)), node(3, None)];
 
         for mode in [
-            crate::topology_mode::TopologyMode::Manual,
-            crate::topology_mode::TopologyMode::Shadow,
+            crate::repo::topology_mode::TopologyMode::Manual,
+            crate::repo::topology_mode::TopologyMode::Shadow,
         ] {
             let mut sources = FakeSources::new(Fails::Nothing, nodes.clone(), mode);
             sources.derived = derived.clone();
@@ -1009,7 +1013,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             nodes,
-            crate::topology_mode::TopologyMode::Derived,
+            crate::repo::topology_mode::TopologyMode::Derived,
         );
         sources.derived = derived;
         let base = load_alert_config_base(&sources).await.expect("healthy");

@@ -9,7 +9,7 @@
 //! **polled** — the failure mode that recurred in v0.2.13.
 
 use crate::l3_routing::RoutingPlan;
-use crate::neighbors::AdjacencySettings;
+use crate::repo::adjacency_settings::AdjacencySettings;
 use crate::secrets::SnmpV3Secret;
 use std::collections::HashSet;
 use std::sync::Arc;

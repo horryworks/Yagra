@@ -36,14 +36,6 @@ use yagra_common::{
     RoutingSnapshot,
 };
 
-/// Default cadence for the ARP walk: six hours.
-///
-/// Slower than the neighbour and interface-address walks by design. Those read tables sized by the
-/// device; this one reads a table sized by the network, and it is the only walk in ADR-043 that
-/// costs a busy switch measurable work. Meraki's inventory tier made the same call at the same
-/// number.
-pub const DEFAULT_ARP_INTERVAL_SECS: u32 = 21_600;
-
 /// Fleet-wide ceiling on stored endpoints.
 ///
 /// Not a performance guess: a campus with a few thousand hosts fits comfortably, and a deployment
@@ -1271,11 +1263,6 @@ mod tests {
         // inventory of every laptop that ever joined the wifi.
         assert_eq!(DISCOVERED_RETENTION_SECS, 7 * 86_400);
         const { assert!(MAX_DISCOVERED_ENDPOINTS <= 10_000) };
-        // And the ARP cadence stays in the band the API edge enforces for the other two walks.
-        assert!(crate::neighbors::interval_in_bounds(
-            DEFAULT_ARP_INTERVAL_SECS
-        ));
-        const { assert!(DEFAULT_ARP_INTERVAL_SECS > crate::neighbors::DEFAULT_NEIGHBOR_INTERVAL_SECS) };
     }
 
     /// **An address leaves PostgreSQL through `host()`, never through a cast to text.**

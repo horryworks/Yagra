@@ -36,8 +36,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 use yagra_common::{LinkSource, NodeKind, NodeState, ProfileCategory};
 
-use crate::api::fleet::GroupStateCounts;
-use crate::api::topology::{
+use super::fleet::GroupStateCounts;
+use super::topology::{
     MapBreadcrumb, MapEdge, MapEdgeMember, MapEndpoint, MapEndpointKind, MapFolder, MapLevel,
     MapNode, MapRole, MapRoleReason, MapStub, MapStubKind,
 };

@@ -119,6 +119,15 @@ pub struct RediscoverWrite {
     pub sys_descr: Option<String>,
 }
 
+/// The most nodes that may share a value before the value stops counting as evidence (ADR-148
+/// decision 3).
+///
+/// A judgement, not a measurement: a stack or a chassis cluster registered by every member's own
+/// address stays under it, and a value carried by nine devices has stopped naming a device. It lives
+/// here rather than in `duplicates.rs` because the statements that read a duplicate's candidates cap
+/// their rows by it, and this layer may not reach up into the module that judges them (ADR-202).
+pub const SHARED_VALUE_MAX: usize = 8;
+
 /// One device node as Nodes ▸ Duplicates compares it (ADR-148) — see [`NodeRepo::duplicate_inputs`].
 #[derive(Debug, Clone)]
 pub struct DuplicateInput {
@@ -1433,7 +1442,7 @@ impl NodeRepo {
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );
-        let per_name = i64::try_from(crate::duplicates::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
+        let per_name = i64::try_from(super::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
         let rows = sqlx::query(&sql)
             .bind(Self::scope_bind(groups))
             .bind(keys)

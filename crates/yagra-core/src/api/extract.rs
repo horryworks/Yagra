@@ -69,7 +69,8 @@ pub(crate) fn public_route_allowed(parts: &Parts, st: &ApiState) -> bool {
     let Some(matched) = parts.extensions.get::<axum::extract::MatchedPath>() else {
         return false;
     };
-    crate::public_access::current(&st.public_access).allows(parts.method.as_str(), matched.as_str())
+    crate::api::public_access::current(&st.public_access)
+        .allows(parts.method.as_str(), matched.as_str())
 }
 
 /// What a valid bearer token turned out to be.
@@ -516,7 +517,7 @@ impl std::ops::Deref for Events {
 /// [`public_route_allowed`] said this exact route is on the board's allow-list, so "all nodes" is
 /// bounded by what the admin put on the board — a fleet-wide summary widget, not a way to page
 /// through the inventory. There is deliberately no per-group public scope: see
-/// [`crate::public_access`]'s property 2.
+/// [`crate::api::public_access`]'s property 2.
 pub struct Scoped(pub super::scope::NodeScope);
 
 #[async_trait]

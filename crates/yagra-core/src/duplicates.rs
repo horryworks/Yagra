@@ -60,13 +60,7 @@ use serde::Serialize;
 use uuid::Uuid;
 use yagra_common::NeighborProto;
 
-use crate::repo::DuplicateInput;
-
-/// The most nodes that may share a value before the value stops counting as evidence (decision 3).
-///
-/// A judgement, not a measurement: a stack or a chassis cluster registered by every member's own
-/// address stays under it, and a value carried by nine devices has stopped naming a device.
-pub const SHARED_VALUE_MAX: usize = 8;
+use crate::repo::{DuplicateInput, SHARED_VALUE_MAX};
 
 /// The most groups one read lists. `Findings::total` still says how many there are.
 pub const GROUPS_MAX: usize = 500;

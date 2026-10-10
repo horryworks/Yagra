@@ -20,7 +20,8 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem, RequireView};
 use super::ApiState;
-use crate::retention::{self, RetentionSettings, Subject};
+use crate::repo::retention_settings::{self, RetentionSettings};
+use crate::retention::Subject;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,7 @@ pub(crate) struct RetentionValues {
 }
 
 fn default_diagnostic_days() -> u32 {
-    retention::DEFAULT_DIAGNOSTIC_DAYS
+    retention_settings::DEFAULT_DIAGNOSTIC_DAYS
 }
 
 /// One line of the retention table.
@@ -218,10 +219,10 @@ async fn update_retention(
             "invalid_retention",
             format!(
                 "day windows must be {}-{} and the unmatched-event window {}-{} hours",
-                retention::MIN_RETENTION_DAYS,
-                retention::MAX_RETENTION_DAYS,
-                retention::MIN_RETENTION_HOURS,
-                retention::MAX_RETENTION_HOURS,
+                retention_settings::MIN_RETENTION_DAYS,
+                retention_settings::MAX_RETENTION_DAYS,
+                retention_settings::MIN_RETENTION_HOURS,
+                retention_settings::MAX_RETENTION_HOURS,
             ),
         ));
     }
@@ -352,7 +353,10 @@ mod tests {
         let old = r#"{"alert_linked_days":30,"unmatched_event_hours":6,"report_run_days":45,"flow_days":14}"#;
         let v: RetentionValues = serde_json::from_str(old).expect("an N-1 body must still parse");
         assert_eq!(v.alert_linked_days, 30);
-        assert_eq!(v.diagnostic_days, retention::DEFAULT_DIAGNOSTIC_DAYS);
+        assert_eq!(
+            v.diagnostic_days,
+            retention_settings::DEFAULT_DIAGNOSTIC_DAYS
+        );
 
         // …and an explicit value is honoured, so the default is a fallback and not an override.
         let new = r#"{"alert_linked_days":30,"unmatched_event_hours":6,"report_run_days":45,"flow_days":14,"diagnostic_days":7}"#;
@@ -370,7 +374,7 @@ mod tests {
                 ..Default::default()
             },
             RetentionSettings {
-                flow_days: retention::MAX_RETENTION_DAYS + 1,
+                flow_days: retention_settings::MAX_RETENTION_DAYS + 1,
                 ..Default::default()
             },
             RetentionSettings {

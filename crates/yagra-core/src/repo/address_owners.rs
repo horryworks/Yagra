@@ -70,8 +70,7 @@ impl NodeRepo {
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );
-        let per_address =
-            i64::try_from(crate::duplicates::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
+        let per_address = i64::try_from(super::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
         let rows = sqlx::query(&sql)
             .bind(Self::scope_bind(groups))
             .bind(&text)
@@ -413,7 +412,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn carriers_are_found_up_to_one_past_the_cap_per_address(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
-        let cap = crate::duplicates::SHARED_VALUE_MAX;
+        let cap = crate::repo::SHARED_VALUE_MAX;
         let lone = pgtest::node_at(&pool, "rtr-lone", ip("192.0.2.1"), None).await;
         l3(&pool, lone, &["203.0.113.1"]).await;
         let twice = pgtest::node_at(&pool, "rtr-twice", ip("192.0.2.2"), None).await;
@@ -457,7 +456,7 @@ mod tests {
     async fn nodes_are_found_by_name_up_to_one_past_the_cap(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
         let core = pgtest::node_at(&pool, " Core-1 ", ip("192.0.2.1"), None).await;
-        let cap = crate::duplicates::SHARED_VALUE_MAX;
+        let cap = crate::repo::SHARED_VALUE_MAX;
         for i in 0..cap + 3 {
             pgtest::node_at(&pool, "switch", ip(&format!("198.51.100.{}", i + 1)), None).await;
         }

@@ -57,6 +57,7 @@ use yagra_common::retry::{until_ready, Budget, GaveUp};
 use yagra_common::{CredentialId, GroupId, Node, NodeId, ProfileId};
 
 mod address_owners;
+pub(crate) mod adjacency_settings;
 mod defaults;
 mod interfaces;
 mod listing;
@@ -66,11 +67,13 @@ mod pool_takeover;
 mod pools;
 mod prefix_gap_acks;
 mod profiles;
+pub(crate) mod retention_settings;
 mod row_names;
 mod seed;
 mod settings;
 mod snapshots;
 mod subnet_overlaps;
+pub(crate) mod topology_mode;
 
 #[cfg(test)]
 mod guards;
@@ -97,7 +100,7 @@ pub use migrate::MIGRATIONS;
 pub use nodes::TopologyRow;
 pub use nodes::{
     DuplicateInput, NodeBindingUpdate, NodeWithNotes, ReclassifyInput, ReclassifyWrite,
-    RediscoverWrite,
+    RediscoverWrite, SHARED_VALUE_MAX,
 };
 // Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping

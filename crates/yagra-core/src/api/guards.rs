@@ -418,3 +418,85 @@ fn every_list_limit_is_clamped_through_page_limit() {
         "{hand_written:#?} clamp a limit by hand — use `api::util::page_limit` (ADR-202)"
     );
 }
+
+/// Production files outside `api/` and `mcp/` that may still name `crate::api`, each with the
+/// reason. Checked both ways: a file that stops needing its entry fails the test until it leaves.
+const IMPORTS_API_ALLOWED: &[(&str, &str)] = &[
+    (
+        "rca/agent.rs",
+        "the LLM root-cause agent calls the MCP tools in-process under the caller's scope, so it \
+         sits above the API surface rather than under it (ADR-029)",
+    ),
+    (
+        "rca/orchestrator.rs",
+        "carries the caller's `api::scope::NodeScope` to the agent beside it, for the same reason",
+    ),
+];
+
+/// Whether a production file names the API layer: `crate::api` as a path, or `api` inside a
+/// grouped `use crate::{…}`.
+fn names_the_api_layer(code: &str) -> bool {
+    let path = regex::Regex::new(r"\bcrate::api\b").expect("a valid pattern");
+    let grouped = regex::Regex::new(r"\bcrate::\{[^}]*\bapi\b").expect("a valid pattern");
+    path.is_match(code) || grouped.is_match(code)
+}
+
+/// **Nothing below the API layer imports it** (ADR-202 Inc.3).
+///
+/// A domain module that reaches up into `api/` for a type or a helper is the dependency that makes
+/// no part of this crate separable from the rest: the API layer depends on everything, so anything
+/// it is depended on by is tied to everything too. Seven production files did that before ADR-202
+/// cut them; this keeps the number from growing back one convenient `use` at a time.
+///
+/// Reads production code through [`crate::module_source::crate_code`] — unlike the checks above,
+/// the population here *is* production code, and a test-only `use crate::api::tests_support` is
+/// allowed. `main.rs` is the wiring and names everything; it spells the module `api::` anyway.
+#[test]
+fn no_module_outside_api_imports_api() {
+    let files = crate::module_source::crate_code();
+    let below: Vec<&(String, String)> = files
+        .iter()
+        .filter(|(name, _)| {
+            !name.starts_with("api/") && !name.starts_with("mcp/") && name != "main.rs"
+        })
+        .collect();
+    assert!(
+        below.len() >= 120,
+        "only {} files outside api/ and mcp/ were read; the walk no longer sees the crate",
+        below.len()
+    );
+    let offenders: BTreeSet<&str> = below
+        .iter()
+        .filter(|(_, code)| names_the_api_layer(code))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let allowed: BTreeSet<&str> = IMPORTS_API_ALLOWED.iter().map(|(f, _)| *f).collect();
+    let undeclared: Vec<&&str> = offenders.difference(&allowed).collect();
+    assert!(
+        undeclared.is_empty(),
+        "{undeclared:?} import the API layer. Move the type or helper they need below `api/` (and \
+         have `api/` import it from there), or move the file into `api/` if it is part of a route"
+    );
+    let stale: Vec<&&str> = allowed.difference(&offenders).collect();
+    assert!(
+        stale.is_empty(),
+        "{stale:?} no longer import the API layer — take them out of IMPORTS_API_ALLOWED"
+    );
+}
+
+/// The detector behind [`no_module_outside_api_imports_api`] still recognises both spellings, and
+/// does not mistake a neighbouring name for the module.
+#[test]
+fn the_api_import_detector_recognises_both_spellings() {
+    let module = "api";
+    assert!(names_the_api_layer(&format!(
+        "use crate::{module}::scope::NodeScope;"
+    )));
+    assert!(names_the_api_layer(&format!(
+        "use crate::{{alerts, {module}}};"
+    )));
+    assert!(!names_the_api_layer("use crate::apitokens::TokenRepo;"));
+    assert!(!names_the_api_layer(
+        "use crate::alerts::{api_like, Other};"
+    ));
+}

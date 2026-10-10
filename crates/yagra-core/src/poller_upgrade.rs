@@ -144,7 +144,7 @@ impl Drop for ConvergeGuard {
         with_progress(|p| {
             if let Some(c) = p.as_mut() {
                 if c.finished_at.is_none() {
-                    c.finished_at = Some(crate::api::util::now_unix_s());
+                    c.finished_at = Some(yagra_common::clock::now_unix_s());
                 }
             }
         });
@@ -424,7 +424,7 @@ pub async fn converge(run: Run, targets: Vec<Target>, absent: Vec<Absent>, _lock
         &run.run_id,
         &run.tag,
         &run.requested_by,
-        crate::api::util::now_unix_s(),
+        yagra_common::clock::now_unix_s(),
         &by_pool,
         &absent,
     );
@@ -568,7 +568,7 @@ async fn send(run: &Run, poller_id: &str, step: UpgradeStep) {
         run_id: run.run_id.clone(),
         tag: run.tag.clone(),
         requested_by: run.requested_by.clone(),
-        requested_at: crate::api::util::now_unix_s(),
+        requested_at: yagra_common::clock::now_unix_s(),
         step,
     };
     if let Err(e) = run.bus.publish_poller_upgrade(msg).await {

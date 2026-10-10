@@ -14,9 +14,10 @@
 //! large pages, an AI client wants small ones — because a clamp is surface policy, not assembly.
 
 use super::extract::{Actor, RequireManageConfig, RequireView, Scoped};
-use super::nodes::{fresh_fallback_ids, state_or_fallback, NodePageQuery};
+use super::nodes::{fresh_fallback_ids, NodePageQuery};
 use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
+use crate::node_display::state_or_fallback;
 use axum::{
     extract::{Path, Query},
     routing::{delete, get},
@@ -143,7 +144,7 @@ pub(crate) async fn topology_page(
                 id: r.id,
                 name: r.name,
                 parent_id: r.parent_id,
-                // The rule lives in `nodes::state_or_fallback`, not here: this map was a fourth
+                // The rule lives in `node_display::state_or_fallback`, not here: this map was a fourth
                 // hand-written copy of it, and the copies had already drifted.
                 state: state_or_fallback(states.get(&nid).copied(), fresh_fallback.contains(&r.id)),
                 root_cause: root_causes.get(&r.id).copied(),
@@ -556,7 +557,7 @@ async fn role_facts(
     admin: &super::AdminState,
     drawn: &[Uuid],
     links: &[crate::topology_links::StoredLink],
-) -> HashMap<Uuid, crate::topology_level::RoleFacts> {
+) -> HashMap<Uuid, super::topology_level::RoleFacts> {
     let (kinds, categories, l3, hops) = tokio::join!(
         super::nodes::node_kinds_with_products(admin, drawn),
         async {
@@ -584,7 +585,7 @@ async fn role_facts(
     for l in links {
         if l.sources
             .iter()
-            .any(|s| crate::topology_level::is_routing_evidence(*s))
+            .any(|s| super::topology_level::is_routing_evidence(*s))
         {
             routing.extend(l.a_node.iter().chain(l.b_node.iter()).map(|n| n.as_uuid()));
         }
@@ -596,7 +597,7 @@ async fn role_facts(
             let kind = *kinds.kinds.get(id)?;
             Some((
                 *id,
-                crate::topology_level::RoleFacts {
+                super::topology_level::RoleFacts {
                     kind,
                     meraki_product: kinds.meraki_product_types.get(id).cloned(),
                     category: categories.get(id).copied(),
@@ -656,9 +657,9 @@ async fn site_exits_for(
         .collect();
     let is_site = |g: Uuid| sites.contains(&g);
     let site = |node: Uuid| {
-        crate::topology_level::site_of_group(filed.get(&node).copied().flatten(), &parent, &is_site)
+        super::topology_level::site_of_group(filed.get(&node).copied().flatten(), &parent, &is_site)
     };
-    crate::topology_level::site_exits(hops, &owners, networks, &site)
+    super::topology_level::site_exits(hops, &owners, networks, &site)
 }
 
 /// Assemble one map level: the seam the REST handler and the MCP `get_topology` tool both call.
@@ -686,7 +687,7 @@ pub(crate) async fn topology_map_level(
             ));
         }
     }
-    let folders: Vec<crate::topology_level::FolderRow> =
+    let folders: Vec<super::topology_level::FolderRow> =
         super::groups::visible_groups(admin, scope)
             .await?
             .iter()
@@ -703,7 +704,7 @@ pub(crate) async fn topology_map_level(
         .iter()
         .any(|(id, _)| !raw.contains_key(&NodeId::from(*id)));
     let fresh = if any_unobserved {
-        super::nodes::fresh_fleet_ids(st.store.as_ref()).await
+        crate::node_display::fresh_fleet_ids(st.store.as_ref()).await
     } else {
         HashSet::new()
     };
@@ -721,7 +722,7 @@ pub(crate) async fn topology_map_level(
         .await
         .map_err(load("map links"))?;
 
-    let mut level = crate::topology_level::compute(&crate::topology_level::LevelInput {
+    let mut level = super::topology_level::compute(&super::topology_level::LevelInput {
         level: group,
         edges: &edges,
         groups: &folders,
@@ -732,12 +733,12 @@ pub(crate) async fn topology_map_level(
         links: &links,
     });
     let names =
-        super::nodes::resolve_node_names(st, scope, crate::topology_level::names_needed(&level))
+        super::nodes::resolve_node_names(st, scope, super::topology_level::names_needed(&level))
             .await;
-    crate::topology_level::apply_names(&mut level, &names);
+    super::topology_level::apply_names(&mut level, &names);
     let drawn: Vec<Uuid> = level.nodes.iter().map(|n| n.id).collect();
     let roles = role_facts(admin, &drawn, &links).await;
-    crate::topology_level::apply_roles(&mut level, &roles);
+    super::topology_level::apply_roles(&mut level, &roles);
     // The drawing is useful without the run's record, so a failed read leaves both unset.
     if let Some(run) = admin.topology_links.last_run().await.unwrap_or(None) {
         level.derived_at = Some(run.derived_at.to_rfc3339());
@@ -1018,7 +1019,7 @@ pub(crate) struct ShadowEdge {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct TopologyShadow {
     /// `manual`, `shadow` or `derived`.
-    pub mode: crate::topology_mode::TopologyMode,
+    pub mode: crate::repo::topology_mode::TopologyMode,
     /// Edges in the hand-authored graph.
     pub manual_edges: usize,
     /// Edges in the derived graph.
@@ -1231,7 +1232,7 @@ pub(crate) async fn topology_shadow(
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(crate) struct TopologyModeRequest {
     /// `manual`, `shadow` or `derived`.
-    pub mode: crate::topology_mode::TopologyMode,
+    pub mode: crate::repo::topology_mode::TopologyMode,
 }
 
 /// Choose which dependency graph drives alert suppression.

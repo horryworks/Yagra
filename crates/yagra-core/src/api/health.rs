@@ -121,7 +121,7 @@ pub(crate) async fn client_config(st: &ApiState) -> ClientConfig {
         None => false,
     };
     ClientConfig {
-        public_dashboard: crate::public_access::current(&st.public_access).enabled(),
+        public_dashboard: crate::api::public_access::current(&st.public_access).enabled(),
         auth_available: st.admin.is_some(),
         sso_enabled,
         rca_enabled,

@@ -27,6 +27,7 @@ use super::extract::{Admin, ListSlot, RequireManageConfig, RequireView, Scoped, 
 use super::util::CreatedId;
 use super::{AdminState, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
+use crate::node_display::{state_or_fallback, FALLBACK_FRESH_SECS, FALLBACK_METRICS};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -105,44 +106,6 @@ pub(crate) fn routes() -> Router<ApiState> {
 
 // ── Display state: the one answer to "how is this node doing?" ───────────────
 
-/// Freshness window for the coarse fallback probe: a node with a liveness sample within this
-/// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
-///
-/// ⚠️ **One number with the floor of an AP's report window** (ADR-064 Inc.G): the engine shows an
-/// AP whose controller has not reported it within that window as `unknown`, and after a restart
-/// this fallback is what decides the same AP. Two numbers would make one outage read differently
-/// depending on whether core had restarted.
-const FALLBACK_FRESH_SECS: u64 = crate::alerts::reported::FRESH_FLOOR_SECS;
-
-/// The metrics the fallback probe asks about: **every node kind's liveness series**, because a URL
-/// monitor, a DNS monitor and a Meraki device are never pinged and so have no `icmp_rtt_ms` at all.
-/// Asking only about ICMP made those three kinds fall to `unknown` whenever the engine had no
-/// opinion yet — the same defect that made fleet coverage report them as silent (ADR-059).
-///
-/// The union answers without resolving each node's kind, which would put three database reads on
-/// the node-list path for an answer that is identical either way.
-const FALLBACK_METRICS: [&str; NodeKind::ALL.len()] = NodeKind::LIVENESS_METRICS;
-
-/// **The display rule itself**: the engine's opinion when it has one, otherwise a recent liveness
-/// sample means `ok` and silence means `unknown`.
-///
-/// "The engine's opinion" already accounts for a wireless AP its controller has stopped reporting:
-/// the engine hands back `unknown` for its stale `ok` (ADR-064 Inc.G), so no caller here needs to
-/// know which nodes are APs.
-///
-/// Pure — every caller brings its own already-batched inputs, and nothing here does I/O. It is a
-/// function rather than three lines because it *was* three lines, four times over: the topology
-/// graph, the fleet tally, the per-group rollup and the inventory report each restated it, and two
-/// of them had dropped the fallback entirely. The visible symptom was a core restart making the
-/// dashboard summary report `unknown` for nodes the Nodes page was simultaneously showing as `ok`.
-pub(crate) fn state_or_fallback(known: Option<NodeState>, fresh: bool) -> NodeState {
-    match known {
-        Some(s) => s,
-        None if fresh => NodeState::Ok,
-        None => NodeState::Unknown,
-    }
-}
-
 /// The rolled-up state to display for one node.
 ///
 /// The alert engine's opinion when it has one. When it does not — a just-added node, or right
@@ -220,22 +183,6 @@ pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> 
     let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
     st.store
         .fresh_node_ids_scoped(&FALLBACK_METRICS, FALLBACK_FRESH_SECS, &scope)
-        .await
-        .into_iter()
-        .collect()
-}
-
-/// The **whole fleet's** fresh set, for the rollups that hold counts rather than a page of ids.
-///
-/// [`fresh_fallback_ids`] pushes its id set into the query selector, which is right for a page and
-/// wrong for a rollup: the fleet tally, the per-group summary and the inventory report each cover
-/// every visible node, and a selector carrying 50,000 UUIDs is not a query. So they share one
-/// unscoped freshness query instead — and every caller skips it entirely unless something is
-/// actually unobserved, which is the steady state (the engine holds an opinion about every node it
-/// has swept). Takes the store rather than `ApiState` because the report renderer has no `ApiState`.
-pub(crate) async fn fresh_fleet_ids(store: &dyn crate::store::MetricStore) -> HashSet<Uuid> {
-    store
-        .fresh_node_ids(&FALLBACK_METRICS, FALLBACK_FRESH_SECS)
         .await
         .into_iter()
         .collect()

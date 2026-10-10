@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// Skeleton-mode state with `public_dashboard` set as given and no write side.
 ///
 /// ⚠️ `public_dashboard = true` builds the **unrestricted** surface
-/// ([`crate::public_access::PublicAccess::skeleton_open`]), not a board-derived one. That keeps the
+/// ([`crate::api::public_access::PublicAccess::skeleton_open`]), not a board-derived one. That keeps the
 /// twenty "…is closed even on a public dashboard" tests measuring what they were written to
 /// measure — that a *write* guard stays shut when reads are open — without each of them having to
 /// compose a board carrying the widget that happens to read the route under test.
@@ -41,10 +41,10 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         history: None,
         ack: None,
         event_engine: None,
-        public_access: crate::public_access::handle(if public_dashboard {
-            crate::public_access::PublicAccess::skeleton_open()
+        public_access: crate::api::public_access::handle(if public_dashboard {
+            crate::api::public_access::PublicAccess::skeleton_open()
         } else {
-            crate::public_access::PublicAccess::closed()
+            crate::api::public_access::PublicAccess::closed()
         }),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,
@@ -78,7 +78,7 @@ pub(crate) fn private_state() -> ApiState {
 
 /// A saved public board carrying exactly `types`, in the v2 layout shape the WebUI writes.
 ///
-/// Only `type` is read out of a layout by [`crate::public_access::derive`], so the widgets carry
+/// Only `type` is read out of a layout by [`crate::api::public_access::derive`], so the widgets carry
 /// nothing else. Shared with `public_access.rs`’s own tests rather than written twice — the two
 /// would drift on the layout shape, which is the one thing the derivation actually parses.
 pub(crate) fn public_board(types: &[&str]) -> serde_json::Value {
@@ -98,7 +98,7 @@ pub(crate) fn public_board(types: &[&str]) -> serde_json::Value {
 ///
 /// 🚨 The other half of [`public_state`], and the half that was missing. `public_state` builds
 /// the *unrestricted* surface, so every router-level "an anonymous caller reaches this" test in
-/// this crate has been measuring `skeleton_open`, never [`crate::public_access::derive`] — and
+/// this crate has been measuring `skeleton_open`, never [`crate::api::public_access::derive`] — and
 /// the derivation is where ADR-123 actually lives. A parameterized route was closed to every
 /// anonymous visitor for the whole of increment 1 with all of those tests green, because none of
 /// them went through the code that builds the allow-list.
@@ -107,9 +107,9 @@ pub(crate) fn public_board(types: &[&str]) -> serde_json::Value {
 /// and a test that asserts it directly is a second copy of that belief rather than a check on it.
 pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
     let st = base(Arc::new(InMemorySink::default()), true);
-    crate::public_access::store(
+    crate::api::public_access::store(
         &st.public_access,
-        crate::public_access::PublicAccess::derive(true, Some(&public_board(types))),
+        crate::api::public_access::PublicAccess::derive(true, Some(&public_board(types))),
     );
     st
 }
@@ -503,7 +503,9 @@ async fn live_state_with(
         // Closed: `live_state` exists to test writes being *accepted* (ADR-115), and anonymous
         // access has nothing to do with that. A test that wants the public surface builds it with
         // `public_access::store` after the fact, so the board it derives from is explicit.
-        public_access: crate::public_access::handle(crate::public_access::PublicAccess::closed()),
+        public_access: crate::api::public_access::handle(
+            crate::api::public_access::PublicAccess::closed(),
+        ),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: Some(Arc::new(crate::ldap::LdapRepo::new(
             pool.clone(),

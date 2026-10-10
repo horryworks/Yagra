@@ -42,7 +42,7 @@ use crate::collection::CollectionRepo;
 use crate::dns_check::DnsCheckRepo;
 use crate::l3::L3Repo;
 use crate::meraki::MerakiDeviceRepo;
-use crate::neighbors::AdjacencySettings;
+use crate::repo::adjacency_settings::AdjacencySettings;
 use crate::repo::NodeRepo;
 use crate::secrets::CredentialStore;
 use crate::url_check::UrlCheckRepo;

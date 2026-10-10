@@ -32,7 +32,7 @@ use yagra_common::{
     ScopedCollectionItem, UrlCheckConfig,
 };
 
-use crate::neighbors::AdjacencySettings;
+use crate::repo::adjacency_settings::AdjacencySettings;
 use crate::secrets::SnmpV3Secret;
 
 use super::seams::{AdjacencySource, CollectionSource, CredentialSource, MonitorBindings};

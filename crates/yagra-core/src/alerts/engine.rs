@@ -1277,7 +1277,7 @@ impl AlertManager {
         // read `ok` until it had failed `dwell` times: measured five minutes after a restart, 15 of
         // 22 stopped devices were reported healthy, and `/flashdeploy`'s own health check runs
         // inside that window. An unconfirmed check writes nothing at all, which leaves the node
-        // absent from `live` — exactly the state `nodes::state_or_fallback` already answers for
+        // absent from `live` — exactly the state `node_display::state_or_fallback` already answers for
         // ("a recent liveness sample means ok, silence means unknown"), so no caller changes.
         let down_set_changed = match (is_liveness, observed) {
             (true, Some(committed)) => {
@@ -2926,7 +2926,7 @@ mod tests {
     /// test server, five minutes after a restart 15 of 22 stopped devices were reported healthy.
     ///
     /// A node whose first poll *fails* has told the engine nothing. It must have no state at all,
-    /// which is what `nodes::state_or_fallback` already answers for.
+    /// which is what `node_display::state_or_fallback` already answers for.
     #[test]
     fn a_node_whose_first_poll_fails_has_no_state_rather_than_ok() {
         let mgr = manager();

@@ -82,6 +82,7 @@ mod module_source;
 mod neighbors;
 mod netbox;
 mod no_reading_filter;
+mod node_display;
 mod oidc;
 /// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
 /// that keep the convention honest (ADR-114). Test-only, like `module_source` above.
@@ -102,7 +103,6 @@ mod poolres;
 mod preferences;
 // Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170).
 mod prefix_gaps;
-mod public_access;
 mod ratelimit;
 mod rca;
 mod reclassify;
@@ -144,9 +144,7 @@ mod support_bundle;
 mod tagres;
 mod tls;
 mod token;
-mod topology_level;
 mod topology_links;
-mod topology_mode;
 mod topology_projection;
 // What this deployment is running and how far back it can be taken (ADR-050). Named apart from
 // `repo`, which *applies* migrations; this one reasons about what applying them cost.
@@ -579,7 +577,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Core self-observability (monitoring-conventions): the cache the System Health page reads, and
     // the sampler that fills it. On every core; `host_collector::start` carries why.
-    let core_host: api::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
+    let core_host: host_collector::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
     host_collector::start(
         store.clone(),
         core_host.clone(),
@@ -1070,10 +1068,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let poller_log_collector = poller_logs::start(bus.clone(), &shutdown).await;
 
     // What an anonymous request may reach (ADR-123). Starts **closed** and is filled in by the
-    // refresh task, which also keeps a standby core in step — see `public_access::start` for why
-    // that task is every-core rather than leader-gated.
-    let public_access = public_access::handle(public_access::PublicAccess::closed());
-    public_access::start(
+    // refresh task, which also keeps a standby core in step — see `api::public_access::start` for
+    // why that task is every-core rather than leader-gated.
+    let public_access = api::public_access::handle(api::public_access::PublicAccess::closed());
+    api::public_access::start(
         public_access.clone(),
         repo.clone(),
         Arc::new(PublicDashboardRepo::new(repo.pool())),
@@ -1778,7 +1776,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // switch or the board, so a derived surface would be empty and the dev stack would show
         // nothing. `skeleton_open`'s doc carries why that is safe: `admin: None` means every write
         // handler answers 503 before authorization is reached.
-        public_access: public_access::handle(public_access::PublicAccess::skeleton_open()),
+        public_access: api::public_access::handle(api::public_access::PublicAccess::skeleton_open()),
         // Skeleton has no directory store either; `login` treats that as "no directory configured"
         // rather than an error, so the local path is unaffected.
         ldap: None,

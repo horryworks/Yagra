@@ -1200,8 +1200,8 @@ mod tests {
 
     /// Settings with routing on and every walk that would need SNMP off, so a policy read is about
     /// the plan and nothing else.
-    fn routing_on() -> crate::neighbors::AdjacencySettings {
-        crate::neighbors::AdjacencySettings::default()
+    fn routing_on() -> crate::repo::adjacency_settings::AdjacencySettings {
+        crate::repo::adjacency_settings::AdjacencySettings::default()
     }
 
     /// Two nodes, each holding one host address, so the built plan asks both to probe the other.

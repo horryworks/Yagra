@@ -61,10 +61,10 @@ pub(crate) struct FleetSummary {
 ///
 /// Nodes the alert engine has never observed — brand new, or right after a core restart before the
 /// first sweep — take the same fallback the per-node list takes: a recent ICMP sample means `ok`,
-/// silence means `unknown` ([`super::nodes::state_or_fallback`]). This tally used to count *all* of
-/// them as `unknown` while claiming in a comment that it matched the list, so for the minutes after
-/// every restart the dashboard summary reported `unknown` for nodes the Nodes page beside it was
-/// showing as `ok`.
+/// silence means `unknown` ([`crate::node_display::state_or_fallback`]). This tally used to count
+/// *all* of them as `unknown` while claiming in a comment that it matched the list, so for the
+/// minutes after every restart the dashboard summary reported `unknown` for nodes the Nodes page
+/// beside it was showing as `ok`.
 ///
 /// The fallback costs a TSDB query, so it is asked **only when something is actually unobserved** —
 /// in the steady state the engine holds an opinion about every node and this function does no I/O
@@ -121,7 +121,7 @@ async fn fresh_unobserved(st: &ApiState, scope: &NodeScope, unobserved: i64) -> 
         return 0;
     }
     let known = st.alerts.node_states();
-    let fresh = super::nodes::fresh_fleet_ids(st.store.as_ref()).await;
+    let fresh = crate::node_display::fresh_fleet_ids(st.store.as_ref()).await;
     let n = fresh
         .into_iter()
         .map(NodeId::from)
@@ -191,9 +191,9 @@ pub(crate) struct FleetGroupSummary {
 ///
 /// Pure (no I/O) so the grouping and fallback rules are unit-testable. Ungrouped nodes (null
 /// `group_id`) are skipped — no widget rolls them up. A node the engine has never observed takes
-/// the same fallback as the per-node list ([`super::nodes::state_or_fallback`]): `fresh` holds the
-/// unobserved nodes with a recent ICMP sample, and the rest are `unknown` — so a group's tally
-/// reconciles with its size *and* agrees with what the Nodes tree shows for the same members.
+/// the same fallback as the per-node list ([`crate::node_display::state_or_fallback`]): `fresh`
+/// holds the unobserved nodes with a recent ICMP sample, and the rest are `unknown` — so a group's
+/// tally reconciles with its size *and* agrees with what the Nodes tree shows for the same members.
 pub(crate) fn aggregate_group_counts(
     node_groups: &[(Uuid, Option<Uuid>)],
     states: &HashMap<NodeId, NodeState>,
@@ -202,7 +202,7 @@ pub(crate) fn aggregate_group_counts(
     let mut groups: HashMap<Uuid, GroupStateCounts> = HashMap::new();
     for (id, group_id) in node_groups {
         let Some(gid) = group_id else { continue };
-        let state = super::nodes::state_or_fallback(
+        let state = crate::node_display::state_or_fallback(
             states.get(&NodeId::from(*id)).copied(),
             fresh.contains(id),
         );
@@ -267,7 +267,7 @@ pub(crate) async fn group_summary(
         .iter()
         .any(|(id, group)| group.is_some() && !states.contains_key(&NodeId::from(*id)));
     let fresh = if any_unobserved {
-        super::nodes::fresh_fleet_ids(st.store.as_ref()).await
+        crate::node_display::fresh_fleet_ids(st.store.as_ref()).await
     } else {
         HashSet::new()
     };

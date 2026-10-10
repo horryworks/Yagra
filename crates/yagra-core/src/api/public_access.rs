@@ -38,7 +38,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// ⚠️ Committed build output, like `web/src/api/schema.d.ts`. Regenerate with
 /// `cd web && npm run generate:widget-routes`; CI fails on a diff. Editing it by hand edits an
 /// access-control table without the declaration that produced it.
-const WIDGET_ROUTES_JSON: &str = include_str!("../../../web/src/dashboard/widgetRoutes.json");
+const WIDGET_ROUTES_JSON: &str = include_str!("../../../../web/src/dashboard/widgetRoutes.json");
 
 /// The widget types that may never go on the public board, generated from `NOT_PUBLIC` in
 /// `web/src/dashboard/publicCatalog.ts` by the same command as [`WIDGET_ROUTES_JSON`].
@@ -47,7 +47,7 @@ const WIDGET_ROUTES_JSON: &str = include_str!("../../../web/src/dashboard/widget
 /// was read here a board written through the API stored the audit widget and every anonymous
 /// visitor saw "a valid bearer token is required" in its card (found on a lab deployment,
 /// 2026-10-08). Core now refuses such a layout on save, and a stored one contributes no routes.
-const NOT_PUBLIC_JSON: &str = include_str!("../../../web/src/dashboard/notPublicWidgets.json");
+const NOT_PUBLIC_JSON: &str = include_str!("../../../../web/src/dashboard/notPublicWidgets.json");
 
 /// Routes an anonymous visitor may reach whenever the switch is on, whatever the board carries.
 ///
@@ -150,7 +150,7 @@ impl PublicAccess {
     /// `{node_id}`.
     ///
     /// 🚨 The generated table is written the other way round, so [`widget_route_table`] converts
-    /// on the way in ([`crate::api::route_path`]) and this stays a plain equality. Comparing the
+    /// on the way in ([`super::route_path`]) and this stays a plain equality. Comparing the
     /// two spellings raw is what kept **every** parameterized route permanently closed to
     /// anonymous callers — silently, because a route that is not on the list and a route whose
     /// spelling does not match are the same 401.
@@ -307,7 +307,7 @@ fn widget_route_table() -> &'static HashMap<String, Vec<(String, String)>> {
                 let parsed = routes
                     .iter()
                     .filter_map(|r| r.split_once(' '))
-                    .map(|(m, p)| (m.to_string(), crate::api::route_path::from_openapi(p)))
+                    .map(|(m, p)| (m.to_string(), super::route_path::from_openapi(p)))
                     .collect();
                 (ty, parsed)
             })

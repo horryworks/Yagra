@@ -5,7 +5,7 @@
 //! **Why this is not part of `api/dashboard.rs`.** That module holds two boards that differ only in
 //! who they answer for; both are presentation state and both write with `ManageConfig`. This board
 //! is a third thing: what it carries **decides which API routes an unauthenticated request may
-//! reach** ([`crate::public_access`]). Saving it is an access-control act, so it writes with
+//! reach** ([`crate::api::public_access`]). Saving it is an access-control act, so it writes with
 //! `ManageSystem` (Admin) — the permission ADR-057 gives to "the deployment itself, and anything
 //! that leaves it" — and it lives beside the switch that turns the whole thing on rather than
 //! beside the boards it merely resembles.
@@ -26,14 +26,14 @@
 //!
 //! Both `PUT`s re-derive the anonymous surface **synchronously** before returning, so the admin who
 //! just clicked sees the effect on their next request rather than waiting out
-//! [`crate::public_access::REFRESH_SECS`]. A standby core in an HA pair still catches up on its own
+//! [`crate::api::public_access::REFRESH_SECS`]. A standby core in an HA pair still catches up on its own
 //! refresh; that window is stated in `public_access`'s own doc.
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Caller, RequireManageSystem, RequireView};
 use super::util::{validate_opaque_doc, MAX_JSON_DOC_BYTES};
 use super::ApiState;
-use crate::public_access::{self, PublicAccess};
+use crate::api::public_access::{self, PublicAccess};
 use axum::extract::State;
 use axum::{routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
@@ -174,7 +174,7 @@ async fn put_public_dashboard_switch(
 /// The public board's layout, or JSON `null` when no admin has composed one.
 ///
 /// 🚨 **The one route anonymous callers reach whatever the board says** (`ALWAYS_OPEN` in
-/// [`crate::public_access`]): the page cannot draw itself without knowing which widgets to place.
+/// [`crate::api::public_access`]): the page cannot draw itself without knowing which widgets to place.
 /// It carries the board's *shape* and no monitoring data — every widget fetches its own content
 /// through a route the board had to open.
 #[utoipa::path(
@@ -421,7 +421,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(
-            crate::public_access::current(&st.public_access).route_count(),
+            crate::api::public_access::current(&st.public_access).route_count(),
             0
         );
 
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 1);
 
-        let access = crate::public_access::current(&st.public_access);
+        let access = crate::api::public_access::current(&st.public_access);
         assert!(access.allows("GET", "/api/v1/fleet/summary"));
         assert!(!access.allows("GET", "/api/v1/events"));
 
@@ -495,9 +495,8 @@ mod tests {
             "boards": [{ "id": "b1", "name": "P", "widgets": [{ "instanceId": "w", "type": "status-summary" }] }],
         });
         send(&st, "PUT", "/api/v1/public-dashboard", &tok, Some(board)).await;
-        assert!(
-            crate::public_access::current(&st.public_access).allows("GET", "/api/v1/fleet/summary")
-        );
+        assert!(crate::api::public_access::current(&st.public_access)
+            .allows("GET", "/api/v1/fleet/summary"));
 
         let (status, body) = send(
             &st,
@@ -511,7 +510,7 @@ mod tests {
         // The row survives — turning the deployment private must not destroy the composed board,
         // or turning it public again would silently serve an empty page.
         assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 1);
-        let access = crate::public_access::current(&st.public_access);
+        let access = crate::api::public_access::current(&st.public_access);
         assert!(!access.enabled());
         assert!(!access.allows("GET", "/api/v1/fleet/summary"));
     }
@@ -538,7 +537,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
-        assert!(!crate::public_access::current(&st.public_access).enabled());
+        assert!(!crate::api::public_access::current(&st.public_access).enabled());
     }
 
     #[tokio::test]

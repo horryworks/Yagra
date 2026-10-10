@@ -17,6 +17,10 @@ use std::time::Duration;
 
 use crate::store::MetricStore;
 
+/// Core's own latest host-resource sample (self-observability), refreshed by [`start`]. Read by
+/// `GET /api/v1/system/hosts`; `None` until the first sample (or in skeleton mode).
+pub type CoreHostSample = Arc<std::sync::Mutex<Option<yagra_common::HostSample>>>;
+
 /// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
 pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
 
@@ -36,7 +40,7 @@ pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
 /// page draws it against the interface total, and the sample is the one thing both halves arrive in.
 pub(crate) fn start(
     store: Arc<dyn MetricStore>,
-    cache: crate::api::CoreHostSample,
+    cache: CoreHostSample,
     pool: sqlx::PgPool,
     bus_bytes: Arc<yagra_bus::BusBytes>,
     shutdown: &yagra_telemetry::CancellationToken,
@@ -50,7 +54,7 @@ pub(crate) fn start(
 /// dir, so its size comes from `pg_database_size`. Runs for the process lifetime.
 async fn run_host_collector(
     store: Arc<dyn MetricStore>,
-    cache: crate::api::CoreHostSample,
+    cache: CoreHostSample,
     pool: sqlx::PgPool,
     bus_bytes: Arc<yagra_bus::BusBytes>,
 ) {
