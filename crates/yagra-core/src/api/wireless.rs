@@ -678,11 +678,11 @@ mod tests {
 
     /// ADR-064 B2, accepted: an admin switches a controller's import on, imports a never-in-service
     /// AP by hand, and the node detail of both says what each one is.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_admin_switches_import_on_and_imports_an_ap_by_hand(pool: sqlx::PgPool) {
-        let site = crate::pgtest::group(&pool, "site").await;
-        let wac = crate::pgtest::node(&pool, "wac001", 1, Some(site)).await;
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let wac = yagra_base::pgtest::node(&pool, "wac001", 1, Some(site)).await;
         let repo = WirelessRepo::new(pool.clone());
         let obs = |mac: u8, state: WlanApState| WlanApObservation {
             mac: ApMac::new([0, 0, 0, 0, 0, mac]),
@@ -797,13 +797,13 @@ mod tests {
 
     /// End to end over a real database: a viewer reads a controller's APs, and a scoped caller reads
     /// only the APs a controller in its folders reports.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_lists_a_controllers_aps_and_a_scoped_caller_only_its_own(pool: sqlx::PgPool) {
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let ours = crate::pgtest::node(&pool, "wac-ours", 1, Some(mine)).await;
-        let alien = crate::pgtest::node(&pool, "wac-alien", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let ours = yagra_base::pgtest::node(&pool, "wac-ours", 1, Some(mine)).await;
+        let alien = yagra_base::pgtest::node(&pool, "wac-alien", 2, Some(theirs)).await;
         let repo = WirelessRepo::new(pool.clone());
         let obs = |mac: u8, name: &str| WlanApObservation {
             mac: ApMac::new([0, 0, 0, 0, 0, mac]),
@@ -905,15 +905,15 @@ mod tests {
     /// the AP, but neither the active member, nor a node filed beside it, nor a way to create one
     /// there. The case the single-controller test above cannot reach — every AP in it had one
     /// reporter.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_neither_sees_nor_files_into_the_other_members_folder(
         pool: sqlx::PgPool,
     ) {
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let active = crate::pgtest::node(&pool, "wac-active", 1, Some(theirs)).await;
-        let standby = crate::pgtest::node(&pool, "wac-standby", 2, Some(mine)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let active = yagra_base::pgtest::node(&pool, "wac-active", 1, Some(theirs)).await;
+        let standby = yagra_base::pgtest::node(&pool, "wac-standby", 2, Some(mine)).await;
         let repo = WirelessRepo::new(pool.clone());
         let obs = |mac: u8, state: WlanApState| WlanApObservation {
             mac: ApMac::new([0, 0, 0, 0, 0, mac]),

@@ -37,10 +37,10 @@ use uuid::Uuid;
 use yagra_secrets::EnvelopeCipher;
 
 use crate::atomic_file::write_atomically;
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
 use crate::server_cert::{self, ServerCert, RENEW_WITHIN_DAYS};
-use crate::stored_enum::token_enum;
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
+use yagra_base::stored_enum::token_enum;
 
 /// The file both nginx directives point at: chain and key in one place, so the writer's job is a
 /// single rename and there is no window where the two disagree.

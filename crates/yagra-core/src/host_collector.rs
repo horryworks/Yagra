@@ -96,7 +96,7 @@ mod tests {
     /// the failure is silent — the `Err` arm logs at debug and the sample simply goes out without
     /// its `database` disk, so a function renamed by a PostgreSQL major version would take the
     /// database-growth trend away with no error anyone sees.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_database_size_statement_still_resolves(pool: sqlx::PgPool) {
         let bytes: i64 = sqlx::query_scalar("SELECT pg_database_size(current_database())")

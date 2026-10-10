@@ -372,10 +372,10 @@ mod tests {
     /// ADR-191 Inc.10: the default next hops ride inside the stored document. A node observed by an
     /// older poller reads as not asked; one asked with no default route reads as an empty list; and
     /// the folder each node is filed in comes back unscoped.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn default_next_hops_round_trip_inside_the_stored_snapshot(pool: sqlx::PgPool) {
-        use crate::pgtest;
+        use yagra_base::pgtest;
         let site = pgtest::group(&pool, "site-a").await;
         let router = pgtest::node(&pool, "rt-01", 1, Some(site)).await;
         let core = pgtest::node(&pool, "core-01", 2, Some(site)).await;

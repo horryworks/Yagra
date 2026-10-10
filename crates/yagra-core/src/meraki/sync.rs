@@ -72,8 +72,8 @@ use crate::meraki::inventory::{
 };
 use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
 use crate::neighbors::NeighborRepo;
-use crate::repo::NodeRepo;
-use crate::secrets::CredentialStore;
+use yagra_base::repo::NodeRepo;
+use yagra_base::secrets::CredentialStore;
 
 /// How often the loop looks for an organization that is due.
 const TICK: Duration = Duration::from_secs(15);
@@ -148,7 +148,7 @@ pub enum MerakiSyncFailure {
 
 // A token this build does not know — written by a newer core — reads as `Internal` rather than as
 // "no failure": the row still says the sync failed.
-crate::stored_enum::token_enum!(MerakiSyncFailure, Internal, "meraki_organizations.last_sync_error", [
+yagra_base::stored_enum::token_enum!(MerakiSyncFailure, Internal, "meraki_organizations.last_sync_error", [
     Credential => "credential",
     Config => "config",
     Auth => "auth",
@@ -682,7 +682,7 @@ impl MerakiSync {
         // it: the connectivity graph is re-derived when the generation or an observation watermark
         // moves (`run_topology_derivation`), and a re-addressed node moves neither watermark.
         if applied.followed > 0 {
-            crate::config_gen::bump();
+            yagra_base::config_gen::bump();
         }
         // After `apply`, which created the rows of devices seen for the first time.
         self.inflight
@@ -1151,7 +1151,7 @@ impl MerakiSync {
             filed = outcome.filed;
             // At once, for the reason `attempt` bumps after `apply` (decision 38).
             if imported > 0 {
-                crate::config_gen::bump();
+                yagra_base::config_gen::bump();
             }
         }
         self.orgs
@@ -1553,9 +1553,9 @@ mod tests {
         assert!(neighbors_due(&mx, &last, now, every, 0).is_empty());
     }
     use crate::meraki::MerakiLane;
-    use crate::pgtest;
     use sqlx::Row;
     use std::sync::Mutex;
+    use yagra_base::pgtest;
     use yagra_common::MerakiTier;
     use yagra_transport::{
         MerakiAvailability, MerakiDeviceInfo, MerakiInventoryDevice, MerakiNetworkInfo,
@@ -1881,7 +1881,7 @@ mod tests {
         let credential = creds
             .create(
                 "Meraki API — Acme",
-                crate::secrets::KIND_MERAKI_API,
+                yagra_base::secrets::KIND_MERAKI_API,
                 br#"{"api_key":"not-a-real-key"}"#,
             )
             .await
@@ -1895,7 +1895,7 @@ mod tests {
         let inflight = Arc::new(MerakiInflight::new());
         let directory = FakeDirectory::answering(first);
         let resolver = Arc::new(ImportResolver::new(
-            Arc::new(crate::groups::GroupRepo::new(pool.clone())),
+            Arc::new(yagra_base::groups::GroupRepo::new(pool.clone())),
             Arc::new(NodeRepo::from_pool(pool.clone())),
         ));
         let sync = MerakiSync::new(
@@ -1924,7 +1924,7 @@ mod tests {
     /// and its turn has come, records them as that node's, and does not ask again within the
     /// interval. With neighbour discovery off it asks nothing. Inc.5: an MR is read the same way,
     /// in the same queue; a switch is not (its neighbours come from the organization's listing).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_records_an_imported_mxs_neighbours_once_an_interval(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
@@ -2040,7 +2040,7 @@ mod tests {
     }
 
     /// The whole life of a row, against real SQL: found, unchanged, gone, back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_records_what_changed_and_only_that(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP), ("Q2-B", DOWN)]))).await;
@@ -2125,7 +2125,7 @@ mod tests {
     /// ADR-164 decision 26: the sync records each MX's warm-spare role — once; the next sync writes no
     /// role — and a roles read that fails costs nothing: the roles stay, the sync is still a
     /// success, and no device is marked missing. A pair is the other MX of the same network.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_sync_records_warm_spare_roles_and_a_failed_roles_read_costs_nothing(
         pool: sqlx::PgPool,
@@ -2249,7 +2249,7 @@ mod tests {
 
     /// ADR-164 decision 3, the one that matters most: a sync that fails changes **nothing** it could be
     /// wrong about. Not a row of the inventory, and not the stamp the next sync is timed from.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_sync_marks_nothing_missing_and_does_not_move_the_stamp(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP), ("Q2-B", UP)]))).await;
@@ -2303,7 +2303,7 @@ mod tests {
     /// without touching the Dashboard or the row — and it never takes the fast lane instead, which
     /// is where it used to delay availability by a tick every time it ran. A finished sync, and a
     /// failed one, leave the lane free for the collector.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_scheduled_sync_waits_for_the_slow_lane_and_leaves_the_fast_one_alone(
         pool: sqlx::PgPool,
@@ -2363,7 +2363,7 @@ mod tests {
     /// minutes, and the fast lane is availability's. While a collect holds the slow lane it waits
     /// (busy, the request standing, nothing asked); once it runs it reads every network — the one
     /// read a sync ago too — and clears the request and its progress. It releases its own lane only.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_requested_read_waits_for_the_slow_lane_and_reads_every_network(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
@@ -2434,7 +2434,7 @@ mod tests {
     }
 
     /// A key that cannot be opened is a recorded failure, and the Dashboard is never asked.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unusable_key_fails_the_sync_before_anything_is_sent(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
@@ -2480,7 +2480,7 @@ mod tests {
 
     /// ADR-164 decision 5: a device becomes a node when it is in a watched network and Meraki has
     /// reported it online — and a new organization watches a network from the sync that finds it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_imports_what_has_been_online_and_only_that(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP), ("Q2-B", DOWN)]))).await;
@@ -2488,7 +2488,7 @@ mod tests {
             r.org().await.import_devices,
             "migration 0125: an organization added from here on imports automatically"
         );
-        let generation = crate::config_gen::current();
+        let generation = yagra_base::config_gen::current();
 
         let first = r
             .sync
@@ -2512,7 +2512,7 @@ mod tests {
             "with no IP range anywhere the device goes under Organization ▸ Network"
         );
         assert!(
-            crate::config_gen::current() > generation,
+            yagra_base::config_gen::current() > generation,
             "an import that created a node must make the scheduler rebuild its round"
         );
 
@@ -2538,7 +2538,7 @@ mod tests {
 
     /// A device an operator deleted stays deleted. `imported_at` outlives the node, and that is the
     /// whole mechanism — without it the next sync, five minutes later, would put the node back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_an_operator_deleted_is_not_imported_again(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
@@ -2573,7 +2573,7 @@ mod tests {
 
     /// Both halves of "off", and the trap behind switching it on later: an organization that was
     /// imported by hand has networks nobody watched, and turning the switch on watches none of them.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn with_automatic_import_off_nothing_is_imported_and_no_network_is_watched(
         pool: sqlx::PgPool,
@@ -2633,7 +2633,7 @@ mod tests {
 
     /// The cap stops the import and is never silent about it: what it left out is on the row, goes
     /// back to zero when the cap is raised, and does not outlive the switch.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_cap_stops_the_import_and_the_row_says_what_it_left_out(pool: sqlx::PgPool) {
         let r = rig(
@@ -2709,7 +2709,7 @@ mod tests {
 
     /// The sync files a device exactly as a manual import does — the folder whose IP range holds
     /// its address — unless the organization says not to.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_sync_files_by_ip_range_unless_the_organization_says_not_to(pool: sqlx::PgPool) {
         let site = pgtest::group(&pool, "Matsuyama").await;
@@ -2750,7 +2750,7 @@ mod tests {
     }
 
     /// Migration 0124, as a behaviour: the floor is one minute, and the default five.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_sync_interval_defaults_to_five_minutes_and_may_go_down_to_one(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(MerakiInventory::default())).await;
@@ -2832,7 +2832,7 @@ mod tests {
 
     /// The three things a node takes from the Dashboard, against real SQL — and the one it never
     /// does: it stays in the folder it was filed in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_imported_node_follows_the_dashboard_and_stays_where_it_was_filed(
         pool: sqlx::PgPool,
@@ -2849,7 +2849,7 @@ mod tests {
             .expect("first sync");
         assert_eq!((first.imported, first.followed), (1, 0));
         let filed = folder_of(&pool, "Q2-A").await;
-        let generation = crate::config_gen::current();
+        let generation = yagra_base::config_gen::current();
 
         r.directory
             .now_answers(Ok(listing_of("Q2-A", "lobby-ap", "N_2", Some("10.0.0.7"))));
@@ -2872,7 +2872,7 @@ mod tests {
             "a device that changed network was moved to another folder (決定 6)"
         );
         assert!(
-            crate::config_gen::current() > generation,
+            yagra_base::config_gen::current() > generation,
             "a re-addressed node is not re-derived into the map until the generation moves"
         );
 
@@ -2887,7 +2887,7 @@ mod tests {
 
     /// A name an operator chose survives Meraki's rename — decided by the plan when the sync reads
     /// the node after the rename, and by the statement when the rename lands in between.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_name_an_operator_chose_survives_a_rename_in_meraki(pool: sqlx::PgPool) {
         let r = rig(
@@ -2951,7 +2951,7 @@ mod tests {
     /// that slipped by one would still insert the right number of rows), a second write keeps the
     /// two timestamps the first one stamped and clears `missing_since`, and a serial planned twice
     /// costs that row rather than the statement.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_plan_of_many_rows_lands_whole_and_a_second_write_keeps_what_the_first_stamped(
         pool: sqlx::PgPool,
@@ -3117,13 +3117,13 @@ mod tests {
     /// address arrives is not imported by no address — it would sit under its network's folder for
     /// good — but waits, and goes into the folder whose range holds its address once Meraki reports
     /// one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_ap_listed_before_its_address_is_imported_into_its_range_once_it_has_one(
         pool: sqlx::PgPool,
     ) {
-        let site = crate::pgtest::group(&pool, "Site A").await;
-        crate::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
+        let site = yagra_base::pgtest::group(&pool, "Site A").await;
+        yagra_base::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
         let r = rig(&pool, Ok(listing_of("Q2-A", "ap-1", "N_1", None))).await;
         let first = r
             .sync
@@ -3164,7 +3164,7 @@ mod tests {
     /// that has one, and a later sync that has none again leaves it alone. With filing by range
     /// off, an access point with no address is imported at once (there is no folder to wait for,
     /// decision 41) — which is how such a node comes to exist without a hand import.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_imported_without_an_address_gets_one_and_never_loses_it(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing_of("Q2-A", "ap-1", "N_1", None))).await;
@@ -3206,7 +3206,7 @@ mod tests {
     /// ADR-164 decision 15. Collection asks about watched networks only, so a node whose network is not
     /// watched goes quiet. The count on the organization's row has to be the number of rows the
     /// device list marks — they are two queries, and one number on two screens.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_count_of_nodes_nothing_is_collected_for_is_what_the_device_list_marks(
         pool: sqlx::PgPool,
@@ -3271,7 +3271,7 @@ mod tests {
     /// VLAN next, a folder holding the site's range. The MX is addressed and filed by the site's VLAN
     /// — never by the address the listing carries, which for an MX is its WAN — and a network read
     /// once is not read again the next sync.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_mx_is_addressed_and_filed_by_the_vlan_inside_a_folders_range(pool: sqlx::PgPool) {
         let site = pgtest::group(&pool, "site-a").await;
@@ -3307,7 +3307,7 @@ mod tests {
     /// An MX whose network could not be read has no address yet, and importing it would file it by
     /// none — for good, since a node is never moved (decision 6). It waits, the sync still succeeds, and
     /// the sync that reads its network imports it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_mx_is_imported_only_once_its_network_has_been_read(pool: sqlx::PgPool) {
         let site = pgtest::group(&pool, "site-a").await;
@@ -3340,7 +3340,7 @@ mod tests {
 
     /// A node that carries the address it was given before decision 28 — its WAN — follows to its LAN
     /// address; and a later read that fails, once the network is due again, takes nothing away.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_wan_address_follows_to_the_lan_and_a_failed_reread_keeps_it(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;
@@ -3388,7 +3388,7 @@ mod tests {
     /// What the lab found on 2026-09-23, end to end: two sites reuse one guest subnet, a folder's
     /// range happens to hold it, and neither site's own VLAN is in any range. Each MX takes its own
     /// VLAN address — never the reused one — and so neither is filed into that folder.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_guest_subnet_several_sites_reuse_is_never_an_mx_address(pool: sqlx::PgPool) {
         let home = pgtest::group(&pool, "home").await;
@@ -3437,7 +3437,7 @@ mod tests {
 
     /// An MX waiting for its network to be read keeps its slot under the cap: the access point behind
     /// it in name order does not take it, so the MX goes in on the sync that reads its network.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_mx_waiting_for_its_network_keeps_its_slot_under_the_cap(pool: sqlx::PgPool) {
         let device =
@@ -3524,7 +3524,7 @@ mod tests {
     /// one chunk of them — and imports every MX in that same sync, reading at the organization's
     /// whole rate while it has no node. The next sync reads nothing new; "Sync now" then reads them
     /// all again, at one lane's rate now that there are nodes to collect.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_organizations_first_sync_reads_every_network_and_imports_every_mx(
         pool: sqlx::PgPool,
@@ -3589,7 +3589,7 @@ mod tests {
     /// be reused yet, and it would be filed into that folder for good — while the access point,
     /// addressed by its own `lanIp`, does (decision 31). The next sync reads the second site, and the MX
     /// goes in by its own address, into its network's folder.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_read_cut_short_imports_no_mx_and_the_reused_address_never_files_one(
         pool: sqlx::PgPool,
@@ -3646,7 +3646,7 @@ mod tests {
 
     /// decision 31's other half, and the answer to why increment 15 would not wait: a network whose
     /// **own** read fails was asked, so it holds up only its own MX — every other MX goes in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_network_that_cannot_be_read_holds_up_only_its_own_mx(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(sites(3))).await;
@@ -3669,7 +3669,7 @@ mod tests {
     /// The row's side of a whole-organization read: a request keeps its first time however often it
     /// is pressed; progress is written and read back; ending a read the loop started on its own
     /// leaves the request; a new leader clears progress and keeps the request.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_full_reads_request_and_progress_live_on_the_row(pool: sqlx::PgPool) {
         let r = rig(&pool, Ok(listing(&[("Q2-A", UP)]))).await;

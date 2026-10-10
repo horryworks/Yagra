@@ -7,6 +7,7 @@
 #   crates/yagra-poller    = Poller worker                  [bin: yagra-poller]
 #   crates/yagra-discovery = Discovery & classification      [lib]
 #   crates/yagra-alert     = Alert engine                    [lib]
+#   crates/yagra-base      = Database layer under core       [lib]
 #   crates/yagra-ingest    = Passive-event parsing (syslog/trap) [lib]
 #   crates/yagra-forward   = Forwarding filters + renderers  [lib]
 #   crates/yagra-bus       = Task queue / bus                [lib]
@@ -30,6 +31,7 @@ members = [
     "crates/yagra-topology",
     "crates/yagra-discovery",
     "crates/yagra-alert",
+    "crates/yagra-base",
     "crates/yagra-ingest",
     "crates/yagra-forward",
     "crates/yagra-poller",

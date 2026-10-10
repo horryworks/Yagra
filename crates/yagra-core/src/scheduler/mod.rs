@@ -21,10 +21,10 @@
 //!
 //! Adding a check kind: the builder goes in [`checks`], the decision to emit it in [`assemble`].
 
-use crate::secrets;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use uuid::Uuid;
+use yagra_base::secrets;
 use yagra_common::ProfileId;
 
 mod assemble;

@@ -355,7 +355,7 @@ mod tests {
 
     /// The per-node reader answers with exactly what was recorded, distinguishes "never walked"
     /// from "walked and empty", and follows a replacement (ADR-157).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn current_returns_the_recorded_set_and_none_before_any_walk(pool: sqlx::PgPool) {
         // This module deliberately has no `use super::*` — its other tests read the source as
@@ -364,8 +364,8 @@ mod tests {
         use std::net::IpAddr;
         use yagra_common::{L3Address, L3Snapshot};
         let repo = L3Repo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "l3-current", 1, None).await;
-        let other = crate::pgtest::node(&pool, "l3-other", 2, None).await;
+        let node = yagra_base::pgtest::node(&pool, "l3-current", 1, None).await;
+        let other = yagra_base::pgtest::node(&pool, "l3-other", 2, None).await;
 
         assert_eq!(
             repo.current(node).await.unwrap(),
@@ -404,9 +404,9 @@ mod tests {
 // because the database layer cannot name `L3Repo` now that it is its own crate (ADR-202 Inc.5).
 #[cfg(test)]
 mod address_owner_reads {
-    use crate::pgtest;
     use std::net::IpAddr;
     use uuid::Uuid;
+    use yagra_base::pgtest;
     use yagra_common::{L3AddrType, L3Address, L3Snapshot, L3SourceTable};
 
     fn ip(s: &str) -> IpAddr {
@@ -439,7 +439,7 @@ mod address_owner_reads {
             .unwrap();
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn claims_cover_node_and_interface_addresses_v4_and_v6(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -476,7 +476,7 @@ mod address_owner_reads {
 
     /// Two claimants come back as two rows: the one-owner rule is applied above this reader, and
     /// it can only be applied if nothing here collapses them.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_address_two_nodes_claim_returns_both(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -495,7 +495,7 @@ mod address_owner_reads {
     /// names none — the tab reads each claimant's link state from exactly these. The stored list
     /// keeps one record per address, so the second port offered for the same address is not
     /// stored and does not come back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn each_claim_names_the_port_that_carries_the_address(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -528,7 +528,7 @@ mod address_owner_reads {
         assert_eq!(got, want);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_outside_the_scope_is_returned_marked_invisible(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -551,7 +551,7 @@ mod address_owner_reads {
     /// The interface half is probed through the GIN index, not a scan. Sequential scans are switched
     /// off for the statement so a tiny test table cannot hide a query shape the index cannot serve:
     /// with the index unusable, the plan still falls back to a scan and this fails.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_interface_half_can_use_the_gin_index(pool: sqlx::PgPool) {
         let mut tx = pool.begin().await.unwrap();
@@ -581,7 +581,7 @@ mod address_owner_reads {
 
     /// ADR-139 Inc.3: a device node whose interface list carries a scanned address comes back with
     /// its own monitored address and model; one outside the caller's folders does not come back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn carriers_are_the_visible_nodes_whose_list_names_the_address(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -623,7 +623,7 @@ mod address_owner_reads {
 
     /// A VRRP/HSRP virtual address (`anycast`) and a broadcast address are carried by more than one
     /// device, so neither makes its node a carrier; `unknown` (an `ipAddrTable`-only agent) does.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_addresses_that_identify_a_node_make_it_a_carrier(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
@@ -644,11 +644,11 @@ mod address_owner_reads {
 
     /// One address returns at most one carrier more than the cap — enough to see that it names
     /// nobody — however many sites reuse it, and a node carrying it twice counts once.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn carriers_are_found_up_to_one_past_the_cap_per_address(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
-        let cap = crate::repo::SHARED_VALUE_MAX;
+        let cap = yagra_base::repo::SHARED_VALUE_MAX;
         let lone = pgtest::node_at(&pool, "rtr-lone", ip("192.0.2.1"), None).await;
         l3(&pool, lone, &["203.0.113.1"]).await;
         let twice = pgtest::node_at(&pool, "rtr-twice", ip("192.0.2.2"), None).await;
@@ -687,12 +687,12 @@ mod address_owner_reads {
 
     /// Names are matched trimmed and case-folded, and one name returns at most one row more than
     /// the cap — enough to see that it names nobody.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn nodes_are_found_by_name_up_to_one_past_the_cap(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
         let core = pgtest::node_at(&pool, " Core-1 ", ip("192.0.2.1"), None).await;
-        let cap = crate::repo::SHARED_VALUE_MAX;
+        let cap = yagra_base::repo::SHARED_VALUE_MAX;
         for i in 0..cap + 3 {
             pgtest::node_at(&pool, "switch", ip(&format!("198.51.100.{}", i + 1)), None).await;
         }

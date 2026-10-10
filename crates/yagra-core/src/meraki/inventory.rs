@@ -490,7 +490,7 @@ pub struct Applied {
 /// re-derives only when a signal moves; a MAC arriving or a device leaving the listing moves none of
 /// the others, so this is that input's own signal.
 ///
-/// Not [`crate::config_gen`]: bumping that wakes the scheduler and the change feed too, for a change
+/// Not [`yagra_base::config_gen`]: bumping that wakes the scheduler and the change feed too, for a change
 /// only the map reads. In-process is enough — the sync and the derivation are both leader-only, and a
 /// new leader starts with no remembered signal, so it derives once regardless.
 static INVENTORY_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -2071,10 +2071,10 @@ mod tests {
 
     /// ADR-179 Inc.3: a device's LAN address names its organization — until the listing stops
     /// containing it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_address_names_its_organization(pool: sqlx::PgPool) {
-        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
@@ -2108,10 +2108,10 @@ mod tests {
 
     /// ADR-180 Inc.3: a listed device is found by the MAC the listing gave it, with its node once
     /// it has one; a device the last listing no longer contained is not.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_mac_names_its_organization_and_its_node(pool: sqlx::PgPool) {
-        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
@@ -2134,8 +2134,8 @@ mod tests {
             follows: vec![],
         };
         repo.apply(org, &plan).await.expect("apply");
-        let folder = crate::pgtest::group(&pool, "site-a").await;
-        let node = crate::pgtest::node(&pool, "mx-01", 1, Some(folder)).await;
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        let node = yagra_base::pgtest::node(&pool, "mx-01", 1, Some(folder)).await;
         sqlx::query(
             "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
              VALUES ($1, $2, 'Q2AA-0001', 'N_1', 'appliance')",
@@ -2217,7 +2217,7 @@ mod tests {
         sql: &str,
         bind: &str,
     ) -> Vec<String> {
-        let cred = crate::pgtest::credential(pool, "meraki-key", "meraki_api").await;
+        let cred = yagra_base::pgtest::credential(pool, "meraki-key", "meraki_api").await;
         let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
@@ -2254,7 +2254,7 @@ mod tests {
 
     /// The Neighbors tab asks which listed Meraki device sits at an address through an index, not a
     /// scan (ADR-180 Inc.2, migration 0139).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_address_lookup_can_use_the_listed_lan_ip_index(pool: sqlx::PgPool) {
         let plan = plan_over_a_filled_inventory(
@@ -2273,7 +2273,7 @@ mod tests {
 
     /// …and which listed device carries a neighbour's chassis MAC, the same way (ADR-180 Inc.3,
     /// migration 0140).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_mac_lookup_can_use_the_listed_mac_index(pool: sqlx::PgPool) {
         let plan = plan_over_a_filled_inventory(
@@ -2293,10 +2293,10 @@ mod tests {
     /// The MX and MR whose neighbours a sync reads leave out a device the organization's last
     /// complete listing no longer contained: asking about it would spend a Dashboard request on a
     /// 404. A switch is never among them.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_missing_from_the_listing_is_not_read_for_neighbours(pool: sqlx::PgPool) {
-        let cred = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
@@ -2310,7 +2310,8 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let node = crate::pgtest::node(&pool, serial, u8::try_from(i + 1).unwrap(), None).await;
+            let node =
+                yagra_base::pgtest::node(&pool, serial, u8::try_from(i + 1).unwrap(), None).await;
             sqlx::query(
                 "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id) \
                  VALUES ($1, $2, $2, $3, 'N_1')",

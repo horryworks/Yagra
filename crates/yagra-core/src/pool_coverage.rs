@@ -26,17 +26,18 @@ use std::sync::Arc;
 use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
 use crate::coordinator::{Coordinator, PollerView};
-use crate::groups::GroupRepo;
 use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
-use crate::repo::NodeRepo;
 use yagra_alert::engine::POOL_COVERAGE_METRIC as COVERAGE_METRIC;
 use yagra_alert::Alert;
+use yagra_base::groups::GroupRepo;
+use yagra_base::repo::NodeRepo;
 use yagra_common::Node;
 // Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
 // lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
 // alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
-use crate::{config_gen, groups, meraki, pool_coverage};
+use crate::{meraki, pool_coverage};
+use yagra_base::{config_gen, groups};
 
 /// How often the watch loop samples coverage.
 ///
@@ -1001,7 +1002,7 @@ mod tests {
         );
     }
 
-    use crate::pgtest;
+    use yagra_base::pgtest;
 
     fn stores(pool: &sqlx::PgPool) -> (NodeRepo, MerakiDeviceRepo, GroupRepo) {
         (
@@ -1013,7 +1014,7 @@ mod tests {
 
     /// A node inheriting `siteA` from its folder, read with the folder tree readable and then not.
     /// Before ADR-158 the unreadable tree resolved the node to `default` and said so as an answer.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_folder_pool_read_is_an_error_not_a_default_pool(pool: sqlx::PgPool) {
         let folder = pgtest::group(&pool, "site-a").await;
@@ -1037,7 +1038,7 @@ mod tests {
 
     /// An unreadable inventory, or an unreadable Meraki list, is an error — not an empty fleet, and
     /// not a fleet with the Meraki nodes counted in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_inventory_or_meraki_read_is_an_error(pool: sqlx::PgPool) {
         pgtest::node(&pool, "plain", 1, None).await;

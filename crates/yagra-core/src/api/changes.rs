@@ -111,16 +111,17 @@ async fn stream_config(
         return e.into_response();
     }
     // Subscribe first, then read: a publish between the two is on the receiver either way.
-    let rx = crate::change_feed::subscribe();
-    let first = crate::change_feed::current();
+    let rx = yagra_base::change_feed::subscribe();
+    let first = yagra_base::change_feed::current();
     // The alert engine stands for the state here: it lives exactly as long as the state does.
     let state = std::sync::Arc::downgrade(&st.alerts);
     let alive = move || state.strong_count() > 0;
-    let stream = revisions(rx, first, crate::change_feed::current, alive, COALESCE).map(|rev| {
-        Ok::<_, Infallible>(
-            Event::default().data(serde_json::json!({ "revision": rev }).to_string()),
-        )
-    });
+    let stream =
+        revisions(rx, first, yagra_base::change_feed::current, alive, COALESCE).map(|rev| {
+            Ok::<_, Infallible>(
+                Event::default().data(serde_json::json!({ "revision": rev }).to_string()),
+            )
+        });
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()

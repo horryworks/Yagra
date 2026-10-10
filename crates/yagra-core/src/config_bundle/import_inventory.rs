@@ -20,9 +20,9 @@
 use super::import::Ids;
 use super::import::{bump, counter, id_set, keep_ref};
 use super::*;
-use crate::seed_ids;
 use sqlx::{Postgres, Transaction};
 use std::collections::BTreeMap;
+use yagra_base::seed_ids;
 
 pub(super) async fn write<'a>(
     mut tx: Transaction<'a, Postgres>,

@@ -42,11 +42,11 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
 use crate::coordinator::Coordinator;
-use crate::repo::{self, NodeRepo};
 use crate::store::MetricStore;
 use crate::wireless_fanout::{ApFanout, Replay};
 use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
 use yagra_alert::no_reading::{Admitted, NoReadingHandle};
+use yagra_base::repo::{self, NodeRepo};
 
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
 /// mirroring the event pipeline's ADR-024 split). Like events, sustained overload sheds the newest

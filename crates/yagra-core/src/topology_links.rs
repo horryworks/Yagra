@@ -453,7 +453,7 @@ mod tests {
     // text check. That second one is not hypothetical — `neighbors.rs` dropped two settings that
     // way from ADR-063 until ADR-115 ran the SQL and found them.
     use super::{DerivedLink, LinkSource, NodeId, StoredLink, TopoLinkRepo, TopologyLinkSummary};
-    use crate::pgtest;
+    use yagra_base::pgtest;
 
     /// Whether `rows` holds the link `want` — by its endpoint pair, which is its identity.
     fn holds(rows: &[StoredLink], want: &DerivedLink) -> bool {
@@ -465,7 +465,7 @@ mod tests {
     ///
     /// 🚨 The subject is the **projection**, not the row count. Stopping at "one row exists" is
     /// what lets a reader that names eight of the writer's ten columns pass.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn every_column_of_a_link_survives_the_round_trip(pool: sqlx::PgPool) {
         let a = pgtest::node(&pool, "a", 1, None).await;
@@ -511,7 +511,7 @@ mod tests {
 
     /// A second observation updates the row in place and refreshes `last_seen` — and leaves
     /// `first_seen` where it was, which is the one fact here that cannot be recomputed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_second_observation_updates_in_place_and_keeps_first_seen(pool: sqlx::PgPool) {
         let a = pgtest::node(&pool, "a", 1, None).await;
@@ -560,7 +560,7 @@ mod tests {
 
     /// The dependency graph's read: both endpoints and every source, with **no** scope filter —
     /// the two links below sit in different groups and both must come back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn all_links_returns_every_pair_regardless_of_group(pool: sqlx::PgPool) {
         let one = pgtest::group(&pool, "one").await;
@@ -600,7 +600,7 @@ mod tests {
     }
 
     /// The map's read: every column, both links, no scope — the level builder filters.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn all_stored_links_returns_every_pair_with_its_ports(pool: sqlx::PgPool) {
         let one = pgtest::group(&pool, "one").await;
@@ -635,7 +635,7 @@ mod tests {
 
     /// Links are removed by age, one at a time. A window three cycles wide keeps a link seen a
     /// moment ago; a zero-length one takes it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_link_seen_this_cycle_survives_the_prune(pool: sqlx::PgPool) {
         let a = pgtest::node(&pool, "a", 1, None).await;
@@ -657,7 +657,7 @@ mod tests {
     }
 
     /// The derivation state is one row that each run replaces — never a second row.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_derivation_state_is_one_row_the_next_run_replaces(pool: sqlx::PgPool) {
         let repo = TopoLinkRepo::new(pool.clone());
@@ -706,7 +706,7 @@ mod tests {
     /// **The scope rule, executed.** A link is returned to a scoped caller only when *both* of its
     /// endpoints sit in a visible group — one visible end would tell that caller a node exists
     /// outside their scope, which is the fail-open direction.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_read_returns_a_link_only_when_both_ends_are_visible(pool: sqlx::PgPool) {
         let mine = pgtest::group(&pool, "mine").await;
@@ -771,7 +771,7 @@ mod tests {
     /// ⚠️ The bounded loop is part of the assertion: a `WHERE id > $2` that stopped being applied
     /// would hand back the same first row forever, and an unbounded `loop` would hang rather than
     /// fail.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn paging_by_cursor_walks_every_link_exactly_once(pool: sqlx::PgPool) {
         let a = pgtest::node(&pool, "a", 1, None).await;

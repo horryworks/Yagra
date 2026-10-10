@@ -67,7 +67,7 @@
 //! Seeded profiles, templates, classification rules, seeded thresholds and the built-in trap rules
 //! are excluded, because the target seeds its own copies at boot and their ids are derived from an
 //! array position — carrying one across builds whose catalogs differ would re-key it. The filter is
-//! [`crate::seed_ids::is_builtin`], which is the same table the seeder itself reads.
+//! [`yagra_base::seed_ids::is_builtin`], which is the same table the seeder itself reads.
 //!
 //! # Import semantics
 //!

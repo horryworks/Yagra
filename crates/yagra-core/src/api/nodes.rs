@@ -26,7 +26,6 @@
 use super::extract::{Admin, ListSlot, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
 use super::{AdminState, ApiError, ApiResult, ApiState};
-use crate::groups::{placement_order, would_create_cycle};
 use crate::node_display::{state_or_fallback, FALLBACK_FRESH_SECS, FALLBACK_METRICS};
 use axum::{
     extract::{Path, Query, State},
@@ -38,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
+use yagra_base::groups::{placement_order, would_create_cycle};
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -313,7 +313,7 @@ pub(crate) struct NodePageQuery {
 /// - **pool** is inherited from the folder tree and deliberately not materialized (ADR-013), so the
 ///   answer is [`crate::poolres::PoolResolver`]'s, not a column's.
 ///
-/// So they run over a bounded candidate scan ([`crate::repo::NODE_SCAN_MAX`]), through the same
+/// So they run over a bounded candidate scan ([`yagra_base::repo::NODE_SCAN_MAX`]), through the same
 /// resolvers every other surface asks. What that buys is that a row can never disagree with the
 /// filter that selected it. What it costs is the bound: past it the answer is a subset, and
 /// `NodePage::truncated` says so rather than letting "no matches" mean "none among the first N".
@@ -354,7 +354,7 @@ pub(crate) async fn filtered_node_page(
     // query. A plain text search rejects nothing, so it stays exactly as cheap as it was — and so
     // does an exact address, which the query itself narrows.
     let scan = if filter.is_set() {
-        crate::repo::NODE_SCAN_MAX
+        yagra_base::repo::NODE_SCAN_MAX
     } else {
         limit
     };
@@ -589,7 +589,7 @@ async fn list_nodes(
     let limit = q
         .limit
         .unwrap_or(100)
-        .clamp(1, crate::repo::NODE_SEARCH_MAX);
+        .clamp(1, yagra_base::repo::NODE_SEARCH_MAX);
     let term = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let address = parse_address_filter(q.address.as_deref())?;
     let filter = parse_node_filter(q.state.as_deref(), q.kind.as_deref(), q.pool.as_deref())?;
@@ -1199,7 +1199,7 @@ async fn get_node(
     let admin = st.admin.as_ref().ok_or_else(missing)?;
     // `get_node_with_notes`, not `get_node`: the note is not in `NODE_COLUMNS` and this is one of
     // the two surfaces allowed to ask for it (ADR-135 decision 2).
-    let crate::repo::NodeWithNotes {
+    let yagra_base::repo::NodeWithNotes {
         mut node,
         notes,
         os_version,
@@ -1760,7 +1760,7 @@ async fn set_node_bindings(
         .repo
         .set_node_bindings(
             id,
-            crate::repo::NodeBindingUpdate {
+            yagra_base::repo::NodeBindingUpdate {
                 profile: body.profile_id,
                 credential: body.credential_id,
                 vendor: trimmed(body.vendor.as_ref()),
@@ -1902,14 +1902,14 @@ pub(super) struct MovePreviewResult {
     any_prefixes: bool,
 }
 
-/// Shape this domain's DTOs from the shared fold (`crate::groups::fold_prefix_matches`).
+/// Shape this domain's DTOs from the shared fold (`yagra_base::groups::fold_prefix_matches`).
 ///
-/// The fold itself moved to `crate::groups` in ADR-131, because a second caller appeared that asks
+/// The fold itself moved to `yagra_base::groups` in ADR-131, because a second caller appeared that asks
 /// the same question about **addresses that are not nodes yet**. What is left here is the part
 /// that is genuinely about this domain: turning `(key, group, prefix)` into the node-shaped DTOs
 /// this endpoint publishes.
 fn node_prefix_dtos(
-    fold: crate::groups::PrefixFold<Uuid>,
+    fold: yagra_base::groups::PrefixFold<Uuid>,
 ) -> (Vec<PrefixProposal>, Vec<PrefixAmbiguity>, Vec<Uuid>) {
     (
         fold.matched
@@ -2328,7 +2328,7 @@ async fn preview_move_by_prefix(
         })?;
     let (in_place, left, hits) = split_in_place(&admin, &body.node_ids, hits).await?;
     let (matched, ambiguous, unmatched) =
-        node_prefix_dtos(crate::groups::fold_prefix_matches(&left, hits));
+        node_prefix_dtos(yagra_base::groups::fold_prefix_matches(&left, hits));
     Ok(Json(MovePreviewResult {
         matched,
         ambiguous,
@@ -2343,8 +2343,15 @@ async fn preview_move_by_prefix(
 async fn split_in_place(
     admin: &Admin,
     requested: &[Uuid],
-    hits: Vec<crate::groups::PrefixHit<Uuid>>,
-) -> Result<(Vec<Uuid>, Vec<Uuid>, Vec<crate::groups::PrefixHit<Uuid>>), ApiError> {
+    hits: Vec<yagra_base::groups::PrefixHit<Uuid>>,
+) -> Result<
+    (
+        Vec<Uuid>,
+        Vec<Uuid>,
+        Vec<yagra_base::groups::PrefixHit<Uuid>>,
+    ),
+    ApiError,
+> {
     let found = admin.groups.nodes_in_place(&hits).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -2352,7 +2359,7 @@ async fn split_in_place(
             "failed to match prefixes",
         )
     })?;
-    let (left, hits) = crate::groups::without_in_place(requested, hits, &found);
+    let (left, hits) = yagra_base::groups::without_in_place(requested, hits, &found);
     let in_place = requested
         .iter()
         .copied()
@@ -2450,7 +2457,7 @@ async fn preview_move_by_subtree(
         .map_err(fail("read group prefixes"))?;
     let (in_place, left, hits) = split_in_place(&admin, &ids, hits).await?;
     let (mut matched, mut ambiguous, mut unmatched) =
-        node_prefix_dtos(crate::groups::fold_prefix_matches(&left, hits));
+        node_prefix_dtos(yagra_base::groups::fold_prefix_matches(&left, hits));
     let (matched_total, ambiguous_total, unmatched_total) =
         (matched.len(), ambiguous.len(), unmatched.len());
     matched.truncate(NODE_MOVE_BATCH_MAX);
@@ -3765,7 +3772,7 @@ mod tests {
     ///
     /// The whole point of ADR-115: before it, no test in this module had ever seen a 201 from any
     /// endpoint, because every fixture was skeleton mode and this handler answered 503.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_node_writes_the_row_and_then_lists_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -3780,7 +3787,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -3796,13 +3803,13 @@ mod tests {
     /// client written before this change sends — and asserts the name and the note survived it. A
     /// version of this test with only the first save passes against an implementation that blanks
     /// both on every write, which is the data-loss bug the three-state reading exists to prevent.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_rename_and_a_note_are_accepted_and_survive_an_unrelated_save(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let id = crate::pgtest::node(&pool, "typo-sw-01", 1, None).await;
+        let id = yagra_base::pgtest::node(&pool, "typo-sw-01", 1, None).await;
         let path = format!("/api/v1/nodes/{id}/bindings");
 
         let (status, body) = send(
@@ -3876,20 +3883,20 @@ mod tests {
     ///
     /// 🚨 The `null` before the write proves only that the field exists; the value after it is what
     /// separates a detail that reads the column from one that does not.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_detail_shows_the_os_version_the_poll_path_recorded(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Viewer);
-        let id = crate::pgtest::node(&pool, "fw-1", 1, None).await;
+        let id = yagra_base::pgtest::node(&pool, "fw-1", 1, None).await;
         let path = format!("/api/v1/nodes/{id}");
 
         let (status, detail) = send(&st, "GET", &path, &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
         assert_eq!(detail["os_version"], serde_json::Value::Null, "{detail}");
 
-        crate::pgtest::repo(pool.clone())
+        yagra_base::pgtest::repo(pool.clone())
             .update_os_version_batch(&[(id, "v7.2.6,build1575,230926 (GA.F)".to_owned())])
             .await
             .expect("record a version");
@@ -3903,20 +3910,20 @@ mod tests {
 
     /// The node detail shows the serial number the poll path recorded (ADR-147), to a caller
     /// holding only View. The `null` before the write proves only that the field exists.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_detail_shows_the_serial_number_the_poll_path_recorded(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Viewer);
-        let id = crate::pgtest::node(&pool, "sw-stack", 1, None).await;
+        let id = yagra_base::pgtest::node(&pool, "sw-stack", 1, None).await;
         let path = format!("/api/v1/nodes/{id}");
 
         let (status, detail) = send(&st, "GET", &path, &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
         assert_eq!(detail["serial_number"], serde_json::Value::Null, "{detail}");
 
-        crate::pgtest::repo(pool.clone())
+        yagra_base::pgtest::repo(pool.clone())
             .update_serial_number_batch(&[(id, "FCW1929B68S, FCW1931A06Z".to_owned())])
             .await
             .expect("record a serial");
@@ -3970,14 +3977,14 @@ mod tests {
     /// compiled, ran only under `--include-ignored`, and answered 422 against a machine with no
     /// PostgreSQL to run it on. A `json!` body is a hand-written copy of the request schema with
     /// nothing pinning it to the real one — when you change a DTO, grep the `json!` literals.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_tag_is_accepted_and_merges_into_what_is_already_there(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
 
         // Give `a` a label through the single-node path, which replaces.
         let (status, body) = send(
@@ -4044,15 +4051,15 @@ mod tests {
     /// ⚠️ The status is named, not `is_success()`: this endpoint documents 200 with a body, and
     /// nine of the write routes measured in ADR-115 are 204s — a check that cannot tell them apart
     /// would pass on the wrong one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_move_is_accepted_and_the_nodes_land_in_the_folder(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let dest = crate::pgtest::group(&pool, "Tokyo").await;
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let dest = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
 
         let (status, body) = send(
             &st,
@@ -4066,7 +4073,7 @@ mod tests {
         assert_eq!(body["requested"], 2, "{body}");
         assert_eq!(body["moved"], 2, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         for id in [a, b] {
             let node = repo.get_node(id).await.expect("read").expect("the node");
             assert_eq!(node.group.map(|g| g.0), Some(dest), "{id} did not move");
@@ -4075,18 +4082,18 @@ mod tests {
 
     /// ADR-172 decision 2: an IP-range move is one request and one transaction — every destination or
     /// none. It used to be one request per destination from the browser.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_move_by_prefix_writes_every_destination_or_none(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let tokyo = crate::pgtest::group(&pool, "Tokyo").await;
-        let osaka = crate::pgtest::group(&pool, "Osaka").await;
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
-        let c = crate::pgtest::node(&pool, "c", 3, None).await;
-        let repo = crate::pgtest::repo(pool.clone());
+        let tokyo = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let osaka = yagra_base::pgtest::group(&pool, "Osaka").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
+        let c = yagra_base::pgtest::node(&pool, "c", 3, None).await;
+        let repo = yagra_base::pgtest::repo(pool.clone());
         let group_of = |id| {
             let repo = &repo;
             async move {
@@ -4154,22 +4161,22 @@ mod tests {
     ///
     /// The gesture this endpoint could not express until it grew `before`/`after`: the drag had to
     /// append a multi-node batch, so the same drop answered differently at one node and at three.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_move_places_the_batch_where_it_was_dropped(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let dest = crate::pgtest::group(&pool, "Tokyo").await;
-        let repo = crate::pgtest::repo(pool.clone());
-        let top = crate::pgtest::node(&pool, "top", 1, Some(dest)).await;
-        let anchor = crate::pgtest::node(&pool, "anchor", 2, Some(dest)).await;
+        let dest = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let repo = yagra_base::pgtest::repo(pool.clone());
+        let top = yagra_base::pgtest::node(&pool, "top", 1, Some(dest)).await;
+        let anchor = yagra_base::pgtest::node(&pool, "anchor", 2, Some(dest)).await;
         repo.place_node(top, Some(dest), 1.0).await.expect("top");
         repo.place_node(anchor, Some(dest), 2.0)
             .await
             .expect("anchor");
-        let c = crate::pgtest::node(&pool, "c", 3, None).await;
-        let a = crate::pgtest::node(&pool, "a", 4, None).await;
+        let c = yagra_base::pgtest::node(&pool, "c", 3, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 4, None).await;
 
         let (status, body) = send(
             &st,
@@ -4196,15 +4203,15 @@ mod tests {
     }
 
     /// Both ordering hints at once is a refusal, not a guess about which one was meant.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_move_naming_both_sides_of_a_sibling_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let dest = crate::pgtest::group(&pool, "Tokyo").await;
-        let anchor = crate::pgtest::node(&pool, "anchor", 1, Some(dest)).await;
-        let a = crate::pgtest::node(&pool, "a", 2, None).await;
+        let dest = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let anchor = yagra_base::pgtest::node(&pool, "anchor", 1, Some(dest)).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 2, None).await;
 
         let (status, body) = send(
             &st,
@@ -4221,13 +4228,13 @@ mod tests {
     }
 
     /// An unknown destination is a 400 that names it, not the foreign key's 500 that names nothing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn moving_into_a_folder_that_does_not_exist_is_refused_by_name(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
         let ghost = uuid::Uuid::new_v4();
 
         // Both paths share one helper, so both are checked here — the single-node route was the
@@ -4249,7 +4256,7 @@ mod tests {
 
     /// Over the ceiling is refused outright — a truncated *write* would report a move it did not
     /// make for everything past the cut.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_batch_over_the_ceiling_is_refused_rather_than_truncated(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -4272,15 +4279,15 @@ mod tests {
     }
 
     /// A bulk delete is **accepted** and the rows are gone (ADR-115's shape, ADR-124 Inc.6).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_delete_is_accepted_and_the_nodes_are_gone(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
-        let kept = crate::pgtest::node(&pool, "kept", 3, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
+        let kept = yagra_base::pgtest::node(&pool, "kept", 3, None).await;
 
         let (status, body) = send(
             &st,
@@ -4295,7 +4302,7 @@ mod tests {
         assert_eq!(body["requested"], 2, "{body}");
         assert_eq!(body["deleted"], 2, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         for id in [a, b] {
             assert!(
                 repo.get_node(id).await.expect("read").is_none(),
@@ -4311,15 +4318,15 @@ mod tests {
     /// A bulk pool change is accepted, and clearing it puts the nodes back to inherited.
     ///
     /// ⚠️ The status is named, not `is_success()`: this route documents 200 with a body.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_pool_change_is_accepted_and_can_be_cleared(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
-        let repo = crate::pgtest::repo(pool.clone());
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
+        let repo = yagra_base::pgtest::repo(pool.clone());
 
         let (status, body) = send(
             &st,
@@ -4371,15 +4378,15 @@ mod tests {
     /// ⚠️ **The bus in this fixture is in-memory**, so what is asserted is that the jobs were
     /// *built and published* — no poller receives them (`tests_support`'s own doc says so). A
     /// node that reaches no poller is exactly what `dispatched` claims and no more.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_poll_dispatches_each_node_the_caller_can_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
-        let hidden = crate::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let hidden = yagra_base::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
         let gone = uuid::Uuid::new_v4();
 
         let tok = scoped_token(&st, &[mine]);
@@ -4427,15 +4434,15 @@ mod tests {
     /// The pool decides which poller reaches a device, so an unscoped write here would strand
     /// another site's inventory on a poller that cannot see it — which is why this route is
     /// `GroupFiltered`, and why the single-node one takes `VisibleNode` (ADR-158 A8).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_pool_change_does_not_reach_outside_the_callers_scope(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
-        let other = crate::pgtest::node(&pool, "other", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let own = yagra_base::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let other = yagra_base::pgtest::node(&pool, "other", 2, Some(theirs)).await;
         let tok = scoped_token(&st, &[mine]);
 
         let (status, body) = send(
@@ -4450,7 +4457,7 @@ mod tests {
         assert_eq!(body["requested"], 2, "{body}");
         assert_eq!(body["applied"], 1, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         assert_eq!(
             repo.get_node(other)
                 .await
@@ -4464,15 +4471,15 @@ mod tests {
 
     /// 🚨 **A scoped caller's bulk delete does not reach another site's nodes**, and the count says
     /// so rather than claiming the batch.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_delete_does_not_reach_outside_the_callers_scope(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
-        let other = crate::pgtest::node(&pool, "other", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let own = yagra_base::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let other = yagra_base::pgtest::node(&pool, "other", 2, Some(theirs)).await;
         let tok = scoped_token(&st, &[mine]);
 
         let (status, body) = send(
@@ -4487,7 +4494,7 @@ mod tests {
         assert_eq!(body["requested"], 2, "{body}");
         assert_eq!(body["deleted"], 1, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         assert!(repo.get_node(own).await.expect("read").is_none());
         assert!(
             repo.get_node(other).await.expect("read").is_some(),
@@ -4506,7 +4513,7 @@ mod tests {
     /// Both halves on one fixture: every route answers `404 node_not_found` for the other site's
     /// node and writes nothing, and every route is **accepted** for the caller's own node — so a
     /// handler that refused everything would fail the second half.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_cannot_write_a_node_outside_its_folders(pool: sqlx::PgPool) {
         use crate::alerts::{AlertConfig, NodeMeta};
@@ -4515,12 +4522,12 @@ mod tests {
         use serde_json::json;
 
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let own = crate::pgtest::node(&pool, "own", 1, Some(mine)).await;
-        let own_url = crate::pgtest::node(&pool, "own-url", 2, Some(mine)).await;
-        let own_dns = crate::pgtest::node(&pool, "own-dns", 3, Some(mine)).await;
-        let other = crate::pgtest::node(&pool, "other", 4, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let own = yagra_base::pgtest::node(&pool, "own", 1, Some(mine)).await;
+        let own_url = yagra_base::pgtest::node(&pool, "own-url", 2, Some(mine)).await;
+        let own_dns = yagra_base::pgtest::node(&pool, "own-dns", 3, Some(mine)).await;
+        let other = yagra_base::pgtest::node(&pool, "other", 4, Some(theirs)).await;
         // `VisibleNode` reads a node's folder from the alert engine's snapshot, which a live
         // deployment refreshes from these rows and this fixture does not.
         let meta = [
@@ -4631,7 +4638,7 @@ mod tests {
                 "{method} {path}: {out}"
             );
         }
-        let repo = crate::pgtest::repo(pool.clone());
+        let repo = yagra_base::pgtest::repo(pool.clone());
         let untouched = repo
             .get_node(other)
             .await
@@ -4639,9 +4646,9 @@ mod tests {
             .expect("a scoped caller deleted a node in a folder it cannot see");
         assert_eq!(untouched.name, "other", "renamed from outside its scope");
         assert_eq!(untouched.pool, None, "re-homed from outside its scope");
-        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 0);
-        assert_eq!(crate::pgtest::rows(&pool, "url_checks").await, 0);
-        assert_eq!(crate::pgtest::rows(&pool, "dns_checks").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "collection_items").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "url_checks").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "dns_checks").await, 0);
 
         for (method, path, body, expected) in writes(own_url, own_dns, own) {
             let (status, out) =
@@ -4678,7 +4685,7 @@ mod tests {
     }
 
     /// Over the ceiling is refused outright, as the bulk move is.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_delete_over_the_ceiling_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -4701,14 +4708,14 @@ mod tests {
 
     /// The exact-address filter finds the device at that address and not its near neighbour
     /// (ADR-139 Inc.2) — through the whole router, with the kind filter the add-node dialog sends.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_list_finds_the_device_at_an_exact_address(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Viewer);
-        let one = crate::pgtest::node(&pool, "one", 1, None).await;
-        crate::pgtest::node(&pool, "ten", 10, None).await;
+        let one = yagra_base::pgtest::node(&pool, "one", 1, None).await;
+        yagra_base::pgtest::node(&pool, "ten", 10, None).await;
 
         let (status, body) = send(
             &st,
@@ -4729,12 +4736,12 @@ mod tests {
     }
 
     /// A viewer may read the inventory and may not rearrange it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_cannot_move_nodes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
         let body = serde_json::json!({ "node_ids": [a], "group_id": null });
 
         // ⚠️ A hand-written list, so a new bulk route does not join it by itself. Every `POST`
@@ -4752,18 +4759,22 @@ mod tests {
     }
 
     /// The preview proposes and **writes nothing** — the property the whole feature rests on.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_preview_proposes_a_folder_and_moves_nothing(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let site = crate::pgtest::group(&pool, "Tokyo").await;
-        crate::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
-        let inside = crate::pgtest::node(&pool, "inside", 7, None).await;
-        let outside =
-            crate::pgtest::node_at(&pool, "outside", "192.168.9.9".parse().expect("addr"), None)
-                .await;
+        let site = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        yagra_base::pgtest::prefix(&pool, site, "10.0.0.0/24").await;
+        let inside = yagra_base::pgtest::node(&pool, "inside", 7, None).await;
+        let outside = yagra_base::pgtest::node_at(
+            &pool,
+            "outside",
+            "192.168.9.9".parse().expect("addr"),
+            None,
+        )
+        .await;
 
         let (status, body) = send(
             &st,
@@ -4779,7 +4790,7 @@ mod tests {
         assert_eq!(body["unmatched"][0], outside.to_string(), "{body}");
         assert_eq!(body["any_prefixes"], true, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         let node = repo
             .get_node(inside)
             .await
@@ -4791,27 +4802,28 @@ mod tests {
     /// ADR-176: the whole inventory is examined without the browser naming a node — ungrouped
     /// nodes and nodes in the wrong folder are proposed, a node already filed beneath its folder
     /// is counted in place, and the labels come back with the proposal.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_subtree_preview_covers_the_inventory_and_leaves_placed_nodes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let tokyo = crate::pgtest::group(&pool, "Tokyo").await;
-        let floor = crate::pgtest::group(&pool, "Floor 3").await;
-        let osaka = crate::pgtest::group(&pool, "Osaka").await;
+        let tokyo = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let floor = yagra_base::pgtest::group(&pool, "Floor 3").await;
+        let osaka = yagra_base::pgtest::group(&pool, "Osaka").await;
         sqlx::query("UPDATE node_groups SET parent_id = $1 WHERE id = $2")
             .bind(tokyo)
             .bind(floor)
             .execute(&pool)
             .await
             .expect("nest");
-        crate::pgtest::prefix(&pool, tokyo, "10.0.0.0/24").await;
-        let loose = crate::pgtest::node(&pool, "loose", 1, None).await;
-        let wrong = crate::pgtest::node(&pool, "wrong", 2, Some(osaka)).await;
-        let placed = crate::pgtest::node(&pool, "placed", 3, Some(floor)).await;
+        yagra_base::pgtest::prefix(&pool, tokyo, "10.0.0.0/24").await;
+        let loose = yagra_base::pgtest::node(&pool, "loose", 1, None).await;
+        let wrong = yagra_base::pgtest::node(&pool, "wrong", 2, Some(osaka)).await;
+        let placed = yagra_base::pgtest::node(&pool, "placed", 3, Some(floor)).await;
         let far =
-            crate::pgtest::node_at(&pool, "far", "192.0.2.9".parse().expect("addr"), None).await;
+            yagra_base::pgtest::node_at(&pool, "far", "192.0.2.9".parse().expect("addr"), None)
+                .await;
 
         let path = "/api/v1/nodes/move-preview/subtree";
         let (status, body) = send(&st, "POST", path, &tok, Some(serde_json::json!({}))).await;
@@ -4860,22 +4872,22 @@ mod tests {
         assert_eq!(ids(&body["matched"], "node_id"), vec![wrong.to_string()]);
         assert_eq!(body["unmatched_total"], 0, "{body}");
 
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         let node = repo.get_node(loose).await.expect("read").expect("node");
         assert_eq!(node.group, None, "the preview moved a node");
     }
 
     /// A folder outside the caller's scope is a 404, and a scoped whole-inventory preview names
     /// nothing outside it (ADR-176 decision 3).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_subtree_preview_stays_inside_the_callers_scope(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "Mine").await;
-        let theirs = crate::pgtest::group(&pool, "Theirs").await;
-        crate::pgtest::prefix(&pool, mine, "10.0.0.0/24").await;
-        let a = crate::pgtest::node(&pool, "a", 1, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "Mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "Theirs").await;
+        yagra_base::pgtest::prefix(&pool, mine, "10.0.0.0/24").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(theirs)).await;
         let tok = scoped_token(&st, &[mine]);
         let path = "/api/v1/nodes/move-preview/subtree";
 
@@ -4899,14 +4911,14 @@ mod tests {
 
     /// Past 1,000 proposals the list stops at what one `move-by-prefix` may carry and the total
     /// says how many are left (ADR-176 decision 4).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_subtree_preview_caps_its_proposals_at_one_request(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let site = crate::pgtest::group(&pool, "Big").await;
-        crate::pgtest::prefix(&pool, site, "10.8.0.0/16").await;
+        let site = yagra_base::pgtest::group(&pool, "Big").await;
+        yagra_base::pgtest::prefix(&pool, site, "10.8.0.0/16").await;
         // The fixture writes one node per call; 1,001 of them through it would dominate the run.
         sqlx::query(
             "INSERT INTO nodes (id, name, address) \
@@ -4932,13 +4944,13 @@ mod tests {
 
     /// `any_prefixes` is false where no folder carries a range — the difference between "your
     /// addresses do not match" and "there was nothing to match against".
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_preview_says_when_there_were_no_ranges_at_all(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
 
         let (status, body) = send(
             &st,
@@ -4956,19 +4968,19 @@ mod tests {
     /// ADR-158 B4. A node inheriting `siteA` from its folder is polled on `siteA`; with the folder
     /// tree unreadable, both poll-now forms answer 500. They used to resolve the node to `default`,
     /// publish its jobs where no poller for it listens, and answer 202.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn poll_now_refuses_to_guess_a_pool_it_cannot_resolve(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         use axum::http::StatusCode;
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let folder = crate::pgtest::group(&pool, "site-a").await;
-        crate::groups::GroupRepo::new(pool.clone())
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .set_pool(folder, Some("siteA"))
             .await
             .unwrap();
-        let node = crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        let node = yagra_base::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
         let single = format!("/api/v1/nodes/{node}/poll");
         let bulk = serde_json::json!({ "node_ids": [node] });
 

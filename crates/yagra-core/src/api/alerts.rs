@@ -988,7 +988,7 @@ fn sse_with_resync(
     alerts: std::sync::Weak<crate::alerts::AlertManager>,
     scope: super::scope::NodeScope,
     what: &'static str,
-    ports: Option<std::sync::Arc<crate::repo::NodeRepo>>,
+    ports: Option<std::sync::Arc<yagra_base::repo::NodeRepo>>,
 ) -> impl futures::Stream<Item = Result<Event, Infallible>> {
     tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(move |r| {
         // Cloned per frame so the closure stays `FnMut` rather than consuming its captures; all
@@ -1062,7 +1062,7 @@ fn frame_port(
 /// as it is: no port, no name, or the inventory could not be read (a name is decorative, so the
 /// frame goes out with its ifIndex rather than not at all).
 async fn with_live_port_name(
-    repo: &crate::repo::NodeRepo,
+    repo: &yagra_base::repo::NodeRepo,
     subject: &yagra_alert::Subject,
     json: &str,
 ) -> Option<String> {
@@ -1589,11 +1589,11 @@ mod tests {
 
     /// **A live port alert reaches the screen with its port's name, and one with no known name goes
     /// out unchanged** — never dropped, since the name is decorative (ADR-196 Inc.4).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_live_port_alert_is_named_from_the_inventory(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
-        let repo = crate::pgtest::repo(pool.clone());
+        let node = yagra_base::pgtest::node(&pool, "sw1", 1, None).await;
+        let repo = yagra_base::pgtest::repo(pool.clone());
         sqlx::query("INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 7, 'Gi0/7')")
             .bind(node)
             .execute(&pool)
@@ -1619,10 +1619,10 @@ mod tests {
     /// **A node's own status names its port alerts the way the Active list does** — the Overview
     /// tab used to show `port 10106` beside an Active list reading `Gi1/0/6` for the same alert,
     /// because `GET /nodes/{id}/status` served the bare alert (ADR-196 decision 6).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_status_alert_is_named_from_the_inventory(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "sw1", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "sw1", 1, None).await;
         sqlx::query("INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 7, 'Gi0/7')")
             .bind(node)
             .execute(&pool)
@@ -1778,13 +1778,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// An ack is *recorded*, not merely accepted: the row lands in `alert_acks`.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn acknowledging_an_alert_writes_the_ack_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Operator);
-        let node = crate::pgtest::node(&pool, "acked", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "acked", 1, None).await;
         let (status, body) = send(
             &st,
             "POST",
@@ -1799,6 +1799,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "alert_acks").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "alert_acks").await, 1);
     }
 }

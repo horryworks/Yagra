@@ -232,7 +232,7 @@ pub const REFRESH_SECS: u64 = 30;
 /// itself, where the other order would serve for a moment on a deployment whose switch is off.
 pub fn start(
     handle: PublicAccessHandle,
-    settings: Arc<crate::repo::NodeRepo>,
+    settings: Arc<yagra_base::repo::NodeRepo>,
     board: Arc<crate::dashboard::PublicDashboardRepo>,
     shutdown: &yagra_telemetry::CancellationToken,
 ) {
@@ -264,7 +264,7 @@ pub fn start(
 /// — which is closed in effect, and logged — rather than being confused with "nothing is on the
 /// board". The distinction matters for the log line, not for what is served.
 async fn refresh(
-    settings: &crate::repo::NodeRepo,
+    settings: &yagra_base::repo::NodeRepo,
     board: &crate::dashboard::PublicDashboardRepo,
 ) -> PublicAccess {
     let enabled = settings.get_public_dashboard_enabled().await;

@@ -42,7 +42,7 @@ fn meaningful(label: &str) -> Option<&str> {
 /// Precomputed effective labels per folder, built once from the whole `node_groups` table.
 ///
 /// 🚨 **There is deliberately no `TagSource` enum**, and the absence is the design rather than an
-/// omission. [`crate::poolres::PoolSource`] and [`crate::groups::GeoSource`] exist because a pool
+/// omission. [`crate::poolres::PoolSource`] and [`yagra_base::groups::GeoSource`] exist because a pool
 /// and a map pin each have exactly **one** supplier, so "where did this come from" has one answer.
 /// A label does not: a node and two folders above it can all supply the same one. Provenance here
 /// is therefore per label, and the only question a screen actually asks — *which of these are
@@ -63,14 +63,14 @@ impl TagResolver {
     }
 
     /// Build from the `(id, parent_id, tags, tags_excluded)` rows of `node_groups` (see
-    /// [`crate::groups::GroupRepo::tag_rows`]).
+    /// [`yagra_base::groups::GroupRepo::tag_rows`]).
     ///
     /// The traversal itself — the cycle guard, the depth bound, the memoization — is
-    /// [`crate::groups::accumulate_ancestor_labels`]. What belongs here is only what is specific
+    /// [`yagra_base::groups::accumulate_ancestor_labels`]. What belongs here is only what is specific
     /// to labels: [`meaningful`], deciding a blank string is not a label.
     #[must_use]
-    pub fn build(rows: Vec<crate::groups::LabelRow>) -> Self {
-        let by_group = crate::groups::accumulate_ancestor_labels(rows.into_iter().map(
+    pub fn build(rows: Vec<yagra_base::groups::LabelRow>) -> Self {
+        let by_group = yagra_base::groups::accumulate_ancestor_labels(rows.into_iter().map(
             |(id, parent, add, remove)| {
                 (
                     id,
@@ -216,7 +216,7 @@ mod tests {
         parent: Option<Uuid>,
         add: &[&str],
         remove: &[&str],
-    ) -> crate::groups::LabelRow {
+    ) -> yagra_base::groups::LabelRow {
         (
             id,
             parent,
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn a_chain_deeper_than_the_bound_stops_at_the_bound() {
-        let ids: Vec<Uuid> = (0..crate::groups::MAX_GROUP_DEPTH + 20)
+        let ids: Vec<Uuid> = (0..yagra_base::groups::MAX_GROUP_DEPTH + 20)
             .map(|_| Uuid::new_v4())
             .collect();
         let rows: Vec<_> = ids
@@ -396,7 +396,7 @@ mod tests {
             };
             rows.push((ids[i], parent.map(|p| ids[p]), add, remove));
         }
-        let resolved = crate::groups::accumulate_ancestor_labels(rows.clone());
+        let resolved = yagra_base::groups::accumulate_ancestor_labels(rows.clone());
 
         for (i, id) in ids.iter().enumerate() {
             // Naive: collect the chain to the root, then fold it shallowest-first.

@@ -9,11 +9,11 @@
 //! **polled** — the failure mode that recurred in v0.2.13.
 
 use crate::l3_routing::RoutingPlan;
-use crate::repo::adjacency_settings::AdjacencySettings;
-use crate::secrets::SnmpV3Secret;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
+use yagra_base::repo::adjacency_settings::AdjacencySettings;
+use yagra_base::secrets::SnmpV3Secret;
 
 // The builders this file chooses between: one file per stage, `checks` makes one check and
 // this one decides which checks a node gets (ADR-096).

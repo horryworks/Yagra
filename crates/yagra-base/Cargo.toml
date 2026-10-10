@@ -1,0 +1,47 @@
+[package]
+name = "yagra-base"
+description = "Yagra-base — the database layer under yagra-core: repositories, folders, sealed secrets, the config generation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+yagra-secrets = { path = "../yagra-secrets" }
+# The seeded liveness rule names the engine's sentinel and dwell (`repo/defaults.rs`). The engine
+# reads no store, so it does not depend on this crate and there is no cycle.
+yagra-alert = { path = "../yagra-alert" }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+metrics = { workspace = true }
+async-trait = { workspace = true }
+rand = { workspace = true }
+# The table vocabulary's statement scan (`sql_tables`, behind `test-util`).
+regex = { workspace = true, optional = true }
+# The folder, credential and profile summaries are returned by the northbound API, so they carry
+# their own JSON Schema for the OpenAPI document (ADR-035). Derive-only.
+utoipa = { workspace = true }
+
+[dev-dependencies]
+# `srcread` for the checks that read this crate's own text (ADR-091/099). A dev-dependency, so a
+# release build links a `yagra-common` with no filesystem reader in it.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
+# `pool_takeover`'s tests name the default pool, which `yagra-bus` exports with its NATS client.
+yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+regex = { workspace = true }
+
+[features]
+# The real-PostgreSQL test convention (`pgtest`), the table vocabulary (`sql_tables`) and the
+# test-only reads a caller's tests use (`repo::MIGRATIONS` and three ordered readers). `yagra-core`
+# enables it from **dev-dependencies** only, which resolver v2 does not unify into a normal build,
+# so none of it reaches a release binary (the same arrangement as `yagra-alert`'s `test-util`).
+test-util = ["yagra-common/test-util", "dep:regex"]

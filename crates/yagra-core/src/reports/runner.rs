@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
-use crate::repo::NodeRepo;
 use crate::store::MetricStore;
+use yagra_base::repo::NodeRepo;
 
 use super::seams::{AlertFacts, FleetInventory, LiveAlerts, RunStore};
 

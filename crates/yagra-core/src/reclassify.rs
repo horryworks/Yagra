@@ -17,7 +17,7 @@
 use uuid::Uuid;
 
 use crate::classification::{ClassificationMatch, Classifier};
-use crate::repo::ReclassifyInput;
+use yagra_base::repo::ReclassifyInput;
 
 /// The most proposals one read lists, and the most nodes one write may name. A fleet whose rules
 /// just changed can differ on thousands of nodes; the screen is a table a person reads, and the

@@ -15,12 +15,12 @@
 //! time; the alert still fires for the UI/history. This is the I/O adapter — the
 //! suppression itself lives in [`crate::alerts`].
 
-use crate::repo::scope_predicate;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::collections::BTreeSet;
 use uuid::Uuid;
+use yagra_base::repo::scope_predicate;
 use yagra_common::{Node, NodeId};
 
 /// How a maintenance window is scoped. The first three mirror threshold scoping (ADR-013):
@@ -73,7 +73,7 @@ pub const UPGRADE_SCOPE_ID: &str = "upgrade";
 // one unrecognised row from failing a whole page. It does mean an **older core reads a `system`
 // window as a profile window whose id matches no profile**, i.e. suppresses nothing. That is the
 // safe direction: during a rolling upgrade the old binary alerts too much rather than too little.
-crate::stored_enum::token_enum!(WindowScope, Profile, "maintenance_windows.scope_level", [
+yagra_base::stored_enum::token_enum!(WindowScope, Profile, "maintenance_windows.scope_level", [
     Node => "node",
     Profile => "profile",
     Group => "group",
@@ -89,7 +89,7 @@ pub enum MuteScope {
     Group,
 }
 
-crate::stored_enum::token_enum!(MuteScope, Node, "mutes.scope_kind", [
+yagra_base::stored_enum::token_enum!(MuteScope, Node, "mutes.scope_kind", [
     Node => "node",
     Group => "group",
 ]);
@@ -109,7 +109,7 @@ pub enum ExemptionKind {
 // Falls back to `Maintenance` — the narrower of the two, since a mute-only exemption read as a
 // maintenance one releases a node from planned suppression it was already visible in, rather than
 // silently un-muting notifications nobody asked to hear.
-crate::stored_enum::token_enum!(ExemptionKind, Maintenance, "exemptions.kind", [
+yagra_base::stored_enum::token_enum!(ExemptionKind, Maintenance, "exemptions.kind", [
     Maintenance => "maintenance",
     Mute => "mute",
 ]);
@@ -599,7 +599,7 @@ scope_predicate(6, "n.group_id"),
 /// Exhaustive over [`WindowScope`] on purpose — a new scope must decide both answers rather than
 /// falling into a wildcard. The hierarchical [`WindowScope::FolderGroup`] scope is resolved
 /// separately by the caller (it needs the group edges + DB membership, via
-/// [`crate::groups::group_subtree`] + `NodeRepo::nodes_in_groups`), so it is never covered here.
+/// [`yagra_base::groups::group_subtree`] + `NodeRepo::nodes_in_groups`), so it is never covered here.
 ///
 /// `labels` is the node's **effective** label set (its own plus everything its folder chain
 /// supplies, ADR-135 inc. 2), passed in rather than read off `node` because the caller resolves it
@@ -716,7 +716,7 @@ impl CoverageFacts {
         if let Some(group) = node.group {
             let gid = group.as_uuid();
             containing_groups.push(gid);
-            containing_groups.extend(crate::groups::group_ancestors(edges, gid));
+            containing_groups.extend(yagra_base::groups::group_ancestors(edges, gid));
         }
         Self {
             profile: node.profile.map(|p| p.to_string()),
@@ -822,8 +822,8 @@ pub(crate) fn reconcile_exemption(
 /// Cheap when there is nothing to do: one indexed `SELECT` returning no rows.
 pub(crate) async fn reconcile_exemptions(
     maintenance: &MaintenanceRepo,
-    groups: &crate::groups::GroupRepo,
-    repo: &crate::repo::NodeRepo,
+    groups: &yagra_base::groups::GroupRepo,
+    repo: &yagra_base::repo::NodeRepo,
 ) -> anyhow::Result<usize> {
     let rows = maintenance.list_exemptions().await?;
     if rows.is_empty() {
@@ -873,8 +873,8 @@ pub(crate) async fn reconcile_exemptions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pgtest;
     use std::net::{IpAddr, Ipv4Addr};
+    use yagra_base::pgtest;
     use yagra_common::ProfileId;
 
     /// This module's code, comments stripped — see
@@ -1284,7 +1284,7 @@ mod tests {
 
     /// A window reads back with the times it was given, and says whether it covers *now* — which is
     /// computed by the database at read time, not stored.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_window_reads_back_and_says_whether_it_covers_now(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1361,7 +1361,7 @@ mod tests {
     /// rejects, and the one that suppresses nothing while looking to the operator like it worked.
     /// The UI only offers the button on an active window; this predicate is what makes that true of
     /// *any* caller.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn ending_a_window_now_is_refused_unless_it_is_running(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1441,7 +1441,7 @@ mod tests {
     }
 
     /// Deleting removes the row and says whether one was there.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn deleting_a_window_removes_exactly_that_row(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1471,7 +1471,7 @@ mod tests {
     /// The two reads the alert engine and the release path use return exactly the windows in force
     /// — and `active_windows` carries the instant each one stops, which is what an exemption is
     /// sized to.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_windows_in_force_reach_the_alert_engine(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1529,7 +1529,7 @@ mod tests {
     /// this matches the window family rather than an id. That is exactly why it has to be narrow:
     /// a predicate one token wider would silence-cancel every operator's maintenance on the next
     /// upgrade.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_upgrade_path_closes_only_its_own_windows(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1594,7 +1594,7 @@ mod tests {
     /// `ends_at <= now()` is evaluated by the database. Dropping the id clause would clear the
     /// whole deployment's ended windows for a scoped caller; dropping the time clause would delete
     /// windows that are still suppressing alerts.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn clearing_ended_windows_honours_both_the_visible_set_and_the_clock(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1661,7 +1661,7 @@ mod tests {
     /// 🚨 That is not tidiness. A group mute silences the whole node set; storing a per-check name
     /// beside it would list back to the operator as "this group is muted for `icmp`", which is not
     /// what the mute does. The writer decides it, so only running it can say whether it did.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_group_mute_drops_the_check_name_a_node_mute_keeps(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1706,7 +1706,7 @@ mod tests {
     }
 
     /// Expired mutes are dropped on read, and what is left comes back soonest-expiring first.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_expired_mute_is_dropped_on_read_and_the_rest_are_soonest_first(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());
@@ -1760,7 +1760,7 @@ mod tests {
     /// 🚨 The upsert is keyed on `(kind, node_id)`. Two rows for one node would give the reader an
     /// expiry to choose between, and whichever it picked would be right half the time — a node
     /// silently back under suppression while the operator's second release said otherwise.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn releasing_a_node_twice_extends_it_and_the_kinds_are_independent(pool: sqlx::PgPool) {
         use chrono::SubsecRound;
@@ -1846,7 +1846,7 @@ mod tests {
 
     /// An expired release puts the node back under suppression, and the row is removed rather than
     /// merely filtered out.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_expired_release_puts_the_node_back_and_is_swept(pool: sqlx::PgPool) {
         let repo = MaintenanceRepo::new(pool.clone());

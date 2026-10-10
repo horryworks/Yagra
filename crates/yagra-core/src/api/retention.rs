@@ -20,10 +20,10 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem, RequireView};
 use super::ApiState;
-use crate::repo::retention_settings::{self, RetentionSettings};
 use crate::retention::Subject;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
+use yagra_base::repo::retention_settings::{self, RetentionSettings};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -408,7 +408,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The retention windows are written and read back as they were sent.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn retention_windows_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};

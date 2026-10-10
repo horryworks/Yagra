@@ -68,8 +68,8 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::groups::GroupType;
-use crate::secrets::{CredentialStore, NetboxTokenSecret, KIND_NETBOX_TOKEN};
+use yagra_base::groups::GroupType;
+use yagra_base::secrets::{CredentialStore, NetboxTokenSecret, KIND_NETBOX_TOKEN};
 
 /// Fixed namespace for deriving stable folder ids via UUIDv5, so re-syncing never duplicates the
 /// tree and an `ON CONFLICT (id) DO UPDATE` is all the write needs. Same device as
@@ -258,7 +258,7 @@ pub enum ObjectKind {
 // `ALL` is production since Inc.4: `NetboxPrefix::scope` turns NetBox's `scope_type` string into a
 // kind by searching it. `from_token`'s `None` is the `LinkSource` rule — an older core meeting an
 // unknown token must skip that row rather than fail the query it appeared in.
-crate::stored_enum::token_enum!(ObjectKind, [
+yagra_base::stored_enum::token_enum!(ObjectKind, [
     Region => "region",
     Site => "site",
 ]);
@@ -1472,7 +1472,7 @@ impl NetboxRepo {
         .await?;
         tx.commit().await?;
         if written {
-            crate::config_gen::bump();
+            yagra_base::config_gen::bump();
         }
         Ok(written)
     }
@@ -2267,7 +2267,7 @@ mod tests {
 
     /// A registered server row to hang a sync off.
     async fn lab_server(pool: &sqlx::PgPool) -> (NetboxRepo, Uuid) {
-        let cred = crate::pgtest::credential(pool, "netbox-token", KIND_NETBOX_TOKEN).await;
+        let cred = yagra_base::pgtest::credential(pool, "netbox-token", KIND_NETBOX_TOKEN).await;
         let repo = NetboxRepo::new(pool.clone());
         let id = repo
             .create("lab", "http://10.0.0.14:8000", cred, None, 3600, None)
@@ -2296,7 +2296,7 @@ mod tests {
         .expect("read folder")
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_lab_hierarchy_lands_as_a_tree_and_a_second_sync_changes_nothing(
         pool: sqlx::PgPool,
@@ -2307,7 +2307,7 @@ mod tests {
             .await
             .expect("first sync");
         assert_eq!((report.regions, report.sites), (3, 2));
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 5);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 5);
 
         // The shape, not just the count: this is the assertion that would have failed against the
         // pre-correction belief that regions are one flat layer.
@@ -2335,11 +2335,11 @@ mod tests {
             .await
             .expect("second sync");
         assert_eq!(
-            crate::pgtest::rows(&pool, "node_groups").await,
+            yagra_base::pgtest::rows(&pool, "node_groups").await,
             5,
             "a re-sync must not duplicate folders"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "netbox_groups").await, 5);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "netbox_groups").await, 5);
         // ADR-178 decision 7: nothing moved, so nothing was written — and the config generation, which
         // the scope cache and the alert-config rebuild key on, is left where it was.
         assert_eq!(
@@ -2360,7 +2360,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_owns_the_name_and_the_operator_owns_the_pool(pool: sqlx::PgPool) {
         // ADR-100 decision 2, both directions, which is the whole design in one test.
@@ -2394,7 +2394,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_object_that_disappears_from_netbox_is_marked_and_never_deleted(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -2423,7 +2423,7 @@ mod tests {
             .expect("record");
 
         assert_eq!(
-            crate::pgtest::rows(&pool, "node_groups").await,
+            yagra_base::pgtest::rows(&pool, "node_groups").await,
             5,
             "deleting a folder re-parents its child nodes, so an external system's one mistaken \
              click must never do it (ADR-100 decision 5)"
@@ -2446,7 +2446,7 @@ mod tests {
         assert_eq!(stale, vec![format!("{}:7", ObjectKind::Site.as_str())]);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_sync_does_not_advance_the_timestamp_the_mark_is_measured_against(
         pool: sqlx::PgPool,
@@ -2494,7 +2494,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_site_whose_region_was_not_returned_lands_at_the_root(pool: sqlx::PgPool) {
         // NetBox permissions can hide a region from the token while still listing its sites. A
@@ -2527,7 +2527,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_request_is_kept_until_a_run_that_started_after_it_ends(pool: sqlx::PgPool) {
         // ADR-172 decision 1: the request lives on the row, and only a run that could have answered
@@ -2592,7 +2592,7 @@ mod tests {
 
     /// ADR-178 decision 5: pausing a server takes a waiting "Sync now" off it, since nothing will ever
     /// run it — and an edit that leaves the server on keeps the request.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pausing_a_server_drops_a_waiting_sync_request(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -2638,7 +2638,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_success_keeps_its_site_id_counts_on_the_row(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -2658,7 +2658,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn forgetting_a_server_keeps_the_folders_it_created(pool: sqlx::PgPool) {
         // Same reasoning as decision 5: disconnecting an integration must not restructure the
@@ -2668,18 +2668,18 @@ mod tests {
             .await
             .expect("sync");
         assert!(repo.delete(server).await.expect("delete"));
-        assert_eq!(crate::pgtest::rows(&pool, "netbox_groups").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "netbox_groups").await, 0);
         assert_eq!(
-            crate::pgtest::rows(&pool, "node_groups").await,
+            yagra_base::pgtest::rows(&pool, "node_groups").await,
             5,
             "the tree survives the integration being removed"
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_server_round_trips_and_its_ca_is_three_state(pool: sqlx::PgPool) {
-        let cred = crate::pgtest::credential(&pool, "netbox-token", KIND_NETBOX_TOKEN).await;
+        let cred = yagra_base::pgtest::credential(&pool, "netbox-token", KIND_NETBOX_TOKEN).await;
         let repo = NetboxRepo::new(pool.clone());
         let id = repo
             .create(
@@ -2895,7 +2895,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_an_active_site_becomes_a_folder(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -2915,7 +2915,7 @@ mod tests {
             (2, 2),
             "the active site and the one with no status are written; planned and retired are not"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 5);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 5);
         assert!(folder(&pool, site_group_id(server, 6)).await.is_some());
         assert!(folder(&pool, site_group_id(server, 7)).await.is_some());
         assert!(folder(&pool, site_group_id(server, 8)).await.is_none());
@@ -2931,7 +2931,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_site_that_stops_being_active_keeps_its_folder_and_loses_its_prefixes(
         pool: sqlx::PgPool,
@@ -3295,7 +3295,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_site_code_prefixes_the_site_folders_and_leaves_the_regions_alone(
         pool: sqlx::PgPool,
@@ -3336,13 +3336,13 @@ mod tests {
             );
         }
         assert_eq!(
-            crate::pgtest::rows(&pool, "node_groups").await,
+            yagra_base::pgtest::rows(&pool, "node_groups").await,
             5,
             "no new folders"
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn choosing_an_empty_field_keeps_the_bare_name_and_says_how_many(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3386,7 +3386,7 @@ mod tests {
         assert_eq!(report.sites_without_site_id, 0);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn changing_the_field_renames_the_folders_and_keeps_the_operators_pool(
         pool: sqlx::PgPool,
@@ -3432,7 +3432,7 @@ mod tests {
             folder(&pool, matsuyama).await.expect("6").0,
             "Matsuyama Home"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 5);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 5);
     }
 
     #[test]
@@ -3627,7 +3627,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_labs_prefixes_land_on_the_sites_they_name(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3673,7 +3673,7 @@ mod tests {
     /// This is where decision 10 departs from decision 5, so it is worth a test of its own: for a
     /// folder the answer is "mark it", for a prefix it is "drop it", and the reason is that
     /// dropping one destroys nothing (migration 0104's header).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_prefix_netbox_stopped_listing_is_removed(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3719,7 +3719,7 @@ mod tests {
     ///
     /// Before the fix the second `apply` set `netbox_server_id` and replaced the description, and
     /// the third deleted the row the operator had typed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_hand_typed_range_is_never_taken_over_or_swept_by_a_sync(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3794,7 +3794,7 @@ mod tests {
     /// The failure this exists for: losing `ipam.view_prefix` would otherwise sweep every site's
     /// target list away on the next sync and report success, because "NetBox listed none" and "we
     /// were not allowed to ask" would have been the same value.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_refused_prefix_listing_neither_writes_nor_sweeps(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3831,7 +3831,7 @@ mod tests {
     }
 
     /// A prefix that reaches no folder is counted, and does not take the sync down with it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn prefixes_that_reach_no_folder_are_counted_not_fatal(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3871,7 +3871,7 @@ mod tests {
     }
 
     /// Host bits are canonicalised rather than refused — `192.168.1.5/24` becomes the network.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_prefix_with_host_bits_is_stored_as_its_network(pool: sqlx::PgPool) {
         let (repo, server) = lab_server(&pool).await;
@@ -3895,11 +3895,11 @@ mod tests {
     }
 
     /// Two NetBox servers do not sweep each other's prefixes away.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn one_servers_sync_leaves_another_servers_prefixes_alone(pool: sqlx::PgPool) {
         let (repo, first) = lab_server(&pool).await;
-        let cred = crate::pgtest::credential(&pool, "netbox-token-2", KIND_NETBOX_TOKEN).await;
+        let cred = yagra_base::pgtest::credential(&pool, "netbox-token-2", KIND_NETBOX_TOKEN).await;
         let second = repo
             .create("lab2", "http://10.0.0.14:8001", cred, None, 3600, None)
             .await

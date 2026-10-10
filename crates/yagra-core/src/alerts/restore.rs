@@ -102,7 +102,7 @@ pub(crate) async fn restore(mgr: &AlertManager, history: &AlertHistoryStore) {
 /// could page — for up to that hour. A failed read is logged and skipped rather than fatal: the
 /// names come back with the next walk, and until then only the rules without a pattern apply,
 /// which is how every rule behaved before row names existed.
-pub(crate) async fn restore_row_names(mgr: &AlertManager, repo: &crate::repo::NodeRepo) {
+pub(crate) async fn restore_row_names(mgr: &AlertManager, repo: &yagra_base::repo::NodeRepo) {
     match repo.list_row_names().await {
         Ok(rows) => {
             let taken =

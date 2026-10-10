@@ -6,13 +6,14 @@
 //! in is the one this module is named after.
 
 use crate::coordinator::Coordinator;
-use crate::repo::NodeRepo;
-use crate::{config_gen, groups, meraki, poolres, scheduler, wireless};
+use crate::{meraki, poolres, scheduler, wireless};
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
+use yagra_base::repo::NodeRepo;
+use yagra_base::{config_gen, groups};
 
 // The loop names most of the rest through the `scheduler::` self-import it was written with
 // (see the `use crate::{…, scheduler}` line above); these are the ones it names bare.
@@ -205,7 +206,7 @@ pub(crate) async fn run_scheduler(
         let overrides_read = repo.profile_interval_overrides().await;
         // Whether this round's intervals may be published — see `IntervalSnapshot::publishable`.
         let intervals_read = default_read.is_ok() && overrides_read.is_ok();
-        let default_secs = default_read.unwrap_or(crate::repo::DEFAULT_POLL_INTERVAL_SECS);
+        let default_secs = default_read.unwrap_or(yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS);
         let overrides = overrides_read.unwrap_or_default();
         // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
         // no per-node settings query enters the sweep. Degrades to the compiled default.

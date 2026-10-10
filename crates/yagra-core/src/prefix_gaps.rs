@@ -266,7 +266,7 @@ pub fn by_site(
     prefixes: &[(Uuid, SubnetKey)],
     counted: impl Fn(Uuid) -> bool,
 ) -> BTreeMap<Option<Uuid>, SiteComparison> {
-    use crate::groups::{group_ancestors, group_subtree};
+    use yagra_base::groups::{group_ancestors, group_subtree};
 
     let mut members: BTreeMap<Option<Uuid>, Vec<(Uuid, &L3Snapshot)>> = BTreeMap::new();
     for (node, snapshot) in observed {
@@ -651,7 +651,7 @@ mod tests {
     /// 🚨 [`SubnetKey::contains`] is a second implementation of PostgreSQL's `<<=`, which folder
     /// filing uses. Every pair below is asked of both; a disagreement means this report and the
     /// importer would file the same address differently.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_containment_rule_agrees_with_postgresql(pool: sqlx::PgPool) {
         let nets = [

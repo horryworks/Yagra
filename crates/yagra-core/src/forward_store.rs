@@ -14,8 +14,8 @@ use uuid::Uuid;
 use yagra_forward::{DestKind, FilterExpr, SourceKind};
 use yagra_secrets::{EnvelopeCipher, SealedSecret};
 
-use crate::sealed_row::{sealed_from_row_opt, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row_opt, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// Ceiling on configured destinations. Bounds both the forwarder's per-message fan-out cost and the
 /// cardinality of the `dest` metric label (monitoring-conventions: labels must be bounded).

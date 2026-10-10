@@ -298,7 +298,7 @@ mod tests {
     /// 🚨 The three `parent_id` assertions are the ones worth keeping. Each of profiles, groups and
     /// nodes applies its parent in a **second pass**, so a bundle whose rows are all roots imports
     /// perfectly while three `UPDATE`s never execute.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bundle_that_fills_every_collection_imports_into_an_empty_deployment(
         pool: sqlx::PgPool,
@@ -306,7 +306,7 @@ mod tests {
         let bundle = testkit::full_bundle();
         let mut before = Vec::new();
         for (table, _) in EXPECTED_ROWS {
-            before.push(crate::pgtest::rows(&pool, table).await);
+            before.push(yagra_base::pgtest::rows(&pool, table).await);
         }
 
         let report = ConfigBundleRepo::new(pool.clone())
@@ -316,7 +316,7 @@ mod tests {
         assert!(!report.dry_run);
 
         for (i, (table, want)) in EXPECTED_ROWS.into_iter().enumerate() {
-            let after = crate::pgtest::rows(&pool, table).await;
+            let after = yagra_base::pgtest::rows(&pool, table).await;
             assert_eq!(
                 after - before[i],
                 want,
@@ -367,13 +367,13 @@ mod tests {
     /// code path with a rollback rather than a second, less-tested one — so this asserts the report
     /// is populated *and* the tables are untouched. Asserting only the second would pass for an
     /// importer that did nothing at all.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_dry_run_reports_what_it_would_do_and_writes_none_of_it(pool: sqlx::PgPool) {
         let bundle = testkit::full_bundle();
         let mut before = Vec::new();
         for (table, _) in EXPECTED_ROWS {
-            before.push(crate::pgtest::rows(&pool, table).await);
+            before.push(yagra_base::pgtest::rows(&pool, table).await);
         }
 
         let report = ConfigBundleRepo::new(pool.clone())
@@ -393,7 +393,7 @@ mod tests {
 
         for (i, (table, _)) in EXPECTED_ROWS.into_iter().enumerate() {
             assert_eq!(
-                crate::pgtest::rows(&pool, table).await,
+                yagra_base::pgtest::rows(&pool, table).await,
                 before[i],
                 "{table} was written by a dry run"
             );
@@ -404,7 +404,7 @@ mod tests {
     ///
     /// The importer is upsert-only, so the second run is the case an operator actually hits — a
     /// bundle re-applied after an edit. A row counted as created twice would mean a duplicate.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_same_bundle_imported_twice_creates_nothing_the_second_time(pool: sqlx::PgPool) {
         let bundle = testkit::full_bundle();
@@ -412,7 +412,7 @@ mod tests {
         repo.import(&bundle, false).await.expect("first import");
         let mut counts = Vec::new();
         for (table, _) in EXPECTED_ROWS {
-            counts.push(crate::pgtest::rows(&pool, table).await);
+            counts.push(yagra_base::pgtest::rows(&pool, table).await);
         }
 
         let second = repo.import(&bundle, false).await.expect("second import");
@@ -427,7 +427,7 @@ mod tests {
         }
         for (i, (table, _)) in EXPECTED_ROWS.into_iter().enumerate() {
             assert_eq!(
-                crate::pgtest::rows(&pool, table).await,
+                yagra_base::pgtest::rows(&pool, table).await,
                 counts[i],
                 "{table} grew on the second import"
             );
@@ -440,12 +440,12 @@ mod tests {
     /// security design of the feature rather than a completeness question: `users`, `api_tokens`
     /// and `oidc_providers` are how an import would otherwise become the shortest route to granting
     /// yourself a role.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_tables_a_bundle_does_not_carry_are_untouched_by_an_import(pool: sqlx::PgPool) {
         let mut before = Vec::new();
         for table in NEVER_CARRIED {
-            before.push(crate::pgtest::rows(&pool, table).await);
+            before.push(yagra_base::pgtest::rows(&pool, table).await);
         }
         ConfigBundleRepo::new(pool.clone())
             .import(&testkit::full_bundle(), false)
@@ -453,7 +453,7 @@ mod tests {
             .expect("import");
         for (i, table) in NEVER_CARRIED.into_iter().enumerate() {
             assert_eq!(
-                crate::pgtest::rows(&pool, table).await,
+                yagra_base::pgtest::rows(&pool, table).await,
                 before[i],
                 "the import wrote to {table}"
             );
@@ -466,7 +466,7 @@ mod tests {
     /// filters those out, so the two documents are not the same length. What must hold is that no
     /// id the importer accepted is missing from what the exporter can see — which is the property a
     /// second deployment depends on when the bundle is carried onward.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_exporter_sees_every_row_the_importer_wrote(pool: sqlx::PgPool) {
         let sent = testkit::full_bundle();

@@ -671,7 +671,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_inserted_run_comes_back_running_with_the_values_it_was_given(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -714,7 +714,7 @@ mod tests {
         assert!(repo.get(Uuid::new_v4()).await.expect("get").is_none());
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn progress_moves_a_running_run_and_leaves_a_finished_one_alone(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(done.phase, None);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn finishing_clears_the_caption_and_records_what_the_run_produced(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -780,7 +780,7 @@ mod tests {
         assert!(done.finished_ms >= done.started_ms);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn failing_keeps_the_progress_the_run_reached_and_says_why_it_stopped(
         pool: sqlx::PgPool,
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(failed.summary, None);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn cancelling_stops_a_running_run_and_cannot_rewrite_a_finished_one(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -860,13 +860,13 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn findings_come_back_by_score_and_only_for_the_run_that_produced_them(
         pool: sqlx::PgPool,
     ) {
         let repo = AnalysisRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
         let mine = repo
             .insert(&a_job(AnalysisTool::Anomaly), None)
             .await
@@ -921,7 +921,7 @@ mod tests {
             .is_empty());
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_runs_list_is_newest_first_and_each_filter_narrows_it_alone(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -992,7 +992,8 @@ mod tests {
         // on its first run. It is a display value; the findings cursor pages on `created_at`
         // itself for the same reason.
         let exactly_first =
-            crate::pgtest::timestamp_of(&pool, "analysis_jobs", "created_at", "id", first.id).await;
+            yagra_base::pgtest::timestamp_of(&pool, "analysis_jobs", "created_at", "id", first.id)
+                .await;
         let inclusive = repo
             .list(
                 50,
@@ -1039,7 +1040,7 @@ mod tests {
         assert!(neither.is_empty());
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pruning_a_run_takes_its_findings_with_it(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -1054,17 +1055,20 @@ mod tests {
         // Inside the retention window nothing goes — the sweep runs on a cadence, so a statement
         // that deleted regardless of age would empty the table on its first tick.
         assert_eq!(repo.prune_jobs(3_600).await.expect("prune"), 0);
-        assert_eq!(crate::pgtest::rows(&pool, "analysis_jobs").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "analysis_jobs").await, 1);
 
         // Past it, the run goes — and `analysis_findings` has no statement of its own here: it is
         // `ON DELETE CASCADE` from the job, which is why the findings table went untrimmed for as
         // long as the jobs table did.
         assert_eq!(repo.prune_jobs(0).await.expect("prune"), 1);
-        assert_eq!(crate::pgtest::rows(&pool, "analysis_jobs").await, 0);
-        assert_eq!(crate::pgtest::rows(&pool, "analysis_findings").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "analysis_jobs").await, 0);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "analysis_findings").await,
+            0
+        );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_restart_fails_the_runs_still_in_flight_and_leaves_the_rest(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -1127,7 +1131,7 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_schedule_round_trips_and_an_update_replaces_every_field_it_names(
         pool: sqlx::PgPool,
@@ -1197,7 +1201,7 @@ mod tests {
         assert!(!repo.delete_schedule(id).await.expect("delete"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_due_query_takes_only_enabled_schedules_whose_time_has_come(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -1242,7 +1246,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_fire_advances_the_schedule_and_a_deferral_deliberately_does_not(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
@@ -1321,12 +1325,12 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_saved_findings_search_narrows_on_every_filter_it_offers(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
-        let core = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
-        let edge = crate::pgtest::node(&pool, "edge-rtr-02", 12, None).await;
+        let core = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let edge = yagra_base::pgtest::node(&pool, "edge-rtr-02", 12, None).await;
 
         let anomaly = repo
             .insert(&a_job(AnalysisTool::Anomaly), None)
@@ -1484,14 +1488,14 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_saved_findings_search_never_widens_the_callers_own_scope(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());
-        let theirs = crate::pgtest::group(&pool, "Site A").await;
-        let ours = crate::pgtest::group(&pool, "Site B").await;
-        let their_node = crate::pgtest::node(&pool, "a-sw-01", 21, Some(theirs)).await;
-        let our_node = crate::pgtest::node(&pool, "b-sw-01", 22, Some(ours)).await;
+        let theirs = yagra_base::pgtest::group(&pool, "Site A").await;
+        let ours = yagra_base::pgtest::group(&pool, "Site B").await;
+        let their_node = yagra_base::pgtest::node(&pool, "a-sw-01", 21, Some(theirs)).await;
+        let our_node = yagra_base::pgtest::node(&pool, "b-sw-01", 22, Some(ours)).await;
 
         let job = repo
             .insert(&a_job(AnalysisTool::Anomaly), None)
@@ -1576,7 +1580,7 @@ mod tests {
             .is_empty());
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_findings_cursor_walks_every_row_exactly_once(pool: sqlx::PgPool) {
         let repo = AnalysisRepo::new(pool.clone());

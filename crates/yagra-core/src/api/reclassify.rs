@@ -25,7 +25,7 @@ use super::extract::{Admin, RequireManageConfig, Scoped};
 use super::scope::NodeScope;
 use super::{AdminState, ApiState};
 use crate::reclassify::{check_request, propose, Skip, PROPOSAL_LIMIT};
-use crate::repo::{ReclassifyInput, ReclassifyWrite};
+use yagra_base::repo::{ReclassifyInput, ReclassifyWrite};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -352,10 +352,10 @@ async fn lock_reclassify(
 #[cfg(test)]
 mod tests {
     use crate::api::tests_support::{live_state, send, token};
-    use crate::seed_ids::SeedRange;
     use axum::http::StatusCode;
     use serde_json::json;
     use uuid::Uuid;
+    use yagra_base::seed_ids::SeedRange;
     use yagra_common::Role;
 
     fn profile(name: &str) -> Uuid {
@@ -368,14 +368,14 @@ mod tests {
 
     /// An Alcatel OmniSwitch on "Nokia SR router", identified the way the poll path identifies it.
     async fn misfiled_omniswitch(pool: &sqlx::PgPool) -> Uuid {
-        let id = crate::pgtest::node(pool, "ale-sw01", 1, None).await;
+        let id = yagra_base::pgtest::node(pool, "ale-sw01", 1, None).await;
         sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
             .bind(id)
             .bind(profile("Nokia SR router"))
             .execute(pool)
             .await
             .expect("the old rule's profile");
-        crate::pgtest::repo(pool.clone())
+        yagra_base::pgtest::repo(pool.clone())
             .update_snmp_identity_batch(&[(
                 id,
                 Some("1.3.6.1.4.1.6486.801.1.1.2.1.11.1.9".to_owned()),
@@ -402,7 +402,7 @@ mod tests {
     ///
     /// 🚨 The last read is the half that proves the write landed where the read looks. An apply that
     /// answered `applied: 1` and wrote nothing would pass every assertion before it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_proposal_is_listed_applied_and_then_gone(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;
@@ -449,7 +449,7 @@ mod tests {
 
     /// A lock is **accepted**, the locked node is counted rather than listed, and an apply that names
     /// it anyway is skipped as locked rather than applied over the lock.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_locked_node_is_counted_not_listed_and_not_moved(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;
@@ -495,7 +495,7 @@ mod tests {
 
     /// A Viewer is refused all three with 403 — and, since refusals alone prove nothing, the two
     /// tests above are the accepted half.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_can_neither_read_nor_change_reclassification(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;

@@ -1076,7 +1076,7 @@ impl WirelessRepo {
         }
         // Appended over the destination folder's whole scope (ADR-162). Left at its DEFAULT 0 an
         // imported AP would sit above every sub-folder of the controller's folder.
-        let ap_order = crate::groups::append_base_sql("$7", "");
+        let ap_order = yagra_base::groups::append_base_sql("$7", "");
         sqlx::query(&format!(
             "INSERT INTO nodes \
                (id, name, address, profile_id, vendor, model, group_id, sort_order) \
@@ -1115,7 +1115,7 @@ fn wireless_ap_profile_id() -> Option<Uuid> {
     yagra_common::builtin_profiles()
         .iter()
         .position(|p| p.name == yagra_common::WIRELESS_AP_PROFILE)
-        .map(|i| crate::seed_ids::SeedRange::Profiles.id(i))
+        .map(|i| yagra_base::seed_ids::SeedRange::Profiles.id(i))
 }
 
 #[cfg(test)]
@@ -1257,7 +1257,7 @@ mod tests {
 
     // ── Database (ADR-114) ────────────────────────────────────────────────────
 
-    use crate::pgtest;
+    use yagra_base::pgtest;
 
     fn observation(
         mac: [u8; 6],
@@ -1300,7 +1300,7 @@ mod tests {
     /// lists reads as not associated in the list — without its `last_seen` moving, since nothing
     /// reported it — while an AP another controller serves, and every AP of a table read inside the
     /// grace after a boot, is left exactly as it was. The first assertion is the accepting one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_ap_a_cisco_controller_stops_listing_reads_as_not_associated(pool: sqlx::PgPool) {
         let wlc = pgtest::node(&pool, "wlc01", 1, None).await;
@@ -1413,7 +1413,7 @@ mod tests {
 
     /// The pair, end to end through the database: both members report the same two APs, and the list
     /// shows the active's view with both sightings beside it — whichever inventory is written first.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_pair_reports_one_ap_list_with_the_active_view(pool: sqlx::PgPool) {
         let site = pgtest::group(&pool, "site").await;
@@ -1502,7 +1502,7 @@ mod tests {
 
     /// **The scope rule, executed**, and the filters and cursor that share its statement. The
     /// acceptance side first: a predicate that refuses everything reads exactly like one that works.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_ap_list_is_scoped_by_the_reporting_controller_and_pages_by_cursor(
         pool: sqlx::PgPool,
@@ -1627,7 +1627,7 @@ mod tests {
 
     /// A controller deleted between its poll and the write drops the inventory without an error, and
     /// an AP a controller stops reporting keeps its row (decision 10).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_vanished_controller_or_ap_deletes_nothing_and_fails_nothing(pool: sqlx::PgPool) {
         let repo = WirelessRepo::new(pool.clone());
@@ -1677,7 +1677,7 @@ mod tests {
     /// inventory arrives; nothing while import is off; with it on, only APs that have been in
     /// service, up to the cap, with the rest counted; each under the member of a pair that serves
     /// it; and an AP whose node someone deleted is never brought back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_importer_takes_in_service_aps_up_to_the_cap_and_never_undoes_a_deletion(
         pool: sqlx::PgPool,
@@ -1843,7 +1843,7 @@ mod tests {
 
     /// An imported AP's node follows the controller's name for it until someone renames the node,
     /// and follows its address from the report that stands — never blanking it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_ap_node_follows_its_name_until_renamed_and_keeps_its_last_address(
         pool: sqlx::PgPool,
@@ -1906,7 +1906,7 @@ mod tests {
 
     /// ADR-179 Inc.3: an address a controller reports an AP at names that AP and the controller —
     /// and a caller who cannot see the controller learns only that one exists.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_ap_address_names_the_ap_and_a_controller_the_caller_can_see(pool: sqlx::PgPool) {
         let mine = pgtest::group(&pool, "mine").await;
@@ -1952,7 +1952,7 @@ mod tests {
 
     /// The Neighbors tab asks which access point sits at an address through an index, not a scan. Sequential scans are switched off for the statement so a tiny test table cannot hide a
     /// query shape the index cannot serve (ADR-180 Inc.2, migration 0139).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_address_lookup_can_use_the_ip_index(pool: sqlx::PgPool) {
         let mut tx = pool.begin().await.unwrap();
@@ -1988,7 +1988,7 @@ mod tests {
     /// never names the column — comes out `TRUE`, because the column default is the only place the
     /// default is written. As with 0122 the harness has already applied it, so the fixture puts
     /// the table back into the pre-0123 shape first and applies the file's own statements.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_import_default_migration_switches_existing_and_future_controllers_on(
         pool: sqlx::PgPool,
@@ -1996,7 +1996,7 @@ mod tests {
         use yagra_common::{WlanFlavor, WlanInventory};
         let repo = crate::wireless::WirelessRepo::new(pool.clone());
         let empty = WlanInventory::bounded(WlanFlavor::Huawei, Vec::new(), 1024);
-        let existing = crate::pgtest::node(&pool, "wac-existing", 50, None).await;
+        let existing = yagra_base::pgtest::node(&pool, "wac-existing", 50, None).await;
         repo.record_inventory(existing, &empty, chrono::Utc::now())
             .await
             .expect("first inventory");
@@ -2042,7 +2042,7 @@ mod tests {
             repo.controller(existing).await.unwrap().unwrap().import_aps,
             "an existing controller is switched on"
         );
-        let later = crate::pgtest::node(&pool, "wac-later", 51, None).await;
+        let later = yagra_base::pgtest::node(&pool, "wac-later", 51, None).await;
         repo.record_inventory(later, &empty, chrono::Utc::now())
             .await
             .expect("first inventory");

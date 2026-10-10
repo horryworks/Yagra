@@ -750,18 +750,20 @@ mod tests {
         // itself the rule. A pool change may travel with a node/folder re-pointing, and the two
         // have to commit together: a poller moved without its nodes leaves them in a pool with no
         // poller, which is a silent monitoring hole. So the only writer is inside a transaction,
-        // and this file must not offer a second, non-transactional one.
+        // and this file must not offer a second, non-transactional one. (`repo/` is in
+        // `yagra-base` since ADR-202 Inc.5.)
         let src = production_source();
         assert!(
             !src.contains(&format!("UPDATE pollers SET {col}")),
             "a second, non-transactional pool writer has appeared here; the move must stay atomic \
              with the node/folder re-pointing in repo/pools.rs"
         );
-        let repo = crate::module_source::files(&crate::module_source::roots("src", "repo"))
-            .into_iter()
-            .map(|(_, text)| text)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let repo =
+            crate::module_source::files(&crate::module_source::roots("../yagra-base/src", "repo"))
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+                .join("\n");
         assert!(
             repo.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")),
             "the transactional pool writer is gone from repo/, so nothing can move a poller"
@@ -829,7 +831,7 @@ mod tests {
 
     const V: &str = "0.3.4";
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_heartbeat_creates_a_poller_once_and_afterwards_only_refreshes_it(
         pool: sqlx::PgPool,
@@ -915,7 +917,7 @@ mod tests {
         assert_eq!(pools, ["east", "west"]);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_beat_from_an_unregistered_poller_creates_a_row_only_when_allowed(
         pool: sqlx::PgPool,
@@ -932,7 +934,7 @@ mod tests {
                 .as_deref(),
             Some("east")
         );
-        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pollers").await, 1);
 
         // The other direction, and the reason it exists. Deleting a poller in the WebUI did not
         // delete it: the live connection kept beating and the upsert recreated the row within ten
@@ -948,7 +950,7 @@ mod tests {
             None,
             "the beat must not resurrect a deleted poller"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pollers").await, 0);
 
         // …and an id nobody ever registered is refused the same way, rather than being an error.
         assert_eq!(
@@ -958,7 +960,7 @@ mod tests {
                 .expect("beat"),
             None
         );
-        assert_eq!(crate::pgtest::rows(&pool, "pollers").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pollers").await, 0);
 
         // A registered poller still refreshes under the gate — the mode blocks creation, not the
         // heartbeat, and a deployment where beats stopped landing would look identical to one
@@ -980,11 +982,11 @@ mod tests {
         assert_eq!(row.mgmt_addrs, vec!["10.0.0.9".to_owned()]);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_anchor_is_the_operators_and_a_heartbeat_leaves_it_alone(pool: sqlx::PgPool) {
         let repo = PollerRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
         repo.upsert_seen("site-a", "east", V, Uuid::new_v4(), &[])
             .await
             .expect("beat");
@@ -1030,12 +1032,12 @@ mod tests {
     ///
     /// 🚨 A pool name becomes a NATS subject component, so this is what an operator is shown before
     /// they are allowed to delete or rename one. All three sources count.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pool_references_counts_nodes_folders_and_pollers(pool: sqlx::PgPool) {
-        let group = crate::pgtest::group(&pool, "tokyo").await;
-        let node = crate::pgtest::node(&pool, "in-edge", 1, Some(group)).await;
-        crate::groups::GroupRepo::new(pool.clone())
+        let group = yagra_base::pgtest::group(&pool, "tokyo").await;
+        let node = yagra_base::pgtest::node(&pool, "in-edge", 1, Some(group)).await;
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .set_pool(group, Some("edge"))
             .await
             .expect("folder pool");
@@ -1043,7 +1045,7 @@ mod tests {
             .ensure_registered(&["site-a".to_owned()], "edge")
             .await
             .expect("poller");
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         repo.create_pool("edge", None, None).await.expect("create");
         repo.set_node_pool(node, Some("edge")).await.expect("node");
 
@@ -1058,12 +1060,12 @@ mod tests {
 
     /// A rename carries everything that named the pool: nodes, folders and pollers, in one
     /// transaction.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn renaming_a_pool_moves_everything_that_named_it(pool: sqlx::PgPool) {
-        let group = crate::pgtest::group(&pool, "tokyo").await;
-        let node = crate::pgtest::node(&pool, "in-edge", 1, Some(group)).await;
-        crate::groups::GroupRepo::new(pool.clone())
+        let group = yagra_base::pgtest::group(&pool, "tokyo").await;
+        let node = yagra_base::pgtest::node(&pool, "in-edge", 1, Some(group)).await;
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .set_pool(group, Some("edge"))
             .await
             .expect("folder pool");
@@ -1071,7 +1073,7 @@ mod tests {
             .ensure_registered(&["site-a".to_owned()], "edge")
             .await
             .expect("poller");
-        let repo = crate::pgtest::repo(pool);
+        let repo = yagra_base::pgtest::repo(pool);
         repo.create_pool("edge", None, None).await.expect("create");
         repo.set_node_pool(node, Some("edge")).await.expect("node");
 

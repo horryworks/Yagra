@@ -493,7 +493,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// An SSO provider is created, and its client secret never comes back out.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_provider_seals_the_client_secret(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -514,7 +514,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "oidc_providers").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "oidc_providers").await, 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/settings/oidc", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");

@@ -37,7 +37,7 @@ pub struct TopologySources {
     /// Interface addresses, used to place a poller on a segment.
     pub l3: Arc<L3Repo>,
     /// The inventory, for the per-node suppression opt-out (ADR-043 Increment 3).
-    pub nodes: Arc<crate::repo::NodeRepo>,
+    pub nodes: Arc<yagra_base::repo::NodeRepo>,
 }
 
 /// Project the stored links into a dependency graph, and report how the anchors resolved.
@@ -84,7 +84,7 @@ pub async fn resolve(topo: &TopologySources, nodes: &[yagra_common::Node]) -> An
 ///
 /// Takes them individually rather than the whole [`TopologySources`] so a test can hand it two
 /// repos pointed at a dead database and check what a failed read degrades to — the struct also
-/// carries a [`crate::repo::NodeRepo`], which this path never touches.
+/// carries a [`yagra_base::repo::NodeRepo`], which this path never touches.
 async fn resolve_from(
     l3: &L3Repo,
     pollers: &PollerRepo,

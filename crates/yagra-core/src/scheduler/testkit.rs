@@ -32,8 +32,8 @@ use yagra_common::{
     ScopedCollectionItem, UrlCheckConfig,
 };
 
-use crate::repo::adjacency_settings::AdjacencySettings;
-use crate::secrets::SnmpV3Secret;
+use yagra_base::repo::adjacency_settings::AdjacencySettings;
+use yagra_base::secrets::SnmpV3Secret;
 
 use super::seams::{AdjacencySource, CollectionSource, CredentialSource, MonitorBindings};
 use super::PollDispatcher;

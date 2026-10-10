@@ -17,7 +17,6 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::nodes::{validate_pool_create, validate_pool_update, PoolAssignment};
 use super::util::CreatedId;
 use super::ApiState;
-use crate::groups::{placement_order, would_create_cycle, GroupType, SortDirection};
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -26,6 +25,7 @@ use axum::{
 };
 use serde::Deserialize;
 use uuid::Uuid;
+use yagra_base::groups::{placement_order, would_create_cycle, GroupType, SortDirection};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -80,7 +80,7 @@ const MAX_PREFIX_DESCRIPTION: usize = 200;
 #[utoipa::path(
     get, path = "/api/v1/node-groups", tag = "groups",
     responses(
-        (status = 200, description = "Every folder group in the inventory tree", body = Vec<crate::groups::GroupSummary>),
+        (status = 200, description = "Every folder group in the inventory tree", body = Vec<yagra_base::groups::GroupSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -90,7 +90,7 @@ async fn list_node_groups(
     _guard: RequireView,
     Scoped(scope): Scoped,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::groups::GroupSummary>>> {
+) -> ApiResult<Json<Vec<yagra_base::groups::GroupSummary>>> {
     Ok(Json(visible_groups(&admin, &scope).await?))
 }
 
@@ -113,7 +113,7 @@ async fn list_node_groups(
 pub(crate) async fn visible_groups(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
-) -> ApiResult<Vec<crate::groups::GroupSummary>> {
+) -> ApiResult<Vec<yagra_base::groups::GroupSummary>> {
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
@@ -806,8 +806,8 @@ pub(crate) async fn prefix_gap_report(
     scope: &super::scope::NodeScope,
     id: Uuid,
 ) -> ApiResult<crate::prefix_gaps::PrefixGapReport> {
-    use crate::groups::{group_ancestors, group_subtree};
     use crate::prefix_gaps::{classify, Range, Relation};
+    use yagra_base::groups::{group_ancestors, group_subtree};
 
     super::scope::require_visible_group(scope, id)?;
     let groups = admin.groups.list().await.map_err(|e| {
@@ -992,7 +992,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A folder group is created and appears in the tree.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_group_stores_it_and_lists_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1007,7 +1007,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/node-groups", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -1021,11 +1021,11 @@ mod tests {
     /// Before ADR-162 `place_group` read `node_groups` alone, so a node id matched nothing and
     /// `placement_order` appended — the request returned 204 and the folder did not move, which is
     /// the failure this endpoint's arithmetic makes silent.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_folder_lands_between_two_nodes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
@@ -1034,8 +1034,8 @@ mod tests {
             .create("parent", GroupType::Site, None, None)
             .await
             .expect("parent");
-        let a = crate::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
-        let b = crate::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
+        let a = yagra_base::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
+        let b = yagra_base::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
         let moving = groups
             .create("mike", GroupType::Generic, Some(parent), None)
             .await
@@ -1083,11 +1083,11 @@ mod tests {
     /// **A node placed next to a folder lands next to it** — the same claim from the other side
     /// (ADR-162 decision 2). The two kinds are one list, so this has to work or "one list" is only
     /// half true; `POST /nodes/move` reads the same merged siblings.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_lands_next_to_a_folder(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
@@ -1104,7 +1104,7 @@ mod tests {
             .create("bbb", GroupType::Generic, Some(parent), None)
             .await
             .expect("second");
-        let n = crate::pgtest::node(&pool, "zulu", 12, Some(parent)).await;
+        let n = yagra_base::pgtest::node(&pool, "zulu", 12, Some(parent)).await;
         assert_eq!(
             merged_names(&pool, &groups, parent).await,
             ["aaa", "bbb", "zulu"]
@@ -1131,23 +1131,23 @@ mod tests {
     /// the new folder gets the value the first node already has, the two tie, and the browser
     /// breaks the tie by name. The folder appears in the middle of the list, the write succeeded,
     /// and there is nothing to read.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_new_folder_appends_below_the_last_node(pool: sqlx::PgPool) {
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let groups = GroupRepo::new(pool.clone());
         let parent = groups
             .create("parent", GroupType::Site, None, None)
             .await
             .expect("parent");
-        crate::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
-        crate::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
+        yagra_base::pgtest::node(&pool, "alpha", 10, Some(parent)).await;
+        yagra_base::pgtest::node(&pool, "bravo", 11, Some(parent)).await;
         let made = groups
             .create("zulu", GroupType::Generic, Some(parent), None)
             .await
             .expect("folder");
 
-        let rows = crate::groups::ordered_tree_siblings(&pool, Some(parent))
+        let rows = yagra_base::groups::ordered_tree_siblings(&pool, Some(parent))
             .await
             .expect("siblings");
         assert_eq!(rows.len(), 3, "two nodes and one folder");
@@ -1161,11 +1161,11 @@ mod tests {
 
     /// **A node moved into a folder appends below that folder's sub-folders** — decision 4 again,
     /// from the node side, where the max used to be taken over `nodes` alone.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn moving_a_node_into_a_folder_appends_below_its_subfolders(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
@@ -1182,7 +1182,7 @@ mod tests {
         }
         // Named so that landing *above* the sub-folders would also be the name order — the
         // assertion has to be about the position, not about what sorts where.
-        let n = crate::pgtest::node(&pool, "000-first-by-name", 13, None).await;
+        let n = yagra_base::pgtest::node(&pool, "000-first-by-name", 13, None).await;
 
         let (status, body) = send(
             &st,
@@ -1207,11 +1207,11 @@ mod tests {
     /// two kinds through separate projections, and merging them leaves each projection's own order
     /// exactly as it was. Both tests are kept — that one is about the renumbering, this one is
     /// about the two kinds landing in one sequence.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn sorting_a_folder_interleaves_its_subfolders_and_nodes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
@@ -1227,7 +1227,7 @@ mod tests {
                 .expect("subfolder");
         }
         for (i, name) in ["alpha", "charlie"].into_iter().enumerate() {
-            crate::pgtest::node(
+            yagra_base::pgtest::node(
                 &pool,
                 name,
                 20 + u8::try_from(i).expect("small"),
@@ -1274,17 +1274,17 @@ mod tests {
 
     /// The names directly under `parent`, folders and nodes, in the order the tree draws them.
     ///
-    /// Reads through [`crate::groups::ordered_tree_siblings`] — the same list the placement
+    /// Reads through [`yagra_base::groups::ordered_tree_siblings`] — the same list the placement
     /// arithmetic uses — rather than through the two per-kind readers, which is the whole point:
     /// a projection per kind cannot see the two interleave.
     async fn merged_names(
         pool: &sqlx::PgPool,
-        groups: &crate::groups::GroupRepo,
+        groups: &yagra_base::groups::GroupRepo,
         parent: uuid::Uuid,
     ) -> Vec<String> {
-        let repo = crate::pgtest::repo(pool.clone());
+        let repo = yagra_base::pgtest::repo(pool.clone());
         let all = groups.list().await.expect("list");
-        let rows = crate::groups::ordered_tree_siblings(pool, Some(parent))
+        let rows = yagra_base::groups::ordered_tree_siblings(pool, Some(parent))
             .await
             .expect("siblings");
         let mut out = Vec::new();
@@ -1314,15 +1314,15 @@ mod tests {
     /// `Alpha` and `Mike` would come before *every* lowercase name and the test would pass just as
     /// well on a case-sensitive `ORDER BY` — so the two capitals sit where only `lower(name)` puts
     /// them, and the descending pass puts them last.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn sorting_a_folder_renumbers_its_subfolders_and_its_nodes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
-        let repo = crate::pgtest::repo(pool.clone());
+        let repo = yagra_base::pgtest::repo(pool.clone());
 
         let parent = groups
             .create("parent", GroupType::Site, None, None)
@@ -1335,7 +1335,7 @@ mod tests {
                 .expect("subfolder");
         }
         for (i, name) in ["zulu", "Mike", "november"].into_iter().enumerate() {
-            crate::pgtest::node(
+            yagra_base::pgtest::node(
                 &pool,
                 name,
                 10 + u8::try_from(i).expect("small"),
@@ -1419,15 +1419,15 @@ mod tests {
     /// The two `UPDATE`s carry the whole of the scoping in their `WHERE`. Drop either predicate and
     /// the entire table is renumbered — while the folder the operator clicked still looks perfectly
     /// sorted. So the assertion that matters here is about the rows the request did *not* name.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn sorting_one_folder_does_not_touch_another(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
-        let repo = crate::pgtest::repo(pool.clone());
+        let repo = yagra_base::pgtest::repo(pool.clone());
 
         let target = groups
             .create("target", GroupType::Site, None, None)
@@ -1445,9 +1445,9 @@ mod tests {
                 .await
                 .expect("sub");
         }
-        crate::pgtest::node(&pool, "zz", 1, Some(other)).await;
-        crate::pgtest::node(&pool, "aa", 2, Some(other)).await;
-        crate::pgtest::node(&pool, "yy", 3, Some(target)).await;
+        yagra_base::pgtest::node(&pool, "zz", 1, Some(other)).await;
+        yagra_base::pgtest::node(&pool, "aa", 2, Some(other)).await;
+        yagra_base::pgtest::node(&pool, "yy", 3, Some(target)).await;
 
         let before_folders = groups.ordered_subfolders(Some(other)).await.expect("sibs");
         let before_nodes = repo
@@ -1488,7 +1488,7 @@ mod tests {
     /// learn the addressing of the building it sits in. `allows_group_row` admits the row;
     /// `allows_group` is what decides the prefixes, and this test is the only thing that would
     /// notice if the two were unified.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_breadcrumb_ancestor_is_named_without_its_prefixes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -1584,7 +1584,7 @@ mod tests {
     ///
     /// ⚠️ The documented status is named, not `is_success()`: 200 and 204 are both successes and
     /// only one of them is this route's contract.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_folders_labels_are_stored_and_reach_its_whole_subtree(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1694,7 +1694,7 @@ mod tests {
     /// `pool` siblings claim, and the claim is only worth anything if the handler acts on it. Both
     /// directions on purpose: a test that only sees the refusal would pass on a handler that
     /// refuses everyone.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn labelling_a_folder_outside_the_callers_scope_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -1768,7 +1768,7 @@ mod tests {
     /// A 204 says the handler returned; it does not say a range was stored, canonicalised, or
     /// marked as the operator's. This checks all three, and then reads them back through
     /// `GET /node-groups` — the surface the editor actually renders from.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn setting_a_folders_ranges_stores_them_as_the_operators(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1798,7 +1798,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 2);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "node_group_prefixes").await,
+            2
+        );
 
         let (status, list) = send(&st, "GET", "/api/v1/node-groups", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -1840,14 +1843,17 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 0);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "node_group_prefixes").await,
+            0
+        );
     }
 
     /// A value that is not an IP range is a 400 that **names it**, and nothing is written.
     ///
     /// The second half is the point: the canonicalisation probe runs on the pool before the
     /// transaction opens, so a bad row cannot abort a write that had already begun.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_range_that_is_not_an_address_is_refused_by_name(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1884,14 +1890,14 @@ mod tests {
             "the offending value is named: {body}"
         );
         assert_eq!(
-            crate::pgtest::rows(&pool, "node_group_prefixes").await,
+            yagra_base::pgtest::rows(&pool, "node_group_prefixes").await,
             0,
             "the good row must not have landed either"
         );
     }
 
     /// A range a sync owns is refused by name rather than silently dropped.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_range_a_sync_owns_cannot_be_taken_over_here(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1907,7 +1913,7 @@ mod tests {
         .await;
         let id = created["id"].as_str().expect("id").to_owned();
         let group: Uuid = id.parse().expect("uuid");
-        let server = crate::pgtest::netbox_server(&pool, "nb").await;
+        let server = yagra_base::pgtest::netbox_server(&pool, "nb").await;
         sqlx::query(
             "INSERT INTO node_group_prefixes (group_id, prefix, description, netbox_server_id) \
              VALUES ($1, network($2::inet)::cidr, 'from netbox', $3)",
@@ -1929,7 +1935,10 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "prefix_owned_by_sync", "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "node_group_prefixes").await,
+            1
+        );
     }
 
     // ── ADR-170: subnets missing from a folder's ranges ─────────────────────────────────────
@@ -1961,17 +1970,17 @@ mod tests {
         let site = folder("site-a", Some(region)).await;
         let child = folder("site-a-floor", Some(site)).await;
         let other = folder("site-b", Some(region)).await;
-        crate::pgtest::prefix(pool, region, "10.1.0.0/16").await;
-        crate::pgtest::prefix(pool, site, "10.1.1.0/24").await;
-        crate::pgtest::prefix(pool, child, "10.1.2.0/24").await;
-        crate::pgtest::prefix(pool, other, "10.9.0.0/24").await;
-        crate::pgtest::prefix(pool, other, "172.30.0.0/25").await;
+        yagra_base::pgtest::prefix(pool, region, "10.1.0.0/16").await;
+        yagra_base::pgtest::prefix(pool, site, "10.1.1.0/24").await;
+        yagra_base::pgtest::prefix(pool, child, "10.1.2.0/24").await;
+        yagra_base::pgtest::prefix(pool, other, "10.9.0.0/24").await;
+        yagra_base::pgtest::prefix(pool, other, "172.30.0.0/25").await;
 
         let l3 = crate::l3::L3Repo::new(pool.clone());
-        let a = crate::pgtest::node(pool, "cs-a", 1, Some(site)).await;
-        let b = crate::pgtest::node(pool, "as-a", 2, Some(child)).await;
+        let a = yagra_base::pgtest::node(pool, "cs-a", 1, Some(site)).await;
+        let b = yagra_base::pgtest::node(pool, "as-a", 2, Some(child)).await;
         // Filed in the site, never walked: counted in the total, not in "read".
-        crate::pgtest::node(pool, "ping-only", 3, Some(site)).await;
+        yagra_base::pgtest::node(pool, "ping-only", 3, Some(site)).await;
         let snap = |rows: &[(u32, &str, u8)]| {
             yagra_common::L3Snapshot::new(
                 rows.iter()
@@ -2002,7 +2011,7 @@ mod tests {
     /// ADR-170 decision 18: a node that is no longer a device keeps the addresses it reported as
     /// one. Counting them on one side of "read N of M" and not the other put more nodes read than
     /// there were, and compared subnets the fleet-wide screen leaves out.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_that_stopped_being_a_device_is_left_out_of_both_counts(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2037,7 +2046,7 @@ mod tests {
 
     /// 🚨 The read is **answered** — kinds, ranges, names and the three counts — and a subnet a
     /// subfolder's range covers is the site's own, not a gap.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_folders_missing_subnets_are_reported_with_why(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2111,7 +2120,7 @@ mod tests {
 
     /// A scoped caller learns **that** another folder claims a subnet, never which folder or
     /// range — and a folder outside its scope is a 404.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_is_not_told_whose_range_it_is(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -2157,7 +2166,7 @@ mod tests {
     }
 
     /// A folder outside a scoped caller's reach is a 404, not a silent write.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_cannot_set_ranges_on_a_folder_it_cannot_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -2192,15 +2201,18 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_group_prefixes").await, 0);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "node_group_prefixes").await,
+            0
+        );
     }
 
     /// ADR-174: DELETE is ACCEPTED (204) and takes the folder's subtree and its nodes with it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn deleting_a_folder_is_accepted_and_takes_its_subtree(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         let groups = GroupRepo::new(pool.clone());
@@ -2212,7 +2224,7 @@ mod tests {
             .create("rack", GroupType::Generic, Some(site), None)
             .await
             .expect("rack");
-        crate::pgtest::node(&pool, "sw", 1, Some(rack)).await;
+        yagra_base::pgtest::node(&pool, "sw", 1, Some(rack)).await;
 
         let (status, body) = send(
             &st,
@@ -2223,8 +2235,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 0);
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 0);
 
         let (status, body) = send(
             &st,
@@ -2239,21 +2251,21 @@ mod tests {
 
     /// ADR-174 decision 3: a group-scoped caller may delete a folder it can see, and gets a 404 — with
     /// nothing deleted — for one it cannot. Before ADR-174 this route checked no scope at all.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_deletes_only_folders_it_can_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
-        use crate::groups::{GroupRepo, GroupType};
+        use yagra_base::groups::{GroupRepo, GroupType};
         let st = live_state(pool.clone()).await;
         let groups = GroupRepo::new(pool.clone());
-        let mine = crate::pgtest::group(&pool, "mine").await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
         let my_rack = groups
             .create("my rack", GroupType::Generic, Some(mine), None)
             .await
             .expect("my rack");
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        crate::pgtest::node(&pool, "their-sw", 1, Some(theirs)).await;
-        crate::pgtest::node(&pool, "my-sw", 2, Some(my_rack)).await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        yagra_base::pgtest::node(&pool, "their-sw", 1, Some(theirs)).await;
+        yagra_base::pgtest::node(&pool, "my-sw", 2, Some(my_rack)).await;
         let tok = scoped_token(&st, &[mine]);
 
         let (status, body) = send(
@@ -2265,8 +2277,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 3);
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 3);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 2);
 
         let (status, body) = send(
             &st,
@@ -2277,9 +2289,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, 2);
         assert_eq!(
-            crate::pgtest::rows(&pool, "nodes").await,
+            yagra_base::pgtest::rows(&pool, "nodes").await,
             1,
             "their node is untouched"
         );

@@ -326,7 +326,7 @@ pub(crate) async fn run_upkeep(fanout: Arc<ApFanout>, repo: Arc<WirelessRepo>) {
                         );
                         metrics::counter!("yagra_wlan_aps_imported_total")
                             .increment(u64::from(pass.imported));
-                        crate::config_gen::bump();
+                        yagra_base::config_gen::bump();
                     }
                 }
                 Err(e) => tracing::warn!(error = %e, "wireless AP import pass failed"),

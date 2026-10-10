@@ -45,7 +45,7 @@ pub(super) enum HealthSection {
     Upgrade,
 }
 
-crate::stored_enum::token_enum!(HealthSection, [
+yagra_base::stored_enum::token_enum!(HealthSection, [
     Pollers => "pollers",
     PollerHealth => "poller_health",
     Pools => "pools",
@@ -178,7 +178,7 @@ pub(super) enum ConfigKind {
     Ldap,
 }
 
-crate::stored_enum::token_enum!(ConfigKind, [
+yagra_base::stored_enum::token_enum!(ConfigKind, [
     Thresholds => "thresholds",
     EventRules => "event_rules",
     EventSources => "event_sources",

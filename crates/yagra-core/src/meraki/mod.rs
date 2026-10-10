@@ -5,7 +5,7 @@
 //! A Meraki organization ([`MerakiOrg`]) is the org-scoped polling + rate-limit unit; its devices
 //! are ordinary nodes discriminated by a `meraki_devices` row (mirroring the url-check pattern).
 //! Metadata, so it all lives in PostgreSQL (store separation). Runtime `sqlx::query` (not the
-//! compile-time macro) so the build needs no live database — consistent with [`crate::repo`].
+//! compile-time macro) so the build needs no live database — consistent with [`yagra_base::repo`].
 //!
 //! The integration is strictly **read-only**: this module only resolves/inlines the API key and
 //! shapes jobs; every byte of Meraki I/O goes through `yagra_transport::meraki` (GET-only).
@@ -25,12 +25,12 @@ use std::time::{Duration, Instant};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub(crate) use crate::groups::{network_group_id, org_group_id};
+pub(crate) use yagra_base::groups::{network_group_id, org_group_id};
 use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
 use yagra_common::{MerakiDeviceConfig, MerakiTier};
 
 use crate::meraki::filing::{Filing, MerakiFiled};
-use crate::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
+use yagra_base::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
 
 /// Default page-size cap sent to paginated Dashboard endpoints.
 const DEFAULT_PER_PAGE: u32 = 1000;
@@ -739,7 +739,7 @@ impl MerakiOrgRepo {
         // Root group at the HostTree top level (no parent — single-tenant decision). `sort_order`
         // is appended over the whole top-level scope (ADR-162): left at its DEFAULT 0 the org
         // folder would sit above everything an operator has arranged there.
-        let order = crate::groups::append_base_sql("NULL", "");
+        let order = yagra_base::groups::append_base_sql("NULL", "");
         sqlx::query(&format!(
             "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
              VALUES ($1, $2, 'region', NULL, {order} + 1) ON CONFLICT (id) DO NOTHING"
@@ -979,7 +979,7 @@ impl MerakiOrgRepo {
         // The organization's folder and everything beneath it — network folders, any folder an
         // operator made inside one, and any node filed there (ADR-174 decision 5). This used to delete
         // the root and its direct children only, so a folder two levels down fell to the top.
-        crate::groups::delete_subtree(&mut tx, group).await?;
+        yagra_base::groups::delete_subtree(&mut tx, group).await?;
         tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
@@ -1296,7 +1296,7 @@ impl MerakiOrgRepo {
                     if !root_ready {
                         // Top level, appended over that whole scope (ADR-162). A no-op when the
                         // folder is where `create` put it — or wherever an operator moved it.
-                        let order = crate::groups::append_base_sql("NULL", "");
+                        let order = yagra_base::groups::append_base_sql("NULL", "");
                         sqlx::query(&format!(
                             "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
                              VALUES ($1, $2, 'region', NULL, {order} + 1) \
@@ -1320,7 +1320,7 @@ impl MerakiOrgRepo {
                     // the parent's whole scope (ADR-162) — that folder holds nodes as well.
                     let network = network_group_id(org.id, &d.network_id);
                     if networks_ready.insert(network) {
-                        let order = crate::groups::append_base_sql("$3", "");
+                        let order = yagra_base::groups::append_base_sql("$3", "");
                         sqlx::query(&format!(
                             "INSERT INTO node_groups (id, name, group_type, parent_id, sort_order) \
                              VALUES ($1, $2, 'site', $3, {order} + 1) ON CONFLICT (id) DO NOTHING"
@@ -1344,7 +1344,7 @@ impl MerakiOrgRepo {
             // with no binding (one carried here by a configuration bundle, which knows nothing of
             // `meraki_devices`). That node *is* this device, so it is bound below where it stands
             // rather than failing the batch on the primary key.
-            let node_order = crate::groups::append_base_sql("$6", "");
+            let node_order = yagra_base::groups::append_base_sql("$6", "");
             sqlx::query(&format!(
                 "INSERT INTO nodes \
                    (id, name, address, profile_id, vendor, model, group_id, sort_order) \
@@ -2215,7 +2215,7 @@ mod tests {
 
     /// The node list's read joins the inventory row by (organization, serial) and marks only the
     /// access point that is listed with no LAN address (ADR-175).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn product_types_mark_only_an_access_point_listed_without_a_lan_address(
         pool: sqlx::PgPool,
@@ -2281,14 +2281,14 @@ mod tests {
     //
     // Two of this file's twenty-four statements had ever reached a server, both through the API.
     // The org lifecycle below is the half the scheduler reads on every sweep.
-    use crate::pgtest;
+    use yagra_base::pgtest;
 
     /// Creating an org also creates its HostTree root group, in one transaction, and the row reads
     /// back with the cadence defaults the migration declares.
     ///
     /// 🚨 The defaults are the point of reading them here: they are `DEFAULT` clauses in the
     /// migration and `CHECK`-bounded, so nothing in Rust would notice one changing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_org_is_created_with_its_root_group_and_reads_back(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2345,7 +2345,7 @@ mod tests {
 
         // The root group is a real row, named after the org, at the top of the tree.
         assert_eq!(pgtest::rows(&pool, "node_groups").await, 1);
-        let groups = crate::groups::GroupRepo::new(pool.clone())
+        let groups = yagra_base::groups::GroupRepo::new(pool.clone())
             .list()
             .await
             .expect("groups");
@@ -2365,7 +2365,7 @@ mod tests {
 
     /// The scheduler reads only the enabled orgs; the Integrations page reads all of them. Pausing
     /// an org must not lose its configuration.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_enabled_orgs_reach_the_scheduler_and_pausing_keeps_the_configuration(
         pool: sqlx::PgPool,
@@ -2433,7 +2433,7 @@ mod tests {
     /// seconds against a cloud API with a shared rate budget is how an org gets itself throttled,
     /// and the API edge's own validation is not the only thing standing between an operator and
     /// that — this is.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_cadence_round_trips_and_the_check_bounds_refuse_an_absurd_one(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2548,7 +2548,7 @@ mod tests {
     /// that flag is an operator's choice, and every sync would otherwise silently reset it. In one
     /// direction that reads as monitoring quietly stopping for the networks somebody asked for; in
     /// the other (`watch_new`, ADR-164 Inc.4) as a site somebody took out of scope coming back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_later_sync_renames_a_network_but_never_moves_its_monitored_flag(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2641,7 +2641,7 @@ mod tests {
 
     /// Only the monitored networks narrow the collect calls, and an empty selection changes
     /// nothing at all rather than clearing the lot.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_monitored_networks_narrow_the_collect_calls(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2745,7 +2745,7 @@ mod tests {
 
     /// Importing devices creates one HostTree group per network under the org's root, one node per
     /// device, and the binding that makes the node a Meraki device — all in one transaction.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn importing_devices_creates_a_node_and_one_group_per_network(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2786,7 +2786,7 @@ mod tests {
             "expected the org root plus one group per network, created once each"
         );
 
-        let groups = crate::groups::GroupRepo::new(pool.clone())
+        let groups = yagra_base::groups::GroupRepo::new(pool.clone())
             .list()
             .await
             .expect("groups");
@@ -2861,7 +2861,7 @@ mod tests {
 
     /// A device goes where its filing says, and a network's folder exists only if a device landed
     /// in it — an organization whose devices all match an IP range grows no parallel tree.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_is_filed_where_its_filing_says_and_only_used_network_folders_exist(
         pool: sqlx::PgPool,
@@ -2913,7 +2913,7 @@ mod tests {
     /// What the alert engine's snapshot of Meraki organizations is built from (ADR-164 decision 18): every
     /// organization with its name and its nodes — including one with no imported device, whose name
     /// is still what an alert about it is called.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn every_organization_is_listed_with_its_name_and_its_nodes(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -2949,7 +2949,7 @@ mod tests {
     /// Which collects are failing is kept on the row (migration 0127) so that a core that has just
     /// started — or a standby that never heard the reports — can still say so. Written only when it
     /// changes, and read back by the same `list()` the scheduler uses.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_failing_collects_are_kept_on_the_row_and_written_only_on_change(
         pool: sqlx::PgPool,
@@ -3005,7 +3005,7 @@ mod tests {
     /// Which serials are already nodes is decided inside the writer, under its lock: two imports of
     /// one device leave one node, and neither fails. Before ADR-164 the caller filtered first, so
     /// the loser hit `meraki_devices.serial`'s UNIQUE and the whole batch answered 500.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn two_imports_of_one_device_leave_one_node_and_neither_fails(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3036,7 +3036,7 @@ mod tests {
     /// A device is identified by its serial, never by its name: two devices Meraki calls the same
     /// thing are two nodes. Nothing makes a node name unique, and a check that skipped a repeated
     /// name — or keyed anything on it — would leave the second device silently unmonitored.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn two_devices_with_the_same_name_are_two_nodes(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3059,7 +3059,7 @@ mod tests {
 
     /// The UNIQUE on `meraki_devices.serial` spans every organization, so the skip has to as well:
     /// a serial bound under another organization is left alone, and the rest of the batch lands.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_serial_bound_under_another_organization_is_skipped_not_fatal(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3090,7 +3090,7 @@ mod tests {
 
     /// A device deleted and imported again comes back as itself: same node id, so its series and
     /// its alert history are its own again. The id is a function of the serial alone.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_deleted_device_comes_back_under_the_same_node_id(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3130,7 +3130,7 @@ mod tests {
     /// An operator who deletes the organization's folder sets `meraki_orgs.group_id` to NULL
     /// (`ON DELETE SET NULL`). The next import puts the folder back under the same id and points
     /// the row at it — before ADR-164 every later device was filed nowhere, at the top of the tree.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_deleted_organization_folder_is_put_back_under_the_same_id(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3161,7 +3161,7 @@ mod tests {
 
     /// A matched folder deleted between the match and the write is no match: the device falls to
     /// its network folder and is counted that way, instead of the batch failing on the foreign key.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_matched_folder_that_is_gone_is_read_as_no_match(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3185,7 +3185,7 @@ mod tests {
 
     /// The import stamps the inventory row in its own transaction, once. A second import of the
     /// same device creates nothing and so moves nothing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_stamps_the_inventory_row_once(pool: sqlx::PgPool) {
         let (repo, org) = acme(&pool).await;
@@ -3226,7 +3226,7 @@ mod tests {
 
     /// The device reads answer for the org they were asked about, and `filter_meraki` keeps only
     /// the nodes that are Meraki devices out of a mixed list.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_device_reads_are_scoped_to_their_org(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -3345,7 +3345,7 @@ mod tests {
     /// Purging removes the org, its device nodes and its groups, and leaves every other org alone.
     /// On the way: the two sync-outcome writers, in both directions (ADR-164 decision 3) — a success
     /// moves `last_sync_at`, a failure records its reason and leaves the stamp exactly where it was.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn purging_an_org_takes_its_devices_and_groups_and_leaves_the_others(pool: sqlx::PgPool) {
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -3458,10 +3458,10 @@ mod tests {
         // A folder an operator made inside the organization's network folder: two levels below
         // the root. Before ADR-174 the purge removed the root and its direct children only, and
         // this one fell to the top of the tree through `ON DELETE SET NULL`.
-        crate::groups::GroupRepo::new(pool.clone())
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .create(
                 "spares",
-                crate::groups::GroupType::Generic,
+                yagra_base::groups::GroupType::Generic,
                 Some(network_group_id(acme, "N_1")),
                 None,
             )
@@ -3514,12 +3514,12 @@ mod tests {
     // which the database layer cannot name now that it is its own crate.
     /// The marks, read back from a real tree: a Meraki organization with one network folder and
     /// an operator's folder inside it, and a NetBox site.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_folder_list_marks_what_each_integration_keeps(pool: sqlx::PgPool) {
-        let groups = crate::groups::GroupRepo::new(pool.clone());
+        let groups = yagra_base::groups::GroupRepo::new(pool.clone());
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
-        let cred = crate::pgtest::credential(&pool, "meraki", "meraki_api").await;
+        let cred = yagra_base::pgtest::credential(&pool, "meraki", "meraki_api").await;
         let org = orgs
             .create("123", "Acme", "https://api.meraki.com", cred)
             .await
@@ -3533,7 +3533,10 @@ mod tests {
         // derived id must not invent one.
         let before = groups.list().await.expect("list");
         assert_eq!(before.len(), 1, "only the organization's folder exists yet");
-        assert_eq!(before[0].origin, Some(crate::groups::GroupOrigin::Meraki));
+        assert_eq!(
+            before[0].origin,
+            Some(yagra_base::groups::GroupOrigin::Meraki)
+        );
 
         let network_folder = network_group_id(org, "N_1");
         sqlx::query(
@@ -3547,15 +3550,15 @@ mod tests {
         let own = groups
             .create(
                 "Spares",
-                crate::groups::GroupType::Generic,
+                yagra_base::groups::GroupType::Generic,
                 Some(org_folder),
                 None,
             )
             .await
             .expect("an operator's folder inside the organization's");
 
-        let server = crate::pgtest::netbox_server(&pool, "lab").await;
-        let site = crate::pgtest::group(&pool, "Tokyo").await;
+        let server = yagra_base::pgtest::netbox_server(&pool, "lab").await;
+        let site = yagra_base::pgtest::group(&pool, "Tokyo").await;
         sqlx::query(
             "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id) \
              VALUES ($1, 'site', 7, $2)",
@@ -3565,7 +3568,7 @@ mod tests {
         .execute(&pool)
         .await
         .expect("netbox mapping");
-        let plain = crate::pgtest::group(&pool, "Osaka").await;
+        let plain = yagra_base::pgtest::group(&pool, "Osaka").await;
 
         let list = groups.list().await.expect("list");
         let origin_of = |id: Uuid| {
@@ -3576,18 +3579,21 @@ mod tests {
         };
         assert_eq!(
             origin_of(org_folder),
-            Some(crate::groups::GroupOrigin::Meraki)
+            Some(yagra_base::groups::GroupOrigin::Meraki)
         );
         assert_eq!(
             origin_of(network_folder),
-            Some(crate::groups::GroupOrigin::Meraki)
+            Some(yagra_base::groups::GroupOrigin::Meraki)
         );
         assert_eq!(
             origin_of(own),
             None,
             "an operator's folder, wherever it sits"
         );
-        assert_eq!(origin_of(site), Some(crate::groups::GroupOrigin::Netbox));
+        assert_eq!(
+            origin_of(site),
+            Some(yagra_base::groups::GroupOrigin::Netbox)
+        );
         assert_eq!(origin_of(plain), None);
 
         // Forgetting the NetBox server leaves the folder and takes the mark.
@@ -3622,7 +3628,7 @@ mod tests {
         // 0134 raises the cap's default for organizations added after it (ADR-164 decision 33), which
         // is its own test below; this one stops before it, so it pins what 0125 did and nothing after.
         const CAP_DEFAULT: i64 = 134;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) = embedded
             .iter()
             .filter(|m| m.version < CAP_DEFAULT)
@@ -3638,7 +3644,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create(
@@ -3696,7 +3702,7 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const CAP_DEFAULT: i64 = 134;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) =
             embedded.iter().partition(|m| m.version < CAP_DEFAULT);
         assert!(
@@ -3710,7 +3716,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create("1", "Added before", "https://api.meraki.com", credential)
@@ -3750,7 +3756,7 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         const TRAFFIC_DEFAULT: i64 = 135;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) =
             embedded.iter().partition(|m| m.version < TRAFFIC_DEFAULT);
         assert!(
@@ -3764,7 +3770,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create("1", "Added before", "https://api.meraki.com", credential)
@@ -3807,7 +3813,7 @@ mod tests {
         // 0130 appends the switch-port tier to every row (ADR-167), which is its own test below;
         // this one stops before it, so it pins what 0126 did and nothing after.
         const SWITCH_PORTS: i64 = 130;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) = embedded
             .iter()
             .filter(|m| m.version < SWITCH_PORTS)
@@ -3823,7 +3829,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [
@@ -3888,7 +3894,7 @@ mod tests {
         // 0131 appends the wireless tier to every row (ADR-168), which is its own test below; this
         // one stops before it, so it pins what 0130 did and nothing after.
         const WIRELESS: i64 = 131;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) = embedded
             .iter()
             .filter(|m| m.version < WIRELESS)
@@ -3903,7 +3909,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [
@@ -3978,7 +3984,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn migration_0131_adds_the_wireless_tier_to_every_organization_once(pool: sqlx::PgPool) {
         const WIRELESS: i64 = 131;
-        let embedded = crate::repo::embedded_migrations();
+        let embedded = yagra_base::repo::embedded_migrations();
         let (before, from): (Vec<_>, Vec<_>) = embedded.iter().partition(|m| m.version < WIRELESS);
         assert!(
             from.iter().any(|m| m.version == WIRELESS),
@@ -3990,7 +3996,7 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [

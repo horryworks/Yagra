@@ -427,7 +427,7 @@ impl NodeRepo {
     /// One copy, read by [`Self::device_nodes_at`], [`Self::import_nodes`] and
     /// `DiscoveredRepo::reconcile_promotions`, so the Discovery screen's two tables cannot
     /// disagree about the same address.
-    pub(crate) const DEVICE_NODE_PREDICATE: &'static str =
+    pub const DEVICE_NODE_PREDICATE: &'static str =
         "NOT EXISTS (SELECT 1 FROM url_checks uc WHERE uc.node_id = n.id) \
          AND NOT EXISTS (SELECT 1 FROM dns_checks dc WHERE dc.node_id = n.id)";
 
@@ -959,7 +959,7 @@ impl NodeRepo {
     /// folder", and the folder itself has been checked against the caller's scope before anything
     /// reads this; every member of a visible folder is visible. Narrowing here would make the
     /// anchor invisible to a scoped caller and silently turn their drop into an append.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub async fn ordered_nodes_in_group(
         &self,
         group: Option<Uuid>,

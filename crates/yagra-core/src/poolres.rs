@@ -69,18 +69,17 @@ impl PoolResolver {
     }
 
     /// Build from the `(id, parent_id, pool)` rows of `node_groups` (see
-    /// [`crate::groups::GroupRepo::pool_rows`]).
+    /// [`yagra_base::groups::GroupRepo::pool_rows`]).
     ///
     /// The traversal itself — path compression, the cycle guard, the depth bound — is
-    /// [`crate::groups::resolve_nearest_ancestor`], shared with map-coordinate inheritance. What
+    /// [`yagra_base::groups::resolve_nearest_ancestor`], shared with map-coordinate inheritance. What
     /// belongs here is only what is specific to pools: [`meaningful`] deciding that a blank value
     /// means "unset" rather than a pool literally named `""`.
     #[must_use]
     pub fn build(rows: Vec<(Uuid, Option<Uuid>, Option<String>)>) -> Self {
-        let by_group =
-            crate::groups::resolve_nearest_ancestor(rows.into_iter().map(|(id, parent, pool)| {
-                (id, parent, meaningful(pool.as_deref()).map(str::to_owned))
-            }));
+        let by_group = yagra_base::groups::resolve_nearest_ancestor(rows.into_iter().map(
+            |(id, parent, pool)| (id, parent, meaningful(pool.as_deref()).map(str::to_owned)),
+        ));
         Self { by_group }
     }
 
@@ -168,8 +167,8 @@ impl PoolResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::groups::MAX_GROUP_DEPTH;
     use std::net::{IpAddr, Ipv4Addr};
+    use yagra_base::groups::MAX_GROUP_DEPTH;
     use yagra_common::GroupId;
 
     fn g(n: u128) -> Uuid {

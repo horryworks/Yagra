@@ -151,7 +151,7 @@ impl Engine {
 
     /// One-hop neighbours per node, restricted to `authorized`, labelled upstream/downstream.
     ///
-    /// **Not gated on [`crate::repo::topology_mode::TopologyMode`], deliberately.** That gate exists
+    /// **Not gated on [`yagra_base::repo::topology_mode::TopologyMode`], deliberately.** That gate exists
     /// because a wrong derived edge *suppresses a real outage*, and silence is unrecoverable;
     /// `incident_correlate` suppresses nothing, so a wrong edge here only adds a peer to a
     /// diagnostic — the noisy direction. Gating on it would ship this dead on every default

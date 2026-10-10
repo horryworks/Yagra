@@ -26,7 +26,7 @@ use crate::duplicates::{
     self, DuplicateConfidence, DuplicateContradiction, DuplicateEvidenceKind, Observations,
     OwnAddress, PeerReport,
 };
-use crate::repo::DuplicateInput;
+use yagra_base::repo::DuplicateInput;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -268,17 +268,17 @@ mod tests {
 
     /// Two device nodes at one address come back as one confident group with the older suggested to
     /// keep, and a caller scoped to a different folder is shown neither of them.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn two_nodes_at_one_address_are_one_group_and_invisible_outside_their_folder(
         pool: sqlx::PgPool,
     ) {
         let st = live_state(pool.clone()).await;
-        let tokyo = crate::pgtest::group(&pool, "tokyo").await;
-        let osaka = crate::pgtest::group(&pool, "osaka").await;
-        let older = crate::pgtest::node(&pool, "a-core-sw", 7, Some(tokyo)).await;
-        let newer = crate::pgtest::node(&pool, "b-core-sw", 7, Some(tokyo)).await;
-        crate::pgtest::node(&pool, "unrelated", 8, Some(tokyo)).await;
+        let tokyo = yagra_base::pgtest::group(&pool, "tokyo").await;
+        let osaka = yagra_base::pgtest::group(&pool, "osaka").await;
+        let older = yagra_base::pgtest::node(&pool, "a-core-sw", 7, Some(tokyo)).await;
+        let newer = yagra_base::pgtest::node(&pool, "b-core-sw", 7, Some(tokyo)).await;
+        yagra_base::pgtest::node(&pool, "unrelated", 8, Some(tokyo)).await;
 
         let (status, body) = send(&st, "GET", PATH, &token(&st, Role::Admin), None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -301,7 +301,7 @@ mod tests {
 
     /// A Viewer is refused — the list exists to be acted on, and acting is `ManageConfig` — and an
     /// inventory with nothing to compare answers an empty list rather than an error.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_is_refused_and_an_empty_inventory_answers_empty(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;

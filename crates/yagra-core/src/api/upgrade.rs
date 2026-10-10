@@ -1488,7 +1488,7 @@ mod tests {
     ///
     /// Both directions because an idempotent write and a dead one look the same from one call —
     /// see `closing-a-check-must-be-tested-with-reopening`.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_upgrade_switch_moves_and_moves_back(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1544,7 +1544,7 @@ mod hand_off_tests {
     ///
     /// Before, a failed write answered 500 and the fleet-wide window it had just opened stayed open
     /// for its fifteen minutes — every judgement paused, with nothing that would ever close it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_request_that_cannot_be_written_closes_the_window_it_opened(pool: sqlx::PgPool) {
         let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
@@ -1568,7 +1568,7 @@ mod hand_off_tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_written_request_leaves_its_window_open(pool: sqlx::PgPool) {
         let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
@@ -1594,7 +1594,7 @@ mod hand_off_tests {
     }
 
     /// A request the updater would refuse is refused before the window is opened.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_request_that_fails_its_checks_opens_no_window(pool: sqlx::PgPool) {
         let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));

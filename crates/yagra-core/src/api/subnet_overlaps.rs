@@ -24,10 +24,10 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::{require_fleet_wide, NodeScope};
 use super::util::CreatedId;
 use super::{AdminState, ApiState};
-use crate::repo::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 use crate::subnet_overlaps::{
     self, Ack, ExclusionReason, Input, Overlap, OverlapStatus, Port, Rule,
 };
+use yagra_base::repo::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 use yagra_common::{SubnetKey, MAX_ADDRESSES_PER_NODE};
 
 /// The built-in CGNAT rule seeded by migration 0143. Switchable, never editable or deletable.
@@ -165,7 +165,7 @@ fn internal(e: &anyhow::Error, what: &'static str) -> ApiError {
 /// The comparison before names are filled in and the list is cut to [`OVERLAPS_MAX`] — what an
 /// acknowledgement looks its key up in, so an overlap past the cap can still be acknowledged.
 struct Compared {
-    groups: Vec<crate::groups::GroupSummary>,
+    groups: Vec<yagra_base::groups::GroupSummary>,
     nodes: Vec<(Uuid, String, Option<Uuid>)>,
     stored_rules: Vec<StoredOverlapRule>,
     notes: HashMap<String, String>,
@@ -684,7 +684,7 @@ mod tests {
 
     /// `pgtest::group` creates a folder of type Site, which is what a site is here.
     async fn site(pool: &sqlx::PgPool, name: &str) -> uuid::Uuid {
-        crate::pgtest::group(pool, name).await
+        yagra_base::pgtest::group(pool, name).await
     }
 
     async fn addresses(st: &super::ApiState, node: uuid::Uuid, list: &[(&str, u8)]) {
@@ -711,19 +711,19 @@ mod tests {
     /// The same gateway at two sites is listed; a scoped caller is told a second site exists
     /// without its name; a rule, an acknowledgement and their removal are each ACCEPTED and each
     /// moves the overlap where the list says it went.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_overlap_is_listed_scoped_excluded_and_acknowledged(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;
         let tokyo = site(&pool, "tokyo").await;
         let nagoya = site(&pool, "nagoya").await;
-        let a = crate::pgtest::node(&pool, "tky-core-01", 1, Some(tokyo)).await;
-        let b = crate::pgtest::node(&pool, "ngy-rt-01", 2, Some(nagoya)).await;
+        let a = yagra_base::pgtest::node(&pool, "tky-core-01", 1, Some(tokyo)).await;
+        let b = yagra_base::pgtest::node(&pool, "ngy-rt-01", 2, Some(nagoya)).await;
         addresses(&st, a, &[("10.10.20.1", 24), ("100.64.1.1", 22)]).await;
         addresses(&st, b, &[("10.10.20.1", 24), ("100.64.2.9", 22)]).await;
         // A URL monitor reports no interface addresses; counting it would make "every device
         // answered" unreachable, and the empty state would never say "no overlaps".
-        let url = crate::pgtest::node(&pool, "web-check", 3, Some(tokyo)).await;
+        let url = yagra_base::pgtest::node(&pool, "web-check", 3, Some(tokyo)).await;
         sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://example.com/')")
             .bind(url)
             .execute(&pool)
@@ -822,7 +822,7 @@ mod tests {
 
     /// The built-in CGNAT rule can be switched off but not edited or deleted, and a rule naming
     /// neither a range nor a port is refused.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_builtin_rule_only_switches_and_an_empty_rule_is_refused(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;

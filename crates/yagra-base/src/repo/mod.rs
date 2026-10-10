@@ -57,7 +57,7 @@ use yagra_common::retry::{until_ready, Budget, GaveUp};
 use yagra_common::{CredentialId, GroupId, Node, NodeId, ProfileId};
 
 mod address_owners;
-pub(crate) mod adjacency_settings;
+pub mod adjacency_settings;
 mod defaults;
 mod interfaces;
 mod listing;
@@ -67,13 +67,13 @@ mod pool_takeover;
 mod pools;
 mod prefix_gap_acks;
 mod profiles;
-pub(crate) mod retention_settings;
+pub mod retention_settings;
 mod row_names;
 mod seed;
 mod settings;
 mod snapshots;
 mod subnet_overlaps;
-pub(crate) mod topology_mode;
+pub mod topology_mode;
 
 #[cfg(test)]
 mod guards;
@@ -94,7 +94,7 @@ pub use migrate::embedded_migrations;
 // The static itself is read by `embedded_migrations` above; only *this name* is test-only, and it
 // exists because `#[sqlx::test(migrator = "crate::repo::MIGRATIONS")]` needs a path it can spell
 // from outside `migrate`. Unconditional, it is dead code in the shipped binary.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub use migrate::MIGRATIONS;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
@@ -308,7 +308,7 @@ pub type GroupFilter<'a> = Option<&'a [Uuid]>;
 /// `repo/guards.rs`-style text checks are the only thing that would see either.
 ///
 /// ⚠️ Parenthesize the condition it is `AND`ed with — see [`NodeRepo::SCOPE_PREDICATE`].
-pub(crate) fn scope_predicate(param: u8, column: &str) -> String {
+pub fn scope_predicate(param: u8, column: &str) -> String {
     format!("(${param}::uuid[] IS NULL OR {column} = ANY(${param}))")
 }
 
@@ -387,7 +387,7 @@ impl NodeRepo {
     /// `#[cfg(test)]` because `#[sqlx::test]` (ADR-114) is its only caller: it hands the test a
     /// `PgPool` against a freshly migrated throwaway database. Left unconditional it is dead code
     /// in the shipped binary, which `clippy --all-targets` says out loud.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     #[must_use]
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }

@@ -650,8 +650,8 @@ async fn site_exits_for(
     let sites: HashSet<Uuid> = groups
         .iter()
         .filter(|g| {
-            crate::groups::GroupType::from_key(&g.group_type)
-                == Some(crate::groups::GroupType::Site)
+            yagra_base::groups::GroupType::from_key(&g.group_type)
+                == Some(yagra_base::groups::GroupType::Site)
         })
         .map(|g| g.id)
         .collect();
@@ -1019,7 +1019,7 @@ pub(crate) struct ShadowEdge {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct TopologyShadow {
     /// `manual`, `shadow` or `derived`.
-    pub mode: crate::repo::topology_mode::TopologyMode,
+    pub mode: yagra_base::repo::topology_mode::TopologyMode,
     /// Edges in the hand-authored graph.
     pub manual_edges: usize,
     /// Edges in the derived graph.
@@ -1232,7 +1232,7 @@ pub(crate) async fn topology_shadow(
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(crate) struct TopologyModeRequest {
     /// `manual`, `shadow` or `derived`.
-    pub mode: crate::repo::topology_mode::TopologyMode,
+    pub mode: yagra_base::repo::topology_mode::TopologyMode,
 }
 
 /// Choose which dependency graph drives alert suppression.
@@ -1457,14 +1457,14 @@ mod tests {
     ///
     /// `200`, not `201`: recording a decision is idempotent, so the endpoint documents an OK
     /// carrying the id rather than a creation.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pinning_a_link_stores_the_override(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let a = crate::pgtest::node(&pool, "left", 4, None).await;
-        let b = crate::pgtest::node(&pool, "right", 5, None).await;
+        let a = yagra_base::pgtest::node(&pool, "left", 4, None).await;
+        let b = yagra_base::pgtest::node(&pool, "right", 5, None).await;
         let (status, body) = send(
             &st,
             "POST",
@@ -1474,7 +1474,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "link_overrides").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "link_overrides").await, 1);
     }
 
     // ── One level of the network map (ADR-191), through the whole router ────────────────────
@@ -1488,32 +1488,37 @@ mod tests {
     /// │     └─ floor-1   └ sw-d   (LLDP to sw-b)
     /// └─ west            └ sw-c   (LLDP to sw-a)
     /// ```
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_map_level_bundles_links_and_honours_the_scope(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         use yagra_common::{DerivedLink, NodeId};
-        let groups = crate::groups::GroupRepo::new(pool.clone());
-        let east = crate::pgtest::group(&pool, "east").await;
-        let west = crate::pgtest::group(&pool, "west").await;
+        let groups = yagra_base::groups::GroupRepo::new(pool.clone());
+        let east = yagra_base::pgtest::group(&pool, "east").await;
+        let west = yagra_base::pgtest::group(&pool, "west").await;
         let site = groups
-            .create("site-a", crate::groups::GroupType::Site, Some(east), None)
+            .create(
+                "site-a",
+                yagra_base::groups::GroupType::Site,
+                Some(east),
+                None,
+            )
             .await
             .expect("site-a");
-        let lone = crate::pgtest::node(&pool, "lone", 1, None).await;
-        let a = crate::pgtest::node(&pool, "sw-a", 2, Some(site)).await;
-        let b = crate::pgtest::node(&pool, "sw-b", 3, Some(site)).await;
-        let c = crate::pgtest::node(&pool, "sw-c", 4, Some(west)).await;
+        let lone = yagra_base::pgtest::node(&pool, "lone", 1, None).await;
+        let a = yagra_base::pgtest::node(&pool, "sw-a", 2, Some(site)).await;
+        let b = yagra_base::pgtest::node(&pool, "sw-b", 3, Some(site)).await;
+        let c = yagra_base::pgtest::node(&pool, "sw-c", 4, Some(west)).await;
         let floor = groups
             .create(
                 "floor-1",
-                crate::groups::GroupType::Generic,
+                yagra_base::groups::GroupType::Generic,
                 Some(site),
                 None,
             )
             .await
             .expect("floor-1");
-        let d = crate::pgtest::node(&pool, "sw-d", 5, Some(floor)).await;
+        let d = yagra_base::pgtest::node(&pool, "sw-d", 5, Some(floor)).await;
         crate::topology_links::TopoLinkRepo::new(pool.clone())
             .upsert_batch(&[
                 DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp),

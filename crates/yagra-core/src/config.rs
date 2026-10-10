@@ -6,7 +6,7 @@
 //! falls back to the in-memory **skeleton** so a bare `cargo run` still serves the API.
 //! Compose always injects all three.
 
-use crate::repo::DEFAULT_POLL_INTERVAL_SECS;
+use yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS;
 
 /// Smallest polling interval (seconds) an operator may configure. A tight floor protects both the
 /// monitored devices and Yagra, and keeps the anti-stampede jitter window from collapsing.

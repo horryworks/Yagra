@@ -584,7 +584,7 @@ impl AlertHistoryStore {
     pub async fn fires_by_weekday_hour(
         &self,
         since_ms: i64,
-        groups: crate::repo::GroupFilter<'_>,
+        groups: yagra_base::repo::GroupFilter<'_>,
     ) -> anyhow::Result<Vec<(i32, i32, i64)>> {
         let rows = sqlx::query(&format!(
             "SELECT \
@@ -1322,10 +1322,10 @@ mod tests {
     ///
     /// Three ways to be counted wrongly, one fixture: a resolution inside the window, a fire
     /// before it, and a fire on the boundary itself (`>=`, so it counts).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn only_fires_inside_the_window_are_counted(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "n1", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "n1", 1, None).await;
         let store = AlertHistoryStore::new(pool.clone());
         let since = 10_000i64;
         store
@@ -1359,11 +1359,11 @@ mod tests {
     /// paragraphs apart, and they used to be produced by different mechanisms over different
     /// row sets. Since ADR-112 Increment 2 they share [`AlertHistoryStore::FIRES_SINCE`] and are
     /// given the same lower bound; this runs both against one fixture and adds them up.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_halves_of_the_alert_story_agree_on_one_fixture(pool: sqlx::PgPool) {
-        let a = crate::pgtest::node(&pool, "a", 1, None).await;
-        let b = crate::pgtest::node(&pool, "b", 2, None).await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
         let store = AlertHistoryStore::new(pool.clone());
         let since = 10_000i64;
         let mut records: Vec<(Alert, bool)> = Vec::new();
@@ -1435,10 +1435,10 @@ mod tests {
     /// same rows before and after, the prune reports exactly the rows it should have removed, and
     /// the table holds exactly what is left — so neither "delete nothing" nor "delete everything
     /// old" can pass.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_prune_never_deletes_a_row_the_restore_would_return(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "n1", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "n1", 1, None).await;
         // Not in `nodes`: an alert about a node deleted while core was stopped (ADR-097 Inc.5).
         let gone = Uuid::new_v4();
         let store = AlertHistoryStore::new(pool.clone());
@@ -1494,7 +1494,7 @@ mod tests {
             4,
             "A, B's latest, F and G are open — the fixture must give the restore something to lose"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "alert_history").await, 12);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "alert_history").await, 12);
 
         let removed = store.prune_old(7 * 86_400).await.expect("prune");
 
@@ -1505,7 +1505,7 @@ mod tests {
         );
         // B's two older rows, C's two, D's fire, E's two.
         assert_eq!(removed, 7, "the prune removed the wrong number of rows");
-        assert_eq!(crate::pgtest::rows(&pool, "alert_history").await, 5);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "alert_history").await, 5);
     }
 
     /// 🎯 **More than a thousand fires in the window are all counted.**
@@ -1518,10 +1518,10 @@ mod tests {
     /// (503 fires, 313 resolutions), so the old code and the new one both said 503 and the fix was
     /// only ever confirmed as "not broken". 1,200 fires plus 400 resolutions is 1,600 rows — over
     /// the old cap in total, and over it in fires alone.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_window_holding_more_than_a_thousand_fires_reports_all_of_them(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "busy", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "busy", 1, None).await;
         let store = AlertHistoryStore::new(pool.clone());
         let since = 10_000i64;
         let mut records: Vec<(Alert, bool)> = Vec::with_capacity(1_600);

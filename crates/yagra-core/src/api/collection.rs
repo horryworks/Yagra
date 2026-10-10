@@ -35,7 +35,7 @@ use yagra_common::{
 // The staleness window lives with the column it describes (`repo::interfaces`), because it is one
 // half of an invariant whose other half is the lazy-touch window the writer uses — see
 // `INTERFACE_TOUCH_SECS`. This edge and the MCP node-status tool both read the same constant.
-use crate::repo::INTERFACE_STALE_SECS;
+use yagra_base::repo::INTERFACE_STALE_SECS;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -783,7 +783,7 @@ impl VlanJoin {
     /// aggregate its members.
     pub(crate) fn new(
         snapshot: Option<yagra_common::VlanSnapshot>,
-        metas: &[crate::repo::InterfaceMeta],
+        metas: &[yagra_base::repo::InterfaceMeta],
     ) -> Self {
         let mut members: std::collections::BTreeMap<u32, Vec<u32>> =
             std::collections::BTreeMap::new();
@@ -882,7 +882,7 @@ impl VlanJoin {
 /// list and `get_node_status` both apply (ADR-063 Inc.8 decision 1, `yagra_common::link_mode_shown`).
 /// The stored row is not changed; only what is served.
 pub(crate) fn shown_link_mode(
-    meta: &crate::repo::InterfaceMeta,
+    meta: &yagra_base::repo::InterfaceMeta,
     oper_status: Option<f64>,
 ) -> (Option<String>, Option<String>) {
     let (duplex, media) = yagra_common::link_mode_shown(
@@ -1014,11 +1014,11 @@ mod vlan_join_tests {
     use super::*;
     use yagra_common::{PortMode, PortVlan, VlanSnapshot};
 
-    fn meta(ifindex: i32, name: &str) -> crate::repo::InterfaceMeta {
-        crate::repo::InterfaceMeta {
+    fn meta(ifindex: i32, name: &str) -> yagra_base::repo::InterfaceMeta {
+        yagra_base::repo::InterfaceMeta {
             ifindex,
             if_name: Some(name.to_owned()),
-            ..crate::repo::InterfaceMeta::default()
+            ..yagra_base::repo::InterfaceMeta::default()
         }
     }
 
@@ -1305,13 +1305,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A collection template is created on top of the seeded ones, not instead of them.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_collection_template_adds_one_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let before = crate::pgtest::rows(&pool, "collection_templates").await;
+        let before = yagra_base::pgtest::rows(&pool, "collection_templates").await;
         let (status, body) = send(
             &st,
             "POST",
@@ -1322,7 +1322,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(
-            crate::pgtest::rows(&pool, "collection_templates").await,
+            yagra_base::pgtest::rows(&pool, "collection_templates").await,
             before + 1
         );
     }
@@ -1332,17 +1332,17 @@ mod tests {
     /// The join the Interfaces tab draws: every stored address lands on the row with its
     /// `ifIndex`, in the snapshot's order, with the poller's zero prefix read back as `null` —
     /// and an address on an index that has no interface row is on no row at all.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn interfaces_carry_every_address_of_their_port(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::repo::InterfaceUpsert;
         use std::net::IpAddr;
+        use yagra_base::repo::InterfaceUpsert;
         use yagra_common::{L3Address, L3Snapshot};
 
         let st = live_state(pool.clone()).await;
         let admin = st.admin.as_ref().expect("live state");
-        let node = crate::pgtest::node(&pool, "svi-switch", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "svi-switch", 1, None).await;
         let port = |ifindex: i32, name: &str| InterfaceUpsert {
             ifindex,
             if_name: Some(name.to_owned()),

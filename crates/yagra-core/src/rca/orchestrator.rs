@@ -39,7 +39,7 @@ use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
 use crate::audit::AuditRepo;
 use crate::ratelimit::{charge_window, env_cap};
-use crate::repo::NodeRepo;
+use yagra_base::repo::NodeRepo;
 
 /// Default simultaneous generations (`YAGRA_RCA_MAX_CONCURRENT`). Two, not four: unlike an analysis
 /// this call is billed and leaves the building.
@@ -259,7 +259,7 @@ pub struct RcaOrchestrator {
     analysis: Arc<AnalysisRunner>,
     audit: Arc<AuditRepo>,
     /// The folder tree, read once per gathered context to resolve inherited labels.
-    groups: Arc<crate::groups::GroupRepo>,
+    groups: Arc<yagra_base::groups::GroupRepo>,
     slots: Arc<Semaphore>,
     max_concurrent: usize,
     recent_starts: Mutex<VecDeque<Instant>>,
@@ -280,7 +280,7 @@ impl RcaOrchestrator {
         alerts: Arc<AlertManager>,
         analysis: Arc<AnalysisRunner>,
         audit: Arc<AuditRepo>,
-        groups: Arc<crate::groups::GroupRepo>,
+        groups: Arc<yagra_base::groups::GroupRepo>,
     ) -> Self {
         let max_concurrent = env_cap("YAGRA_RCA_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
         let max_per_window = env_cap("YAGRA_RCA_RATE_PER_MIN", DEFAULT_RATE_PER_MIN);

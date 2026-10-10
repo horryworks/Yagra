@@ -8556,14 +8556,14 @@ export interface components {
             /**
              * @description Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit
              *     from the nearest ancestor that sets one, else the default pool. A node's own `pool` still
-             *     wins — see [`crate::poolres`].
+             *     wins — see `poolres`.
              */
             pool?: string | null;
             /**
              * @description The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a
              *     folder nothing has attached one to, which is every folder in a deployment with no NetBox.
              *
-             *     🚨 **Empty also means "you may not see them".** [`crate::api::groups::visible_groups`]
+             *     🚨 **Empty also means "you may not see them".** `api::groups::visible_groups`
              *     clears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is
              *     listed so the tree has a spine, and handing over the subnet layout of a site whose
              *     membership the caller cannot see would be a leak the folder's *name* does not constitute.

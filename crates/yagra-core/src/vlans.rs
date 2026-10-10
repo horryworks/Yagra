@@ -74,10 +74,10 @@ mod tests {
 
     /// A stored snapshot reads back as it was written, and a second observation replaces it whole —
     /// the property that makes a removed VLAN disappear.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_observation_replaces_the_stored_snapshot_whole(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "vlan-switch", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "vlan-switch", 1, None).await;
         let repo = VlanRepo::new(pool.clone());
         assert_eq!(repo.current(node).await.unwrap(), None);
 

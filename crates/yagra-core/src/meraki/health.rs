@@ -515,7 +515,7 @@ const WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(15);
 /// persists and notifies as one step (ADR-092).
 pub(crate) async fn run_meraki_collect_watch(
     orgs: std::sync::Arc<crate::meraki::MerakiOrgRepo>,
-    settings: std::sync::Arc<crate::repo::NodeRepo>,
+    settings: std::sync::Arc<yagra_base::repo::NodeRepo>,
     inflight: std::sync::Arc<crate::meraki::MerakiInflight>,
     alerts: std::sync::Arc<crate::alerts::AlertManager>,
     sink: std::sync::Arc<dyn crate::alerts::sink::AlertSink>,

@@ -1175,15 +1175,15 @@ mod tests {
     /// Node-scoped deliberately: `icmp_rtt_ms` already carries a **seeded global** rule, and a
     /// second rule at the same (level, targets, metric) is refused with `409` — which is
     /// ADR-081 working. A narrower scope is the shape an operator actually adds.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_threshold_rule_adds_one_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let before = crate::pgtest::rows(&pool, "thresholds").await;
+        let before = yagra_base::pgtest::rows(&pool, "thresholds").await;
         assert!(before > 0, "the seeded default rules are missing");
-        let node = crate::pgtest::node(&pool, "slow-link", 6, None).await;
+        let node = yagra_base::pgtest::node(&pool, "slow-link", 6, None).await;
         let (status, body) = send(
             &st,
             "POST",
@@ -1200,12 +1200,15 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "thresholds").await, before + 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "thresholds").await,
+            before + 1
+        );
     }
 
     /// ADR-200 Inc.33: only a request that asks pays for the override count. The screen's two
     /// `total`-only questions and the profile list used to walk the fleet and discard the answer.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_override_count_is_filled_only_when_asked_for(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1213,7 +1216,7 @@ mod tests {
         use yagra_common::NodeId;
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node = crate::pgtest::node(&pool, "slow-link", 6, None).await;
+        let node = yagra_base::pgtest::node(&pool, "slow-link", 6, None).await;
         st.alerts.set_config(crate::alerts::AlertConfig::new(
             Vec::new(),
             HashMap::from([(NodeId::from(node), crate::alerts::NodeMeta::default())]),
@@ -1259,13 +1262,13 @@ mod tests {
     /// ADR-143: a rule naming a table row sits beside the rule for every row at the same scope —
     /// that pair is the whole point — while a second rule naming the same row is still the ADR-081
     /// duplicate, and a port rule cannot carry a pattern at all.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_row_pattern_is_stored_beside_the_rule_for_every_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node = crate::pgtest::node(&pool, "c2960s", 7, None).await;
+        let node = yagra_base::pgtest::node(&pool, "c2960s", 7, None).await;
         let body = |row_match: Option<&str>| {
             serde_json::json!({
                 "scope_level": "node",

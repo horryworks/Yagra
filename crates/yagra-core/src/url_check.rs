@@ -4,7 +4,7 @@
 //! Metadata, so it lives in PostgreSQL (store separation). One row per node (1:1), keyed by
 //! `node_id`. This is the I/O adapter; the config type ([`UrlCheckConfig`]) and its validation
 //! live in `yagra-common` (tested there). Runtime `sqlx::query` (not the compile-time macro) so
-//! the build needs no live database — consistent with [`crate::repo`].
+//! the build needs no live database — consistent with [`yagra_base::repo`].
 
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};

@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use crate::alerts::history::AlertHistoryStore;
 use crate::pollers::PollerRepo;
-use crate::repo::retention_settings::RetentionSettings;
-use crate::repo::NodeRepo;
 use crate::{analysis, dns_check, events, l3, neighbors, rca};
+use yagra_base::repo::retention_settings::RetentionSettings;
+use yagra_base::repo::NodeRepo;
 
 /// The ten stores the sweep deletes from.
 ///

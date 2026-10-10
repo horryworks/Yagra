@@ -198,7 +198,7 @@ pub enum SenderKind {
     Trap,
 }
 
-crate::stored_enum::token_enum!(SenderKind, [
+yagra_base::stored_enum::token_enum!(SenderKind, [
     Syslog => "syslog",
     Trap => "trap",
 ]);
@@ -804,7 +804,7 @@ impl DiscoveredRepo {
     /// ⚠️ **A URL or DNS monitor at the same address does not count** (ADR-139 decision 1). Both store a
     /// resolved address in `nodes.address`, and matching on the address alone marked a router
     /// "monitored" because its web page was — while the scan table beside this one, which asks
-    /// the same question through [`crate::repo::NodeRepo::DEVICE_NODE_PREDICATE`], said it was not.
+    /// the same question through [`yagra_base::repo::NodeRepo::DEVICE_NODE_PREDICATE`], said it was not.
     pub async fn reconcile_promotions(&self) -> anyhow::Result<u64> {
         let res = sqlx::query(Self::RECONCILE_PROMOTIONS)
             .execute(&self.pool)
@@ -1226,7 +1226,7 @@ mod tests {
     /// the scan table but not on this one is the disagreement ADR-139 decision 1 exists to prevent.
     #[test]
     fn the_promotion_statement_ends_in_the_device_predicate() {
-        let tail = format!("AND {}", crate::repo::NodeRepo::DEVICE_NODE_PREDICATE);
+        let tail = format!("AND {}", yagra_base::repo::NodeRepo::DEVICE_NODE_PREDICATE);
         assert!(
             DiscoveredRepo::RECONCILE_PROMOTIONS.ends_with(&tail),
             "RECONCILE_PROMOTIONS no longer ends in NodeRepo::DEVICE_NODE_PREDICATE:\n{}\n--- expected tail ---\n{tail}",
@@ -1769,7 +1769,7 @@ mod tests {
     // stores here is the only one in ADR-043 whose reader joins to a *second* table — which is
     // exactly where a scope predicate goes wrong quietly.
     use crate::l3::L3Repo;
-    use crate::pgtest;
+    use yagra_base::pgtest;
     use yagra_common::{L3Address, L3Snapshot};
 
     /// A node with an address of the test's choosing, through the production writer.
@@ -1799,7 +1799,7 @@ mod tests {
 
     /// A summary goes in whole, comes back whole, and the coverage line counts it — including the
     /// truncation flag, which is what says the endpoint list is a sample rather than the network.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_observed_summary_reads_back_and_the_totals_count_it(pool: sqlx::PgPool) {
         let repo = ArpRepo::new(pool.clone());
@@ -1849,7 +1849,7 @@ mod tests {
     /// ⚠️ Read through [`pgtest::node_timestamp`] because `node_arp.first_seen` has **no reader in
     /// production** — the column is written by this statement and consulted by nothing else, so
     /// without the fixture the rule is only assertable as text.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unchanged_walk_keeps_first_seen_and_a_changed_one_restarts_it(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "rtr", 1, None).await;
@@ -1887,7 +1887,7 @@ mod tests {
     /// address answers ARP for its LAN interface too, so the known set has to carry every reported
     /// interface address as well as every node address — otherwise the router's own gateway
     /// address is reported as an unmonitored endpoint on every segment it terminates.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn known_addresses_covers_node_addresses_and_reported_interface_addresses(
         pool: sqlx::PgPool,
@@ -1922,7 +1922,7 @@ mod tests {
 
     /// An endpoint seen again keeps `first_seen` — how long it was on the network before anyone
     /// monitored it — and takes the newer observation for everything else.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_endpoint_seen_again_keeps_first_seen_and_takes_the_new_observation(
         pool: sqlx::PgPool,
@@ -1983,7 +1983,7 @@ mod tests {
 
     /// An endpoint that becomes a node stops being a finding — and asking twice changes nothing,
     /// which is what the `IS DISTINCT FROM` guard is for.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn promotion_points_the_row_at_the_node_that_now_monitors_it(pool: sqlx::PgPool) {
         let via = pgtest::node(&pool, "rtr", 1, None).await;
@@ -2049,7 +2049,7 @@ mod tests {
     /// A URL monitor at the endpoint's address does not make the endpoint "monitored"; a device
     /// node at it does (ADR-139 decision 1). The scan table on the same screen asks through the same
     /// predicate, so the two cannot disagree about one address.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_url_monitor_at_the_address_does_not_promote_the_endpoint(pool: sqlx::PgPool) {
         let via = pgtest::node(&pool, "rtr", 1, None).await;
@@ -2084,7 +2084,7 @@ mod tests {
 
     /// Pruning drops what aged out, then enforces the ceiling by dropping the **oldest seen** —
     /// so what survives is what is currently on the network.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pruning_ages_rows_out_then_enforces_the_ceiling_oldest_first(pool: sqlx::PgPool) {
         let via = pgtest::node(&pool, "rtr", 1, None).await;
@@ -2131,7 +2131,7 @@ mod tests {
     /// scope.
     /// The Neighbors tab's "listed as unregistered" (ADR-180) answers exactly what the list shows:
     /// the same scope, and an imported row no longer counts.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn listed_among_follows_the_list_scope_and_drops_imported_rows(pool: sqlx::PgPool) {
         let mine = pgtest::group(&pool, "mine").await;
@@ -2176,7 +2176,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_listing_is_scoped_by_the_observing_node_and_pages_by_cursor(pool: sqlx::PgPool) {
         let mine = pgtest::group(&pool, "mine").await;
@@ -2264,7 +2264,7 @@ mod tests {
     /// Evidence and a name go in through the sweep's writer and come back through both readers; a
     /// row written before ADR-179 reads as the ARP observation it was; and the tab's count uses the
     /// list's scope (ADR-179 decision 1, 8).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn evidence_and_a_name_round_trip_and_the_count_follows_the_scope(pool: sqlx::PgPool) {
         let mine = pgtest::group(&pool, "mine").await;

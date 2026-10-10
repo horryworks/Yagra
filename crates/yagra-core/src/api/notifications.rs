@@ -675,7 +675,7 @@ pub(crate) async fn delivery_page(
     use crate::alerts::notification_log::{
         DeliveryEvent, DeliveryFilter, DeliveryResult, DeliverySide, DEFAULT_LIMIT,
     };
-    use crate::stored_enum::{filter_token_list, parse_filter_token};
+    use yagra_base::stored_enum::{filter_token_list, parse_filter_token};
 
     let before = super::util::keyset_cursor(input.before, input.before_id, "before")?;
     let picks = super::util::parse_set(
@@ -1733,7 +1733,7 @@ at 2026-08-04T09:41:07+00:00"
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A channel is created sealed: stored, listed, and its target never returned.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_channel_stores_it_without_returning_its_config(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1751,7 +1751,10 @@ at 2026-08-04T09:41:07+00:00"
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "notification_channels").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "notification_channels").await,
+            1
+        );
 
         let (status, list) = send(&st, "GET", "/api/v1/notification-channels", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -1765,7 +1768,7 @@ at 2026-08-04T09:41:07+00:00"
     /// is the answer, reported in the body — and the reason never carries the channel's URL, which
     /// is sealed at rest and never returned. `.invalid` is reserved (RFC 2606), so the lookup fails
     /// without anything leaving the machine. Works on a disabled channel, and an unknown id is 404.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn testing_a_channel_reports_the_failure_without_its_url(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1868,7 +1871,7 @@ at 2026-08-04T09:41:07+00:00"
 
     /// ADR-193: a rule's definition is replaced in place — name, severity and channels — while
     /// its on/off switch stays where the operator left it. The checks are the create path's.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn editing_a_rule_replaces_its_definition_and_keeps_it_switched_off(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1985,7 +1988,7 @@ at 2026-08-04T09:41:07+00:00"
 
     /// ADR-200 Inc.28, through the router: the kinds a core's notifier reports are what an
     /// administrator reads, with the documented 200.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_default_route_answers_what_the_notifier_holds(pool: sqlx::PgPool) {
         use crate::alerts::notify::DefaultRouteKind::{Email, Webhook};

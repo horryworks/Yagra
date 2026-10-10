@@ -1707,7 +1707,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A schedule is created and stored — the 201 and the row, not one or the other.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_schedule_answers_201_and_stores_the_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1731,6 +1731,9 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert!(body["id"].is_string(), "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "analysis_schedules").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "analysis_schedules").await,
+            1
+        );
     }
 }

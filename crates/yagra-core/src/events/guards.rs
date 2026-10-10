@@ -149,7 +149,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
 /// declare **no** tables, so store discipline in the two hot paths is a build failure rather than a
 /// convention.
 ///
-/// The two filters live in [`crate::sql_tables`] — a name counts only in SQL position *and* only if
+/// The two filters live in [`yagra_base::sql_tables`] — a name counts only in SQL position *and* only if
 /// it is a real table derived from `migrations/`, and neither is sufficient alone.
 ///
 /// 🚨 **Two floors, because this is a check that reports "nothing wrong" when it sees nothing.**
@@ -158,7 +158,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
 /// ADR-091 made in its own guard and only found by breaking it.
 #[test]
 fn every_statement_names_a_table_its_file_declares() {
-    let vocab = crate::sql_tables::vocabulary();
+    let vocab = yagra_base::sql_tables::vocabulary();
     assert!(
         vocab.len() >= 55,
         "only {} tables were derived from migrations/, so this check can barely see anything; \
@@ -191,7 +191,7 @@ fn every_statement_names_a_table_its_file_declares() {
     let mut wrong: Vec<String> = Vec::new();
     for (name, text) in &files {
         let allowed = declared[name.as_str()];
-        for table in crate::sql_tables::references(text, &vocab) {
+        for table in yagra_base::sql_tables::references(text, &vocab) {
             checked += 1;
             if !allowed.contains(&table.as_str()) {
                 wrong.push(format!(

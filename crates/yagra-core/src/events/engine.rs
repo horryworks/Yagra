@@ -23,7 +23,7 @@ use yagra_bus::{EventKind, EventMsg};
 use yagra_common::{trap_oid_name, CheckId, NodeId, NodeState, Severity};
 
 use crate::alerts::{check_id, AlertManager, NotifyAction};
-use crate::repo::NodeRepo;
+use yagra_base::repo::NodeRepo;
 
 // The vocabulary lives in the parent, which a child can see without any widening — see
 // `super`'s doc for why that is what decides where a thing goes here.

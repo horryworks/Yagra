@@ -13,7 +13,7 @@
 //!
 //! **The expensive half is gated on the config generation** (S6). [`AlertConfigBase`] is a full
 //! fleet scan — every node, a 50k-entry metadata map, a topology build — so it is rebuilt only when
-//! [`crate::config_gen`] says configuration actually changed. Maintenance windows are
+//! [`yagra_base::config_gen`] says configuration actually changed. Maintenance windows are
 //! time-dependent and cannot be cached that way, so they are re-resolved every cycle over the node
 //! list the base already holds.
 //!
@@ -36,11 +36,10 @@ use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::thresholds::ThresholdStore;
-use crate::repo::NodeRepo;
-use crate::{
-    alerts::maintenance, classification, config_gen, events, groups, poolres, topology_projection,
-};
+use crate::{alerts::maintenance, classification, events, poolres, topology_projection};
 use yagra_alert::no_reading::{NoReadingHandle, NoReadingMarkers};
+use yagra_base::repo::NodeRepo;
+use yagra_base::{config_gen, groups};
 use yagra_topology::Topology;
 
 /// The config-derived half of the alert config: all thresholds + a full node scan folded into the
@@ -111,7 +110,7 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     /// deliberately: the table is hundreds of rows read every 30s, and a combined
     /// "everything inheritable about a folder" method would be one seam answering two unrelated
     /// questions, which is what makes a fake hard to reason about.
-    async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>>;
+    async fn folder_tags(&self) -> anyhow::Result<Vec<yagra_base::groups::LabelRow>>;
     /// `(group, parent)` for every folder group, for the ancestor walk.
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
     /// Every collection item the deployment knows — what the per-interface names (ADR-076) and the
@@ -124,7 +123,7 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     ///
     /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
     /// changes nothing — see [`NodeRepo::get_topology_mode`] before copying that.
-    async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode;
+    async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode;
     /// The derived connectivity graph for these nodes (ADR-043). Only called when the mode says so.
     async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology;
 }
@@ -148,7 +147,7 @@ impl AlertConfigSources for LiveConfigSources {
     async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
         self.groups.pool_rows().await
     }
-    async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>> {
+    async fn folder_tags(&self) -> anyhow::Result<Vec<yagra_base::groups::LabelRow>> {
         self.groups.tag_rows().await
     }
     async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
@@ -167,7 +166,7 @@ impl AlertConfigSources for LiveConfigSources {
             .alert_bindings()
             .await
     }
-    async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode {
+    async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode {
         self.repo.get_topology_mode().await
     }
     async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology {
@@ -739,7 +738,7 @@ mod tests {
     struct FakeSources {
         fails: Fails,
         nodes: Vec<Node>,
-        mode: crate::repo::topology_mode::TopologyMode,
+        mode: yagra_base::repo::topology_mode::TopologyMode,
         /// The graph `derived_topology` hands back…
         derived: Topology,
         /// …and whether it was asked for at all, which is half of ADR-043 decision 5's property.
@@ -754,7 +753,7 @@ mod tests {
         fn new(
             fails: Fails,
             nodes: Vec<Node>,
-            mode: crate::repo::topology_mode::TopologyMode,
+            mode: yagra_base::repo::topology_mode::TopologyMode,
         ) -> Self {
             Self {
                 fails,
@@ -788,7 +787,7 @@ mod tests {
             self.refuse(Fails::FolderPools)?;
             Ok(Vec::new())
         }
-        async fn folder_tags(&self) -> anyhow::Result<Vec<crate::groups::LabelRow>> {
+        async fn folder_tags(&self) -> anyhow::Result<Vec<yagra_base::groups::LabelRow>> {
             self.refuse(Fails::FolderTags)?;
             Ok(Vec::new())
         }
@@ -804,7 +803,7 @@ mod tests {
             self.refuse(Fails::MerakiOrgs)?;
             Ok(Vec::new())
         }
-        async fn topology_mode(&self) -> crate::repo::topology_mode::TopologyMode {
+        async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode {
             self.mode
         }
         async fn derived_topology(&self, _nodes: &[Node]) -> Topology {
@@ -835,7 +834,7 @@ mod tests {
         let sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None), node(2, Some(1))],
-            crate::repo::topology_mode::TopologyMode::Manual,
+            yagra_base::repo::topology_mode::TopologyMode::Manual,
         );
         let base = load_alert_config_base(&sources)
             .await
@@ -852,7 +851,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None)],
-            crate::repo::topology_mode::TopologyMode::Manual,
+            yagra_base::repo::topology_mode::TopologyMode::Manual,
         );
         sources.items = yagra_common::builtin_templates()
             .into_iter()
@@ -908,7 +907,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             vec![node(1, None)],
-            crate::repo::topology_mode::TopologyMode::Manual,
+            yagra_base::repo::topology_mode::TopologyMode::Manual,
         );
         sources.rules = vec![on_node.clone(), on_port.clone()];
         let base = load_alert_config_base(&sources).await.expect("healthy");
@@ -940,7 +939,7 @@ mod tests {
             let sources = FakeSources::new(
                 which,
                 vec![node(1, None)],
-                crate::repo::topology_mode::TopologyMode::Manual,
+                yagra_base::repo::topology_mode::TopologyMode::Manual,
             );
             assert!(
                 load_alert_config_base(&sources).await.is_err(),
@@ -983,8 +982,8 @@ mod tests {
         let nodes = vec![node(1, None), node(2, Some(1)), node(3, None)];
 
         for mode in [
-            crate::repo::topology_mode::TopologyMode::Manual,
-            crate::repo::topology_mode::TopologyMode::Shadow,
+            yagra_base::repo::topology_mode::TopologyMode::Manual,
+            yagra_base::repo::topology_mode::TopologyMode::Shadow,
         ] {
             let mut sources = FakeSources::new(Fails::Nothing, nodes.clone(), mode);
             sources.derived = derived.clone();
@@ -1012,7 +1011,7 @@ mod tests {
         let mut sources = FakeSources::new(
             Fails::Nothing,
             nodes,
-            crate::repo::topology_mode::TopologyMode::Derived,
+            yagra_base::repo::topology_mode::TopologyMode::Derived,
         );
         sources.derived = derived;
         let base = load_alert_config_base(&sources).await.expect("healthy");

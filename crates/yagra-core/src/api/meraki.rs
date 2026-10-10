@@ -668,7 +668,7 @@ async fn create_meraki_orgs(
                 .creds
                 .create(
                     &cred_name,
-                    crate::secrets::KIND_MERAKI_API,
+                    yagra_base::secrets::KIND_MERAKI_API,
                     secret.as_bytes(),
                 )
                 .await
@@ -2519,12 +2519,12 @@ mod tests {
     /// `ManageConfig` is an Operator's permission and an Operator can be scoped (ADR-014), while an
     /// organization spans every folder: importing files nodes wherever they belong, and deleting one
     /// purges every node it holds. Before ADR-164 none of these routes asked for the scope at all.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_folder_scoped_caller_is_refused_every_meraki_write(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
-        let folder = crate::pgtest::group(&pool, "Branch").await;
+        let folder = yagra_base::pgtest::group(&pool, "Branch").await;
         let scoped = scoped_token(&st, &[folder]);
         // Assembled rather than written out: `scope.rs::no_handler_spells_the_scope_refusal_by_hand`
         // counts the quoted code across this directory, tests included, so that a handler cannot
@@ -2566,7 +2566,7 @@ mod tests {
     /// This endpoint and not `POST /meraki/orgs`: creating an organization validates the API key
     /// against the Dashboard API before storing anything, so it cannot be accepted without a
     /// network. What is provable here is the half that lives in PostgreSQL.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn setting_the_meraki_polling_switch_reaches_the_settings_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2594,7 +2594,7 @@ mod tests {
     /// ⚠️ The fixture's Dashboard is [`crate::api::tests_support::EmptyDashboard`], so this proves
     /// the endpoint — the request, the view, the two 409s, the stamp — and nothing about what a sync
     /// does with devices. That is `meraki/sync.rs`'s, against its own fake.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn syncing_an_organization_is_accepted_and_recorded_on_its_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -2605,7 +2605,7 @@ mod tests {
             .creds
             .create(
                 "Meraki API — Acme",
-                crate::secrets::KIND_MERAKI_API,
+                yagra_base::secrets::KIND_MERAKI_API,
                 br#"{"api_key":"not-a-real-key"}"#,
             )
             .await
@@ -2681,7 +2681,7 @@ mod tests {
         assert_eq!(list, serde_json::json!([]));
 
         // The device list is refused to a folder-restricted account, read though it is.
-        let folder = crate::pgtest::group(&pool, "Branch").await;
+        let folder = yagra_base::pgtest::group(&pool, "Branch").await;
         let scoped = scoped_token(&st, &[folder]);
         let (status, answer) = send(&st, "GET", &devices, &scoped, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
@@ -2722,7 +2722,7 @@ mod tests {
     /// A warm-spare pair on the node detail and on the device list (ADR-164 decision 26): the partner is
     /// named to a caller who can see it, and withheld — with the state `unknown` — from one whose
     /// folders hold only this MX. Reading a node proves only that **this** node is visible.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_pairs_partner_is_named_only_to_a_caller_who_can_see_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -2732,7 +2732,7 @@ mod tests {
             .creds
             .create(
                 "Meraki API — Acme",
-                crate::secrets::KIND_MERAKI_API,
+                yagra_base::secrets::KIND_MERAKI_API,
                 br#"{"api_key":"not-a-real-key"}"#,
             )
             .await
@@ -2742,11 +2742,11 @@ mod tests {
             .create("123456", "Acme", "https://api.meraki.com", credential)
             .await
             .expect("create org");
-        let site = crate::pgtest::group(&pool, "Site").await;
-        let elsewhere = crate::pgtest::group(&pool, "Elsewhere").await;
-        let primary = crate::pgtest::node(&pool, "mx-a", 1, Some(site)).await;
-        let spare = crate::pgtest::node(&pool, "mx-b", 2, Some(elsewhere)).await;
-        let single = crate::pgtest::node(&pool, "mx-c", 3, Some(site)).await;
+        let site = yagra_base::pgtest::group(&pool, "Site").await;
+        let elsewhere = yagra_base::pgtest::group(&pool, "Elsewhere").await;
+        let primary = yagra_base::pgtest::node(&pool, "mx-a", 1, Some(site)).await;
+        let spare = yagra_base::pgtest::node(&pool, "mx-b", 2, Some(elsewhere)).await;
+        let single = yagra_base::pgtest::node(&pool, "mx-c", 3, Some(site)).await;
         for (node, serial, name, network, role) in [
             (primary, "Q2-A", "mx-a-dashboard", "N_1", Some("primary")),
             (spare, "Q2-B", "mx-b-dashboard", "N_1", Some("spare")),
@@ -2856,7 +2856,7 @@ mod tests {
     /// The node detail names a Meraki node's organization and network (ADR-185): both names when
     /// the sync recorded the network, the organization alone when it did not — no row, or the
     /// column's `''` default — and nothing at all for a node with no Meraki binding.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_detail_names_a_meraki_nodes_organization_and_network(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2866,7 +2866,7 @@ mod tests {
             .creds
             .create(
                 "Meraki API — Acme",
-                crate::secrets::KIND_MERAKI_API,
+                yagra_base::secrets::KIND_MERAKI_API,
                 br#"{"api_key":"not-a-real-key"}"#,
             )
             .await
@@ -2887,10 +2887,10 @@ mod tests {
             .await
             .expect("network row");
         }
-        let named = crate::pgtest::node(&pool, "mx-named", 1, None).await;
-        let blank = crate::pgtest::node(&pool, "mx-blank", 2, None).await;
-        let unrecorded = crate::pgtest::node(&pool, "mx-unrecorded", 3, None).await;
-        let plain = crate::pgtest::node(&pool, "sw-01", 4, None).await;
+        let named = yagra_base::pgtest::node(&pool, "mx-named", 1, None).await;
+        let blank = yagra_base::pgtest::node(&pool, "mx-blank", 2, None).await;
+        let unrecorded = yagra_base::pgtest::node(&pool, "mx-unrecorded", 3, None).await;
+        let plain = yagra_base::pgtest::node(&pool, "sw-01", 4, None).await;
         for (node, serial, network) in [
             (named, "Q2-A", "N_1"),
             (blank, "Q2-B", "N_2"),
@@ -2941,13 +2941,13 @@ mod tests {
     /// An import is accepted, files each device by its address, and says how (ADR-164): the one
     /// folder whose IP range holds the address, otherwise the organization's network folder — and
     /// `0.0.0.0` is not an address, whatever range would hold it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_files_each_device_by_its_address_and_says_how(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3000,10 +3000,10 @@ mod tests {
 
         // A site with a range, and a catch-all that would swallow an address-less device if
         // `0.0.0.0` were treated as an address.
-        let site = crate::pgtest::group(&pool, "Matsuyama").await;
-        crate::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
-        let everything = crate::pgtest::group(&pool, "Everything").await;
-        crate::pgtest::prefix(&pool, everything, "0.0.0.0/0").await;
+        let site = yagra_base::pgtest::group(&pool, "Matsuyama").await;
+        yagra_base::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
+        let everything = yagra_base::pgtest::group(&pool, "Everything").await;
+        yagra_base::pgtest::prefix(&pool, everything, "0.0.0.0/0").await;
 
         let (status, answer) = send(
             &st,
@@ -3068,7 +3068,7 @@ mod tests {
     /// ADR-164 decision 41: an access point Meraki reports no address for yet says so on the page —
     /// the sync is waiting for it, so `no_address` would describe a hand import, not what happens —
     /// and a hand import is still accepted, filing it under the network's folder as before.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_ap_with_no_address_yet_is_listed_as_waiting_and_can_still_be_imported_by_hand(
         pool: sqlx::PgPool,
@@ -3076,7 +3076,7 @@ mod tests {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3140,13 +3140,13 @@ mod tests {
     /// name — which then never followed a rename again (decision 14 follows only while the node still
     /// carries Meraki's name). A serial the organization does not hold is refused, and an MX whose
     /// network's LAN side has not been read waits, as automatic import does (decision 28).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_manual_import_reads_the_inventory_and_waits_for_an_unread_mx(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3257,20 +3257,20 @@ mod tests {
     /// 🚨 ADR-164 decision 40: a configuration bundle does not carry a node a Meraki organization owns.
     /// Its binding does not travel, so on the target it was an ordinary device, pinged and polled at
     /// its LAN address. The ordinary node beside it still travels.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_configuration_bundle_leaves_out_a_node_an_integration_owns(pool: sqlx::PgPool) {
         use crate::api::tests_support::live_state;
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
             .await
             .expect("create org");
-        let plain = crate::pgtest::node(&pool, "switch-1", 1, None).await;
-        let owned = crate::pgtest::node(&pool, "mr-1", 2, None).await;
+        let plain = yagra_base::pgtest::node(&pool, "switch-1", 1, None).await;
+        let owned = yagra_base::pgtest::node(&pool, "mr-1", 2, None).await;
         sqlx::query(
             "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
              VALUES ($1, $2, 'Q5-MR', 'N_1', 'wireless')",
@@ -3295,13 +3295,13 @@ mod tests {
 
     /// The import settings are accepted and reach the row, and an absurd cap is refused rather than
     /// clamped (ADR-164 Inc.4). An absent `max_devices` keeps the cap the organization has.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_import_settings_are_stored_and_an_absurd_cap_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3384,7 +3384,7 @@ mod tests {
     /// organization rather than an id, the node's status carries the fault and its reason, and the
     /// organization's row says which collect is failing. A caller restricted to the folder that
     /// holds one of its nodes sees the alert; one restricted elsewhere does not.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unanswered_organization_is_one_alert_and_its_nodes_say_their_state_is_stale(
         pool: sqlx::PgPool,
@@ -3394,7 +3394,7 @@ mod tests {
         use std::collections::HashMap;
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3519,7 +3519,7 @@ mod tests {
         let mine = scoped_token(&st, &[folder]);
         let (_, seen) = send(&st, "GET", "/api/v1/alerts", &mine, None).await;
         assert_eq!(seen.as_array().map(Vec::len), Some(1), "{seen}");
-        let elsewhere = crate::pgtest::group(&pool, "Osaka").await;
+        let elsewhere = yagra_base::pgtest::group(&pool, "Osaka").await;
         let theirs = scoped_token(&st, &[elsewhere]);
         let (_, hidden) = send(&st, "GET", "/api/v1/alerts", &theirs, None).await;
         assert_eq!(hidden.as_array().map(Vec::len), Some(0), "{hidden}");
@@ -3540,13 +3540,13 @@ mod tests {
     /// decision 17, through the router: a cadence that keeps availability is stored, one that drops it
     /// is answered `400 availability_required` — and the refusal leaves the row as it was, so the
     /// organization does not end up with nothing that says whether its devices are up.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_cadence_is_stored_and_one_without_availability_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
@@ -3651,21 +3651,21 @@ mod tests {
 
     /// The device list says where each device is, or would go — from the same resolver an import
     /// uses, so the page cannot promise one folder and the import use another (ADR-164 Inc.5).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_device_list_says_where_each_device_is_or_would_go(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         use crate::meraki::inventory::{DeviceWrite, SeenDevice, SyncPlan};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let credential = crate::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let org = admin
             .meraki_orgs
             .create("123456", "Acme", "https://api.meraki.com", credential)
             .await
             .expect("create org");
-        let site = crate::pgtest::group(&pool, "Matsuyama").await;
-        crate::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
+        let site = yagra_base::pgtest::group(&pool, "Matsuyama").await;
+        yagra_base::pgtest::prefix(&pool, site, "10.1.0.0/24").await;
 
         // What a sync would have recorded: three devices, all seen online.
         let seen = |serial: &str, ip: Option<&str>| DeviceWrite {
@@ -3923,7 +3923,7 @@ mod tests {
     /// The whole saved-key path, accepted (ADR-115): a typed key is sealed once, the organization
     /// says which credential holds it, and a second organization is added under that credential —
     /// with the saved key being what the Dashboard is handed, and no second credential sealed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_organization_is_added_under_a_saved_key_without_sealing_another(
         pool: sqlx::PgPool,
@@ -3949,7 +3949,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         assert_eq!(body, json!({ "created": 1, "already_added": 0 }));
-        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "credentials").await, 1);
 
         // The organization says which credential holds its key — the id, and nothing of the key.
         let (_, list) = send(&st, "GET", orgs_path, &operator, None).await;
@@ -3993,9 +3993,9 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         assert_eq!(body, json!({ "created": 1, "already_added": 1 }));
-        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "meraki_orgs").await, 2);
         assert_eq!(
-            crate::pgtest::rows(&pool, "credentials").await,
+            yagra_base::pgtest::rows(&pool, "credentials").await,
             1,
             "a saved key seals nothing"
         );
@@ -4017,7 +4017,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         assert_eq!(body, json!({ "created": 0, "already_added": 1 }));
-        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "credentials").await, 1);
 
         // An organization the key cannot see is refused, not stored under its own id to fail every
         // sync after (ADR-164 Inc.18).
@@ -4031,7 +4031,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "unknown_org", "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "meraki_orgs").await, 2);
 
         // The two networks routes answer an unknown organization the way their siblings do, and an
         // empty list of networks is a request that says nothing.
@@ -4065,7 +4065,7 @@ mod tests {
     /// 🚨 The security half: a credential that is not a Meraki key is refused **before the Dashboard
     /// is asked anything**. Otherwise naming an SNMP community's id here would send that community
     /// to a server as a bearer key.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_credential_that_is_not_a_meraki_key_never_reaches_the_dashboard(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state_with_dashboard, send, token};
@@ -4128,6 +4128,6 @@ mod tests {
             Vec::<String>::new(),
             "nothing was sent to the Dashboard on any of the six refusals"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "meraki_orgs").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "meraki_orgs").await, 0);
     }
 }

@@ -1851,7 +1851,7 @@ mod tests {
     ///
     /// This is the property the table exists for: a signed token outlives its minter, so a restart
     /// that forgot the revocation would silently sign the holder back in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_revoked_token_and_a_revoked_user_both_survive_a_restart(pool: sqlx::PgPool) {
         assert!(
@@ -1896,7 +1896,7 @@ mod tests {
     ///
     /// A second revocation carrying a nearer expiry, or an earlier cutoff, would otherwise narrow
     /// one already recorded and let a denied token back in early.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn re_revoking_keeps_the_later_expiry_and_the_later_cutoff(pool: sqlx::PgPool) {
         let uid = Uuid::new_v4();
@@ -1948,7 +1948,7 @@ mod tests {
     }
 
     /// An entry past its expiry is neither loaded nor kept, and pruning leaves the live ones.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_expired_revocation_is_not_loaded_and_is_pruned_while_a_live_one_stays(
         pool: sqlx::PgPool,
@@ -1968,7 +1968,7 @@ mod tests {
         .await
         .expect("expired");
         persist_revocation(&pool, &live).await.expect("live");
-        assert_eq!(crate::pgtest::rows(&pool, "auth_revocations").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "auth_revocations").await, 2);
 
         let loaded = load_active_revocations(&pool).await.expect("load");
         assert_eq!(
@@ -1983,7 +1983,7 @@ mod tests {
             1,
             "pruning took the wrong number of rows"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "auth_revocations").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "auth_revocations").await, 1);
         assert_eq!(
             prune_revocations(&pool).await.expect("prune"),
             0,
@@ -1996,8 +1996,8 @@ mod tests {
     ///
     /// ⚠️ The row is inserted by hand because **no production writer can produce it**, which is the
     /// entire point of the test. Everything else here goes through the real writer, per
-    /// [`crate::pgtest`].
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    /// [`yagra_base::pgtest`].
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_kind_this_binary_does_not_know_is_skipped_rather_than_failing_the_load(
         pool: sqlx::PgPool,
@@ -2027,7 +2027,7 @@ mod tests {
 
     /// The bootstrap admin is seeded exactly once, and the second call says so rather than seeding
     /// another — which is what the caller uses to decide whether to announce a generated password.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_default_admin_is_seeded_once_and_only_once(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2038,7 +2038,7 @@ mod tests {
                 .expect("seed"),
             "an empty users table was not seeded"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "users").await, 1);
 
         assert!(
             !store
@@ -2048,7 +2048,7 @@ mod tests {
             "seeding twice reported that it had seeded again"
         );
         assert_eq!(
-            crate::pgtest::rows(&pool, "users").await,
+            yagra_base::pgtest::rows(&pool, "users").await,
             1,
             "a second admin was created"
         );
@@ -2060,7 +2060,7 @@ mod tests {
     ///
     /// ⚠️ `Refused` and `External` are not exercised here: producing those accounts needs
     /// `create_service` and `set_enabled`, which belong to the next slice of this file.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unknown_name_stays_offerable_to_a_directory_and_a_local_account_does_not(
         pool: sqlx::PgPool,
@@ -2085,7 +2085,7 @@ mod tests {
 
     /// A created account shows up in the listing with the fields the writer chose for it, and a
     /// duplicate username is refused by name rather than by a 500.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_created_account_appears_in_the_listing_and_a_duplicate_name_is_refused(
         pool: sqlx::PgPool,
@@ -2143,14 +2143,14 @@ mod tests {
             "a duplicate username was not reported as taken"
         );
         assert_eq!(
-            crate::pgtest::rows(&pool, "users").await,
+            yagra_base::pgtest::rows(&pool, "users").await,
             2,
             "the refused duplicate still wrote a row"
         );
     }
 
     /// **The lock-out guard.** The only admin cannot be deleted, and a second one lifts the refusal.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_last_admin_cannot_be_deleted(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2167,7 +2167,7 @@ mod tests {
             ),
             "the only admin was deletable — the deployment would be unmanageable"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "users").await, 1);
         assert!(
             matches!(
                 store.delete(Uuid::new_v4()).await.expect("delete"),
@@ -2200,7 +2200,7 @@ mod tests {
     /// 🚨 This is the whole reason `CAN_LOG_IN` exists, and until now it was pinned only as text:
     /// an automation's identity can carry Admin, but nobody can sign into it, so counting one would
     /// let the last human admin be disabled and leave the WebUI unreachable with no way back in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_service_admin_does_not_stand_in_for_the_last_human_admin(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2249,7 +2249,7 @@ mod tests {
     ///
     /// That last part is the branch R4 deferred: consulting a directory on behalf of an account an
     /// admin has switched off would let a directory sign-in resurrect it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_disabled_account_and_a_service_account_are_both_refused_at_login(
         pool: sqlx::PgPool,
@@ -2317,7 +2317,7 @@ mod tests {
 
     /// A correct password authenticates, returns the account's own principal, and records the
     /// login. A wrong one and an unknown name both answer the same `None`.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_correct_password_authenticates_and_records_the_login(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2371,7 +2371,7 @@ mod tests {
 
     /// A disabled account and a non-local one never reach the password check — and the caller
     /// cannot tell either apart from a wrong password, which is the point.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_disabled_or_non_local_account_never_authenticates(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2417,7 +2417,7 @@ mod tests {
     /// scope, and *any other* role change must leave it alone. A one-sided test passes just as well
     /// against `scope = '"All"'` with no condition at all, which would silently widen every
     /// operator the moment their role was touched.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn granting_admin_clears_a_scope_and_any_other_role_change_leaves_it(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2496,7 +2496,7 @@ mod tests {
     /// Refusing a directory or service account is not merely tidy: writing a real hash over the
     /// sentinel answered 200 and told an admin they had set a password that can never be used —
     /// which is the first thing somebody tries when a directory user cannot sign in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_password_can_only_be_set_on_a_local_account(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2571,7 +2571,7 @@ mod tests {
 
     /// A directory identity nobody has seen before is provisioned on the spot, unrestricted, and
     /// routes to its own provider afterwards.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_new_external_identity_is_provisioned_unrestricted(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2621,7 +2621,7 @@ mod tests {
     /// silently. And promoting through SSO must clear it in the same statement, exactly as the
     /// local path does: this is the *second* role-setting path `ADMIN_IS_UNSCOPED` covers, and the
     /// one no test had ever run.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_second_sign_in_refreshes_the_role_and_keeps_the_assigned_scope(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2644,7 +2644,7 @@ mod tests {
             panic!("the second sign-in was refused");
         };
         assert_eq!(again, id, "the same identity was given a second account");
-        assert_eq!(crate::pgtest::rows(&pool, "users").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "users").await, 1);
         assert_eq!(
             principal.role,
             Role::Operator,
@@ -2682,7 +2682,7 @@ mod tests {
     /// The control is worth nothing otherwise: disabling revokes the sessions, and the next SSO
     /// login would mint a fresh one — for exactly the accounts an operator is least able to switch
     /// off at the source.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_disabled_external_account_is_refused_rather_than_signed_back_in(pool: sqlx::PgPool) {
         let store = UserStore::new(pool.clone());
@@ -2739,7 +2739,7 @@ mod tests {
     /// For LDAP the username **is** what the person types at the form, so both halves matter: a
     /// rename that is not followed locks them out, and one that takes an existing name would hand
     /// somebody another account.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_directory_rename_follows_the_account_but_never_takes_an_owned_name(
         pool: sqlx::PgPool,
@@ -2763,7 +2763,7 @@ mod tests {
             .upsert_external_user(UserKind::Ldap, provider, "sub-1", "alice2", Role::Viewer)
             .await
             .expect("rename");
-        assert_eq!(crate::pgtest::rows(&pool, "users").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "users").await, 2);
         let renamed = store
             .list()
             .await
@@ -2805,7 +2805,7 @@ mod tests {
             "a new directory identity took over an existing account's username"
         );
         assert_eq!(
-            crate::pgtest::rows(&pool, "users").await,
+            yagra_base::pgtest::rows(&pool, "users").await,
             2,
             "the refused provisioning wrote a row anyway"
         );

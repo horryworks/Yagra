@@ -313,7 +313,7 @@ mod tests {
             flows: None,
             ipasn: crate::ipasn::empty_handle(),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
-            nodes: Arc::new(crate::repo::StaticNodeList::demo()),
+            nodes: Arc::new(yagra_base::repo::StaticNodeList::demo()),
             alerts: Arc::new(crate::alerts::new_manager()),
             admin: None,
             sessions,

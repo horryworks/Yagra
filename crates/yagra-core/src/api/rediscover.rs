@@ -37,7 +37,7 @@ use crate::rediscover::{
     check_apply, judge, ApplyRequest, Change, Current, RediscoverState, RediscoverVerdict, Refusal,
     Row,
 };
-use crate::repo::RediscoverWrite;
+use yagra_base::repo::RediscoverWrite;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -540,13 +540,13 @@ mod tests {
 
     /// The whole round trip, **accepted** (ADR-115): a start is 202 and waits, the answer is
     /// compared, Apply writes what was shown — and the row carries it afterwards.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_rediscovery_is_started_compared_and_applied(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;
         let tok = token(&st, Role::Admin);
-        let node = crate::pgtest::node(&pool, "sw-01", 10, None).await;
-        let cred = crate::pgtest::credential(&pool, "lab-v2c", "snmp_v2c").await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 10, None).await;
+        let cred = yagra_base::pgtest::credential(&pool, "lab-v2c", "snmp_v2c").await;
         sqlx::query("UPDATE nodes SET credential_id = $2, address = '192.0.2.10' WHERE id = $1")
             .bind(node)
             .bind(cred)
@@ -641,16 +641,16 @@ mod tests {
 
     /// A locked profile is shown as locked and Apply refuses to move it; another node's id cannot
     /// read this scan; a viewer and an out-of-scope caller are refused.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_locked_profile_another_nodes_scan_and_other_callers_are_refused(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;
         let tok = token(&st, Role::Admin);
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let node = crate::pgtest::node(&pool, "sw-01", 10, Some(mine)).await;
-        let other = crate::pgtest::node(&pool, "sw-02", 11, Some(mine)).await;
-        let cred = crate::pgtest::credential(&pool, "lab-v2c", "snmp_v2c").await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 10, Some(mine)).await;
+        let other = yagra_base::pgtest::node(&pool, "sw-02", 11, Some(mine)).await;
+        let cred = yagra_base::pgtest::credential(&pool, "lab-v2c", "snmp_v2c").await;
         sqlx::query(
             "UPDATE nodes SET credential_id = $2, profile_locked = true WHERE id = ANY($1)",
         )
@@ -736,13 +736,13 @@ mod tests {
 
     /// A node with no credential on a deployment with no fallback community has nothing to re-read
     /// with, and a URL monitor is not a device.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_node_with_nothing_to_read_with_or_no_snmp_at_all_is_refused(pool: sqlx::PgPool) {
         let st = loaded_state(&pool).await;
         let tok = token(&st, Role::Admin);
         a_live_poller(&st, "default").await;
-        let bare = crate::pgtest::node(&pool, "host-01", 12, None).await;
+        let bare = yagra_base::pgtest::node(&pool, "host-01", 12, None).await;
         let (status, body) = send(
             &st,
             "POST",

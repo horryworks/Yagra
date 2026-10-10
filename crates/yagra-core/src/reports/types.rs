@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::cadence::Cadence;
-use crate::stored_enum::token_enum;
+use yagra_base::stored_enum::token_enum;
 
 // ── Closed sets ───────────────────────────────────────────────────────────────────────
 //

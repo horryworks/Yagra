@@ -1611,13 +1611,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A maintenance window is created over a node that exists.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_maintenance_window_stores_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node = crate::pgtest::node(&pool, "under-maintenance", 2, None).await;
+        let node = yagra_base::pgtest::node(&pool, "under-maintenance", 2, None).await;
         let (status, body) = send(
             &st,
             "POST",
@@ -1633,7 +1633,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
+            1
+        );
     }
 
     /// One window per selected node, and a node the caller cannot see gets none.
@@ -1641,16 +1644,16 @@ mod tests {
     /// 🚨 The scope is carried by the store's `JOIN nodes`, not by a pre-check, so this is the
     /// test that would notice it being dropped — and it has to pass a real filter, because a
     /// `None` scope short-circuits that predicate entirely.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_maintenance_window_covers_each_node_it_may_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
-        let b = crate::pgtest::node(&pool, "b", 2, Some(mine)).await;
-        let hidden = crate::pgtest::node(&pool, "hidden", 3, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, Some(mine)).await;
+        let hidden = yagra_base::pgtest::node(&pool, "hidden", 3, Some(theirs)).await;
         let tok = scoped_token(&st, &[mine]);
 
         let (status, body) = send(
@@ -1672,7 +1675,10 @@ mod tests {
             body["created"], 2,
             "the scope did not hold, or a window was not opened: {body}"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 2);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
+            2
+        );
 
         // A window that ends before it begins suppresses nothing while reading as success — the
         // same refusal every other creation path makes.
@@ -1694,15 +1700,15 @@ mod tests {
     }
 
     /// The mute twin: one mute per node, the scope held, and a past `until` refused.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bulk_mute_covers_each_node_it_may_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let a = crate::pgtest::node(&pool, "a", 1, Some(mine)).await;
-        let hidden = crate::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let hidden = yagra_base::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
         let tok = scoped_token(&st, &[mine]);
 
         let (status, body) = send(
@@ -1716,7 +1722,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert_eq!(body["requested"], 2, "{body}");
         assert_eq!(body["created"], 1, "the scope did not hold: {body}");
-        assert_eq!(crate::pgtest::rows(&pool, "mutes").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "mutes").await, 1);
 
         // A mute that has already expired silences nothing while reading as success.
         let (status, body) = send(
@@ -1732,13 +1738,13 @@ mod tests {
     }
 
     /// A Viewer holds neither permission, so both bulk routes refuse before touching the store.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_cannot_suppress_a_batch(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let viewer = token(&st, yagra_common::Role::Viewer);
-        let node = crate::pgtest::node(&pool, "a", 1, None).await;
+        let node = yagra_base::pgtest::node(&pool, "a", 1, None).await;
 
         for (path, body) in [
             (
@@ -1756,7 +1762,10 @@ mod tests {
             let (status, out) = send(&st, "POST", path, &viewer, Some(body)).await;
             assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");
         }
-        assert_eq!(crate::pgtest::rows(&pool, "maintenance_windows").await, 0);
-        assert_eq!(crate::pgtest::rows(&pool, "mutes").await, 0);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
+            0
+        );
+        assert_eq!(yagra_base::pgtest::rows(&pool, "mutes").await, 0);
     }
 }

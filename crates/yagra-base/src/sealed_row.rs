@@ -35,7 +35,7 @@ fn key_id(row: &PgRow) -> Result<u32, sqlx::Error> {
 ///
 /// # Errors
 /// A column missing from the `SELECT`, or a NULL in one of them.
-pub(crate) fn sealed_from_row(row: &PgRow) -> Result<SealedSecret, sqlx::Error> {
+pub fn sealed_from_row(row: &PgRow) -> Result<SealedSecret, sqlx::Error> {
     Ok(SealedSecret {
         key_id: key_id(row)?,
         wrapped_dek: row.try_get("wrapped_dek")?,
@@ -51,7 +51,7 @@ pub(crate) fn sealed_from_row(row: &PgRow) -> Result<SealedSecret, sqlx::Error> 
 ///
 /// # Errors
 /// As [`sealed_from_row`], for a row that has a ciphertext.
-pub(crate) fn sealed_from_row_opt(row: &PgRow) -> Result<Option<SealedSecret>, sqlx::Error> {
+pub fn sealed_from_row_opt(row: &PgRow) -> Result<Option<SealedSecret>, sqlx::Error> {
     match row.try_get::<Option<Vec<u8>>, _>("ciphertext")? {
         None => Ok(None),
         Some(_) => sealed_from_row(row).map(Some),
@@ -61,7 +61,7 @@ pub(crate) fn sealed_from_row_opt(row: &PgRow) -> Result<Option<SealedSecret>, s
 /// Binding the five columns, in the order they are declared:
 /// `key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce`. The statement has to name them
 /// consecutively, which every statement that stores one already does.
-pub(crate) trait BindSealed<'q> {
+pub trait BindSealed<'q> {
     /// Bind a secret.
     fn bind_sealed(self, sealed: &'q SealedSecret) -> Self;
     /// Bind a secret, or five NULLs — "no secret" for an all-or-none table, or "keep what is
@@ -91,60 +91,6 @@ impl<'q> BindSealed<'q> for Query<'q, Postgres, PgArguments> {
 mod tests {
     use super::*;
     use std::path::Path;
-
-    /// The files allowed to name a sealed column in Rust rather than in SQL. `secrets.rs` owns
-    /// `SEALED_TABLES` and its counting query, which reads through this module like everyone else.
-    const READS_BY_HAND: &[&str] = &["sealed_row.rs"];
-
-    /// ADR-184: nobody else reads or binds the five columns field by field.
-    ///
-    /// Three shapes, built at run time so this file's own production text is the only literal: a
-    /// column read by name (`"key_id")`), a `SealedSecret` assembled by hand, and a field of one
-    /// handed to `bind`. SQL text names the columns too, but never in any of these shapes.
-    #[test]
-    fn no_module_reads_a_sealed_column_by_hand() {
-        let files = crate::module_source::crate_code();
-        assert!(files.len() >= 150, "only {} files were read", files.len());
-        let needles = [
-            format!("\"{}\")", "key_id"),
-            format!("\"{}\")", "wrapped_dek"),
-            format!("\"{}\")", "ct_nonce"),
-            format!("{} {{", "SealedSecret"),
-            format!(".{})", "wrapped_dek"),
-            format!(".{}.clone()", "wrapped_dek"),
-        ];
-        let mut offenders = Vec::new();
-        for (name, code) in &files {
-            if READS_BY_HAND.contains(&name.as_str()) {
-                continue;
-            }
-            for needle in &needles {
-                if code.contains(needle.as_str()) {
-                    offenders.push(format!("{name}: {needle}"));
-                }
-            }
-        }
-        assert!(
-            offenders.is_empty(),
-            "{offenders:?} read or bind the sealed columns by hand. Use `sealed_row::sealed_from_row` \
-             and `BindSealed` — the last hand-written reader asked for the wrong key_id width and \
-             silently disabled notifications"
-        );
-        // The floor: the callers this was written for were found using it.
-        let callers = files
-            .iter()
-            .filter(|(_, code)| {
-                code.contains(&format!("{}(", "sealed_from_row"))
-                    || code.contains(&format!("{}(", "sealed_from_row_opt"))
-                    || code.contains(&format!(".{}(", "bind_sealed"))
-                    || code.contains(&format!(".{}(", "bind_sealed_opt"))
-            })
-            .count();
-        assert!(
-            callers >= 9,
-            "only {callers} files store a sealed secret through this module"
-        );
-    }
 
     /// The width rule is **derived, not written down**: `migrations/` says which width each
     /// `key_id` column has. This pins the premise [`key_id`]'s fallback rests on — exactly one

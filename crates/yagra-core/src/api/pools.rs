@@ -588,7 +588,7 @@ async fn take_over_pool(
         .take_over_pool(
             &to,
             &caller.0.username,
-            crate::repo::PoolCarry {
+            yagra_base::repo::PoolCarry {
                 from: &from,
                 fall_through: &members.fall_through,
             },
@@ -874,13 +874,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A pool is created and listed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_pool_stores_it_and_lists_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let before = crate::pgtest::rows(&pool, "pools").await;
+        let before = yagra_base::pgtest::rows(&pool, "pools").await;
         let (status, body) = send(
             &st,
             "POST",
@@ -890,7 +890,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "pools").await, before + 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pools").await, before + 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/pools", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -905,7 +905,7 @@ mod tests {
     /// serve it an empty working set: the whole pool unpolled, with every screen agreeing it was
     /// fine. Moving one poller between pools already told the registry (`set_pool`); the rename,
     /// which moves every poller of a pool at once, did not.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn renaming_a_pool_moves_its_live_pollers_with_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -996,7 +996,7 @@ mod tests {
     /// distinguish "was inheriting" from "was never taken over" — both are NULL. If the restore
     /// leaves an explicit pool on it, the deployment is not the one the takeover promised to be
     /// reversible about, and nothing else in the suite would notice.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn covering_a_pool_moves_its_members_and_restoring_puts_each_one_back(
         pool: sqlx::PgPool,
@@ -1007,9 +1007,9 @@ mod tests {
 
         // One node that names the pool, one that names nothing at all. Through the production
         // writer: `nodes.address` is `inet`, and a hand-rolled INSERT gets that wrong first.
-        let named = crate::pgtest::node(&pool, "named", 1, None).await;
-        let bare = crate::pgtest::node(&pool, "bare", 2, None).await;
-        crate::pgtest::repo(pool.clone())
+        let named = yagra_base::pgtest::node(&pool, "named", 1, None).await;
+        let bare = yagra_base::pgtest::node(&pool, "bare", 2, None).await;
+        yagra_base::pgtest::repo(pool.clone())
             .set_node_pool(named, Some("tokyo"))
             .await
             .expect("pin the first node to the pool");
@@ -1049,24 +1049,24 @@ mod tests {
         // `repo::pool_takeover` against the default pool: `PoolCarry::fall_through` is empty for
         // any other source, which this test learned by asserting the opposite and failing.
         assert_eq!(pool_of(bare).await, None, "a non-member was moved");
-        assert_eq!(crate::pgtest::rows(&pool, "pool_takeover").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pool_takeover").await, 0);
     }
 
     /// ADR-158 B4. Covering `default` re-points the nodes that fall through to it — and a node
     /// inheriting `siteA` from its folder is not one of them. With the folder tree unreadable it
     /// looked like one, and was pinned to the destination as a member of a pool it never was.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_takeover_that_cannot_resolve_membership_moves_nothing(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let folder = crate::pgtest::group(&pool, "site-a").await;
-        crate::groups::GroupRepo::new(pool.clone())
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .set_pool(folder, Some("siteA"))
             .await
             .unwrap();
-        let inherits = crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        let inherits = yagra_base::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
         sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
             .execute(&pool)
             .await
@@ -1092,6 +1092,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pinned, None, "a node of another pool was pinned");
-        assert_eq!(crate::pgtest::rows(&pool, "pool_takeover").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "pool_takeover").await, 0);
     }
 }

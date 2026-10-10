@@ -63,7 +63,7 @@ pub enum ProviderKind {
 
 // Strict: an unknown provider is a config error at the API edge, never a silent fallback to a
 // different vendor. The token is also a metric label, so the set must stay closed.
-crate::stored_enum::token_enum!(ProviderKind, [
+yagra_base::stored_enum::token_enum!(ProviderKind, [
     Vertex => "vertex",
     Gemini => "gemini",
     Claude => "claude",

@@ -115,7 +115,7 @@ fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, ApiError> {
 #[utoipa::path(
     get, path = "/api/v1/profiles", tag = "profiles",
     responses(
-        (status = 200, description = "Every device profile", body = Vec<crate::repo::ProfileSummary>),
+        (status = 200, description = "Every device profile", body = Vec<yagra_base::repo::ProfileSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -124,7 +124,7 @@ fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, ApiError> {
 async fn list_profiles(
     _guard: RequireManageConfig,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::repo::ProfileSummary>>> {
+) -> ApiResult<Json<Vec<yagra_base::repo::ProfileSummary>>> {
     let list = admin.repo.list_profiles().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list profiles", "failed to list profiles")
     })?;
@@ -347,13 +347,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A profile is created on top of the built-in ones.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_profile_adds_one_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let before = crate::pgtest::rows(&pool, "profiles").await;
+        let before = yagra_base::pgtest::rows(&pool, "profiles").await;
         assert!(before > 0, "the built-in profiles were not seeded");
         let (status, body) = send(
             &st,
@@ -364,6 +364,9 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "profiles").await, before + 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "profiles").await,
+            before + 1
+        );
     }
 }

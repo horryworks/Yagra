@@ -220,7 +220,7 @@ fn build_pollers_response(
     inventory: Vec<PollerRow>,
     live: Vec<PollerView>,
     node_pools: std::collections::HashMap<String, usize>,
-    described: Vec<crate::repo::PoolRow>,
+    described: Vec<yagra_base::repo::PoolRow>,
     covered: std::collections::BTreeMap<String, String>,
 ) -> PollersResponse {
     use std::collections::HashMap;
@@ -1258,7 +1258,7 @@ async fn set_poller_pool(
             to,
             carry
                 .as_ref()
-                .map(|(from, fall_through)| crate::repo::PoolCarry { from, fall_through }),
+                .map(|(from, fall_through)| yagra_base::repo::PoolCarry { from, fall_through }),
         )
         .await
         .map_err(|e| {
@@ -2331,7 +2331,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A poller's anchor node is stored against its inventory row.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn anchoring_a_poller_stores_the_node_against_its_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2343,7 +2343,7 @@ mod tests {
             .ensure_registered(&["site-a".to_owned()], "default")
             .await
             .expect("register");
-        let node = crate::pgtest::node(&pool, "anchor", 3, None).await;
+        let node = yagra_base::pgtest::node(&pool, "anchor", 3, None).await;
 
         let (status, body) = send(
             &st,
@@ -2366,19 +2366,19 @@ mod tests {
     /// ADR-158 B4. Moving `siteA`'s only live poller away is refused while a node still inherits
     /// `siteA` from its folder. With the folder tree unreadable that node resolved to `default`,
     /// the pool looked empty, and the move went through — leaving the node with no poller.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_poller_move_that_cannot_count_what_it_strands_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         use axum::http::StatusCode;
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let folder = crate::pgtest::group(&pool, "site-a").await;
-        crate::groups::GroupRepo::new(pool.clone())
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        yagra_base::groups::GroupRepo::new(pool.clone())
             .set_pool(folder, Some("siteA"))
             .await
             .unwrap();
-        crate::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        yagra_base::pgtest::node(&pool, "inherits", 1, Some(folder)).await;
         sqlx::query("INSERT INTO pollers (id, pool) VALUES ('edge-1', 'siteA')")
             .execute(&pool)
             .await

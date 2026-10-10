@@ -1129,7 +1129,9 @@ mod tests {
     #[test]
     fn every_variable_core_reads_is_bundled_or_excluded_with_a_reason() {
         use std::collections::BTreeSet;
-        let files = crate::module_source::crate_code();
+        // The whole program: `yagra-base` runs inside this binary, and the KEK path and the pool
+        // size are read there since ADR-202 Inc.5.
+        let files = crate::module_source::program_code();
         assert!(files.len() >= 150, "only {} files were read", files.len());
         // A read is a name handed to one of the readers, or a `*_ENV` constant that is.
         let read = regex::Regex::new(

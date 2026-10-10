@@ -18,7 +18,7 @@
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
 use serde::Serialize;
 
-use crate::stored_enum::token_enum;
+use yagra_base::stored_enum::token_enum;
 
 /// How often a schedule fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]

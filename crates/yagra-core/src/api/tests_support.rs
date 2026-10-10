@@ -7,10 +7,10 @@
 
 use super::ApiState;
 use crate::auth::{LoginThrottle, SessionStore};
-use crate::repo::StaticNodeList;
 use crate::sink::InMemorySink;
 use crate::store::MetricStore;
 use std::sync::Arc;
+use yagra_base::repo::StaticNodeList;
 
 /// Skeleton-mode state with `public_dashboard` set as given and no write side.
 ///
@@ -293,10 +293,11 @@ async fn live_state_with(
     notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
     use crate::alerts::Notifier;
-    use crate::secrets::CredentialStore;
     use crate::volatile::VolatileStore;
+    use yagra_base::secrets::CredentialStore;
 
-    let kek: crate::secrets::Kek = Arc::new(yagra_secrets::StaticKeyProvider::single([7u8; 32]));
+    let kek: yagra_base::secrets::Kek =
+        Arc::new(yagra_secrets::StaticKeyProvider::single([7u8; 32]));
     // Erased once, here, so no call site below has to rely on a coercion firing in an inferred
     // position. The three trait objects are the same bus.
     let bus = Arc::new(yagra_bus::InMemoryBus::new(64));
@@ -304,12 +305,12 @@ async fn live_state_with(
     let discovery_bus: Arc<dyn yagra_bus::DiscoveryBus> = bus.clone();
     let upgrade_bus: Arc<dyn yagra_bus::UpgradeBus> = bus;
     let store: Arc<dyn MetricStore> = Arc::new(InMemorySink::default());
-    let repo = Arc::new(crate::repo::NodeRepo::from_pool(pool.clone()));
+    let repo = Arc::new(yagra_base::repo::NodeRepo::from_pool(pool.clone()));
 
     // Boot's seeding, in boot's order. Demo nodes excluded — see the doc above.
     repo.seed_builtin_profiles().await.expect("seed profiles");
     repo.seed_app_settings(
-        crate::repo::DEFAULT_POLL_INTERVAL_SECS,
+        yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS,
         crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS,
     )
     .await
@@ -319,7 +320,7 @@ async fn live_state_with(
 
     let alerts = Arc::new(crate::alerts::new_manager());
     let history = Arc::new(crate::alerts::history::AlertHistoryStore::new(pool.clone()));
-    let group_repo = Arc::new(crate::groups::GroupRepo::new(pool.clone()));
+    let group_repo = Arc::new(yagra_base::groups::GroupRepo::new(pool.clone()));
     let events_repo = Arc::new(crate::events::EventRepo::new(pool.clone()));
     let poller_repo = Arc::new(crate::pollers::PollerRepo::new(pool.clone()));
     let l3_repo = Arc::new(crate::l3::L3Repo::new(pool.clone()));
@@ -435,7 +436,7 @@ async fn live_state_with(
                 settings: repo.clone(),
                 l3: l3_repo.clone(),
                 env_community,
-                interval_secs: crate::repo::DEFAULT_POLL_INTERVAL_SECS,
+                interval_secs: yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS,
             },
         )),
         analysis: analysis.clone(),

@@ -27,7 +27,6 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
-use crate::secrets::CredentialStore;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -39,6 +38,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
+use yagra_base::secrets::CredentialStore;
 
 /// Most targets a single scan may sweep — a /20 (ADR-173). The cap is what keeps one request from
 /// becoming an unbounded outbound scan of someone else's network. The import and its preview hold
@@ -212,8 +212,8 @@ pub(super) async fn resolve_scan_credentials(
                 format!("no credential {id}"),
             ));
         };
-        if kind == crate::secrets::KIND_SNMP_V3 {
-            match crate::secrets::SnmpV3Secret::parse(&secret) {
+        if kind == yagra_base::secrets::KIND_SNMP_V3 {
+            match yagra_base::secrets::SnmpV3Secret::parse(&secret) {
                 // `DiscoveryV3` is `SnmpV3Auth` since ADR-084, so the six-field copy that used to
                 // sit here is `SnmpV3Secret::auth()` — the one crossing from the stored shape to
                 // the wire shape, shared with the eight scheduler builders.
@@ -372,9 +372,9 @@ pub(crate) struct SameDeviceNode {
 /// Fold [`crate::duplicates::same_device_candidates`]'s answer into one entry per candidate address.
 fn same_device_matches(
     candidates: &[crate::discovery::Candidate],
-    existing: &[crate::repo::AddressMatch],
-    carriers: &[(IpAddr, crate::repo::DeviceIdentity)],
-    named: &[crate::repo::DeviceIdentity],
+    existing: &[yagra_base::repo::AddressMatch],
+    carriers: &[(IpAddr, yagra_base::repo::DeviceIdentity)],
+    named: &[yagra_base::repo::DeviceIdentity],
 ) -> Vec<SameDeviceMatch> {
     let parsed: Vec<(IpAddr, &crate::discovery::Candidate)> = candidates
         .iter()
@@ -391,7 +391,7 @@ fn same_device_matches(
     let already_at: HashSet<IpAddr> = existing.iter().map(|m| m.address).collect();
     let found =
         crate::duplicates::same_device_candidates(&identities, &already_at, carriers, named);
-    let nodes: HashMap<Uuid, &crate::repo::DeviceIdentity> = carriers
+    let nodes: HashMap<Uuid, &yagra_base::repo::DeviceIdentity> = carriers
         .iter()
         .map(|(_, n)| n)
         .chain(named.iter())
@@ -458,9 +458,9 @@ pub(crate) struct InventoryNode {
 /// withheld name, one entry for a candidate listed twice — is tested without one.
 fn inventory_matches(
     candidates: &[crate::discovery::Candidate],
-    found: &[crate::repo::AddressMatch],
+    found: &[yagra_base::repo::AddressMatch],
 ) -> Vec<InventoryMatch> {
-    let mut by_address: HashMap<IpAddr, Vec<&crate::repo::AddressMatch>> = HashMap::new();
+    let mut by_address: HashMap<IpAddr, Vec<&yagra_base::repo::AddressMatch>> = HashMap::new();
     for f in found {
         by_address.entry(f.address).or_default().push(f);
     }
@@ -813,7 +813,7 @@ async fn import_discovered(
     }
     // Every node is validated up front and the batch is then inserted in one transaction, so a
     // failure partway cannot leave half an import behind (NodeRepo::import_nodes).
-    let mut prepared: Vec<crate::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
+    let mut prepared: Vec<yagra_base::repo::NewNode<'_>> = Vec::with_capacity(body.nodes.len());
     for n in &body.nodes {
         let Ok(addr) = n.address.parse::<IpAddr>() else {
             return Err(ApiError::bad_request(
@@ -836,7 +836,7 @@ async fn import_discovered(
                 "profile_id/credential_id must be UUIDs",
             ));
         };
-        prepared.push(crate::repo::NewNode {
+        prepared.push(yagra_base::repo::NewNode {
             name,
             address: addr,
             profile,
@@ -931,7 +931,7 @@ enum Bucket {
 async fn file_by_range(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
-    rows: &mut [crate::repo::NewNode<'_>],
+    rows: &mut [yagra_base::repo::NewNode<'_>],
     buckets: &mut [Bucket],
 ) -> ApiResult<()> {
     let addrs: Vec<IpAddr> = rows
@@ -951,7 +951,7 @@ async fn file_by_range(
                 "failed to match prefixes",
             )
         })?;
-    let fold = crate::groups::fold_prefix_matches(&addrs, hits);
+    let fold = yagra_base::groups::fold_prefix_matches(&addrs, hits);
     let by_address: HashMap<IpAddr, Uuid> = fold
         .matched
         .iter()
@@ -1095,7 +1095,7 @@ async fn preview_discovery_import(
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "read group prefixes", "failed to read prefixes")
         })?;
-    let fold = crate::groups::fold_prefix_matches(&addrs, hits);
+    let fold = yagra_base::groups::fold_prefix_matches(&addrs, hits);
     Ok(Json(ImportPreviewResult {
         matched: fold
             .matched
@@ -1643,7 +1643,7 @@ async fn import_discovered_endpoint(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(address.as_str());
-    let mut rows = [crate::repo::NewNode {
+    let mut rows = [yagra_base::repo::NewNode {
         name,
         address: endpoint.ip,
         profile,
@@ -1986,7 +1986,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A sweep is accepted and becomes a scan the caller can look up by id.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn starting_a_sweep_is_accepted_and_the_scan_is_listed(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2020,7 +2020,7 @@ mod tests {
     /// 🚨 The assertion is on the **row**, not on the status. Before `group_id` existed this
     /// endpoint already answered 201 while writing `group_id = NULL` for every node, so a status
     /// check alone would pass against the code this test exists to prove changed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn importing_into_a_folder_files_the_node_there(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2065,7 +2065,7 @@ mod tests {
     }
 
     /// A folder id nothing has is a 400 that names the problem, not a foreign-key 500.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn importing_into_a_folder_that_does_not_exist_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2085,7 +2085,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_group");
         assert_eq!(
-            crate::pgtest::rows(&pool, "nodes").await,
+            yagra_base::pgtest::rows(&pool, "nodes").await,
             0,
             "the batch is refused before anything is written"
         );
@@ -2094,7 +2094,7 @@ mod tests {
     /// ADR-158 B7. An import carries at most what one sweep can find. Every other bulk write on
     /// the node inventory already refused a larger batch; this one inserted 1,025 rows — or, in a
     /// 2 MB body, some twenty thousand — one statement at a time inside one transaction.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_larger_than_one_sweep_is_refused_whole(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2120,7 +2120,7 @@ mod tests {
 
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "too_many_nodes");
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 0);
     }
 
     // ── ADR-131: filing an import by IP range ───────────────────────────────────────────
@@ -2142,7 +2142,7 @@ mod tests {
     /// at the same length. The last two both land in the fallback — and the counts report them
     /// **separately**, which is the whole of ADR-131 decision 2: folding them would tell the operator
     /// that two addresses are outside every range, which is untrue of the ambiguous one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_files_each_device_into_the_folder_whose_range_holds_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2173,11 +2173,11 @@ mod tests {
             fallback.parse().expect("uuid"),
         );
 
-        crate::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
-        crate::pgtest::prefix(&pool, b_id, "192.168.2.0/24").await;
+        yagra_base::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
+        yagra_base::pgtest::prefix(&pool, b_id, "192.168.2.0/24").await;
         // Both claim this one at the same length: the tie the feature refuses to break.
-        crate::pgtest::prefix(&pool, a_id, "10.5.0.0/16").await;
-        crate::pgtest::prefix(&pool, b_id, "10.5.0.0/16").await;
+        yagra_base::pgtest::prefix(&pool, a_id, "10.5.0.0/16").await;
+        yagra_base::pgtest::prefix(&pool, b_id, "10.5.0.0/16").await;
 
         let (status, body) = send(
             &st,
@@ -2230,7 +2230,7 @@ mod tests {
     ///
     /// Without this the test above would pass just as well against an implementation that files by
     /// range unconditionally, which is the behaviour change nobody asked for.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_with_the_option_off_still_uses_one_folder(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2254,7 +2254,7 @@ mod tests {
         .await;
         let a_id: Uuid = a["id"].as_str().expect("id").parse().expect("uuid");
         let fb_id: Uuid = fb["id"].as_str().expect("id").parse().expect("uuid");
-        crate::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
+        yagra_base::pgtest::prefix(&pool, a_id, "192.168.1.0/24").await;
 
         let (status, body) = send(
             &st,
@@ -2281,7 +2281,7 @@ mod tests {
     }
 
     /// The preview answers per address, and says whether there was anything to match against.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_import_preview_names_the_folder_that_would_claim_each_address(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2311,7 +2311,7 @@ mod tests {
         )
         .await;
         let gid: Uuid = g["id"].as_str().expect("id").parse().expect("uuid");
-        crate::pgtest::prefix(&pool, gid, "192.168.1.0/24").await;
+        yagra_base::pgtest::prefix(&pool, gid, "192.168.1.0/24").await;
 
         let (status, body) = send(
             &st,
@@ -2333,7 +2333,7 @@ mod tests {
     ///
     /// This is what keeps raw request text away from `match_address_prefixes`' `::inet` cast,
     /// which that method's doc says must never see one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_import_preview_refuses_a_value_that_is_not_an_address(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2390,7 +2390,7 @@ mod tests {
     ///
     /// The row that names a folder is also **kept out of the matcher**, so the two can never
     /// disagree — that is why `chosen` is counted separately from `matched`.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_row_the_operator_directed_ignores_the_range_that_claims_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -2418,7 +2418,7 @@ mod tests {
         let ranged_id: Uuid = ranged.parse().expect("uuid");
         let elsewhere_id: Uuid = elsewhere.parse().expect("uuid");
         let fallback_id: Uuid = fallback.parse().expect("uuid");
-        crate::pgtest::prefix(&pool, ranged_id, "192.168.1.0/24").await;
+        yagra_base::pgtest::prefix(&pool, ranged_id, "192.168.1.0/24").await;
 
         let (status, body) = send(
             &st,
@@ -2474,7 +2474,7 @@ mod tests {
     ///
     /// The insert is one transaction, so the check has to happen before any row is prepared —
     /// otherwise the operator would be told an import started and then have it rolled back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_row_aimed_at_a_folder_out_of_scope_imports_nothing(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -2515,7 +2515,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(
-            crate::pgtest::rows(&pool, "nodes").await,
+            yagra_base::pgtest::rows(&pool, "nodes").await,
             0,
             "the good row must not have landed either"
         );
@@ -2535,8 +2535,8 @@ mod tests {
         }
     }
 
-    fn device(address: &str, name: &str, visible: bool) -> crate::repo::AddressMatch {
-        crate::repo::AddressMatch {
+    fn device(address: &str, name: &str, visible: bool) -> yagra_base::repo::AddressMatch {
+        yagra_base::repo::AddressMatch {
             address: address.parse().expect("address"),
             id: Uuid::new_v4(),
             name: name.to_owned(),
@@ -2571,7 +2571,7 @@ mod tests {
             candidate("10.0.0.1"),
             candidate("not-an-address"),
         ];
-        let node = |m: &crate::repo::AddressMatch| InventoryNode {
+        let node = |m: &yagra_base::repo::AddressMatch| InventoryNode {
             id: m.id,
             name: m.name.clone(),
         };
@@ -2608,7 +2608,7 @@ mod tests {
     #[test]
     fn same_device_entries_are_per_candidate_and_skip_the_existing_ones() {
         let oid = "1.3.6.1.4.1.9.1.1208";
-        let core = crate::repo::DeviceIdentity {
+        let core = yagra_base::repo::DeviceIdentity {
             id: Uuid::from_u128(1),
             name: "core-1".to_owned(),
             address: "192.0.2.1".parse().expect("address"),
@@ -2644,7 +2644,7 @@ mod tests {
     #[test]
     fn same_device_entry_uses_the_first_spelling_of_an_address() {
         let oid = "1.3.6.1.4.1.9.1.1208";
-        let core = crate::repo::DeviceIdentity {
+        let core = yagra_base::repo::DeviceIdentity {
             id: Uuid::from_u128(1),
             name: "core-1".to_owned(),
             address: "192.0.2.1".parse().expect("address"),
@@ -2699,13 +2699,13 @@ mod tests {
     ///
     /// The rows are read back, not only the counts: an import that reported a skip and inserted
     /// the duplicate anyway would pass a status-and-body check.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_import_skips_an_address_that_is_already_a_device_node(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        crate::pgtest::node_at(
+        yagra_base::pgtest::node_at(
             &pool,
             "core-sw01",
             "192.168.1.10".parse().expect("addr"),
@@ -2748,20 +2748,20 @@ mod tests {
         );
         assert_eq!(body["created"], 0, "{body}");
         assert_eq!(body["skipped_existing"], 2, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 2);
     }
 
     /// The filing report counts the rows that were created. A skipped row was filed nowhere, so
     /// counting the range match instead would report a device filed that never landed.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_filing_report_counts_only_the_rows_created(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let site = crate::pgtest::group(&pool, "Matsuyama Home").await;
-        crate::pgtest::prefix(&pool, site, "192.168.1.0/24").await;
-        crate::pgtest::node_at(
+        let site = yagra_base::pgtest::group(&pool, "Matsuyama Home").await;
+        yagra_base::pgtest::prefix(&pool, site, "192.168.1.0/24").await;
+        yagra_base::pgtest::node_at(
             &pool,
             "core-sw01",
             "192.168.1.10".parse().expect("addr"),
@@ -2797,7 +2797,7 @@ mod tests {
     /// Promoting an endpoint whose address a node was added at by hand since the last sweep is
     /// refused with 409, and the row is reconciled on the way out (ADR-139 decision 5). The column
     /// still said "unmonitored"; the repository is what knew better.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn promoting_an_endpoint_a_node_now_stands_at_is_refused_and_reconciled(
         pool: sqlx::PgPool,
@@ -2811,7 +2811,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("endpoint");
-        let node = crate::pgtest::node_at(
+        let node = yagra_base::pgtest::node_at(
             &pool,
             "added-by-hand",
             "192.168.70.10".parse().expect("addr"),
@@ -2829,7 +2829,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
         assert_eq!(
-            crate::pgtest::rows(&pool, "nodes").await,
+            yagra_base::pgtest::rows(&pool, "nodes").await,
             1,
             "nothing was added"
         );
@@ -2844,7 +2844,7 @@ mod tests {
 
     /// Probing an endpoint (ADR-179 Inc.2) is accepted as a one-address scan the Scan tab's own
     /// status read can follow; a row the caller's scope hides is 404 and an imported one is 409.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn probing_an_endpoint_starts_a_one_address_scan_within_the_callers_scope(
         pool: sqlx::PgPool,
@@ -2852,9 +2852,9 @@ mod tests {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
         let admin_tok = token(&st, yagra_common::Role::Admin);
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let observer = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let observer = yagra_base::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
         let endpoint: Uuid = sqlx::query_scalar(
             "INSERT INTO l3_discovered (ip, via_node) VALUES ('192.0.2.44', $1) RETURNING id",
         )
@@ -2927,7 +2927,7 @@ mod tests {
     /// ADR-179 Inc.5: a row only a syslog or trap sender vouches for is neither probed nor imported,
     /// and a folder-scoped caller cannot create a node at the tree root through either import — but
     /// since Inc.8 it can import an endpoint into a folder it sees.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn forged_or_invisible_destinations_are_refused_before_anything_is_written(
         pool: sqlx::PgPool,
@@ -2973,8 +2973,8 @@ mod tests {
         assert_eq!(nodes_now().await, before, "nothing was imported");
 
         // ⑵ An observed row a scoped caller can see: importing it would land at the root.
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let observer = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let observer = yagra_base::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
         let seen_row: Uuid = sqlx::query_scalar(
             "INSERT INTO l3_discovered (ip, via_node) VALUES ('192.0.2.44', $1) RETURNING id",
         )
@@ -3000,7 +3000,7 @@ mod tests {
             "no node was created where its creator cannot see it"
         );
         // Inc.8: a folder outside its scope is not there, as far as it is concerned …
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
         let (status, body) = send(
             &st,
             "POST",
@@ -3056,16 +3056,16 @@ mod tests {
     /// ADR-179 Inc.8: the endpoint import files a node as the range-scan import does — the folder
     /// whose IP range holds its address, else the folder the request names, else the root — and a
     /// body that names neither (an N-1 client) means what it always meant.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_endpoint_import_files_by_ip_range_then_by_the_folder_it_names(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let site = crate::pgtest::group(&pool, "site-a").await;
-        crate::pgtest::prefix(&pool, site, "198.51.100.0/24").await;
-        let fallback = crate::pgtest::group(&pool, "unsorted").await;
-        let observer = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let site = yagra_base::pgtest::group(&pool, "site-a").await;
+        yagra_base::pgtest::prefix(&pool, site, "198.51.100.0/24").await;
+        let fallback = yagra_base::pgtest::group(&pool, "unsorted").await;
+        let observer = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
         let row = |ip: &'static str| {
             let pool = pool.clone();
             async move {
@@ -3153,15 +3153,15 @@ mod tests {
 
     /// A folder-scoped caller sees a row through its lowest observer, and must not read the other
     /// observers' evidence when they sit outside its folders (ADR-179 Inc.4, ADR-014).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_reads_no_evidence_from_a_node_it_cannot_see(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let near = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
-        let far = crate::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let near = yagra_base::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let far = yagra_base::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
         let evidence = serde_json::json!([
             { "source": "arp", "via_node": near, "via_ifindex": 3 },
             { "source": "lldp", "via_node": far, "via_ifindex": 12, "port": "Gi1/0/12", "detail": "C9300-48P" },
@@ -3224,7 +3224,7 @@ mod tests {
 
     /// What a probe classified travels with the import (ADR-179 Inc.2), so the node carries its
     /// maker from the start instead of waiting for its first identity read.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn promoting_an_endpoint_keeps_the_maker_a_probe_found(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};

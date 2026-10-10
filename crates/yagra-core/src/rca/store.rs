@@ -18,8 +18,8 @@ use yagra_secrets::EnvelopeCipher;
 
 use super::answer::RcaAnswer;
 use super::{ProviderConfig, ProviderKind, DEFAULT_MAX_OUTPUT_TOKENS};
-use crate::sealed_row::{sealed_from_row_opt, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row_opt, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// Bounds on `max_output_tokens`, matching the CHECK in migration 0053. Below the floor a model
 /// cannot finish a sentence; the ceiling is far above what an RCA needs and exists to stop a typo
@@ -649,12 +649,12 @@ mod tests {
     /// The one database test this repository had none of (ADR-184): a credential stored through
     /// `save` comes back out of `configured`, survives an edit that does not mention it, and does
     /// not survive a change of vendor.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_stored_credential_is_read_back_kept_and_dropped_on_a_vendor_change(
         pool: sqlx::PgPool,
     ) {
-        let repo = RcaRepo::new(pool, crate::pgtest::kek());
+        let repo = RcaRepo::new(pool, yagra_base::pgtest::kek());
         let secret = |c: Option<ActiveConfig>| c.expect("a row is stored").provider.secret;
 
         let mut first = input("gemini");

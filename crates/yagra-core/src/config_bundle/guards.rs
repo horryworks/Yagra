@@ -195,7 +195,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
 
 /// Every table `code` names in **write** position, in order, with repeats.
 ///
-/// A narrower question than [`crate::sql_tables::references`], which does not distinguish
+/// A narrower question than [`yagra_base::sql_tables::references`], which does not distinguish
 /// direction — and deliberately local, because there is one caller. `sql_tables` became a module
 /// when a *second* caller needed the same rule; this is that reasoning read the other way round.
 /// Move it there when something else asks the question.
@@ -225,7 +225,7 @@ fn writes(code: &str, vocab: &BTreeSet<String>) -> Vec<String> {
 /// carrying accounts across would make "restore a config" the shortest route to granting yourself a
 /// role.
 ///
-/// **The two filters live in [`crate::sql_tables`]** — a name counts only in SQL position *and*
+/// **The two filters live in [`yagra_base::sql_tables`]** — a name counts only in SQL position *and*
 /// only if it is a real table derived from `migrations/`, and neither is sufficient alone.
 ///
 /// 🚨 **Three floors, because this is a check whose healthy answer is "found nothing".** One on the
@@ -234,7 +234,7 @@ fn writes(code: &str, vocab: &BTreeSet<String>) -> Vec<String> {
 /// ADR-091 made in its own guard and only found by breaking it.
 #[test]
 fn every_statement_names_a_table_its_file_declares() {
-    let vocab = crate::sql_tables::vocabulary();
+    let vocab = yagra_base::sql_tables::vocabulary();
     assert!(
         vocab.len() >= 55,
         "only {} tables were derived from migrations/, so this check can barely see anything; \
@@ -304,7 +304,7 @@ fn every_statement_names_a_table_its_file_declares() {
     let mut wrong: Vec<String> = Vec::new();
     for (name, text) in &files {
         let allowed = &declared[name.as_str()];
-        for table in crate::sql_tables::references(text, &vocab) {
+        for table in yagra_base::sql_tables::references(text, &vocab) {
             checked += 1;
             if !allowed.contains(&table.as_str()) {
                 wrong.push(format!(
@@ -346,12 +346,12 @@ fn every_statement_names_a_table_its_file_declares() {
 /// The floor is the read count — a reader that came back empty writes nothing either.
 #[test]
 fn the_export_writes_nothing() {
-    let vocab = crate::sql_tables::vocabulary();
+    let vocab = yagra_base::sql_tables::vocabulary();
     let (_, export) = files()
         .into_iter()
         .find(|(name, _)| name == "export.rs")
         .expect("config_bundle/export.rs exists");
-    let reads = crate::sql_tables::references(&export, &vocab).len();
+    let reads = yagra_base::sql_tables::references(&export, &vocab).len();
     assert!(
         reads >= 16,
         "the export was read as {reads} statements; it selects from seventeen tables, so this \

@@ -22,11 +22,11 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::groups::GroupRepo;
 use crate::meraki::filing::{addresses_to_match, plan_filing, Filing};
 use crate::meraki::inventory::{takes_lan_from_vlans, DeviceRecord, MerakiDeviceState};
 use crate::meraki::MerakiImportDevice;
-use crate::repo::NodeRepo;
+use yagra_base::groups::GroupRepo;
+use yagra_base::repo::NodeRepo;
 
 /// One device somebody — an operator or the sync — picked for import, before anything about it has
 /// been resolved.
@@ -178,11 +178,11 @@ impl ImportResolver {
         let fold = if file_by_prefix && ranges_configured {
             let asked = addresses_to_match(addresses);
             let hits = self.groups.match_address_prefixes(&asked, None).await?;
-            crate::groups::fold_prefix_matches(&asked, hits)
+            yagra_base::groups::fold_prefix_matches(&asked, hits)
         } else {
             // Nothing to ask, or nothing to ask against: an empty answer, which `plan_filing` reads
             // as "no range holds it" for every address.
-            crate::groups::fold_prefix_matches::<IpAddr>(&[], Vec::new())
+            yagra_base::groups::fold_prefix_matches::<IpAddr>(&[], Vec::new())
         };
         Ok((
             plan_filing(addresses, &fold, file_by_prefix),

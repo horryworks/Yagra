@@ -35,8 +35,8 @@ use uuid::Uuid;
 use yagra_common::Role;
 use yagra_secrets::EnvelopeCipher;
 
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
 
 // ── Limits ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -93,7 +93,7 @@ pub enum LdapSecurity {
     StartTls,
 }
 
-crate::stored_enum::token_enum!(LdapSecurity, [
+yagra_base::stored_enum::token_enum!(LdapSecurity, [
     Ldaps => "ldaps",
     StartTls => "starttls",
 ]);

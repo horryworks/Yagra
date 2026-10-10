@@ -21,8 +21,6 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::scope::NodeScope;
 use super::ApiState;
-use crate::repo::adjacency_settings::{self, AdjacencySettings};
-use crate::repo::AddressClaim;
 use crate::store::MetricStore;
 use axum::extract::{Path, Query, State};
 use axum::{http::StatusCode, routing::get, Json, Router};
@@ -30,6 +28,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
+use yagra_base::repo::adjacency_settings::{self, AdjacencySettings};
+use yagra_base::repo::AddressClaim;
 use yagra_common::{Neighbor, NeighborCapability, NeighborIdKind, NeighborSet};
 
 /// Default page size for the change history.
@@ -1457,14 +1457,14 @@ mod tests {
     /// ADR-179 Inc.9: a neighbour on the list only through a node outside the caller's folders
     /// says so to that caller, and is simply listed for one who sees everything; one on no list
     /// says it is not listed yet.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_neighbour_listed_only_outside_the_callers_folders_says_so(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let here = crate::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
-        let there = crate::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let here = yagra_base::pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let there = yagra_base::pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
         sqlx::query("INSERT INTO l3_discovered (ip, via_node) VALUES ('198.51.100.20', $1)")
             .bind(there)
             .execute(&pool)
@@ -1549,11 +1549,11 @@ mod tests {
     /// A CDP row whose device has no `cdpInterfaceName` (a Catalyst 2960) arrives as
     /// `ifindex <n>`; the tab and the history show the port's `ifName` instead, and a port the
     /// interface list does not name keeps the poller's spelling.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_cdp_port_named_only_by_its_ifindex_reads_as_its_ifname(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        let here = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let here = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
         sqlx::query(
             "INSERT INTO interfaces (node_id, ifindex, if_name) VALUES ($1, 10103, 'Gi1/0/3')",
         )
@@ -1629,7 +1629,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The adjacency settings are written and read back as they were sent.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn adjacency_settings_round_trip_through_the_settings_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};

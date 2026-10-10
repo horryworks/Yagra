@@ -1452,7 +1452,7 @@ mod tests {
     ///
     /// A private address on purpose: ADR-033's SSRF rule permits private targets and blocks
     /// link-local ones, and using a public hostname here would make the test depend on DNS.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_url_monitor_writes_the_node_and_the_check(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1467,7 +1467,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "nodes").await, 1);
-        assert_eq!(crate::pgtest::rows(&pool, "url_checks").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "url_checks").await, 1);
     }
 }

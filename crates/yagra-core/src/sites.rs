@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 /// The site of every node: the nearest folder of type Site above it, else its own folder.
 pub(crate) fn sites_by_node(
-    groups: &[crate::groups::GroupSummary],
+    groups: &[yagra_base::groups::GroupSummary],
     nodes: &[(Uuid, String, Option<Uuid>)],
 ) -> HashMap<Uuid, Option<Uuid>> {
     let folders: HashMap<Uuid, Folder> = groups

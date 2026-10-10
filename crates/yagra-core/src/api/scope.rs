@@ -28,7 +28,7 @@
 //!
 //! The `(id, parent_id)` **edges** are cached, not the expansion. Expansion is a BFS over a few
 //! hundred edges — microseconds, so it runs per request and no invalidation problem exists for it.
-//! The edges are re-read only when [`crate::config_gen`] advances, which `audit_mw` bumps on every
+//! The edges are re-read only when [`yagra_base::config_gen`] advances, which `audit_mw` bumps on every
 //! successful config mutation including all of `/node-groups` (ADR-026, the same idiom `SweepCache`
 //! and the alert-config reloader use). Cost is one small query per config generation.
 //!
@@ -45,10 +45,10 @@
 //!    next refresh), never briefly visible to someone who should not see it.
 
 use super::{ApiError, ApiState};
-use crate::groups::{group_ancestors, group_subtree, GroupEdges};
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
+use yagra_base::groups::{group_ancestors, group_subtree, GroupEdges};
 use yagra_common::{NodeId, Principal};
 
 /// The groups a scoped principal may see, expanded once per request from the cached edges.
@@ -685,16 +685,16 @@ mod tests {
     /// before ADR-115. `repo/listing.rs` pins the SQL against the in-memory mirror, and the units
     /// below pin the resolution, but nothing ran a real request against a real database and looked
     /// at what came back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_sees_only_the_nodes_in_their_own_group(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        crate::pgtest::node(&pool, "in-my-group", 10, Some(mine)).await;
-        crate::pgtest::node(&pool, "in-their-group", 11, Some(theirs)).await;
-        crate::pgtest::node(&pool, "in-no-group", 12, None).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        yagra_base::pgtest::node(&pool, "in-my-group", 10, Some(mine)).await;
+        yagra_base::pgtest::node(&pool, "in-their-group", 11, Some(theirs)).await;
+        yagra_base::pgtest::node(&pool, "in-no-group", 12, None).await;
 
         let unrestricted = token(&st, yagra_common::Role::Admin);
         let (status, all) = send(&st, "GET", "/api/v1/nodes", &unrestricted, None).await;

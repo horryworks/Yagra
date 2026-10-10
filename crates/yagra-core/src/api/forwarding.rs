@@ -783,7 +783,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A forwarding destination is created and stored.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_forward_destination_stores_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -803,12 +803,15 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "forward_destinations").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "forward_destinations").await,
+            1
+        );
     }
 
     /// ADR-184: a pool name is held to the rule every pool name is — and a destination stored
     /// before that rule still lists, so the operator can see it and fix it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_pool_that_is_not_a_subject_token_is_refused_and_an_old_one_still_lists(
         pool: sqlx::PgPool,

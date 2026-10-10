@@ -29,7 +29,7 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::{require_fleet_wide, NodeScope};
 use super::{AdminState, ApiState};
 use crate::prefix_gaps::{by_site, GapMark, PrefixGap};
-use crate::repo::StoredGapAck;
+use yagra_base::repo::StoredGapAck;
 use yagra_common::{L3Snapshot, NodeKind, SubnetKey};
 
 /// The most gaps one answer lists, across every site. Each site's `gap_count` is never capped.
@@ -249,7 +249,7 @@ struct Compared {
     nodes_total: usize,
     nodes_with_addresses: usize,
     nodes_truncated: usize,
-    groups: Vec<crate::groups::GroupSummary>,
+    groups: Vec<yagra_base::groups::GroupSummary>,
 }
 
 /// Every site's gaps, as this caller may see them — the seam REST and the MCP
@@ -378,7 +378,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
         })?
     };
 
-    let by_id: HashMap<Uuid, &crate::groups::GroupSummary> =
+    let by_id: HashMap<Uuid, &yagra_base::groups::GroupSummary> =
         groups.iter().map(|g| (g.id, g)).collect();
     let mut out: Vec<SitePrefixGaps> = compared
         .into_iter()
@@ -387,7 +387,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
             let folder = site.and_then(|id| by_id.get(&id));
             let path = site
                 .map(|id| {
-                    let mut above = crate::groups::group_ancestors(&edges, id);
+                    let mut above = yagra_base::groups::group_ancestors(&edges, id);
                     above.reverse();
                     above
                         .into_iter()
@@ -774,7 +774,7 @@ mod tests {
     /// 🚨 The read is **answered** for every site at once: each site is compared against its own
     /// folder, a site whose devices reported nothing is `no_data` rather than clean, and a scoped
     /// caller is listed only its own site and is not told whose range a claimed subnet falls in.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn every_sites_missing_subnets_are_listed_and_a_scoped_caller_sees_its_own(
         pool: sqlx::PgPool,
@@ -806,9 +806,9 @@ mod tests {
         let floor = folder("site-a-floor", "generic", Some(site_a)).await;
         let site_b = folder("site-b", "site", Some(region)).await;
         let site_c = folder("site-c", "site", Some(region)).await;
-        crate::pgtest::prefix(&pool, region, "10.1.0.0/16").await;
-        crate::pgtest::prefix(&pool, site_a, "10.1.1.0/24").await;
-        crate::pgtest::prefix(&pool, site_b, "10.9.0.0/24").await;
+        yagra_base::pgtest::prefix(&pool, region, "10.1.0.0/16").await;
+        yagra_base::pgtest::prefix(&pool, site_a, "10.1.1.0/24").await;
+        yagra_base::pgtest::prefix(&pool, site_b, "10.9.0.0/24").await;
 
         let l3 = crate::l3::L3Repo::new(pool.clone());
         let snap = |rows: &[(u32, &str, u8)]| {
@@ -820,10 +820,10 @@ mod tests {
                     .collect(),
             )
         };
-        let a = crate::pgtest::node(&pool, "cs-a", 1, Some(floor)).await;
-        let b = crate::pgtest::node(&pool, "cs-b", 2, Some(site_b)).await;
+        let a = yagra_base::pgtest::node(&pool, "cs-a", 1, Some(floor)).await;
+        let b = yagra_base::pgtest::node(&pool, "cs-b", 2, Some(site_b)).await;
         // Filed in site-c, never walked: the site is listed, and not as complete.
-        crate::pgtest::node(&pool, "ping-only", 3, Some(site_c)).await;
+        yagra_base::pgtest::node(&pool, "ping-only", 3, Some(site_c)).await;
         l3.record_observation(
             a,
             &snap(&[

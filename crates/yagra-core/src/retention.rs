@@ -21,7 +21,7 @@
 //!   silently disagree with what the store is actually enforcing.
 //!
 //! The configurable windows, their compiled defaults and their bands are
-//! [`crate::repo::retention_settings`]: the defaults are also the fallback a reader degrades to,
+//! [`yagra_base::repo::retention_settings`]: the defaults are also the fallback a reader degrades to,
 //! so a transient database failure can never silently change the policy.
 //!
 //! The PostgreSQL prune sites: nine of the ten are [`crate::retention_sweep`], run off the
@@ -29,7 +29,7 @@
 //! cadence. **Nine is not ten** — a new [`Subject`] still has to be given a prune site by hand,
 //! and this module is deliberately not the thing that would notice if nobody did.
 
-use crate::repo::retention_settings::RetentionSettings;
+use yagra_base::repo::retention_settings::RetentionSettings;
 
 /// The flag name both VictoriaMetrics and VictoriaLogs use for their retention window.
 const RETENTION_FLAG: &str = "-retentionPeriod=";
@@ -541,7 +541,8 @@ mod tests {
         // ADR-094 split `repo.rs` by the table each method's SQL names, so the `node_state_snapshots`
         // delete this list wants is in the file for that table. Same shape as the `analysis/` entry
         // below, and same safety: a wrong path can only make the search fail.
-        include_str!("repo/snapshots.rs"),
+        // ADR-202 Inc.5 moved `repo/` into `yagra-base`.
+        include_str!("../../yagra-base/src/repo/snapshots.rs"),
         include_str!("dns_check.rs"),
         include_str!("neighbors.rs"),
         include_str!("l3.rs"),

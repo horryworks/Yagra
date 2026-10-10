@@ -91,7 +91,7 @@ pub enum AuditAction {
 // **exact**, not case-insensitive: every `from_token` in this workspace is (`Severity`,
 // `NodeState`, `Direction`), and one that quietly accepted `POST` would make the vocabulary a
 // slightly different set on this endpoint than on every other one.
-crate::stored_enum::token_enum!(AuditAction, [
+yagra_base::stored_enum::token_enum!(AuditAction, [
     Post => "post",
     Put => "put",
     Patch => "patch",
@@ -142,7 +142,7 @@ pub enum AuditStatusClass {
     Server,
 }
 
-crate::stored_enum::token_enum!(AuditStatusClass, [
+yagra_base::stored_enum::token_enum!(AuditStatusClass, [
     Ok => "ok",
     Client => "client",
     Server => "server",

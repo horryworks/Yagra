@@ -45,6 +45,33 @@ pub(crate) fn crate_code() -> Vec<(String, String)> {
     yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join("src"))
 }
 
+/// Where the database layer's sources are, relative to this crate (ADR-202 Inc.5).
+const YAGRA_BASE_SRC: &str = "../yagra-base/src";
+
+/// The `src` directories of the program: core's and `yagra-base`'s.
+///
+/// For a check whose claim is about the program rather than about one crate — see
+/// `program_guards.rs`. A walk of [`BASE`] alone stopped seeing the repositories the day they
+/// moved, and nothing failed.
+pub(crate) fn program_src_dirs() -> Vec<PathBuf> {
+    vec![
+        Path::new(BASE).join("src"),
+        Path::new(BASE).join(YAGRA_BASE_SRC),
+    ]
+}
+
+/// [`crate_code`] over the whole program: core's files named as they are, `yagra-base`'s with a
+/// `yagra-base/` prefix (`yagra-base/repo/mod.rs`), so an exemption list says which crate it means.
+pub(crate) fn program_code() -> Vec<(String, String)> {
+    let mut out = crate_code();
+    out.extend(
+        yagra_common::srcread::crate_files_no_comments(&Path::new(BASE).join(YAGRA_BASE_SRC))
+            .into_iter()
+            .map(|(name, code)| (format!("yagra-base/{name}"), code)),
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

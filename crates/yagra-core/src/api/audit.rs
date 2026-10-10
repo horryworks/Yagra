@@ -536,13 +536,13 @@ mod tests {
     ///
     /// The read is included because "who changed what" is only answered if **both** halves work,
     /// and the two are separate code paths — `audit_mw` writes and `list_audit` reads.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_mutating_call_is_recorded_against_the_account_that_made_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
         let st = live_state(pool.clone()).await;
         let (tok, _) = account_token(&st, "auditor-kim", yagra_common::Role::Admin).await;
-        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "audit_log").await, 0);
 
         let (status, body) = send(
             &st,
@@ -553,7 +553,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "audit_log").await, 1);
 
         let (status, log) = send(&st, "GET", "/api/v1/audit", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{log}");
@@ -567,6 +567,6 @@ mod tests {
         // A read is not audited — otherwise the log is a request trace and nobody can find a change
         // in it. Asserted here because the deny-list that decides this is a list, and a list grows.
         send(&st, "GET", "/api/v1/nodes", &tok, None).await;
-        assert_eq!(crate::pgtest::rows(&pool, "audit_log").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "audit_log").await, 1);
     }
 }

@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 /// Default flow retention in days (ADR-031). Seeded from `YAGRA_FLOW_RETENTION_DAYS` on first boot,
 /// operator-editable thereafter — the policy table is [`crate::retention`] (ADR-040).
-pub use crate::repo::retention_settings::DEFAULT_FLOW_DAYS as DEFAULT_FLOW_RETENTION_DAYS;
+pub use yagra_base::repo::retention_settings::DEFAULT_FLOW_DAYS as DEFAULT_FLOW_RETENTION_DAYS;
 
 /// Default retention for ClickHouse's **own** system log tables (ADR-031 Increment 4).
 ///

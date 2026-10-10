@@ -10,7 +10,7 @@
 //!
 //! ⚠️ ADR-094 and ADR-095 defended their splits with the table-ownership check. **That does not
 //! transfer here** — `scheduler/` contains no SQL at all (`sqlx` appears zero times), so the
-//! vocabulary in `crate::sql_tables` has nothing to match. This is the replacement rule, not a
+//! vocabulary in `yagra_base::sql_tables` has nothing to match. This is the replacement rule, not a
 //! second copy of that one.
 //!
 //! Declared `#[cfg(test)] mod guards;` in [`super`], which is how [`crate::module_source`]'s
@@ -136,7 +136,7 @@ fn the_pure_half_never_waits_on_the_outside_world() {
 ///
 /// ⚠️ Today every mention is already in the right file, so this is **prevention, not repair**.
 /// The vocabulary is derived from the bus, not listed, so a twenty-first variant needs no edit
-/// here — the same reason `crate::sql_tables` derives table names from `migrations/`.
+/// here — the same reason `yagra_base::sql_tables` derives table names from `migrations/`.
 #[test]
 fn only_the_assembler_names_a_check_kind() {
     let bus = std::fs::read_to_string("../yagra-bus/src/messages.rs")

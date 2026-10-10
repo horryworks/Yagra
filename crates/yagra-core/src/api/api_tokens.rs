@@ -517,7 +517,7 @@ mod tests {
     ///
     /// The list is checked in the same test on purpose: "only its hash is stored" is a claim about
     /// two endpoints, and asserting the 201 alone would leave the half that matters unread.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn minting_a_token_hands_back_the_raw_value_once_and_never_again(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         let raw = body["token"].as_str().expect("the raw token").to_owned();
         assert!(!raw.is_empty(), "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "api_tokens").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "api_tokens").await, 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/api-tokens", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -545,7 +545,7 @@ mod tests {
     }
 
     /// The idle window is reported for a token whose owner signs in through an IdP, and only then.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_listing_names_the_idle_window_only_for_an_sso_owner(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};

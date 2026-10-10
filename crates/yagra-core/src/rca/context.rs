@@ -12,7 +12,7 @@
 //!    under an upstream failure, the context is assembled for that upstream node instead. Forty
 //!    servers behind a dead switch are one incident with one cause, and the roll-up already knows
 //!    which node it is.
-//! 2. **No credentials, by construction.** Nothing here touches [`crate::secrets::CredentialStore`],
+//! 2. **No credentials, by construction.** Nothing here touches [`yagra_base::secrets::CredentialStore`],
 //!    and [`NodeFacts::from_node`] lists the fields it copies **explicitly** — no `..rest`. A future
 //!    secret-bearing field on [`Node`] therefore cannot reach a prompt by being added upstream; it
 //!    has to be added here, in a diff someone reviews. A canary test holds that line.
@@ -35,7 +35,7 @@ use yagra_common::{Direction, Node, NodeId};
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, IncidentSignal};
 use crate::audit::AuditRepo;
-use crate::repo::NodeRepo;
+use yagra_base::repo::NodeRepo;
 
 /// Dependents named individually before the rest become a count. Twenty is enough for the model to
 /// see the shape of a cascade ("all of rack 3") without the list crowding out the timeline.
@@ -265,7 +265,7 @@ pub struct Sources<'a> {
     /// root and its upstream chain — and the label a site folder carries is often the single most
     /// useful thing in the prompt ("everything in branch-osaka"). Reading the node's own column
     /// alone would leave exactly that out.
-    pub groups: &'a crate::groups::GroupRepo,
+    pub groups: &'a yagra_base::groups::GroupRepo,
 }
 
 /// Assemble the context for the incident containing `node`/`check`.

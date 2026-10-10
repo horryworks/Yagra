@@ -107,8 +107,8 @@ pub(crate) async fn client_config(st: &ApiState) -> ClientConfig {
             .repo
             .get_default_poll_interval()
             .await
-            .unwrap_or(crate::repo::DEFAULT_POLL_INTERVAL_SECS),
-        None => crate::repo::DEFAULT_POLL_INTERVAL_SECS,
+            .unwrap_or(yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS),
+        None => yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS,
     };
     let sso_enabled = match st.oidc.as_ref() {
         Some(oidc) => oidc.sso_enabled().await.unwrap_or(false),
@@ -290,7 +290,7 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
                 .repo
                 .get_default_poll_interval()
                 .await
-                .unwrap_or(crate::repo::DEFAULT_POLL_INTERVAL_SECS);
+                .unwrap_or(yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS);
             let now_ms = yagra_common::clock::now_unix_ms();
             let fresh = bus_sweep_is_fresh(
                 admin.scheduler_stats.snapshot().last_sweep_unix_ms,
@@ -491,7 +491,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The deployment's default poll interval is written, and the store agrees afterwards.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn setting_the_default_poll_interval_reaches_the_settings_row(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};

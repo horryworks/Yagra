@@ -39,7 +39,6 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView};
 use super::ApiState;
 use crate::netbox::{self, NetboxClient, NetboxRepo, NetboxServer};
-use crate::secrets::KIND_NETBOX_TOKEN;
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -48,6 +47,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use yagra_base::secrets::KIND_NETBOX_TOKEN;
 
 /// Bounds on the operator-set sync cadence. The floor is not the same as
 /// `netbox::MIN_SYNC_INTERVAL`'s: that one is a safety net inside the loop, this one is the form's
@@ -835,7 +835,7 @@ mod tests {
     /// 🚨 It asserts **201**, not `is_success()`. Nine of the thirty-six endpoints measured in
     /// ADR-115 answer 204, and `is_success()` cannot tell the two apart — a suite that only knows
     /// "not an error" is how a documented status drifts from the served one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_netbox_server_registration_is_accepted_and_lands_in_the_database(
         pool: sqlx::PgPool,
@@ -858,14 +858,14 @@ mod tests {
         .await;
         assert_eq!(res.0, StatusCode::CREATED, "body: {}", res.1);
 
-        assert_eq!(crate::pgtest::rows(&pool, "netbox_servers").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "netbox_servers").await, 1);
         // The token must have been sealed, not stored beside the server row.
-        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "credentials").await, 1);
         let kind: String = sqlx::query_scalar("SELECT kind FROM credentials")
             .fetch_one(&pool)
             .await
             .expect("kind");
-        assert_eq!(kind, crate::secrets::KIND_NETBOX_TOKEN);
+        assert_eq!(kind, yagra_base::secrets::KIND_NETBOX_TOKEN);
         // …and no column anywhere holds it in the clear.
         let leaked: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM netbox_servers \
@@ -881,7 +881,7 @@ mod tests {
     }
 
     /// ADR-172 decision 1: "Sync now" writes a request and answers 202; it does not run the sync.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sync_request_is_accepted_and_recorded_on_the_row(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;
@@ -961,7 +961,7 @@ mod tests {
 
     /// ADR-178 decision 3: the stored token is never sent to a new host without being typed again, and
     /// the edits that do not change the host still round-trip without it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_new_host_needs_the_token_typed_again(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;
@@ -1078,7 +1078,7 @@ mod tests {
     /// `create` and `test` validating `token.trim()` and then using the **untrimmed** string, while
     /// `update` trimmed. A token pasted with a trailing newline would have been sealed with it and
     /// then refused forever, with a message pointing at a token that is correct.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_token_is_sealed_trimmed_so_a_pasted_newline_cannot_break_every_later_sync(
         pool: sqlx::PgPool,
@@ -1106,9 +1106,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("credential_id");
-        let store = crate::secrets::CredentialStore::new(pool.clone(), crate::pgtest::kek());
+        let store =
+            yagra_base::secrets::CredentialStore::new(pool.clone(), yagra_base::pgtest::kek());
         let (kind, bytes) = store.open(cred_id).await.expect("open").expect("row");
-        assert_eq!(kind, crate::secrets::KIND_NETBOX_TOKEN);
+        assert_eq!(kind, yagra_base::secrets::KIND_NETBOX_TOKEN);
         // ⚠️ The raw document, not only the parsed token: since ADR-178 decision 6 `parse` trims too, so
         // on its own it would pass whether or not this endpoint did.
         let raw: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
@@ -1116,7 +1117,7 @@ mod tests {
             raw["token"], "0123456789abcdef",
             "sealed trimmed, not trimmed on read"
         );
-        let secret = crate::secrets::NetboxTokenSecret::parse(&bytes).expect("parses");
+        let secret = yagra_base::secrets::NetboxTokenSecret::parse(&bytes).expect("parses");
         assert_eq!(
             secret.token, "0123456789abcdef",
             "the sealed token must be what will actually be sent, not what was pasted"
@@ -1137,7 +1138,7 @@ mod tests {
         assert_eq!(res.0, StatusCode::BAD_REQUEST, "body: {}", res.1);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_ssrf_policy_is_enforced_at_the_edge_and_private_addresses_still_work(
         pool: sqlx::PgPool,
@@ -1177,7 +1178,7 @@ mod tests {
         assert_eq!(res.0, StatusCode::CREATED, "body: {}", res.1);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_private_key_pasted_into_the_certificate_box_is_refused(pool: sqlx::PgPool) {
         // It would land in a plaintext column this API returns. Refusing is the only safe answer:
@@ -1200,15 +1201,15 @@ mod tests {
         )
         .await;
         assert_eq!(res.0, StatusCode::BAD_REQUEST, "body: {}", res.1);
-        assert_eq!(crate::pgtest::rows(&pool, "netbox_servers").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "netbox_servers").await, 0);
         assert_eq!(
-            crate::pgtest::rows(&pool, "credentials").await,
+            yagra_base::pgtest::rows(&pool, "credentials").await,
             0,
             "and nothing is sealed on the way to the refusal"
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_listing_never_carries_the_token(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;
@@ -1309,7 +1310,7 @@ mod tests {
     }
 
     /// The prefix source is stored on create, replaced on update, and refused when unreadable.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_site_id_field_is_stored_replaced_and_validated_at_the_edge(pool: sqlx::PgPool) {
         let st = live_state(pool.clone()).await;
@@ -1338,7 +1339,7 @@ mod tests {
             assert_eq!(res.0, StatusCode::BAD_REQUEST, "{bad} :: {}", res.1);
         }
         assert_eq!(
-            crate::pgtest::rows(&pool, "netbox_servers").await,
+            yagra_base::pgtest::rows(&pool, "netbox_servers").await,
             0,
             "a refused field must not leave a server row behind"
         );

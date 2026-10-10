@@ -16,8 +16,8 @@ use yagra_common::Severity;
 use yagra_secrets::EnvelopeCipher;
 
 use crate::alerts::notify_render::ChannelTemplate;
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// A delivery channel kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -33,7 +33,7 @@ pub enum ChannelKind {
     Jsm,
 }
 
-crate::stored_enum::token_enum!(ChannelKind, [
+yagra_base::stored_enum::token_enum!(ChannelKind, [
     Webhook => "webhook",
     Email => "email",
     PagerDuty => "pagerduty",
@@ -497,11 +497,11 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_channels_config_is_sealed_and_never_comes_back_in_the_metadata(pool: sqlx::PgPool) {
         const SECRET: &str = "https://hooks.example.test/T000/B000/zzTOPSECRETzz";
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let id = repo
             .create_channel("Ops webhook", &a_webhook(SECRET))
             .await
@@ -559,10 +559,10 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_switched_off_channel_is_still_listed_and_no_longer_delivers(pool: sqlx::PgPool) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let on = repo
             .create_channel("Stays on", &a_webhook("https://a.example.test/hook"))
             .await
@@ -598,10 +598,10 @@ mod tests {
             .expect("disable"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn deleting_a_channel_takes_it_out_of_every_rule_that_named_it(pool: sqlx::PgPool) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let doomed = repo
             .create_channel("Doomed", &a_webhook("https://a.example.test/hook"))
             .await
@@ -641,10 +641,10 @@ mod tests {
         assert!(!repo.delete_channel(doomed).await.expect("delete"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_template_override_is_replaced_as_a_pair_not_merged(pool: sqlx::PgPool) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let id = repo
             .create_channel("Ops", &a_webhook("https://a.example.test/hook"))
             .await
@@ -713,10 +713,10 @@ mod tests {
             .expect("template"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_rule_round_trips_including_the_severity_that_means_all(pool: sqlx::PgPool) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let a = repo
             .create_channel("A", &a_webhook("https://a.example.test/hook"))
             .await
@@ -774,12 +774,12 @@ mod tests {
         assert_eq!(last.severity, Some(Severity::Info));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn switching_a_rule_off_and_deleting_it_each_say_whether_they_found_it(
         pool: sqlx::PgPool,
     ) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let channel = repo
             .create_channel("A", &a_webhook("https://a.example.test/hook"))
             .await
@@ -827,10 +827,10 @@ mod tests {
         assert_eq!(repo.list_channels().await.expect("channels").len(), 1);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn editing_a_rule_replaces_what_it_matches_and_keeps_its_switch(pool: sqlx::PgPool) {
-        let repo = NotificationRepo::new(pool.clone(), crate::pgtest::kek());
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
         let a = repo
             .create_channel("A", &a_webhook("https://a.example.test/hook"))
             .await

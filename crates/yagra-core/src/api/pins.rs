@@ -300,14 +300,14 @@ mod tests {
     }
 
     /// A viewer pins a node and a folder, reads them back, and removes one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pinning_a_node_and_a_folder_lists_them_and_unpinning_removes_them(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
         let st = live_state(pool.clone()).await;
         let (tok, _) = account_token(&st, "fixture-pins", Role::Viewer).await;
-        let site = crate::pgtest::group(&pool, "site").await;
-        let node = crate::pgtest::node(&pool, "core-1", 1, Some(site)).await;
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let node = yagra_base::pgtest::node(&pool, "core-1", 1, Some(site)).await;
 
         for path in [
             format!("/api/v1/pins/nodes/{node}"),
@@ -318,7 +318,7 @@ mod tests {
             let (status, body) = send(&st, "PUT", &path, &tok, None).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{path}: {body}");
         }
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 2);
 
         let (status, pins) = send(&st, "GET", "/api/v1/pins", &tok, None).await;
         assert_eq!(status, StatusCode::OK, "{pins}");
@@ -332,19 +332,19 @@ mod tests {
             let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
         }
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 1);
     }
 
     /// Deleting a pinned node or folder takes the pin with it — no id is left behind to point at
     /// nothing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_pin_leaves_with_the_node_or_folder_it_names(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
         let st = live_state(pool.clone()).await;
         let (tok, _) = account_token(&st, "fixture-pins-admin", Role::Admin).await;
-        let site = crate::pgtest::group(&pool, "site").await;
-        let node = crate::pgtest::node(&pool, "core-1", 1, None).await;
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let node = yagra_base::pgtest::node(&pool, "core-1", 1, None).await;
         for path in [
             format!("/api/v1/pins/nodes/{node}"),
             format!("/api/v1/pins/groups/{site}"),
@@ -356,24 +356,24 @@ mod tests {
         let (status, body) =
             send(&st, "DELETE", &format!("/api/v1/nodes/{node}"), &tok, None).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 1);
         let path = format!("/api/v1/node-groups/{site}");
         let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 0);
     }
 
     /// A scoped caller cannot pin what they cannot see, and a pin that falls outside a narrowed
     /// scope is not returned. Both directions, so a handler refusing everyone cannot pass.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scope_decides_what_may_be_pinned_and_what_is_returned(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
         let st = live_state(pool.clone()).await;
         let (all, user_id) = account_token(&st, "fixture-pins-scoped", Role::Viewer).await;
-        let mine = crate::pgtest::group(&pool, "mine").await;
-        let theirs = crate::pgtest::group(&pool, "theirs").await;
-        let far = crate::pgtest::node(&pool, "far-1", 2, Some(theirs)).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let far = yagra_base::pgtest::node(&pool, "far-1", 2, Some(theirs)).await;
         let scoped = st.sessions.issue(
             user_id,
             Principal::new(Role::Viewer, Scope::groups([mine.to_string()])),
@@ -405,7 +405,7 @@ mod tests {
             let (status, body) = send(&st, "PUT", &path, &all, None).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{path}: {body}");
         }
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 3);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 3);
         let (status, pins) = send(&st, "GET", "/api/v1/pins", &scoped, None).await;
         assert_eq!(status, StatusCode::OK, "{pins}");
         assert_eq!(id_of(&pins["group_ids"]), vec![mine.to_string()]);

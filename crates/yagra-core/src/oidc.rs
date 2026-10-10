@@ -35,8 +35,8 @@ use uuid::Uuid;
 use yagra_common::Role;
 use yagra_secrets::EnvelopeCipher;
 
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// How long an in-flight authorization (state→nonce/PKCE) is honored before it's pruned.
 const FLIGHT_TTL: Duration = Duration::from_secs(600);
@@ -199,7 +199,7 @@ pub enum OidcProviderKind {
 // a newer core — reads as `Generic` rather than failing the row and taking the whole provider list
 // down with it. Same call as `LinkSource` (ADR-043), and the reason migration 0077 carries no
 // `CHECK`.
-crate::stored_enum::token_enum!(OidcProviderKind, Generic, "oidc_providers.kind", [
+yagra_base::stored_enum::token_enum!(OidcProviderKind, Generic, "oidc_providers.kind", [
     Entra => "entra",
     Okta => "okta",
     Google => "google",

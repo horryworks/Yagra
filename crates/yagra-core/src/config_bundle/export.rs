@@ -2,7 +2,7 @@
 //! Reading a deployment's configuration **out** (ADR-040 decision 3).
 //!
 //! Sixteen tables plus the two carried columns of `app_settings`, in [`super::BUNDLE_TABLES`]
-//! order, each row filtered through [`crate::seed_ids::is_builtin`] so a target's own seeded rows
+//! order, each row filtered through [`yagra_base::seed_ids::is_builtin`] so a target's own seeded rows
 //! are never re-keyed by an import.
 //!
 //! 🚨 **Nothing here writes**, and that is a check rather than a convention:
@@ -16,11 +16,11 @@
 //! line, not a rule anyone could re-apply.
 
 use super::*;
-use crate::seed_ids;
 use chrono::Utc;
 use sqlx::Row;
 use std::collections::HashSet;
 use uuid::Uuid;
+use yagra_base::seed_ids;
 
 impl ConfigBundleRepo {
     /// Build a bundle from the current configuration.

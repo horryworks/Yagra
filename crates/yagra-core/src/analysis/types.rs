@@ -175,7 +175,7 @@ pub enum ScopeKind {
     Node,
 }
 
-crate::stored_enum::token_enum!(ScopeKind, [
+yagra_base::stored_enum::token_enum!(ScopeKind, [
     All => "all",
     Group => "group",
     Node => "node",
@@ -254,7 +254,7 @@ pub enum AnalysisJobState {
     Unknown,
 }
 
-crate::stored_enum::token_enum!(AnalysisJobState, Unknown, "analysis_jobs.state", [
+yagra_base::stored_enum::token_enum!(AnalysisJobState, Unknown, "analysis_jobs.state", [
     Queued => "queued",
     Running => "running",
     Done => "done",
@@ -280,13 +280,13 @@ impl AnalysisJobState {
     /// Parse a filter token, refusing anything outside the writable vocabulary.
     #[must_use]
     pub fn from_filter_token(s: &str) -> Option<Self> {
-        crate::stored_enum::parse_filter_token(Self::ALL, Self::Unknown, Self::as_str, s)
+        yagra_base::stored_enum::parse_filter_token(Self::ALL, Self::Unknown, Self::as_str, s)
     }
 
     /// The filterable tokens, for the 400 that names them. Mirrors `AnalysisTool::token_list`.
     #[must_use]
     pub fn filter_token_list() -> String {
-        crate::stored_enum::filter_token_list(Self::ALL, Self::Unknown, Self::as_str)
+        yagra_base::stored_enum::filter_token_list(Self::ALL, Self::Unknown, Self::as_str)
     }
 }
 
@@ -393,7 +393,7 @@ pub enum AnalysisScheduleStatus {
     Unknown,
 }
 
-crate::stored_enum::token_enum!(AnalysisScheduleStatus, Unknown, "analysis_schedules.last_status", [
+yagra_base::stored_enum::token_enum!(AnalysisScheduleStatus, Unknown, "analysis_schedules.last_status", [
     Queued => "queued",
     Busy => "busy",
     Error => "error",
@@ -466,7 +466,7 @@ pub struct FindingSearch<'a> {
     /// whose name could match.
     pub node_q: Option<&'a str>,
     /// The **caller's** group scope (ADR-014). `None` is unrestricted; `Some(&[])` matches nothing.
-    pub groups: crate::repo::GroupFilter<'a>,
+    pub groups: yagra_base::repo::GroupFilter<'a>,
     /// The folder-group subtree the caller asked to filter *by* — a request, unlike `groups`.
     pub in_group: Option<&'a [Uuid]>,
     /// Inclusive lower / upper bound on the finding's score (ADR-053 Inc.6's numeric column).

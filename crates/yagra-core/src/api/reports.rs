@@ -452,7 +452,7 @@ pub(crate) fn parse_run_filter(
 ) -> Result<reports::RunFilter, ApiError> {
     let state = match state {
         Some(s) => Some(
-            crate::stored_enum::parse_filter_token(
+            yagra_base::stored_enum::parse_filter_token(
                 reports::ReportRunState::ALL,
                 reports::ReportRunState::Unknown,
                 reports::ReportRunState::as_str,
@@ -463,7 +463,7 @@ pub(crate) fn parse_run_filter(
                     "invalid_state",
                     format!(
                         "unknown run state; must be one of: {}",
-                        crate::stored_enum::filter_token_list(
+                        yagra_base::stored_enum::filter_token_list(
                             reports::ReportRunState::ALL,
                             reports::ReportRunState::Unknown,
                             reports::ReportRunState::as_str,
@@ -1125,7 +1125,7 @@ mod tests {
     ///
     /// `200`, not `201`: this endpoint answers with the created definition itself, which is
     /// what its `#[utoipa::path]` documents and therefore what the WebUI is generated against.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_report_definition_stores_it_and_lists_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1144,7 +1144,10 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert!(body["id"].is_string(), "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "report_definitions").await, 1);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "report_definitions").await,
+            1
+        );
 
         let (status, list) = send(&st, "GET", "/api/v1/reports/definitions", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");

@@ -510,7 +510,7 @@ mod tests {
     ///
     /// `updated_by` is written by both writers and read by the list, so it is the one field that
     /// would go unnoticed if a projection dropped it — the shape ADR-115 found in `repo/settings.rs`.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_definition_is_created_read_edited_and_deleted(pool: sqlx::PgPool) {
         let repo = ReportsRepo::new(pool.clone());
@@ -570,7 +570,7 @@ mod tests {
     /// what a broken predicate returns, so a test that only checks "a future schedule is not due"
     /// passes against a query that is due for nothing, ever
     /// (`rejection-only-tests-pass-when-everything-rejects`).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_schedule_becomes_due_and_marking_it_fired_moves_it_on(pool: sqlx::PgPool) {
         let repo = ReportsRepo::new(pool.clone());
@@ -632,7 +632,7 @@ mod tests {
     }
 
     /// A run from insert to finish, read back through all three readers, and filtered three ways.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_run_is_inserted_progressed_finished_and_read_back(pool: sqlx::PgPool) {
         let repo = ReportsRepo::new(pool.clone());
@@ -762,7 +762,7 @@ mod tests {
     ///
     /// 🚨 Both directions on both, because each one deletes or rewrites rows. A janitor that takes
     /// everything satisfies "the stale row is gone" perfectly.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_janitors_take_the_stale_rows_and_leave_the_rest(pool: sqlx::PgPool) {
         let repo = ReportsRepo::new(pool.clone());

@@ -31,7 +31,7 @@ use yagra_bus::FlowBatch;
 use yagra_telemetry::CancellationToken;
 
 use crate::flowstore::{FlowRow, FlowStore};
-use crate::repo::NodeRepo;
+use yagra_base::repo::NodeRepo;
 
 /// Max flow rows buffered before a forced ClickHouse insert (bounds memory between flush ticks).
 const FLOW_INSERT_MAX_ROWS: usize = 10_000;

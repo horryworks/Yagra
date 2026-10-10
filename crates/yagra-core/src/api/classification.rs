@@ -361,13 +361,13 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A classification rule is stored against a profile that exists.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_classification_rule_stores_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let before = crate::pgtest::rows(&pool, "classification_rules").await;
+        let before = yagra_base::pgtest::rows(&pool, "classification_rules").await;
         let (_, profile) = send(
             &st,
             "POST",
@@ -391,7 +391,7 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
         assert_eq!(
-            crate::pgtest::rows(&pool, "classification_rules").await,
+            yagra_base::pgtest::rows(&pool, "classification_rules").await,
             before + 1
         );
     }

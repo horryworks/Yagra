@@ -8,7 +8,7 @@
 //!
 //! The traits are cut by **what the caller needs**, never per repository (ADR-092 decision 1) —
 //! twelve methods against five concrete types with a hundred-odd between them. The same shape as
-//! [`crate::repo::NodeListing`], which was already here as precedent.
+//! [`yagra_base::repo::NodeListing`], which was already here as precedent.
 //!
 //! 🎯 **[`AnalysisEvents`] is the point of the exercise.** The store choice — VictoriaLogs when it
 //! is configured, PostgreSQL otherwise (ADR-024) — used to be a free function taking
@@ -36,10 +36,10 @@ use crate::events::{
     EventAuthSource, EventBucketCount, EventFilter, EventFlapStat, EventRepo, EventRow,
     EventSeverityCount, EventSignatureCount,
 };
-use crate::groups::GroupRepo;
 use crate::logstore::{LogStore, NameIds};
-use crate::repo::NodeRepo;
 use crate::topology_projection::{derived_topology, TopologySources};
+use yagra_base::groups::GroupRepo;
+use yagra_base::repo::NodeRepo;
 
 use super::{broadcast_job, AnalysisRepo, JobFrame};
 

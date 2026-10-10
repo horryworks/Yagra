@@ -580,7 +580,7 @@ impl YagraMcp {
                         m,
                         live.get(&m.ifindex).copied().unwrap_or_default(),
                         now_s,
-                        crate::repo::INTERFACE_STALE_SECS,
+                        yagra_base::repo::INTERFACE_STALE_SECS,
                         u32::try_from(m.ifindex)
                             .ok()
                             .and_then(|i| addresses.remove(&i))
@@ -1144,7 +1144,7 @@ mod tests {
     ///
     /// It also drives real HTTP and the real tool body over one live database rather than
     /// comparing source text, because the offence is a value and not a spelling.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_surfaces_agree_on_whether_snmp_is_configured(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state_with_env_community, send, token};
@@ -1222,13 +1222,13 @@ mod tests {
     /// tool never learned about the column at all. So the interesting assertion is the second pair,
     /// after something is written; the `null` pair is only here to prove the field exists on both
     /// before there is anything to carry (`consistent-state-is-weaker-than-a-transition`).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_surfaces_agree_on_a_nodes_note(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node_id = crate::pgtest::node(&pool, "sw-1", 1, None).await;
+        let node_id = yagra_base::pgtest::node(&pool, "sw-1", 1, None).await;
 
         // Before: both say "no note", which on its own proves nothing.
         let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{node_id}"), &tok, None).await;
@@ -1271,13 +1271,13 @@ mod tests {
     /// 🚨 Same shape as the note test above and for the same reason: `null` on both sides before
     /// anything is recorded is true of a tool that never learned the column, so the pair after the
     /// write is the one that proves the fold.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_surfaces_agree_on_a_nodes_os_version(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node_id = crate::pgtest::node(&pool, "sw-1", 1, None).await;
+        let node_id = yagra_base::pgtest::node(&pool, "sw-1", 1, None).await;
 
         let r = YagraMcp::new(st.clone())
             .node_status_in(NodeIdParams { node_id }, &unrestricted())
@@ -1286,7 +1286,7 @@ mod tests {
         assert_eq!(json_of(&r)["os_version"], serde_json::Value::Null);
 
         const VERSION: &str = "10.5(2)";
-        crate::pgtest::repo(pool.clone())
+        yagra_base::pgtest::repo(pool.clone())
             .update_os_version_batch(&[(node_id, VERSION.to_owned())])
             .await
             .expect("record a version");
@@ -1309,13 +1309,13 @@ mod tests {
 
     /// Both surfaces report the same serial number (ADR-147), for the reason the version test above
     /// gives — the pair after the write is what proves the fold.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_surfaces_agree_on_a_nodes_serial_number(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let node_id = crate::pgtest::node(&pool, "sw-stack", 1, None).await;
+        let node_id = yagra_base::pgtest::node(&pool, "sw-stack", 1, None).await;
 
         let r = YagraMcp::new(st.clone())
             .node_status_in(NodeIdParams { node_id }, &unrestricted())
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(json_of(&r)["serial_number"], serde_json::Value::Null);
 
         const SERIAL: &str = "FCW1929B68S, FCW1931A06Z, FCW1929B6BP";
-        crate::pgtest::repo(pool.clone())
+        yagra_base::pgtest::repo(pool.clone())
             .update_serial_number_batch(&[(node_id, SERIAL.to_owned())])
             .await
             .expect("record a serial");
@@ -1349,7 +1349,7 @@ mod tests {
     /// `GET /node-groups/:id/prefix-gaps` does (ADR-170, ADR-014), and a folder outside the scope
     /// answers "not available" rather than its report. The unrestricted call first, so the
     /// withheld fields are known to exist when there is nothing to hide.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_scoped_caller_is_not_told_whose_range_a_gap_falls_in(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -1376,8 +1376,8 @@ mod tests {
         };
         let site = folder("site-a").await;
         let other = folder("site-b").await;
-        crate::pgtest::prefix(&pool, other, "10.9.0.0/24").await;
-        let node = crate::pgtest::node(&pool, "cs-a", 1, Some(site)).await;
+        yagra_base::pgtest::prefix(&pool, other, "10.9.0.0/24").await;
+        let node = yagra_base::pgtest::node(&pool, "cs-a", 1, Some(site)).await;
         crate::l3::L3Repo::new(pool.clone())
             .record_observation(
                 node,

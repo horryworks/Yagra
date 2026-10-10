@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
-use crate::repo::NodeRepo;
 use crate::store::{self, MetricStore};
+use yagra_base::repo::NodeRepo;
 use yagra_common::derived_metric::{DerivedPair, DERIVED_PAIRS};
 use yagra_common::{IfIndex, NodeId};
 

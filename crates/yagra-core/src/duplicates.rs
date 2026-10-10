@@ -60,7 +60,7 @@ use serde::Serialize;
 use uuid::Uuid;
 use yagra_common::NeighborProto;
 
-use crate::repo::{DuplicateInput, SHARED_VALUE_MAX};
+use yagra_base::repo::{DuplicateInput, SHARED_VALUE_MAX};
 
 /// The most groups one read lists. `Findings::total` still says how many there are.
 pub const GROUPS_MAX: usize = 500;
@@ -764,17 +764,17 @@ fn oid_key(oid: Option<&str>) -> Option<&str> {
 pub fn same_device_candidates(
     candidates: &[CandidateIdentity<'_>],
     already_at: &HashSet<IpAddr>,
-    carriers: &[(IpAddr, crate::repo::DeviceIdentity)],
-    named: &[crate::repo::DeviceIdentity],
+    carriers: &[(IpAddr, yagra_base::repo::DeviceIdentity)],
+    named: &[yagra_base::repo::DeviceIdentity],
 ) -> Vec<SameDevice> {
-    let mut by_carried: HashMap<IpAddr, Vec<&crate::repo::DeviceIdentity>> = HashMap::new();
+    let mut by_carried: HashMap<IpAddr, Vec<&yagra_base::repo::DeviceIdentity>> = HashMap::new();
     for (ip, node) in carriers {
         let list = by_carried.entry(*ip).or_default();
         if !list.iter().any(|n| n.id == node.id) {
             list.push(node);
         }
     }
-    let mut by_name: HashMap<String, Vec<&crate::repo::DeviceIdentity>> = HashMap::new();
+    let mut by_name: HashMap<String, Vec<&yagra_base::repo::DeviceIdentity>> = HashMap::new();
     for node in named {
         if let Some(key) = name_key(&node.name) {
             let list = by_name.entry(key).or_default();
@@ -793,12 +793,12 @@ pub fn same_device_candidates(
         {
             continue;
         }
-        let carried: &[&crate::repo::DeviceIdentity] = by_carried
+        let carried: &[&yagra_base::repo::DeviceIdentity] = by_carried
             .get(&c.address)
             .map(Vec::as_slice)
             .filter(|l| l.len() <= SHARED_VALUE_MAX)
             .unwrap_or(&[]);
-        let same_name: &[&crate::repo::DeviceIdentity] = c
+        let same_name: &[&yagra_base::repo::DeviceIdentity] = c
             .sysname
             .and_then(name_key)
             .and_then(|k| by_name.get(&k))
@@ -807,8 +807,13 @@ pub fn same_device_candidates(
             .unwrap_or(&[]);
         let cand_oid = oid_key(c.sys_object_id);
 
-        let mut hits: BTreeMap<Uuid, (&crate::repo::DeviceIdentity, Vec<DuplicateEvidenceKind>)> =
-            BTreeMap::new();
+        let mut hits: BTreeMap<
+            Uuid,
+            (
+                &yagra_base::repo::DeviceIdentity,
+                Vec<DuplicateEvidenceKind>,
+            ),
+        > = BTreeMap::new();
         for n in carried {
             hits.entry(n.id)
                 .or_insert_with(|| (n, Vec::new()))
@@ -1469,8 +1474,8 @@ mod tests {
         name: &str,
         address: &str,
         oid: Option<&str>,
-    ) -> crate::repo::DeviceIdentity {
-        crate::repo::DeviceIdentity {
+    ) -> yagra_base::repo::DeviceIdentity {
+        yagra_base::repo::DeviceIdentity {
             id: id(n),
             name: name.to_owned(),
             address: address.parse().expect("a test address"),
@@ -1581,7 +1586,7 @@ mod tests {
 
     #[test]
     fn a_name_more_nodes_share_than_the_cap_names_none_of_them() {
-        let named: Vec<crate::repo::DeviceIdentity> = (0..=SHARED_VALUE_MAX as u128)
+        let named: Vec<yagra_base::repo::DeviceIdentity> = (0..=SHARED_VALUE_MAX as u128)
             .map(|n| {
                 device(
                     n + 1,

@@ -25,7 +25,7 @@ use std::path::Path;
 /// Derived because a hand-written vocabulary would be the very thing the checks above this exist to
 /// stop: a list that falls behind the schema, quietly narrowing what a scan can even see. A table
 /// missing from here is a table the scan skips — so a caller must put a floor on this set's size.
-pub(crate) fn vocabulary() -> BTreeSet<String> {
+pub fn vocabulary() -> BTreeSet<String> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
     let mut out = BTreeSet::new();
     for entry in std::fs::read_dir(&dir).expect("migrations/ is readable from the crate directory")
@@ -69,7 +69,7 @@ pub(crate) fn vocabulary() -> BTreeSet<String> {
 /// Whole-line comments come out first — prose explaining a query would otherwise read as one.
 /// Repeats are kept because the caller's floor counts *statements inspected*, and a module with one
 /// table and forty statements must not read as a module with one statement.
-pub(crate) fn references(code: &str, vocab: &BTreeSet<String>) -> Vec<String> {
+pub fn references(code: &str, vocab: &BTreeSet<String>) -> Vec<String> {
     let sql = regex::Regex::new(r"\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)")
         .expect("a valid pattern");
     let stripped = code

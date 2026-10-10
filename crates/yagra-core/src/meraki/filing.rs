@@ -2,8 +2,8 @@
 //! Where an imported Meraki device is filed (ADR-164): the folder whose IP range holds its address,
 //! or — for everything else — the organization's own `Organization ▸ Network` folder.
 //!
-//! Pure on purpose. [`crate::groups::GroupRepo::match_address_prefixes`] decides which ranges
-//! contain an address and [`crate::groups::fold_prefix_matches`] decides whether one folder claims
+//! Pure on purpose. [`yagra_base::groups::GroupRepo::match_address_prefixes`] decides which ranges
+//! contain an address and [`yagra_base::groups::fold_prefix_matches`] decides whether one folder claims
 //! it or two do; what is left is the part specific to Meraki — which devices are asked about at all,
 //! and what each of the four non-answers means — and that is the part a wrong line in would file a
 //! device into a site nobody chose.
@@ -19,7 +19,7 @@ use std::net::IpAddr;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::groups::PrefixFold;
+use yagra_base::groups::PrefixFold;
 
 /// What the IP-range match said about one device.
 ///
@@ -125,7 +125,7 @@ pub fn addresses_to_match(addresses: &[Option<IpAddr>]) -> Vec<IpAddr> {
 /// One [`Filing`] per device, in the order the devices were given.
 ///
 /// `fold` is the answer for [`addresses_to_match`]. An address the fold does not mention at all is
-/// `Unmatched` — the same fail-closed reading [`crate::groups::fold_prefix_matches`] gives a key the
+/// `Unmatched` — the same fail-closed reading [`yagra_base::groups::fold_prefix_matches`] gives a key the
 /// query dropped.
 #[must_use]
 pub fn plan_filing(

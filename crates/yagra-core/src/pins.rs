@@ -230,14 +230,14 @@ mod tests {
 
     /// The cap counts nodes and folders together, a repeated pin is not a second pin, and a
     /// pin on something that does not exist says so rather than looking like the cap.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_cap_counts_nodes_and_folders_together(pool: sqlx::PgPool) {
         let repo = UserPinsRepo::new(pool.clone());
         account(&pool, "pinner").await;
-        let site = crate::pgtest::group(&pool, "site").await;
-        let other = crate::pgtest::group(&pool, "other").await;
-        let node = crate::pgtest::node(&pool, "core-1", 1, Some(site)).await;
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let other = yagra_base::pgtest::group(&pool, "other").await;
+        let node = yagra_base::pgtest::node(&pool, "core-1", 1, Some(site)).await;
 
         assert_eq!(
             repo.pin("pinner", PinTarget::Group(site), 2).await.unwrap(),
@@ -258,7 +258,7 @@ mod tests {
             repo.pin("pinner", PinTarget::Node(node), 2).await.unwrap(),
             PinOutcome::Pinned
         );
-        assert_eq!(crate::pgtest::rows(&pool, "user_pins").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "user_pins").await, 2);
 
         // Missing things are named as missing, at the cap or not.
         assert_eq!(
@@ -289,14 +289,14 @@ mod tests {
     }
 
     /// Two accounts pinning the same node hold two pins, and neither sees the other's.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pins_belong_to_one_account(pool: sqlx::PgPool) {
         let repo = UserPinsRepo::new(pool.clone());
         account(&pool, "alice").await;
         account(&pool, "bob").await;
-        let node = crate::pgtest::node(&pool, "core-1", 1, None).await;
-        let site = crate::pgtest::group(&pool, "site").await;
+        let node = yagra_base::pgtest::node(&pool, "core-1", 1, None).await;
+        let site = yagra_base::pgtest::group(&pool, "site").await;
 
         repo.pin("alice", PinTarget::Node(node), PINS_MAX)
             .await

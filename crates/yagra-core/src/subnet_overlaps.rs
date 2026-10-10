@@ -117,7 +117,7 @@ pub enum ExclusionReason {
     Other,
 }
 
-crate::stored_enum::token_enum!(ExclusionReason, Other, "subnet_overlap_rules.reason", [
+yagra_base::stored_enum::token_enum!(ExclusionReason, Other, "subnet_overlap_rules.reason", [
     Wan => "wan",
     Redundancy => "redundancy",
     SharedLine => "shared_line",

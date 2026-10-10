@@ -203,7 +203,7 @@ pub struct RelocationOptions {
 /// The secrets one push needs, held for exactly as long as it takes to write them to disk.
 ///
 /// **No `Debug`, deliberately.** A key provider must never have one either
-/// ([`crate::secrets`]) — the derive is how a secret ends up in a log line nobody wrote.
+/// ([`yagra_base::secrets`]) — the derive is how a secret ends up in a log line nobody wrote.
 pub struct SshSecrets {
     pub ssh_password: Option<String>,
     pub ssh_key: Option<String>,

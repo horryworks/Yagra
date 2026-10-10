@@ -131,7 +131,7 @@ const PURITY: &[(&str, bool)] = &[
 /// ⚠️ **This is a second implementation of `scheduler/guards.rs`'s rule, and deliberately not
 /// shared.** What could be shared is "count the lines containing `.await`", which is three lines;
 /// what carries the weight is the table above and the floors below, and both are facts about *this*
-/// module. `crate::sql_tables` was lifted to a shared module because it derives a fact — which
+/// module. `yagra_base::sql_tables` was lifted to a shared module because it derives a fact — which
 /// tables exist — that must not be written down twice. A predicate is not that.
 #[test]
 fn the_pure_half_never_waits_on_the_outside_world() {
@@ -231,7 +231,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
 
 /// **A statement may only name a table its file has declared** — and every file is in the table.
 ///
-/// The two filters live in [`crate::sql_tables`]: a name counts only in SQL position *and* only if
+/// The two filters live in [`yagra_base::sql_tables`]: a name counts only in SQL position *and* only if
 /// it is a real table derived from `migrations/`, and neither is sufficient alone.
 ///
 /// 🚨 **Two floors, because this is a check that reports "nothing wrong" when it sees nothing.** One
@@ -239,7 +239,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
 /// statements, not the files, which is the distinction ADR-091's own guard got wrong.
 #[test]
 fn every_statement_names_a_table_its_file_declares() {
-    let vocab = crate::sql_tables::vocabulary();
+    let vocab = yagra_base::sql_tables::vocabulary();
     assert!(
         vocab.len() >= 55,
         "only {} tables were derived from migrations/; the scan below would be filtering against \
@@ -269,7 +269,7 @@ fn every_statement_names_a_table_its_file_declares() {
     let mut wrong: Vec<String> = Vec::new();
     for (name, text) in &files {
         let allowed = declared[name.as_str()];
-        for table in crate::sql_tables::references(text, &vocab) {
+        for table in yagra_base::sql_tables::references(text, &vocab) {
             checked += 1;
             if !allowed.contains(&table.as_str()) {
                 wrong.push(format!(

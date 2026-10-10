@@ -696,7 +696,7 @@ mod tests {
     ///
     /// It walks the states in the order an operator does: request, refuse a second one, refuse an
     /// upgrade on top of it, then delete, download, delete again.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_relocation_request_is_accepted_and_handed_to_the_sidecar(pool: sqlx::PgPool) {
         let dir = tempdir();
@@ -897,7 +897,7 @@ mod tests {
     /// Asking it anyway is not harmless: it would answer by writing a rejection into
     /// `status.json`, which is the *upgrade* page's file and is claimed by
     /// `settle_finished_run` (ADR-121 decision 5).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_sidecar_without_the_capability_is_refused(pool: sqlx::PgPool) {
         let dir = tempdir();

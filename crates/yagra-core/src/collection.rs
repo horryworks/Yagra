@@ -654,14 +654,14 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn re_adding_a_metric_at_one_scope_edits_it_instead_of_adding_a_second(
         pool: sqlx::PgPool,
     ) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
-        let other = crate::pgtest::node(&pool, "core-sw-02", 12, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let other = yagra_base::pgtest::node(&pool, "core-sw-02", 12, None).await;
 
         let first = repo
             .create_item(
@@ -691,7 +691,7 @@ mod tests {
             .await
             .expect("create");
         assert_eq!(again, first, "the upsert must return the row it updated");
-        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "collection_items").await, 1);
 
         let stored = repo.list_items("node", node).await.expect("list");
         assert_eq!(stored.len(), 1);
@@ -715,17 +715,17 @@ mod tests {
             .await
             .expect("create");
         assert_ne!(elsewhere, first);
-        assert_eq!(crate::pgtest::rows(&pool, "collection_items").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "collection_items").await, 2);
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn what_a_node_collects_is_its_profiles_templates_plus_its_own_overrides(
         pool: sqlx::PgPool,
     ) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
-        let profile = crate::pgtest::profile(&pool, "Generic switch").await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let profile = yagra_base::pgtest::profile(&pool, "Generic switch").await;
 
         let template = match repo
             .create_template("Interfaces", Some("the usual"))
@@ -836,7 +836,7 @@ mod tests {
         );
 
         // Another node carrying the same profile gets the profile half and nothing of this node's.
-        let sibling = crate::pgtest::node(&pool, "core-sw-02", 12, None).await;
+        let sibling = yagra_base::pgtest::node(&pool, "core-sw-02", 12, None).await;
         let theirs = repo
             .list_items_for_node(sibling, Some(profile))
             .await
@@ -853,12 +853,12 @@ mod tests {
     /// Two sets on one profile that declare the same name: the winner is decided by the rows'
     /// order, so the read must order them — by set name, never by insertion or by the planner.
     /// Created and attached Zeta-first so that an unordered read has a real chance to disagree.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn two_sets_declaring_one_name_resolve_the_same_way_every_time(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "wlc-01", 21, None).await;
-        let profile = crate::pgtest::profile(&pool, "Wireless controller").await;
+        let node = yagra_base::pgtest::node(&pool, "wlc-01", 21, None).await;
+        let profile = yagra_base::pgtest::profile(&pool, "Wireless controller").await;
         let mut ids = Vec::new();
         for (name, oid) in [
             ("Zeta set", "1.3.6.1.4.1.9.9"),
@@ -894,11 +894,11 @@ mod tests {
         assert_eq!(won[0].item.oid, "1.3.6.1.4.1.9.1");
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn deleting_an_item_removes_exactly_that_row(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
         let doomed = repo
             .create_item(
                 "node",
@@ -941,11 +941,11 @@ mod tests {
         assert!(!repo.delete_item(Uuid::new_v4()).await.expect("delete"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_metric_is_a_counter_from_either_table_it_can_be_declared_in(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
         let template = match repo
             .create_template("Interfaces", None)
             .await
@@ -1018,11 +1018,11 @@ mod tests {
             .expect("probe"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_per_interface_set_unions_the_catalog_with_both_item_tables(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
         let template = match repo
             .create_template("Interfaces", None)
             .await
@@ -1140,12 +1140,12 @@ mod tests {
 
     /// ADR-156: the no-reading table is built from both item tables, with each row's real kinds —
     /// and an operator item that reuses the metric name on another column takes the marker away.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn the_no_reading_table_follows_the_items_in_both_tables(pool: sqlx::PgPool) {
         use yagra_alert::no_reading::NoReadingMarkers;
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "S90001wac002", 12, None).await;
+        let node = yagra_base::pgtest::node(&pool, "S90001wac002", 12, None).await;
         let template = match repo
             .create_template("Huawei VRP health (test)", None)
             .await
@@ -1215,11 +1215,11 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_template_with_no_metrics_still_lists_with_a_count_of_zero(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let profile = crate::pgtest::profile(&pool, "Generic switch").await;
+        let profile = yagra_base::pgtest::profile(&pool, "Generic switch").await;
         let created = |o: CreateTemplateOutcome| match o {
             CreateTemplateOutcome::Created(id) => id,
             CreateTemplateOutcome::NameTaken => panic!("a fresh database cannot have this name"),
@@ -1290,7 +1290,7 @@ mod tests {
         // A second profile using it: the count is of profiles, not of (profile, metric) pairs.
         // Joined beside the two metrics instead of counted apart, it would read 4 here, and the
         // metric count would double with it.
-        let other = crate::pgtest::profile(&pool, "Generic router").await;
+        let other = yagra_base::pgtest::profile(&pool, "Generic router").await;
         repo.set_profile_templates(other, &[filled])
             .await
             .expect("attach");
@@ -1322,11 +1322,11 @@ mod tests {
         // from here, so neither has a statement of its own to go wrong separately.
         assert!(repo.delete_template(filled).await.expect("delete"));
         assert_eq!(
-            crate::pgtest::rows(&pool, "collection_template_items").await,
+            yagra_base::pgtest::rows(&pool, "collection_template_items").await,
             0
         );
         assert_eq!(
-            crate::pgtest::rows(&pool, "profile_collection_templates").await,
+            yagra_base::pgtest::rows(&pool, "profile_collection_templates").await,
             0
         );
         assert_eq!(
@@ -1341,7 +1341,7 @@ mod tests {
         assert!(!repo.delete_template(filled).await.expect("delete"));
     }
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn removing_a_metric_from_a_template_cannot_reach_another_templates_row(
         pool: sqlx::PgPool,
@@ -1460,11 +1460,11 @@ mod parse_tests {
     // wildcard that shipped a silent total failure, and the reason it survived is stated there:
     // *every test used the enum directly and never went through the database*. These do.
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_item_round_trips_with_the_kind_the_wildcard_used_to_swallow(pool: sqlx::PgPool) {
         let repo = CollectionRepo::new(pool.clone());
-        let node = crate::pgtest::node(&pool, "core-sw-01", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "core-sw-01", 11, None).await;
 
         // Every kind, written as its stored token and read back through the parser. `optical` is
         // the one that matters: it was seeded, read back as `Scalar`, dispatched as an SNMP GET of

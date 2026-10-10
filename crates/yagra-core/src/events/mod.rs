@@ -225,7 +225,7 @@ pub enum EventMatchKind {
 // read is honestly `none` (`from_stored`, which is also what the log-store path returns when the
 // field is absent), but a *filter* that degrades a typo to `none` answers a different question
 // than the one asked and looks like a correct answer — so request input uses `from_token`.
-crate::stored_enum::token_enum!(EventAction, None, "events.action", [
+yagra_base::stored_enum::token_enum!(EventAction, None, "events.action", [
     None => "none",
     Info => "info",
     Suppressed => "suppressed",
@@ -257,7 +257,7 @@ fn event_kind_from_stored(s: &str) -> EventKind {
     })
 }
 
-crate::stored_enum::token_enum!(EventMatchKind, Unknown, "event_rules.match_kind", [
+yagra_base::stored_enum::token_enum!(EventMatchKind, Unknown, "event_rules.match_kind", [
     Substring => "substring",
     Regex => "regex",
     Unknown => "unknown",

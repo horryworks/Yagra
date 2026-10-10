@@ -49,9 +49,9 @@ use uuid::Uuid;
 use yagra_secrets::EnvelopeCipher;
 
 use crate::atomic_file::write_atomically;
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
 use crate::server_cert::{self, ServerCert};
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// Subdirectory of the bus TLS volume holding the pair. Mirrors what `nats-server.conf` names, and
 /// the conf sits one level above it so a bind of the whole volume gives NATS both.

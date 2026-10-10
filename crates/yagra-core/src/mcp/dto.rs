@@ -29,7 +29,7 @@ use yagra_common::{Node, NodeKind, NodeState};
 use crate::alerts::history::AlertHistoryRow;
 use crate::analysis::{AnalysisFinding, AnalysisJob};
 use crate::events::EventRow;
-use crate::repo::InterfaceMeta;
+use yagra_base::repo::InterfaceMeta;
 
 /// Render an optional rolled-up state to its stable lowercase string (unobserved ⇒ `"unknown"`).
 fn state_str(state: Option<NodeState>) -> String {
@@ -597,7 +597,7 @@ pub struct FleetSummaryDto {
 
 /// One folder group in the inventory tree, sanitized for AI consumption.
 ///
-/// **Not `crate::groups::GroupSummary` served directly**, unlike the `get_topology` move above: that
+/// **Not `yagra_base::groups::GroupSummary` served directly**, unlike the `get_topology` move above: that
 /// type carries `pool`, the poll-pool assignment, which is a forbidden key here — see this module's
 /// canary. The precedent for reusing a REST type applies only when the REST type is already clean.
 ///
@@ -624,7 +624,7 @@ pub struct NodeGroupDto {
     /// The enum itself rather than a string: it has no `as_str()`, only `#[serde(rename_all)]`, so
     /// spelling the tokens out here would create a second spelling with nothing making the two
     /// agree (`testing.md`, "an enum's token and its serde tag").
-    pub geo_source: crate::groups::GeoSource,
+    pub geo_source: yagra_base::groups::GeoSource,
     /// The folder that supplied the effective position: the map pin this folder's nodes count at.
     pub geo_group: Option<Uuid>,
     /// Direct-member state tallies, when the caller asked for them (ADR-042 I2, the
@@ -639,7 +639,7 @@ pub struct NodeGroupDto {
     /// Not a new exposure — the addresses of the nodes in those ranges are already returned by
     /// `list_nodes`. And the scope filter that clears this for a breadcrumb ancestor runs before
     /// the projection, so a scoped caller sees here exactly what the WebUI shows them.
-    pub prefixes: Vec<crate::groups::GroupPrefix>,
+    pub prefixes: Vec<yagra_base::groups::GroupPrefix>,
     /// Labels stored on this folder (ADR-135 inc. 2).
     pub tags: Vec<String>,
     /// This folder's labels plus every ancestor's, minus its refusals — what everything beneath it
@@ -656,13 +656,13 @@ pub struct NodeGroupDto {
     /// organization's folders are deleted with the organization, and a NetBox folder is renamed
     /// back by the next sync.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub origin: Option<crate::groups::GroupOrigin>,
+    pub origin: Option<yagra_base::groups::GroupOrigin>,
 }
 
 impl NodeGroupDto {
     /// Project a repo row, dropping the poll-pool assignment.
     #[must_use]
-    pub fn from_summary(g: &crate::groups::GroupSummary) -> Self {
+    pub fn from_summary(g: &yagra_base::groups::GroupSummary) -> Self {
         Self {
             id: g.id,
             name: g.name.clone(),
@@ -1430,7 +1430,7 @@ mod tests {
 
         // `GroupSummary` is the one that is *not* clean — it carries `pool` — which is why this DTO
         // exists rather than the row being served directly.
-        let group = crate::groups::GroupSummary {
+        let group = yagra_base::groups::GroupSummary {
             id: uuid::Uuid::new_v4(),
             name: "Tokyo".to_owned(),
             group_type: "site".to_owned(),
@@ -1440,18 +1440,18 @@ mod tests {
             longitude: Some(139.7),
             effective_latitude: Some(35.6),
             effective_longitude: Some(139.7),
-            geo_source: crate::groups::GeoSource::Own,
+            geo_source: yagra_base::groups::GeoSource::Own,
             geo_group: None,
             pool: Some("tokyo".to_owned()),
             tags: vec!["JAPAN".to_owned()],
             tags_excluded: Vec::new(),
             effective_tags: vec!["JAPAN".to_owned()],
-            prefixes: vec![crate::groups::GroupPrefix {
+            prefixes: vec![yagra_base::groups::GroupPrefix {
                 prefix: "192.168.1.0/24".to_owned(),
                 description: "Tokyo LAN".to_owned(),
-                source: crate::groups::PrefixSource::Manual,
+                source: yagra_base::groups::PrefixSource::Manual,
             }],
-            origin: Some(crate::groups::GroupOrigin::Meraki),
+            origin: Some(yagra_base::groups::GroupOrigin::Meraki),
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
         assert!(

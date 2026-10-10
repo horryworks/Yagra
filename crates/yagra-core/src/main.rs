@@ -33,12 +33,10 @@ mod bigquery;
 mod bus_callout;
 mod bus_cert;
 mod cadence;
-mod change_feed;
 mod classification;
 mod collection;
 mod config;
 mod config_bundle;
-mod config_gen;
 mod csv;
 mod dashboard;
 mod derived;
@@ -51,7 +49,6 @@ mod flowstore;
 mod forward;
 mod forward_store;
 mod gcp;
-mod groups;
 mod host_collector;
 // The outbound HTTP client core builds for its own stores and integrations (ADR-184). Apart from
 // `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.
@@ -79,16 +76,16 @@ mod metric_meaning;
 mod mib;
 #[cfg(test)]
 mod module_source;
+// The source-text checks whose claim is about the whole program, reading core's tree and
+// `yagra-base`'s together (ADR-202 Inc.5).
 mod neighbors;
 mod netbox;
 mod node_display;
 mod oidc;
-/// Tests that run against a real PostgreSQL: the convention, the fixtures, and the checks
-/// that keep the convention honest (ADR-114). Test-only, like `module_source` above.
-#[cfg(test)]
-mod pgtest;
 /// Per-account pins on the inventory tree (ADR-146).
 mod pins;
+#[cfg(test)]
+mod program_guards;
 // Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
@@ -109,29 +106,19 @@ mod rediscover;
 /// which moves a *configuration* between deployments and carries no secret; this one carries the
 /// KEK and every sealed row, which is why it is Admin-only and audited.
 mod relocation;
-mod repo;
 mod reports;
 mod result_ingest;
 mod retention;
 mod retention_sweep;
 mod ring;
 mod scheduler;
-mod sealed_row;
-mod secrets;
-mod seed_ids;
 // The WebUI's own server certificate (ADR-044). Named apart from `tls`, which builds *client*
 // configurations for outbound peers — see that module's doc.
 mod server_cert;
 mod sink;
 /// Which site a node belongs to — one rule for Subnet overlaps and Missing IP prefixes.
 mod sites;
-// The table vocabulary the placement guards scan against, derived from `migrations/` (ADR-095).
-// Apart from `module_source`, which answers what a module's own text is rather than what the
-// schema declares.
-#[cfg(test)]
-mod sql_tables;
 mod store;
-mod stored_enum;
 /// Which address ranges two sites both use (ADR-187). Pure; `api::subnet_overlaps` reads the stores.
 mod subnet_overlaps;
 // Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from
@@ -187,12 +174,13 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
 use pollers::PollerRepo;
 use preferences::UserPrefsRepo;
-use repo::{NodeListing, NodeRepo, StaticNodeList};
-use secrets::CredentialStore;
 use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use uuid::Uuid;
 use volatile::VolatileStore;
+use yagra_base::repo::{NodeListing, NodeRepo, StaticNodeList};
+use yagra_base::secrets::CredentialStore;
+use yagra_base::{config_gen, groups, repo, secrets};
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
 
 #[tokio::main]
@@ -2825,8 +2813,8 @@ mod tests {
         }
     }
 
-    use crate::pgtest;
     use std::sync::Arc;
+    use yagra_base::pgtest;
 
     fn topology_stores(pool: &sqlx::PgPool) -> super::TopologyStores {
         super::TopologyStores {
@@ -2871,7 +2859,7 @@ mod tests {
     /// A failed inventory read used to be read as an empty fleet: the cycle derived nothing,
     /// "refreshed" nothing, and the prune right after it deleted every link older than fifteen
     /// minutes — which, with inputs that move hourly, is every link (ADR-158 B3).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_inventory_read_neither_writes_nor_prunes_the_graph(pool: sqlx::PgPool) {
         an_hour_old_link(&pool).await;
@@ -2887,7 +2875,7 @@ mod tests {
     /// A failed override read used to run the cycle without the operator's decisions: a pinned
     /// link was not re-emitted and was pruned, and a hidden one was written back onto the map. The
     /// cycle is now skipped and not remembered, so the next tick tries again.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_override_read_is_not_remembered_and_prunes_nothing(pool: sqlx::PgPool) {
         let (a, b) = an_hour_old_link(&pool).await;
@@ -2927,7 +2915,7 @@ mod tests {
 
     /// The Meraki device MACs are an input like the others: unreadable, the cycle neither writes
     /// nor prunes, or every link matched by a listed MAC would be deleted (ADR-191 decision 26).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_meraki_mac_read_neither_writes_nor_prunes_the_graph(pool: sqlx::PgPool) {
         an_hour_old_link(&pool).await;
@@ -2942,7 +2930,7 @@ mod tests {
 
     /// The cycle that can read everything still prunes what nothing derives any more — the half
     /// that keeps the two refusals above from being "never prune".
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_whole_cycle_derives_and_prunes(pool: sqlx::PgPool) {
         an_hour_old_link(&pool).await;

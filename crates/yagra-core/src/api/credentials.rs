@@ -149,32 +149,32 @@ pub(crate) async fn credential_decrypt_health(
 /// failed with `credential`. **The reason is the parser's static text and never any field
 /// content.**
 fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
-    if kind == crate::secrets::KIND_MERAKI_API {
-        if let Err(reason) = crate::secrets::MerakiApiSecret::parse(secret) {
+    if kind == yagra_base::secrets::KIND_MERAKI_API {
+        if let Err(reason) = yagra_base::secrets::MerakiApiSecret::parse(secret) {
             return Err(ApiError::bad_request(
                 "invalid_credential",
                 format!("invalid Meraki API credential: {reason}"),
             ));
         }
     }
-    if kind == crate::secrets::KIND_NETBOX_TOKEN {
-        if let Err(reason) = crate::secrets::NetboxTokenSecret::parse(secret) {
+    if kind == yagra_base::secrets::KIND_NETBOX_TOKEN {
+        if let Err(reason) = yagra_base::secrets::NetboxTokenSecret::parse(secret) {
             return Err(ApiError::bad_request(
                 "invalid_credential",
                 format!("invalid NetBox token credential: {reason}"),
             ));
         }
     }
-    if kind == crate::secrets::KIND_SNMP_V3 {
-        if let Err(reason) = crate::secrets::SnmpV3Secret::parse(secret) {
+    if kind == yagra_base::secrets::KIND_SNMP_V3 {
+        if let Err(reason) = yagra_base::secrets::SnmpV3Secret::parse(secret) {
             return Err(ApiError::bad_request(
                 "invalid_credential",
                 format!("invalid SNMPv3 credential: {reason}"),
             ));
         }
     }
-    if kind == crate::secrets::KIND_HTTP_AUTH {
-        if let Err(reason) = crate::secrets::parse_http_auth(kind, secret) {
+    if kind == yagra_base::secrets::KIND_HTTP_AUTH {
+        if let Err(reason) = yagra_base::secrets::parse_http_auth(kind, secret) {
             return Err(ApiError::bad_request(
                 "invalid_credential",
                 format!("invalid HTTP auth credential: {reason}"),
@@ -187,7 +187,7 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
 #[utoipa::path(
     get, path = "/api/v1/credentials", tag = "credentials",
     responses(
-        (status = 200, description = "Credential metadata only — the secret is never returned", body = Vec<crate::secrets::CredentialSummary>),
+        (status = 200, description = "Credential metadata only — the secret is never returned", body = Vec<yagra_base::secrets::CredentialSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role does not hold ManageCredentials", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -196,7 +196,7 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
 async fn list_credentials(
     _guard: RequireManageCredentials,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::secrets::CredentialSummary>>> {
+) -> ApiResult<Json<Vec<yagra_base::secrets::CredentialSummary>>> {
     // Metadata only — the summary carries no secret, which is what makes this listable at all.
     let list = admin.creds.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list credentials", "failed to list credentials")
@@ -372,7 +372,7 @@ async fn delete_credential(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    use crate::secrets::CredentialDelete;
+    use yagra_base::secrets::CredentialDelete;
     credentials_are_deployment_wide(&scope)?;
     match admin.creds.delete(id).await {
         Ok(CredentialDelete::Deleted) => Ok(StatusCode::NO_CONTENT),
@@ -454,8 +454,8 @@ mod tests {
     fn a_malformed_v3_document_is_rejected_before_it_is_sealed() {
         // Otherwise it is stored successfully and then fails every poll, with the reason visible
         // only in the poller's log.
-        let err =
-            check_secret_shape(crate::secrets::KIND_SNMP_V3, b"not a usm document").unwrap_err();
+        let err = check_secret_shape(yagra_base::secrets::KIND_SNMP_V3, b"not a usm document")
+            .unwrap_err();
         assert_eq!(err.code(), "invalid_credential");
         // The reason is the parser's static text. Nothing from the submitted secret may appear.
         assert!(!err.message().contains("not a usm document"));
@@ -469,7 +469,7 @@ mod tests {
     /// with `credential`, with nothing on the dialog that had taken it.
     #[test]
     fn an_integration_key_that_is_not_its_document_is_rejected_before_it_is_sealed() {
-        use crate::secrets::{KIND_MERAKI_API, KIND_NETBOX_TOKEN};
+        use yagra_base::secrets::{KIND_MERAKI_API, KIND_NETBOX_TOKEN};
         for (kind, bare, document) in [
             (
                 KIND_MERAKI_API,
@@ -519,8 +519,8 @@ mod tests {
              and this reader stopped finding them"
         );
         for (kind, field) in [
-            (crate::secrets::KIND_MERAKI_API, fields[0]),
-            (crate::secrets::KIND_NETBOX_TOKEN, fields[1]),
+            (yagra_base::secrets::KIND_MERAKI_API, fields[0]),
+            (yagra_base::secrets::KIND_NETBOX_TOKEN, fields[1]),
         ] {
             let document = serde_json::json!({ field: "k" }).to_string();
             assert!(
@@ -532,7 +532,7 @@ mod tests {
 
     /// The rotation itself, through the router: the document is accepted and resealed, and the
     /// bare key is refused with the stored secret left as it was.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_meraki_key_is_replaced_by_its_document_and_never_by_the_bare_key(
         pool: sqlx::PgPool,
@@ -545,7 +545,7 @@ mod tests {
             .creds
             .create(
                 "Meraki API — Acme",
-                crate::secrets::KIND_MERAKI_API,
+                yagra_base::secrets::KIND_MERAKI_API,
                 br#"{"api_key":"old-key"}"#,
             )
             .await
@@ -560,7 +560,7 @@ mod tests {
                 .expect("the credential");
             (
                 kind,
-                crate::secrets::MerakiApiSecret::parse(&secret).map(|s| s.api_key),
+                yagra_base::secrets::MerakiApiSecret::parse(&secret).map(|s| s.api_key),
             )
         };
 
@@ -605,7 +605,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// A credential is stored sealed, and the list never hands the secret back (ADR-018).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn creating_a_credential_seals_it_and_the_list_never_returns_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -624,7 +624,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "credentials").await, 1);
 
         let (status, list) = send(&st, "GET", "/api/v1/credentials", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
@@ -641,14 +641,14 @@ mod tests {
     /// with — so an Operator limited to one site could re-seal or delete what another site runs
     /// on. The list stays open on purpose: the add-node and edit-node dialogs fill their picker
     /// from it, and it answers names, never a secret.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_folder_scoped_caller_reads_the_credentials_and_changes_none(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
-        let existing = crate::pgtest::credential(&pool, "osaka core v3", "snmp_v2c").await;
-        let folder = crate::pgtest::group(&pool, "Tokyo").await;
+        let existing = yagra_base::pgtest::credential(&pool, "osaka core v3", "snmp_v2c").await;
+        let folder = yagra_base::pgtest::group(&pool, "Tokyo").await;
         let scoped = scoped_token(&st, &[folder]);
         // Assembled rather than written out: `scope.rs::no_handler_spells_the_scope_refusal_by_hand`
         // counts the quoted code across this directory, tests included.
@@ -711,7 +711,7 @@ mod tests {
     /// A credential a Meraki organization is polled with says so in the list, and deleting it is
     /// refused with a reason — it used to read "unused" and answer 500 (ADR-164 Inc.6). Once the
     /// organization is gone the same delete is accepted.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_credential_an_integration_uses_is_counted_and_cannot_be_deleted(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -719,7 +719,7 @@ mod tests {
         let admin = st.admin.clone().expect("live state");
         let tok = token(&st, yagra_common::Role::Operator);
 
-        let key = crate::pgtest::credential(&pool, "meraki key", "meraki_api").await;
+        let key = yagra_base::pgtest::credential(&pool, "meraki key", "meraki_api").await;
         let mut orgs = Vec::new();
         for (org_id, name) in [("100", "Acme"), ("200", "Globex")] {
             orgs.push(
@@ -734,7 +734,7 @@ mod tests {
         // it is here because the three counts come from three tables, and joined under one GROUP BY
         // they would multiply (3 × 2 = 6 of each).
         for n in 1..=3u8 {
-            let node = crate::pgtest::node(&pool, &format!("n{n}"), n, None).await;
+            let node = yagra_base::pgtest::node(&pool, &format!("n{n}"), n, None).await;
             sqlx::query("UPDATE nodes SET credential_id = $1 WHERE id = $2")
                 .bind(key)
                 .bind(node)
@@ -743,7 +743,7 @@ mod tests {
                 .expect("bind");
         }
         // The NetBox fixture seals a token of its own.
-        crate::pgtest::netbox_server(&pool, "lab").await;
+        yagra_base::pgtest::netbox_server(&pool, "lab").await;
 
         let (status, list) = send(&st, "GET", "/api/v1/credentials", &tok, None).await;
         assert_eq!(status, StatusCode::OK, "{list}");
@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["error"]["code"], "credential_in_use", "{body}");
         assert_eq!(
-            crate::pgtest::rows(&pool, "credentials").await,
+            yagra_base::pgtest::rows(&pool, "credentials").await,
             2,
             "a refused delete removed nothing"
         );
@@ -784,7 +784,7 @@ mod tests {
         }
         let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "credentials").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "credentials").await, 1);
 
         // And one that was never there is still a 404, not a conflict.
         let (status, body) = send(&st, "DELETE", &path, &tok, None).await;

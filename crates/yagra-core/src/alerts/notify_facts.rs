@@ -19,7 +19,7 @@ use uuid::Uuid;
 use yagra_alert::Alert;
 use yagra_common::{AlertFacts, NotifyEvent, PreviewSample};
 
-use crate::repo::{NodeFacts, NodeRepo};
+use yagra_base::repo::{NodeFacts, NodeRepo};
 
 /// How long a resolved node's facts stay usable.
 ///
@@ -55,7 +55,7 @@ pub trait AlertFactsSource: Send + Sync {
 pub struct CachedNodeFacts {
     repo: Arc<NodeRepo>,
     /// The folder tree, for resolving each node's inherited labels (ADR-135 inc. 2).
-    groups: Arc<crate::groups::GroupRepo>,
+    groups: Arc<yagra_base::groups::GroupRepo>,
     /// The label map, rebuilt at most once per [`FACTS_TTL`] — a few hundred rows, and the same
     /// staleness window a rename already has.
     ///
@@ -75,7 +75,7 @@ pub struct CachedNodeFacts {
 impl CachedNodeFacts {
     /// Wrap the node repository and the folder tree.
     #[must_use]
-    pub fn new(repo: Arc<NodeRepo>, groups: Arc<crate::groups::GroupRepo>) -> Self {
+    pub fn new(repo: Arc<NodeRepo>, groups: Arc<yagra_base::groups::GroupRepo>) -> Self {
         Self {
             repo,
             groups,

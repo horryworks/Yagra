@@ -110,7 +110,7 @@ pub enum SortDirection {
 impl SortDirection {
     /// Every direction, so the agreement test iterates rather than naming them — a third variant
     /// is then covered without anyone remembering to extend the test.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub const ALL: [SortDirection; 2] = [SortDirection::Asc, SortDirection::Desc];
 
     /// The SQL keyword.
@@ -217,7 +217,7 @@ pub enum GroupOrigin {
 
 impl GroupOrigin {
     /// Every origin, so the token test iterates rather than naming them.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub const ALL: [GroupOrigin; 2] = [GroupOrigin::Meraki, GroupOrigin::Netbox];
 }
 
@@ -1388,7 +1388,7 @@ scope_predicate(2, "p.group_id"),
     /// one parent are siblings in one list, so the midpoint arithmetic reads
     /// [`ordered_tree_siblings`]; this half-list is for callers that are asking about folders —
     /// which, since ADR-162, is the tests and nothing else.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub async fn ordered_subfolders(
         &self,
         parent: Option<Uuid>,
@@ -1731,7 +1731,7 @@ pub struct GroupDeletion {
 ///
 /// ⚠️ A node outside the subtree whose dependency parent (`nodes.parent_id`) is one of the deleted
 /// nodes keeps its row and loses that parent (`ON DELETE SET NULL`) — ADR-174 accepts that.
-pub(crate) async fn delete_subtree(
+pub async fn delete_subtree(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     root: Uuid,
 ) -> anyhow::Result<Option<GroupDeletion>> {
@@ -1801,81 +1801,6 @@ mod tests {
         // ADR-162 and the reason a deleted row never turns a drop into a 404.
         let unknown = placement_order(&siblings, Some(Uuid::new_v4()), None);
         assert!(unknown > 3.0, "an unknown anchor appends, got {unknown}");
-    }
-    /// **Every `INSERT` into the two tree tables names `sort_order`.**
-    ///
-    /// 🚨 This is the class ADR-162 could not afford to leave to review. A scope is one ordering
-    /// sequence now, so a row inserted at the column's `DEFAULT 0` sits above everything in it —
-    /// and a row appended with a `MAX` taken over one of the two tables lands on a value the other
-    /// table is already using. A tie is not an error: `placement_orders` divides the gap between
-    /// two neighbours, and when they are equal every midpoint collapses onto the same value. **The
-    /// write returns 204 and the row does not move.** There is nothing on screen to read, and the
-    /// operator concludes the drag is broken.
-    ///
-    /// Four inserts were sitting at `DEFAULT 0` when this was written (two Meraki folders, the
-    /// Meraki device node, the imported AP) and were invisible for as long as the renderer kept
-    /// the two lists apart.
-    ///
-    /// ⚠️ **It cannot see the other half**: an append that names `sort_order` but computes it over
-    /// one table passes this. That half is [`append_base_sql`] having one call shape and being read
-    /// by a person. What this closes is the forgotten column.
-    ///
-    /// Read through `srcread`, so test fixtures and this test's own needles are not in the text,
-    /// and with whole-line comments dropped — `config_bundle/guards.rs` describes an
-    /// `INSERT INTO nodes` in its own module doc.
-    #[test]
-    fn every_insert_into_a_tree_table_names_sort_order() {
-        use std::path::Path;
-        use yagra_common::srcread as sr;
-
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut paths = Vec::new();
-        sr::rs_files(&src, &mut paths);
-        assert!(
-            paths.len() >= 150,
-            "only {} source files walked; the crate is larger than that",
-            paths.len()
-        );
-        let mut inspected = 0usize;
-        let mut offenders: Vec<String> = Vec::new();
-        for path in &paths {
-            let name = sr::file_name(path);
-            let code = sr::strip_and_check(&name, &sr::read(path))
-                .lines()
-                .filter(|l| !l.trim_start().starts_with("//"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for table in ["INSERT INTO nodes ", "INSERT INTO node_groups "] {
-                let mut from = 0usize;
-                while let Some(hit) = code[from..].find(table) {
-                    let at = from + hit;
-                    // The column list runs to the first `)` after the table name. Slicing to it
-                    // rather than taking a fixed window keeps the check stable under `cargo fmt`,
-                    // which decides for itself where the string literal's continuations fall.
-                    let end = code[at..].find(')').map_or(code.len(), |o| at + o);
-                    let cols = &code[at..end];
-                    inspected += 1;
-                    if !cols.contains("sort_order") {
-                        offenders.push(format!(
-                            "{name}: {}",
-                            cols.split_whitespace().collect::<Vec<_>>().join(" ")
-                        ));
-                    }
-                    from = end.max(at + table.len());
-                }
-            }
-        }
-        assert!(
-            inspected >= 8,
-            "only {inspected} tree-table inserts inspected — the needle stopped matching, which \
-             reads exactly like a codebase where every insert is correct"
-        );
-        assert!(
-            offenders.is_empty(),
-            "these INSERT into a tree table without naming `sort_order`, so the row lands at the \
-             column's DEFAULT 0 and sits above everything in its scope (ADR-162):\n  {}",
-            offenders.join("\n  ")
-        );
     }
 
     #[test]

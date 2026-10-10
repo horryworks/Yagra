@@ -32174,14 +32174,14 @@
               "string",
               "null"
             ],
-            "description": "Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit\nfrom the nearest ancestor that sets one, else the default pool. A node's own `pool` still\nwins — see [`crate::poolres`]."
+            "description": "Poll-pool this folder assigns to its nodes (ADR-009/020, migration 0054). `null` ⇒ inherit\nfrom the nearest ancestor that sets one, else the default pool. A node's own `pool` still\nwins — see `poolres`."
           },
           "prefixes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GroupPrefix"
             },
-            "description": "The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a\nfolder nothing has attached one to, which is every folder in a deployment with no NetBox.\n\n🚨 **Empty also means \"you may not see them\".** [`crate::api::groups::visible_groups`]\nclears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is\nlisted so the tree has a spine, and handing over the subnet layout of a site whose\nmembership the caller cannot see would be a leak the folder's *name* does not constitute."
+            "description": "The IP prefixes in use at this folder (ADR-100 decision 10, migration 0104). Empty for a\nfolder nothing has attached one to, which is every folder in a deployment with no NetBox.\n\n🚨 **Empty also means \"you may not see them\".** `api::groups::visible_groups`\nclears this on a row a scoped caller receives only as a breadcrumb ancestor: such a row is\nlisted so the tree has a spine, and handing over the subnet layout of a site whose\nmembership the caller cannot see would be a leak the folder's *name* does not constitute."
           },
           "sort_order": {
             "type": "number",

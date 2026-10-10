@@ -43,7 +43,7 @@ use yagra_common::{Node, NodeId, NodeState};
 
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::AlertManager;
-use crate::repo::{GroupFilter, NodeRepo};
+use yagra_base::repo::{GroupFilter, NodeRepo};
 
 use super::{ReportDefinition, ReportRun, ReportRunTrigger, ReportsRepo};
 

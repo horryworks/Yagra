@@ -650,7 +650,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// Regenerating the bus certificate stores one, and stores exactly one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn regenerating_the_bus_certificate_stores_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -667,6 +667,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "bus_tls_config").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "bus_tls_config").await, 1);
     }
 }

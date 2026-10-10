@@ -231,7 +231,7 @@ mod tests {
     /// The document this sends is the one this build produced a moment earlier, so a field the
     /// exporter writes and the importer cannot read fails here rather than at a customer's second
     /// deployment.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_bundle_this_deployment_exported_imports_back_into_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -245,15 +245,15 @@ mod tests {
             Some(serde_json::json!({ "name": "tokyo", "group_type": "site" })),
         )
         .await;
-        let profiles = crate::pgtest::rows(&pool, "profiles").await;
-        let groups = crate::pgtest::rows(&pool, "node_groups").await;
+        let profiles = yagra_base::pgtest::rows(&pool, "profiles").await;
+        let groups = yagra_base::pgtest::rows(&pool, "node_groups").await;
 
         let (status, bundle) = send(&st, "GET", "/api/v1/config/bundle", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{bundle}");
 
         let (status, report) = send(&st, "POST", "/api/v1/config/bundle", &tok, Some(bundle)).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{report}");
-        assert_eq!(crate::pgtest::rows(&pool, "profiles").await, profiles);
-        assert_eq!(crate::pgtest::rows(&pool, "node_groups").await, groups);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "profiles").await, profiles);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "node_groups").await, groups);
     }
 }

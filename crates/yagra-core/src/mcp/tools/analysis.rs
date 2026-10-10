@@ -510,7 +510,7 @@ mod tests {
     }
 
     /// ADR-184: `list_analyses` narrows on the same filter the runs list does, over real rows.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn both_surfaces_narrow_the_runs_list_the_same_way(pool: sqlx::PgPool) {
         use crate::analysis::{AnalysisRepo, AnalysisTool, JobParams, ScopeKind};

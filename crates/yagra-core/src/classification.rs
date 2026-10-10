@@ -619,7 +619,7 @@ mod tests {
 
     /// The built-in rules, seeded the way `repo/seed.rs` seeds them, as a classifier.
     fn builtin_classifier() -> (Classifier, impl Fn(Uuid) -> Option<&'static str>) {
-        use crate::seed_ids::SeedRange;
+        use yagra_base::seed_ids::SeedRange;
         let profiles = yagra_common::builtin_profiles();
         let id_of = |name: &str| {
             profiles

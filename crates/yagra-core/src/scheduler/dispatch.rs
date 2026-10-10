@@ -13,11 +13,11 @@
 //! previously guarded by nothing but a comment.
 
 use crate::l3_routing::RoutingPlan;
-use crate::secrets;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
+use yagra_base::secrets;
 use yagra_bus::SyncBus;
 
 // The pure halves this file feeds from the stores (ADR-096).
@@ -90,7 +90,7 @@ pub struct PollDispatcher {
 /// *field*, not a position.
 pub struct PollDispatcherStores {
     pub bus: Arc<dyn SyncBus>,
-    pub creds: Arc<crate::secrets::CredentialStore>,
+    pub creds: Arc<yagra_base::secrets::CredentialStore>,
     pub collection: Arc<crate::collection::CollectionRepo>,
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
@@ -98,7 +98,7 @@ pub struct PollDispatcherStores {
     /// Imported wireless access points (ADR-064), which are answered for by their controller.
     pub wireless: Arc<crate::wireless::WirelessRepo>,
     /// Deployment-wide settings — half of the adjacency seam.
-    pub settings: Arc<crate::repo::NodeRepo>,
+    pub settings: Arc<yagra_base::repo::NodeRepo>,
     /// Interface addresses, read only to rebuild the route-probe plan (ADR-043 Increment 4).
     pub l3: Arc<crate::l3::L3Repo>,
     /// v2c community fallback for nodes without a bound credential.
@@ -569,9 +569,9 @@ mod tests {
         V3_DOC,
     };
     use super::*;
-    use crate::secrets::{KIND_HTTP_AUTH, KIND_SNMP_V3};
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::atomic::Ordering;
+    use yagra_base::secrets::{KIND_HTTP_AUTH, KIND_SNMP_V3};
     use yagra_bus::CheckSpec;
     use yagra_common::{CollectionKind, CredentialId, MetricKind, ScopeLevel};
 
@@ -1200,8 +1200,8 @@ mod tests {
 
     /// Settings with routing on and every walk that would need SNMP off, so a policy read is about
     /// the plan and nothing else.
-    fn routing_on() -> crate::repo::adjacency_settings::AdjacencySettings {
-        crate::repo::adjacency_settings::AdjacencySettings::default()
+    fn routing_on() -> yagra_base::repo::adjacency_settings::AdjacencySettings {
+        yagra_base::repo::adjacency_settings::AdjacencySettings::default()
     }
 
     /// Two nodes, each holding one host address, so the built plan asks both to probe the other.

@@ -19,6 +19,8 @@ yagra-bus = { path = "../yagra-bus", features = ["nats"] }
 yagra-authz = { path = "../yagra-authz" }
 yagra-topology = { path = "../yagra-topology" }
 yagra-alert = { path = "../yagra-alert" }
+# The database layer (ADR-202 Inc.5): repositories, folders, sealed secrets, the config generation.
+yagra-base = { path = "../yagra-base" }
 yagra-discovery = { path = "../yagra-discovery" }
 # Forwarding filters + wire renderers for the passive-data tee (ADR-034).
 yagra-forward = { path = "../yagra-forward" }
@@ -122,4 +124,7 @@ yagra-common = { path = "../yagra-common", features = ["test-util"] }
 # The shared alert fixtures and the engine's test-only hooks (ADR-202 Inc.4). Same arrangement as
 # the line above: a dev-dependency, so a release build carries none of it.
 yagra-alert = { path = "../yagra-alert", features = ["test-util"] }
+# The real-PostgreSQL fixtures, the table vocabulary and the test-only reads (ADR-202 Inc.5). Same
+# arrangement as the two lines above: a dev-dependency, so a release build carries none of it.
+yagra-base = { path = "../yagra-base", features = ["test-util"] }
 tower = { workspace = true }

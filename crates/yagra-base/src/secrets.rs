@@ -325,9 +325,7 @@ pub fn load_key_provider() -> anyhow::Result<Arc<StaticKeyProvider>> {
 
 /// The decision behind [`load_key_provider`], split from the environment read so it is testable
 /// without mutating process-wide state.
-pub(crate) fn key_provider_from_env(
-    path: Option<String>,
-) -> anyhow::Result<Arc<StaticKeyProvider>> {
+pub fn key_provider_from_env(path: Option<String>) -> anyhow::Result<Arc<StaticKeyProvider>> {
     let Some(path) = path.map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()) else {
         tracing::warn!(
             "YAGRA_KEK_FILE not set — using EPHEMERAL dev KEK (credentials will not \
@@ -532,7 +530,7 @@ impl CredentialStore {
 /// The five sealed columns are spelled identically in all nine (`key_id`, `wrapped_dek`,
 /// `dek_nonce`, `ciphertext`, `ct_nonce`); only `credentials.key_id` is `BIGINT`, and two tables
 /// (`forward_destinations`, `llm_config`) allow the whole set to be NULL, meaning "no secret".
-pub(crate) const SEALED_TABLES: [&str; 9] = [
+pub const SEALED_TABLES: [&str; 9] = [
     "credentials",
     "notification_channels",
     "oidc_providers",
@@ -546,14 +544,14 @@ pub(crate) const SEALED_TABLES: [&str; 9] = [
 
 /// How many sealed rows one table holds, and how many of them this KEK opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SealedCount {
+pub struct SealedCount {
     pub total: u64,
     pub decryptable: u64,
 }
 
 /// The whole answer `yagra-core verify-secrets` prints: per table and in total.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SealedReport {
+pub struct SealedReport {
     pub tables: Vec<(&'static str, SealedCount)>,
 }
 
@@ -594,7 +592,7 @@ impl SealedReport {
 /// that has just been restored on another host and the question is whether the key travelled with
 /// it. A row whose sealed columns are NULL (the two all-or-none tables) is not counted at all: it
 /// holds no secret, so it can neither be opened nor be evidence that the key is wrong.
-pub(crate) async fn count_sealed(pool: &PgPool, kek: Kek) -> anyhow::Result<SealedReport> {
+pub async fn count_sealed(pool: &PgPool, kek: Kek) -> anyhow::Result<SealedReport> {
     let cipher = EnvelopeCipher::new(kek);
     let mut report = SealedReport::default();
     for table in SEALED_TABLES {

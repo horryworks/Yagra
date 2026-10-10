@@ -41,8 +41,8 @@ use super::topology::{
     MapBreadcrumb, MapEdge, MapEdgeMember, MapEndpoint, MapEndpointKind, MapFolder, MapLevel,
     MapNode, MapRole, MapRoleReason, MapStub, MapStubKind,
 };
-use crate::groups::{GroupType, MAX_GROUP_DEPTH};
 use crate::topology_links::StoredLink;
+use yagra_base::groups::{GroupType, MAX_GROUP_DEPTH};
 
 /// Above this many linked nodes on one level the level is not drawn (`overflow`).
 pub(crate) const MAP_MAX_NODES: usize = 2000;
@@ -60,8 +60,8 @@ pub(crate) struct FolderRow {
     pub sort_order: f64,
 }
 
-impl From<&crate::groups::GroupSummary> for FolderRow {
-    fn from(g: &crate::groups::GroupSummary) -> Self {
+impl From<&yagra_base::groups::GroupSummary> for FolderRow {
+    fn from(g: &yagra_base::groups::GroupSummary) -> Self {
         FolderRow {
             id: g.id,
             name: g.name.clone(),

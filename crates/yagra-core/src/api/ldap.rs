@@ -273,7 +273,7 @@ mod tests {
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// The directory configuration is stored, and its bind password never comes back out.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn storing_the_directory_config_seals_the_bind_password(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
@@ -293,7 +293,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "ldap_config").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "ldap_config").await, 1);
 
         let (status, read) = send(&st, "GET", "/api/v1/settings/ldap", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{read}");

@@ -351,7 +351,7 @@ mod tests {
     // append-on-change rule, because it lives inside one CTE. What text cannot say is whether the
     // statement does what the words claim, or whether the reader's projection still names every
     // column the writer writes. Both below.
-    use crate::pgtest;
+    use yagra_base::pgtest;
     use yagra_common::{Neighbor, NeighborCapability, NeighborProto};
 
     /// One adjacency with every optional field filled in, so a payload column that stopped
@@ -370,7 +370,7 @@ mod tests {
 
     /// A set goes in, comes back whole, and leaves exactly one history row behind — the first
     /// observation, which replaced nothing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_observed_set_reads_back_with_its_payload_and_appends_its_first_change(
         pool: sqlx::PgPool,
@@ -414,7 +414,7 @@ mod tests {
 
     /// **The feature.** Adjacency is normally constant, so an unchanged poll must write no history
     /// at all — and must not move `first_seen`, which is how long the adjacency has held.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unchanged_observation_appends_no_history_and_keeps_first_seen(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
@@ -444,7 +444,7 @@ mod tests {
     }
 
     /// A real transition appends exactly one row, and that row names the key it replaced.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_changed_set_appends_a_row_naming_the_key_it_replaced(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
@@ -480,7 +480,7 @@ mod tests {
     /// ADR-182: the producer respells its rows and raises its format. The row is still appended —
     /// a real change read at the same moment must not vanish — but it says it is a change of
     /// spelling, and `first_seen` keeps counting from the cabling's own first sight.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_respelled_set_is_marked_and_keeps_first_seen(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
@@ -528,7 +528,7 @@ mod tests {
 
     /// A format raised for a producer whose rows did not change leaves no row at all: the key did
     /// not move, and there is nothing to explain.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_raised_format_with_the_same_rows_appends_nothing(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
@@ -550,7 +550,7 @@ mod tests {
 
     /// The derivation task's two reads: every node's current set, unpaged, and the newest
     /// observation across the fleet.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn every_nodes_current_set_comes_back_and_the_watermark_names_the_newest(
         pool: sqlx::PgPool,
@@ -602,7 +602,7 @@ mod tests {
     /// ⚠️ The bounded loop is part of the assertion: a `(at, id) < ($2, $3)` that stopped being
     /// applied would hand back the same newest row forever, and an unbounded `loop` would hang
     /// instead of failing.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn change_paging_walks_the_history_newest_first_and_stops(pool: sqlx::PgPool) {
         let node = pgtest::node(&pool, "sw", 1, None).await;
@@ -647,7 +647,7 @@ mod tests {
 
     /// History is pruned by age. A row written a moment ago survives an hour-long retention window
     /// and does not survive a zero-length one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn pruning_removes_history_outside_the_window_and_keeps_what_is_inside(
         pool: sqlx::PgPool,

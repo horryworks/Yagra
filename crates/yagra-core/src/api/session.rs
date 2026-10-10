@@ -647,7 +647,7 @@ mod tests {
     ///
     /// End to end on purpose: the password hash, the login handler and the session store are three
     /// separate mechanisms, and each has its own unit tests that cannot see the other two.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_real_account_can_sign_in_and_use_what_it_is_given(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -679,7 +679,7 @@ mod tests {
     /// that hashed nothing; asserting only the revoke would pass against one that broke the account.
     /// What makes this a *write* test rather than another refusal is the last two lines — the old
     /// password stops working and the new one starts.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn changing_your_own_password_takes_effect_and_ends_the_session(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -736,7 +736,7 @@ mod tests {
     ///
     /// The second half is the one worth writing: a handler that verified *after* writing would pass
     /// the 401 assertion and have already replaced the password.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_wrong_current_password_changes_nothing(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -773,7 +773,7 @@ mod tests {
     /// A short password and a password identical to the current one are both refused, and neither
     /// refusal ends the caller's session — being signed out for a rejected change would be worse
     /// than the mistake.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_refused_change_leaves_the_session_alone(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -808,7 +808,7 @@ mod tests {
     }
 
     /// `/auth/me` reports the account kind, which is what the WebUI draws the control from.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn who_am_i_reports_a_real_accounts_kind(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};

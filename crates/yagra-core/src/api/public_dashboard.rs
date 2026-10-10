@@ -403,7 +403,7 @@ mod tests {
     /// implementation that saved the board and never told `public_access` about it — the operator
     /// would compose a board, see it saved, and find that visitors could reach nothing for the next
     /// thirty seconds, or forever if the refresh task were not running.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn composing_the_board_is_stored_and_reopens_its_routes(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -435,7 +435,7 @@ mod tests {
         });
         let (status, body) = send(&st, "PUT", "/api/v1/public-dashboard", &tok, Some(board)).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "public_dashboard").await, 1);
 
         let access = crate::api::public_access::current(&st.public_access);
         assert!(access.allows("GET", "/api/v1/fleet/summary"));
@@ -451,7 +451,7 @@ mod tests {
     ///
     /// The catalog never offers the audit widget, but the layout is an opaque document and the API
     /// accepted one carrying it — every visitor then saw an auth error in that card.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_board_with_a_widget_that_cannot_be_public_is_refused(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -472,11 +472,11 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert!(body.to_string().contains("widget_not_public"), "{body}");
         assert!(body.to_string().contains("audit"), "{body}");
-        assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 0);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "public_dashboard").await, 0);
     }
 
     /// Turning the switch off closes the surface even with a board still saved.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn switching_off_closes_a_board_that_is_still_stored(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         // The row survives — turning the deployment private must not destroy the composed board,
         // or turning it public again would silently serve an empty page.
-        assert_eq!(crate::pgtest::rows(&pool, "public_dashboard").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "public_dashboard").await, 1);
         let access = crate::api::public_access::current(&st.public_access);
         assert!(!access.enabled());
         assert!(!access.allows("GET", "/api/v1/fleet/summary"));
@@ -520,7 +520,7 @@ mod tests {
     /// 🚨 This is the specific mistake the module doc warns about: `PUT /api/v1/config` takes
     /// `ManageConfig`, which Operator holds, so putting the switch there would have let an operator
     /// open the deployment. Pinned as a behaviour rather than as a comment.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_operator_can_read_the_switch_but_not_move_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{account_token, live_state, send};

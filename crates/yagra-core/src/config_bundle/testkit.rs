@@ -54,7 +54,7 @@ pub(super) fn empty_bundle() -> ConfigBundle {
 /// a separate pass, because a bundle's order does not guarantee a parent arrives before its child.
 /// One row of each would leave those three `UPDATE`s unexecuted and still look complete.
 ///
-/// Ids are v4 rather than derived: [`crate::seed_ids::is_builtin`] skips a row whose id lands in a
+/// Ids are v4 rather than derived: [`yagra_base::seed_ids::is_builtin`] skips a row whose id lands in a
 /// reserved range, and a skipped row is a statement that did not run.
 pub(super) fn full_bundle() -> ConfigBundle {
     let profile_parent = Uuid::new_v4();

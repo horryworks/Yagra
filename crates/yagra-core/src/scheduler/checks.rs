@@ -6,8 +6,8 @@
 //! so a check can never be constructed inline at the site that decides to emit it (ADR-096;
 //! that inlining is what ADR-084 removed from `assemble_node_jobs`).
 
-use crate::secrets::SnmpV3Secret;
 use uuid::Uuid;
+use yagra_base::secrets::SnmpV3Secret;
 use yagra_bus::{
     DnsCheck, HttpCheck, IcmpCheck, OpticalProbe, PollJob, SnmpArpCheck, SnmpArpColumn, SnmpCheck,
     SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMauCheck, SnmpMetaColumn, SnmpNeighborCheck,

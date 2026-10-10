@@ -833,11 +833,11 @@ mod tests {
     /// `ON DELETE SET NULL` reaches only the rows that already exist when the parent goes. A record
     /// queued before the delete still carries the old id, and one violating row fails the whole
     /// multi-row INSERT — every other event in the flush with it.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_record_naming_a_deleted_node_or_rule_does_not_lose_the_batch(pool: sqlx::PgPool) {
-        let kept = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
-        let gone = crate::pgtest::node(&pool, "rtr-2", 12, None).await;
+        let kept = yagra_base::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let gone = yagra_base::pgtest::node(&pool, "rtr-2", 12, None).await;
         let repo = EventRepo::new(pool.clone());
         let rule = repo
             .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
@@ -847,7 +847,7 @@ mod tests {
             .create_rule(&rule_params("retired", "RETIRED"))
             .await
             .unwrap();
-        assert!(crate::pgtest::repo(pool.clone())
+        assert!(yagra_base::pgtest::repo(pool.clone())
             .delete_node(gone)
             .await
             .unwrap());
@@ -917,10 +917,10 @@ mod tests {
     /// `create_source` is the only writer that mints a token, and the plaintext is returned exactly
     /// once — so this is also the only place the stored digest can be checked against the value the
     /// operator was shown.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_webhook_source_is_created_listed_renamed_and_deleted(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "rtr-1", 11, None).await;
         let repo = EventRepo::new(pool.clone());
 
         let (id, token) = repo.create_source("branch", Some(node)).await.unwrap();
@@ -965,7 +965,7 @@ mod tests {
     ///
     /// 🚨 The last assertion is a security property, not a tidiness one: `UnknownOrDisabled` is one
     /// variant on purpose, so a caller probing ids cannot tell a real source from a fabricated one.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_rotated_token_replaces_the_one_before_it(pool: sqlx::PgPool) {
         let repo = EventRepo::new(pool.clone());
@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     /// A rule through its whole life, including the fields the engine compiles from.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_event_rule_is_created_listed_edited_and_deleted(pool: sqlx::PgPool) {
         let repo = EventRepo::new(pool.clone());
@@ -1043,11 +1043,11 @@ mod tests {
     /// ⚠️ `EVENT_FILTER_WHERE` has three implementations (here, `logstore.rs`, `matchRanges.ts`).
     /// A mirror test already pins them to each other; this is the first time the PostgreSQL one is
     /// **evaluated by PostgreSQL**.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_batch_is_written_and_the_filter_reads_back_what_it_names(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
-        let other = crate::pgtest::node(&pool, "rtr-2", 12, None).await;
+        let node = yagra_base::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let other = yagra_base::pgtest::node(&pool, "rtr-2", 12, None).await;
         let repo = EventRepo::new(pool.clone());
         let rule = repo
             .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
@@ -1132,10 +1132,10 @@ mod tests {
     /// to make exactly one of these queries return a row. Split apart, six of them would be
     /// asserting emptiness — which every one of them also returns when its SQL is wrong
     /// (`rejection-only-tests-pass-when-everything-rejects`).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn every_aggregate_counts_what_the_batch_contains(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "rtr-1", 11, None).await;
         let repo = EventRepo::new(pool.clone());
         let rule = repo
             .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
@@ -1232,10 +1232,10 @@ mod tests {
     /// so there is no production writer to go through; the alternative is passing a negative window
     /// so that "older than" is satisfied by everything, which would prove the statement runs and
     /// nothing about whether it selects the right rows.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn retention_deletes_by_age_and_keeps_what_is_inside_the_window(pool: sqlx::PgPool) {
-        let node = crate::pgtest::node(&pool, "rtr-1", 11, None).await;
+        let node = yagra_base::pgtest::node(&pool, "rtr-1", 11, None).await;
         let repo = EventRepo::new(pool.clone());
         let rule = repo
             .create_rule(&rule_params("link down", "LINK-3-UPDOWN"))
@@ -1281,12 +1281,12 @@ mod tests {
         // The unmatched window alone takes the aged unmatched row, and leaves the matched one.
         assert_eq!(repo.prune_old(259_200, 86_400).await.unwrap(), (0, 1));
         assert_eq!(repo.prune_old(86_400, 86_400).await.unwrap(), (1, 0));
-        assert_eq!(crate::pgtest::rows(&pool, "events").await, 2);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "events").await, 2);
     }
 
     /// The senders table keeps one row per (address, kind), keeps a hostname a later batch left
     /// out, moves the watermark, and prunes by age then by the ceiling (ADR-179 decision 3).
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn unattributed_senders_are_remembered_merged_and_pruned(pool: sqlx::PgPool) {
         use crate::arp::{SenderKind, SenderObservation};
@@ -1403,6 +1403,6 @@ mod tests {
             1,
             "the ceiling"
         );
-        assert_eq!(crate::pgtest::rows(&pool, "event_senders").await, 1);
+        assert_eq!(yagra_base::pgtest::rows(&pool, "event_senders").await, 1);
     }
 }

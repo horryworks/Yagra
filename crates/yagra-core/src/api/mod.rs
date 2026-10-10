@@ -127,17 +127,15 @@ use crate::collection::CollectionRepo;
 use crate::coordinator::Coordinator;
 use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::discovery::DiscoveryRunner;
-use crate::groups::GroupRepo;
 use crate::logstore::LogStore;
 use crate::mib::MibRepo;
 use crate::pollers::PollerRepo;
 use crate::preferences::UserPrefsRepo;
+use yagra_base::groups::GroupRepo;
 
 use crate::alerts::thresholds::ThresholdStore;
-use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::{ReportRunner, ReportsRepo};
 use crate::scheduler::PollDispatcher;
-use crate::secrets::CredentialStore;
 use crate::store::MetricStore;
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
@@ -148,6 +146,8 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
+use yagra_base::repo::{NodeListing, NodeRepo};
+use yagra_base::secrets::CredentialStore;
 
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
@@ -578,11 +578,11 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
         if resp.status().is_success() {
             if changes_monitoring_config(&path) {
                 // Moves the browsers' change feed as well (`config_gen::bump`).
-                crate::config_gen::bump();
+                yagra_base::config_gen::bump();
             } else if changes_what_the_tree_draws(&path) {
                 // Nothing a poller reads, so no config generation — but an open inventory tree
                 // draws it, so the browsers are told (ADR-019 Inc.2).
-                crate::change_feed::publish();
+                yagra_base::change_feed::publish();
             }
         }
         if let Some(admin) = st.admin.as_ref() {
@@ -837,12 +837,12 @@ pub(crate) use yagra_common::is_valid_metric_name;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repo::StaticNodeList;
     use crate::sink::InMemorySink;
     use axum::body::{to_bytes, Body};
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt; // for `oneshot`
     use uuid::Uuid;
+    use yagra_base::repo::StaticNodeList;
     use yagra_bus::{CheckOutcome, PollResult, Sample};
     use yagra_common::NodeId;
 

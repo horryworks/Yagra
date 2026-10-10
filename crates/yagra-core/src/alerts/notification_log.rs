@@ -48,7 +48,7 @@ pub enum DeliveryEvent {
     Unknown,
 }
 
-crate::stored_enum::token_enum!(DeliveryEvent, Unknown, "notification_deliveries.event", [
+yagra_base::stored_enum::token_enum!(DeliveryEvent, Unknown, "notification_deliveries.event", [
     Fire => "fire",
     Resolve => "resolve",
     Suppress => "suppress",
@@ -79,7 +79,7 @@ pub enum DeliveryResult {
     Unknown,
 }
 
-crate::stored_enum::token_enum!(DeliveryResult, Unknown, "notification_deliveries.result", [
+yagra_base::stored_enum::token_enum!(DeliveryResult, Unknown, "notification_deliveries.result", [
     Delivered => "delivered",
     Failed => "failed",
     Unknown => "unknown",
@@ -104,7 +104,7 @@ pub enum DeliverySide {
     Unknown,
 }
 
-crate::stored_enum::token_enum!(DeliverySide, Unknown, "notification_deliveries.side", [
+yagra_base::stored_enum::token_enum!(DeliverySide, Unknown, "notification_deliveries.side", [
     Yagra => "yagra",
     Network => "network",
     Remote => "remote",
@@ -583,9 +583,9 @@ mod tests {
         log.record(record(true, Vec::new()));
     }
 
-    use crate::pgtest;
+    use yagra_base::pgtest;
 
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn rows_round_trip_and_page_newest_first(pool: PgPool) {
         let repo = DeliveryLogRepo::new(pool.clone());

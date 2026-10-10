@@ -16,11 +16,11 @@
 use super::import::Ids;
 use super::import::{bump, counter, id_set, keep_ref, next_run, unusable_token_hash};
 use super::*;
-use crate::seed_ids;
 use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
 use std::collections::BTreeMap;
 use uuid::Uuid;
+use yagra_base::seed_ids;
 
 pub(super) async fn write<'a>(
     mut tx: Transaction<'a, Postgres>,

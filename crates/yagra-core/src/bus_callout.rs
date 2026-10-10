@@ -37,8 +37,8 @@ use sqlx::{PgPool, Row};
 use yagra_secrets::EnvelopeCipher;
 
 use crate::atomic_file::write_atomically;
-use crate::sealed_row::{sealed_from_row, BindSealed};
-use crate::secrets::Kek;
+use yagra_base::sealed_row::{sealed_from_row, BindSealed};
+use yagra_base::secrets::Kek;
 
 /// What `nats-server.conf` includes. Sits beside it on the bus volume, one level above `certs/`.
 pub const CONF_FILE: &str = "callout.conf";
