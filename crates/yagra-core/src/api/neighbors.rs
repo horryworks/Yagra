@@ -21,7 +21,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::scope::NodeScope;
 use super::ApiState;
-use crate::store::MetricStore;
+use crate::tsdb::store::MetricStore;
 use axum::extract::{Path, Query, State};
 use axum::{http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
@@ -192,7 +192,7 @@ pub(crate) enum SetupBlocked {
 
 /// Which reason applies, in the order the list's rules are applied.
 fn setup_blocked(ip: IpAddr, only_end_stations: bool, listed_elsewhere: bool) -> SetupBlocked {
-    if !crate::arp::identifies_a_device(ip) {
+    if !crate::discover::arp::identifies_a_device(ip) {
         SetupBlocked::NotADeviceAddress
     } else if only_end_stations {
         SetupBlocked::EndStation
@@ -249,7 +249,7 @@ pub(crate) enum NeighborManagedBy {
 /// see first (one click imports it), then a Meraki organization (a page to go to), then a
 /// controller the caller cannot see (nothing to offer, but still not the caller's to add by hand).
 fn managed_by(
-    ap: Option<&crate::wireless::ApAtAddress>,
+    ap: Option<&crate::topology::wireless::ApAtAddress>,
     meraki: Option<&(Uuid, String)>,
 ) -> Option<NeighborManagedBy> {
     match (ap, meraki) {
@@ -536,7 +536,7 @@ fn end_station_only(set: &NeighborSet) -> BTreeSet<IpAddr> {
         let Some(ip) = n.usable_mgmt_addr() else {
             continue;
         };
-        let only = crate::arp::only_an_end_station(n);
+        let only = crate::discover::arp::only_an_end_station(n);
         verdict.entry(ip).and_modify(|v| *v &= only).or_insert(only);
     }
     verdict
@@ -605,7 +605,7 @@ fn advertised_name(n: &Neighbor) -> Option<&str> {
 /// A name as it is compared (ADR-180 Inc.4 decision 2): the shared name key, less a trailing `(…)` —
 /// CDP appends a serial as `name(FOC1234X0YZ)`.
 fn peer_name_key(raw: &str) -> Option<String> {
-    let key = crate::duplicates::name_key(raw)?;
+    let key = crate::discover::duplicates::name_key(raw)?;
     let bare = match key
         .strip_suffix(')')
         .and_then(|s| s.rfind('(').map(|i| &s[..i]))
@@ -837,7 +837,11 @@ async fn link_states(store: &dyn MetricStore, ports: &[(Uuid, i64)]) -> HashMap<
         return HashMap::new();
     }
     within_budget(
-        store.series_rows_at("if_oper_status", ports, crate::store::INSTANT_LOOKBACK_SECS),
+        store.series_rows_at(
+            "if_oper_status",
+            ports,
+            crate::tsdb::store::INSTANT_LOOKBACK_SECS,
+        ),
         ports.len(),
     )
     .await
@@ -1736,8 +1740,8 @@ mod peer_tests {
         assert_eq!(peers[0].discovery_id, None);
     }
 
-    fn ap(controller: Option<(Uuid, &str)>) -> crate::wireless::ApAtAddress {
-        crate::wireless::ApAtAddress {
+    fn ap(controller: Option<(Uuid, &str)>) -> crate::topology::wireless::ApAtAddress {
+        crate::topology::wireless::ApAtAddress {
             ap_id: Uuid::from_u128(70),
             controller: controller.map(|(id, n)| (id, n.to_owned())),
             imported: false,

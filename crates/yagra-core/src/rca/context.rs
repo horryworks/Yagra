@@ -185,7 +185,7 @@ impl NodeFacts {
     /// Written as an explicit field list rather than a struct update so that adding a field to
     /// [`Node`] cannot silently widen what a prompt contains — see the module docs.
     #[must_use]
-    pub fn from_node(node: &Node, tags: &crate::tagres::TagResolver) -> Self {
+    pub fn from_node(node: &Node, tags: &crate::inventory::tagres::TagResolver) -> Self {
         Self {
             name: node.name.clone(),
             address: node.address,
@@ -340,10 +340,10 @@ pub async fn gather(
     // Best-effort, like every other source here: a folder read that fails costs the prompt its
     // inherited labels, not the whole explanation.
     let tags = match src.groups.tag_rows().await {
-        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Ok(rows) => crate::inventory::tagres::TagResolver::build(rows),
         Err(e) => {
             tracing::warn!(error = %e, "failed to load folder labels for the RCA prompt");
-            crate::tagres::TagResolver::empty()
+            crate::inventory::tagres::TagResolver::empty()
         }
     };
     let dependents = roll_up_dependents(&active, root_id, &names_of(src, &active).await);
@@ -450,7 +450,7 @@ fn roll_up_dependents(
 async fn upstream_chain(
     nodes: &NodeRepo,
     node: &Node,
-    tags: &crate::tagres::TagResolver,
+    tags: &crate::inventory::tagres::TagResolver,
 ) -> Vec<NodeFacts> {
     let mut chain = Vec::new();
     let mut next = node.parent;
@@ -543,7 +543,7 @@ mod tests {
         let mut node = a_node();
         node.name = format!("sw-{CANARY}"); // copied — the canary must appear
         node.credential = Some(yagra_common::CredentialId::from(Uuid::from_u128(7))); // never copied
-        let facts = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
+        let facts = NodeFacts::from_node(&node, &crate::inventory::tagres::TagResolver::empty());
 
         let rendered = format!("{facts:?}");
         assert!(
@@ -564,13 +564,13 @@ mod tests {
         for i in 0..20 {
             node.tags.push(format!("k{i:02}"));
         }
-        let facts = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
+        let facts = NodeFacts::from_node(&node, &crate::inventory::tagres::TagResolver::empty());
         assert_eq!(facts.tags.len(), MAX_TAGS);
         // Deterministic order: the same node renders identically on every call, so the prompt is
         // cacheable and two RCAs of the same incident are diffable.
         assert_eq!(facts.tags[0], "k00");
         assert_eq!(facts.tags[MAX_TAGS - 1], format!("k{:02}", MAX_TAGS - 1));
-        let again = NodeFacts::from_node(&node, &crate::tagres::TagResolver::empty());
+        let again = NodeFacts::from_node(&node, &crate::inventory::tagres::TagResolver::empty());
         assert_eq!(facts.tags, again.tags);
     }
 
@@ -588,7 +588,8 @@ mod tests {
         // the union would drop exactly this one.
         node.tags = vec!["zzz-own".to_owned()];
         let folder: Vec<String> = (0..20).map(|i| format!("a{i:02}-inherited")).collect();
-        let resolver = crate::tagres::TagResolver::build(vec![(group, None, folder, Vec::new())]);
+        let resolver =
+            crate::inventory::tagres::TagResolver::build(vec![(group, None, folder, Vec::new())]);
 
         let facts = NodeFacts::from_node(&node, &resolver);
         assert_eq!(facts.tags.len(), MAX_TAGS);

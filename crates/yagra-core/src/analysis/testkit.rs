@@ -2,8 +2,8 @@
 //! The fakes a behaviour test builds an [`Engine`] out of (ADR-098).
 //!
 //! Every seam in [`super::seams`] gets one, plus a builder that assembles them. Two of the six
-//! stores an analysis reads did not need writing at all — [`crate::flowstore::InMemoryFlowStore`]
-//! and [`crate::logstore::InMemoryLogStore`] are real in-memory implementations that already
+//! stores an analysis reads did not need writing at all — [`crate::passive::flowstore::InMemoryFlowStore`]
+//! and [`crate::passive::logstore::InMemoryLogStore`] are real in-memory implementations that already
 //! existed for other modules' tests, and the flow analyses run against the first of them end to
 //! end.
 //!
@@ -31,9 +31,9 @@ use crate::events::{
     EventAuthSource, EventBucketCount, EventFilter, EventFlapStat, EventRow, EventSeverityCount,
     EventSignatureCount,
 };
-use crate::flowstore::{FlowStore, InMemoryFlowStore};
-use crate::ipasn;
-use crate::store::{
+use crate::passive::flowstore::{FlowStore, InMemoryFlowStore};
+use crate::passive::ipasn;
+use crate::tsdb::store::{
     DeltaDirection, InterfaceLive, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg,
 };
 
@@ -521,7 +521,7 @@ impl Harness {
         }
     }
 
-    /// Attach a real in-memory ClickHouse stand-in (`crate::flowstore::InMemoryFlowStore`), which
+    /// Attach a real in-memory ClickHouse stand-in (`crate::passive::flowstore::InMemoryFlowStore`), which
     /// models the query contract rather than canning answers.
     pub(super) fn with_flows(mut self) -> Self {
         self.flows = Some(Arc::new(InMemoryFlowStore::default()));

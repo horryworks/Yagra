@@ -105,7 +105,7 @@ mod tests {
         assert!(!cfg.contains("mod system_log_days_tests"), "…and both go");
 
         // `logstore.rs`: a test-only `use` on line 16 used to end the file there.
-        let logs = code("src", "logstore");
+        let logs = code("src/passive", "logstore");
         assert!(
             logs.contains("impl LogStore for VlStore"),
             "logstore.rs was read as its first few lines again — the production impl is gone"

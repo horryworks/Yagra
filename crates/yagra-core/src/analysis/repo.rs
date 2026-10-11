@@ -110,7 +110,7 @@ pub(super) fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Anal
         scope_id: row.try_get("scope_id")?,
         scope_label: row.try_get("scope_label")?,
         params: row.try_get("params")?,
-        frequency: crate::cadence::Cadence::from_stored(row.try_get("frequency")?),
+        frequency: crate::runtime::cadence::Cadence::from_stored(row.try_get("frequency")?),
         day_of_week: row.try_get("day_of_week")?,
         day_of_month: row.try_get("day_of_month")?,
         at_hour: row.try_get("at_hour")?,
@@ -1120,8 +1120,8 @@ mod tests {
     fn a_schedule(tool: AnalysisTool, enabled: bool) -> ScheduleInput {
         ScheduleInput {
             params: a_job(tool),
-            cadence: crate::cadence::Schedule {
-                frequency: crate::cadence::Cadence::Daily,
+            cadence: crate::runtime::cadence::Schedule {
+                frequency: crate::runtime::cadence::Cadence::Daily,
                 day_of_week: None,
                 day_of_month: None,
                 at_hour: 3,
@@ -1148,7 +1148,7 @@ mod tests {
         assert_eq!(got.tool, "anomaly");
         assert_eq!(got.scope_kind, "all");
         assert_eq!(got.scope_label, "Whole fleet");
-        assert_eq!(got.frequency, crate::cadence::Cadence::Daily);
+        assert_eq!(got.frequency, crate::runtime::cadence::Cadence::Daily);
         assert_eq!(got.at_hour, 3);
         assert_eq!(got.at_minute, 30);
         assert_eq!(got.day_of_week, None);
@@ -1164,7 +1164,7 @@ mod tests {
         // the old cadence's day beside the new cadence's frequency, and the schedule then fires on
         // a day nobody chose.
         let mut weekly = a_schedule(AnalysisTool::Capacity, false);
-        weekly.cadence.frequency = crate::cadence::Cadence::Weekly;
+        weekly.cadence.frequency = crate::runtime::cadence::Cadence::Weekly;
         weekly.cadence.day_of_week = Some(2);
         weekly.cadence.at_hour = 19;
         weekly.cadence.at_minute = 5;
@@ -1176,7 +1176,7 @@ mod tests {
 
         let after = repo.get_schedule(id).await.expect("get").expect("row");
         assert_eq!(after.tool, "capacity");
-        assert_eq!(after.frequency, crate::cadence::Cadence::Weekly);
+        assert_eq!(after.frequency, crate::runtime::cadence::Cadence::Weekly);
         assert_eq!(after.day_of_week, Some(2));
         assert_eq!(after.at_hour, 19);
         assert_eq!(after.at_minute, 5);

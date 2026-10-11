@@ -67,7 +67,7 @@ pub struct Config {
     /// Redis connection URL for volatile poller liveness/assignment mirroring (ADR-004/009).
     /// Optional and **independent of the live/skeleton decision**: Redis is rebuildable, so its
     /// absence only downgrades that mirror to a no-op (ADR-017), it never forces skeleton mode.
-    /// Consumed by `run_live` to build the coordinator's [`crate::volatile::VolatileStore`].
+    /// Consumed by `run_live` to build the coordinator's [`crate::fleet::volatile::VolatileStore`].
     pub redis_url: Option<String>,
     /// VictoriaLogs base URL for the passive-event log store (ADR-024, the 4th data class).
     /// Optional and **independent of the live/skeleton decision** — when set, events are searched
@@ -81,7 +81,7 @@ pub struct Config {
     /// (byte-identical to pre-flow behavior). Consumed by `run_live`.
     pub flow_url: Option<String>,
     /// Flow retention in days for the ClickHouse TTL (`YAGRA_FLOW_RETENTION_DAYS`, ADR-031).
-    /// Defaults to [`crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS`] when unset/invalid.
+    /// Defaults to [`crate::passive::flowstore::DEFAULT_FLOW_RETENTION_DAYS`] when unset/invalid.
     pub flow_retention_days: u32,
     /// How many days of ClickHouse's **own** system log tables to keep
     /// (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`, ADR-031 Increment 4). `0` disables the
@@ -246,7 +246,7 @@ fn parse_retention_days(raw: Option<String>) -> u32 {
     raw.and_then(|s| s.trim().parse::<u32>().ok())
         .filter(|&n| n > 0)
         .map(|n| n.clamp(1, 3650))
-        .unwrap_or(crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS)
+        .unwrap_or(crate::passive::flowstore::DEFAULT_FLOW_RETENTION_DAYS)
 }
 
 /// Parse the ClickHouse system-log retention (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`).
@@ -260,15 +260,15 @@ fn parse_system_log_days(raw: Option<String>) -> u32 {
         Some(s) if !s.is_empty() => s
             .parse::<u32>()
             .map(|n| n.clamp(0, 3650))
-            .unwrap_or(crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS),
-        _ => crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS,
+            .unwrap_or(crate::passive::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS),
+        _ => crate::passive::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS,
     }
 }
 
 #[cfg(test)]
 mod system_log_days_tests {
     use super::parse_system_log_days;
-    use crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS as DEF;
+    use crate::passive::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS as DEF;
 
     /// 🚨 `0` must survive, and that is the whole difference from `parse_retention_days`.
     ///

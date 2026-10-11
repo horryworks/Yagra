@@ -434,7 +434,6 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   const [stored, setStored] = useState<LdapConfigView | null>(null);
   const [form, setForm] = useState<LdapFormState>(emptyLdapForm());
   const [rows, setRows] = useState<RoleMapRow[]>([]);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -444,26 +443,25 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   // Bumped on every load, so the password field forgets a "Replace" that a save has answered.
   const [loadGen, setLoadGen] = useState(0);
 
-  const load = useCallback(() => {
-    api
-      .getLdapConfig()
-      .then((res) => {
-        setStored(res.config ?? null);
-        setLoadGen((g) => g + 1);
-        if (res.config) {
-          setForm(toLdapForm(res.config));
-          setRows(toRoleMapRows(res.config.role_map));
-        }
-      })
-      .catch(() => {
-        /* The page's own unavailable notice already covers 401/403. */
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  // A refusal is not drawn here: the page's own unavailable notice already covers 401/403.
+  const {
+    data: answer,
+    loading,
+    reload: load,
+  } = useLoad(() => api.getLdapConfig(), [], {
+    initial: null as { config?: LdapConfigView | null } | null,
+  });
 
+  // Each answer replaces the form: `data` keeps its identity until a new one arrives.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!answer) return;
+    setStored(answer.config ?? null);
+    setLoadGen((g) => g + 1);
+    if (answer.config) {
+      setForm(toLdapForm(answer.config));
+      setRows(toRoleMapRows(answer.config.role_map));
+    }
+  }, [answer]);
 
   // Any edit invalidates a stale success banner and a stale probe result — the latter matters,
   // because the probe describes the *saved* configuration and would otherwise appear to describe

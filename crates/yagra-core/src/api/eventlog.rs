@@ -29,7 +29,7 @@ use super::extract::{Admin, RequireView, Scoped};
 use super::util::{normalize_search, parse_set};
 use super::{ApiError, ApiResult, ApiState};
 use crate::events::{EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket};
-use crate::logstore::NameIds;
+use crate::passive::logstore::NameIds;
 use axum::{
     extract::{Query, State},
     routing::get,

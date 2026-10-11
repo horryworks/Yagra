@@ -12,7 +12,7 @@
 //! store was **not** queried: the per-node round trips [`MonitorHints`] exists to remove were
 //! previously guarded by nothing but a comment.
 
-use crate::l3_routing::RoutingPlan;
+use crate::topology::l3_routing::RoutingPlan;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,16 +91,16 @@ pub struct PollDispatcher {
 pub struct PollDispatcherStores {
     pub bus: Arc<dyn SyncBus>,
     pub creds: Arc<yagra_base::secrets::CredentialStore>,
-    pub collection: Arc<crate::collection::CollectionRepo>,
-    pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
-    pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
+    pub collection: Arc<crate::discover::collection::CollectionRepo>,
+    pub url_checks: Arc<crate::monitors::url_check::UrlCheckRepo>,
+    pub dns_checks: Arc<crate::monitors::dns_check::DnsCheckRepo>,
     pub meraki_devices: Arc<yagra_meraki::MerakiDeviceRepo>,
     /// Imported wireless access points (ADR-064), which are answered for by their controller.
-    pub wireless: Arc<crate::wireless::WirelessRepo>,
+    pub wireless: Arc<crate::topology::wireless::WirelessRepo>,
     /// Deployment-wide settings — half of the adjacency seam.
     pub settings: Arc<yagra_base::repo::NodeRepo>,
     /// Interface addresses, read only to rebuild the route-probe plan (ADR-043 Increment 4).
-    pub l3: Arc<crate::l3::L3Repo>,
+    pub l3: Arc<crate::topology::l3::L3Repo>,
     /// v2c community fallback for nodes without a bound credential.
     pub env_community: Option<String>,
     /// Fallback poll interval (seconds) for on-demand "poll now" jobs — see the field of the

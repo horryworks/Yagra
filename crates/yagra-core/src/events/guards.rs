@@ -232,7 +232,11 @@ fn uses_in(files: &[(String, String)], name: &str, needle: &str) -> usize {
 fn both_event_backends_clamp_to_the_same_constants() {
     let files = crate::module_source::crate_code();
     let literal = regex::Regex::new(r"clamp\(1, [0-9_]+\)").unwrap();
-    for name in ["events/repo.rs", "logstore.rs", "mcp/tools/events.rs"] {
+    for name in [
+        "events/repo.rs",
+        "passive/logstore.rs",
+        "mcp/tools/events.rs",
+    ] {
         let code = &files
             .iter()
             .find(|(n, _)| n == name)
@@ -249,12 +253,12 @@ fn both_event_backends_clamp_to_the_same_constants() {
     // Floors: every site this was written for still names the constant.
     assert!(uses_in(&files, "events/repo.rs", &page) >= 4);
     assert!(uses_in(&files, "events/repo.rs", &bucket) >= 1);
-    assert!(uses_in(&files, "logstore.rs", &page) >= 5);
-    assert!(uses_in(&files, "logstore.rs", &bucket) >= 2);
+    assert!(uses_in(&files, "passive/logstore.rs", &page) >= 5);
+    assert!(uses_in(&files, "passive/logstore.rs", &bucket) >= 2);
     // The log store's in-memory fake is test-only, so `crate_code` never shows it — and it is the
     // third implementation a test compares the other two against. Read it raw.
     let raw = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/logstore.rs"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/passive/logstore.rs"),
     )
     .expect("logstore.rs is readable");
     let fake: Vec<&str> = literal.find_iter(&raw).map(|m| m.as_str()).collect();

@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::cadence::Cadence;
+use crate::runtime::cadence::Cadence;
 
 // ── Repository ───────────────────────────────────────────────────────────────────────
 

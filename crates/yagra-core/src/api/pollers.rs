@@ -20,9 +20,9 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem, RequireView, Scoped, VisibleNode};
 use super::util::pool_resolver;
 use super::{AdminState, ApiState};
-use crate::coordinator::PollerView;
-use crate::pollers::PollerRow;
-use crate::poolres::PoolSource;
+use crate::fleet::coordinator::PollerView;
+use crate::fleet::pollers::PollerRow;
+use crate::fleet::poolres::PoolSource;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -324,7 +324,7 @@ fn build_pollers_response(
         .map(|r| r.name.clone())
         .chain(covered.keys().cloned())
         .collect();
-    let pools = crate::pool_coverage::coverage(&live, &node_pools, &names)
+    let pools = crate::fleet::pool_coverage::coverage(&live, &node_pools, &names)
         .into_iter()
         .map(|c| PoolSummary {
             mode: if c.live_pollers > 0 {
@@ -379,7 +379,7 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
     // the folder inheritance are decided once (see `pool_coverage::node_counts_by_pool`). This page
     // degrades to "no counts" on a read error (ADR-017); the watch loop, which acts on the answer,
     // does not (ADR-158 B4).
-    let node_pools = crate::pool_coverage::node_counts_by_pool(
+    let node_pools = crate::fleet::pool_coverage::node_counts_by_pool(
         &admin.repo,
         &admin.meraki_devices,
         &admin.groups,
@@ -708,7 +708,7 @@ pub(crate) async fn poller_nodes_page(
 #[utoipa::path(
     get, path = "/api/v1/monitoring-gaps", tag = "pollers",
     responses(
-        (status = 200, description = "Recent core↔poller visibility outages, newest first", body = Vec<crate::pollers::MonitoringGapRow>),
+        (status = 200, description = "Recent core↔poller visibility outages, newest first", body = Vec<crate::fleet::pollers::MonitoringGapRow>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
@@ -717,14 +717,16 @@ pub(crate) async fn poller_nodes_page(
 async fn list_monitoring_gaps(
     _guard: RequireView,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::pollers::MonitoringGapRow>>> {
+) -> ApiResult<Json<Vec<crate::fleet::pollers::MonitoringGapRow>>> {
     Ok(Json(monitoring_gaps(&admin).await))
 }
 
 /// Recent core↔poller visibility outages, shared by `GET /api/v1/monitoring-gaps` and the MCP
 /// `get_system_health(section="monitoring_gaps")` tool (ADR-042 I3a). The 200-row cap lives here so
 /// neither surface can ask for the whole history.
-pub(crate) async fn monitoring_gaps(admin: &AdminState) -> Vec<crate::pollers::MonitoringGapRow> {
+pub(crate) async fn monitoring_gaps(
+    admin: &AdminState,
+) -> Vec<crate::fleet::pollers::MonitoringGapRow> {
     admin
         .pollers
         .list_monitoring_gaps(200)
@@ -1109,7 +1111,7 @@ struct MovePoolRequest {
 /// `PUT /api/v1/pollers/{id}/pool` — move this poller to another pool (ADR-107 Inc.2).
 ///
 /// **This moves it, now.** Core owns `pollers.pool`; the write here plus
-/// [`crate::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
+/// [`crate::fleet::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
 /// (woken immediately) and the poller receives a snapshot of the new pool's nodes on
 /// `yagra.poller.assign.{id}` — a subject with no pool token in it, which is why the primary work
 /// path needs no cooperation from the poller at all. The snapshot also carries the pool name, which
@@ -1206,16 +1208,18 @@ async fn set_poller_pool(
             // inheriting nodes to `default`, an unread inventory has no nodes at all, and either
             // one answers "nothing is stranded" and lets the pool's last poller go.
             let resolver = super::util::pool_resolver_or_error(&admin).await?;
-            let inventory =
-                crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
-                    .await
-                    .map_err(|e| {
-                        ApiError::from_internal(
-                            e.as_ref(),
-                            "pool dependent nodes",
-                            "failed to check what the source pool still holds",
-                        )
-                    })?;
+            let inventory = crate::fleet::pool_coverage::pool_dependent_nodes(
+                &admin.repo,
+                &admin.meraki_devices,
+            )
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "pool dependent nodes",
+                    "failed to check what the source pool still holds",
+                )
+            })?;
             let members = resolver.members(&inventory, from);
             if members.total > 0 {
                 match req.on_source_empty {
@@ -1618,7 +1622,7 @@ mod tests {
         node_pools.insert("legacy-pool".to_owned(), 4usize);
         node_pools.insert("empty-and-unserved".to_owned(), 0usize);
 
-        let coverage = crate::pool_coverage::coverage(&live, &node_pools, &[]);
+        let coverage = crate::fleet::pool_coverage::coverage(&live, &node_pools, &[]);
         let resp = build_pollers_response(
             Vec::new(),
             live.clone(),
@@ -1690,7 +1694,7 @@ mod tests {
     trait PoolCoverageExt {
         fn uncovered(&self) -> bool;
     }
-    impl PoolCoverageExt for crate::pool_coverage::PoolCoverage {
+    impl PoolCoverageExt for crate::fleet::pool_coverage::PoolCoverage {
         fn uncovered(&self) -> bool {
             self.is_uncovered()
         }

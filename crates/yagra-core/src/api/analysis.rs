@@ -840,7 +840,7 @@ fn parse_schedule_body(
              configured — scheduling it would produce an empty run on every fire",
         ));
     }
-    let next = crate::cadence::compute_next_run(cadence, chrono::Utc::now());
+    let next = crate::runtime::cadence::compute_next_run(cadence, chrono::Utc::now());
     Ok((
         crate::analysis::ScheduleInput {
             params,
@@ -1560,7 +1560,7 @@ mod tests {
             scope_id: None,
             scope_label: "All nodes".to_owned(),
             params,
-            frequency: crate::cadence::Cadence::Daily,
+            frequency: crate::runtime::cadence::Cadence::Daily,
             day_of_week: None,
             day_of_month: None,
             at_hour: 3,

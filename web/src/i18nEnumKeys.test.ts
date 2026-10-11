@@ -309,7 +309,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // worse than no text at all.
     //
     // ⚠️ **What this test now checks is the Japanese half.** Since ADR-079 the sentences are
-    // owned by `crates/yagra-core/src/metric_meaning.rs` and the English file is generated from
+    // owned by `crates/yagra-core/src/tsdb/metric_meaning.rs` and the English file is generated from
     // it, so `EXPLAINED_METRICS` *is* the English key list and that side cannot be short. The
     // failure it still catches is the one parity never could: a metric explained in Rust and
     // never translated, which would render the English sentence in a Japanese UI (i18next falls

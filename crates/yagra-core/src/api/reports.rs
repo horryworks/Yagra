@@ -796,7 +796,7 @@ fn parse_schedule_body(
         at_minute: cadence.at_minute,
         enabled: body.enabled.unwrap_or(true),
     };
-    let next = crate::cadence::compute_next_run(cadence, chrono::Utc::now());
+    let next = crate::runtime::cadence::compute_next_run(cadence, chrono::Utc::now());
     Ok((input, next))
 }
 

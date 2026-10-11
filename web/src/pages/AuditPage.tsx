@@ -192,7 +192,7 @@ export function AuditPage() {
   // a duplicated encoder is a duplicated security boundary: this log stores the username submitted
   // to a **failed** sign-in, so formula neutralization is load-bearing. That was the right concern
   // and the wrong conclusion — the backend already had a CSV encoder (report exports) and it did
-  // **not** neutralize. There were two all along, and one was broken. `crates/yagra-core/src/csv.rs`
+  // **not** neutralize. There were two all along, and one was broken. `crates/yagra-core/src/runtime/csv.rs`
   // is now the single one, mirrored against `lib/csv.ts` by a test.
   //
   // Navigating rather than fetching: the browser's own download handles the file, so a 50k-row

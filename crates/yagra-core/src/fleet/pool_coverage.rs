@@ -1,0 +1,1064 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Poller-pool coverage: does every pool that has nodes still have a poller to poll them?
+//!
+//! This is the one failure the alert engine cannot see by itself. `AlertManager::observe` is fed
+//! `PollResult`s, so it reasons about devices that answered or failed to answer — but when a pool
+//! loses its last live poller the scheduler falls back to legacy per-job publish on
+//! `yagra.jobs.{pool}` with nothing subscribed, plain NATS discards the jobs, and **no
+//! `PollResult` is produced at all**. The nodes decay to `unknown` rather than `down`, every
+//! dashboard reads calm, and an entire site stops being monitored silently. ADR-009's scale-to-zero
+//! discussion names this as monitoring's own blind spot.
+//!
+//! Before this module the condition was visible only to someone already looking: a `warning` string
+//! on `GET /api/v1/pollers` and a pill on Settings ▸ Pollers. Here it becomes an alert delivered
+//! over the configured notification channels, plus gauges an operator's own Prometheus (or a KEDA
+//! `ScaledObject`) can act on.
+//!
+//! The condition itself is defined **once**, by [`PoolCoverage::is_uncovered`], and the API's
+//! `PoolSummary.warning` is derived from the same function — so the pill an operator sees and the
+//! page they receive cannot disagree.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use std::sync::Arc;
+
+use crate::alerts::AlertManager;
+use crate::fleet::coordinator::{Coordinator, PollerView};
+use crate::fleet::poolres::PoolResolver;
+use yagra_alert::action::AlertSink;
+use yagra_alert::engine::POOL_COVERAGE_METRIC as COVERAGE_METRIC;
+use yagra_alert::Alert;
+use yagra_base::groups::GroupRepo;
+use yagra_base::repo::NodeRepo;
+use yagra_common::Node;
+use yagra_meraki::MerakiDeviceRepo;
+// Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
+// lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
+// alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
+use crate::fleet::pool_coverage;
+use yagra_base::{config_gen, groups};
+
+/// How often the watch loop samples coverage.
+///
+/// Matches `coordinator::OFFLINE_AFTER`: sampling faster cannot see anything new, because a
+/// poller's liveness only changes on that granularity.
+pub const WATCH_TICK: Duration = Duration::from_secs(30);
+
+/// Default time a pool must be uncovered before it notifies.
+///
+/// `HEARTBEAT_SECS` is 10 and `OFFLINE_AFTER` is 30, so a poller must miss three beats to read
+/// dead — this is ten times that. It has to be comfortably longer than a pod restart or an image
+/// pull, because a `leaving` heartbeat **removes** the poller from the registry immediately
+/// (`coordinator.rs`), which means an ordinary rolling restart raises the condition instantly. The
+/// debounce is what stops that paging anyone.
+pub const DEFAULT_RAISE_AFTER: Duration = Duration::from_secs(300);
+
+/// Env var overriding [`DEFAULT_RAISE_AFTER`]; `0` disables coverage notifications entirely.
+pub const RAISE_AFTER_ENV: &str = "YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS";
+
+/// Most pools that get their own labelled gauge series.
+///
+/// Pool names are operator-authored free text and the Prometheus recorder is installed without an
+/// idle timeout, so a series lives for the life of the process — a typo would be permanent. Past
+/// this many pools the labelled gauge is dropped **whole** for that tick rather than truncated: a
+/// half-populated labelled gauge is a wrong answer, whereas the unlabelled count is still a right
+/// one. See `.claude/rules/monitoring-conventions.md` on label cardinality.
+const MAX_LABELLED_POOLS: usize = 64;
+
+/// Gauge: how many pools currently have nodes and no live poller. No labels — this is the series
+/// to alert on and to drive a scale-up from.
+const M_POOLS_UNCOVERED: &str = "yagra_pools_without_live_poller";
+/// Gauge: nodes at risk in each pool, `0` for a healthy one.
+const M_POOL_NODES_UNCOVERED: &str = "yagra_pool_nodes_without_live_poller";
+/// Counter: coverage notifications emitted, by lifecycle point.
+const M_NOTIFICATIONS: &str = "yagra_pool_coverage_notifications_total";
+
+/// One pool's polling coverage: how many nodes depend on it, and how many live pollers serve it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolCoverage {
+    /// Pool name (`default` for unassigned nodes).
+    pub pool: String,
+    /// Non-Meraki nodes whose **effective** pool is this one.
+    pub nodes: usize,
+    /// Live (online) pollers serving it.
+    pub live_pollers: usize,
+}
+
+impl PoolCoverage {
+    /// **The** definition of `nodes_without_live_poller`.
+    ///
+    /// `api/pollers.rs` derives `PoolSummary.warning` from this, so the pill on Settings ▸ Pollers
+    /// and the notification an operator receives are the same judgement, not two spellings of it.
+    #[must_use]
+    pub const fn is_uncovered(&self) -> bool {
+        self.nodes > 0 && self.live_pollers == 0
+    }
+}
+
+/// Merge the live poller registry with per-pool node counts. Pure: no I/O, no clock.
+///
+/// Reports a pool that has nodes, **or** a live poller, **or** a row describing it (ADR-107) — so a
+/// poller registered but not yet assigned work still appears, and so does a pool an operator has
+/// just created. Uncovered is false for both: no nodes are at risk in either.
+///
+/// ⚠️ **A described pool with neither nodes nor pollers must not raise the coverage alarm.** It is
+/// not a failure, it is a pool half-configured on purpose, and firing on it would mean every new
+/// pool pages somebody the moment it is named. `is_uncovered` already reads "has nodes and no live
+/// poller", which is exactly that distinction — do not widen it.
+#[must_use]
+pub fn coverage(
+    live: &[PollerView],
+    node_pools: &HashMap<String, usize>,
+    described: &[String],
+) -> Vec<PoolCoverage> {
+    // An offline poller cannot serve work, so it does not count towards coverage.
+    let mut live_per_pool: HashMap<&str, usize> = HashMap::new();
+    for v in live.iter().filter(|v| v.online) {
+        *live_per_pool.entry(v.pool.as_str()).or_insert(0) += 1;
+    }
+
+    let mut names: Vec<&str> = node_pools
+        .keys()
+        .map(String::as_str)
+        .chain(live_per_pool.keys().copied())
+        .chain(described.iter().map(String::as_str))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+
+    names
+        .into_iter()
+        .map(|name| PoolCoverage {
+            pool: name.to_owned(),
+            nodes: node_pools.get(name).copied().unwrap_or(0),
+            live_pollers: live_per_pool.get(name).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// Non-Meraki node counts keyed by **effective** pool (own > nearest ancestor folder > default).
+///
+/// 🚨 **Fails when any of its three reads fails** (ADR-158 B4). It used to degrade: an unreadable
+/// folder tree resolved every inheriting node to `default`, and an unreadable inventory counted
+/// nothing. Both are answers the coverage watch acts on — a pool that seemed to lose its nodes had
+/// its open alert cleared, and on the first tick after a restart an empty answer was cached and
+/// cleared every restored alert. A display that wants a partial answer degrades at its own call
+/// site, where the choice is visible.
+///
+/// The Meraki exclusion is load-bearing, not tidiness. Core's org collector polls Meraki-managed
+/// nodes directly, so they depend on no pool poller — counting them would put a Meraki-only
+/// deployment whose `default` pool has no registered poller into a permanent false alarm.
+pub async fn node_counts_by_pool(
+    repo: &NodeRepo,
+    meraki: &MerakiDeviceRepo,
+    groups: &GroupRepo,
+) -> anyhow::Result<HashMap<String, usize>> {
+    let resolver = PoolResolver::build(groups.pool_rows().await?);
+    Ok(count_by_pool(
+        &pool_dependent_nodes(repo, meraki).await?,
+        &resolver,
+    ))
+}
+
+/// How many of `nodes` resolve to each pool. Pure.
+#[must_use]
+pub fn count_by_pool(nodes: &[Node], resolver: &PoolResolver) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for n in nodes {
+        *counts
+            .entry(resolver.resolve_pool(n).to_owned())
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+/// The nodes whose polling depends on a pool having a live poller.
+///
+/// 🔑 **The Meraki exclusion is defined here and only here.** Core’s org collector polls
+/// Meraki-managed nodes directly, so no pool poller stands between them and their data — counting
+/// them would put a Meraki-only deployment into a permanent false alarm, and *moving* them with a
+/// pool would promise something the pool does not deliver.
+///
+/// Two callers ask "which nodes are in pool P": the coverage strip above, and the pool-move
+/// refusal in `api/pollers.rs`. **ADR-107 Inc.3 exists because those two once counted different
+/// sets** — the strip resolved inheritance and the refusal read the column, so a pool of purely
+/// inheriting nodes was 32 on screen and 0 to the check that had to protect it. One
+/// implementation, so the dialog an operator answers and the `409` that enforces the answer
+/// cannot disagree.
+///
+/// Fails when either read fails. It used to answer an empty list for an unreadable inventory and
+/// count Meraki nodes for an unreadable device list — and every caller decides something from the
+/// answer: whether to refuse a poller move, which nodes a takeover pins (ADR-158 B4).
+pub async fn pool_dependent_nodes(
+    repo: &NodeRepo,
+    meraki: &MerakiDeviceRepo,
+) -> anyhow::Result<Vec<Node>> {
+    let meraki_ids = meraki.node_ids().await?;
+    Ok(repo
+        .list_nodes()
+        .await?
+        .into_iter()
+        .filter(|n| !meraki_ids.contains(&n.id.as_uuid()))
+        .collect())
+}
+
+/// The watch loop's last successful node count, with the config generation it was read at.
+pub type CountsCache = Option<(u64, HashMap<String, usize>)>;
+
+/// Fold one read of the node counts into the watch loop's cache.
+///
+/// A successful read replaces the cache, **empty included** — an inventory that really is empty
+/// must be able to clear the alerts it no longer has nodes for. A failed read changes nothing:
+/// the cache keeps its older generation, so the next tick reads again, and with no cache at all the
+/// loop has nothing to act on and waits (the same shape as `scheduler/sweep.rs`'s resolver).
+pub fn remember(
+    cached: &mut CountsCache,
+    generation: u64,
+    read: anyhow::Result<HashMap<String, usize>>,
+) {
+    match read {
+        Ok(counts) => *cached = Some((generation, counts)),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "pool coverage: counting nodes by pool failed; keeping the last answer"
+        ),
+    }
+}
+
+/// A coverage edge worth telling someone about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoverageEvent {
+    /// The pool has been uncovered for longer than the debounce.
+    Raise { pool: String, nodes: usize },
+    /// A previously-raised pool is covered again (or is gone).
+    Clear { pool: String },
+}
+
+/// How long a pool has been uncovered, and whether we have already said so.
+#[derive(Debug, Clone, Copy)]
+struct PoolWatch {
+    since: Instant,
+    raised: bool,
+}
+
+/// Debounce plus edge detection over successive coverage samples.
+///
+/// Pure and clock-injected (the same shape as `Coordinator`), so every edge is testable without a
+/// bus, a database or real time.
+///
+/// The **debounce timer** is deliberately not persisted. A core restart or an HA leader flip
+/// re-arms it, so a pool that has been dark for an hour is re-notified only after another full
+/// debounce — late, never false, which is the right direction for the failure to lean.
+///
+/// 🚨 **That reasoning is about the notification, and it does not extend to the alert** — which is
+/// the mistake this doc used to make, and it cost a `critical` that stood open for fifteen days on
+/// a pool with a live poller (ADR-107 Inc.5, found on hardware 2026-09-09). Raising writes
+/// **durable** state: a row in `alert_history`, restored into the engine on every boot by
+/// `alerts/restore.rs`, which does not care what kind of subject it is. Clearing is reachable only
+/// from [`Self::observe`]'s `Clear` edge, and `observe` iterates the **watch map** — so a pool this
+/// process never watched is a pool it can never clear. Recover while core is down and the alert is
+/// open forever.
+///
+/// The repair is [`Self::seed`]: start the map from the alerts that are already open, so the state
+/// machine's initial value agrees with the durable side. It is why the type is still not persisted
+/// — it is *derived*, once, from the thing that is. **A `raised: true` entry is also what stops the
+/// duplicate raise this doc used to accept as unavoidable**: the alert is already open, so there is
+/// nothing new to say. `Dispatcher::dispatch_resolve` documents the same shape and has not been
+/// looked at.
+#[derive(Debug)]
+pub struct CoverageWatch {
+    raise_after: Duration,
+    watching: HashMap<String, PoolWatch>,
+}
+
+impl CoverageWatch {
+    /// New watch with the given debounce. `Duration::ZERO` disables notification entirely.
+    #[must_use]
+    pub fn new(raise_after: Duration) -> Self {
+        Self {
+            raise_after,
+            watching: HashMap::new(),
+        }
+    }
+
+    /// Read the debounce from the environment, falling back to [`DEFAULT_RAISE_AFTER`].
+    #[must_use]
+    pub fn from_env() -> Self {
+        let secs = std::env::var(RAISE_AFTER_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        Self::new(secs.map_or(DEFAULT_RAISE_AFTER, Duration::from_secs))
+    }
+
+    /// Whether notifications are switched off.
+    #[must_use]
+    pub const fn disabled(&self) -> bool {
+        self.raise_after.is_zero()
+    }
+
+    /// Start the watch from the coverage alerts that are **already open** (ADR-107 Inc.5).
+    ///
+    /// Called once, at the top of the watch loop, with [`raised_pools`] over the engine's restored
+    /// active set. Each pool goes in as `raised: true`, which buys two things:
+    ///
+    /// - the next tick in which the pool is covered emits its `Clear`, so the alert closes. Without
+    ///   this the pool is absent from the map and [`Self::observe`] has nothing to clear — the
+    ///   fifteen-day `critical` in the type's doc above;
+    /// - a pool that is *still* uncovered is not raised again, because it is already open.
+    ///
+    /// `since: now` is right for both: it is only read on the path to raising, which a
+    /// `raised: true` entry never takes again.
+    ///
+    /// ⚠️ **Ordering is load-bearing and is not local to this file.** The seed is only as good as
+    /// the restore that fills the active set, and `alerts::restore::restore` is awaited in
+    /// `run_live` long before `LeaderTasks::run` spawns this loop. Move either and the seed goes
+    /// silently empty — which looks exactly like a deployment that had no open alerts.
+    pub fn seed(&mut self, raised: impl IntoIterator<Item = String>, now: Instant) {
+        if self.disabled() {
+            return;
+        }
+        for pool in raised {
+            self.watching.insert(
+                pool,
+                PoolWatch {
+                    since: now,
+                    raised: true,
+                },
+            );
+        }
+    }
+
+    /// Feed one coverage sample; returns the edges crossed.
+    ///
+    /// Iterates the **watch map**, not just the current uncovered set, so a pool that disappears
+    /// entirely — renamed, or its last node moved away — still gets its `Clear` instead of leaving
+    /// a remote incident open forever.
+    pub fn observe(&mut self, coverage: &[PoolCoverage], now: Instant) -> Vec<CoverageEvent> {
+        if self.disabled() {
+            self.watching.clear();
+            return Vec::new();
+        }
+
+        let mut events = Vec::new();
+        let uncovered: HashMap<&str, usize> = coverage
+            .iter()
+            .filter(|c| c.is_uncovered())
+            .map(|c| (c.pool.as_str(), c.nodes))
+            .collect();
+
+        // Clear anything no longer uncovered — but only if we actually raised it. A pool that
+        // recovered inside the debounce was never announced, so announcing its recovery would be
+        // noise about an event nobody was told about. This is the rolling-restart case, and it is
+        // the single most important behaviour in this type.
+        self.watching.retain(|pool, watch| {
+            if uncovered.contains_key(pool.as_str()) {
+                return true;
+            }
+            if watch.raised {
+                events.push(CoverageEvent::Clear { pool: pool.clone() });
+            }
+            false
+        });
+
+        for (pool, nodes) in uncovered {
+            let watch = self.watching.entry(pool.to_owned()).or_insert(PoolWatch {
+                since: now,
+                raised: false,
+            });
+            if !watch.raised && now.saturating_duration_since(watch.since) >= self.raise_after {
+                watch.raised = true;
+                events.push(CoverageEvent::Raise {
+                    pool: pool.to_owned(),
+                    nodes,
+                });
+            }
+        }
+        events.sort_by(|a, b| key_of(a).cmp(key_of(b)));
+        events
+    }
+}
+
+/// Which pools currently hold an open coverage alert, from a snapshot of the engine's active set.
+///
+/// Pure, so the one judgement in [`CoverageWatch::seed`]'s input is testable without an
+/// `AlertManager`: an alert counts only when it is **both** a [`yagra_alert::Subject::Pool`] **and** this
+/// module's metric. Filtering on the subject alone would sweep in any future pool-subject alert and
+/// clear it from a loop that knows nothing about it; filtering on the metric alone would match a
+/// device metric that happened to share the name.
+#[must_use]
+pub fn raised_pools(active: &[Alert]) -> Vec<String> {
+    let mut pools: Vec<String> = active
+        .iter()
+        .filter(|a| a.metric == COVERAGE_METRIC)
+        .filter_map(|a| a.subject.pool().map(str::to_owned))
+        .collect();
+    // Deterministic for the log line and the tests; the set is one entry per uncovered pool, so
+    // the sort is free.
+    pools.sort_unstable();
+    pools.dedup();
+    pools
+}
+
+/// Stable ordering key so a tick's events are deterministic (several pools can flip together).
+fn key_of(event: &CoverageEvent) -> &str {
+    match event {
+        CoverageEvent::Raise { pool, .. } | CoverageEvent::Clear { pool } => pool.as_str(),
+    }
+}
+
+/// The gauge values one coverage sample produces, as `(pool, nodes_at_risk)` plus the total.
+///
+/// Split out from emission so the property that matters is testable: a **recovered pool is present
+/// with `0.0`**, it does not simply stop being reported. `yagra_topology_anchor_unresolved` only
+/// ever writes its non-zero entries, which — with no `idle_timeout` on the recorder — leaves a
+/// stale non-zero series forever. Do not "tidy" the zeros away.
+#[must_use]
+pub fn gauge_values(coverage: &[PoolCoverage]) -> (usize, Vec<(String, f64)>) {
+    let uncovered = coverage.iter().filter(|c| c.is_uncovered()).count();
+    if coverage.len() > MAX_LABELLED_POOLS {
+        return (uncovered, Vec::new());
+    }
+    let per_pool = coverage
+        .iter()
+        .map(|c| {
+            let at_risk = if c.is_uncovered() { c.nodes } else { 0 };
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a gauge is f64; node counts are far below 2^53"
+            )]
+            (c.pool.clone(), at_risk as f64)
+        })
+        .collect();
+    (uncovered, per_pool)
+}
+
+/// Emit the coverage gauges for one sample.
+pub fn publish_gauges(coverage: &[PoolCoverage]) {
+    let (uncovered, per_pool) = gauge_values(coverage);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a gauge is f64; pool counts are far below 2^53"
+    )]
+    metrics::gauge!(M_POOLS_UNCOVERED).set(uncovered as f64);
+    if per_pool.is_empty() && coverage.len() > MAX_LABELLED_POOLS {
+        tracing::warn!(
+            pools = coverage.len(),
+            cap = MAX_LABELLED_POOLS,
+            "too many poller pools for a per-pool gauge; reporting the total only"
+        );
+        return;
+    }
+    for (pool, at_risk) in per_pool {
+        metrics::gauge!(M_POOL_NODES_UNCOVERED, "pool" => pool).set(at_risk);
+    }
+}
+
+/// Count one emitted coverage notification.
+pub fn count_notification(event: &'static str) {
+    metrics::counter!(M_NOTIFICATIONS, "event" => event).increment(1);
+}
+
+/// Wall-clock milliseconds, for stamping a coverage alert.
+pub use yagra_common::clock::now_unix_ms;
+
+/// Leader-only loop: alert when a poller pool has nodes but no live poller (ADR-009's blind spot).
+///
+/// **Leader-only is a correctness requirement, not an optimization.** A standby core runs no
+/// coordinator — `run_heartbeat_consumer` is spawned here in `leader_work` — so its registry is
+/// permanently empty and it would read *every* pool as dark and page for the whole fleet. This is
+/// the same hazard `api/pollers.rs::resolve_polled_by` guards with an `is_leader` check.
+///
+/// **The node scan is generation-gated** (ADR-026, the idiom `SweepCache` already uses): pool
+/// membership is config-derived and `audit_mw` bumps `config_gen` on every config mutation, so an
+/// unchanged generation means the counts are identical and a steady-state tick costs one in-memory
+/// registry read. Without that this would scan the node table every 30 seconds, which at 50,000
+/// nodes is not affordable.
+pub(crate) async fn run_pool_coverage_watch(
+    coordinator: Arc<Coordinator>,
+    repo: Arc<NodeRepo>,
+    meraki: Arc<yagra_meraki::MerakiDeviceRepo>,
+    groups: Arc<groups::GroupRepo>,
+    alerts: Arc<AlertManager>,
+    sink: Arc<dyn AlertSink>,
+) {
+    let mut watch = pool_coverage::CoverageWatch::from_env();
+    if watch.disabled() {
+        tracing::info!(
+            env = pool_coverage::RAISE_AFTER_ENV,
+            "poller-pool coverage notifications are disabled; gauges still published"
+        );
+    }
+    // ADR-107 Inc.5. The alerts survived the restart; the watch that can close them did not. Seed
+    // it from what `alerts::restore::restore` (awaited back in `run_live`) put back, or a pool that
+    // recovered while this core was down stays `critical` for as long as the deployment lives.
+    let reopened = pool_coverage::raised_pools(&alerts.active_alerts());
+    if !reopened.is_empty() {
+        tracing::info!(
+            pools = ?reopened,
+            "resuming coverage watch for pools whose alert was already open"
+        );
+        watch.seed(reopened, Instant::now());
+    }
+    let mut cached: pool_coverage::CountsCache = None;
+    loop {
+        tokio::time::sleep(pool_coverage::WATCH_TICK).await;
+
+        let generation = config_gen::current();
+        if cached.as_ref().is_none_or(|(gen, _)| *gen != generation) {
+            let read = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
+            pool_coverage::remember(&mut cached, generation, read);
+        }
+        let Some((_, node_pools)) = cached.as_ref() else {
+            continue;
+        };
+
+        // 🚨 **The alarm path deliberately does not read the `pools` table** (ADR-107,, out of scope).
+        // A pool that has been described but has neither nodes nor a poller is half-configured on
+        // purpose, not broken — `is_uncovered` would already answer false for it, but feeding it in
+        // would still put it in `publish_gauges`' output and make every freshly created pool show up
+        // in a metric an operator reads as "pools needing attention". The empty slice keeps this
+        // loop's behaviour byte-identical to before the table existed.
+        let coverage =
+            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools, &[]);
+        pool_coverage::publish_gauges(&coverage);
+
+        for event in watch.observe(&coverage, Instant::now()) {
+            let action = match event {
+                pool_coverage::CoverageEvent::Raise { pool, nodes } => {
+                    tracing::warn!(
+                        pool = %pool,
+                        nodes,
+                        "poller pool has nodes but no live poller — they are not being monitored"
+                    );
+                    pool_coverage::count_notification("raise");
+                    alerts.raise_pool_coverage_alert(&pool, pool_coverage::now_unix_ms())
+                }
+                pool_coverage::CoverageEvent::Clear { pool } => {
+                    tracing::info!(pool = %pool, "poller pool has a live poller again");
+                    pool_coverage::count_notification("clear");
+                    alerts.resolve_pool_coverage_alert(&pool)
+                }
+            };
+            let Some(action) = action else { continue };
+            // Persist **and** notify, as one step. Writing inline rather than through the batch
+            // channel is deliberate: that channel exists to keep the poll-result hot path off the
+            // database, and this loop is a 30-second tick that emits at most one row per pool per
+            // debounce. This loop holds no `Notifier` of its own (ADR-092) — Increment 1 wired it
+            // to the notifier alone and the alerts paged with no row behind them, and the type is
+            // now what stops that rather than a test reading this function's text.
+            sink.dispatch(action).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use yagra_alert::Subject;
+
+    // **"A coverage transition is written to History, not only notified" was a test here, and is a
+    // type now.** ⚠️ Found on real hardware, not by a test: Increment 1 wired this loop to the
+    // notifier alone, so the alert raised, paged, and left no row — with every gauge and log line
+    // looking correct. What stood in for the missing type was a structural assertion that read this
+    // file's own text for `history.record(` and `notifier.handle(`, because the loop's body is a
+    // 30-second tick around a real database and there was no seam to test through.
+    //
+    // ADR-092 gave the loop an `AlertSink` and took its `Notifier` away, so the assertion has
+    // nothing left to assert: the failure it described does not compile. What `dispatch` actually
+    // does with a transition is tested in `alerts/sink.rs`, against fakes, including the case where
+    // the History write fails and the page must still go out.
+
+    fn view(id: &str, pool: &str, online: bool) -> PollerView {
+        PollerView {
+            id: id.to_owned(),
+            pool: pool.to_owned(),
+            online,
+            seconds_since_seen: 0,
+            version: String::new(),
+            incarnation: uuid::Uuid::nil(),
+            working_set_nodes: 0,
+            working_set_specs: 0,
+            inflight: 0,
+            results_total: 0,
+            host: None,
+            listeners: Vec::new(),
+            caps: Vec::new(),
+            upgrade: None,
+        }
+    }
+
+    fn counts(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+        pairs.iter().map(|(p, n)| ((*p).to_owned(), *n)).collect()
+    }
+
+    fn cov(pool: &str, nodes: usize, live: usize) -> PoolCoverage {
+        PoolCoverage {
+            pool: pool.to_owned(),
+            nodes,
+            live_pollers: live,
+        }
+    }
+
+    #[test]
+    fn nodes_with_no_live_poller_are_uncovered() {
+        let c = coverage(&[], &counts(&[("tokyo", 412)]), &[]);
+        assert_eq!(c, vec![cov("tokyo", 412, 0)]);
+        assert!(c[0].is_uncovered());
+    }
+
+    #[test]
+    fn an_offline_poller_does_not_cover_a_pool() {
+        // The whole point: a registered-but-dead poller must not read as coverage.
+        let c = coverage(&[view("p1", "tokyo", false)], &counts(&[("tokyo", 5)]), &[]);
+        assert_eq!(c, vec![cov("tokyo", 5, 0)]);
+        assert!(c[0].is_uncovered());
+    }
+
+    #[test]
+    fn a_live_poller_covers_its_pool() {
+        let c = coverage(&[view("p1", "tokyo", true)], &counts(&[("tokyo", 5)]), &[]);
+        assert_eq!(c, vec![cov("tokyo", 5, 1)]);
+        assert!(!c[0].is_uncovered());
+    }
+
+    #[test]
+    fn a_pool_with_a_poller_and_no_nodes_is_not_uncovered() {
+        // A poller registered but not yet assigned work is reported, without a warning.
+        let c = coverage(&[view("p1", "spare", true)], &HashMap::new(), &[]);
+        assert_eq!(c, vec![cov("spare", 0, 1)]);
+        assert!(!c[0].is_uncovered());
+    }
+
+    /// The rolling-restart case. A `leaving` heartbeat removes the poller from the registry at
+    /// once, so the condition is true immediately on any ordinary restart — if this ever emits a
+    /// `Raise`, the feature becomes a pager that fires on every deploy.
+    #[test]
+    fn a_pool_that_recovers_inside_the_debounce_says_nothing_at_all() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        assert!(w.observe(&[cov("tokyo", 5, 0)], t0).is_empty());
+        assert!(w
+            .observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(120))
+            .is_empty());
+        assert!(
+            w.observe(&[cov("tokyo", 5, 1)], t0 + Duration::from_secs(150))
+                .is_empty(),
+            "no Clear for something that was never raised"
+        );
+    }
+
+    #[test]
+    fn a_sustained_outage_raises_once_and_clears_once() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        assert!(w.observe(&[cov("tokyo", 5, 0)], t0).is_empty());
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(300)),
+            vec![CoverageEvent::Raise {
+                pool: "tokyo".to_owned(),
+                nodes: 5
+            }]
+        );
+        // Still dark: no repeat.
+        assert!(w
+            .observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(900))
+            .is_empty());
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 2)], t0 + Duration::from_secs(1000)),
+            vec![CoverageEvent::Clear {
+                pool: "tokyo".to_owned()
+            }]
+        );
+        // And it can raise again after another full debounce.
+        let t1 = t0 + Duration::from_secs(2000);
+        assert!(w.observe(&[cov("tokyo", 5, 0)], t1).is_empty());
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 0)], t1 + Duration::from_secs(300)),
+            vec![CoverageEvent::Raise {
+                pool: "tokyo".to_owned(),
+                nodes: 5
+            }]
+        );
+    }
+
+    #[test]
+    fn a_raised_pool_that_disappears_is_cleared() {
+        // Renamed, or its last node moved away: the pool is gone from the sample entirely. Without
+        // iterating the watch map this would leave a PagerDuty/JSM incident open forever.
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(60));
+        w.observe(&[cov("tokyo", 5, 0)], t0);
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(60))
+                .len(),
+            1
+        );
+        assert_eq!(
+            w.observe(&[], t0 + Duration::from_secs(120)),
+            vec![CoverageEvent::Clear {
+                pool: "tokyo".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_pool_that_disappears_before_it_raised_says_nothing() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.observe(&[cov("tokyo", 5, 0)], t0);
+        assert!(w.observe(&[], t0 + Duration::from_secs(30)).is_empty());
+    }
+
+    #[test]
+    fn a_zero_debounce_disables_notification_and_forgets_its_state() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::ZERO);
+        assert!(w.disabled());
+        assert!(w.observe(&[cov("tokyo", 5, 0)], t0).is_empty());
+        assert!(w
+            .observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(86_400))
+            .is_empty());
+        assert!(w.watching.is_empty(), "disabling must not strand a watch");
+    }
+
+    #[test]
+    fn several_pools_flip_in_a_deterministic_order() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(60));
+        let sample = [cov("beta", 1, 0), cov("alpha", 2, 0)];
+        w.observe(&sample, t0);
+        let events = w.observe(&sample, t0 + Duration::from_secs(60));
+        assert_eq!(
+            events,
+            vec![
+                CoverageEvent::Raise {
+                    pool: "alpha".to_owned(),
+                    nodes: 2
+                },
+                CoverageEvent::Raise {
+                    pool: "beta".to_owned(),
+                    nodes: 1
+                },
+            ]
+        );
+    }
+
+    /// The anti-`yagra_topology_anchor_unresolved` property. With no `idle_timeout` on the
+    /// recorder, a series that stops being written keeps its last value forever — so a recovered
+    /// pool must be written as `0.0`, not omitted.
+    #[test]
+    fn a_recovered_pool_is_reported_as_zero_not_omitted() {
+        let (total, per_pool) = gauge_values(&[cov("tokyo", 5, 2), cov("osaka", 3, 0)]);
+        assert_eq!(total, 1);
+        assert_eq!(
+            per_pool,
+            vec![("tokyo".to_owned(), 0.0), ("osaka".to_owned(), 3.0)]
+        );
+    }
+
+    #[test]
+    fn past_the_label_cap_the_total_survives_and_the_labels_are_dropped_whole() {
+        let many: Vec<PoolCoverage> = (0..=MAX_LABELLED_POOLS)
+            .map(|i| cov(&format!("pool-{i}"), 1, 0))
+            .collect();
+        let (total, per_pool) = gauge_values(&many);
+        assert_eq!(total, MAX_LABELLED_POOLS + 1);
+        assert!(
+            per_pool.is_empty(),
+            "a truncated labelled gauge would be a wrong answer; the total is still a right one"
+        );
+    }
+    fn alert_on(subject: Subject, metric: &str) -> Alert {
+        Alert {
+            subject,
+            check: yagra_common::CheckId::from(uuid::Uuid::nil()),
+            severity: yagra_common::Severity::Critical,
+            state: yagra_common::NodeState::Unreachable,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: metric.to_owned(),
+            breach: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+        }
+    }
+
+    /// ADR-107 Inc.5. Both halves of the filter, because either one alone is wrong in a way that
+    /// only shows up later: the subject alone would sweep in a future pool-subject alert this loop
+    /// knows nothing about and clear it, and the metric alone would match a device metric that
+    /// happened to share the name.
+    #[test]
+    fn only_a_pool_subject_carrying_this_modules_metric_is_read_back() {
+        let node = Subject::Node(yagra_common::NodeId::from(uuid::Uuid::nil()));
+        let active = [
+            alert_on(Subject::Pool("tokyo".to_owned()), COVERAGE_METRIC),
+            alert_on(Subject::Pool("osaka".to_owned()), "some_other_pool_metric"),
+            alert_on(node, COVERAGE_METRIC),
+        ];
+        assert_eq!(raised_pools(&active), vec!["tokyo".to_owned()]);
+    }
+
+    #[test]
+    fn an_empty_active_set_seeds_nothing() {
+        assert!(raised_pools(&[]).is_empty());
+    }
+
+    /// 🚨 **The fifteen-day `critical`.** The pool recovered while core was down, so this process
+    /// never saw it uncovered — and before the seed there was nothing in the map to clear, so the
+    /// restored alert stayed open for the life of the deployment.
+    #[test]
+    fn a_pool_that_recovered_while_core_was_down_is_cleared_on_the_first_tick() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.seed(["tokyo".to_owned()], t0);
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 1)], t0 + Duration::from_secs(30)),
+            vec![CoverageEvent::Clear {
+                pool: "tokyo".to_owned()
+            }],
+            "the restored alert has to close on the first tick that sees a live poller"
+        );
+    }
+
+    /// The other disappearance: the pool is gone from the sample entirely (renamed, or its last
+    /// node taken over — ADR-107 Inc.4). Same `Clear`, and it is the case a seeded-but-unobserved
+    /// pool would otherwise miss, because `observe` iterates the watch map rather than the sample.
+    #[test]
+    fn a_seeded_pool_that_is_gone_from_the_sample_is_also_cleared() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.seed(["tokyo".to_owned()], t0);
+        assert_eq!(
+            w.observe(&[], t0 + Duration::from_secs(30)),
+            vec![CoverageEvent::Clear {
+                pool: "tokyo".to_owned()
+            }]
+        );
+    }
+
+    /// ⚠️ The seed must not *page* anyone. A still-dark pool is already open, so re-announcing it
+    /// on every restart is the duplicate this type's doc used to accept as unavoidable — and the
+    /// window it would fire in is a full debounce after boot, which reads as a fresh outage.
+    #[test]
+    fn a_still_uncovered_pool_is_not_raised_again_after_a_restart() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.seed(["tokyo".to_owned()], t0);
+        for after in [1, 300, 301, 3600] {
+            assert!(
+                w.observe(&[cov("tokyo", 5, 0)], t0 + Duration::from_secs(after))
+                    .is_empty(),
+                "seeded pool re-raised {after}s after the restart"
+            );
+        }
+        // …and it is still the same watch: recovery still closes it.
+        assert_eq!(
+            w.observe(&[cov("tokyo", 5, 2)], t0 + Duration::from_secs(3630)),
+            vec![CoverageEvent::Clear {
+                pool: "tokyo".to_owned()
+            }]
+        );
+    }
+
+    /// Seeding a watch whose notifications are off must not resurrect them: `observe` clears the
+    /// map and returns nothing, so a seeded entry would be dead weight that a later re-enable
+    /// (a restart with the env var changed) could act on.
+    #[test]
+    fn seeding_a_disabled_watch_does_nothing() {
+        let t0 = Instant::now();
+        let mut w = CoverageWatch::new(Duration::ZERO);
+        w.seed(["tokyo".to_owned()], t0);
+        assert!(w.observe(&[cov("tokyo", 5, 0)], t0).is_empty());
+        assert!(w.watching.is_empty());
+    }
+
+    /// 🚨 **The seed is one line in a loop no test can run, and deleting it is silent** — which is
+    /// the same shape as the defect it repairs. Everything above drives `seed` and `raised_pools`
+    /// directly; nothing above notices if the watch loop stops calling them, and the symptom would
+    /// again be an alert that never closes, on somebody's deployment, months later.
+    ///
+    /// So this reads the module's own production text. It is the weakest kind of check and it is
+    /// the one available: `run_pool_coverage_watch` is a 30-second tick around a live coordinator,
+    /// a database and a bus, and ADR-092 already took this module's other structural assertion away
+    /// by making its failure uncompilable. This failure is not uncompilable.
+    ///
+    /// ⚠️ The floor counts what was **searched**. A reader that stops matching returns "nothing
+    /// wrong", which is indistinguishable from a healthy module.
+    #[test]
+    fn the_watch_loop_seeds_the_watch_from_the_alerts_that_are_already_open() {
+        let roots = crate::module_source::roots("src/fleet", "pool_coverage");
+        let src: String = crate::module_source::files_no_comments(&roots)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect();
+        assert!(
+            src.len() > 5_000,
+            "read only {} bytes of pool_coverage — the reader stopped matching, \
+             which is not the same as the module having shrunk",
+            src.len()
+        );
+        let after_signature = src
+            .split_once("async fn run_pool_coverage_watch")
+            .expect("the watch loop was renamed or moved; point this check at it")
+            .1;
+        assert!(
+            after_signature.contains("raised_pools(") && after_signature.contains(".seed("),
+            "the watch loop no longer seeds itself from the already-open coverage alerts \
+             (ADR-107 増分 5). Without that, a pool that recovers while this core is down keeps a \
+             `critical` open for the life of the deployment — measured at 15 days on a lab deployment"
+        );
+        assert!(
+            after_signature.contains("remember("),
+            "the watch loop no longer folds its node-count read through `remember`, so nothing \
+             tested decides what a failed read does to the cache (ADR-158 B4)"
+        );
+    }
+
+    /// A seeded, raised `siteA` and a cache that counted 12 nodes in it — the state a coverage
+    /// alert that has been open across a restart is in.
+    fn raised_site_a(t0: Instant) -> (CoverageWatch, CountsCache) {
+        let mut w = CoverageWatch::new(Duration::from_secs(300));
+        w.seed(["siteA".to_owned()], t0);
+        (w, Some((1, counts(&[("siteA", 12)]))))
+    }
+
+    fn failed_read() -> anyhow::Result<HashMap<String, usize>> {
+        Err(anyhow::anyhow!("relation \"node_groups\" does not exist"))
+    }
+
+    /// ADR-158 B4. A failed read leaves the older generation cached — so the next tick reads again —
+    /// and never replaces what was known with nothing.
+    #[test]
+    fn a_failed_read_is_never_cached() {
+        let (_, mut cached) = raised_site_a(Instant::now());
+        remember(&mut cached, 2, failed_read());
+        assert_eq!(cached, Some((1, counts(&[("siteA", 12)]))));
+    }
+
+    /// The first tick after a restart has no cache yet. A failed read there used to be cached as an
+    /// empty inventory — which cleared every coverage alert the restore had just put back.
+    #[test]
+    fn a_failed_read_on_the_first_tick_leaves_nothing_to_act_on() {
+        let mut cached = None;
+        remember(&mut cached, 1, failed_read());
+        assert_eq!(cached, None);
+    }
+
+    #[test]
+    fn a_failed_read_clears_nothing() {
+        let t0 = Instant::now();
+        let (mut w, mut cached) = raised_site_a(t0);
+        remember(&mut cached, 2, failed_read());
+        let (_, node_pools) = cached.as_ref().expect("the last answer is kept");
+        let sample = coverage(&[], node_pools, &[]);
+        assert!(w.observe(&sample, t0 + Duration::from_secs(30)).is_empty());
+    }
+
+    /// The other direction, and the reason the old "an empty answer keeps the last set" guard had
+    /// to go rather than stay beside the fix: once a failure is an `Err`, an empty map is a real
+    /// empty inventory, and the pool's alert must be able to close.
+    #[test]
+    fn an_emptied_inventory_does_clear() {
+        let t0 = Instant::now();
+        let (mut w, mut cached) = raised_site_a(t0);
+        remember(&mut cached, 2, Ok(HashMap::new()));
+        let (generation, node_pools) = cached.as_ref().expect("cached");
+        assert_eq!(*generation, 2);
+        let sample = coverage(&[], node_pools, &[]);
+        assert_eq!(
+            w.observe(&sample, t0 + Duration::from_secs(30)),
+            vec![CoverageEvent::Clear {
+                pool: "siteA".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn nodes_are_counted_by_the_pool_they_resolve_to() {
+        let folder = uuid::Uuid::from_u128(7);
+        let resolver = PoolResolver::build(vec![(folder, None, Some("siteA".to_owned()))]);
+        let at = |pool: Option<&str>, group: Option<uuid::Uuid>| {
+            let mut n = Node::new(
+                yagra_common::NodeId::new(),
+                "n",
+                std::net::IpAddr::from([10, 0, 0, 1]),
+            );
+            n.pool = pool.map(str::to_owned);
+            n.group = group.map(yagra_common::GroupId::from);
+            n
+        };
+        let nodes = [
+            at(None, Some(folder)),
+            at(None, Some(folder)),
+            at(Some("siteB"), Some(folder)),
+            at(None, None),
+        ];
+        assert_eq!(
+            count_by_pool(&nodes, &resolver),
+            counts(&[("siteA", 2), ("siteB", 1), ("default", 1)])
+        );
+    }
+
+    use yagra_base::pgtest;
+
+    fn stores(pool: &sqlx::PgPool) -> (NodeRepo, MerakiDeviceRepo, GroupRepo) {
+        (
+            pgtest::repo(pool.clone()),
+            MerakiDeviceRepo::new(pool.clone()),
+            GroupRepo::new(pool.clone()),
+        )
+    }
+
+    /// A node inheriting `siteA` from its folder, read with the folder tree readable and then not.
+    /// Before ADR-158 the unreadable tree resolved the node to `default` and said so as an answer.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_folder_pool_read_is_an_error_not_a_default_pool(pool: sqlx::PgPool) {
+        let folder = pgtest::group(&pool, "site-a").await;
+        GroupRepo::new(pool.clone())
+            .set_pool(folder, Some("siteA"))
+            .await
+            .unwrap();
+        pgtest::node(&pool, "inherits", 1, Some(folder)).await;
+        let (repo, meraki, groups) = stores(&pool);
+        assert_eq!(
+            node_counts_by_pool(&repo, &meraki, &groups).await.unwrap(),
+            counts(&[("siteA", 1)])
+        );
+
+        sqlx::query("ALTER TABLE node_groups RENAME COLUMN parent_id TO parent_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(node_counts_by_pool(&repo, &meraki, &groups).await.is_err());
+    }
+
+    /// An unreadable inventory, or an unreadable Meraki list, is an error — not an empty fleet, and
+    /// not a fleet with the Meraki nodes counted in.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_failed_inventory_or_meraki_read_is_an_error(pool: sqlx::PgPool) {
+        pgtest::node(&pool, "plain", 1, None).await;
+        let (repo, meraki, groups) = stores(&pool);
+        assert_eq!(pool_dependent_nodes(&repo, &meraki).await.unwrap().len(), 1);
+
+        sqlx::query("ALTER TABLE meraki_devices RENAME TO meraki_devices_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(pool_dependent_nodes(&repo, &meraki).await.is_err());
+        sqlx::query("ALTER TABLE meraki_devices_unreadable RENAME TO meraki_devices")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query("ALTER TABLE nodes RENAME TO nodes_unreadable")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(node_counts_by_pool(&repo, &meraki, &groups).await.is_err());
+    }
+}

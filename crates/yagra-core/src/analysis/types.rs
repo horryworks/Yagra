@@ -412,7 +412,7 @@ pub struct AnalysisSchedule {
     pub scope_label: String,
     /// The launch knobs, the same shape as `AnalysisJob.params`.
     pub params: serde_json::Value,
-    pub frequency: crate::cadence::Cadence,
+    pub frequency: crate::runtime::cadence::Cadence,
     pub day_of_week: Option<i16>,
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
@@ -429,7 +429,7 @@ pub struct ScheduleInput {
     /// The launch spec, already validated and clamped by the same `job_params` the manual launch
     /// path uses — so a schedule cannot be saved with a window a direct launch would refuse.
     pub params: JobParams,
-    pub cadence: crate::cadence::Schedule,
+    pub cadence: crate::runtime::cadence::Schedule,
     pub enabled: bool,
 }
 

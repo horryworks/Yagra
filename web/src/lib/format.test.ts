@@ -673,7 +673,7 @@ describe('helpers lifted out of the .tsx screens', () => {
 });
 
 // ADR-046 Inc.7 — metric units. The table itself lives in Rust
-// (`crates/yagra-core/src/metric_meaning.rs`) and reaches here as the generated
+// (`crates/yagra-core/src/tsdb/metric_meaning.rs`) and reaches here as the generated
 // `src/api/metricUnits.json`, so nothing below re-declares which metric has which unit. What these
 // pin is the *rendering* of a unit, and the two places a missing answer is invisible: a `scaled`
 // metric with no formatter, and a `counted` noun with no string.

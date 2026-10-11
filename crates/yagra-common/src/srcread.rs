@@ -836,7 +836,12 @@ mod tests {
             read.len()
         );
         // Descends, and spells the path with `/` on every platform.
-        for present in ["store.rs", "api/nodes.rs", "mcp/tools/mod.rs", "main.rs"] {
+        for present in [
+            "tsdb/store.rs",
+            "api/nodes.rs",
+            "mcp/tools/mod.rs",
+            "main.rs",
+        ] {
             assert!(names.contains(&present), "{present} is production code");
         }
         // Declared test-only by a `mod.rs` two levels down, by a `mod.rs` one level down, and by
@@ -848,7 +853,7 @@ mod tests {
             );
         }
         // Each file's own test items are gone too.
-        let store = &read.iter().find(|(n, _)| n == "store.rs").unwrap().1;
+        let store = &read.iter().find(|(n, _)| n == "tsdb/store.rs").unwrap().1;
         assert!(store.contains("impl MetricStore for VmStore"));
         assert!(!store.contains("mod tests {"));
     }

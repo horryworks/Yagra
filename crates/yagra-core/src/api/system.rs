@@ -12,7 +12,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::RequireView;
 use super::util::now_unix_s;
 use super::{clamp_range_step, ApiState, DEFAULT_RANGE_SECS, DEFAULT_STEP_SECS};
-use crate::store::MetricPoint;
+use crate::tsdb::store::MetricPoint;
 use axum::{
     extract::{Path, Query, State},
     routing::get,
@@ -257,9 +257,9 @@ async fn host_metric_range(
 
 /// The step a host trend is folded and drawn at.
 ///
-/// 🚨 **The floor is the sample interval, not 1.** [`crate::store`]'s `host_range_query` folds each
+/// 🚨 **The floor is the sample interval, not 1.** [`crate::tsdb::store`]'s `host_range_query` folds each
 /// step with `avg_over_time` over a window of exactly that step, so a step finer than
-/// [`crate::host_collector::HOST_SAMPLE_SECS`] leaves buckets with no sample in them — gaps, where the old
+/// [`crate::tsdb::host_collector::HOST_SAMPLE_SECS`] leaves buckets with no sample in them — gaps, where the old
 /// raw-selector read drew a carried-forward value instead. Drawing finer than you sample was never
 /// honest; before ADR-082 it was merely invisible, because the raw read had VictoriaMetrics'
 /// staleness window to hide behind.
@@ -268,7 +268,7 @@ fn host_trend_step(from: i64, to: i64, requested: Option<u64>) -> u64 {
         from,
         to,
         requested.unwrap_or(DEFAULT_STEP_SECS),
-        crate::host_collector::HOST_SAMPLE_SECS,
+        crate::tsdb::host_collector::HOST_SAMPLE_SECS,
     )
 }
 
@@ -426,24 +426,25 @@ mod tests {
         // A caller asking for per-second detail gets the sampling interval, not per-second gaps.
         assert_eq!(
             host_trend_step(0, 3600, Some(1)),
-            crate::host_collector::HOST_SAMPLE_SECS
+            crate::tsdb::host_collector::HOST_SAMPLE_SECS
         );
         assert_eq!(
             host_trend_step(0, 3600, Some(0)),
-            crate::host_collector::HOST_SAMPLE_SECS
+            crate::tsdb::host_collector::HOST_SAMPLE_SECS
         );
         // Anything at or above the floor is honoured as asked.
         assert_eq!(
-            host_trend_step(0, 3600, Some(crate::host_collector::HOST_SAMPLE_SECS)),
-            crate::host_collector::HOST_SAMPLE_SECS
+            host_trend_step(0, 3600, Some(crate::tsdb::host_collector::HOST_SAMPLE_SECS)),
+            crate::tsdb::host_collector::HOST_SAMPLE_SECS
         );
         assert_eq!(host_trend_step(0, 3600, Some(300)), 300);
         // The default is above the floor — otherwise the default view would be silently re-stepped.
-        assert!(host_trend_step(0, 3600, None) >= crate::host_collector::HOST_SAMPLE_SECS);
+        assert!(host_trend_step(0, 3600, None) >= crate::tsdb::host_collector::HOST_SAMPLE_SECS);
         assert_eq!(host_trend_step(0, 3600, None), DEFAULT_STEP_SECS);
         // A long window is still bounded by the point cap, which outranks the floor.
         assert!(
-            host_trend_step(0, 90 * 86_400, Some(15)) > crate::host_collector::HOST_SAMPLE_SECS
+            host_trend_step(0, 90 * 86_400, Some(15))
+                > crate::tsdb::host_collector::HOST_SAMPLE_SECS
         );
     }
 
@@ -474,7 +475,7 @@ mod tests {
         let network = &json["network"];
         assert_eq!(
             network["step_secs"],
-            crate::host_collector::HOST_SAMPLE_SECS
+            crate::tsdb::host_collector::HOST_SAMPLE_SECS
         );
         for series in [
             "nic_rx_bytes",

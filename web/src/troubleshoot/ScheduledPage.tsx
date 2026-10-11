@@ -9,20 +9,22 @@
 // that is the bug `reports/runStatus.ts` was written to fix, and `busy` is exactly the variant it
 // would misreport: a deferred fire is not a failure, it is a fire that will happen a minute later.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useAuthStore, useCan } from '../store';
 import type { AnalysisSchedule, AnalysisScheduleStatus } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { Button } from '../components/ui/Button';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useLoad } from '../lib/useLoad';
 import { scheduleFilters } from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -130,10 +132,7 @@ function scheduleColumns(
 export function ScheduledPage() {
   const { t } = useTranslation('troubleshoot');
   const authed = useAuthStore((s) => s.authed);
-  const [rows, setRows] = useState<AnalysisSchedule[]>([]);
   const [flowEnabled, setFlowEnabled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<AnalysisSchedule | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<AnalysisSchedule | null>(null);
@@ -142,25 +141,27 @@ export function ScheduledPage() {
   // action is offered only to a caller who holds it, rather than failing on save.
   const canWrite = useCan('ack_alerts');
 
-  const load = useCallback(() => {
-    setError(null);
-    api
-      .listAnalysisSchedules()
-      .then(setRows)
-      .catch((e: unknown) => setError(errMsg(e, t('schedule.err.load'))))
-      .finally(() => setLoading(false));
-  }, [t]);
+  const {
+    data: rows,
+    block,
+    error,
+    loading,
+    reload: load,
+  } = useLoad(() => api.listAnalysisSchedules(), [], {
+    initial: [] as AnalysisSchedule[],
+    enabled: authed,
+    errorFallback: t('schedule.err.load'),
+  });
 
   useEffect(() => {
     if (!authed) return;
-    load();
     // The flow tier decides which analyses may be scheduled at all; the same call the app already
     // makes for the login gate carries it.
     api
       .getConfig()
       .then((c) => setFlowEnabled(c.flow_enabled === true))
       .catch(() => undefined);
-  }, [authed, load]);
+  }, [authed]);
 
   // `canWrite` reaches the columns: the row menu was the one write control here that did not ask,
   // so a Viewer got Edit and Delete on every row and a 403 on Save.
@@ -193,6 +194,8 @@ export function ScheduledPage() {
         <Card>
           <p className="muted">{t('schedule.signInPrompt')}</p>
         </Card>
+      ) : block ? (
+        <LoadBlockNotice block={block} />
       ) : (
         <>
           <ListToolbar

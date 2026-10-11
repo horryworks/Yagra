@@ -3,7 +3,7 @@
 //! said about them.
 //!
 //! One read and five writes. The read recomputes the comparison from the stored interface addresses
-//! on every call ([`crate::subnet_overlaps`] is pure) and is **group-filtered**: a scoped caller is
+//! on every call ([`crate::inventory::subnet_overlaps`] is pure) and is **group-filtered**: a scoped caller is
 //! told an overlap reaches sites it cannot see, and how many, never which. [`overlaps_view`] is the
 //! seam the MCP `get_subnet_overlaps` tool shares, so the two surfaces cannot disclose differently.
 //!
@@ -24,7 +24,7 @@ use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::{require_fleet_wide, NodeScope};
 use super::util::CreatedId;
 use super::{AdminState, ApiState};
-use crate::subnet_overlaps::{
+use crate::inventory::subnet_overlaps::{
     self, Ack, ExclusionReason, Input, Overlap, OverlapStatus, Port, Rule,
 };
 use yagra_base::repo::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
@@ -187,7 +187,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
     )
     .map_err(|e| internal(&e, "read subnet overlap inputs"))?;
 
-    let site_of = crate::sites::sites_by_node(&groups, &nodes);
+    let site_of = crate::inventory::sites::sites_by_node(&groups, &nodes);
     let folder_of: HashMap<Uuid, Option<Uuid>> = nodes.iter().map(|(id, _, g)| (*id, *g)).collect();
     let visible: Option<HashSet<Uuid>> = (!scope.is_all()).then(|| {
         nodes
@@ -342,7 +342,7 @@ impl SubnetOverlapsView {
     /// Every field populated, for the MCP forbidden-key canary (`mcp/dto.rs`).
     #[cfg(test)]
     pub(crate) fn sample() -> Self {
-        use crate::subnet_overlaps::{Exclusion, OverlapHint, OverlapKind, Place};
+        use crate::inventory::subnet_overlaps::{Exclusion, OverlapHint, OverlapKind, Place};
         let site = Uuid::new_v4();
         Self {
             overlaps: vec![Overlap {

@@ -304,14 +304,14 @@ mod tests {
     /// A minimal state whose only wired pieces are the session store (for token auth) and the flag.
     /// `admin` is `None`, so PAT auth is unavailable — session tokens are the auth path under test.
     fn state_with_sessions(sessions: Arc<SessionStore>) -> ApiState {
-        use crate::sink::InMemorySink;
-        use crate::store::MetricStore;
+        use crate::tsdb::sink::InMemorySink;
+        use crate::tsdb::store::MetricStore;
         let store: Arc<dyn MetricStore> = Arc::new(InMemorySink::default());
         ApiState {
             store,
             logs: None,
             flows: None,
-            ipasn: crate::ipasn::empty_handle(),
+            ipasn: crate::passive::ipasn::empty_handle(),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
             nodes: Arc::new(yagra_base::repo::StaticNodeList::demo()),
             alerts: Arc::new(crate::alerts::new_manager()),

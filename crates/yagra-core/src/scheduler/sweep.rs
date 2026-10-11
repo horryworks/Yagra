@@ -5,8 +5,10 @@
 //! Needs the clock and the pool map. Moved here from `main.rs` by ADR-083; the file it landed
 //! in is the one this module is named after.
 
-use crate::coordinator::Coordinator;
-use crate::{poolres, scheduler, wireless};
+use crate::fleet::coordinator::Coordinator;
+use crate::fleet::poolres;
+use crate::scheduler;
+use crate::topology::wireless;
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;

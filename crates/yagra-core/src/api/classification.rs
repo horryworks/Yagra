@@ -15,7 +15,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig};
 use super::util::CreatedId;
 use super::{is_valid_oid_prefix, AdminState, ApiState};
-use crate::classification::ClassificationRepo;
+use crate::discover::classification::ClassificationRepo;
 use axum::{
     extract::Path,
     http::StatusCode,

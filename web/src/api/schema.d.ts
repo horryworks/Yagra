@@ -3497,7 +3497,7 @@ export interface paths {
         /**
          * `PUT /api/v1/pollers/{id}/pool` — move this poller to another pool (ADR-107 Inc.2).
          * @description **This moves it, now.** Core owns `pollers.pool`; the write here plus
-         *     [`crate::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
+         *     [`crate::fleet::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
          *     (woken immediately) and the poller receives a snapshot of the new pool's nodes on
          *     `yagra.poller.assign.{id}` — a subject with no pool token in it, which is why the primary work
          *     path needs no cooperation from the poller at all. The snapshot also carries the pool name, which
@@ -10238,7 +10238,7 @@ export interface components {
              */
             family?: string | null;
             /**
-             * @description One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders
+             * @description One sentence, in English. English is canonical (`crate::tsdb::metric_meaning`); the WebUI renders
              *     a translation of it, so the wording here and the wording on screen may differ by language,
              *     never by content.
              */

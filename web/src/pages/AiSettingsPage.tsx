@@ -13,13 +13,13 @@
 // outside the boundary is confirmed at the moment it is switched on. Each of those judgements is
 // in `aiConfigForm.ts`, where a test reaches it.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useAuthStore, useCan } from '../store';
-import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { useLoad } from '../lib/useLoad';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-import type { LlmConfigView, LlmProviderChoice } from '../types/api';
+import type { LlmConfigResponse, LlmConfigView, LlmProviderChoice } from '../types/api';
 import { formatExactTime } from '../lib/format';
 import {
   DEFAULT_TOKENS,
@@ -50,8 +50,6 @@ export function AiSettingsPage() {
 
   const [providers, setProviders] = useState<LlmProviderChoice[]>([]);
   const [stored, setStored] = useState<LlmConfigView | null>(null);
-  const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [loading, setLoading] = useState(true);
 
   const [provider, setProvider] = useState('vertex');
   const [model, setModel] = useState('');
@@ -69,37 +67,36 @@ export function AiSettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const load = useCallback(() => {
-    api
-      .getLlmConfig()
-      .then((res) => {
-        setProviders(res.providers);
-        setBlock(null);
-        setStored(res.config ?? null);
-        if (res.config) {
-          setProvider(res.config.provider);
-          setModel(res.config.model);
-          setProject(res.config.project);
-          setLocation(res.config.location);
-          setMaxTokens(String(res.config.max_output_tokens));
-          setEnabled(res.config.enabled);
-        } else if (res.providers.length > 0) {
-          setProvider(res.providers[0].key);
-        }
-        setApiKey('');
-        setClearKey(false);
-      })
-      .catch((e: unknown) => {
-        const b = classifyLoadError(e);
-        if (b) setBlock(b);
-        else setError(errMsg(e, t('loadFailed')));
-      })
-      .finally(() => setLoading(false));
-  }, [t]);
+  const {
+    data: answer,
+    block,
+    error: loadError,
+    loading,
+    reload: load,
+  } = useLoad(() => api.getLlmConfig(), [], {
+    initial: null as LlmConfigResponse | null,
+    errorFallback: t('loadFailed'),
+  });
 
+  // Each answer replaces the form: `data` keeps its identity until a new one arrives.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!answer) return;
+    const res = answer;
+    setProviders(res.providers);
+    setStored(res.config ?? null);
+    if (res.config) {
+      setProvider(res.config.provider);
+      setModel(res.config.model);
+      setProject(res.config.project);
+      setLocation(res.config.location);
+      setMaxTokens(String(res.config.max_output_tokens));
+      setEnabled(res.config.enabled);
+    } else if (res.providers.length > 0) {
+      setProvider(res.providers[0].key);
+    }
+    setApiKey('');
+    setClearKey(false);
+  }, [answer]);
 
   const choice = useMemo(
     () => providers.find((p) => p.key === provider),
@@ -381,7 +378,7 @@ export function AiSettingsPage() {
       </div>
 
       {!authed && <p className="muted">{t('common:loadBlock.signIn')}</p>}
-      {error && <p className="form-error">{error}</p>}
+      {(error ?? loadError) && <p className="form-error">{error ?? loadError}</p>}
       {saved && <p className="ai-saved">{t('state.saved')}</p>}
       {testResult && (
         <p className={testResult.ok ? 'ai-saved' : 'form-error'}>{testResult.text}</p>

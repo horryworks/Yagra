@@ -30,7 +30,7 @@ use yagra_alert::{Alert, Subject};
 use yagra_bus::PollResult;
 use yagra_common::{CheckId, Node, NodeId, NodeState, SeriesKey, Severity};
 
-use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
+use crate::tsdb::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg};
 use yagra_base::repo::GroupFilter;
 
 use super::seams::{AlertFacts, FleetInventory, RunStore};

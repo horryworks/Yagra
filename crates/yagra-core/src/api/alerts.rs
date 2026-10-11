@@ -211,7 +211,7 @@ fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<A
             ActiveAlertView {
                 subject_kind: alert.subject.kind(),
                 subject_name: alert.subject.name().map(str::to_owned),
-                title: crate::metric_meaning::alert_title_of(&alert.metric),
+                title: crate::tsdb::metric_meaning::alert_title_of(&alert.metric),
                 if_name: None,
                 alert,
                 acked,
@@ -234,7 +234,7 @@ fn decorate_history(
                 title: row
                     .metric
                     .as_deref()
-                    .and_then(crate::metric_meaning::alert_title_of),
+                    .and_then(crate::tsdb::metric_meaning::alert_title_of),
                 if_name: None,
                 row,
                 acked,

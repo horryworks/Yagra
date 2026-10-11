@@ -384,7 +384,7 @@ impl std::ops::Deref for Oidc {
 }
 
 /// The WebUI's TLS certificate store (ADR-044) — absent only in skeleton mode.
-pub struct WebTls(pub Arc<crate::webtls::WebTlsRepo>);
+pub struct WebTls(pub Arc<crate::certs::webtls::WebTlsRepo>);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for WebTls {
@@ -399,14 +399,14 @@ impl FromRequestParts<ApiState> for WebTls {
 }
 
 impl std::ops::Deref for WebTls {
-    type Target = crate::webtls::WebTlsRepo;
+    type Target = crate::certs::webtls::WebTlsRepo;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 /// The bus's TLS certificate store (ADR-065) — absent only in skeleton mode.
-pub struct BusTls(pub Arc<crate::bus_cert::BusTlsRepo>);
+pub struct BusTls(pub Arc<crate::certs::bus_cert::BusTlsRepo>);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for BusTls {
@@ -421,7 +421,7 @@ impl FromRequestParts<ApiState> for BusTls {
 }
 
 impl std::ops::Deref for BusTls {
-    type Target = crate::bus_cert::BusTlsRepo;
+    type Target = crate::certs::bus_cert::BusTlsRepo;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

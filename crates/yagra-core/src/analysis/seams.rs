@@ -16,7 +16,7 @@
 //! watched for anyone using it. With the router behind this trait, an analysis has no `EventRepo`
 //! to reach: reading the alert-linked subset by mistake is no longer a thing that can be written,
 //! so that check is gone rather than converted. The routing itself still lives once, in
-//! [`crate::logstore`]'s `route_*` helpers, shared with the MCP `event_stats` tool — the
+//! [`crate::passive::logstore`]'s `route_*` helpers, shared with the MCP `event_stats` tool — the
 //! implementation below calls them.
 //!
 //! ⚠️ What this does **not** buy: with a fake [`AnalysisEvents`] in a test, the branch *inside*
@@ -36,8 +36,8 @@ use crate::events::{
     EventAuthSource, EventBucketCount, EventFilter, EventFlapStat, EventRepo, EventRow,
     EventSeverityCount, EventSignatureCount,
 };
-use crate::logstore::{LogStore, NameIds};
-use crate::topology_projection::{derived_topology, TopologySources};
+use crate::passive::logstore::{LogStore, NameIds};
+use crate::topology::topology_projection::{derived_topology, TopologySources};
 use yagra_base::groups::GroupRepo;
 use yagra_base::repo::NodeRepo;
 
@@ -139,7 +139,7 @@ impl AnalysisEvents for RoutedEvents {
         filter: &EventFilter,
         bucket_secs: i64,
     ) -> anyhow::Result<Vec<EventBucketCount>> {
-        crate::logstore::route_counts_by_bucket(
+        crate::passive::logstore::route_counts_by_bucket(
             self.logs.as_ref(),
             &self.events,
             filter,
@@ -152,7 +152,8 @@ impl AnalysisEvents for RoutedEvents {
         &self,
         filter: &EventFilter,
     ) -> anyhow::Result<Vec<EventSeverityCount>> {
-        crate::logstore::route_severity_counts(self.logs.as_ref(), &self.events, filter).await
+        crate::passive::logstore::route_severity_counts(self.logs.as_ref(), &self.events, filter)
+            .await
     }
 
     async fn unmatched_signatures(
@@ -160,8 +161,13 @@ impl AnalysisEvents for RoutedEvents {
         filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventSignatureCount>> {
-        crate::logstore::route_unmatched_signatures(self.logs.as_ref(), &self.events, filter, limit)
-            .await
+        crate::passive::logstore::route_unmatched_signatures(
+            self.logs.as_ref(),
+            &self.events,
+            filter,
+            limit,
+        )
+        .await
     }
 
     async fn auth_sources(
@@ -169,7 +175,13 @@ impl AnalysisEvents for RoutedEvents {
         filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventAuthSource>> {
-        crate::logstore::route_auth_sources(self.logs.as_ref(), &self.events, filter, limit).await
+        crate::passive::logstore::route_auth_sources(
+            self.logs.as_ref(),
+            &self.events,
+            filter,
+            limit,
+        )
+        .await
     }
 
     async fn flap_stats(&self, from_ms: i64, to_ms: i64) -> anyhow::Result<Vec<EventFlapStat>> {

@@ -465,7 +465,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::analysis::testkit::{params, Harness};
-    use crate::flowstore::FlowRow;
+    use crate::passive::flowstore::FlowRow;
     use std::net::{IpAddr, Ipv4Addr};
 
     /// One flow record. Defaults are the uninteresting ones; a test names only what it is about.
@@ -708,7 +708,7 @@ mod tests {
             node,
             HashMap::from([(
                 1,
-                crate::store::InterfaceLive {
+                crate::tsdb::store::InterfaceLive {
                     in_bps: Some(1_000.0),
                     out_bps: Some(2_000.0),
                     oper_status: Some(1.0),

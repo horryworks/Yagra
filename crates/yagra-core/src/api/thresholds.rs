@@ -357,7 +357,7 @@ pub(crate) async fn interface_thresholds(
 
 /// Whether the built-in catalog declares `metric` a raw counter. Pure (no store) so the
 /// rejection below is testable without a database; custom collection items are the async
-/// half, via [`crate::collection::CollectionRepo::metric_declared_counter`].
+/// half, via [`crate::discover::collection::CollectionRepo::metric_declared_counter`].
 fn is_builtin_counter(metric: &str) -> bool {
     match yagra_common::builtin_metric_kind(metric) {
         Some(yagra_common::MetricKind::Counter) => true,

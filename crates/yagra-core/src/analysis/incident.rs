@@ -161,7 +161,7 @@ impl Engine {
     ///
     /// Both graphs are unioned, so a hand-authored `parent_id` counts as an edge alongside a
     /// derived one. A node with the "never suppress" opt-out gets no parents from
-    /// [`crate::topology_projection::derived_topology`], and that is kept rather than worked
+    /// [`crate::topology::topology_projection::derived_topology`], and that is kept rather than worked
     /// around: "do not reason about this node's upstream" is an operator statement.
     async fn incident_neighbourhood(
         &self,
@@ -177,7 +177,7 @@ impl Engine {
             }
         };
         let derived = self.graph.derived(&nodes).await;
-        let manual = crate::topology_projection::manual_topology(&nodes);
+        let manual = crate::topology::topology_projection::manual_topology(&nodes);
         one_hop_neighbours(&derived, &manual, authorized)
     }
 

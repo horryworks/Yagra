@@ -137,7 +137,7 @@ services:
   # ── Bus certificate + NATS configuration (ADR-065) ──
   # Mints the self-signed certificate the bus serves, materializes it, and copies the NATS server
   # configuration out of the core image onto the same volume. Runs from the core image so the
-  # certificate rules live in one place (`crates/yagra-core/src/bus_cert.rs`), and runs as a
+  # certificate rules live in one place (`crates/yagra-core/src/certs/bus_cert.rs`), and runs as a
   # ONE-SHOT before nats because core cannot do it: core needs the bus to start, and the bus needs
   # the certificate. Idempotent — with a valid certificate stored it only rewrites the files.
   #

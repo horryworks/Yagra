@@ -487,7 +487,7 @@ pub fn validate(input: &LlmConfigInput) -> Result<ProviderKind, String> {
             super::provider::validate_path_segment("location", location)?;
             // A service-account JSON is optional (Workload Identity); a malformed one is not.
             if let Some(key) = input.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
-                crate::gcp::validate_service_account(key)?;
+                crate::passive::gcp::validate_service_account(key)?;
             }
         }
         ProviderKind::Gemini | ProviderKind::Claude => {

@@ -89,7 +89,7 @@ impl NodeSummaryDto {
         node: &Node,
         state: Option<NodeState>,
         kind: NodeKind,
-        tags: &crate::tagres::TagResolver,
+        tags: &crate::inventory::tagres::TagResolver,
     ) -> Self {
         Self {
             id: node.id.0,
@@ -206,7 +206,7 @@ impl AlertDto {
             severity: alert.severity.as_str().to_owned(),
             state: alert.state.as_str().to_owned(),
             metric: alert.metric.clone(),
-            title: crate::metric_meaning::alert_title_of(&alert.metric),
+            title: crate::tsdb::metric_meaning::alert_title_of(&alert.metric),
             fired_at: unix_ms_to_rfc3339(alert.at_unix_ms),
             root_cause: alert.root_cause.map(|r| r.0),
             ifindex: alert.ifindex.map(|i| i.0),
@@ -294,7 +294,7 @@ impl AlertHistoryDto {
             title: row
                 .metric
                 .as_deref()
-                .and_then(crate::metric_meaning::alert_title_of),
+                .and_then(crate::tsdb::metric_meaning::alert_title_of),
             resolved: row.resolved,
             at: unix_ms_to_rfc3339(row.at_unix_ms),
             observed_value: row.observed_value,
@@ -418,7 +418,7 @@ impl InterfaceDto {
     #[must_use]
     pub fn from_meta_and_live(
         meta: &InterfaceMeta,
-        live: crate::store::InterfaceLive,
+        live: crate::tsdb::store::InterfaceLive,
         now_s: i64,
         stale_after_s: i64,
         addresses: Vec<crate::api::collection::InterfaceAddress>,
@@ -1036,7 +1036,7 @@ mod tests {
             &node,
             Some(NodeState::Warning),
             NodeKind::Url,
-            &crate::tagres::TagResolver::empty(),
+            &crate::inventory::tagres::TagResolver::empty(),
         );
         let json = serde_json::to_value(&dto).expect("serialize");
         // Sanity: it carries the safe fields…
@@ -1058,7 +1058,7 @@ mod tests {
     #[test]
     fn node_summary_dto_carries_a_meraki_product_type_only_when_there_is_one() {
         let node = sample_node_with_secret();
-        let tags = crate::tagres::TagResolver::empty();
+        let tags = crate::inventory::tagres::TagResolver::empty();
         let plain = NodeSummaryDto::from_node(&node, None, NodeKind::Device, &tags);
         assert!(serde_json::to_value(&plain)
             .expect("serialize")
@@ -1082,7 +1082,7 @@ mod tests {
     /// `null` rather than hand a model `0.0.0.0` as if it were one. Both families.
     #[test]
     fn node_summary_dto_reports_no_address_for_the_unspecified_one() {
-        let tags = crate::tagres::TagResolver::empty();
+        let tags = crate::inventory::tagres::TagResolver::empty();
         let mut node = sample_node_with_secret();
         for unspecified in ["0.0.0.0", "::"] {
             node.address = unspecified.parse().expect("addr");
@@ -1142,7 +1142,7 @@ mod tests {
             &node,
             Some(NodeState::Ok),
             NodeKind::Device,
-            &crate::tagres::TagResolver::empty(),
+            &crate::inventory::tagres::TagResolver::empty(),
         );
         assert_inventory_dto_is_clean(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
 
@@ -1469,20 +1469,20 @@ mod tests {
         assert_inventory_dto_is_clean(&group_json, "NodeGroup");
 
         // Served straight through from the REST handler (ADR-170).
-        let gaps = crate::prefix_gaps::PrefixGapReport {
+        let gaps = crate::inventory::prefix_gaps::PrefixGapReport {
             group_id: uuid::Uuid::new_v4(),
             nodes_total: 2,
             nodes_with_addresses: 1,
             nodes_truncated: 0,
             subnets_checked: 3,
-            gaps: vec![crate::prefix_gaps::PrefixGap {
+            gaps: vec![crate::inventory::prefix_gaps::PrefixGap {
                 subnet: "10.1.2.0/24".to_owned(),
-                kind: crate::prefix_gaps::GapKind::OtherFolder,
+                kind: crate::inventory::prefix_gaps::GapKind::OtherFolder,
                 range: Some("10.1.2.0/24".to_owned()),
                 range_group: Some(uuid::Uuid::new_v4()),
                 range_group_name: Some("site-b".to_owned()),
                 node_count: 1,
-                seen_on: vec![crate::prefix_gaps::SeenOn {
+                seen_on: vec![crate::inventory::prefix_gaps::SeenOn {
                     node_id: uuid::Uuid::new_v4(),
                     ifindex: 3,
                     if_name: Some("Vlan10".to_owned()),
@@ -1536,15 +1536,16 @@ mod tests {
 
         // `FlowRows` is `#[serde(untagged)]`, so it serializes as the bare array the REST edge
         // returns; one variant is enough to prove the wrapper adds no key of its own.
-        let flow_rows = crate::api::flow::FlowRows::Talkers(vec![crate::flowstore::FlowTalker {
-            addr: "10.0.0.1".to_owned(),
-            bytes: 1,
-            packets: 1,
-            flows: 1,
-        }]);
+        let flow_rows =
+            crate::api::flow::FlowRows::Talkers(vec![crate::passive::flowstore::FlowTalker {
+                addr: "10.0.0.1".to_owned(),
+                bytes: 1,
+                packets: 1,
+                flows: 1,
+            }]);
         assert_no_forbidden_keys(&serde_json::to_value(&flow_rows).unwrap(), "FlowRows");
 
-        let fanout = vec![crate::flowstore::FlowFanout {
+        let fanout = vec![crate::passive::flowstore::FlowFanout {
             src: "10.0.0.1".to_owned(),
             distinct_dst: 2,
             distinct_ports: 3,

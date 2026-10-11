@@ -23,7 +23,7 @@ use super::{
     clamp_range_step, is_valid_metric_name, ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS,
     DEFAULT_STEP_SECS,
 };
-use crate::store::{
+use crate::tsdb::store::{
     DeltaDirection, InterfaceTopMetric, MetricPoint, NodeSeries, PortDirection, TopAgg,
 };
 use axum::{
@@ -338,7 +338,7 @@ async fn list_node_metrics(
 /// ADR-042's parity rule exists to prevent.
 pub(crate) async fn node_metric_inventory(
     admin: &super::AdminState,
-    store: &dyn crate::store::MetricStore,
+    store: &dyn crate::tsdb::store::MetricStore,
     node_id: Uuid,
     within_secs: Option<u64>,
 ) -> ApiResult<Vec<NodeMetricEntry>> {
@@ -412,7 +412,7 @@ pub(crate) async fn node_metric_rows(
         .series_rows(
             metric,
             Some(&[node_id]),
-            crate::store::INSTANT_LOOKBACK_SECS,
+            crate::tsdb::store::INSTANT_LOOKBACK_SECS,
         )
         .await;
     let names: std::collections::HashMap<i64, String> = match st.admin.as_ref() {

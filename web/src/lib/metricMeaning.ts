@@ -28,7 +28,7 @@
 // `locales/{en,ja}/metrics.json`, which made them something the WebUI knew and `/mcp` did not —
 // the alert-rule table has a "What it measures" column and an MCP client reading the same
 // ruleset got a bare metric name. English is now canonical in
-// `crates/yagra-core/src/metric_meaning.rs`, `locales/en/metricMeanings.json` is generated from
+// `crates/yagra-core/src/tsdb/metric_meaning.rs`, `locales/en/metricMeanings.json` is generated from
 // it, and `locales/ja/metricMeanings.json` is the translation. Nothing here is hand-kept in step
 // with Rust: the explained set below is read straight off the generated file.
 

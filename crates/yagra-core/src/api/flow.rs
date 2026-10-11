@@ -17,7 +17,7 @@
 
 use super::extract::{RequireView, Scoped, VisibleNode};
 use super::{ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS};
-use crate::flowstore::{
+use crate::passive::flowstore::{
     FlowAsAgg, FlowConversation, FlowPoint, FlowPortAgg, FlowProtoAgg, FlowTalker,
 };
 use axum::{
@@ -180,7 +180,7 @@ pub(crate) fn flow_window(
         to.saturating_mul(1000),
         limit
             .unwrap_or(default_limit)
-            .clamp(1, crate::flowstore::FLOW_QUERY_LIMIT_MAX),
+            .clamp(1, crate::passive::flowstore::FLOW_QUERY_LIMIT_MAX),
     )
 }
 
@@ -225,15 +225,15 @@ fn flow_filter_set<T: std::str::FromStr>(
     Ok(out)
 }
 
-/// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
+/// Build a validated [`crate::passive::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
 /// path) for a per-node query or `None` for the fleet-wide (all-exporters) endpoints; the window is
 /// converted to ms and the limit clamped — no untrusted string ever reaches the store query.
 fn flow_query_params(
     node_id: Option<Uuid>,
     q: &FlowRangeQuery,
-) -> Result<crate::flowstore::FlowQuery, ApiError> {
+) -> Result<crate::passive::flowstore::FlowQuery, ApiError> {
     let (from_unix_ms, to_unix_ms, limit) = flow_window(q.from, q.to, q.limit, 20);
-    Ok(crate::flowstore::FlowQuery {
+    Ok(crate::passive::flowstore::FlowQuery {
         node_id,
         from_unix_ms,
         to_unix_ms,
@@ -248,10 +248,10 @@ fn flow_query_params(
 }
 
 /// Which AS side the top-AS endpoint aggregates on (`dir=src`; default destination).
-fn flow_as_dir(q: &FlowRangeQuery) -> crate::flowstore::AsDir {
+fn flow_as_dir(q: &FlowRangeQuery) -> crate::passive::flowstore::AsDir {
     match q.dir.as_deref() {
-        Some("src") => crate::flowstore::AsDir::Src,
-        _ => crate::flowstore::AsDir::Dst,
+        Some("src") => crate::passive::flowstore::AsDir::Src,
+        _ => crate::passive::flowstore::AsDir::Dst,
     }
 }
 
@@ -260,7 +260,7 @@ fn flow_as_dir(q: &FlowRangeQuery) -> crate::flowstore::AsDir {
 /// `None`).
 pub(crate) fn resolve_conversation_as_names(
     st: &ApiState,
-    rows: &mut [crate::flowstore::FlowConversation],
+    rows: &mut [crate::passive::flowstore::FlowConversation],
 ) {
     let db = st.ipasn.read().unwrap().clone();
     if let Some(db) = &db {
@@ -276,7 +276,7 @@ pub(crate) fn resolve_conversation_as_names(
 }
 
 /// Fill AS-aggregate `name` fields from the hot-swappable IP→ASN table.
-pub(crate) fn resolve_as_names(st: &ApiState, rows: &mut [crate::flowstore::FlowAsAgg]) {
+pub(crate) fn resolve_as_names(st: &ApiState, rows: &mut [crate::passive::flowstore::FlowAsAgg]) {
     let db = st.ipasn.read().unwrap().clone();
     if let Some(db) = &db {
         for r in rows.iter_mut() {
@@ -330,12 +330,12 @@ impl FlowAgg {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(untagged)]
 pub(crate) enum FlowRows {
-    Series(Vec<crate::flowstore::FlowPoint>),
-    Talkers(Vec<crate::flowstore::FlowTalker>),
-    Conversations(Vec<crate::flowstore::FlowConversation>),
-    Ports(Vec<crate::flowstore::FlowPortAgg>),
-    Protocols(Vec<crate::flowstore::FlowProtoAgg>),
-    As(Vec<crate::flowstore::FlowAsAgg>),
+    Series(Vec<crate::passive::flowstore::FlowPoint>),
+    Talkers(Vec<crate::passive::flowstore::FlowTalker>),
+    Conversations(Vec<crate::passive::flowstore::FlowConversation>),
+    Ports(Vec<crate::passive::flowstore::FlowPortAgg>),
+    Protocols(Vec<crate::passive::flowstore::FlowProtoAgg>),
+    As(Vec<crate::passive::flowstore::FlowAsAgg>),
 }
 
 impl FlowRows {
@@ -400,15 +400,15 @@ async fn run_flow_agg(
 /// this instance of it.
 pub(crate) async fn flow_agg_rows(
     st: &ApiState,
-    fq: &crate::flowstore::FlowQuery,
-    dir: crate::flowstore::AsDir,
+    fq: &crate::passive::flowstore::FlowQuery,
+    dir: crate::passive::flowstore::AsDir,
     agg: FlowAgg,
 ) -> ApiResult<FlowRows> {
     let store = st.flows.clone().ok_or_else(flow_unavailable)?;
     let what = agg.label(fq.node_id.is_none());
     Ok(match agg {
         FlowAgg::Series => {
-            let sq = crate::flowstore::FlowSeriesQuery {
+            let sq = crate::passive::flowstore::FlowSeriesQuery {
                 node_id: fq.node_id,
                 from_unix_ms: fq.from_unix_ms,
                 to_unix_ms: fq.to_unix_ms,
@@ -735,15 +735,15 @@ mod tests {
         };
         assert!(matches!(
             flow_as_dir(&with_dir(Some("src"))),
-            crate::flowstore::AsDir::Src
+            crate::passive::flowstore::AsDir::Src
         ));
         assert!(matches!(
             flow_as_dir(&with_dir(Some("bogus"))),
-            crate::flowstore::AsDir::Dst
+            crate::passive::flowstore::AsDir::Dst
         ));
         assert!(matches!(
             flow_as_dir(&with_dir(None)),
-            crate::flowstore::AsDir::Dst
+            crate::passive::flowstore::AsDir::Dst
         ));
     }
 

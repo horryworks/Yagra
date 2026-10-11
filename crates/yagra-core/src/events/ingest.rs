@@ -2,7 +2,7 @@
 //! **The four background tasks** of the passive-event pipeline (ADR-095): the bus consumer, the TTL
 //! sweeper, and the two batch writers.
 //!
-//! Named for the same thing [`crate::result_ingest`] and [`crate::flow_ingest`] are (ADR-090) —
+//! Named for the same thing [`crate::tsdb::result_ingest`] and [`crate::passive::flow_ingest`] are (ADR-090) —
 //! what happens to a record after it arrives. The writers are here rather than beside the repo they
 //! call because they are *loops with their own buffers and shutdown paths*, and because both of them
 //! route rows between two stores: PostgreSQL keeps alert-linked rows, the log store keeps the rest
@@ -20,7 +20,7 @@ use yagra_telemetry::CancellationToken;
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::{Notifier, NotifyAction};
 
-use crate::logstore::LogStore;
+use crate::passive::logstore::LogStore;
 
 // The vocabulary lives in the parent, which a child can see without any widening — see
 // `super`'s doc for why that is what decides where a thing goes here.
@@ -35,7 +35,7 @@ use super::*;
 pub async fn consume_events<S>(
     mut events: S,
     engine: Arc<EventEngine>,
-    forward: Option<crate::forward::ForwardHandle>,
+    forward: Option<crate::passive::forward::ForwardHandle>,
 ) where
     S: Stream<Item = EventMsg> + Unpin,
 {
@@ -106,8 +106,10 @@ async fn flush_persist(
 /// Webhooks carry no sender address worth discovering and are left out by kind, not by accident.
 /// The last hostname in the batch wins, and one message without a hostname does not erase an
 /// earlier one's. The text is device-supplied and is bounded to the column's limit here.
-pub(crate) fn unattributed_senders(buf: &[PersistRecord]) -> Vec<crate::arp::SenderObservation> {
-    use crate::arp::{SenderKind, SenderObservation};
+pub(crate) fn unattributed_senders(
+    buf: &[PersistRecord],
+) -> Vec<crate::discover::arp::SenderObservation> {
+    use crate::discover::arp::{SenderKind, SenderObservation};
     let mut by_key: std::collections::BTreeMap<(std::net::IpAddr, SenderKind), Option<String>> =
         std::collections::BTreeMap::new();
     for r in buf {
@@ -148,10 +150,10 @@ pub async fn run_persist_writer(
     logs: Option<Arc<dyn LogStore>>,
     shutdown: CancellationToken,
 ) {
-    crate::batch_writer::run(
+    crate::tsdb::batch_writer::run(
         rx,
         PERSIST_BATCH_MAX,
-        crate::batch_writer::FlushPolicy::EveryDrain,
+        crate::tsdb::batch_writer::FlushPolicy::EveryDrain,
         "events",
         shutdown,
         move |buf: &mut Vec<PersistRecord>| -> futures::future::BoxFuture<'_, ()> {
@@ -218,10 +220,10 @@ pub async fn run_event_action_writer(
     notifier: Arc<Notifier>,
     shutdown: CancellationToken,
 ) {
-    crate::batch_writer::run(
+    crate::tsdb::batch_writer::run(
         rx,
         ACTION_BATCH_MAX,
-        crate::batch_writer::FlushPolicy::EveryDrain,
+        crate::tsdb::batch_writer::FlushPolicy::EveryDrain,
         "event_actions",
         shutdown,
         move |buf: &mut Vec<QueuedAction>| -> futures::future::BoxFuture<'_, ()> {
@@ -243,7 +245,7 @@ mod tests {
     /// later message in the batch left out (ADR-179 decision 3).
     #[test]
     fn a_batch_yields_each_unclaimed_sender_once() {
-        use crate::arp::{SenderKind, SenderObservation};
+        use crate::discover::arp::{SenderKind, SenderObservation};
         let unclaimed = |kind: EventKind, addr: &str, host: Option<&str>| {
             let mut r = persist_record(EventAction::None);
             r.node_id = None;
@@ -295,7 +297,7 @@ mod tests {
     async fn persist_writer_routes_non_alert_rows_to_log_store_only() {
         // With the log store enabled, non-alert-linked rows go to the log store and never touch
         // Postgres — so this exercises the writer end-to-end against a never-connected lazy pool.
-        let fake = Arc::new(crate::logstore::InMemoryLogStore::default());
+        let fake = Arc::new(crate::passive::logstore::InMemoryLogStore::default());
         let logs: Option<Arc<dyn LogStore>> = Some(fake.clone());
         let (tx, rx) = tokio::sync::mpsc::channel::<PersistRecord>(16);
         let token = CancellationToken::new();
@@ -311,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn persist_writer_final_flush_on_shutdown() {
-        let fake = Arc::new(crate::logstore::InMemoryLogStore::default());
+        let fake = Arc::new(crate::passive::logstore::InMemoryLogStore::default());
         let logs: Option<Arc<dyn LogStore>> = Some(fake.clone());
         let (tx, rx) = tokio::sync::mpsc::channel::<PersistRecord>(16);
         let token = CancellationToken::new();

@@ -45,7 +45,7 @@ use yagra_base::secrets::CredentialStore;
 /// to it too: they carry what one sweep found.
 ///
 /// ⚠️ **Not the size of a bus message.** A scan this wide goes out as several jobs of at most
-/// [`crate::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to fit in
+/// [`crate::discover::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to fit in
 /// one NATS message; raising this number costs more jobs, never a bigger message. It was 1024
 /// while one scan was one job.
 const MAX_SCAN_TARGETS: usize = 4096;
@@ -305,9 +305,9 @@ async fn start_discovery_scan(
     // (`DiscoveryJob::snmp_when_unreachable`) an absent field means the job came from a core that
     // predates this option, and that core meant "probe everything".
     let silent = if body.snmp_when_unreachable {
-        crate::discovery::SilentTargets::ProbeSnmp
+        crate::discover::discovery::SilentTargets::ProbeSnmp
     } else {
-        crate::discovery::SilentTargets::Skip
+        crate::discover::discovery::SilentTargets::Skip
     };
     let scan_id = admin
         .discovery
@@ -331,7 +331,7 @@ async fn start_discovery_scan(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ScanView {
     #[serde(flatten)]
-    status: crate::discovery::ScanStatus,
+    status: crate::discover::discovery::ScanStatus,
     /// The candidates already in the inventory, in candidate order. A candidate absent from this
     /// list is not monitored at its own address — `same_device` names one that may be monitored at
     /// another. Read when the scan is read, so a node added or removed after
@@ -363,34 +363,40 @@ pub(crate) struct SameDeviceNode {
     address: String,
     /// `confident` when the node's interface list carries the candidate's address and both report
     /// the same `sysObjectID`; `possible` otherwise.
-    confidence: crate::duplicates::DuplicateConfidence,
+    confidence: crate::discover::duplicates::DuplicateConfidence,
     /// `own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`
     /// (same name and the same `sysObjectID`).
-    evidence: Vec<crate::duplicates::DuplicateEvidenceKind>,
+    evidence: Vec<crate::discover::duplicates::DuplicateEvidenceKind>,
 }
 
-/// Fold [`crate::duplicates::same_device_candidates`]'s answer into one entry per candidate address.
+/// Fold [`crate::discover::duplicates::same_device_candidates`]'s answer into one entry per candidate address.
 fn same_device_matches(
-    candidates: &[crate::discovery::Candidate],
+    candidates: &[crate::discover::discovery::Candidate],
     existing: &[yagra_base::repo::AddressMatch],
     carriers: &[(IpAddr, yagra_base::repo::DeviceIdentity)],
     named: &[yagra_base::repo::DeviceIdentity],
 ) -> Vec<SameDeviceMatch> {
-    let parsed: Vec<(IpAddr, &crate::discovery::Candidate)> = candidates
+    let parsed: Vec<(IpAddr, &crate::discover::discovery::Candidate)> = candidates
         .iter()
         .filter_map(|c| c.address.parse().ok().map(|a| (a, c)))
         .collect();
-    let identities: Vec<crate::duplicates::CandidateIdentity<'_>> = parsed
+    let identities: Vec<crate::discover::duplicates::CandidateIdentity<'_>> = parsed
         .iter()
-        .map(|(address, c)| crate::duplicates::CandidateIdentity {
-            address: *address,
-            sysname: c.sysname.as_deref(),
-            sys_object_id: c.sysobjectid.as_deref(),
-        })
+        .map(
+            |(address, c)| crate::discover::duplicates::CandidateIdentity {
+                address: *address,
+                sysname: c.sysname.as_deref(),
+                sys_object_id: c.sysobjectid.as_deref(),
+            },
+        )
         .collect();
     let already_at: HashSet<IpAddr> = existing.iter().map(|m| m.address).collect();
-    let found =
-        crate::duplicates::same_device_candidates(&identities, &already_at, carriers, named);
+    let found = crate::discover::duplicates::same_device_candidates(
+        &identities,
+        &already_at,
+        carriers,
+        named,
+    );
     let nodes: HashMap<Uuid, &yagra_base::repo::DeviceIdentity> = carriers
         .iter()
         .map(|(_, n)| n)
@@ -457,7 +463,7 @@ pub(crate) struct InventoryNode {
 /// Pure, so the part a test can get wrong without a database — the join on the parsed address, the
 /// withheld name, one entry for a candidate listed twice — is tested without one.
 fn inventory_matches(
-    candidates: &[crate::discovery::Candidate],
+    candidates: &[crate::discover::discovery::Candidate],
     found: &[yagra_base::repo::AddressMatch],
 ) -> Vec<InventoryMatch> {
     let mut by_address: HashMap<IpAddr, Vec<&yagra_base::repo::AddressMatch>> = HashMap::new();
@@ -513,7 +519,7 @@ pub(crate) async fn scan_view(
         .candidates
         .iter()
         .filter_map(|c| c.sysname.as_deref())
-        .filter_map(crate::duplicates::name_key)
+        .filter_map(crate::discover::duplicates::name_key)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -589,7 +595,7 @@ pub(super) struct ScansQuery {
     get, path = "/api/v1/discovery/scans", tag = "discovery",
     params(ScansQuery),
     responses(
-        (status = 200, description = "Retained scans, newest first", body = Vec<crate::discovery::ScanSummary>),
+        (status = 200, description = "Retained scans, newest first", body = Vec<crate::discover::discovery::ScanSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no discovery runner", body = super::error::ErrorBody),
@@ -599,7 +605,7 @@ async fn list_discovery_scans(
     _guard: RequireManageConfig,
     admin: Admin,
     Query(q): Query<ScansQuery>,
-) -> ApiResult<Json<Vec<crate::discovery::ScanSummary>>> {
+) -> ApiResult<Json<Vec<crate::discover::discovery::ScanSummary>>> {
     Ok(Json(
         admin.discovery.list(
             q.limit
@@ -1136,7 +1142,7 @@ pub(super) struct CandidatesQuery {
     get, path = "/api/v1/discovery/candidates", tag = "discovery",
     params(CandidatesQuery),
     responses(
-        (status = 200, description = "Recent unclassified devices; empty in skeleton mode", body = Vec<crate::discovery::Candidate>),
+        (status = 200, description = "Recent unclassified devices; empty in skeleton mode", body = Vec<crate::discover::discovery::Candidate>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
     ),
@@ -1145,7 +1151,7 @@ async fn discovery_candidates(
     _guard: RequireView,
     State(st): State<ApiState>,
     Query(q): Query<CandidatesQuery>,
-) -> ApiResult<Json<Vec<crate::discovery::Candidate>>> {
+) -> ApiResult<Json<Vec<crate::discover::discovery::Candidate>>> {
     Ok(Json(recent_candidates(&st, q.limit)))
 }
 
@@ -1156,7 +1162,7 @@ async fn discovery_candidates(
 pub(crate) fn recent_candidates(
     st: &ApiState,
     limit: Option<usize>,
-) -> Vec<crate::discovery::Candidate> {
+) -> Vec<crate::discover::discovery::Candidate> {
     let Some(admin) = st.admin.as_ref() else {
         return Vec::new();
     };
@@ -1186,7 +1192,7 @@ pub(crate) struct DiscoveredEndpointRow {
     pub name: Option<String>,
     /// Where it was seen, ordered by source (ARP, LLDP, CDP, OSPF, BGP, syslog, trap) and capped
     /// at eight. Never empty.
-    pub evidence: Vec<crate::arp::EndpointEvidence>,
+    pub evidence: Vec<crate::discover::arp::EndpointEvidence>,
     /// When it was first seen anywhere in the fleet (RFC 3339).
     pub first_seen: String,
     /// When it was last confirmed still present (RFC 3339).
@@ -1361,7 +1367,7 @@ pub(crate) async fn discovered_endpoint_page(
                 )
             })?;
         for r in &mut rows {
-            crate::arp::drop_hidden_evidence(&mut r.evidence, &visible);
+            crate::discover::arp::drop_hidden_evidence(&mut r.evidence, &visible);
         }
     }
     // A cursor only when the page came back full — a short page is the end of the list, and handing
@@ -1458,7 +1464,7 @@ async fn visible_unmonitored_endpoint(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
     id: Uuid,
-) -> Result<crate::arp::DiscoveredEndpoint, ApiError> {
+) -> Result<crate::discover::arp::DiscoveredEndpoint, ApiError> {
     let endpoint = admin
         .discovered
         .get(id, scope.group_filter())
@@ -1481,7 +1487,7 @@ async fn visible_unmonitored_endpoint(
     }
     // A syslog or trap source address can be forged, so a row only a sender vouches for is never
     // probed (that would send the chosen credentials to the forger) nor imported (ADR-179 Inc.5).
-    if crate::arp::only_senders_vouch(&endpoint.evidence) {
+    if crate::discover::arp::only_senders_vouch(&endpoint.evidence) {
         return Err(ApiError::conflict(
             "sender_only",
             format!(
@@ -1565,7 +1571,7 @@ async fn probe_discovered_endpoint(
             Vec::new(),
             credentials,
             pool_route.as_deref(),
-            crate::discovery::SilentTargets::ProbeSnmp,
+            crate::discover::discovery::SilentTargets::ProbeSnmp,
         )
         .await
         .map_err(|e| {
@@ -1919,7 +1925,7 @@ mod tests {
     fn a_full_sweep_of_the_widest_devices_still_fits_in_one_bus_message() {
         // NATS's default, restated here as well as in the server config. The config is loaded on
         // one deployment shape (the remote-poller one); this bound applies to all of them.
-        use crate::discovery::JOB_TARGETS;
+        use crate::discover::discovery::JOB_TARGETS;
         const NATS_MAX_PAYLOAD: usize = 1024 * 1024;
         const OBSERVED_WORST_SYSDESCR: usize = 384;
 
@@ -1978,7 +1984,7 @@ mod tests {
     /// how long a sweep may hold the poller's sequential job loop, not a free change.
     #[test]
     fn the_widest_scan_is_a_few_jobs_no_wider_than_one_bus_message_holds() {
-        use crate::discovery::JOB_TARGETS;
+        use crate::discover::discovery::JOB_TARGETS;
         assert_eq!(MAX_SCAN_TARGETS, 4096, "a /20");
         assert_eq!(MAX_SCAN_TARGETS.div_ceil(JOB_TARGETS), 4);
     }
@@ -2521,8 +2527,8 @@ mod tests {
         );
     }
 
-    fn candidate(address: &str) -> crate::discovery::Candidate {
-        crate::discovery::Candidate {
+    fn candidate(address: &str) -> crate::discover::discovery::Candidate {
+        crate::discover::discovery::Candidate {
             address: address.to_owned(),
             reachable: true,
             sysdescr: None,
@@ -2665,10 +2671,10 @@ mod tests {
     #[test]
     fn a_scan_view_is_the_scan_with_existing_beside_it() {
         let view = ScanView {
-            status: crate::discovery::ScanStatus {
+            status: crate::discover::discovery::ScanStatus {
                 scan_id: Uuid::nil(),
                 done: true,
-                state: crate::discovery::DiscoveryScanState::Done,
+                state: crate::discover::discovery::DiscoveryScanState::Done,
                 probed: 2,
                 total: 2,
                 scanning: None,

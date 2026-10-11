@@ -190,7 +190,6 @@ describe('a screen reads through useLoad', () => {
     'pages/UpgradePage.tsx': 'a status poll with its own everSeen/stale state and a ceiling',
     'pages/RelocationPage.tsx': 'a status poll with its own everSeen/stale state and a ceiling',
     'pages/TlsSettingsPage.tsx': 'reads one document into a form, not a list',
-    'pages/AiSettingsPage.tsx': 'reads one document into a form, not a list',
     'pages/integrations/IntegrationsCatalogPage.tsx': 'N independent checks, one per card',
     'pages/integrations/MerakiOrgPage.tsx':
       'chained reads, where "not found" is an answer the screen draws rather than a failure',
@@ -223,39 +222,44 @@ describe('a screen reads through useLoad', () => {
 });
 
 /**
- * ADR-202: thirteen files keep their own `[loading, setLoading]` instead of reading through
- * `useLoad`. Measured, not reviewed: some are reads that could move, some may be a spinner for an
- * action (a save, a run) where `useLoad` does not apply. Until each is looked at, the list is a
- * ratchet — a fourteenth fails, and a file that stops hand-rolling has to leave the list.
+ * ADR-202: a file keeps its own `[loading, setLoading]` only for a reason `useLoad` cannot meet.
+ * Reviewed in Inc.7: the four plain reads moved to `useLoad`; the nine below stay, because moving
+ * them would change what the screen does. `useLoad`'s `loading` is true until the first answer and
+ * never again, and it keeps the previous answer through a failed re-read — so a screen that shows
+ * a spinner on every filter change, appends pages, or empties itself on a failure cannot use it.
+ *
+ * A new holder fails, a listed file that stops holding fails, and so does a row with no reason.
  *
  * ⚠️ The needle is assembled at runtime, for the reason the guards above give.
  */
 describe('hand-rolled loading state does not spread', () => {
   const NEEDLE = `[${'loading'}, setLoading] = useState`;
 
-  /** Not yet reviewed (ADR-202 remaining work). Shrinks only. */
-  const UNREVIEWED = [
-    'components/CollectionEditor/CollectionEditor.tsx',
-    'components/EventLog/useEventLog.ts',
-    'components/NodeDetail/FlowTab.tsx',
-    'components/Rca/RcaModal.tsx',
-    'lib/useNodeSearch.ts',
-    'pages/AiSettingsPage.tsx',
-    'pages/AuditPage.tsx',
-    'pages/AuthSettingsPage.tsx',
-    'pages/DeliveryLog.tsx',
-    'pages/NodesPage.tsx',
-    'pages/useFilterSearch.ts',
-    'troubleshoot/SavedFindingsPage.tsx',
-    'troubleshoot/ScheduledPage.tsx',
-  ];
+  const KEYSET = 'keyset paging: "load more" appends, and every filter change shows loading again';
+  const TYPEAHEAD =
+    'a search as you type: loading returns on every keystroke and a failure empties the list';
+
+  /** Where a hand-rolled loading flag is the design, with the reason `useLoad` does not fit. */
+  const HAND_ROLLED: Record<string, string> = {
+    'components/EventLog/useEventLog.ts': KEYSET,
+    'pages/AuditPage.tsx': KEYSET,
+    'pages/DeliveryLog.tsx': KEYSET,
+    'troubleshoot/SavedFindingsPage.tsx': KEYSET,
+    'lib/useNodeSearch.ts': TYPEAHEAD,
+    'pages/useFilterSearch.ts': TYPEAHEAD,
+    'components/NodeDetail/FlowTab.tsx':
+      'six reads at once, each allowed to fail alone, re-run on every range or filter change',
+    'pages/NodesPage.tsx':
+      'the folder list and the caches under it are re-read together, and the flag gates lazy reads',
+    'components/Rca/RcaModal.tsx': 'not a read: the flag is an LLM explanation being generated (POST)',
+  };
 
   const holders = readSources()
     .filter(([, src]) => codeOnly(src).includes(NEEDLE))
     .map(([p]) => p);
 
   it('no new file holds its own loading flag', () => {
-    const fresh = holders.filter((p) => !UNREVIEWED.includes(p));
+    const fresh = holders.filter((p) => !(p in HAND_ROLLED));
     expect(
       fresh,
       `read through useLoad (lib/useLoad.ts) instead of a hand-rolled loading flag:\n  ${fresh.join('\n  ')}`,
@@ -263,7 +267,14 @@ describe('hand-rolled loading state does not spread', () => {
   });
 
   it('a file that moved to useLoad leaves the list', () => {
-    const stale = UNREVIEWED.filter((p) => !holders.includes(p));
+    const stale = Object.keys(HAND_ROLLED).filter((p) => !holders.includes(p));
     expect(stale, 'no longer hand-rolls loading — take it off the list').toEqual([]);
+  });
+
+  it('every listed file says why', () => {
+    const silent = Object.entries(HAND_ROLLED)
+      .filter(([, why]) => why.trim() === '')
+      .map(([p]) => p);
+    expect(silent, 'a hand-rolled loading flag needs its reason').toEqual([]);
   });
 });

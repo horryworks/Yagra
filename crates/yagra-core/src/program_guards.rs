@@ -183,7 +183,7 @@ fn the_migration_macro_has_exactly_one_call_site() {
 const SQL_WITHOUT_A_TEST_OF_ITS_OWN: [(&str, &str); 3] = [
     (
         "address_owners.rs",
-        "`yagra-base`'s address-owner reads. Their tests feed an L3 observation through the          production writer, `L3Repo`, which lives in core and which the database layer cannot          name (ADR-202 Inc.5) — so they are in `yagra-core/src/l3.rs::address_owner_reads`, the          same tests as before the split.",
+        "`yagra-base`'s address-owner reads. Their tests feed an L3 observation through the          production writer, `L3Repo`, which lives in core and which the database layer cannot          name (ADR-202 Inc.5) — so they are in `yagra-core/src/topology/l3.rs::address_owner_reads`, the          same tests as before the split.",
     ),
     (
         "import_inventory.rs",
@@ -302,11 +302,11 @@ const SCOPE_PREDICATE_COPIES: &[(&str, &str)] = &[
         "`NodeRepo::SCOPE_PREDICATE`, the `$1` form the node listing interpolates as a const",
     ),
     (
-        "arp.rs",
+        "discover/arp.rs",
         "the module refuses `format!` so every statement stays a literal, and a test holds it to that",
     ),
     (
-        "wireless.rs",
+        "topology/wireless.rs",
         "its predicates sit inside `EXISTS` and `CASE`, where the NULL guard is written one level up",
     ),
     (

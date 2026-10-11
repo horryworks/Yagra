@@ -110,7 +110,7 @@ pub const EVENT_BUCKET_SECS_MAX: i64 = 86_400;
 /// TTL sweeper cadence.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 // Retention windows are no longer declared here: they are operator-configurable and live in
-// `crate::retention` (ADR-040). `prune_old` takes them as arguments so this store has no opinion.
+// `crate::runtime::retention` (ADR-040). `prune_old` takes them as arguments so this store has no opinion.
 /// Bounded queue between the (single) event matcher and the async batch persist writer. The event
 /// log is a best-effort observational tier (ADR-024): sustained overload sheds the newest event
 /// rather than blocking the matcher or growing memory unbounded.
@@ -442,7 +442,7 @@ impl PersistRecord {
     /// This row's clustering key under [`SIGNATURE_TIERS`] precedence — the in-process equivalent
     /// of the PostgreSQL `COALESCE` and the LogsQL tier chain.
     ///
-    /// `#[cfg(test)]` because its only caller is the in-memory [`crate::logstore::LogStore`], which
+    /// `#[cfg(test)]` because its only caller is the in-memory [`crate::passive::logstore::LogStore`], which
     /// is itself test-only. That is exactly why it exists: the fake every analysis test runs against
     /// must not be able to answer differently from the two real stores, and a third hand-written
     /// precedence chain inside the fake is how it would.

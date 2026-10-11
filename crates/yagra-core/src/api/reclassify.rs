@@ -7,7 +7,7 @@
 //! sees and changes only the nodes in their own folders, and a request naming any other node is
 //! counted as hidden, the same answer a node that does not exist gets.
 //!
-//! The judgement lives in [`crate::reclassify`], which is pure; this file reads the stores, calls it,
+//! The judgement lives in [`crate::discover::reclassify`], which is pure; this file reads the stores, calls it,
 //! and puts names on the ids. [`reclassify_view`] is the seam the MCP `get_config(kind="reclassify")`
 //! branch shares, so the two surfaces cannot answer differently (ADR-042 read parity).
 
@@ -24,7 +24,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, Scoped};
 use super::scope::NodeScope;
 use super::{AdminState, ApiState};
-use crate::reclassify::{check_request, propose, Skip, PROPOSAL_LIMIT};
+use crate::discover::reclassify::{check_request, propose, Skip, PROPOSAL_LIMIT};
 use yagra_base::repo::{ReclassifyInput, ReclassifyWrite};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].

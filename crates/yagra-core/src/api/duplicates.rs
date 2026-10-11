@@ -7,7 +7,7 @@
 //! delete, because the list exists to be acted on. **Group-filtered**: the candidates are the
 //! caller's own device nodes, so a group never names a node outside their folders (ADR-148 decision 8).
 //!
-//! The judgement is [`crate::duplicates`], which is pure; this file reads the stores it weighs and
+//! The judgement is [`crate::discover::duplicates`], which is pure; this file reads the stores it weighs and
 //! puts names on the ids. [`duplicates_view`] is the seam the MCP `get_config(kind="duplicate_nodes")`
 //! branch shares, so the two surfaces cannot answer differently (ADR-042 read parity).
 
@@ -22,7 +22,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, Scoped};
 use super::scope::NodeScope;
 use super::{AdminState, ApiState};
-use crate::duplicates::{
+use crate::discover::duplicates::{
     self, DuplicateConfidence, DuplicateContradiction, DuplicateEvidenceKind, Observations,
     OwnAddress, PeerReport,
 };

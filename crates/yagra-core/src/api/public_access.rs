@@ -233,7 +233,7 @@ pub const REFRESH_SECS: u64 = 30;
 pub fn start(
     handle: PublicAccessHandle,
     settings: Arc<yagra_base::repo::NodeRepo>,
-    board: Arc<crate::dashboard::PublicDashboardRepo>,
+    board: Arc<crate::account::dashboard::PublicDashboardRepo>,
     shutdown: &yagra_telemetry::CancellationToken,
 ) {
     yagra_telemetry::spawn_cancellable(shutdown, async move {
@@ -265,7 +265,7 @@ pub fn start(
 /// board". The distinction matters for the log line, not for what is served.
 async fn refresh(
     settings: &yagra_base::repo::NodeRepo,
-    board: &crate::dashboard::PublicDashboardRepo,
+    board: &crate::account::dashboard::PublicDashboardRepo,
 ) -> PublicAccess {
     let enabled = settings.get_public_dashboard_enabled().await;
     if !enabled {

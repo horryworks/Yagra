@@ -471,7 +471,7 @@ export function scalarLabel(metric: string): { label: string; known: boolean } {
 /** What a metric's number *is*, as a kind and a payload — or `null` when it has no unit.
  *
  *  Read straight off `api/metricUnits.json`, which is **generated** from
- *  `crates/yagra-core/src/metric_meaning.rs` (ADR-046 Inc.7). Nothing here is hand-kept in step
+ *  `crates/yagra-core/src/tsdb/metric_meaning.rs` (ADR-046 Inc.7). Nothing here is hand-kept in step
  *  with Rust, and there is deliberately no rule from the metric's *name*: Inc.6 decision J refused a
  *  `_pct` / `_ms` suffix rule because `huawei_cpu_usage` and `huawei_mem_usage` are percentages
  *  with no suffix at all. All 108 rows were written by hand, in Rust.

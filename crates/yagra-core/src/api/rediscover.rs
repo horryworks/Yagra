@@ -12,7 +12,7 @@
 //! - `POST …/rediscover/apply` re-judges what the person was shown and writes it in one guarded
 //!   statement.
 //!
-//! The judgement is [`crate::rediscover`], which is pure; this file reads the stores, calls it, and
+//! The judgement is [`crate::discover::rediscover`], which is pure; this file reads the stores, calls it, and
 //! puts names on the ids. **REST only**: the two writes are outside MCP's frozen write surface
 //! (ADR-042), and the read is a proposal for one of them.
 
@@ -33,7 +33,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Leader, RequireManageConfig, Scoped, VisibleNode};
 use super::scope::NodeScope;
 use super::{AdminState, ApiState};
-use crate::rediscover::{
+use crate::discover::rediscover::{
     check_apply, judge, ApplyRequest, Change, Current, RediscoverState, RediscoverVerdict, Refusal,
     Row,
 };

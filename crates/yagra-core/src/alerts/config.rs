@@ -36,7 +36,10 @@ use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::thresholds::ThresholdStore;
-use crate::{alerts::maintenance, classification, events, poolres, topology_projection};
+use crate::discover::classification;
+use crate::fleet::poolres;
+use crate::topology::topology_projection;
+use crate::{alerts::maintenance, events};
 use yagra_alert::no_reading::{NoReadingHandle, NoReadingMarkers};
 use yagra_base::repo::NodeRepo;
 use yagra_base::{config_gen, groups};
@@ -156,7 +159,7 @@ impl AlertConfigSources for LiveConfigSources {
     async fn collection_items(&self) -> anyhow::Result<Vec<yagra_common::CollectionItem>> {
         // Constructed here rather than held as a field: it is a handle on the pool `repo` already
         // owns, and this runs only when the config generation advances.
-        crate::collection::CollectionRepo::new(self.repo.pool())
+        crate::discover::collection::CollectionRepo::new(self.repo.pool())
             .collected_items()
             .await
     }
@@ -220,7 +223,7 @@ pub(crate) async fn load_alert_config_base(
     // snapshot in place. ⚠️ `notify_facts.rs` treats the identical failure the *opposite* way and
     // is also right: there the labels ride along on a notification that has to go out regardless.
     // Each site reads like a bug from the other's perspective; both have their reason written down.
-    let tags = crate::tagres::TagResolver::build(
+    let tags = crate::inventory::tagres::TagResolver::build(
         sources
             .folder_tags()
             .await
@@ -246,7 +249,7 @@ pub(crate) async fn load_alert_config_base(
     // node rule on it. Without them the override count on Alerts > Metric alert rules answered
     // "overridden nowhere" for the very rules the evaluator was overriding port by port. The poll
     // path never sees a sample of one, so adding them changes nothing there.
-    let mut per_interface = crate::collection::per_interface_metric_names(&items);
+    let mut per_interface = crate::discover::collection::per_interface_metric_names(&items);
     per_interface.extend(
         yagra_common::derived_metric::DERIVED_INTERFACE_METRICS
             .iter()
@@ -373,10 +376,10 @@ async fn resolve_maintenance(
     // inside a window could be alerted on. It is the pre-existing call for this function (the
     // folder-group half already behaves this way), not a new one made here.
     let tags = match groups.tag_rows().await {
-        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Ok(rows) => crate::inventory::tagres::TagResolver::build(rows),
         Err(e) => {
             tracing::warn!(error = %e, "failed to load folder labels for maintenance scopes");
-            crate::tagres::TagResolver::empty()
+            crate::inventory::tagres::TagResolver::empty()
         }
     };
     let named = maintenance::nodes_named_by_a_window(&scopes, nodes);

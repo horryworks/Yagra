@@ -66,7 +66,7 @@ pub struct CachedNodeFacts {
     /// on a notification that has to go out regardless — the same call `node_facts` above already
     /// makes when it degrades to raw ids. Each site reads like a bug from the other's perspective,
     /// which is why both say so.
-    tags: Mutex<Option<(Arc<crate::tagres::TagResolver>, Instant)>>,
+    tags: Mutex<Option<(Arc<crate::inventory::tagres::TagResolver>, Instant)>>,
     // A plain Mutex, not an async one: every critical section here is a map lookup with no await
     // inside it, so holding it across a scheduling point is impossible by construction.
     cache: Mutex<HashMap<Uuid, (NodeFacts, Instant)>>,
@@ -89,7 +89,7 @@ impl CachedNodeFacts {
     /// ⚠️ The coherency window is worth naming: because this caches a *resolved* answer, re-labelling
     /// a folder takes up to one TTL to reach a page. That is the same window a rename already has —
     /// but it is now true of a value the operator did not edit on the node itself.
-    async fn tag_resolver(&self) -> Arc<crate::tagres::TagResolver> {
+    async fn tag_resolver(&self) -> Arc<crate::inventory::tagres::TagResolver> {
         let now = Instant::now();
         if let Some((r, at)) = self
             .tags
@@ -103,7 +103,7 @@ impl CachedNodeFacts {
         }
         match self.groups.tag_rows().await {
             Ok(rows) => {
-                let built = Arc::new(crate::tagres::TagResolver::build(rows));
+                let built = Arc::new(crate::inventory::tagres::TagResolver::build(rows));
                 *self.tags.lock().expect("notify tag cache poisoned") =
                     Some((Arc::clone(&built), now));
                 built
@@ -118,7 +118,7 @@ impl CachedNodeFacts {
                     .expect("notify tag cache poisoned")
                     .as_ref()
                     .map_or_else(
-                        || Arc::new(crate::tagres::TagResolver::empty()),
+                        || Arc::new(crate::inventory::tagres::TagResolver::empty()),
                         |(r, _)| Arc::clone(r),
                     )
             }
@@ -248,7 +248,7 @@ pub fn context_for(
         metric: (alert.metric != crate::alerts::LIVENESS && !alert.metric.is_empty())
             .then(|| alert.metric.clone()),
         // Unlike `metric`, the liveness alert has a title: "Node not responding" (ADR-196).
-        title: crate::metric_meaning::alert_title_of(&alert.metric),
+        title: crate::tsdb::metric_meaning::alert_title_of(&alert.metric),
         value: alert.breach.as_ref().map(|b| b.value),
         threshold: alert.breach.as_ref().and_then(|b| b.threshold),
         direction: alert

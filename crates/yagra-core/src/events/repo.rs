@@ -662,7 +662,7 @@ impl EventRepo {
 
     /// Asymmetric retention: matched events keep the alert-history window; unmatched rows are
     /// rule-authoring material only and get a shorter one. Both windows come from the caller
-    /// (`crate::retention`, ADR-040) so the policy is declared in one place, not here.
+    /// (`crate::runtime::retention`, ADR-040) so the policy is declared in one place, not here.
     /// Returns (matched, unmatched) rows removed.
     pub async fn prune_old(
         &self,
@@ -702,7 +702,7 @@ impl EventRepo {
     /// to a minute late for it. Returns the rows actually written.
     pub async fn record_unattributed_senders(
         &self,
-        senders: &[crate::arp::SenderObservation],
+        senders: &[crate::discover::arp::SenderObservation],
     ) -> anyhow::Result<u64> {
         if senders.is_empty() {
             return Ok(0);
@@ -737,7 +737,7 @@ impl EventRepo {
     pub async fn unattributed_senders(
         &self,
         limit: usize,
-    ) -> anyhow::Result<Vec<crate::arp::SenderObservation>> {
+    ) -> anyhow::Result<Vec<crate::discover::arp::SenderObservation>> {
         let rows = sqlx::query(
             "SELECT host(ip) AS ip, kind, hostname FROM event_senders \
              ORDER BY last_seen DESC, ip, kind LIMIT $1",
@@ -751,10 +751,11 @@ impl EventRepo {
                 // A row that will not parse is skipped, not fatal: one bad row must not stop
                 // discovery for the whole fleet (the same rule `known_addresses` follows).
                 let ip = row.try_get::<String, _>("ip").ok()?.parse().ok()?;
-                let kind =
-                    crate::arp::SenderKind::from_token(&row.try_get::<String, _>("kind").ok()?)?;
+                let kind = crate::discover::arp::SenderKind::from_token(
+                    &row.try_get::<String, _>("kind").ok()?,
+                )?;
                 let hostname = row.try_get::<Option<String>, _>("hostname").ok()?;
-                Some(crate::arp::SenderObservation { ip, kind, hostname })
+                Some(crate::discover::arp::SenderObservation { ip, kind, hostname })
             })
             .collect())
     }
@@ -1289,7 +1290,7 @@ mod tests {
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn unattributed_senders_are_remembered_merged_and_pruned(pool: sqlx::PgPool) {
-        use crate::arp::{SenderKind, SenderObservation};
+        use crate::discover::arp::{SenderKind, SenderObservation};
         let repo = EventRepo::new(pool.clone());
         assert_eq!(repo.senders_watermark().await.unwrap(), None);
         let sender = |addr: &str, kind, host: Option<&str>| SenderObservation {

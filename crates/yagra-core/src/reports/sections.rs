@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::store::TopAgg;
+use crate::tsdb::store::TopAgg;
 
 impl ReportRunner {
     pub(super) async fn render_availability(&self, id: String, from_s: i64, to_s: i64) -> Section {
@@ -273,7 +273,7 @@ impl ReportRunner {
             .take(limit)
             .any(|n| !states.contains_key(&n.id))
         {
-            crate::node_display::fresh_fleet_ids(self.store.as_ref()).await
+            crate::runtime::node_display::fresh_fleet_ids(self.store.as_ref()).await
         } else {
             std::collections::HashSet::new()
         };
@@ -281,7 +281,7 @@ impl ReportRunner {
             .iter()
             .take(limit)
             .map(|n| {
-                let state = crate::node_display::state_or_fallback(
+                let state = crate::runtime::node_display::state_or_fallback(
                     states.get(&n.id).copied(),
                     fresh.contains(&n.id.as_uuid()),
                 )
@@ -327,7 +327,7 @@ mod tests {
     use super::testkit::{alert, harness, n, node, uid};
     use super::*;
 
-    use crate::store::{MetricPoint, TopAgg};
+    use crate::tsdb::store::{MetricPoint, TopAgg};
     use yagra_common::{NodeState, Severity};
 
     /// The value of one KPI, by its label.

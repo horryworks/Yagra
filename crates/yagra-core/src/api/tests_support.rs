@@ -6,8 +6,8 @@
 //! repeating the ~20-field literal. Compiled only under `cfg(test)`.
 
 use super::ApiState;
-use crate::sink::InMemorySink;
-use crate::store::MetricStore;
+use crate::tsdb::sink::InMemorySink;
+use crate::tsdb::store::MetricStore;
 use std::sync::Arc;
 use yagra_auth::auth::{LoginThrottle, SessionStore};
 use yagra_base::repo::StaticNodeList;
@@ -30,7 +30,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         store,
         logs: None,
         flows: None,
-        ipasn: crate::ipasn::empty_handle(),
+        ipasn: crate::passive::ipasn::empty_handle(),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(crate::alerts::new_manager()),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -293,7 +293,7 @@ async fn live_state_with(
     notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
     use crate::alerts::Notifier;
-    use crate::volatile::VolatileStore;
+    use crate::fleet::volatile::VolatileStore;
     use yagra_base::secrets::CredentialStore;
 
     let kek: yagra_base::secrets::Kek =
@@ -311,26 +311,30 @@ async fn live_state_with(
     repo.seed_builtin_profiles().await.expect("seed profiles");
     repo.seed_app_settings(
         yagra_base::repo::DEFAULT_POLL_INTERVAL_SECS,
-        crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS,
+        crate::passive::flowstore::DEFAULT_FLOW_RETENTION_DAYS,
     )
     .await
     .expect("seed settings");
-    let mib = Arc::new(crate::mib::MibRepo::new(pool.clone()));
+    let mib = Arc::new(crate::discover::mib::MibRepo::new(pool.clone()));
     mib.seed_builtin().await.expect("seed mib");
 
     let alerts = Arc::new(crate::alerts::new_manager());
     let history = Arc::new(crate::alerts::history::AlertHistoryStore::new(pool.clone()));
     let group_repo = Arc::new(yagra_base::groups::GroupRepo::new(pool.clone()));
     let events_repo = Arc::new(crate::events::EventRepo::new(pool.clone()));
-    let poller_repo = Arc::new(crate::pollers::PollerRepo::new(pool.clone()));
-    let l3_repo = Arc::new(crate::l3::L3Repo::new(pool.clone()));
-    let topo_link_repo = Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone()));
+    let poller_repo = Arc::new(crate::fleet::pollers::PollerRepo::new(pool.clone()));
+    let l3_repo = Arc::new(crate::topology::l3::L3Repo::new(pool.clone()));
+    let topo_link_repo = Arc::new(crate::topology::topology_links::TopoLinkRepo::new(
+        pool.clone(),
+    ));
     let scheduler_stats = Arc::new(crate::scheduler::SchedulerStats::default());
-    let classifier = Arc::new(crate::classification::Classifier::empty());
+    let classifier = Arc::new(crate::discover::classification::Classifier::empty());
     let creds = Arc::new(CredentialStore::new(pool.clone(), kek.clone()));
-    let collection = Arc::new(crate::collection::CollectionRepo::new(pool.clone()));
-    let url_checks = Arc::new(crate::url_check::UrlCheckRepo::new(pool.clone()));
-    let dns_checks = Arc::new(crate::dns_check::DnsCheckRepo::new(pool.clone()));
+    let collection = Arc::new(crate::discover::collection::CollectionRepo::new(
+        pool.clone(),
+    ));
+    let url_checks = Arc::new(crate::monitors::url_check::UrlCheckRepo::new(pool.clone()));
+    let dns_checks = Arc::new(crate::monitors::dns_check::DnsCheckRepo::new(pool.clone()));
     let meraki_devices = Arc::new(yagra_meraki::MerakiDeviceRepo::new(pool.clone()));
     let meraki_orgs = Arc::new(yagra_meraki::MerakiOrgRepo::new(pool.clone()));
     let meraki_inventory = Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
@@ -351,7 +355,7 @@ async fn live_state_with(
     ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
     let audit_repo = Arc::new(yagra_auth::audit::AuditRepo::new(pool.clone()));
-    let forward_store = Arc::new(crate::forward_store::ForwardStore::new(
+    let forward_store = Arc::new(crate::passive::forward_store::ForwardStore::new(
         pool.clone(),
         kek.clone(),
     ));
@@ -382,8 +386,8 @@ async fn live_state_with(
             events: events_repo.clone(),
             logs: None,
             flows: None,
-            ipasn: crate::ipasn::empty_handle(),
-            topo: crate::topology_projection::TopologySources {
+            ipasn: crate::passive::ipasn::empty_handle(),
+            topo: crate::topology::topology_projection::TopologySources {
                 links: topo_link_repo.clone(),
                 pollers: poller_repo.clone(),
                 l3: l3_repo.clone(),
@@ -407,22 +411,30 @@ async fn live_state_with(
         )),
         notify_default_route,
         mib,
-        discovery: Arc::new(crate::discovery::DiscoveryRunner::new(
+        discovery: Arc::new(crate::discover::discovery::DiscoveryRunner::new(
             discovery_bus,
             classifier.clone(),
         )),
         maintenance: Arc::new(crate::alerts::maintenance::MaintenanceRepo::new(
             pool.clone(),
         )),
-        classification: Arc::new(crate::classification::ClassificationRepo::new(pool.clone())),
+        classification: Arc::new(crate::discover::classification::ClassificationRepo::new(
+            pool.clone(),
+        )),
         classifier,
         groups: group_repo.clone(),
         audit: audit_repo.clone(),
-        dashboards: Arc::new(crate::dashboard::DashboardRepo::new(pool.clone())),
-        shared_dashboard: Arc::new(crate::dashboard::SharedDashboardRepo::new(pool.clone())),
-        public_dashboard: Arc::new(crate::dashboard::PublicDashboardRepo::new(pool.clone())),
-        prefs: Arc::new(crate::preferences::UserPrefsRepo::new(pool.clone())),
-        pins: Arc::new(crate::pins::UserPinsRepo::new(pool.clone())),
+        dashboards: Arc::new(crate::account::dashboard::DashboardRepo::new(pool.clone())),
+        shared_dashboard: Arc::new(crate::account::dashboard::SharedDashboardRepo::new(
+            pool.clone(),
+        )),
+        public_dashboard: Arc::new(crate::account::dashboard::PublicDashboardRepo::new(
+            pool.clone(),
+        )),
+        prefs: Arc::new(crate::account::preferences::UserPrefsRepo::new(
+            pool.clone(),
+        )),
+        pins: Arc::new(crate::inventory::pins::UserPinsRepo::new(pool.clone())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher: Arc::new(crate::scheduler::PollDispatcher::new(
             crate::scheduler::PollDispatcherStores {
@@ -432,7 +444,7 @@ async fn live_state_with(
                 url_checks: url_checks.clone(),
                 dns_checks: dns_checks.clone(),
                 meraki_devices: meraki_devices.clone(),
-                wireless: Arc::new(crate::wireless::WirelessRepo::new(pool.clone())),
+                wireless: Arc::new(crate::topology::wireless::WirelessRepo::new(pool.clone())),
                 settings: repo.clone(),
                 l3: l3_repo.clone(),
                 env_community,
@@ -452,13 +464,15 @@ async fn live_state_with(
         dns_checks,
         neighbors: Arc::new(yagra_base::neighbors::NeighborRepo::new(pool.clone())),
         l3: l3_repo,
-        vlans: Arc::new(crate::vlans::VlanRepo::new(pool.clone())),
-        routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
-        arp: Arc::new(crate::arp::ArpRepo::new(pool.clone())),
-        discovered: Arc::new(crate::arp::DiscoveredRepo::new(pool.clone())),
-        wireless: Arc::new(crate::wireless::WirelessRepo::new(pool.clone())),
+        vlans: Arc::new(crate::topology::vlans::VlanRepo::new(pool.clone())),
+        routing: Arc::new(crate::topology::l3_routing::RoutingRepo::new(pool.clone())),
+        arp: Arc::new(crate::discover::arp::ArpRepo::new(pool.clone())),
+        discovered: Arc::new(crate::discover::arp::DiscoveredRepo::new(pool.clone())),
+        wireless: Arc::new(crate::topology::wireless::WirelessRepo::new(pool.clone())),
         topology_links: topo_link_repo,
-        link_overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
+        link_overrides: Arc::new(crate::topology::link_overrides::LinkOverrideRepo::new(
+            pool.clone(),
+        )),
         meraki_orgs,
         meraki_inventory,
         meraki_import,
@@ -466,7 +480,7 @@ async fn live_state_with(
         netbox: Arc::new(yagra_netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,
         events: events_repo,
-        coordinator: Arc::new(crate::coordinator::Coordinator::new(
+        coordinator: Arc::new(crate::fleet::coordinator::Coordinator::new(
             sync_bus,
             Arc::new(VolatileStore::disabled()),
             Some(poller_repo.clone()),
@@ -480,7 +494,7 @@ async fn live_state_with(
         )),
         forward: forward_store.clone(),
         // The runner half is dropped on purpose: nothing here delivers, which is the point.
-        forward_handle: crate::forward::prepare(forward_store).0,
+        forward_handle: crate::passive::forward::prepare(forward_store).0,
         llm: llm_repo.clone(),
         config_bundle: Arc::new(crate::config_bundle::ConfigBundleRepo::new(pool.clone())),
         support: Arc::new(yagra_ops::support_bundle::SupportRepo::new(pool.clone())),
@@ -490,7 +504,7 @@ async fn live_state_with(
         store,
         logs: None,
         flows: None,
-        ipasn: crate::ipasn::empty_handle(),
+        ipasn: crate::passive::ipasn::empty_handle(),
         nodes: repo.clone(),
         alerts: alerts.clone(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -520,8 +534,8 @@ async fn live_state_with(
         rca: Some(Arc::new(crate::rca::orchestrator::RcaOrchestrator::new(
             llm_repo, repo, alerts, analysis, audit_repo, group_repo,
         ))),
-        webtls: Some(crate::webtls::open(pool.clone(), kek.clone())),
-        bus_tls: Some(crate::bus_cert::open(pool.clone(), kek)),
+        webtls: Some(crate::certs::webtls::open(pool.clone(), kek.clone())),
+        bus_tls: Some(crate::certs::bus_cert::open(pool.clone(), kek)),
         // With a directory this is a real hand-off volume a write can be accepted into; without
         // one it is `open`'s environment read, which in the test binary means no mechanism at all.
         upgrade: Some(match upgrade_dir {

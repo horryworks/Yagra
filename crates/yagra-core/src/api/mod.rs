@@ -114,21 +114,21 @@ pub(crate) use extract::bearer;
 // import paths still here, must go through these (a name becomes a NATS subject verbatim).
 pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_s, parse_rfc3339};
 
+use crate::account::dashboard::{DashboardRepo, SharedDashboardRepo};
+use crate::account::preferences::UserPrefsRepo;
 use crate::alerts::ack::AckRepo;
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
-use crate::classification::{ClassificationRepo, Classifier};
-use crate::collection::CollectionRepo;
-use crate::coordinator::Coordinator;
-use crate::dashboard::{DashboardRepo, SharedDashboardRepo};
-use crate::discovery::DiscoveryRunner;
-use crate::logstore::LogStore;
-use crate::mib::MibRepo;
-use crate::pollers::PollerRepo;
-use crate::preferences::UserPrefsRepo;
+use crate::discover::classification::{ClassificationRepo, Classifier};
+use crate::discover::collection::CollectionRepo;
+use crate::discover::discovery::DiscoveryRunner;
+use crate::discover::mib::MibRepo;
+use crate::fleet::coordinator::Coordinator;
+use crate::fleet::pollers::PollerRepo;
+use crate::passive::logstore::LogStore;
 use yagra_auth::audit::AuditRepo;
 use yagra_auth::auth::{LoginThrottle, SessionStore, UserStore};
 use yagra_base::groups::GroupRepo;
@@ -136,7 +136,7 @@ use yagra_base::groups::GroupRepo;
 use crate::alerts::thresholds::ThresholdStore;
 use crate::reports::{ReportRunner, ReportsRepo};
 use crate::scheduler::PollDispatcher;
-use crate::store::MetricStore;
+use crate::tsdb::store::MetricStore;
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
     http::StatusCode,
@@ -182,11 +182,11 @@ pub struct AdminState {
     /// ⚠️ Not a third presentation store. What this board carries decides which API routes an
     /// unauthenticated request may reach ([`crate::api::public_access`]), which is why its write takes
     /// `manage_system` while its shared-board sibling takes `manage_config`.
-    pub public_dashboard: Arc<crate::dashboard::PublicDashboardRepo>,
+    pub public_dashboard: Arc<crate::account::dashboard::PublicDashboardRepo>,
     /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
     pub prefs: Arc<UserPrefsRepo>,
     /// Per-account pins on the inventory tree (ADR-146).
-    pub pins: Arc<crate::pins::UserPinsRepo>,
+    pub pins: Arc<crate::inventory::pins::UserPinsRepo>,
     /// Live poll-loop self-monitoring counters (the poller-health endpoint).
     pub scheduler_stats: Arc<crate::scheduler::SchedulerStats>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
@@ -204,34 +204,34 @@ pub struct AdminState {
     /// seams in a test (ADR-112).
     pub reports_repo: Arc<ReportsRepo>,
     /// Per-node URL-monitor configs (HTTP/HTTPS endpoint checks).
-    pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
+    pub url_checks: Arc<crate::monitors::url_check::UrlCheckRepo>,
     /// Per-node DNS-monitor configs plus the observed resolution chains and their history.
-    pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
+    pub dns_checks: Arc<crate::monitors::dns_check::DnsCheckRepo>,
     /// Observed CDP/LLDP adjacency per node, and its append-on-change history (ADR-038).
     pub neighbors: Arc<yagra_base::neighbors::NeighborRepo>,
     /// Observed interface addresses per node (ADR-043). Read here to place a poller on a segment
     /// when the shadow preview resolves anchors.
-    pub l3: Arc<crate::l3::L3Repo>,
+    pub l3: Arc<crate::topology::l3::L3Repo>,
     /// Observed port modes and VLANs per node (ADR-201), joined onto the Interfaces list by ifIndex.
-    pub vlans: Arc<crate::vlans::VlanRepo>,
+    pub vlans: Arc<crate::topology::vlans::VlanRepo>,
     /// Observed routing adjacency and default routes per node (ADR-043, ADR-191 Inc.10). Read here
     /// for where each node's default route points, which tells a site's way out on the map.
-    pub routing: Arc<crate::l3_routing::RoutingRepo>,
+    pub routing: Arc<crate::topology::l3_routing::RoutingRepo>,
     /// Observed ARP/ND caches per node (ADR-043 Increment 3). Read here for the coverage line that
     /// tells an operator whether the endpoint list is complete or a sample.
-    pub arp: Arc<crate::arp::ArpRepo>,
+    pub arp: Arc<crate::discover::arp::ArpRepo>,
     /// Endpoints the fleet has seen but does not monitor (ADR-043 Increment 3). Recomputable from
     /// `arp` **except** for `first_seen`, which is why it is a table and not a view.
-    pub discovered: Arc<crate::arp::DiscoveredRepo>,
+    pub discovered: Arc<crate::discover::arp::DiscoveredRepo>,
     /// Wireless controllers and the access points they report (ADR-064).
-    pub wireless: Arc<crate::wireless::WirelessRepo>,
+    pub wireless: Arc<crate::topology::wireless::WirelessRepo>,
     /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
     /// truth, so a stale read is a stale map rather than lost data.
-    pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
+    pub topology_links: Arc<crate::topology::topology_links::TopoLinkRepo>,
     /// Operator decisions about links (ADR-043 decision 4). Unlike `topology_links` this is a source of
     /// truth — nothing here is recomputable — which is why it is a separate store rather than a
     /// column on the cache.
-    pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
+    pub link_overrides: Arc<crate::topology::link_overrides::LinkOverrideRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
     pub meraki_orgs: Arc<yagra_meraki::MerakiOrgRepo>,
     /// What the Dashboard says each organization holds, kept between syncs (ADR-164).
@@ -260,9 +260,9 @@ pub struct AdminState {
     pub api_tokens: Arc<yagra_auth::apitokens::ApiTokenStore>,
     /// Forwarding destinations (ADR-034): backs Settings ▸ Forwarding. Present on every core so
     /// destination CRUD works from either; only the leader's dispatcher actually sends.
-    pub forward: Arc<crate::forward_store::ForwardStore>,
+    pub forward: Arc<crate::passive::forward_store::ForwardStore>,
     /// Live forwarding status + the poke that makes a destination edit take effect immediately.
-    pub forward_handle: crate::forward::ForwardHandle,
+    pub forward_handle: crate::passive::forward::ForwardHandle,
     /// AI-assisted RCA provider configuration (ADR-029): backs Settings ▸ AI. The credential is
     /// envelope-encrypted and write-only, so this store never hands one back out.
     pub llm: Arc<crate::rca::store::RcaRepo>,
@@ -306,14 +306,14 @@ pub struct ApiState {
     /// Flow store (ADR-031, the traffic-flow tier). `Some` when ClickHouse is configured — then the
     /// flow-query endpoints serve top talkers/conversations/ports/protocols/trend; `None` (default-OFF)
     /// makes those endpoints return `503 service_unavailable`.
-    pub flows: Option<Arc<dyn crate::flowstore::FlowStore>>,
+    pub flows: Option<Arc<dyn crate::passive::flowstore::FlowStore>>,
     /// Offline IP→ASN table (ADR-031 Increment 3), behind a hot-swappable handle so a periodic
     /// reloader can refresh it without a restart. Holds `Some` when `YAGRA_IPASN_DB` is configured —
     /// then the flow top-AS endpoint resolves AS numbers to organization names; `None` leaves names
     /// unset.
-    pub ipasn: crate::ipasn::IpAsnHandle,
+    pub ipasn: crate::passive::ipasn::IpAsnHandle,
     /// Core's own latest host-resource sample (CPU/load/mem/disk/network), for the System Health page.
-    pub host_sample: crate::host_collector::CoreHostSample,
+    pub host_sample: crate::tsdb::host_collector::CoreHostSample,
     /// Inventory read seam.
     pub nodes: Arc<dyn NodeListing>,
     /// Alert engine (active alerts + live event stream).
@@ -370,12 +370,12 @@ pub struct ApiState {
     /// materializing is idempotent and content-addressed, so there is nothing for a standby to
     /// double-do, and a standby that starts first on a fresh database still has to be able to
     /// bootstrap one or the web container waits forever.
-    pub webtls: Option<Arc<crate::webtls::WebTlsRepo>>,
+    pub webtls: Option<Arc<crate::certs::webtls::WebTlsRepo>>,
     /// The certificate the core⇄poller bus serves (ADR-065); `None` in skeleton mode. Read-mostly
     /// here — the `bus-cert` one-shot establishes it before this process starts, and core only shows
     /// it and mints a replacement on request. Present on every core: reissuing is an operator action
     /// either way, so there is nothing for a standby to double-do.
-    pub bus_tls: Option<Arc<crate::bus_cert::BusTlsRepo>>,
+    pub bus_tls: Option<Arc<crate::certs::bus_cert::BusTlsRepo>>,
     /// Migration history and the compatibility floor it implies (ADR-050); `None` in skeleton mode.
     /// Read-only, so every core answers — there is nothing here for a standby to double-do.
     pub upgrade: Option<Arc<yagra_ops::upgrade::UpgradeRepo>>,
@@ -837,7 +837,7 @@ pub(crate) use yagra_common::is_valid_metric_name;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sink::InMemorySink;
+    use crate::tsdb::sink::InMemorySink;
     use axum::body::{to_bytes, Body};
     use axum::http::{header::AUTHORIZATION, Request};
     use tower::ServiceExt; // for `oneshot`
@@ -852,7 +852,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
-            ipasn: crate::ipasn::empty_handle(),
+            ipasn: crate::passive::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(crate::alerts::new_manager()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -894,7 +894,7 @@ mod tests {
             store,
             logs: None,
             flows: None,
-            ipasn: crate::ipasn::empty_handle(),
+            ipasn: crate::passive::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(crate::alerts::new_manager()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -934,7 +934,7 @@ mod tests {
             store: Arc::new(InMemorySink::default()),
             logs: None,
             flows: None,
-            ipasn: crate::ipasn::empty_handle(),
+            ipasn: crate::passive::ipasn::empty_handle(),
             nodes: Arc::new(StaticNodeList::demo()),
             alerts: Arc::new(crate::alerts::new_manager()),
             host_sample: Arc::new(std::sync::Mutex::new(None)),
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[tokio::test]
     async fn flow_top_talkers_returns_data_when_enabled() {
-        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        use crate::passive::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
         let node = Uuid::from_u128(7);
         let store = InMemoryFlowStore::default();
         let mk = |src: &str, bytes: u64| FlowRow {
@@ -1089,7 +1089,7 @@ mod tests {
     async fn flow_top_as_ranks_and_filters() {
         // Endpoint shape + ordering + protocol filter (AS-name resolution is covered by the
         // `ipasn` unit tests; here `st.ipasn` is None so names stay unset).
-        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        use crate::passive::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
         let node = Uuid::from_u128(9);
         let store = InMemoryFlowStore::default();
         let mk = |dst: &str, dst_as: u32, proto: u8, bytes: u64| FlowRow {
@@ -1173,7 +1173,7 @@ mod tests {
     async fn flow_conversations_carry_as() {
         // The conversations endpoint surfaces per-flow src/dst ASN (name-resolution is the
         // `ipasn` layer's job; `st.ipasn` is None here so the `*_as_name` stay null).
-        use crate::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
+        use crate::passive::flowstore::{FlowRow, FlowStore, InMemoryFlowStore};
         let node = Uuid::from_u128(11);
         let store = InMemoryFlowStore::default();
         store

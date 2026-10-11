@@ -454,10 +454,10 @@ impl DeliveryLog {
 /// queued before returning (`batch_writer::run`).
 pub(crate) fn start(repo: Arc<DeliveryLogRepo>, shutdown: &CancellationToken) -> DeliveryLog {
     let (tx, rx) = tokio::sync::mpsc::channel(CHANNEL_CAP);
-    tokio::spawn(crate::batch_writer::run(
+    tokio::spawn(crate::tsdb::batch_writer::run(
         rx,
         WRITE_BATCH_MAX,
-        crate::batch_writer::FlushPolicy::EveryDrain,
+        crate::tsdb::batch_writer::FlushPolicy::EveryDrain,
         "notification_deliveries",
         shutdown.clone(),
         move |buf: &mut Vec<DeliveryRecord>| -> futures::future::BoxFuture<'_, ()> {

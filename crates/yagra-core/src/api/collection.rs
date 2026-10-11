@@ -18,7 +18,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, VisibleNode};
 use super::util::{now_unix_s, CreatedId};
 use super::{is_valid_metric_name, is_valid_oid, ApiState};
-use crate::collection::CreateTemplateOutcome;
+use crate::discover::collection::CreateTemplateOutcome;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -197,7 +197,7 @@ pub(super) struct CollectionQuery {
 #[serde(untagged)]
 pub(crate) enum NodeCollection {
     /// Default: the node's own overrides, each with its id and scope.
-    Stored(Vec<crate::collection::StoredCollectionItem>),
+    Stored(Vec<crate::discover::collection::StoredCollectionItem>),
     /// `?resolved=true`: the effective set after profile defaults, as the poller sees it.
     Resolved(Vec<yagra_common::CollectionItem>),
 }
@@ -377,7 +377,7 @@ pub(super) struct SetProfileTemplates {
 #[utoipa::path(
     get, path = "/api/v1/collection-templates", tag = "collection",
     responses(
-        (status = 200, description = "Every collection template with its item count", body = Vec<crate::collection::TemplateSummary>),
+        (status = 200, description = "Every collection template with its item count", body = Vec<crate::discover::collection::TemplateSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
@@ -386,7 +386,7 @@ pub(super) struct SetProfileTemplates {
 async fn list_collection_templates(
     _guard: RequireManageConfig,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::collection::TemplateSummary>>> {
+) -> ApiResult<Json<Vec<crate::discover::collection::TemplateSummary>>> {
     let list = admin.collection.list_templates().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -474,7 +474,7 @@ async fn delete_collection_template(
     get, path = "/api/v1/collection-templates/{id}/items", tag = "collection",
     params(("id" = Uuid, Path, description = "Collection template id")),
     responses(
-        (status = 200, description = "The template's items", body = Vec<crate::collection::TemplateItem>),
+        (status = 200, description = "The template's items", body = Vec<crate::discover::collection::TemplateItem>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
@@ -484,7 +484,7 @@ async fn list_template_items(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Vec<crate::collection::TemplateItem>>> {
+) -> ApiResult<Json<Vec<crate::discover::collection::TemplateItem>>> {
     let list = admin
         .collection
         .list_template_items(id)
@@ -576,7 +576,7 @@ async fn delete_template_item(
     get, path = "/api/v1/profiles/{id}/templates", tag = "collection",
     params(("id" = Uuid, Path, description = "Device profile id")),
     responses(
-        (status = 200, description = "The templates attached to this profile", body = Vec<crate::collection::TemplateSummary>),
+        (status = 200, description = "The templates attached to this profile", body = Vec<crate::discover::collection::TemplateSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
@@ -586,7 +586,7 @@ async fn list_profile_templates(
     _guard: RequireManageConfig,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Vec<crate::collection::TemplateSummary>>> {
+) -> ApiResult<Json<Vec<crate::discover::collection::TemplateSummary>>> {
     let list = admin
         .collection
         .list_profile_templates(id)

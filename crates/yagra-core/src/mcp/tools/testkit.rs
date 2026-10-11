@@ -17,8 +17,8 @@ use crate::api::ApiState;
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
 // re-exported by `mod.rs` so no file has to name where a sibling keeps a thing.
 use super::*;
-use crate::sink::InMemorySink;
-use crate::store::MetricStore;
+use crate::tsdb::sink::InMemorySink;
+use crate::tsdb::store::MetricStore;
 use std::sync::Arc;
 use yagra_auth::auth::{LoginThrottle, SessionStore};
 
@@ -31,7 +31,7 @@ pub(super) fn skeleton_state() -> ApiState {
         store,
         logs: None,
         flows: None,
-        ipasn: crate::ipasn::empty_handle(),
+        ipasn: crate::passive::ipasn::empty_handle(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(yagra_base::repo::StaticNodeList::demo()),
         alerts: Arc::new(crate::alerts::new_manager()),

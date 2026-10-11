@@ -1,5 +1,5 @@
 {
-  "about": "Whether a subnet-overlap rule's port text matches a port: crates/yagra-core/src/subnet_overlaps.rs::carries_words and web/src/pages/subnetOverlaps.ts::carriesWords both run every case.",
+  "about": "Whether a subnet-overlap rule's port text matches a port: crates/yagra-core/src/inventory/subnet_overlaps.rs::carries_words and web/src/pages/subnetOverlaps.ts::carriesWords both run every case.",
   "cases": [
     { "text": "HA sync", "needle": "ha", "matches": true },
     { "text": "ha-link2", "needle": "ha", "matches": true },

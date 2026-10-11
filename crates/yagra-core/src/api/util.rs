@@ -225,7 +225,7 @@ pub(crate) struct CadenceBody {
     pub at_minute: i16,
 }
 
-/// Validate a cadence body into a [`crate::cadence::Schedule`].
+/// Validate a cadence body into a [`crate::runtime::cadence::Schedule`].
 ///
 /// The frequency is **rejected**, the day/hour/minute fields are **clamped**. That split is
 /// deliberate: a `day_of_month` of 31 is a reasonable thing for a form to send and there is a
@@ -235,21 +235,23 @@ pub(crate) struct CadenceBody {
 /// `Unknown` is a *storage* degradation — what a row written by a newer core reads back as — and
 /// never something an operator may pick. Accepting it here would let a client write a cadence the
 /// scheduler then silently treats as daily.
-pub(crate) fn parse_cadence(body: CadenceBody) -> Result<crate::cadence::Schedule, ApiError> {
-    let frequency = crate::cadence::Cadence::from_stored(&body.frequency);
-    if frequency == crate::cadence::Cadence::Unknown {
+pub(crate) fn parse_cadence(
+    body: CadenceBody,
+) -> Result<crate::runtime::cadence::Schedule, ApiError> {
+    let frequency = crate::runtime::cadence::Cadence::from_stored(&body.frequency);
+    if frequency == crate::runtime::cadence::Cadence::Unknown {
         return Err(ApiError::bad_request(
             "invalid_frequency",
             "frequency must be daily|weekly|monthly",
         ));
     }
-    Ok(crate::cadence::Schedule {
+    Ok(crate::runtime::cadence::Schedule {
         frequency,
         // Each day field is kept only for the cadence that reads it, so a weekly schedule cannot
         // carry a stale day-of-month from an edit that changed the frequency.
-        day_of_week: (frequency == crate::cadence::Cadence::Weekly)
+        day_of_week: (frequency == crate::runtime::cadence::Cadence::Weekly)
             .then(|| body.day_of_week.unwrap_or(0).clamp(0, 6)),
-        day_of_month: (frequency == crate::cadence::Cadence::Monthly)
+        day_of_month: (frequency == crate::runtime::cadence::Cadence::Monthly)
             .then(|| body.day_of_month.unwrap_or(1).clamp(1, 28)),
         at_hour: body.at_hour.clamp(0, 23),
         at_minute: body.at_minute.clamp(0, 59),
@@ -286,7 +288,7 @@ pub(crate) struct EnabledBody {
     pub enabled: bool,
 }
 
-/// Build a [`PoolResolver`](crate::poolres::PoolResolver) from the folder tree, for a **display**.
+/// Build a [`PoolResolver`](crate::fleet::poolres::PoolResolver) from the folder tree, for a **display**.
 ///
 /// A read error degrades to "no folder inheritance" with a warning, deliberately: a caller of this
 /// one is a read-only view, where missing inheritance is a display inaccuracy rather than a polling
@@ -295,17 +297,19 @@ pub(crate) struct EnabledBody {
 /// folder-read blip can never misroute an actual poll.
 ///
 /// Shared by the nodes and poller-pool domains, so it lives here rather than in either.
-pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::PoolResolver {
+pub(crate) async fn pool_resolver(
+    admin: &super::AdminState,
+) -> crate::fleet::poolres::PoolResolver {
     match admin.groups.pool_rows().await {
-        Ok(rows) => crate::poolres::PoolResolver::build(rows),
+        Ok(rows) => crate::fleet::poolres::PoolResolver::build(rows),
         Err(e) => {
             tracing::warn!(error = %e, "loading folder pools failed; resolving without inheritance");
-            crate::poolres::PoolResolver::empty()
+            crate::fleet::poolres::PoolResolver::empty()
         }
     }
 }
 
-/// Build a [`PoolResolver`](crate::poolres::PoolResolver) for a handler that **acts** on it, or
+/// Build a [`PoolResolver`](crate::fleet::poolres::PoolResolver) for a handler that **acts** on it, or
 /// answer 500.
 ///
 /// ADR-158 B4: four handlers decided something from [`pool_resolver`]'s degraded answer, where "no
@@ -314,12 +318,12 @@ pub(crate) async fn pool_resolver(admin: &super::AdminState) -> crate::poolres::
 /// move let a pool's last poller go because its inheriting nodes looked like somebody else's.
 pub(crate) async fn pool_resolver_or_error(
     admin: &super::AdminState,
-) -> Result<crate::poolres::PoolResolver, super::ApiError> {
+) -> Result<crate::fleet::poolres::PoolResolver, super::ApiError> {
     admin
         .groups
         .pool_rows()
         .await
-        .map(crate::poolres::PoolResolver::build)
+        .map(crate::fleet::poolres::PoolResolver::build)
         .map_err(|e| {
             super::ApiError::from_internal(
                 e.as_ref(),
@@ -329,7 +333,7 @@ pub(crate) async fn pool_resolver_or_error(
         })
 }
 
-/// Build a [`TagResolver`](crate::tagres::TagResolver) from the folder tree (ADR-135 inc. 2).
+/// Build a [`TagResolver`](crate::inventory::tagres::TagResolver) from the folder tree (ADR-135 inc. 2).
 ///
 /// The exact twin of [`pool_resolver`] above, including the degradation: a read error becomes "no
 /// folder inheritance" with a warning, because every caller is a read-only view where missing
@@ -339,12 +343,14 @@ pub(crate) async fn pool_resolver_or_error(
 /// failure, because there a missing label narrows a threshold rule's scope and a check that stops
 /// resolving closes its open alerts (ADR-080). The two treatments look like each other's bug; each
 /// has its reason written at the site.
-pub(crate) async fn tag_resolver(admin: &super::AdminState) -> crate::tagres::TagResolver {
+pub(crate) async fn tag_resolver(
+    admin: &super::AdminState,
+) -> crate::inventory::tagres::TagResolver {
     match admin.groups.tag_rows().await {
-        Ok(rows) => crate::tagres::TagResolver::build(rows),
+        Ok(rows) => crate::inventory::tagres::TagResolver::build(rows),
         Err(e) => {
             tracing::warn!(error = %e, "loading folder labels failed; resolving without inheritance");
-            crate::tagres::TagResolver::empty()
+            crate::inventory::tagres::TagResolver::empty()
         }
     }
 }

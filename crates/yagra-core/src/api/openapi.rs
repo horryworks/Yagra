@@ -227,7 +227,7 @@ mod tests {
         );
     }
 
-    /// Strip module paths and whitespace so `Vec<crate::discovery::Candidate>` and
+    /// Strip module paths and whitespace so `Vec<crate::discover::discovery::Candidate>` and
     /// `Json<Vec<Candidate>>` compare equal — what matters is which type, not how it was spelled.
     fn normalize(ty: &str) -> String {
         let t: String = ty.chars().filter(|c| !c.is_whitespace()).collect();

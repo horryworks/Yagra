@@ -17,7 +17,7 @@ use super::extract::{Actor, RequireManageConfig, RequireView, Scoped};
 use super::nodes::{fresh_fallback_ids, NodePageQuery};
 use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
-use crate::node_display::state_or_fallback;
+use crate::runtime::node_display::state_or_fallback;
 use axum::{
     extract::{Path, Query},
     routing::{delete, get},
@@ -556,7 +556,7 @@ pub(crate) struct MapLevelQuery {
 async fn role_facts(
     admin: &super::AdminState,
     drawn: &[Uuid],
-    links: &[crate::topology_links::StoredLink],
+    links: &[crate::topology::topology_links::StoredLink],
 ) -> HashMap<Uuid, super::topology_level::RoleFacts> {
     let (kinds, categories, l3, hops) = tokio::join!(
         super::nodes::node_kinds_with_products(admin, drawn),
@@ -704,7 +704,7 @@ pub(crate) async fn topology_map_level(
         .iter()
         .any(|(id, _)| !raw.contains_key(&NodeId::from(*id)));
     let fresh = if any_unobserved {
-        crate::node_display::fresh_fleet_ids(st.store.as_ref()).await
+        crate::runtime::node_display::fresh_fleet_ids(st.store.as_ref()).await
     } else {
         HashSet::new()
     };
@@ -1107,15 +1107,15 @@ pub(crate) async fn topology_shadow(
             "failed to load the topology",
         )
     })?;
-    let sources = crate::topology_projection::TopologySources {
+    let sources = crate::topology::topology_projection::TopologySources {
         links: admin.topology_links.clone(),
         pollers: admin.pollers.clone(),
         l3: admin.l3.clone(),
         nodes: admin.repo.clone(),
     };
-    let manual = crate::topology_projection::manual_topology(&nodes);
+    let manual = crate::topology::topology_projection::manual_topology(&nodes);
     let (derived, resolution) =
-        crate::topology_projection::derived_topology(&sources, &nodes).await;
+        crate::topology::topology_projection::derived_topology(&sources, &nodes).await;
 
     // Both graphs are built over the whole fleet — a graph filtered to one operator's groups would
     // attribute a root cause to the nearest *visible* node rather than the actual one. The scope is
@@ -1268,13 +1268,13 @@ async fn set_topology_mode(
                 "failed to load the fleet",
             )
         })?;
-        let sources = crate::topology_projection::TopologySources {
+        let sources = crate::topology::topology_projection::TopologySources {
             links: admin.topology_links.clone(),
             pollers: admin.pollers.clone(),
             l3: admin.l3.clone(),
             nodes: admin.repo.clone(),
         };
-        let resolution = crate::topology_projection::resolve(&sources, &nodes).await;
+        let resolution = crate::topology::topology_projection::resolve(&sources, &nodes).await;
         // Only pools that actually have nodes block. An idle pool with a misconfigured poller is a
         // problem for that pool, not a reason to refuse a fleet the operator has already reviewed.
         // A node with no explicit pool belongs to `default` — the same fallback the coordinator
@@ -1519,7 +1519,7 @@ mod tests {
             .await
             .expect("floor-1");
         let d = yagra_base::pgtest::node(&pool, "sw-d", 5, Some(floor)).await;
-        crate::topology_links::TopoLinkRepo::new(pool.clone())
+        crate::topology::topology_links::TopoLinkRepo::new(pool.clone())
             .upsert_batch(&[
                 DerivedLink::new(NodeId(a), NodeId(b), LinkSource::Lldp),
                 DerivedLink::new(NodeId(a), NodeId(c), LinkSource::Lldp),
@@ -1597,7 +1597,7 @@ mod tests {
         // it is incomplete (ADR-191 decision 15): zero before any run, the run's counts after one.
         assert!(whole["derived_at"].is_null());
         assert_eq!(whole["summary"]["unmatched_lldp_rows"], 0);
-        crate::topology_links::TopoLinkRepo::new(pool.clone())
+        crate::topology::topology_links::TopoLinkRepo::new(pool.clone())
             .record_run(
                 &TopologyLinkSummary {
                     unmatched_lldp_rows: 2,

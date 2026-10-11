@@ -4,7 +4,7 @@
 //
 // What is decided here: how the server's groups become table rows, which selections a delete may
 // send, what the delete names, and what an empty table says. What is NOT decided here is which nodes
-// are duplicates — that is the server's (`crates/yagra-core/src/duplicates.rs`), and nothing below
+// are duplicates — that is the server's (`crates/yagra-core/src/discover/duplicates.rs`), and nothing below
 // second-guesses it.
 
 import type {

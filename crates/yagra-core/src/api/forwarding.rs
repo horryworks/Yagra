@@ -120,7 +120,7 @@ const fn default_true() -> bool {
 fn validate_forward_body(
     st: &ApiState,
     body: ForwardDestinationBody,
-) -> Result<crate::forward_store::ForwardDestinationInput, ApiError> {
+) -> Result<crate::passive::forward_store::ForwardDestinationInput, ApiError> {
     let bad = ApiError::bad_request;
 
     let name = super::util::bounded_name(&body.name, 120, "invalid_name")?.to_owned();
@@ -270,19 +270,23 @@ fn validate_forward_body(
         // Parse and reject here so a mistyped key is a 400 rather than a destination whose every
         // batch fails with an error only visible on the status page. The error text is Google-shaped
         // and never quotes key material.
-        crate::gcp::validate_service_account(json)
+        crate::passive::gcp::validate_service_account(json)
             .map_err(|e| ApiError::bad_request("invalid_service_account", e))?;
     }
 
     // Exactly one secret per destination, and which one is decided by the destination kind — the
     // two are mutually exclusive above, so this cannot silently discard the other.
     let secret = match (community, service_account_json) {
-        (Some(community), _) => Some(crate::forward_store::DestSecret::SnmpCommunity { community }),
-        (None, Some(json)) => Some(crate::forward_store::DestSecret::GcpServiceAccount { json }),
+        (Some(community), _) => {
+            Some(crate::passive::forward_store::DestSecret::SnmpCommunity { community })
+        }
+        (None, Some(json)) => {
+            Some(crate::passive::forward_store::DestSecret::GcpServiceAccount { json })
+        }
         (None, None) => None,
     };
 
-    Ok(crate::forward_store::ForwardDestinationInput {
+    Ok(crate::passive::forward_store::ForwardDestinationInput {
         name,
         enabled: body.enabled,
         source_kind: body.source_kind,
@@ -320,7 +324,7 @@ fn check_target(kind: yagra_forward::DestKind, target: &str) -> Result<Option<u1
         };
         return Ok(Some(port));
     }
-    match crate::bigquery::BigQueryTarget::parse(target) {
+    match crate::passive::bigquery::BigQueryTarget::parse(target) {
         Ok(_) => Ok(None),
         Err(e) => Err(ApiError::bad_request(
             "invalid_target",
@@ -394,7 +398,7 @@ fn write_error(e: &anyhow::Error, what: &'static str, msg: &'static str) -> ApiE
 #[utoipa::path(
     get, path = "/api/v1/forwarding/destinations", tag = "forwarding",
     responses(
-        (status = 200, description = "Every destination, without its stored secret", body = Vec<crate::forward_store::ForwardDestination>),
+        (status = 200, description = "Every destination, without its stored secret", body = Vec<crate::passive::forward_store::ForwardDestination>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
@@ -403,7 +407,7 @@ fn write_error(e: &anyhow::Error, what: &'static str, msg: &'static str) -> ApiE
 async fn list_forward_destinations(
     _guard: RequireManageSystem,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::forward_store::ForwardDestination>>> {
+) -> ApiResult<Json<Vec<crate::passive::forward_store::ForwardDestination>>> {
     let rows = admin.forward.list().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -440,12 +444,12 @@ async fn create_forward_destination(
             "failed to create the forwarding destination",
         )
     })?;
-    if n >= crate::forward_store::MAX_DESTINATIONS {
+    if n >= crate::passive::forward_store::MAX_DESTINATIONS {
         return Err(ApiError::bad_request(
             "too_many_destinations",
             format!(
                 "at most {} forwarding destinations are supported",
-                crate::forward_store::MAX_DESTINATIONS
+                crate::passive::forward_store::MAX_DESTINATIONS
             ),
         ));
     }
@@ -563,23 +567,25 @@ async fn test_forward_destination(
             )
         })?
         .ok_or_else(|| ApiError::not_found("not_found", "no such forwarding destination"))?;
-    Ok(Json(match crate::forward::send_test(&open).await {
-        Ok(()) => TestResult {
-            delivered: true,
-            error: None,
+    Ok(Json(
+        match crate::passive::forward::send_test(&open).await {
+            Ok(()) => TestResult {
+                delivered: true,
+                error: None,
+            },
+            Err(e) => TestResult {
+                delivered: false,
+                error: Some(e),
+            },
         },
-        Err(e) => TestResult {
-            delivered: false,
-            error: Some(e),
-        },
-    }))
+    ))
 }
 
 /// The `GET /api/v1/forwarding/status` body.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ForwardingStatus {
     /// Runtime counters, one entry per running destination.
-    destinations: Vec<crate::forward::DestStatus>,
+    destinations: Vec<crate::passive::forward::DestStatus>,
     /// Online pollers that cannot attach the original bytes, so their traffic degrades to rendered.
     pollers_without_raw_capture: Vec<String>,
     /// Online pollers that relay no flow datagrams at all, so a flow destination fed only by these

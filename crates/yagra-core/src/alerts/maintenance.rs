@@ -656,7 +656,7 @@ pub fn nodes_named_by_a_window(
 pub fn nodes_covered_by_a_class_window(
     scopes: &[(WindowScope, String)],
     nodes: &[Node],
-    tags: &crate::tagres::TagResolver,
+    tags: &crate::inventory::tagres::TagResolver,
 ) -> BTreeSet<NodeId> {
     nodes
         .iter()
@@ -710,7 +710,7 @@ impl CoverageFacts {
     pub(crate) fn of(
         node: &Node,
         edges: &[(Uuid, Option<Uuid>)],
-        tags: &crate::tagres::TagResolver,
+        tags: &crate::inventory::tagres::TagResolver,
     ) -> Self {
         let mut containing_groups = Vec::new();
         if let Some(group) = node.group {
@@ -835,7 +835,7 @@ pub(crate) async fn reconcile_exemptions(
     // Propagated, not degraded: this decides whether a node's release from a window is still
     // justified, and resolving it from an empty label map would re-apply coverage an operator
     // deliberately cancelled. The two reads above already fail the whole reconcile the same way.
-    let tags = crate::tagres::TagResolver::build(groups.tag_rows().await?);
+    let tags = crate::inventory::tagres::TagResolver::build(groups.tag_rows().await?);
     let mut changed = 0;
     for row in rows {
         let Some(stored_until) = parse_ts(&row.until_at) else {
@@ -968,7 +968,7 @@ mod tests {
     fn covered(scopes: &[(WindowScope, String)], nodes: &[Node]) -> BTreeSet<NodeId> {
         // An empty resolver: these nodes carry their labels directly, and folder inheritance has
         // its own tests in `tagres.rs`. What is under test here is the scope matching.
-        let tags = crate::tagres::TagResolver::empty();
+        let tags = crate::inventory::tagres::TagResolver::empty();
         nodes_named_by_a_window(scopes, nodes)
             .union(&nodes_covered_by_a_class_window(scopes, nodes, &tags))
             .copied()
@@ -1110,8 +1110,11 @@ mod tests {
         let direct = nodes_named_by_a_window(&scopes, &nodes);
         assert_eq!(direct, BTreeSet::from([named.id]));
 
-        let class =
-            nodes_covered_by_a_class_window(&scopes, &nodes, &crate::tagres::TagResolver::empty());
+        let class = nodes_covered_by_a_class_window(
+            &scopes,
+            &nodes,
+            &crate::inventory::tagres::TagResolver::empty(),
+        );
         assert_eq!(class, BTreeSet::from([named.id, by_profile.id, by_tag.id]));
 
         // `named` is in both — it is named *and* a member of the covered profile — which is the
@@ -1132,7 +1135,11 @@ mod tests {
         let scopes = vec![(WindowScope::System, UPGRADE_SCOPE_ID.to_owned())];
         assert!(nodes_named_by_a_window(&scopes, one).is_empty());
         assert_eq!(
-            nodes_covered_by_a_class_window(&scopes, one, &crate::tagres::TagResolver::empty()),
+            nodes_covered_by_a_class_window(
+                &scopes,
+                one,
+                &crate::inventory::tagres::TagResolver::empty()
+            ),
             BTreeSet::from([a.id])
         );
     }

@@ -36,10 +36,10 @@ use crate::events::{
     EventAction, EventAuthSource, EventBucketCount, EventFilter, EventRepo, EventRow,
     EventSeverityCount, EventSignatureCount,
 };
-use crate::flowstore::{AsDir, FlowQuery, FlowSeriesQuery, FlowStore};
-use crate::ipasn::IpAsnHandle;
-use crate::logstore::LogStore;
-use crate::store::{MetricPoint, MetricStore};
+use crate::passive::flowstore::{AsDir, FlowQuery, FlowSeriesQuery, FlowStore};
+use crate::passive::ipasn::IpAsnHandle;
+use crate::passive::logstore::LogStore;
+use crate::tsdb::store::{MetricPoint, MetricStore};
 use yagra_base::groups::{group_subtree, GroupRepo};
 use yagra_base::repo::NodeRepo;
 use yagra_topology::Topology;
@@ -63,10 +63,10 @@ const DEFAULT_RATE_PER_MIN: usize = 30;
 /// The sliding window the per-minute creation rate limit is measured over.
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 
-// Admission control (the concurrency cap's companion) lives in [`crate::ratelimit`], shared with the
+// Admission control (the concurrency cap's companion) lives in [`crate::runtime::ratelimit`], shared with the
 // AI-assisted RCA endpoint (ADR-029) so there is one definition of "an expensive read is bounded by
 // a cap, not by a role".
-use crate::ratelimit::{charge_window, env_cap};
+use crate::runtime::ratelimit::{charge_window, env_cap};
 
 // The one accessor every source-text check reads this module through, the checks themselves
 // (ADR-089), and the fakes the behaviour tests build an [`Engine`] from (ADR-098). All three are
@@ -361,7 +361,7 @@ pub struct AnalysisRunner {
 ///
 /// A struct rather than more parameters: `new` was already at the `clippy::too_many_arguments`
 /// threshold, and that lint is a design signal rather than something to silence
-/// (coding-conventions). Same shape as [`crate::topology_projection::TopologySources`].
+/// (coding-conventions). Same shape as [`crate::topology::topology_projection::TopologySources`].
 pub struct AnalysisStores {
     pub store: Arc<dyn MetricStore>,
     pub nodes: Arc<NodeRepo>,
@@ -373,7 +373,7 @@ pub struct AnalysisStores {
     pub flows: Option<Arc<dyn FlowStore>>,
     pub ipasn: IpAsnHandle,
     /// The connectivity graph, for `incident_correlate`'s neighbour expansion (ADR-043 → ADR-022).
-    pub topo: crate::topology_projection::TopologySources,
+    pub topo: crate::topology::topology_projection::TopologySources,
 }
 
 impl AnalysisRunner {
@@ -770,7 +770,7 @@ mod tests {
         );
     }
 
-    // The sliding-window rule itself is tested in [`crate::ratelimit`]; what belongs here is that
+    // The sliding-window rule itself is tested in [`crate::runtime::ratelimit`]; what belongs here is that
     // this runner's caps are wired to it (below) and that the concurrency permit behaves.
 
     #[test]

@@ -19,43 +19,18 @@
 #[global_allocator]
 static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod account;
 mod alerts;
 mod analysis;
 mod api;
-mod arp;
-mod authcallout;
-mod batch_writer;
-mod bigquery;
-mod bus_callout;
-mod bus_cert;
-mod cadence;
-mod classification;
-mod collection;
+mod certs;
 mod config;
 mod config_bundle;
-mod csv;
-mod dashboard;
-mod derived;
-mod discovery;
-mod dns_check;
-mod duplicates;
+mod discover;
 mod events;
-mod flow_ingest;
-mod flowstore;
-mod forward;
-mod forward_store;
-mod gcp;
-mod host_collector;
-mod interface_util;
-mod ipasn;
-mod l3;
-mod l3_routing;
-mod leader;
-mod link_overrides;
-mod logstore;
+mod fleet;
+mod inventory;
 mod mcp;
-mod metric_meaning;
-mod mib;
 // ⚠️ **This line used to live at the bottom of the file, and the position was load-bearing.**
 // Twenty-one files in this crate computed "production code" as everything above the first test
 // attribute, so a test-only `mod` declaration at the top of a file truncated their view to its
@@ -64,57 +39,18 @@ mod mib;
 // the first, so the constraint is gone and this line has come home to prove it.
 #[cfg(test)]
 mod module_source;
-mod node_display;
-/// Per-account pins on the inventory tree (ADR-146).
-mod pins;
+mod monitors;
+mod passive;
 // The source-text checks whose claim is about the whole program, reading core's tree and the
 // crates split out of it together (ADR-202 Inc.5).
 #[cfg(test)]
 mod program_guards;
-// Distributed poller pool (ADR-009/020): the coordinator owns the live registry + working-set
-// distribution and consumes the ring / Redis mirror / durable inventory below.
-mod coordinator;
-/// How far apart each node's polls are, shared with the readers outside the scheduler (ADR-144).
-mod pollers;
-mod pool_coverage;
-/// Effective poll-pool resolution (node > ancestor folder > default).
-mod poolres;
-/// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
-mod preferences;
-// Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170).
-mod prefix_gaps;
-mod ratelimit;
 mod rca;
-mod reclassify;
-mod rediscover;
 mod reports;
-mod result_ingest;
-mod retention;
-mod retention_sweep;
-mod ring;
+mod runtime;
 mod scheduler;
-// The WebUI's own server certificate (ADR-044). Named apart from `tls`, which builds *client*
-// configurations for outbound peers — see that module's doc.
-mod server_cert;
-mod sink;
-/// Which site a node belongs to — one rule for Subnet overlaps and Missing IP prefixes.
-mod sites;
-mod store;
-/// Which address ranges two sites both use (ADR-187). Pure; `api::subnet_overlaps` reads the stores.
-mod subnet_overlaps;
-/// Effective label resolution (own + every ancestor folder's − excluded). The accumulating
-/// counterpart to `poolres`, which resolves one value from the nearest folder that carries it.
-mod tagres;
-mod topology_links;
-mod topology_projection;
-mod url_check;
-mod vlans;
-mod volatile;
-// Storage + volume materialization for the WebUI's certificate (ADR-044). `server_cert` decides
-// what is acceptable; this decides where it lives.
-mod webtls;
-mod wireless;
-mod wireless_fanout;
+mod topology;
+mod tsdb;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -123,6 +59,8 @@ use std::time::Duration;
 
 use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
+use account::dashboard::{DashboardRepo, PublicDashboardRepo, SharedDashboardRepo};
+use account::preferences::UserPrefsRepo;
 use alerts::ack::AckRepo;
 use alerts::history::AlertHistoryStore;
 use alerts::maintenance::MaintenanceRepo;
@@ -131,21 +69,19 @@ use alerts::thresholds::ThresholdStore;
 use alerts::{AlertManager, Notifier};
 use api::{AdminState, ApiState};
 use axum::routing::get;
-use collection::CollectionRepo;
 use config::Config;
-use coordinator::Coordinator;
-use dashboard::{DashboardRepo, PublicDashboardRepo, SharedDashboardRepo};
-use discovery::DiscoveryRunner;
-use flowstore::{ChStore, FlowRow, FlowStore};
-use logstore::{LogStore, VlStore};
+use discover::collection::CollectionRepo;
+use discover::discovery::DiscoveryRunner;
+use discover::mib::MibRepo;
+use fleet::coordinator::Coordinator;
+use fleet::pollers::PollerRepo;
+use fleet::volatile::VolatileStore;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use mib::MibRepo;
-use pollers::PollerRepo;
-use preferences::UserPrefsRepo;
-use sink::InMemorySink;
-use store::{MetricStore, VmStore};
+use passive::flowstore::{ChStore, FlowRow, FlowStore};
+use passive::logstore::{LogStore, VlStore};
+use tsdb::sink::InMemorySink;
+use tsdb::store::{MetricStore, VmStore};
 use uuid::Uuid;
-use volatile::VolatileStore;
 use yagra_auth::audit::AuditRepo;
 use yagra_auth::auth::{LoginThrottle, SessionStore, UserStore};
 use yagra_auth::{apitokens, auth, ldap, oidc};
@@ -299,12 +235,14 @@ async fn run_bus_cert() -> anyhow::Result<()> {
     let repo = repo::NodeRepo::connect(&db).await?;
     repo.migrate().await?;
 
-    let bus_tls = bus_cert::BusTlsRepo::new(repo.pool(), kek.clone(), Some(dir.clone()));
-    bus_tls.ensure_ready(&bus_cert::configured_names()).await?;
+    let bus_tls = certs::bus_cert::BusTlsRepo::new(repo.pool(), kek.clone(), Some(dir.clone()));
+    bus_tls
+        .ensure_ready(&certs::bus_cert::configured_names())
+        .await?;
     // The configuration travels with the image exactly as the composition does (ADR-050 decision 5),
     // so this is a copy on every run rather than a create-if-absent: an upgrade that changes the
     // file must not leave the previous release's copy in place.
-    bus_tls.install_server_conf(std::path::Path::new(bus_cert::CONF_IN_IMAGE))?;
+    bus_tls.install_server_conf(std::path::Path::new(certs::bus_cert::CONF_IN_IMAGE))?;
 
     // The Auth Callout account key, and the block that names its public half (ADR-065 Inc.7).
     // Written HERE, in the same run from the same image as the file that includes it — that is the
@@ -316,7 +254,7 @@ async fn run_bus_cert() -> anyhow::Result<()> {
     // and one file nats only reads with `-c`. The alternative — generating the key at the moment
     // the switch is pressed — puts a key generation inside the one request an operator is already
     // watching restart their monitoring.
-    let callout = bus_callout::BusCalloutRepo::new(repo.pool(), kek, Some(dir));
+    let callout = certs::bus_callout::BusCalloutRepo::new(repo.pool(), kek, Some(dir));
     let identity = callout.ensure_ready(&config::callout_account()).await?;
     callout.install_conf(&identity)?;
 
@@ -395,8 +333,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Device classification: the operator-editable rules that map a discovered device's
     // sysObjectID / sysDescr to a suggested profile. Loaded into an in-memory classifier that
     // discovery consults per candidate; reloaded on a refresh loop + after a rule edit.
-    let classification = Arc::new(classification::ClassificationRepo::new(repo.pool()));
-    let classifier = Arc::new(classification::Classifier::empty());
+    let classification = Arc::new(discover::classification::ClassificationRepo::new(
+        repo.pool(),
+    ));
+    let classifier = Arc::new(discover::classification::Classifier::empty());
     if let Err(e) = classifier.reload(&classification).await {
         tracing::warn!(error = %e, "failed to load classification rules; discovery will use the generic fallback");
     }
@@ -447,9 +387,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Offline IP→ASN table for flow AS enrichment (ADR-031 Increment 3), behind a hot-swappable
     // handle shared by the flow writer (IP→AS) and the flow API (AS→name). Opt-in/default-OFF;
-    // `ipasn::open` carries what a missing or empty dataset does. The reloader starts below, once
+    // `passive::ipasn::open` carries what a missing or empty dataset does. The reloader starts below, once
     // the shutdown token exists.
-    let ipasn: crate::ipasn::IpAsnHandle = ipasn::open(cfg.ipasn_db_path.as_deref());
+    let ipasn: crate::passive::ipasn::IpAsnHandle =
+        passive::ipasn::open(cfg.ipasn_db_path.as_deref());
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(alerts::manager_with(poll_intervals.clone()));
@@ -495,11 +436,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     //
     // ⚠️ Inc.7 changed what "configured" means. It used to read `nats_callout_seed_file.is_some()`,
     // an env var the shipped composition never set — so this gate had never once closed in
-    // production. It now asks `authcallout::is_governed`, the same question the responder asks, so
+    // production. It now asks `certs::authcallout::is_governed`, the same question the responder asks, so
     // the two cannot answer differently. The visible consequence on an existing deployment that has
     // already accepted remote pollers: a heartbeat from an id with no inventory row stops creating
     // one. That is the intended behaviour and it is new behaviour.
-    let poller_registration_gated = authcallout::is_governed(cfg.nats_poller_password.as_deref());
+    let poller_registration_gated =
+        certs::authcallout::is_governed(cfg.nats_poller_password.as_deref());
     let poller_repo =
         Arc::new(PollerRepo::new(repo.pool()).with_auto_register(!poller_registration_gated));
     let coordinator = Arc::new(Coordinator::new(
@@ -523,8 +465,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     ));
 
     // IP→ASN periodic reloader (ADR-031). Nothing starts unless a dataset and a non-zero interval
-    // are both configured; on every core when they are. `ipasn::start_reload` carries why.
-    ipasn::start_reload(
+    // are both configured; on every core when they are. `passive::ipasn::start_reload` carries why.
+    passive::ipasn::start_reload(
         ipasn.clone(),
         cfg.ipasn_db_path.as_deref(),
         cfg.ipasn_reload_secs,
@@ -539,9 +481,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // alike. When HA is off, `leader_work` runs inline before `serve` — byte-identical to pre-HA.
 
     // Core self-observability (monitoring-conventions): the cache the System Health page reads, and
-    // the sampler that fills it. On every core; `host_collector::start` carries why.
-    let core_host: host_collector::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
-    host_collector::start(
+    // the sampler that fills it. On every core; `tsdb::host_collector::start` carries why.
+    let core_host: tsdb::host_collector::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
+    tsdb::host_collector::start(
         store.clone(),
         core_host.clone(),
         repo.pool().clone(),
@@ -550,7 +492,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     );
 
     // Per-poller NATS credential scoping via Auth Callout (ADR-030, wired up by ADR-065 Inc.7). A
-    // no-op on a bus the callout does not govern; on every core when it does. `authcallout::start`
+    // no-op on a bus the callout does not govern; on every core when it does. `certs::authcallout::start`
     // carries why it is queue-subscribed.
     //
     // The key comes from the row the `bus-cert` one-shot established — the same run that wrote the
@@ -561,14 +503,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| tracing::error!(error = %e, path, "auth-callout: cannot read the mounted seed file"))
             .ok(),
-        None => bus_callout::BusCalloutRepo::new(repo.pool(), kek.clone(), None)
+        None => certs::bus_callout::BusCalloutRepo::new(repo.pool(), kek.clone(), None)
             .load_seed()
             .await
             .map_err(|e| tracing::error!(error = %e, "auth-callout: cannot read the stored account key"))
             .ok()
             .flatten(),
     };
-    authcallout::start(
+    certs::authcallout::start(
         callout_seed,
         &cfg.nats_callout_account,
         cfg.nats_poller_password.clone(),
@@ -656,20 +598,20 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let collection = Arc::new(CollectionRepo::new(repo.pool()));
     // URL monitors: per-node HTTP/HTTPS check configs. Shared by the dispatcher (a node with one
     // becomes an HTTP-only poll) and the admin API (CRUD).
-    let url_checks = Arc::new(url_check::UrlCheckRepo::new(repo.pool()));
-    let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
+    let url_checks = Arc::new(monitors::url_check::UrlCheckRepo::new(repo.pool()));
+    let dns_checks = Arc::new(monitors::dns_check::DnsCheckRepo::new(repo.pool()));
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
-    let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
-    let vlan_repo = Arc::new(vlans::VlanRepo::new(repo.pool()));
-    let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
-    let routing_repo = Arc::new(l3_routing::RoutingRepo::new(repo.pool()));
-    let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
-    let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
-    let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
+    let l3_repo = Arc::new(topology::l3::L3Repo::new(repo.pool()));
+    let vlan_repo = Arc::new(topology::vlans::VlanRepo::new(repo.pool()));
+    let arp_repo = Arc::new(discover::arp::ArpRepo::new(repo.pool()));
+    let routing_repo = Arc::new(topology::l3_routing::RoutingRepo::new(repo.pool()));
+    let discovered_repo = Arc::new(discover::arp::DiscoveredRepo::new(repo.pool()));
+    let topo_link_repo = Arc::new(topology::topology_links::TopoLinkRepo::new(repo.pool()));
+    let link_override_repo = Arc::new(topology::link_overrides::LinkOverrideRepo::new(repo.pool()));
 
     // Wireless controllers and their APs (ADR-064): written by the result-ingest metadata tier, read
     // by the AP list, and asked by the dispatcher which nodes are APs it must not poll.
-    let wireless_repo = Arc::new(wireless::WirelessRepo::new(repo.pool()));
+    let wireless_repo = Arc::new(topology::wireless::WirelessRepo::new(repo.pool()));
 
     // Poll dispatcher: turns a node into bus jobs (ICMP + SNMP, or HTTP for URL monitors, or DNS for
     // DNS monitors). Shared by the periodic scheduler and the on-demand "poll now" API action so
@@ -702,7 +644,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let maintenance = Arc::new(MaintenanceRepo::new(repo.pool()));
     // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
     // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
-    let topo_sources = topology_projection::TopologySources {
+    let topo_sources = topology::topology_projection::TopologySources {
         links: topo_link_repo.clone(),
         pollers: poller_repo.clone(),
         l3: l3_repo.clone(),
@@ -780,7 +722,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             logs: logs.clone(),
             flows: flows.clone(),
             ipasn: ipasn.clone(),
-            topo: topology_projection::TopologySources {
+            topo: topology::topology_projection::TopologySources {
                 links: topo_link_repo.clone(),
                 pollers: poller_repo.clone(),
                 l3: l3_repo.clone(),
@@ -807,12 +749,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Forwarding ("tee", ADR-034): received syslog/traps are also relayed to external collectors.
     // The store backs Settings ▸ Forwarding on every core; the dispatcher is leader-only (below) so
     // a passive core never double-sends. With no destinations configured this is inert.
-    let forward_store = Arc::new(forward_store::ForwardStore::new(repo.pool(), kek.clone()));
-    let (forward_handle, forward_runner) = forward::prepare(forward_store.clone());
+    let forward_store = Arc::new(passive::forward_store::ForwardStore::new(
+        repo.pool(),
+        kek.clone(),
+    ));
+    let (forward_handle, forward_runner) = passive::forward::prepare(forward_store.clone());
 
     // AI-assisted RCA store (ADR-029). Built here rather than beside the orchestrator below because
     // two things need it: `AdminState` (Settings ▸ AI, on every core) and the leader's retention
-    // loop (`retention::Subject::RcaReports`, leader-only like every other prune).
+    // loop (`runtime::retention::Subject::RcaReports`, leader-only like every other prune).
     let llm_repo = Arc::new(rca::store::RcaRepo::new(repo.pool(), kek.clone()));
 
     // `is_leader` drives `/readyz` and the `yagra_core_is_leader` gauge. With HA off this core is
@@ -919,7 +864,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
         public_dashboard: Arc::new(PublicDashboardRepo::new(repo.pool())),
         prefs: Arc::new(UserPrefsRepo::new(repo.pool())),
-        pins: Arc::new(pins::UserPinsRepo::new(repo.pool())),
+        pins: Arc::new(inventory::pins::UserPinsRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         dispatcher,
         analysis,
@@ -976,13 +921,13 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // bind password sealed by the same KEK. No in-flight map — there is no redirect leg.
     let ldap = Some(Arc::new(ldap::LdapRepo::new(repo.pool(), kek.clone())));
     // The WebUI's own TLS certificate (ADR-044). Same KEK as every other secret.
-    let webtls = webtls::open(repo.pool(), kek.clone());
+    let webtls = certs::webtls::open(repo.pool(), kek.clone());
     // The bus's certificate (ADR-065). Written by the `bus-cert` one-shot before this process
     // starts; core holds the repo so Settings ▸ Pollers can show what remote sites must pin and mint
     // a replacement covering a new site's address. Core deliberately runs no renewal timer for it —
     // see `bus_cert`'s module doc: a new bus certificate disconnects every site until each is given
     // the new one, so it is an operator action rather than a background chore.
-    let bus_tls = bus_cert::open(repo.pool(), kek.clone());
+    let bus_tls = certs::bus_cert::open(repo.pool(), kek.clone());
 
     // ⚠️ Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it.
     let upgrade = upgrade::open(repo.pool());
@@ -1020,7 +965,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // the switch, so a poller id that moved would otherwise be neither refused by the bus (it is
     // on the bypassed static account) nor registered by anything. Measured cost of getting that
     // wrong: a poller polling 11 nodes that no page in the product lists.
-    match pollers::register_local(&poller_repo, &upgrade).await {
+    match fleet::pollers::register_local(&poller_repo, &upgrade).await {
         Ok(Some((created, known))) => {
             tracing::info!(created, known, "adopted the pollers this deployment owns")
         }
@@ -1075,12 +1020,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     };
 
     // Materialize the WebUI certificate BEFORE the listener binds, and keep it renewed. Both halves
-    // run on every core; `webtls::materialize_and_renew` carries the reason.
-    webtls::materialize_and_renew(webtls.clone(), &shutdown).await;
+    // run on every core; `certs::webtls::materialize_and_renew` carries the reason.
+    certs::webtls::materialize_and_renew(webtls.clone(), &shutdown).await;
 
     // Leader-only work starts now (HA off) or the moment this core wins the advisory lock (HA on).
     // The election itself lives in `leader.rs` — see `run_leader_work` for the standby behaviour.
-    leader::run_leader_work(
+    runtime::leader::run_leader_work(
         cfg.enable_ha,
         &cfg.database_url,
         cfg.core_id.as_deref(),
@@ -1158,40 +1103,40 @@ struct LeaderTasks {
     event_action_rx: tokio::sync::mpsc::Receiver<events::QueuedAction>,
     logs: Option<Arc<dyn LogStore>>,
     flows: Option<Arc<dyn FlowStore>>,
-    ipasn: ipasn::IpAsnHandle,
+    ipasn: passive::ipasn::IpAsnHandle,
     thresholds: Arc<ThresholdStore>,
     maintenance: Arc<MaintenanceRepo>,
     groups: Arc<groups::GroupRepo>,
-    classifier: Arc<classification::Classifier>,
-    classification: Arc<classification::ClassificationRepo>,
+    classifier: Arc<discover::classification::Classifier>,
+    classification: Arc<discover::classification::ClassificationRepo>,
     notifications: Arc<NotificationRepo>,
     analysis_repo: Arc<analysis::AnalysisRepo>,
     analysis: Arc<analysis::AnalysisRunner>,
     reports_repo: Arc<reports::ReportsRepo>,
     reports: Arc<reports::ReportRunner>,
-    dns_checks: Arc<dns_check::DnsCheckRepo>,
+    dns_checks: Arc<monitors::dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
-    l3: Arc<l3::L3Repo>,
-    vlans: Arc<vlans::VlanRepo>,
-    arp: Arc<arp::ArpRepo>,
-    routing: Arc<l3_routing::RoutingRepo>,
-    discovered: Arc<arp::DiscoveredRepo>,
+    l3: Arc<topology::l3::L3Repo>,
+    vlans: Arc<topology::vlans::VlanRepo>,
+    arp: Arc<discover::arp::ArpRepo>,
+    routing: Arc<topology::l3_routing::RoutingRepo>,
+    discovered: Arc<discover::arp::DiscoveredRepo>,
     /// Wireless controllers' AP inventories (ADR-064), written by the result-ingest metadata tier.
-    wireless: Arc<wireless::WirelessRepo>,
-    topology_links: Arc<topology_links::TopoLinkRepo>,
-    link_overrides: Arc<link_overrides::LinkOverrideRepo>,
+    wireless: Arc<topology::wireless::WirelessRepo>,
+    topology_links: Arc<topology::topology_links::TopoLinkRepo>,
+    link_overrides: Arc<topology::link_overrides::LinkOverrideRepo>,
     /// Durable poller inventory — where the pollers are, which is what roots the derived dependency
     /// graph (ADR-043 I2). Also the home of `monitoring_gaps`, which the retention loop prunes.
     pollers: Arc<PollerRepo>,
     /// Generated LLM root-cause reports — held only so the retention loop can prune them
-    /// (`retention::Subject::RcaReports`); generating one is not a leader task.
+    /// (`runtime::retention::Subject::RcaReports`); generating one is not a leader task.
     llm: Arc<rca::store::RcaRepo>,
     /// The notification delivery log - held only so the retention loop can prune it
-    /// (`retention::Subject::NotificationDeliveries`); writing it is the notifier's.
+    /// (`runtime::retention::Subject::NotificationDeliveries`); writing it is the notifier's.
     deliveries: Arc<alerts::notification_log::DeliveryLogRepo>,
-    forward_handle: forward::ForwardHandle,
+    forward_handle: passive::forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
-    forward_runner: Option<forward::ForwardRunner>,
+    forward_runner: Option<passive::forward::ForwardRunner>,
 }
 
 impl LeaderTasks {
@@ -1281,18 +1226,18 @@ impl LeaderTasks {
     /// metrics at their original timestamp but must NEVER run alert evaluation — replayed samples
     /// would re-fire dwell-based alerts as a flood).
     async fn spawn_result_ingest(&self, notify_tx: DeliveryQueue) -> anyhow::Result<()> {
-        let vm = result_ingest::start_vm_writers(self.store.clone(), self.shutdown.clone());
-        let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<result_ingest::MetaRecord>(
-            result_ingest::RESULT_PERSIST_CHANNEL_CAP,
+        let vm = tsdb::result_ingest::start_vm_writers(self.store.clone(), self.shutdown.clone());
+        let (meta_tx, meta_rx) = tokio::sync::mpsc::channel::<tsdb::result_ingest::MetaRecord>(
+            tsdb::result_ingest::RESULT_PERSIST_CHANNEL_CAP,
         );
-        let (history_tx, history_rx) = tokio::sync::mpsc::channel::<result_ingest::HistoryRecord>(
-            result_ingest::RESULT_PERSIST_CHANNEL_CAP,
-        );
+        let (history_tx, history_rx) = tokio::sync::mpsc::channel::<
+            tsdb::result_ingest::HistoryRecord,
+        >(tsdb::result_ingest::RESULT_PERSIST_CHANNEL_CAP);
         // Who serves each imported AP, restored before either consumer takes a result (ADR-064 B2):
         // a standby's view arriving first after a promotion must meet the owner the last leader
         // recorded, not an empty map that would let it take the AP down. A failed read starts empty
         // and the upkeep loop retries it — the cost is APs publishing nothing until it succeeds.
-        let ap_fanout = Arc::new(wireless_fanout::ApFanout::new());
+        let ap_fanout = Arc::new(topology::wireless_fanout::ApFanout::new());
         match self.wireless.ap_bindings().await {
             Ok(bindings) => {
                 ap_fanout.install(&bindings);
@@ -1315,12 +1260,12 @@ impl LeaderTasks {
         }
         spawn_cancellable(
             &self.shutdown,
-            wireless_fanout::run_upkeep(ap_fanout.clone(), self.wireless.clone()),
+            topology::wireless_fanout::run_upkeep(ap_fanout.clone(), self.wireless.clone()),
         );
-        tokio::spawn(result_ingest::run_pg_writer(
+        tokio::spawn(tsdb::result_ingest::run_pg_writer(
             meta_rx,
             history_rx,
-            result_ingest::MetaStores {
+            tsdb::result_ingest::MetaStores {
                 repo: self.repo.clone(),
                 dns: self.dns_checks.clone(),
                 neighbors: self.neighbors.clone(),
@@ -1338,7 +1283,7 @@ impl LeaderTasks {
             let results = Box::pin(self.bus.subscribe_results().await?);
             spawn_cancellable(
                 &self.shutdown,
-                result_ingest::consume_results(
+                tsdb::result_ingest::consume_results(
                     results,
                     self.no_reading.clone(),
                     self.alerts.clone(),
@@ -1358,7 +1303,7 @@ impl LeaderTasks {
             let backfill = Box::pin(self.bus.subscribe_results_backfill().await?);
             spawn_cancellable(
                 &self.shutdown,
-                result_ingest::consume_results_backfill(
+                tsdb::result_ingest::consume_results_backfill(
                     backfill,
                     self.no_reading.clone(),
                     vm,
@@ -1445,11 +1390,16 @@ impl LeaderTasks {
     ///    relaxed load when no flow destination exists).
     async fn spawn_flow_pipeline(&self) -> anyhow::Result<()> {
         if let Some(flow_store) = self.flows.clone() {
-            flow_ingest::ensure_flow_schema(&flow_store).await;
-            flow_ingest::bound_clickhouse_system_logs(&flow_store, self.flow_system_log_days).await;
-            let (flow_tx, flow_rx) =
-                tokio::sync::mpsc::channel::<FlowRow>(flow_ingest::FLOW_PERSIST_CHANNEL_CAP);
-            tokio::spawn(flow_ingest::run_flow_writer(
+            passive::flow_ingest::ensure_flow_schema(&flow_store).await;
+            passive::flow_ingest::bound_clickhouse_system_logs(
+                &flow_store,
+                self.flow_system_log_days,
+            )
+            .await;
+            let (flow_tx, flow_rx) = tokio::sync::mpsc::channel::<FlowRow>(
+                passive::flow_ingest::FLOW_PERSIST_CHANNEL_CAP,
+            );
+            tokio::spawn(passive::flow_ingest::run_flow_writer(
                 flow_rx,
                 flow_store,
                 self.shutdown.clone(),
@@ -1457,7 +1407,7 @@ impl LeaderTasks {
             let flow_stream = Box::pin(self.bus.subscribe_flows().await?);
             spawn_cancellable(
                 &self.shutdown,
-                flow_ingest::consume_flows(
+                passive::flow_ingest::consume_flows(
                     flow_stream,
                     flow_tx,
                     self.repo.clone(),
@@ -1468,7 +1418,7 @@ impl LeaderTasks {
         let raw_flows = Box::pin(self.bus.subscribe_raw_flows().await?);
         spawn_cancellable(
             &self.shutdown,
-            flow_ingest::consume_raw_flows(raw_flows, self.forward_handle.clone()),
+            passive::flow_ingest::consume_raw_flows(raw_flows, self.forward_handle.clone()),
         );
         Ok(())
     }
@@ -1532,7 +1482,7 @@ impl LeaderTasks {
                 self.classifier.clone(),
                 self.classification.clone(),
                 self.event_engine.clone(),
-                topology_projection::TopologySources {
+                topology::topology_projection::TopologySources {
                     links: self.topology_links.clone(),
                     pollers: self.pollers.clone(),
                     l3: self.l3.clone(),
@@ -1594,7 +1544,7 @@ impl LeaderTasks {
         // every notification.
         spawn_cancellable(
             &self.shutdown,
-            interface_util::run_interface_utilization_watch(
+            tsdb::interface_util::run_interface_utilization_watch(
                 self.store.clone(),
                 self.repo.clone(),
                 self.alerts.clone(),
@@ -1605,7 +1555,7 @@ impl LeaderTasks {
         // device reports directly. Leader-only for the same reason the two loops around it are.
         spawn_cancellable(
             &self.shutdown,
-            derived::run_derived_metric_watch(
+            tsdb::derived::run_derived_metric_watch(
                 self.store.clone(),
                 self.alerts.clone(),
                 self.alert_sink(delivery, "a derived-metric transition"),
@@ -1644,7 +1594,7 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            pool_coverage::run_pool_coverage_watch(
+            fleet::pool_coverage::run_pool_coverage_watch(
                 self.coordinator.clone(),
                 self.repo.clone(),
                 self.meraki_devices.clone(),
@@ -1723,7 +1673,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         store: sink,
         logs: None,
         flows: None,
-        ipasn: crate::ipasn::empty_handle(),
+        ipasn: crate::passive::ipasn::empty_handle(),
         host_sample: Arc::new(std::sync::Mutex::new(None)),
         nodes: Arc::new(StaticNodeList::demo()),
         alerts: Arc::new(crate::alerts::new_manager()),
@@ -1782,9 +1732,9 @@ struct TimelineSources {
     alerts: Arc<AlertManager>,
     history: Arc<AlertHistoryStore>,
     events: Arc<events::EventRepo>,
-    dns_checks: Arc<dns_check::DnsCheckRepo>,
+    dns_checks: Arc<monitors::dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
-    l3: Arc<l3::L3Repo>,
+    l3: Arc<topology::l3::L3Repo>,
     analyses: Arc<analysis::AnalysisRepo>,
     rca_reports: Arc<rca::store::RcaRepo>,
     pollers: Arc<PollerRepo>,
@@ -1810,7 +1760,7 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         deliveries,
     } = sources;
     // Built once: the sweep borrows these every tick rather than cloning ten Arcs per tick.
-    let targets = retention_sweep::Targets {
+    let targets = runtime::retention_sweep::Targets {
         repo: repo.clone(),
         history,
         events,
@@ -1851,7 +1801,7 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
             tracing::warn!(error = %e, "node-state snapshot failed");
         }
-        retention_sweep::sweep(&targets, &retention).await;
+        runtime::retention_sweep::sweep(&targets, &retention).await;
     }
 }
 
@@ -1914,11 +1864,11 @@ async fn run_topology_derivation(stores: TopologyStores) {
 /// The stores one derivation cycle reads and writes.
 struct TopologyStores {
     repo: Arc<NodeRepo>,
-    l3: Arc<l3::L3Repo>,
+    l3: Arc<topology::l3::L3Repo>,
     neighbors: Arc<neighbors::NeighborRepo>,
-    routing: Arc<l3_routing::RoutingRepo>,
-    links: Arc<topology_links::TopoLinkRepo>,
-    overrides: Arc<link_overrides::LinkOverrideRepo>,
+    routing: Arc<topology::l3_routing::RoutingRepo>,
+    links: Arc<topology::topology_links::TopoLinkRepo>,
+    overrides: Arc<topology::link_overrides::LinkOverrideRepo>,
     meraki_inventory: Arc<yagra_meraki::inventory::MerakiInventoryRepo>,
 }
 
@@ -2042,11 +1992,11 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
 
 /// The stores one endpoint sweep reads and writes (ADR-179).
 struct EndpointSweepStores {
-    arp: Arc<arp::ArpRepo>,
+    arp: Arc<discover::arp::ArpRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
-    routing: Arc<l3_routing::RoutingRepo>,
+    routing: Arc<topology::l3_routing::RoutingRepo>,
     events: Arc<events::EventRepo>,
-    discovered: Arc<arp::DiscoveredRepo>,
+    discovered: Arc<discover::arp::DiscoveredRepo>,
 }
 
 /// Leader-only loop: turn what the fleet has seen — ARP caches, LLDP/CDP neighbours, OSPF/BGP
@@ -2064,13 +2014,16 @@ struct EndpointSweepStores {
 /// **The trigger is the four watermarks alone**, unlike the derivation, which also watches
 /// `config_gen`. `config_gen` would fire this on every unrelated configuration edit, and the thing
 /// it would catch — a node created by hand, so that an endpoint is no longer unmonitored — is
-/// already handled by [`arp::DiscoveredRepo::reconcile_promotions`], which the sweep runs every pass
+/// already handled by [`discover::arp::DiscoveredRepo::reconcile_promotions`], which the sweep runs every pass
 /// and the import handler runs immediately.
 async fn run_endpoint_discovery(stores: EndpointSweepStores) {
     type Watermark = Option<chrono::DateTime<chrono::Utc>>;
     let mut last_signal: Option<(Watermark, Watermark, Watermark, Watermark)> = None;
     loop {
-        tokio::time::sleep(Duration::from_secs(arp::ENDPOINT_SWEEP_INTERVAL_SECS)).await;
+        tokio::time::sleep(Duration::from_secs(
+            discover::arp::ENDPOINT_SWEEP_INTERVAL_SECS,
+        ))
+        .await;
 
         let signal = (
             stores.arp.observation_watermark().await.unwrap_or(None),
@@ -2122,7 +2075,7 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
         };
         let senders = match stores
             .events
-            .unattributed_senders(arp::MAX_DISCOVERED_ENDPOINTS)
+            .unattributed_senders(discover::arp::MAX_DISCOVERED_ENDPOINTS)
             .await
         {
             Ok(rows) => rows,
@@ -2142,8 +2095,8 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
             }
         };
 
-        let found = arp::candidates(
-            &arp::Signals {
+        let found = discover::arp::candidates(
+            &discover::arp::Signals {
                 arp: &summaries,
                 neighbors: &neighbors,
                 routing: &routing,
@@ -2159,8 +2112,8 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
         match stores
             .discovered
             .prune(
-                arp::DISCOVERED_RETENTION_SECS,
-                arp::MAX_DISCOVERED_ENDPOINTS,
+                discover::arp::DISCOVERED_RETENTION_SECS,
+                discover::arp::MAX_DISCOVERED_ENDPOINTS,
             )
             .await
         {
@@ -2173,8 +2126,8 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
         if let Err(e) = stores
             .events
             .prune_senders(
-                arp::DISCOVERED_RETENTION_SECS,
-                arp::MAX_DISCOVERED_ENDPOINTS,
+                discover::arp::DISCOVERED_RETENTION_SECS,
+                discover::arp::MAX_DISCOVERED_ENDPOINTS,
             )
             .await
         {
@@ -2349,7 +2302,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                                 org.id,
                                 tier,
                                 yagra_meraki::sync::MerakiSyncFailure::Internal,
-                                pool_coverage::now_unix_ms(),
+                                fleet::pool_coverage::now_unix_ms(),
                             );
                         }
                         continue;
@@ -2388,7 +2341,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                                 org.id,
                                 tier,
                                 yagra_meraki::sync::MerakiSyncFailure::Internal,
-                                pool_coverage::now_unix_ms(),
+                                fleet::pool_coverage::now_unix_ms(),
                             );
                         }
                         continue;
@@ -2407,7 +2360,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             org.id,
                             tier,
                             yagra_meraki::sync::MerakiSyncFailure::Credential,
-                            pool_coverage::now_unix_ms(),
+                            fleet::pool_coverage::now_unix_ms(),
                         );
                     }
                     continue;
@@ -2467,7 +2420,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                                 org.id,
                                 tier,
                                 yagra_meraki::sync::MerakiSyncFailure::Internal,
-                                pool_coverage::now_unix_ms(),
+                                fleet::pool_coverage::now_unix_ms(),
                             );
                         }
                     }
@@ -2498,8 +2451,8 @@ async fn run_report_scheduler(
         match repo.due_schedules().await {
             Ok(due) => {
                 for sched in due {
-                    let next = cadence::compute_next_run(
-                        cadence::Schedule {
+                    let next = runtime::cadence::compute_next_run(
+                        runtime::cadence::Schedule {
                             frequency: sched.frequency,
                             day_of_week: sched.day_of_week,
                             day_of_month: sched.day_of_month,
@@ -2612,8 +2565,8 @@ async fn advance(
     sched: &analysis::AnalysisSchedule,
     status: analysis::AnalysisScheduleStatus,
 ) {
-    let next = cadence::compute_next_run(
-        cadence::Schedule {
+    let next = runtime::cadence::compute_next_run(
+        runtime::cadence::Schedule {
             frequency: sched.frequency,
             day_of_week: sched.day_of_week,
             day_of_month: sched.day_of_month,
@@ -2764,9 +2717,9 @@ mod tests {
     /// **`run_live` wires; it does not start anything itself.**
     ///
     /// ADR-090's property. Every background task now starts inside the module that owns its
-    /// subject — `ipasn::start_reload`, `authcallout::start`, `auth::start_sessions`,
-    /// `upgrade::start`, `webtls::materialize_and_renew`, `poller_logs::start`,
-    /// `host_collector::start`, `leader::run_leader_work` — or in [`LeaderTasks`], which is the
+    /// subject — `passive::ipasn::start_reload`, `certs::authcallout::start`, `auth::start_sessions`,
+    /// `upgrade::start`, `certs::webtls::materialize_and_renew`, `poller_logs::start`,
+    /// `tsdb::host_collector::start`, `runtime::leader::run_leader_work` — or in [`LeaderTasks`], which is the
     /// same rule for the leader-gated half. That is what makes "is this safe on every core?" a
     /// question with a written answer next to the loop, instead of a comment in the wiring.
     ///
@@ -2798,11 +2751,15 @@ mod tests {
     fn topology_stores(pool: &sqlx::PgPool) -> super::TopologyStores {
         super::TopologyStores {
             repo: Arc::new(pgtest::repo(pool.clone())),
-            l3: Arc::new(crate::l3::L3Repo::new(pool.clone())),
+            l3: Arc::new(crate::topology::l3::L3Repo::new(pool.clone())),
             neighbors: Arc::new(yagra_base::neighbors::NeighborRepo::new(pool.clone())),
-            routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
-            links: Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone())),
-            overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
+            routing: Arc::new(crate::topology::l3_routing::RoutingRepo::new(pool.clone())),
+            links: Arc::new(crate::topology::topology_links::TopoLinkRepo::new(
+                pool.clone(),
+            )),
+            overrides: Arc::new(crate::topology::link_overrides::LinkOverrideRepo::new(
+                pool.clone(),
+            )),
             meraki_inventory: Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
                 pool.clone(),
             )),
@@ -2858,7 +2815,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn a_failed_override_read_is_not_remembered_and_prunes_nothing(pool: sqlx::PgPool) {
         let (a, b) = an_hour_old_link(&pool).await;
-        crate::link_overrides::LinkOverrideRepo::new(pool.clone())
+        crate::topology::link_overrides::LinkOverrideRepo::new(pool.clone())
             .upsert(
                 a.into(),
                 b.into(),

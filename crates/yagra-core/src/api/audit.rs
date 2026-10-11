@@ -194,20 +194,27 @@ async fn export_audit(
 /// so anything said there is said to nobody; a truncated CSV that does not admit it is the same lie
 /// the client-side export used to tell, moved server-side. A spreadsheet shows this as a final row.
 ///
-/// Every field — the notice included — goes through [`crate::csv::field`], which neutralizes
+/// Every field — the notice included — goes through [`crate::runtime::csv::field`], which neutralizes
 /// spreadsheet formulas. That matters most here: `username` is whatever a **failed** sign-in
 /// submitted, so an unauthenticated stranger chooses it.
 fn render_audit_csv(rows: &[yagra_auth::audit::AuditRow], cap: i64) -> String {
     let mut out = String::new();
-    out.push_str(&crate::csv::row(&["time", "user", "action", "status"]));
+    out.push_str(&crate::runtime::csv::row(&[
+        "time", "user", "action", "status",
+    ]));
     for r in rows {
         out.push_str("\r\n");
         let status = r.status.to_string();
-        out.push_str(&crate::csv::row(&[&r.at, &r.username, &r.action, &status]));
+        out.push_str(&crate::runtime::csv::row(&[
+            &r.at,
+            &r.username,
+            &r.action,
+            &status,
+        ]));
     }
     if i64::try_from(rows.len()).unwrap_or(i64::MAX) >= cap {
         out.push_str("\r\n");
-        out.push_str(&crate::csv::row(&[&format!(
+        out.push_str(&crate::runtime::csv::row(&[&format!(
             "truncated: only the newest {cap} matching entries were exported — narrow the time range"
         )]));
     }

@@ -53,7 +53,7 @@
 //!
 //! ⚠️ **What the type split does *not* buy is that delivery cannot stall evaluation** — this doc
 //! used to claim it did. The two are decoupled by a *bounded* channel (1024 actions, filled by
-//! [`crate::result_ingest`] with a blocking send), not by the absence of a shared type, so a
+//! [`crate::tsdb::result_ingest`] with a blocking send), not by the absence of a shared type, so a
 //! delivery slow enough for long enough still reaches the matcher. ADR-104 narrowed what "slow"
 //! means — a wedged vendor endpoint no longer holds up other channels or the 30-second config
 //! refresh — but it did not remove that path, and its decision 6 says why not.
@@ -86,13 +86,13 @@ pub(crate) use notify::{
 };
 pub(crate) use yagra_alert::rules::{check_id, AlertConfig, MerakiOrgScope, NodeMeta, LIVENESS};
 
-/// The engine as this crate runs it: its stream frames titled by [`crate::metric_meaning`], and each
+/// The engine as this crate runs it: its stream frames titled by [`crate::tsdb::metric_meaning`], and each
 /// node's poll interval read from `intervals`, the handle the scheduler publishes into (ADR-144).
 ///
 /// The one place core hands the engine its titles (ADR-202 Inc.4), so a test of this function is a
 /// test of what the live stream says.
 pub(crate) fn manager_with(intervals: yagra_common::poll_interval::PollIntervals) -> AlertManager {
-    AlertManager::with_poll_intervals(intervals, crate::metric_meaning::alert_title_of)
+    AlertManager::with_poll_intervals(intervals, crate::tsdb::metric_meaning::alert_title_of)
 }
 
 /// [`manager_with`] before any interval is published — what every test that does not care builds.
@@ -119,7 +119,7 @@ mod tests {
         let metric = yagra_alert::engine::POOL_COVERAGE_METRIC;
         assert_eq!(
             frame["title"],
-            serde_json::json!(crate::metric_meaning::alert_title(metric))
+            serde_json::json!(crate::tsdb::metric_meaning::alert_title(metric))
         );
         assert_ne!(
             frame["title"],

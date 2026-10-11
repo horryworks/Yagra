@@ -348,9 +348,9 @@ pub fn result_json_to_csv(result: &serde_json::Value) -> String {
 // no spreadsheet-formula neutralization — while a report table's cells are device-supplied
 // (`sysDescr`, `ifAlias`, a node name an operator typed). The WebUI had already paid for that
 // exact omission once; this was the same hole, quieter, on the surface nobody re-read. Both now
-// go through `crate::csv`, which is one encoder and therefore one security boundary
+// go through `crate::runtime::csv`, which is one encoder and therefore one security boundary
 // (`extensibility.md` §3).
-use crate::csv::row as csv_row;
+use crate::runtime::csv::row as csv_row;
 
 /// Wrap section HTML fragments in a self-contained, print-friendly HTML document. The CSS is inline
 /// so the same document renders in the WebUI viewer and the PDF renderer (WYSIWYG).

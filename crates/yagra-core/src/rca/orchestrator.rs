@@ -19,7 +19,7 @@
 //!   opening thirty sockets and thirty prompts' worth of billing at once.
 //!
 //! This mirrors the admission control on Troubleshoot analyses, down to sharing
-//! [`crate::ratelimit::charge_window`]: both are reads that happen to be expensive, and ADR-028
+//! [`crate::runtime::ratelimit::charge_window`]: both are reads that happen to be expensive, and ADR-028
 //! WS-A already concluded that the guard rail for those is a cap rather than a role.
 
 use std::collections::VecDeque;
@@ -37,7 +37,7 @@ use super::provider::{LlmError, LlmProvider};
 use super::store::{ActiveConfig, NewReport, RcaRepo, RcaReport, ReportBody};
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
-use crate::ratelimit::{charge_window, env_cap};
+use crate::runtime::ratelimit::{charge_window, env_cap};
 use yagra_auth::audit::AuditRepo;
 use yagra_base::repo::NodeRepo;
 

@@ -10,7 +10,7 @@
 //! than failing the row.
 
 use super::*;
-use crate::cadence::{compute_next_run, Cadence, Schedule};
+use crate::runtime::cadence::{compute_next_run, Cadence, Schedule};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Transaction};

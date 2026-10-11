@@ -339,7 +339,7 @@ impl YagraMcp {
         // whole-table read per row.
         let tags = match self.state.admin.as_ref() {
             Some(admin) => crate::api::util::tag_resolver(admin).await,
-            None => crate::tagres::TagResolver::empty(),
+            None => crate::inventory::tagres::TagResolver::empty(),
         };
         let out: Vec<NodeSummaryDto> = nodes
             .iter()
@@ -1378,7 +1378,7 @@ mod tests {
         let other = folder("site-b").await;
         yagra_base::pgtest::prefix(&pool, other, "10.9.0.0/24").await;
         let node = yagra_base::pgtest::node(&pool, "cs-a", 1, Some(site)).await;
-        crate::l3::L3Repo::new(pool.clone())
+        crate::topology::l3::L3Repo::new(pool.clone())
             .record_observation(
                 node,
                 &yagra_common::L3Snapshot::new(vec![yagra_common::L3Address::new(

@@ -111,7 +111,7 @@ pub enum PoolMode {
 ///
 /// `since_last_live` is how long ago this scheduler loop last saw the pool in `live_pools`
 /// (`None` = never, this process); `since_start` is how long the loop has been running;
-/// `registered_pools` is [`Coordinator::registered_pools`](crate::coordinator::Coordinator).
+/// `registered_pools` is [`Coordinator::registered_pools`](crate::fleet::coordinator::Coordinator).
 /// Pure so the decision is unit-testable without a clock, a bus or a database.
 ///
 /// **Why a third answer.** "No live poller" used to be read as "nobody is coming", and the two are

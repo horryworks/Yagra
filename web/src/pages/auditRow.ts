@@ -40,5 +40,5 @@ export function parseAction(action: string): ParsedAction {
 // keeping: there were once two byte-identical copies and neither neutralized a leading `=`, so a
 // username submitted to a *failed* login could be planted as `=HYPERLINK(…)` and evaluated when an
 // admin opened the export. The Rust side had a third copy with the same hole
-// (`crates/yagra-core/src/csv.rs` is now the one, mirrored against `lib/csv.ts` by a test).
+// (`crates/yagra-core/src/runtime/csv.rs` is now the one, mirrored against `lib/csv.ts` by a test).
 // Do not re-inline an encoder here — that is the shape the bug had, three times.

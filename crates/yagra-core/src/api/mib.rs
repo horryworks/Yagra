@@ -51,7 +51,7 @@ pub(super) fn routes() -> Router<ApiState> {
 pub(crate) struct MetricMeaning {
     /// Stable metric name — the same spelling a threshold rule's `metric` and a TSDB series use.
     pub metric: String,
-    /// One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders
+    /// One sentence, in English. English is canonical (`crate::tsdb::metric_meaning`); the WebUI renders
     /// a translation of it, so the wording here and the wording on screen may differ by language,
     /// never by content.
     pub meaning: String,
@@ -116,13 +116,14 @@ async fn list_metric_meanings(_guard: RequireView) -> Json<Vec<MetricMeaning>> {
 /// The dictionary as the API serves it. Shared with the MCP tool so the two cannot come to disagree
 /// about which metrics are explained.
 pub(crate) fn metric_meanings() -> Vec<MetricMeaning> {
-    crate::metric_meaning::METRIC_MEANINGS
+    crate::tsdb::metric_meaning::METRIC_MEANINGS
         .iter()
         .map(|(metric, meaning, unit, name)| MetricMeaning {
             metric: (*metric).to_owned(),
             meaning: (*meaning).to_owned(),
-            source: crate::metric_meaning::metric_source(metric).to_owned(),
-            family: crate::metric_meaning::check_family(metric).map(|f| f.as_str().to_owned()),
+            source: crate::tsdb::metric_meaning::metric_source(metric).to_owned(),
+            family: crate::tsdb::metric_meaning::check_family(metric)
+                .map(|f| f.as_str().to_owned()),
             unit: unit.stored().map(str::to_owned),
             unit_kind: unit.kind().map(str::to_owned),
             alert_name: name.text().to_owned(),
@@ -156,7 +157,7 @@ pub(crate) async fn mib_catalog(
     admin: &super::AdminState,
     q: Option<&str>,
     limit: Option<i64>,
-) -> ApiResult<Vec<crate::mib::MibEntry>> {
+) -> ApiResult<Vec<crate::discover::mib::MibEntry>> {
     admin
         .mib
         .list(catalog_needle(q), catalog_limit(limit))
@@ -181,7 +182,7 @@ fn catalog_limit(limit: Option<i64>) -> i64 {
     get, path = "/api/v1/mib-catalog", tag = "mib",
     params(MibQuery),
     responses(
-        (status = 200, description = "Matching catalog entries, or the whole catalog when no term is given, capped at `limit` (1–2000, default 2000)", body = Vec<crate::mib::MibEntry>),
+        (status = 200, description = "Matching catalog entries, or the whole catalog when no term is given, capped at `limit` (1–2000, default 2000)", body = Vec<crate::discover::mib::MibEntry>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -191,7 +192,7 @@ async fn list_mib_catalog(
     _guard: RequireView,
     admin: Admin,
     Query(q): Query<MibQuery>,
-) -> ApiResult<Json<Vec<crate::mib::MibEntry>>> {
+) -> ApiResult<Json<Vec<crate::discover::mib::MibEntry>>> {
     Ok(Json(mib_catalog(&admin, q.q.as_deref(), q.limit).await?))
 }
 
@@ -376,7 +377,10 @@ mod tests {
     #[test]
     fn the_served_dictionary_is_the_whole_table() {
         let served = metric_meanings();
-        assert_eq!(served.len(), crate::metric_meaning::METRIC_MEANINGS.len());
+        assert_eq!(
+            served.len(),
+            crate::tsdb::metric_meaning::METRIC_MEANINGS.len()
+        );
         // A floor, so a table that emptied itself could not pass the equality above.
         assert!(served.len() > 50, "only {} metrics explained", served.len());
         let liveness = served

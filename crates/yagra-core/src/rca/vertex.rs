@@ -10,7 +10,7 @@
 //!
 //! * the **request/response codec** from [`super::gemini`] — Vertex serves the identical
 //!   `generateContent` shape, and a second copy would drift;
-//! * the **OAuth token source** from [`crate::gcp`] — service-account key or Workload Identity,
+//! * the **OAuth token source** from [`crate::passive::gcp`] — service-account key or Workload Identity,
 //!   the same handshake the BigQuery forwarder uses, differing only in scope.
 
 use tokio::sync::Mutex;
@@ -22,7 +22,7 @@ use super::provider::{
     http_client, status_error, transport_error, validate_path_segment, LlmError, LlmProvider,
     LlmRequest, LlmResponse,
 };
-use crate::gcp::TokenSource;
+use crate::passive::gcp::TokenSource;
 
 /// Scope for the Vertex prediction service. Broader than BigQuery's because Google does not publish
 /// a narrower one for `aiplatform`.

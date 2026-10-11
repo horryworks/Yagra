@@ -3,7 +3,7 @@
 //! statements built on it (ADR-095).
 //!
 //! This is a face with three implementations, which is why it has a name of its own rather than
-//! sitting inside [`super::repo`]: PostgreSQL here, LogsQL in [`crate::logstore`], and the
+//! sitting inside [`super::repo`]: PostgreSQL here, LogsQL in [`crate::passive::logstore`], and the
 //! highlighter in `web/src/lib/matchRanges.ts`. The differences between them are deliberate and
 //! documented at each clause (ADR-024/053); what must never differ is *what* they look for, which
 //! is why [`EVENT_FILTER_WHERE`], [`AUTH_FAILURE_PHRASES`] and [`SIGNATURE_TIERS`] are

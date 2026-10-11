@@ -28,7 +28,7 @@
 //! `pool` remains the one list filter that does not 400 on a token it has never seen.
 //!
 //! Membership lives elsewhere and stays there: which nodes are in a pool is `repo/nodes.rs` and
-//! `groups.rs`, which poller serves one is what that poller reports (`crate::pollers`).
+//! `groups.rs`, which poller serves one is what that poller reports (`crate::fleet::pollers`).
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -572,15 +572,16 @@ async fn take_over_pool(
     // (ADR-158 B4): with the folder tree unread, every inheriting node resolves to `default`, so
     // covering `default` would pin nodes that belong to other pools.
     let resolver = super::util::pool_resolver_or_error(&admin).await?;
-    let inventory = crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "pool dependent nodes",
-                "failed to read which nodes the pool holds",
-            )
-        })?;
+    let inventory =
+        crate::fleet::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "pool dependent nodes",
+                    "failed to read which nodes the pool holds",
+                )
+            })?;
     let members = resolver.members(&inventory, &from);
 
     let counts = admin

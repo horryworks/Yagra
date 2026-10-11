@@ -24,7 +24,7 @@ use uuid::Uuid;
 use yagra_common::{CheckId, NodeKind};
 
 use super::AlertManager;
-use crate::store::MetricStore;
+use crate::tsdb::store::MetricStore;
 use yagra_alert::action::AlertSink;
 use yagra_alert::engine::FreshnessCandidate;
 
@@ -322,7 +322,7 @@ pub(crate) async fn run_stale_check_watch(
 mod tests {
     use super::*;
     use crate::alerts::NotifyAction;
-    use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, TopAgg};
+    use crate::tsdb::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, TopAgg};
     use yagra_alert::testkit::{cfg, manager, meta_for, open_alert, result};
     use yagra_common::{NodeId, NodeState, ScopeLevel, SeriesKey, ThresholdBounds, ThresholdRule};
 

@@ -25,8 +25,8 @@ use utoipa::OpenApi;
 use super::error::{ApiError, ApiResult};
 use super::extract::{Caller, RequireManageSystem, WebTls};
 use super::ApiState;
-use crate::server_cert::CertError;
-use crate::webtls::WebTlsView;
+use crate::certs::server_cert::CertError;
+use crate::certs::webtls::WebTlsView;
 
 #[derive(OpenApi)]
 #[openapi(paths(get_web_tls, put_web_tls, regenerate_web_tls))]
@@ -96,7 +96,7 @@ async fn get_web_tls(_guard: RequireManageSystem, tls: WebTls) -> ApiResult<Json
     })?;
     Ok(Json(WebTlsResponse {
         config,
-        api_port_is_public: crate::webtls::api_port_is_public(),
+        api_port_is_public: crate::certs::webtls::api_port_is_public(),
     }))
 }
 
@@ -129,7 +129,7 @@ async fn put_web_tls(
         .map_err(to_api_error)?;
     Ok(Json(WebTlsResponse {
         config: Some(config),
-        api_port_is_public: crate::webtls::api_port_is_public(),
+        api_port_is_public: crate::certs::webtls::api_port_is_public(),
     }))
 }
 
@@ -158,7 +158,7 @@ async fn regenerate_web_tls(
         .filter(|n| !n.is_empty())
         .collect();
     let names = if names.is_empty() {
-        crate::webtls::configured_names()
+        crate::certs::webtls::configured_names()
     } else {
         names
     };
@@ -166,7 +166,7 @@ async fn regenerate_web_tls(
     let config = tls.regenerate(&names, by).await.map_err(to_api_error)?;
     Ok(Json(WebTlsResponse {
         config: Some(config),
-        api_port_is_public: crate::webtls::api_port_is_public(),
+        api_port_is_public: crate::certs::webtls::api_port_is_public(),
     }))
 }
 
@@ -308,7 +308,7 @@ mod tests {
     /// convenience, which is exactly the kind of change that looks harmless in review.
     #[test]
     fn no_response_shape_in_this_feature_carries_key_material() {
-        let src = include_str!("../webtls.rs");
+        let src = include_str!("../certs/webtls.rs");
         let view = src
             .split("pub struct WebTlsView {")
             .nth(1)

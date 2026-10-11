@@ -2,7 +2,7 @@
 //! Pins on the inventory tree: the nodes and folders one account keeps within reach (ADR-146).
 //!
 //! The tree's "Pinned only" switch shows what is pinned plus the folders above it. The pins live per
-//! account in `user_pins` ([`crate::pins`]), so they follow a person between machines.
+//! account in `user_pins` ([`crate::inventory::pins`]), so they follow a person between machines.
 //!
 //! [`Caller`] on every route, for the reason `preferences.rs` gives: the rows are keyed by the
 //! signed-in account, `RequireView` would open them to every anonymous visitor of a public
@@ -21,7 +21,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Caller, Scoped, VisibleNode};
 use super::ApiState;
-use crate::pins::{PinOutcome, PinTarget, PINS_MAX};
+use crate::inventory::pins::{PinOutcome, PinTarget, PINS_MAX};
 use axum::{
     extract::{Path, State},
     http::StatusCode,

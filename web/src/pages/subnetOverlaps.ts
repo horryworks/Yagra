@@ -2,7 +2,7 @@
 // Nodes ▸ Subnet overlaps (ADR-187) — the screen's judgement, where a node-environment test runs.
 // `SubnetOverlapsPage.tsx` is layout plus the calls (`testing.md`).
 //
-// The comparison itself is the server's (`crates/yagra-core/src/subnet_overlaps.rs`). What is
+// The comparison itself is the server's (`crates/yagra-core/src/inventory/subnet_overlaps.rs`). What is
 // decided here is only how the answer is shown: which tab an overlap sits on, what a hint suggests
 // as a rule, where each range sits on the bar, and what an empty table means.
 
@@ -83,7 +83,7 @@ function wordIs(token: string, word: string): boolean {
 /**
  * Whether a rule's port text appears in `text` as whole words, in order, ignoring case.
  *
- * A mirror of `crates/yagra-core/src/subnet_overlaps.rs::carries_words`, which decides what a
+ * A mirror of `crates/yagra-core/src/inventory/subnet_overlaps.rs::carries_words`, which decides what a
  * rule actually excludes; this copy only previews it in the add dialog. Both run
  * `fixtures/carriesWords.cases.json`, so a change to one that the other does not make fails a test.
  */

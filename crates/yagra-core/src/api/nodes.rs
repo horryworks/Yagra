@@ -26,7 +26,7 @@
 use super::extract::{Admin, ListSlot, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
 use super::{AdminState, ApiError, ApiResult, ApiState};
-use crate::node_display::{state_or_fallback, FALLBACK_FRESH_SECS, FALLBACK_METRICS};
+use crate::runtime::node_display::{state_or_fallback, FALLBACK_FRESH_SECS, FALLBACK_METRICS};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -311,7 +311,7 @@ pub(crate) struct NodePageQuery {
 ///   in SQL would be a second answer to "what is this node", which is the thing that type exists to
 ///   prevent.
 /// - **pool** is inherited from the folder tree and deliberately not materialized (ADR-013), so the
-///   answer is [`crate::poolres::PoolResolver`]'s, not a column's.
+///   answer is [`crate::fleet::poolres::PoolResolver`]'s, not a column's.
 ///
 /// So they run over a bounded candidate scan ([`yagra_base::repo::NODE_SCAN_MAX`]), through the same
 /// resolvers every other surface asks. What that buys is that a row can never disagree with the
@@ -2892,7 +2892,7 @@ pub(crate) async fn poll_now(
 /// implementation of "which pool does this node's job go to".
 pub(crate) async fn poll_now_with(
     admin: &super::AdminState,
-    resolver: &crate::poolres::PoolResolver,
+    resolver: &crate::fleet::poolres::PoolResolver,
     node: &yagra_common::Node,
 ) -> PollNowResult {
     let node_id = node.id.0;
@@ -3261,8 +3261,8 @@ mod tests {
     }
 
     /// A store holding one RTT reading for `node`, and nothing else.
-    fn store_with_rtt(node: NodeId) -> std::sync::Arc<dyn crate::store::MetricStore> {
-        let sink = crate::sink::InMemorySink::default();
+    fn store_with_rtt(node: NodeId) -> std::sync::Arc<dyn crate::tsdb::store::MetricStore> {
+        let sink = crate::tsdb::sink::InMemorySink::default();
         sink.ingest(&yagra_bus::PollResult {
             samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 1.5)],
             ..yagra_bus::PollResult::new(Uuid::nil(), node, 0, yagra_bus::CheckOutcome::Reachable)
@@ -3315,7 +3315,7 @@ mod tests {
     async fn an_access_point_its_controller_stopped_reporting_reads_unknown_and_says_since_when() {
         let st = private_state();
         let (ap, fresh, controller) = (Uuid::new_v4(), Uuid::new_v4(), NodeId::new());
-        let now = crate::pool_coverage::now_unix_ms();
+        let now = crate::fleet::pool_coverage::now_unix_ms();
         let last = now - 20 * 60_000;
         for i in 0..3 {
             for (node, at) in [(ap, last + i), (fresh, now - 60_000 + i)] {
@@ -3709,7 +3709,7 @@ mod tests {
     fn a_pool_filter_matches_a_nodes_own_pool_over_any_inheritance() {
         // `resolve_pool`'s precedence, pinned where the filter reads it: a node naming its own pool
         // is in that pool whatever its folder says. Pure, so it does not need a state.
-        let resolver = crate::poolres::PoolResolver::empty();
+        let resolver = crate::fleet::poolres::PoolResolver::empty();
         assert_eq!(resolver.resolve_pool(&n(1, "a", Some("osaka"))), "osaka");
         assert_eq!(
             resolver.resolve_pool(&n(2, "b", None)),

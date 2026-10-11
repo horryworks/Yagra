@@ -13,6 +13,7 @@
 ### Improvements
 
 - **The Interfaces tab fills Media on more ports.** Huawei fibre ports now show their standard (`1000BASE-LX`, `1000BASE-SX`, `10GBASE-SR`, `10GBASE-LR`, `10GBASE-ER`), read from the optic's own description. Cisco Catalyst copper ports whose media columns are absent (the 3650, for one) now show `1000BASE-T` and the like, from the port's ENTITY-MIB vendor type. Direct-attach cables, BiDi optics and Cisco ISR / ASAv ports still show nothing: the device does not state a medium. Filled within an hour, by the media walk.
+- **Troubleshoot ▸ Scheduled says which permission it needs when it is refused**, rather than an error line above an empty table. The LDAP card in Settings ▸ Authentication, the AI settings and the collection editor read through the same loader as the other screens; a failed re-read after a save keeps the values on screen instead of flashing.
 
 ### Bug Fixes
 

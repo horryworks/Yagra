@@ -20,7 +20,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem, RequireView};
 use super::ApiState;
-use crate::retention::Subject;
+use crate::runtime::retention::Subject;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use yagra_base::repo::retention_settings::{self, RetentionSettings};
@@ -298,7 +298,7 @@ fn to_values(s: &RetentionSettings) -> RetentionValues {
 mod tests {
     use super::*;
     use crate::api::tests_support::{private_state, public_state};
-    use crate::retention::Tunable;
+    use crate::runtime::retention::Tunable;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;

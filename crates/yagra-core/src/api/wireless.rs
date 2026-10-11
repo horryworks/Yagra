@@ -18,7 +18,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
 use super::ApiState;
-use crate::wireless::{
+use crate::topology::wireless::{
     ApFilter, ApRow, ControllerRow, ControllerSettings, ImportOne, WirelessRepo,
 };
 use axum::{

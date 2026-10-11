@@ -20,8 +20,8 @@ use yagra_common::NodeId;
 
 use super::YagraMcp;
 use crate::api::scope::NodeScope;
-use crate::flowstore::{AsDir, FlowQuery};
 use crate::mcp::dto::EventDto;
+use crate::passive::flowstore::{AsDir, FlowQuery};
 
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
 // re-exported by `mod.rs` so no file has to name where a sibling keeps a thing.
@@ -370,7 +370,7 @@ impl YagraMcp {
         // Through the log store when one is configured (ADR-024): PostgreSQL keeps only alert-linked
         // rows there, so answering from it reported the events that had already alerted as if they
         // were the whole passive-event volume.
-        let buckets = match crate::logstore::route_counts_by_bucket(
+        let buckets = match crate::passive::logstore::route_counts_by_bucket(
             self.state.logs.as_ref(),
             &admin.events,
             &window,
@@ -405,7 +405,7 @@ impl YagraMcp {
             })
             .collect();
         // Severity mix.
-        let sev = crate::logstore::route_severity_counts(
+        let sev = crate::passive::logstore::route_severity_counts(
             self.state.logs.as_ref(),
             &admin.events,
             &window,
@@ -429,7 +429,7 @@ impl YagraMcp {
         // rather than served: a rule-gap ranking over the whole fleet, handed to an account that
         // sees seven nodes, reads as a fact about those seven.
         let (unmatched, note) = if scope.is_all() {
-            let sigs = crate::logstore::route_unmatched_signatures(
+            let sigs = crate::passive::logstore::route_unmatched_signatures(
                 self.state.logs.as_ref(),
                 &admin.events,
                 &window,

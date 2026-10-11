@@ -776,7 +776,7 @@ pub(crate) const MAX_PREFIX_GAP_NODES: usize = 2_000;
     get, path = "/api/v1/node-groups/{id}/prefix-gaps", tag = "groups",
     params(("id" = String, Path, description = "Folder id")),
     responses(
-        (status = 200, description = "The subnets this folder's devices (and those of every folder beneath it) carry that none of those folders' IP ranges contains, with why each is reported", body = crate::prefix_gaps::PrefixGapReport),
+        (status = 200, description = "The subnets this folder's devices (and those of every folder beneath it) carry that none of those folders' IP ranges contains, with why each is reported", body = crate::inventory::prefix_gaps::PrefixGapReport),
         (status = 400, description = "`too_many_nodes`: the folder and its subfolders hold more devices than one report reads; open a folder further down", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
@@ -789,7 +789,7 @@ async fn get_prefix_gaps(
     Scoped(scope): Scoped,
     admin: Admin,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<crate::prefix_gaps::PrefixGapReport>> {
+) -> ApiResult<Json<crate::inventory::prefix_gaps::PrefixGapReport>> {
     Ok(Json(prefix_gap_report(&admin, &scope, id).await?))
 }
 
@@ -805,8 +805,8 @@ pub(crate) async fn prefix_gap_report(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
     id: Uuid,
-) -> ApiResult<crate::prefix_gaps::PrefixGapReport> {
-    use crate::prefix_gaps::{classify, Range, Relation};
+) -> ApiResult<crate::inventory::prefix_gaps::PrefixGapReport> {
+    use crate::inventory::prefix_gaps::{classify, Range, Relation};
     use yagra_base::groups::{group_ancestors, group_subtree};
 
     super::scope::require_visible_group(scope, id)?;
@@ -897,7 +897,7 @@ pub(crate) async fn prefix_gap_report(
     super::prefix_gaps::fill_port_names(admin, gaps.iter_mut().collect()).await?;
 
     let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-    Ok(crate::prefix_gaps::PrefixGapReport {
+    Ok(crate::inventory::prefix_gaps::PrefixGapReport {
         group_id: id,
         nodes_total: count(devices),
         nodes_with_addresses: count(snapshots.len()),
@@ -1976,7 +1976,7 @@ mod tests {
         yagra_base::pgtest::prefix(pool, other, "10.9.0.0/24").await;
         yagra_base::pgtest::prefix(pool, other, "172.30.0.0/25").await;
 
-        let l3 = crate::l3::L3Repo::new(pool.clone());
+        let l3 = crate::topology::l3::L3Repo::new(pool.clone());
         let a = yagra_base::pgtest::node(pool, "cs-a", 1, Some(site)).await;
         let b = yagra_base::pgtest::node(pool, "as-a", 2, Some(child)).await;
         // Filed in the site, never walked: counted in the total, not in "read".

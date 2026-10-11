@@ -5,9 +5,10 @@
 // Resolution (node overrides profile) and the built-in fallback happen server-side; this only
 // shows what's explicitly configured at this scope.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../../lib/useDebouncedValue';
+import { useLoad } from '../../lib/useLoad';
 import { api, errMsg, type CollectionItemInput } from '../../services/api';
 import type {
   CollectionKind,
@@ -35,8 +36,7 @@ export function CollectionEditor({
   canEdit: boolean;
 }) {
   const { t } = useTranslation('monitoring');
-  const [items, setItems] = useState<StoredCollectionItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // A failed write's message; a failed read's comes from `useLoad`.
   const [error, setError] = useState<string | null>(null);
   const [metricName, setMetricName] = useState('');
   const [oid, setOid] = useState('');
@@ -48,22 +48,15 @@ export function CollectionEditor({
   const [pickQuery, setPickQuery] = useState('');
   const [picks, setPicks] = useState<MibCatalogEntry[]>([]);
 
-  const load = useCallback(() => {
-    const p =
-      scope === 'template'
-        ? api.listTemplateItems(scopeId)
-        : api.listNodeCollection(scopeId);
-    p.then((list) => {
-      setItems(list);
-      setError(null);
-    })
-      .catch((e: unknown) => setError(errMsg(e, t('editor.err.load'))))
-      .finally(() => setLoading(false));
-  }, [scope, scopeId, t]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const listed = useLoad(
+    () =>
+      scope === 'template' ? api.listTemplateItems(scopeId) : api.listNodeCollection(scopeId),
+    [scope, scopeId],
+    { initial: [] as StoredCollectionItem[], errorFallback: t('editor.err.load') },
+  );
+  const { data: items, loading, reload: load } = listed;
+  // A refused read keeps the one line this editor always showed for a failed read.
+  const loadError = listed.error ?? (listed.block ? t('editor.err.load') : null);
 
   // Catalog search while the picker is open: the term settles, then one request goes out.
   const settledPick = useDebouncedValue(pickQuery.trim());
@@ -120,7 +113,7 @@ export function CollectionEditor({
 
   return (
     <div className="ce">
-      {error && <p className="form-error">{error}</p>}
+      {(error ?? loadError) && <p className="form-error">{error ?? loadError}</p>}
       {items.length === 0 ? (
         <p className="muted">
           {loading

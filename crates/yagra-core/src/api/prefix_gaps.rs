@@ -28,7 +28,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::{require_fleet_wide, NodeScope};
 use super::{AdminState, ApiState};
-use crate::prefix_gaps::{by_site, GapMark, PrefixGap};
+use crate::inventory::prefix_gaps::{by_site, GapMark, PrefixGap};
 use yagra_base::repo::StoredGapAck;
 use yagra_common::{L3Snapshot, NodeKind, SubnetKey};
 
@@ -309,7 +309,7 @@ async fn compare(admin: &AdminState, scope: &NodeScope) -> ApiResult<Compared> {
         .map(|a| ((a.site, a.subnet.clone()), a))
         .collect();
 
-    let site_of = crate::sites::sites_by_node(&groups, &nodes);
+    let site_of = crate::inventory::sites::sites_by_node(&groups, &nodes);
     let visible: Vec<Uuid> = nodes
         .iter()
         .filter(|(_, _, g)| scope.allows_group(*g))
@@ -576,7 +576,7 @@ impl PrefixGapSitesView {
     /// One instance of every field, for the MCP result canary.
     #[cfg(test)]
     pub(crate) fn sample() -> Self {
-        use crate::prefix_gaps::{GapKind, SeenOn};
+        use crate::inventory::prefix_gaps::{GapKind, SeenOn};
         Self {
             sites: vec![SitePrefixGaps {
                 site_id: Some(Uuid::new_v4()),
@@ -653,7 +653,7 @@ mod tests {
         assert!(keep[..200].iter().all(|k| *k == 10), "{keep:?}");
     }
 
-    fn gap(subnet: &str, kind: crate::prefix_gaps::GapKind) -> PrefixGap {
+    fn gap(subnet: &str, kind: crate::inventory::prefix_gaps::GapKind) -> PrefixGap {
         PrefixGap {
             subnet: subnet.to_owned(),
             kind,
@@ -682,7 +682,7 @@ mod tests {
     /// with; marked gaps go after the unmarked ones without disturbing either half's order.
     #[test]
     fn a_mark_applies_to_its_site_and_kind_and_moves_the_gap_after_the_open_ones() {
-        use crate::prefix_gaps::GapKind;
+        use crate::inventory::prefix_gaps::GapKind;
         let site = Uuid::from_u128(7);
         let marks: Marks = [
             mark(site, "10.0.1.0/24", "unregistered"),
@@ -810,7 +810,7 @@ mod tests {
         yagra_base::pgtest::prefix(&pool, site_a, "10.1.1.0/24").await;
         yagra_base::pgtest::prefix(&pool, site_b, "10.9.0.0/24").await;
 
-        let l3 = crate::l3::L3Repo::new(pool.clone());
+        let l3 = crate::topology::l3::L3Repo::new(pool.clone());
         let snap = |rows: &[(u32, &str, u8)]| {
             yagra_common::L3Snapshot::new(
                 rows.iter()

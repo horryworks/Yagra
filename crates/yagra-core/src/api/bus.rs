@@ -38,8 +38,8 @@ use utoipa::OpenApi;
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, BusTls, Caller, RequireManageSystem, Upgrade};
 use super::ApiState;
-use crate::bus_cert::BusTlsView;
-use crate::server_cert::CertError;
+use crate::certs::bus_cert::BusTlsView;
+use crate::certs::server_cert::CertError;
 use yagra_ops::upgrade::Command;
 
 #[derive(OpenApi)]
@@ -269,7 +269,7 @@ async fn set_bus_remote(
             // WARNING: this moment is necessary and NOT sufficient (ADR-065 Inc.8). It adopts the
             // ids that exist right now; an upgrade later replaces the composition without anyone
             // pressing this switch, so `run_live` runs the same adoption at every start.
-            match crate::pollers::register_local(&admin.pollers, &upgrade).await {
+            match crate::fleet::pollers::register_local(&admin.pollers, &upgrade).await {
                 Ok(Some((created, known))) => tracing::info!(
                     created,
                     known,
@@ -373,7 +373,7 @@ fn remote_enabled() -> bool {
 /// stop being able to reach their own bus the moment TLS comes on, which reads as "the switch broke
 /// everything" rather than "one name is missing".
 fn merge_names(supplied: &[String]) -> Vec<String> {
-    let mut names = crate::bus_cert::default_names();
+    let mut names = crate::certs::bus_cert::default_names();
     for n in supplied.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
         if !names.iter().any(|existing| existing == n) {
             names.push(n.to_owned());

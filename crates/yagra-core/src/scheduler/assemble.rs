@@ -8,7 +8,7 @@
 //! 🚨 This is where "what gets polled" is decided. Get it wrong and a node is **silently not**
 //! **polled** — the failure mode that recurred in v0.2.13.
 
-use crate::l3_routing::RoutingPlan;
+use crate::topology::l3_routing::RoutingPlan;
 use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;

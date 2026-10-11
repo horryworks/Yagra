@@ -41,7 +41,7 @@ use super::topology::{
     MapBreadcrumb, MapEdge, MapEdgeMember, MapEndpoint, MapEndpointKind, MapFolder, MapLevel,
     MapNode, MapRole, MapRoleReason, MapStub, MapStubKind,
 };
-use crate::topology_links::StoredLink;
+use crate::topology::topology_links::StoredLink;
 use yagra_base::groups::{GroupType, MAX_GROUP_DEPTH};
 
 /// Above this many linked nodes on one level the level is not drawn (`overflow`).
