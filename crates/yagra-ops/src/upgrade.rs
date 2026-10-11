@@ -24,7 +24,7 @@ use std::time::Duration;
 use semver::Version;
 use sqlx::{PgPool, Row};
 
-use crate::atomic_file::write_atomically;
+use yagra_base::atomic_file::write_atomically;
 
 /// How long the fleet-wide maintenance window opened by an apply may last.
 ///
@@ -676,9 +676,9 @@ pub fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
 /// same question from a task that has no API state (ADR-051 Inc.8) — and a second copy of this
 /// mapping is how that path came to answer "who moves" differently from the buttons.
 #[must_use]
-pub(crate) fn poller_builds(coordinator: &crate::coordinator::Coordinator) -> Vec<PollerBuild> {
+pub fn poller_builds(coordinator: &dyn crate::PollerRegistry) -> Vec<PollerBuild> {
     coordinator
-        .poller_views(std::time::Instant::now())
+        .live_pollers()
         .into_iter()
         .map(|v| PollerBuild {
             // Whatever its site updater last said, carried on the build so the set that decides
@@ -778,7 +778,7 @@ pub fn post_upgrade_plan(
 /// Wait until every chosen poller has reconnected, or [`SELECTION_WAIT`] has passed, and return the
 /// fleet as it then stands.
 async fn wait_for_selection(
-    coordinator: &crate::coordinator::Coordinator,
+    coordinator: &dyn crate::PollerRegistry,
     selected: Option<&[String]>,
 ) -> Vec<PollerBuild> {
     let deadline = tokio::time::Instant::now() + SELECTION_WAIT;
@@ -989,7 +989,7 @@ fn watch_step(run: Option<&RunStatus>, expired: bool) -> WatchStep {
 ///
 /// `dir` is `None` when `YAGRA_UPGRADE_DIR` is unset, which is the default and means the whole
 /// mechanism is absent: no request can be written and every read reports "disabled". Same shape as
-/// [`crate::webtls::WebTlsRepo`]'s optional directory, for the same reason — an optional deployment
+/// core's `webtls::WebTlsRepo`'s optional directory, for the same reason — an optional deployment
 /// capability should be one `Option` at the edge rather than a flag threaded through the callers.
 pub struct UpgradeRepo {
     pool: PgPool,
@@ -1035,7 +1035,7 @@ impl UpgradeRepo {
     /// module reading files here is a deliberate arrangement between two named modules, not an
     /// open door.
     #[must_use]
-    pub(crate) fn hand_off_dir(&self) -> Option<&Path> {
+    pub fn hand_off_dir(&self) -> Option<&Path> {
         self.dir.as_deref()
     }
 
@@ -1276,7 +1276,7 @@ impl UpgradeRepo {
     pub async fn settle_finished_run(
         &self,
         audit: &yagra_auth::audit::AuditRepo,
-        maintenance: &crate::alerts::maintenance::MaintenanceRepo,
+        maintenance: &dyn crate::UpgradeWindows,
     ) -> Option<RunStatus> {
         let dir = self.dir.as_deref()?;
         let deadline = tokio::time::Instant::now()
@@ -1474,7 +1474,7 @@ const SETTINGS_ENABLED_KEY: &str = "enabled";
 /// which moves it. An unset `YAGRA_UPGRADE_DIR` means the updater sidecar is not deployed, which is
 /// the default: the migration/compatibility half still answers, the apply half reports itself
 /// disabled.
-pub(crate) fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
+pub fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
     std::sync::Arc::new(UpgradeRepo::new(
         pool,
         yagra_common::env::path("YAGRA_UPGRADE_DIR"),
@@ -1498,7 +1498,7 @@ pub(crate) fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
 /// Deliberately **not** awaited: core boots during the updater's `compose` step, so the run is
 /// still in flight when this starts and settling it means waiting for the outcome. Awaiting that
 /// would hold the whole API port closed for the length of an upgrade.
-pub(crate) async fn start(
+pub async fn start(
     repo: &std::sync::Arc<UpgradeRepo>,
     handles: SettleHandles,
     shutdown: &yagra_telemetry::CancellationToken,
@@ -1514,7 +1514,7 @@ pub(crate) async fn start(
             is_leader,
         } = handles;
         yagra_telemetry::spawn_cancellable(shutdown, async move {
-            let Some(run) = upgrade.settle_finished_run(&audit, &maintenance).await else {
+            let Some(run) = upgrade.settle_finished_run(&audit, &*maintenance).await else {
                 return;
             };
             // Remote-site pollers are a separate compose project on a separate host, so core's own
@@ -1549,7 +1549,7 @@ pub(crate) async fn start(
                 wait_secs = SELECTION_WAIT.as_secs(),
                 "waiting for the chosen remote pollers to reconnect before handing them the release"
             );
-            let fleet = wait_for_selection(&coordinator, selection.as_deref()).await;
+            let fleet = wait_for_selection(&*coordinator, selection.as_deref()).await;
             // Only the leader receives heartbeats, so a follower's registry is empty and would name
             // every chosen poller as not connected (decision 35). The leader runs this same task.
             if !is_leader.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1573,8 +1573,8 @@ pub(crate) async fn start(
                      (already on the target, or no site updater); leaving it where it is"
                 );
             }
-            let absent = absent_pollers(&pollers, &plan.not_connected).await;
-            let targets = crate::poller_upgrade::targets(&coordinator, &plan.moving);
+            let absent = absent_pollers(&*pollers, &plan.not_connected).await;
+            let targets = crate::poller_upgrade::targets(&*coordinator, &plan.moving);
             // Shares one lock with the "align the pollers" button (ADR-051 Inc.4 decision 17).
             // Losing it here is not an error: somebody pressed that button while core was coming
             // back, and their run is already moving the same fleet to the same place.
@@ -1614,18 +1614,18 @@ pub(crate) async fn start(
 ///
 /// A struct because the two ADR-051 Inc.8 handles took the argument list past what clippy accepts,
 /// and because all six travel together into one task.
-pub(crate) struct SettleHandles {
+pub struct SettleHandles {
     /// Where the run's outcome, and each poller's, is recorded.
     pub audit: std::sync::Arc<yagra_auth::audit::AuditRepo>,
     /// The fleet-wide window the run opened, which settling closes.
-    pub maintenance: std::sync::Arc<crate::alerts::maintenance::MaintenanceRepo>,
+    pub maintenance: std::sync::Arc<dyn crate::UpgradeWindows>,
     /// Where upgrade commands to the pollers go.
     pub bus: std::sync::Arc<yagra_bus::NatsBus>,
     /// The live poller registry.
-    pub coordinator: std::sync::Arc<crate::coordinator::Coordinator>,
+    pub coordinator: std::sync::Arc<dyn crate::PollerRegistry>,
     /// The durable poller inventory. A chosen poller that has not reconnected is named from here,
     /// because the registry has not heard of it since this process started.
-    pub pollers: std::sync::Arc<crate::pollers::PollerRepo>,
+    pub pollers: std::sync::Arc<dyn crate::PollerInventory>,
     /// Whether this core leads. Only the leader receives heartbeats, so only the leader can tell a
     /// poller that is absent from one it was never going to hear about (ADR-051 Inc.8 decision 35).
     pub is_leader: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1637,13 +1637,13 @@ pub(crate) struct SettleHandles {
 /// A failed read still names them, with no pool: a site left behind has to say so whether or not
 /// the table answered.
 async fn absent_pollers(
-    pollers: &crate::pollers::PollerRepo,
+    pollers: &dyn crate::PollerInventory,
     ids: &[String],
 ) -> Vec<crate::poller_upgrade::Absent> {
     if ids.is_empty() {
         return Vec::new();
     }
-    let known = match pollers.list().await {
+    let known = match pollers.pools_by_id().await {
         Ok(rows) => rows,
         Err(e) => {
             tracing::warn!(
@@ -1658,8 +1658,8 @@ async fn absent_pollers(
             id: id.clone(),
             pool: known
                 .iter()
-                .find(|r| &r.id == id)
-                .map(|r| r.pool.clone())
+                .find(|(known, _)| known == id)
+                .map(|(_, pool)| pool.clone())
                 .unwrap_or_default(),
         })
         .collect()
@@ -1936,7 +1936,7 @@ fn audit_action(run: &RunStatus) -> String {
 }
 
 /// A field name [`UpgradeRepo::request_with`] will write. Lowercase and underscores only.
-pub(crate) fn is_request_key(key: &str) -> bool {
+pub fn is_request_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 32
         && key
@@ -1949,7 +1949,7 @@ pub(crate) fn is_request_key(key: &str) -> bool {
 /// Alphanumerics and a handful of separators — enough for a mode word, a password and a host name,
 /// and short of anything a shell would treat specially. Empty is allowed: "this field is not
 /// applicable to this request" has to be expressible, and the sidecar tests for it.
-pub(crate) fn is_request_value(value: &str) -> bool {
+pub fn is_request_value(value: &str) -> bool {
     value.len() <= 128
         && value
             .bytes()
@@ -1988,7 +1988,7 @@ pub fn heartbeat_is_fresh(written_at: i64, check_interval_secs: u64, now: i64) -
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
 
     /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
@@ -2310,7 +2310,7 @@ pub(crate) mod tests {
     ///
     /// Line-based, so offsets shrink but their **order** is unchanged: a check that compares two
     /// positions gets the same answer here as in the original.
-    pub(crate) fn without_comments(script: &str) -> String {
+    pub fn without_comments(script: &str) -> String {
         script
             .lines()
             .filter(|l| !l.trim_start().starts_with('#'))
@@ -2321,7 +2321,7 @@ pub(crate) mod tests {
     /// Every `docker run …` in the updater's script, each folded back into one string across its
     /// backslash-continued lines. A launch is only as safe as its whole argument list, so a scan
     /// that stopped at the first line would read every one of them as mountless.
-    pub(crate) fn docker_run_invocations(compose: &str) -> Vec<String> {
+    pub fn docker_run_invocations(compose: &str) -> Vec<String> {
         let compose = without_comments(compose);
         let mut out = Vec::new();
         let mut lines = compose.lines();

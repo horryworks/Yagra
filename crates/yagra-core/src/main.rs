@@ -23,7 +23,6 @@ mod alerts;
 mod analysis;
 mod api;
 mod arp;
-mod atomic_file;
 mod authcallout;
 mod batch_writer;
 mod bigquery;
@@ -88,10 +87,6 @@ mod ratelimit;
 mod rca;
 mod reclassify;
 mod rediscover;
-/// Moving this whole deployment to another host (ADR-121). Named apart from `config_bundle`,
-/// which moves a *configuration* between deployments and carries no secret; this one carries the
-/// KEK and every sealed row, which is why it is Admin-only and audited.
-mod relocation;
 mod reports;
 mod result_ingest;
 mod retention;
@@ -107,20 +102,11 @@ mod sites;
 mod store;
 /// Which address ranges two sites both use (ADR-187). Pure; `api::subnet_overlaps` reads the stores.
 mod subnet_overlaps;
-// Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from
-// `config_bundle`, which moves configuration *between* deployments; this one describes one.
-mod support_bundle;
 /// Effective label resolution (own + every ancestor folder's − excluded). The accumulating
 /// counterpart to `poolres`, which resolves one value from the nearest folder that carries it.
 mod tagres;
 mod topology_links;
 mod topology_projection;
-// What this deployment is running and how far back it can be taken (ADR-050). Named apart from
-// `repo`, which *applies* migrations; this one reasons about what applying them cost.
-mod poller_bundle;
-mod poller_logs;
-mod poller_upgrade;
-mod upgrade;
 mod url_check;
 mod vlans;
 mod volatile;
@@ -167,6 +153,7 @@ use yagra_base::repo::{NodeListing, NodeRepo, StaticNodeList};
 use yagra_base::secrets::CredentialStore;
 use yagra_base::{config_gen, groups, neighbors, repo, secrets};
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
+use yagra_ops::{poller_logs, relocation, support_bundle, upgrade};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

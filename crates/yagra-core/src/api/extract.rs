@@ -428,7 +428,7 @@ impl std::ops::Deref for BusTls {
 }
 
 /// The migration-history reader behind the upgrade view (ADR-050) — absent only in skeleton mode.
-pub struct Upgrade(pub Arc<crate::upgrade::UpgradeRepo>);
+pub struct Upgrade(pub Arc<yagra_ops::upgrade::UpgradeRepo>);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for Upgrade {
@@ -443,7 +443,7 @@ impl FromRequestParts<ApiState> for Upgrade {
 }
 
 impl std::ops::Deref for Upgrade {
-    type Target = crate::upgrade::UpgradeRepo;
+    type Target = yagra_ops::upgrade::UpgradeRepo;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

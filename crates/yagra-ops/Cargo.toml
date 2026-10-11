@@ -1,0 +1,51 @@
+[package]
+name = "yagra-ops"
+description = "Yagra-ops — how a deployment changes itself: upgrades and the pollers that follow, relocation, the support bundle, the pollers' logs and the remote-site bundle."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+# The schema floor it reads, the file writer it publishes through, the outbound client.
+yagra-base = { path = "../yagra-base" }
+# Where an upgrade's and each poller's outcome is recorded.
+yagra-auth = { path = "../yagra-auth" }
+# Upgrade commands to the pollers, their reports, and the poller log stream.
+yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+yagra-telemetry = { path = "../yagra-telemetry" }
+# Free space on the hand-off volume before an image archive is accepted.
+yagra-hoststats = { path = "../yagra-hoststats" }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+# Compatibility-window arithmetic for the upgrade planner (ADR-050 decision 7).
+semver = { workspace = true }
+# The support bundle and the remote-site bundle are gzipped tar archives.
+tar = { workspace = true }
+flate2 = { workspace = true }
+# The upgrade and relocation views are API responses, so they carry their own JSON Schema.
+utoipa = { workspace = true }
+
+[dev-dependencies]
+# `srcread` and the real-PostgreSQL fixtures. Dev-dependencies only, so a release build carries
+# neither.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
+yagra-base = { path = "../yagra-base", features = ["test-util"] }
+
+[features]
+# The support bundle's test-only reads (`ENV_NOT_BUNDLED`, `BundleBuilder::{paths, omissions}`,
+# `SecretScan::patterns_only`), which core's tests use. `yagra-core` enables it from
+# **dev-dependencies** only, so none of it reaches a release binary (as `yagra-base`'s `test-util`).
+test-util = []

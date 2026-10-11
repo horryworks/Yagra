@@ -22,6 +22,8 @@
 //! vocabulary (`sql_tables`) and the test-only reads callers' tests use (`repo::MIGRATIONS` and
 //! the ordered readers). Core enables it from dev-dependencies only.
 
+/// Replacing a file so that no reader ever sees half of it (ADR-184).
+pub mod atomic_file;
 pub mod change_feed;
 pub mod config_gen;
 pub mod groups;

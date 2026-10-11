@@ -28,7 +28,7 @@ const ONE_HOME: &[(&str, &str)] = &[
 /// than `0` before 1970 because it is compared against the certificate's own date.
 const EPOCH_READERS: &[&str] = &[
     "yagra-common/src/clock.rs",
-    "yagra-core/src/relocation.rs",
+    "yagra-ops/src/relocation.rs",
     "yagra-transport/src/http.rs",
 ];
 

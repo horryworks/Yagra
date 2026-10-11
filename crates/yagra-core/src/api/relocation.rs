@@ -50,7 +50,7 @@ use super::extract::{
 };
 use super::upgrade::UpdaterInfo;
 use super::ApiState;
-use crate::relocation::{
+use yagra_ops::relocation::{
     RelocationMode, RelocationOptions, RelocationRun, SshAuthKind, SshSecrets, SshTarget,
 };
 
@@ -300,25 +300,26 @@ async fn get_relocation(
     let now = super::util::now_unix_s();
     let beat = upgrade.heartbeat();
     let fresh = beat.as_ref().is_some_and(|h| {
-        crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
+        yagra_ops::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
     let supported = beat.as_ref().is_some_and(|h| h.relocate);
     let switched_on = upgrade.enabled().await;
-    let run = crate::relocation::status(&upgrade);
-    let archive = crate::relocation::archive(&upgrade).map(|(path, size, modified)| ArchiveInfo {
-        filename: path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_owned(),
-        size_bytes: size,
-        modified_at: modified,
-    });
+    let run = yagra_ops::relocation::status(&upgrade);
+    let archive =
+        yagra_ops::relocation::archive(&upgrade).map(|(path, size, modified)| ArchiveInfo {
+            filename: path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_owned(),
+            size_bytes: size,
+            modified_at: modified,
+        });
     // The estimate is best effort on purpose: a database this cannot measure must not stop the
     // page from rendering, it must render without a number.
-    let estimate = crate::relocation::estimate_bytes(
+    let estimate = yagra_ops::relocation::estimate_bytes(
         &admin.0.repo.pool(),
-        crate::relocation::metrics_dir().as_deref(),
+        yagra_ops::relocation::metrics_dir().as_deref(),
         &RelocationOptions {
             mode: RelocationMode::Archive,
             include_metrics: true,
@@ -338,7 +339,7 @@ async fn get_relocation(
         archive,
         free_bytes: upgrade.free_bytes(),
         estimate_bytes: estimate,
-        needed_bytes: estimate.map(crate::relocation::space_needed),
+        needed_bytes: estimate.map(yagra_ops::relocation::space_needed),
     }))
 }
 
@@ -377,7 +378,7 @@ async fn start_relocation(
              next upgrade, after which this page works",
         ));
     }
-    if crate::relocation::is_running(&upgrade) {
+    if yagra_ops::relocation::is_running(&upgrade) {
         return Err(ApiError::conflict(
             "relocation_in_progress",
             "a relocation is already running",
@@ -397,9 +398,9 @@ async fn start_relocation(
     // again; this one exists so an operator is told before they wait for a backup that cannot fit.
     if let (Some(free), Some(estimate)) = (
         upgrade.free_bytes(),
-        crate::relocation::estimate_bytes(&admin.0.repo.pool(), None, &opts).await,
+        yagra_ops::relocation::estimate_bytes(&admin.0.repo.pool(), None, &opts).await,
     ) {
-        let needed = crate::relocation::space_needed(estimate);
+        let needed = yagra_ops::relocation::space_needed(estimate);
         if free < needed {
             return Err(ApiError::insufficient_storage(
                 "insufficient_disk",
@@ -420,13 +421,13 @@ async fn start_relocation(
     // request file appearing, and a run that finds no password fails at the first ssh — with the
     // operator's credentials sitting on the volume for the next one to pick up.
     if !secrets.is_empty() {
-        crate::relocation::write_secrets(&upgrade, &secrets)
+        yagra_ops::relocation::write_secrets(&upgrade, &secrets)
             .map_err(|e| ApiError::internal_with_code("relocation_failed", e.to_string()))?;
     }
-    let id = crate::upgrade::new_run_id();
-    if let Err(e) = crate::relocation::request(&upgrade, &id, &by, now, &opts) {
+    let id = yagra_ops::upgrade::new_run_id();
+    if let Err(e) = yagra_ops::relocation::request(&upgrade, &id, &by, now, &opts) {
         // The request never landed, so nothing will ever remove what was staged for it.
-        crate::relocation::clear_secrets(&upgrade);
+        yagra_ops::relocation::clear_secrets(&upgrade);
         return Err(ApiError::internal_with_code(
             "relocation_failed",
             e.to_string(),
@@ -459,13 +460,13 @@ async fn start_relocation(
     ),
 )]
 async fn download_archive(_guard: RelocationWrite, upgrade: Upgrade) -> ApiResult<Response> {
-    if crate::relocation::is_running(&upgrade) {
+    if yagra_ops::relocation::is_running(&upgrade) {
         return Err(ApiError::conflict(
             "relocation_in_progress",
             "a relocation is running; wait for it to finish before downloading the archive",
         ));
     }
-    let Some((path, size, _)) = crate::relocation::archive(&upgrade) else {
+    let Some((path, size, _)) = yagra_ops::relocation::archive(&upgrade) else {
         return Err(ApiError::not_found(
             "no_archive",
             "there is no relocation archive on this host; create one first",
@@ -510,17 +511,17 @@ async fn download_archive(_guard: RelocationWrite, upgrade: Upgrade) -> ApiResul
     ),
 )]
 async fn delete_relocation(_guard: RelocationWrite, upgrade: Upgrade) -> ApiResult<StatusCode> {
-    if crate::relocation::is_running(&upgrade) {
+    if yagra_ops::relocation::is_running(&upgrade) {
         return Err(ApiError::conflict(
             "relocation_in_progress",
             "a relocation is running; wait for it to finish",
         ));
     }
-    let removed = crate::relocation::delete_archive(&upgrade)
+    let removed = yagra_ops::relocation::delete_archive(&upgrade)
         .map_err(|e| ApiError::internal_with_code("relocation_failed", e.to_string()))?;
     // Always, even when there was no archive: this is also the button an operator presses after
     // changing their mind about a push that was refused.
-    crate::relocation::clear_secrets(&upgrade);
+    yagra_ops::relocation::clear_secrets(&upgrade);
     if removed {
         tracing::warn!("relocation archive deleted");
         Ok(StatusCode::NO_CONTENT)
@@ -550,7 +551,7 @@ async fn get_relocation_log(
     Query(q): Query<LogQuery>,
 ) -> ApiResult<Json<RelocationLog>> {
     Ok(Json(RelocationLog {
-        lines: crate::relocation::log_tail(&upgrade, q.tail.unwrap_or(DEFAULT_LOG_TAIL)),
+        lines: yagra_ops::relocation::log_tail(&upgrade, q.tail.unwrap_or(DEFAULT_LOG_TAIL)),
     }))
 }
 
@@ -685,7 +686,7 @@ mod tests {
 
     fn tempdir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("yagra-reloc-api-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join(crate::relocation::SUBDIR))
+        std::fs::create_dir_all(dir.join(yagra_ops::relocation::SUBDIR))
             .expect("make the hand-off dir");
         dir
     }
@@ -743,8 +744,8 @@ mod tests {
             );
         }
         let sec = dir
-            .join(crate::relocation::SUBDIR)
-            .join(crate::relocation::SECRET_DIR);
+            .join(yagra_ops::relocation::SUBDIR)
+            .join(yagra_ops::relocation::SECRET_DIR);
         assert_eq!(
             std::fs::read_to_string(sec.join("ssh_password")).unwrap(),
             "hunter2"
@@ -768,8 +769,8 @@ mod tests {
             r#"{{"id":"{id}","mode":"push","state":"running","stage":"backup","started_at":1}}"#
         );
         let status_path = dir
-            .join(crate::relocation::SUBDIR)
-            .join(crate::relocation::STATUS_FILE);
+            .join(yagra_ops::relocation::SUBDIR)
+            .join(yagra_ops::relocation::STATUS_FILE);
         std::fs::write(&status_path, &running).unwrap();
 
         let (status, json) = send(
@@ -828,7 +829,7 @@ mod tests {
         assert_eq!(json["error"]["code"], "no_archive");
 
         let archive = dir
-            .join(crate::relocation::SUBDIR)
+            .join(yagra_ops::relocation::SUBDIR)
             .join("yagra-relocation-20260908T000000Z.tar.gz");
         std::fs::write(&archive, b"not really a tarball").unwrap();
 

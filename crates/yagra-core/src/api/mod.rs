@@ -272,7 +272,7 @@ pub struct AdminState {
     /// Read-only PostgreSQL introspection for the support bundle (ADR-045): applied migrations,
     /// per-table sizes, connection counts. Reads nothing a normal endpoint reads, which is the
     /// point — the questions a bundle answers are the ones no page asks.
-    pub support: Arc<crate::support_bundle::SupportRepo>,
+    pub support: Arc<yagra_ops::support_bundle::SupportRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -378,7 +378,7 @@ pub struct ApiState {
     pub bus_tls: Option<Arc<crate::bus_cert::BusTlsRepo>>,
     /// Migration history and the compatibility floor it implies (ADR-050); `None` in skeleton mode.
     /// Read-only, so every core answers — there is nothing here for a standby to double-do.
-    pub upgrade: Option<Arc<crate::upgrade::UpgradeRepo>>,
+    pub upgrade: Option<Arc<yagra_ops::upgrade::UpgradeRepo>>,
     /// The bus, for the one API path that publishes on it: aligning remote pollers to this core's
     /// build (ADR-051 Inc.4). `None` in skeleton mode.
     ///
@@ -407,7 +407,7 @@ pub struct ApiState {
     /// On [`ApiState`] rather than [`AdminState`] because it is a bus seam, not a store, and because
     /// holding it here keeps the disclosure boundary visible: this is the one handle in the API
     /// state that can make another host send its log body.
-    pub poller_logs: Option<Arc<crate::poller_logs::PollerLogCollector>>,
+    pub poller_logs: Option<Arc<yagra_ops::poller_logs::PollerLogCollector>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.

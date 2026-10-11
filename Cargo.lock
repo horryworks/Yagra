@@ -5250,6 +5250,7 @@ dependencies = [
  "yagra-ingest",
  "yagra-meraki",
  "yagra-netbox",
+ "yagra-ops",
  "yagra-oui",
  "yagra-secrets",
  "yagra-telemetry",
@@ -5342,6 +5343,33 @@ dependencies = [
  "x509-parser 0.16.0",
  "yagra-base",
  "yagra-common",
+]
+
+[[package]]
+name = "yagra-ops"
+version = "0.3.48"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "flate2",
+ "futures",
+ "semver",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tar",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "uuid",
+ "yagra-auth",
+ "yagra-base",
+ "yagra-bus",
+ "yagra-common",
+ "yagra-hoststats",
+ "yagra-telemetry",
 ]
 
 [[package]]

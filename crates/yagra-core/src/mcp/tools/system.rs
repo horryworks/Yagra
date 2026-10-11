@@ -646,7 +646,7 @@ impl YagraMcp {
                     (Some(u), Some(admin)) => match crate::api::upgrade::upgrade_status(
                         u,
                         self.state.started,
-                        &crate::upgrade::poller_builds(&admin.coordinator),
+                        &yagra_ops::upgrade::poller_builds(&*admin.coordinator),
                     )
                     .await
                     {

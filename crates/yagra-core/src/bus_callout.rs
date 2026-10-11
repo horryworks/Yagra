@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use sqlx::{PgPool, Row};
 use yagra_secrets::EnvelopeCipher;
 
-use crate::atomic_file::write_atomically;
+use yagra_base::atomic_file::write_atomically;
 use yagra_base::sealed_row::{sealed_from_row, BindSealed};
 use yagra_base::secrets::Kek;
 
@@ -479,5 +479,60 @@ mod tests {
              substitutes it into the static account, and `core`, which validates a connecting \
              poller's bootstrap secret against it. Found: {live:?}"
         );
+    }
+
+    /// 🚨 The `.env` may only name the poller id as the bus username while the shipped bus can
+    /// actually validate one.
+    ///
+    /// This is bug 10 of ADR-065 Inc.6, and it was not a coding mistake — it was two artefacts
+    /// disagreeing with nobody to notice. [`yagra_ops::poller_bundle::render_env`] writes
+    /// `YAGRA_BUS_URL=tls://<id>:<token>@…` and says, in the file it writes, that "the central Auth
+    /// Callout scopes this connection's permissions on it". The only thing that can validate such a
+    /// name is that callout — and the shipped `nats-server.conf` had it commented out, with an
+    /// instruction to uncomment it that `bus-cert-init` erases on the next `up`. Every site bundle
+    /// ever issued declared a precondition nothing created, and the failure landed at the remote
+    /// end: `authentication error - User "site-poller-a"`, at a site nobody was watching.
+    ///
+    /// So the two are pinned to each other here. Comment the include out and this fails with the
+    /// consequence rather than with a diff. Beside [`CONF_FILE`] rather than beside `render_env`
+    /// since ADR-202 Inc.6: the bundle is built in `yagra-ops`, which cannot name this module.
+    #[test]
+    fn the_env_names_the_poller_id_only_because_the_shipped_bus_can_validate_one() {
+        let env =
+            yagra_ops::poller_bundle::render_env(&yagra_ops::poller_bundle::SiteBundleInput {
+                poller_id: "edge-tokyo-1",
+                pool: "tokyo",
+                host: "yagra.example.net",
+                port: 4222,
+                token: "T0kenT0kenT0ken",
+                ca_certificate: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+                compose: "name: yagra-poller\nservices:\n  poller: {}\n",
+                self_upgrade: true,
+                core_version: "0.2.12",
+                mtime: 1_786_444_236,
+            });
+        assert!(
+            env.contains("YAGRA_BUS_URL=tls://edge-tokyo-1:"),
+            "the bundle stopped naming the poller id; if that was deliberate, this pairing is what \
+             needs deciding again: {env}"
+        );
+        let conf = std::fs::read_to_string("../../docker/nats/nats-server.conf")
+            .expect("the NATS configuration ships in the core image");
+        let live: Vec<&str> = conf
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect();
+        assert!(
+            live.iter()
+                .any(|l| *l == format!("include \"{CONF_FILE}\"")),
+            "the bundle's `.env` presents the poller id as the bus username, and the shipped \
+             nats-server.conf has no live path to an `auth_callout` block that could validate it. \
+             Every site issued a bundle from this build would be refused at connect time, centrally \
+             invisible. Either restore the include, or stop writing the id as the username."
+        );
+        // The static `poller` account must NOT be what a site is pointed at: it is one shared
+        // password for the whole fleet, which is the tenant boundary this feature exists to draw.
+        assert!(!env.contains("tls://poller:"), "{env}");
     }
 }

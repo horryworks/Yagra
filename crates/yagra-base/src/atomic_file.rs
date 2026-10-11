@@ -16,6 +16,9 @@
 //! 3. set the final mode explicitly, because the create mode is narrowed by the umask;
 //! 4. rename over the destination, which is atomic within one filesystem.
 //!
+//! In `yagra-base` since ADR-202 Inc.6, so the upgrade path in `yagra-ops` writes through it too.
+//! Its whole-program check is core's `program_guards.rs::no_other_module_renames_a_temp_file_over_a_destination`.
+//!
 //! The streamed upgrade bundle (`upgrade::BundleWriter`) is not written through here: it arrives in
 //! chunks over an async body, and finishes with the same `fsync`-then-rename on its own handle.
 
@@ -34,7 +37,7 @@ fn temporary(dst: &Path) -> PathBuf {
 ///
 /// # Errors
 /// The first io error; the destination is untouched unless the rename itself succeeded.
-pub(crate) fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
+pub fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
     let tmp = temporary(dst);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -96,40 +99,6 @@ mod tests {
         assert_eq!(
             temporary(Path::new("/d/request")),
             Path::new("/d/request.tmp")
-        );
-    }
-
-    /// Files allowed to rename a file into place themselves.
-    const RENAMES_ITS_OWN: &[&str] = &["atomic_file.rs"];
-
-    /// ADR-184: nobody else in this crate publishes a file by renaming a temporary over it.
-    ///
-    /// The needle is the blocking `rename`; the upgrade bundle's async one is the declared exception
-    /// in the module doc and is spelled differently.
-    #[test]
-    fn no_other_module_renames_a_temp_file_over_a_destination() {
-        let files = crate::module_source::crate_code();
-        assert!(files.len() >= 150, "only {} files were read", files.len());
-        let needle = format!("{}::rename(", "std::fs");
-        let offenders: Vec<&str> = files
-            .iter()
-            .filter(|(name, code)| {
-                !RENAMES_ITS_OWN.contains(&name.as_str()) && code.contains(needle.as_str())
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        assert!(
-            offenders.is_empty(),
-            "{offenders:?} rename a file into place by hand. Use `atomic_file::write_atomically`, \
-             which creates it private, flushes it, and only then publishes it"
-        );
-        let callers = files
-            .iter()
-            .filter(|(_, code)| code.contains(&format!("{}(", "write_atomically")))
-            .count();
-        assert!(
-            callers >= 4,
-            "only {callers} files write through this module"
         );
     }
 }

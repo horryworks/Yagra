@@ -1261,6 +1261,25 @@ fn live_members(st: &CoordState, pool: &str, now: Instant) -> Vec<String> {
     members
 }
 
+/// The registry as `yagra-ops` reads it during an upgrade (ADR-202 Inc.6): the slice of each
+/// [`PollerView`] that decides who moves and whether they came back.
+impl yagra_ops::PollerRegistry for Coordinator {
+    fn live_pollers(&self) -> Vec<yagra_ops::LivePoller> {
+        self.poller_views(Instant::now())
+            .into_iter()
+            .map(|v| yagra_ops::LivePoller {
+                id: v.id,
+                pool: v.pool,
+                online: v.online,
+                version: v.version,
+                incarnation: v.incarnation,
+                caps: v.caps,
+                upgrade: v.upgrade,
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

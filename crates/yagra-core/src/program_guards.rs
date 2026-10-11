@@ -654,3 +654,104 @@ fn the_no_redirect_callers_still_say_so() {
     }
     assert_eq!(inspected, NEVER_FOLLOWS.len());
 }
+
+/// Files allowed to rename a file into place themselves.
+const RENAMES_ITS_OWN: &[&str] = &["yagra-base/atomic_file.rs"];
+
+/// ADR-184: nobody else in the program publishes a file by renaming a temporary over it.
+///
+/// The needle is the blocking `rename`; the upgrade bundle's async one is the declared exception
+/// in the module doc and is spelled differently.
+#[test]
+fn no_other_module_renames_a_temp_file_over_a_destination() {
+    let files = crate::module_source::program_code();
+    assert!(files.len() >= 150, "only {} files were read", files.len());
+    let needle = format!("{}::rename(", "std::fs");
+    let offenders: Vec<&str> = files
+        .iter()
+        .filter(|(name, code)| {
+            !RENAMES_ITS_OWN.contains(&name.as_str()) && code.contains(needle.as_str())
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} rename a file into place by hand. Use `yagra_base::atomic_file::write_atomically`, \
+         which creates it private, flushes it, and only then publishes it"
+    );
+    let callers = files
+        .iter()
+        .filter(|(_, code)| code.contains(&format!("{}(", "write_atomically")))
+        .count();
+    assert!(
+        callers >= 4,
+        "only {callers} files write through this module"
+    );
+}
+
+/// The allow-list must not acquire a secret by name. `YAGRA_NATS_POLLER_PASSWORD` is the one
+/// that would be easiest to add "for completeness" — it sits beside the callout account in
+/// `config.rs` and looks like configuration.
+/// ADR-184: every `YAGRA_*` variable core reads is either carried or excluded with a reason, and
+/// every `YAGRA_*` name carried is one something actually reads.
+#[test]
+fn every_variable_core_reads_is_bundled_or_excluded_with_a_reason() {
+    use std::collections::BTreeSet;
+    // The whole program: the split-out crates run inside this binary, and the KEK path and the
+    // pool size are read in `yagra-base` since ADR-202 Inc.5. In this file rather than beside the
+    // allow-list in `yagra-ops` since ADR-202 Inc.6, because that crate cannot read core.
+    let files = crate::module_source::program_code();
+    assert!(files.len() >= 150, "only {} files were read", files.len());
+    // A read is a name handed to one of the readers, or a `*_ENV` constant that is.
+    let read = regex::Regex::new(
+        r#"(?:\bvar|var_os|nonempty|positive|path|list|bool_or|env_cap)\(\s*"(YAGRA_[A-Z0-9_]+)""#,
+    )
+    .unwrap();
+    let named = regex::Regex::new(r#"const [A-Z_]+_ENV: &str = "(YAGRA_[A-Z0-9_]+)""#).unwrap();
+    let mut reads = BTreeSet::new();
+    for (_, code) in &files {
+        for re in [&read, &named] {
+            for c in re.captures_iter(code) {
+                reads.insert(c[1].to_owned());
+            }
+        }
+    }
+    assert!(reads.len() >= 40, "only {} variables found", reads.len());
+    let carried: BTreeSet<&str> = yagra_ops::support_bundle::ENV_ALLOWLIST
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    let excluded: BTreeSet<&str> = yagra_ops::support_bundle::ENV_NOT_BUNDLED
+        .iter()
+        .map(|(n, _)| *n)
+        .collect();
+    let neither: Vec<&String> = reads
+        .iter()
+        .filter(|n| !carried.contains(n.as_str()) && !excluded.contains(n.as_str()))
+        .collect();
+    assert!(
+        neither.is_empty(),
+        "{neither:?} are read by core but neither carried in a support bundle nor excluded \
+         with a reason — add each to `yagra_ops::support_bundle::ENV_ALLOWLIST` or `ENV_NOT_BUNDLED`"
+    );
+    // The other direction. The telemetry crate reads the log and trace settings for every
+    // binary, so its names count as read.
+    let telemetry = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-telemetry/src/lib.rs"),
+    )
+    .expect("yagra-telemetry is readable");
+    let stale: Vec<&&str> = carried
+        .iter()
+        .chain(excluded.iter())
+        .filter(|n| n.starts_with("YAGRA_"))
+        .filter(|n| !reads.contains(**n) && !telemetry.contains(**n))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "{stale:?} are listed but nothing reads them any more"
+    );
+    assert!(
+        carried.is_disjoint(&excluded),
+        "a name is both carried and excluded"
+    );
+}

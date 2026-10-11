@@ -870,6 +870,14 @@ pub(crate) async fn reconcile_exemptions(
     Ok(changed)
 }
 
+/// What settling a finished upgrade closes (ADR-050 decision 12), as `yagra-ops` reaches it.
+#[async_trait::async_trait]
+impl yagra_ops::UpgradeWindows for MaintenanceRepo {
+    async fn end_upgrade_windows(&self) -> anyhow::Result<u64> {
+        MaintenanceRepo::end_upgrade_windows(self).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

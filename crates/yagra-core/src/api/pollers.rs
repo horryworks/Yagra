@@ -23,7 +23,6 @@ use super::{AdminState, ApiState};
 use crate::coordinator::PollerView;
 use crate::pollers::PollerRow;
 use crate::poolres::PoolSource;
-use crate::upgrade::PollerUpgradeProgress;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -34,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use uuid::Uuid;
 use yagra_common::{HostSample, NodeId, NodeKind};
+use yagra_ops::upgrade::PollerUpgradeProgress;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -976,7 +976,7 @@ async fn issue_poller_token(
             "this core image ships no poller composition",
         )
     })?;
-    let bytes = crate::poller_bundle::build(&crate::poller_bundle::SiteBundleInput {
+    let bytes = yagra_ops::poller_bundle::build(&yagra_ops::poller_bundle::SiteBundleInput {
         poller_id: &id,
         pool,
         host: &host,
@@ -1014,7 +1014,7 @@ async fn issue_poller_token(
                 axum::http::header::CONTENT_DISPOSITION,
                 format!(
                     "attachment; filename=\"{}\"",
-                    crate::poller_bundle::file_name(&id)
+                    yagra_ops::poller_bundle::file_name(&id)
                 ),
             ),
         ],

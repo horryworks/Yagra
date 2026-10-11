@@ -38,9 +38,9 @@ use utoipa::OpenApi;
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Caller, Leader, RequireManageSystem, Upgrade};
 use super::ApiState;
-use crate::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
+use yagra_ops::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
 
-use crate::upgrade::MAINTENANCE_WINDOW_SECS;
+use yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
@@ -207,7 +207,7 @@ pub(crate) struct UpgradeStatusResponse {
     available: Option<AvailableVersions>,
     /// The moves this deployment could make, each with its direction and whether it is allowed.
     /// Excludes the running version. Empty when the updater has found nothing.
-    offers: Vec<crate::upgrade::ReleaseOffer>,
+    offers: Vec<yagra_ops::upgrade::ReleaseOffer>,
     /// The most recent run, finished or in flight; `null` when none has ever been requested.
     last_run: Option<RunStatus>,
     /// Everything this deployment is made of — core and every poller — with what each runs and
@@ -223,7 +223,7 @@ pub(crate) struct UpgradeStatusResponse {
     /// co-located poller from a remote one. That is now a property of a *row* (`co_located`), so a
     /// deployment with no central updater still gets a full list — and still gets the button, since
     /// aligning remote sites touches nothing on this host.
-    components: Vec<crate::upgrade::ComponentRow>,
+    components: Vec<yagra_ops::upgrade::ComponentRow>,
     /// The poller convergence this core is running, or the last one it ran; `null` when it has run
     /// none (ADR-051 Inc.6).
     ///
@@ -237,7 +237,7 @@ pub(crate) struct UpgradeStatusResponse {
     /// vanish from the list and the deployment reported itself aligned.
     ///
     /// ⚠️ In memory, so a core restart loses it — and under HA only the leader has one.
-    poller_convergence: Option<crate::poller_upgrade::Convergence>,
+    poller_convergence: Option<yagra_ops::poller_upgrade::Convergence>,
 }
 
 /// A request to move this deployment to a particular release.
@@ -318,7 +318,7 @@ async fn get_upgrade(
     upgrade_status(
         &upgrade,
         st.started,
-        &crate::upgrade::poller_builds(&admin.coordinator),
+        &yagra_ops::upgrade::poller_builds(&*admin.coordinator),
     )
     .await
     .map(Json)
@@ -337,8 +337,8 @@ async fn get_upgrade(
 /// about exactly the same container (ADR-121): it is one sidecar, and two screens describing its
 /// health from two hand-written copies would eventually describe it differently.
 pub(crate) fn updater_info(
-    upgrade: &crate::upgrade::UpgradeRepo,
-    beat: Option<&crate::upgrade::UpdaterHeartbeat>,
+    upgrade: &yagra_ops::upgrade::UpgradeRepo,
+    beat: Option<&yagra_ops::upgrade::UpdaterHeartbeat>,
     fresh: bool,
 ) -> UpdaterInfo {
     UpdaterInfo {
@@ -362,25 +362,25 @@ pub(crate) fn updater_info(
 /// which is what lets `mcp/folded.rs` check this branch's schema against the published contract
 /// instead of against a hand-built canary (ADR-042).
 pub(crate) async fn upgrade_status(
-    upgrade: &crate::upgrade::UpgradeRepo,
+    upgrade: &yagra_ops::upgrade::UpgradeRepo,
     started: std::time::SystemTime,
-    fleet: &[crate::upgrade::PollerBuild],
+    fleet: &[yagra_ops::upgrade::PollerBuild],
 ) -> anyhow::Result<UpgradeStatusResponse> {
     let schema = upgrade.schema_state().await?;
     let switched_on = upgrade.enabled().await;
     let available = upgrade.available();
-    let p = crate::support_bundle::provenance(started);
+    let p = yagra_ops::support_bundle::provenance(started);
     let beat = upgrade.heartbeat();
     let now = super::util::now_unix_s();
     let fresh = beat.as_ref().is_some_and(|h| {
-        crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
+        yagra_ops::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
     // Whether the central updater has named the pollers in its own compose project. `None` is not
     // "no co-located poller" — it is "core cannot tell", which is why co-location is a property of a
     // row rather than a shape of the whole answer (ADR-051 Inc.6).
     let local = beat.as_ref().and_then(|h| h.local_pollers.as_ref());
     let mechanism_ready = beat.is_some() && fresh && switched_on;
-    let components = crate::upgrade::components(
+    let components = yagra_ops::upgrade::components(
         fleet,
         local.map(Vec::as_slice),
         p.core_version,
@@ -398,7 +398,7 @@ pub(crate) async fn upgrade_status(
             uptime_seconds: p.uptime_seconds,
         },
         available: available.clone(),
-        offers: crate::upgrade::release_offers(
+        offers: yagra_ops::upgrade::release_offers(
             available.as_ref().map_or(&[], |a| a.releases.as_slice()),
             p.core_version,
             schema.compat.as_ref(),
@@ -407,12 +407,12 @@ pub(crate) async fn upgrade_status(
             // guessing (see `PollerUpgradePlan`).
             &components
                 .iter()
-                .filter(|r| r.kind == crate::upgrade::ComponentKind::Poller && !r.upgradable)
+                .filter(|r| r.kind == yagra_ops::upgrade::ComponentKind::Poller && !r.upgradable)
                 .filter_map(|r| r.version.clone())
                 .collect::<Vec<_>>(),
         ),
         components,
-        poller_convergence: crate::poller_upgrade::snapshot(),
+        poller_convergence: yagra_ops::poller_upgrade::snapshot(),
         schema,
         last_run: upgrade.last_run(),
     })
@@ -444,7 +444,7 @@ async fn apply_upgrade(
     let tag = body.target_tag.trim();
     let now = super::util::now_unix_s();
     let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
-    let id = crate::upgrade::new_run_id();
+    let id = yagra_ops::upgrade::new_run_id();
 
     if !body.include_core {
         // Pollers only. Nothing on this host restarts, so the central updater is not needed — and
@@ -535,7 +535,7 @@ async fn check_upgrades(_auth: UpgradeCheck, upgrade: Upgrade) -> ApiResult<Stat
     upgrade
         .request(
             Command::Refresh,
-            &crate::upgrade::new_run_id(),
+            &yagra_ops::upgrade::new_run_id(),
             None,
             "",
             now,
@@ -564,7 +564,7 @@ pub(crate) struct AlignAccepted {
     /// pollers carry belongs to an earlier run and echoing it would put a stale "installing" in the
     /// acknowledgement of a command that has only just been published. Poll
     /// `GET /api/v1/system/upgrade` for how each site is getting on.
-    pollers: Vec<crate::upgrade::PollerLag>,
+    pollers: Vec<yagra_ops::upgrade::PollerLag>,
     /// Pools that will have no live poller for the length of one recreate. Named so an operator
     /// reads it before the alert does; not a refusal (ADR-051 decision 13).
     dark_pools: Vec<String>,
@@ -610,7 +610,7 @@ async fn align_pollers(
         )
     })?;
     let tag = own_release_tag();
-    let id = crate::upgrade::new_run_id();
+    let id = yagra_ops::upgrade::new_run_id();
     let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
     // No selection: this route is "bring everything that can move onto my build", which is what it
     // has always meant. `POST /system/upgrade` with `include_core: false` is the same call with one,
@@ -629,7 +629,7 @@ async fn align_pollers(
 
 /// What a convergence was started with, for whichever route asked for it.
 struct Converging {
-    pollers: Vec<crate::upgrade::PollerLag>,
+    pollers: Vec<yagra_ops::upgrade::PollerLag>,
     dark_pools: Vec<String>,
 }
 
@@ -643,7 +643,7 @@ struct Converging {
 ///
 /// `selected` is `None` for "every poller that can move". A poller already on `tag` is never in the
 /// set whatever the caller asked for: recreating a container for no version change is exactly what
-/// a second press would do, and [`crate::poller_upgrade::try_begin`] refuses that for the same
+/// a second press would do, and [`yagra_ops::poller_upgrade::try_begin`] refuses that for the same
 /// reason one layer down.
 async fn start_convergence(
     admin: &Admin,
@@ -657,19 +657,19 @@ async fn start_convergence(
     // this is where a tag becomes a bus message: every site validates it with the same rule and
     // drops what it cannot parse, so a malformed one buys an accepted run that reports progress
     // and moves nothing — the most expensive way for this to fail.
-    if !crate::upgrade::is_valid_tag(tag) {
+    if !yagra_ops::upgrade::is_valid_tag(tag) {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "not a release tag; a poller is moved to a published release, not to a bare version",
         ));
     }
-    let fleet = crate::upgrade::poller_builds(&admin.coordinator);
+    let fleet = yagra_ops::upgrade::poller_builds(&*admin.coordinator);
     // `local` is `None` here rather than the updater's list, and that is not a shortcut: this route
     // must work on a deployment with no central updater at all, and a co-located poller does not
     // advertise `CAP_SELF_UPGRADE` (only core is given `YAGRA_UPGRADE_DIR`), so `movable_to`
     // excludes it either way.
-    let rows = crate::upgrade::components(&fleet, None, env!("CARGO_PKG_VERSION"), true);
-    let chosen = crate::upgrade::movable_to(&rows, tag, selected);
+    let rows = yagra_ops::upgrade::components(&fleet, None, env!("CARGO_PKG_VERSION"), true);
+    let chosen = yagra_ops::upgrade::movable_to(&rows, tag, selected);
     if chosen.is_empty() {
         // A 409 rather than an empty 202, because "nothing to do" and "done" are answers a page
         // must render differently — and because a 202 here would leave the operator watching for a
@@ -681,7 +681,7 @@ async fn start_convergence(
     }
     // One lock with the post-upgrade convergence (ADR-051 Inc.4 decision 17). Held by the spawned
     // task, so it is released when that task ends however it ends.
-    let lock = crate::poller_upgrade::try_begin().ok_or_else(|| {
+    let lock = yagra_ops::poller_upgrade::try_begin().ok_or_else(|| {
         ApiError::conflict(
             "convergence_in_flight",
             "a poller upgrade is already running; wait for it to finish",
@@ -693,7 +693,7 @@ async fn start_convergence(
         // that have not arrived yet at this point in the request.
         pollers: chosen
             .iter()
-            .map(|r| crate::upgrade::PollerLag {
+            .map(|r| yagra_ops::upgrade::PollerLag {
                 id: r.id.clone(),
                 version: r.version.clone(),
             })
@@ -701,11 +701,11 @@ async fn start_convergence(
         // Computed from what was actually chosen, not from everything that could move: a pool with
         // two pollers where only one was ticked does not go dark, and a warning that does not
         // follow the checkboxes reads the same when it matters as when it does not.
-        dark_pools: crate::upgrade::dark_pools(&fleet, &ids),
+        dark_pools: yagra_ops::upgrade::dark_pools(&fleet, &ids),
     };
     let chosen_ids: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
-    let targets = crate::poller_upgrade::targets(&admin.coordinator, &chosen_ids);
-    let run = crate::poller_upgrade::Run {
+    let targets = yagra_ops::poller_upgrade::targets(&*admin.coordinator, &chosen_ids);
+    let run = yagra_ops::poller_upgrade::Run {
         bus,
         coordinator: admin.coordinator.clone(),
         audit: admin.audit.clone(),
@@ -723,7 +723,7 @@ async fn start_convergence(
     // Nobody is absent here: core has been running all along, so `movable_to` only ever names a
     // poller that is connected now (ADR-051 Inc.8 is about the moment right after a restart).
     tokio::spawn(async move {
-        crate::poller_upgrade::converge(run, targets, Vec::new(), lock).await;
+        yagra_ops::poller_upgrade::converge(run, targets, Vec::new(), lock).await;
     });
     Ok(ack)
 }
@@ -804,7 +804,7 @@ async fn upload_bundle(
         // A full Docker filesystem stops PostgreSQL, so this refusal protects the deployment rather
         // than the upload. Unmeasurable free space is not treated as no space.
         if let Some(free) = upgrade.free_bytes() {
-            let need = crate::upgrade::bundle_space_needed(len);
+            let need = yagra_ops::upgrade::bundle_space_needed(len);
             if free < need {
                 tracing::warn!(
                     free,
@@ -828,7 +828,7 @@ async fn upload_bundle(
     // so every archive still on disk is abandoned, and this is about to write another gigabyte.
     upgrade.prune_stale_bundles();
 
-    let id = crate::upgrade::new_run_id();
+    let id = yagra_ops::upgrade::new_run_id();
     let mut sink = upgrade.begin_bundle(&id).await.map_err(bundle_error)?;
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
@@ -950,11 +950,11 @@ fn bundle_error(e: BundleError) -> ApiError {
 /// is validated before anything acts on it — and because a second copy is how one of them ends up
 /// missing the 409 (extensibility.md §3).
 async fn preflight(
-    upgrade: &crate::upgrade::UpgradeRepo,
+    upgrade: &yagra_ops::upgrade::UpgradeRepo,
     tag: &str,
     now: i64,
 ) -> Result<(), ApiError> {
-    if !crate::upgrade::is_valid_tag(tag) {
+    if !yagra_ops::upgrade::is_valid_tag(tag) {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "target_tag must be a published release tag such as v0.2.2",
@@ -975,7 +975,7 @@ async fn preflight(
 /// message. Re-deriving them there would be four chances to say something less useful, plus the 409
 /// that stops two concurrent recreations of the same stack.
 pub(super) async fn reachable(
-    upgrade: &crate::upgrade::UpgradeRepo,
+    upgrade: &yagra_ops::upgrade::UpgradeRepo,
     now: i64,
 ) -> Result<(), ApiError> {
     // First, because it outranks every check below it. The switch defaults to on, so a deployment
@@ -996,7 +996,7 @@ pub(super) async fn reachable(
         ));
     }
     let ready = upgrade.heartbeat().is_some_and(|h| {
-        crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
+        yagra_ops::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
     if !ready {
         return Err(ApiError::unavailable(
@@ -1016,7 +1016,7 @@ pub(super) async fn reachable(
     // deployment too — it stops the event and flow stores to copy them — and it runs in a
     // container an `up -d --remove-orphans` would kill. The relocation edge refuses the mirror
     // case, so neither can start on top of the other.
-    if crate::relocation::is_running(upgrade) {
+    if yagra_ops::relocation::is_running(upgrade) {
         return Err(ApiError::conflict(
             "relocation_in_progress",
             "a relocation is running; wait for it to finish",
@@ -1052,10 +1052,10 @@ pub(super) struct Handoff {
 ///
 /// Nothing here closes the window on success — this process will not be alive to. The core that
 /// comes back does that once the run reports an outcome
-/// ([`crate::upgrade::UpgradeRepo::settle_finished_run`]); the `ends_at` written here is the
+/// ([`yagra_ops::upgrade::UpgradeRepo::settle_finished_run`]); the `ends_at` written here is the
 /// backstop for the run that never reports at all.
 pub(super) async fn open_window_then_request(
-    upgrade: Arc<crate::upgrade::UpgradeRepo>,
+    upgrade: Arc<yagra_ops::upgrade::UpgradeRepo>,
     maintenance: Arc<crate::alerts::maintenance::MaintenanceRepo>,
     handoff: Handoff,
 ) -> Result<Option<uuid::Uuid>, ApiError> {
@@ -1079,7 +1079,7 @@ pub(super) async fn open_window_then_request(
 /// **written**. If the write fails the window is closed at once — before ADR-172 it stayed open
 /// for its fifteen minutes behind a 500.
 pub(super) async fn hand_off(
-    upgrade: Arc<crate::upgrade::UpgradeRepo>,
+    upgrade: Arc<yagra_ops::upgrade::UpgradeRepo>,
     maintenance: Arc<crate::alerts::maintenance::MaintenanceRepo>,
     h: Handoff,
 ) -> Result<Option<uuid::Uuid>, ApiError> {
@@ -1127,7 +1127,7 @@ pub(super) async fn hand_off(
 
 /// The upgrade's hand-off: [`open_window_then_request`] with its name and its log line.
 async fn dispatch(
-    upgrade: &Arc<crate::upgrade::UpgradeRepo>,
+    upgrade: &Arc<yagra_ops::upgrade::UpgradeRepo>,
     admin: &Admin,
     command: Command,
     id: &str,
@@ -1218,23 +1218,23 @@ mod tests {
     #[test]
     fn the_tag_a_poller_is_sent_is_one_a_poller_accepts() {
         assert!(
-            crate::upgrade::is_valid_tag(&super::own_release_tag()),
+            yagra_ops::upgrade::is_valid_tag(&super::own_release_tag()),
             "both doors send this, and every site checks it with this same rule"
         );
         // The needle that would have caught the bug: what the WebUI actually holds is not a tag.
         assert!(
-            !crate::upgrade::is_valid_tag(env!("CARGO_PKG_VERSION")),
+            !yagra_ops::upgrade::is_valid_tag(env!("CARGO_PKG_VERSION")),
             "a running version is not a release tag — forwarding one is the failure this pins"
         );
     }
 
     use super::super::tests_support::{private_state, public_state};
     use super::ApiState;
-    use crate::upgrade::BundleError;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
+    use yagra_ops::upgrade::BundleError;
 
     /// Every route this module serves, with a body that would be valid if the caller got that far.
     ///
@@ -1447,11 +1447,15 @@ mod tests {
     /// reaper, so every caller has to be a `#[tokio::test]`. Nothing here reaches the database:
     /// `installed()` reads a field, and `reachable()` refuses before the one query it would
     /// otherwise run.
-    fn repo(dir: Option<std::path::PathBuf>) -> crate::upgrade::UpgradeRepo {
+    fn repo(dir: Option<std::path::PathBuf>) -> yagra_ops::upgrade::UpgradeRepo {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://127.0.0.1:1/yagra-test-no-such-db")
             .expect("a lazy handle needs no server");
-        crate::upgrade::UpgradeRepo::new(pool, dir, crate::upgrade::DEFAULT_BUNDLE_MAX_BYTES)
+        yagra_ops::upgrade::UpgradeRepo::new(
+            pool,
+            dir,
+            yagra_ops::upgrade::DEFAULT_BUNDLE_MAX_BYTES,
+        )
     }
 
     /// The hand-off directory is what says this deployment has a mechanism at all.
@@ -1524,8 +1528,8 @@ mod tests {
 mod hand_off_tests {
     use super::{hand_off, Handoff};
     use crate::alerts::maintenance::MaintenanceRepo;
-    use crate::upgrade::{Command, UpgradeRepo};
     use std::sync::Arc;
+    use yagra_ops::upgrade::{Command, UpgradeRepo};
 
     fn bus_change(id: &str) -> Handoff {
         Handoff {
@@ -1552,7 +1556,7 @@ mod hand_off_tests {
         let missing = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
         let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(missing), 0));
 
-        let id = crate::upgrade::new_run_id();
+        let id = yagra_ops::upgrade::new_run_id();
         let refused = hand_off(upgrade, Arc::clone(&maintenance), bus_change(&id)).await;
         assert!(refused.is_err(), "the write failed, so the hand-off failed");
 
@@ -1576,7 +1580,7 @@ mod hand_off_tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(dir.clone()), 0));
 
-        let id = crate::upgrade::new_run_id();
+        let id = yagra_ops::upgrade::new_run_id();
         let window = hand_off(upgrade, Arc::clone(&maintenance), bus_change(&id))
             .await
             .expect("hand-off");
@@ -1600,7 +1604,7 @@ mod hand_off_tests {
         let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
         let dir = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
         let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(dir), 0));
-        let mut bad = bus_change(&crate::upgrade::new_run_id());
+        let mut bad = bus_change(&yagra_ops::upgrade::new_run_id());
         bad.extra = vec![("bus_mode".to_owned(), "on\nforged=1".to_owned())];
 
         assert!(hand_off(upgrade, Arc::clone(&maintenance), bad)

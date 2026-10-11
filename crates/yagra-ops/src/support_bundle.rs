@@ -4,7 +4,7 @@
 //!
 //! # Why this exists rather than a host-side script
 //!
-//! The obvious collector for this data is a shell script beside [`crate::config_bundle`]'s sibling
+//! The obvious collector for this data is a shell script beside core's `config_bundle`'s sibling
 //! `scripts/yagra-backup.sh`: it can read `docker logs`, `df`, and every container's environment.
 //! It is also useless on the deployment this feature is *for* — a closed network where the operator
 //! has a browser and nothing else. So the collector lives inside core and is reached over HTTP.
@@ -49,7 +49,7 @@ use std::io::Write;
 use std::time::SystemTime;
 
 /// Names the archive so a file on disk is identifiable without the tool that wrote it — the same
-/// reasoning as [`crate::config_bundle::BUNDLE_FORMAT`].
+/// reasoning as core's `config_bundle::BUNDLE_FORMAT`.
 pub const BUNDLE_FORMAT: &str = "yagra.support-bundle";
 /// Bundle schema version. Bump when the file layout changes shape, not when a section is added.
 pub const BUNDLE_VERSION: u32 = 1;
@@ -118,7 +118,7 @@ pub enum EnvShape {
 ///
 /// Note what is **absent on purpose**: `YAGRA_NATS_POLLER_PASSWORD` (a secret outright), and the
 /// contents of anything a `*_FILE` variable points at (the KEK and the session signing key never
-/// leave the deployment — [`crate::config_bundle`] holds the same line).
+/// leave the deployment — core's `config_bundle` holds the same line).
 pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     // Identity and topology of this process
     ("YAGRA_CORE_ID", EnvShape::Plain),
@@ -193,7 +193,7 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
 /// fails on one in neither, so "is this safe to ship?" is asked when the variable is added rather
 /// than when a support engineer notices it missing (ADR-184). Test-only: nothing at run time needs
 /// the list of what is left out, only the check that everything was decided.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub const ENV_NOT_BUNDLED: &[(&str, &str)] = &[
     ("YAGRA_ADMIN_PASSWORD", "a password"),
     ("YAGRA_NATS_POLLER_PASSWORD", "a password"),
@@ -285,7 +285,7 @@ impl SecretScan {
 
     /// A scan with no literals — the shape a deployment with no secrets in its environment gets,
     /// and what the unit tests use so they exercise the patterns without touching process state.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     #[must_use]
     pub fn patterns_only() -> Self {
         Self {
@@ -573,16 +573,16 @@ impl BundleBuilder {
     /// The paths added so far. Test-only: a collector's job is to decide *what goes in*, and
     /// asserting that through `finish` would mean gzipping and re-parsing a tar to learn a
     /// filename.
-    #[cfg(test)]
-    pub(crate) fn paths(&self) -> Vec<&str> {
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn paths(&self) -> Vec<&str> {
         self.files.iter().map(|f| f.path.as_str()).collect()
     }
 
     /// What has been declared missing so far, as `(what, why)`. Test-only, and the counterpart to
     /// [`Self::paths`]: for this bundle an omission is a *result*, not an absence, so a collector
     /// that records none is as wrong as one that records the wrong file.
-    #[cfg(test)]
-    pub(crate) fn omissions(&self) -> Vec<(&str, &str)> {
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn omissions(&self) -> Vec<(&str, &str)> {
         self.omitted
             .iter()
             .map(|o| (o.what.as_str(), o.why.as_str()))
@@ -1119,66 +1119,6 @@ mod tests {
             description: "a section".to_owned(),
         });
         readme_text(&m)
-    }
-
-    /// The allow-list must not acquire a secret by name. `YAGRA_NATS_POLLER_PASSWORD` is the one
-    /// that would be easiest to add "for completeness" — it sits beside the callout account in
-    /// `config.rs` and looks like configuration.
-    /// ADR-184: every `YAGRA_*` variable core reads is either carried or excluded with a reason, and
-    /// every `YAGRA_*` name carried is one something actually reads.
-    #[test]
-    fn every_variable_core_reads_is_bundled_or_excluded_with_a_reason() {
-        use std::collections::BTreeSet;
-        // The whole program: `yagra-base` runs inside this binary, and the KEK path and the pool
-        // size are read there since ADR-202 Inc.5.
-        let files = crate::module_source::program_code();
-        assert!(files.len() >= 150, "only {} files were read", files.len());
-        // A read is a name handed to one of the readers, or a `*_ENV` constant that is.
-        let read = regex::Regex::new(
-            r#"(?:\bvar|var_os|nonempty|positive|path|list|bool_or|env_cap)\(\s*"(YAGRA_[A-Z0-9_]+)""#,
-        )
-        .unwrap();
-        let named = regex::Regex::new(r#"const [A-Z_]+_ENV: &str = "(YAGRA_[A-Z0-9_]+)""#).unwrap();
-        let mut reads = BTreeSet::new();
-        for (_, code) in &files {
-            for re in [&read, &named] {
-                for c in re.captures_iter(code) {
-                    reads.insert(c[1].to_owned());
-                }
-            }
-        }
-        assert!(reads.len() >= 40, "only {} variables found", reads.len());
-        let carried: BTreeSet<&str> = ENV_ALLOWLIST.iter().map(|(n, _)| *n).collect();
-        let excluded: BTreeSet<&str> = ENV_NOT_BUNDLED.iter().map(|(n, _)| *n).collect();
-        let neither: Vec<&String> = reads
-            .iter()
-            .filter(|n| !carried.contains(n.as_str()) && !excluded.contains(n.as_str()))
-            .collect();
-        assert!(
-            neither.is_empty(),
-            "{neither:?} are read by core but neither carried in a support bundle nor excluded \
-             with a reason — add each to ENV_ALLOWLIST or ENV_NOT_BUNDLED"
-        );
-        // The other direction. The telemetry crate reads the log and trace settings for every
-        // binary, so its names count as read.
-        let telemetry = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-telemetry/src/lib.rs"),
-        )
-        .expect("yagra-telemetry is readable");
-        let stale: Vec<&&str> = carried
-            .iter()
-            .chain(excluded.iter())
-            .filter(|n| n.starts_with("YAGRA_"))
-            .filter(|n| !reads.contains(**n) && !telemetry.contains(**n))
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "{stale:?} are listed but nothing reads them any more"
-        );
-        assert!(
-            carried.is_disjoint(&excluded),
-            "a name is both carried and excluded"
-        );
     }
 
     #[test]

@@ -27,6 +27,8 @@ yagra-netbox = { path = "../yagra-netbox" }
 yagra-auth = { path = "../yagra-auth" }
 # The Cisco Meraki integration (ADR-164/169), its own crate since ADR-202 Inc.6.
 yagra-meraki = { path = "../yagra-meraki" }
+# Upgrades, relocation, the support and site bundles, poller logs; its own crate since ADR-202 Inc.6.
+yagra-ops = { path = "../yagra-ops" }
 yagra-discovery = { path = "../yagra-discovery" }
 # Forwarding filters + wire renderers for the passive-data tee (ADR-034).
 yagra-forward = { path = "../yagra-forward" }
@@ -133,4 +135,5 @@ yagra-alert = { path = "../yagra-alert", features = ["test-util"] }
 # The real-PostgreSQL fixtures, the table vocabulary and the test-only reads (ADR-202 Inc.5). Same
 # arrangement as the two lines above: a dev-dependency, so a release build carries none of it.
 yagra-base = { path = "../yagra-base", features = ["test-util"] }
+yagra-ops = { path = "../yagra-ops", features = ["test-util"] }
 tower = { workspace = true }

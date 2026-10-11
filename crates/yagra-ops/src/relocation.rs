@@ -441,7 +441,7 @@ pub fn write_secrets(repo: &UpgradeRepo, secrets: &SshSecrets) -> anyhow::Result
 }
 
 /// [`write_secrets`] against a directory, so it is testable without a database.
-pub(crate) fn write_secrets_in(dir: &Path, secrets: &SshSecrets) -> anyhow::Result<()> {
+pub fn write_secrets_in(dir: &Path, secrets: &SshSecrets) -> anyhow::Result<()> {
     let sec = dir.join(SECRET_DIR);
     let _ = std::fs::remove_dir_all(&sec);
     std::fs::create_dir_all(&sec)?;

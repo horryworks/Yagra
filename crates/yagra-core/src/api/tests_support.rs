@@ -483,7 +483,7 @@ async fn live_state_with(
         forward_handle: crate::forward::prepare(forward_store).0,
         llm: llm_repo.clone(),
         config_bundle: Arc::new(crate::config_bundle::ConfigBundleRepo::new(pool.clone())),
-        support: Arc::new(crate::support_bundle::SupportRepo::new(pool.clone())),
+        support: Arc::new(yagra_ops::support_bundle::SupportRepo::new(pool.clone())),
     });
 
     ApiState {
@@ -525,12 +525,12 @@ async fn live_state_with(
         // With a directory this is a real hand-off volume a write can be accepted into; without
         // one it is `open`'s environment read, which in the test binary means no mechanism at all.
         upgrade: Some(match upgrade_dir {
-            Some(dir) => Arc::new(crate::upgrade::UpgradeRepo::new(
+            Some(dir) => Arc::new(yagra_ops::upgrade::UpgradeRepo::new(
                 pool,
                 Some(dir),
-                crate::upgrade::DEFAULT_BUNDLE_MAX_BYTES,
+                yagra_ops::upgrade::DEFAULT_BUNDLE_MAX_BYTES,
             )),
-            None => crate::upgrade::open(pool),
+            None => yagra_ops::upgrade::open(pool),
         }),
         upgrade_bus: Some(upgrade_bus),
         // No Prometheus recorder in the test binary, and no bus collector: both are recorded as

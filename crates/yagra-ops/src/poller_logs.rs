@@ -384,7 +384,7 @@ fn assemble(pending: HashMap<String, Pending>) -> RemoteLogs {
 /// A failed subscription is **not** fatal, in keeping with "it cannot fail a bundle" above: the
 /// bundle degrades to "no remote poller logs", which it already reports by name, and nothing else
 /// in core depends on this subscription.
-pub(crate) async fn start(
+pub async fn start(
     bus: Arc<yagra_bus::NatsBus>,
     shutdown: &yagra_telemetry::CancellationToken,
 ) -> Arc<PollerLogCollector> {

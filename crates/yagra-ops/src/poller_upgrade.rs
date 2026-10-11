@@ -28,7 +28,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{PollerUpgradeMsg, UpgradeBus, UpgradeStep};
 
-use crate::coordinator::Coordinator;
+use crate::PollerRegistry;
 
 /// How long to wait for one poller to come back on the target version before giving up on its pool.
 ///
@@ -325,7 +325,7 @@ pub struct Run {
     /// Where commands go.
     pub bus: Arc<dyn UpgradeBus>,
     /// Where the answer comes back from: the live poller registry.
-    pub coordinator: Arc<Coordinator>,
+    pub coordinator: Arc<dyn PollerRegistry>,
     /// Where each poller's outcome is recorded, one row apiece.
     pub audit: Arc<yagra_auth::audit::AuditRepo>,
     /// Release every poller is being moved to.
@@ -352,9 +352,9 @@ pub struct Absent {
 /// `upgrade::movable_to`; this turns that answer into the version and incarnation a return is judged
 /// against. An id the registry does not hold is left out, and neither caller passes one.
 #[must_use]
-pub fn targets(coordinator: &Coordinator, ids: &[String]) -> Vec<Target> {
+pub fn targets(coordinator: &dyn PollerRegistry, ids: &[String]) -> Vec<Target> {
     coordinator
-        .poller_views(std::time::Instant::now())
+        .live_pollers()
         .into_iter()
         .filter(|v| ids.contains(&v.id))
         .map(|v| Target {
@@ -485,7 +485,7 @@ async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
     // not going anywhere, so they are exactly the ones that decide whether this costs coverage.
     let live_in_pool = run
         .coordinator
-        .poller_views(std::time::Instant::now())
+        .live_pollers()
         .into_iter()
         .filter(|v| v.online && v.pool == pool)
         .count();
@@ -619,7 +619,7 @@ async fn wait_for_prefetch(
     // `false` here, which is the right answer: nothing is coming from a site that is not on the bus.
     let will_report = run
         .coordinator
-        .poller_views(std::time::Instant::now())
+        .live_pollers()
         .into_iter()
         .find(|v| v.id == target.id)
         .is_some_and(|v| v.caps.iter().any(|c| c == yagra_bus::CAP_UPGRADE_REPORT));
@@ -635,7 +635,7 @@ async fn wait_for_prefetch(
     loop {
         let report = run
             .coordinator
-            .poller_views(std::time::Instant::now())
+            .live_pollers()
             .into_iter()
             .find(|v| v.id == target.id)
             .and_then(|v| v.upgrade);
@@ -672,12 +672,15 @@ async fn wait_for_prefetch(
 }
 
 /// Wait for `target` to reappear on `tag`. `false` on timeout.
-async fn wait_for_return(coordinator: &Arc<Coordinator>, target: &Target, tag: &str) -> bool {
+async fn wait_for_return(
+    coordinator: &Arc<dyn PollerRegistry>,
+    target: &Target,
+    tag: &str,
+) -> bool {
     let deadline = tokio::time::Instant::now() + RETURN_TIMEOUT;
     loop {
-        let now = std::time::Instant::now();
         if let Some(v) = coordinator
-            .poller_views(now)
+            .live_pollers()
             .into_iter()
             .find(|v| v.id == target.id)
         {

@@ -557,7 +557,7 @@ impl PollerRepo {
 /// caller's to log, never fatal — this is preparation, not the change itself.
 pub async fn register_local(
     pollers: &PollerRepo,
-    upgrade: &crate::upgrade::UpgradeRepo,
+    upgrade: &yagra_ops::upgrade::UpgradeRepo,
 ) -> anyhow::Result<Option<(u64, usize)>> {
     let mut ids: Vec<String> = crate::config::local_poller_id().into_iter().collect();
     if let Some(from_updater) = upgrade.heartbeat().and_then(|h| h.local_pollers) {
@@ -581,6 +581,20 @@ fn ms_to_rfc3339(ms: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(ms)
         .map(|d| d.to_rfc3339())
         .unwrap_or_default()
+}
+
+/// The inventory as `yagra-ops` reads it: which pool a poller that has not reconnected last served
+/// (ADR-051 Inc.8).
+#[async_trait::async_trait]
+impl yagra_ops::PollerInventory for PollerRepo {
+    async fn pools_by_id(&self) -> anyhow::Result<Vec<(String, String)>> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .map(|r| (r.id, r.pool))
+            .collect())
+    }
 }
 
 #[cfg(test)]

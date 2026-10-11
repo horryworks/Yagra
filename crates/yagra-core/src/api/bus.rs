@@ -40,7 +40,7 @@ use super::extract::{Admin, BusTls, Caller, RequireManageSystem, Upgrade};
 use super::ApiState;
 use crate::bus_cert::BusTlsView;
 use crate::server_cert::CertError;
-use crate::upgrade::Command;
+use yagra_ops::upgrade::Command;
 
 #[derive(OpenApi)]
 #[openapi(paths(get_bus, regenerate_bus_cert, set_bus_remote))]
@@ -347,7 +347,7 @@ async fn set_bus_remote(
 /// the control from this, and refusing with a message is the `PUT`'s job. `Option` because a
 /// deployment with no updater can still read its certificate and hand it to a site that was
 /// configured from the command line; only the switch needs the sidecar.
-async fn switch_ready(upgrade: Option<&crate::upgrade::UpgradeRepo>) -> bool {
+async fn switch_ready(upgrade: Option<&yagra_ops::upgrade::UpgradeRepo>) -> bool {
     match upgrade {
         Some(u) => super::upgrade::reachable(u, chrono::Utc::now().timestamp())
             .await

@@ -48,8 +48,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_secrets::EnvelopeCipher;
 
-use crate::atomic_file::write_atomically;
 use crate::server_cert::{self, ServerCert};
+use yagra_base::atomic_file::write_atomically;
 use yagra_base::sealed_row::{sealed_from_row, BindSealed};
 use yagra_base::secrets::Kek;
 

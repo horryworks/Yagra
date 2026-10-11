@@ -3,7 +3,7 @@
 //! who cannot reach this deployment at all.
 //!
 //! The collection logic, the redaction scan and the archive format live in
-//! [`crate::support_bundle`]; this module is the seam that reads the running system. It exists as
+//! [`yagra_ops::support_bundle`]; this module is the seam that reads the running system. It exists as
 //! its own domain rather than inside `api/system.rs` because the guard is different, and that
 //! difference is the interesting part:
 //!
@@ -25,16 +25,11 @@
 //! Every section is collected independently and a failure records an omission instead of aborting.
 //! A bundle is requested *because* something is broken; refusing to produce one because the
 //! forwarding subsystem is unreachable would withhold the evidence at the exact moment it is
-//! wanted. The one thing that does abort is a redaction hit — see [`crate::support_bundle`].
+//! wanted. The one thing that does abort is a redaction hit — see [`yagra_ops::support_bundle`].
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageCredentials, RequireManageSystem, RequireViewAudit};
 use super::ApiState;
-use crate::poller_logs::RemoteLogs;
-use crate::support_bundle::{
-    self, BundleBuilder, BundleError, SecretScan, DEFAULT_SINCE_HOURS, MAX_LOG_BYTES,
-    MAX_SINCE_HOURS,
-};
 use axum::{
     extract::{Query, State},
     http::header::{CONTENT_DISPOSITION, CONTENT_TYPE},
@@ -44,6 +39,11 @@ use axum::{
 };
 use serde::Deserialize;
 use yagra_common::NodeId;
+use yagra_ops::poller_logs::RemoteLogs;
+use yagra_ops::support_bundle::{
+    self, BundleBuilder, BundleError, SecretScan, DEFAULT_SINCE_HOURS, MAX_LOG_BYTES,
+    MAX_SINCE_HOURS,
+};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -887,7 +887,7 @@ mod tests {
     /// `secret_literals_enforced: 0`.
     #[test]
     fn an_empty_remote_section_says_which_of_its_two_meanings_it_has() {
-        use crate::poller_logs::{RemoteLogFile, RemoteLogs};
+        use yagra_ops::poller_logs::{RemoteLogFile, RemoteLogs};
 
         let mut disk = std::collections::BTreeSet::new();
         disk.insert("edge-1".to_owned());
@@ -945,7 +945,7 @@ mod tests {
     /// a site that had not. Both numbers, or the sentence is a guess.
     #[test]
     fn a_site_that_was_asked_and_stayed_silent_is_not_reported_as_having_answered() {
-        use crate::poller_logs::{RemoteLogGap, RemoteLogs};
+        use yagra_ops::poller_logs::{RemoteLogGap, RemoteLogs};
 
         let mut disk = std::collections::BTreeSet::new();
         disk.insert("edge-1".to_owned());
@@ -981,7 +981,7 @@ mod tests {
     /// empty case would pass just as well if the files were dropped on the floor.
     #[test]
     fn a_genuinely_remote_log_is_carried_and_needs_no_explanation() {
-        use crate::poller_logs::{RemoteLogFile, RemoteLogs};
+        use yagra_ops::poller_logs::{RemoteLogFile, RemoteLogs};
 
         let mut b = BundleBuilder::new(6);
         add_remote_poller_logs(
