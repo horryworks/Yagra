@@ -17,10 +17,10 @@ use crate::api::ApiState;
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
 // re-exported by `mod.rs` so no file has to name where a sibling keeps a thing.
 use super::*;
-use crate::auth::{LoginThrottle, SessionStore};
 use crate::sink::InMemorySink;
 use crate::store::MetricStore;
 use std::sync::Arc;
+use yagra_auth::auth::{LoginThrottle, SessionStore};
 
 /// A skeleton-mode state: no `admin`, no flow/log tier. This is deliberately the *degraded*
 /// shape — it is what exercises every "tier not enabled / requires live mode" branch, which is
@@ -47,7 +47,7 @@ pub(super) fn skeleton_state() -> ApiState {
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,
         oidc: None,
-        oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+        oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
         enable_mcp: true,
         rca: None,
         webtls: None,

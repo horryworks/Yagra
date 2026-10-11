@@ -10,7 +10,6 @@ use super::error::{ApiError, ApiResult};
 use super::extract::RequireViewAudit;
 use super::util::normalize_search;
 use super::ApiState;
-use crate::audit::{AuditAction, AuditFilter, AuditStatusClass};
 use axum::response::IntoResponse;
 use axum::{
     extract::{Query, State},
@@ -18,6 +17,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use yagra_auth::audit::{AuditAction, AuditFilter, AuditStatusClass};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 ///
@@ -82,7 +82,7 @@ pub(super) struct AuditQuery {
     get, path = "/api/v1/audit", tag = "audit",
     params(AuditQuery),
     responses(
-        (status = 200, description = "One page of audit rows, newest first", body = Vec<crate::audit::AuditRow>),
+        (status = 200, description = "One page of audit rows, newest first", body = Vec<yagra_auth::audit::AuditRow>),
         (status = 400, description = "A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the view-audit permission", body = super::error::ErrorBody),
@@ -113,7 +113,7 @@ async fn list_audit(
     _guard: RequireViewAudit,
     Query(q): Query<AuditQuery>,
     State(st): State<ApiState>,
-) -> ApiResult<Json<Vec<crate::audit::AuditRow>>> {
+) -> ApiResult<Json<Vec<yagra_auth::audit::AuditRow>>> {
     Ok(Json(
         audit_page(
             &st,
@@ -197,7 +197,7 @@ async fn export_audit(
 /// Every field — the notice included — goes through [`crate::csv::field`], which neutralizes
 /// spreadsheet formulas. That matters most here: `username` is whatever a **failed** sign-in
 /// submitted, so an unauthenticated stranger chooses it.
-fn render_audit_csv(rows: &[crate::audit::AuditRow], cap: i64) -> String {
+fn render_audit_csv(rows: &[yagra_auth::audit::AuditRow], cap: i64) -> String {
     let mut out = String::new();
     out.push_str(&crate::csv::row(&["time", "user", "action", "status"]));
     for r in rows {
@@ -241,7 +241,7 @@ pub(crate) struct AuditFilterInput<'a> {
     pub until: Option<&'a str>,
     pub q: Option<&'a str>,
     /// Comma-separated action kinds; parsed by [`audit_page`], not by serde. See the long note in
-    /// `crate::audit` for why the typed field was given up.
+    /// `yagra_auth::audit` for why the typed field was given up.
     pub action: Option<&'a str>,
     /// Comma-separated status classes.
     pub status: Option<&'a str>,
@@ -266,7 +266,7 @@ pub(crate) struct AuditFilterInput<'a> {
 pub(crate) async fn audit_page(
     st: &ApiState,
     input: AuditFilterInput<'_>,
-) -> Result<Vec<crate::audit::AuditRow>, ApiError> {
+) -> Result<Vec<yagra_auth::audit::AuditRow>, ApiError> {
     // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
     // bad bound is operator input, and the UI surfaces them differently. Same split as the event log.
     use super::util::ts_param as ts;
@@ -292,7 +292,7 @@ pub(crate) async fn audit_page(
             &super::util::token_list(AuditStatusClass::TOKENS.iter().copied()),
             AuditStatusClass::from_token,
         )?,
-        limit: input.limit.unwrap_or(crate::audit::DEFAULT_LIMIT),
+        limit: input.limit.unwrap_or(yagra_auth::audit::DEFAULT_LIMIT),
     };
     // Availability **after** the parse — this is what the `Admin` extractor used to do before the
     // body ran, and moving it here is the whole point (see `list_audit`). Still a 503 rather than
@@ -471,8 +471,8 @@ mod tests {
         );
     }
 
-    fn row(at: &str, username: &str, action: &str, status: i32) -> crate::audit::AuditRow {
-        crate::audit::AuditRow {
+    fn row(at: &str, username: &str, action: &str, status: i32) -> yagra_auth::audit::AuditRow {
+        yagra_auth::audit::AuditRow {
             id: Uuid::new_v4(),
             at: at.to_owned(),
             username: username.to_owned(),

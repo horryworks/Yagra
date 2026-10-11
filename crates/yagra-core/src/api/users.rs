@@ -17,7 +17,6 @@
 use super::extract::{Admin, RequireManageUsers, RequireView};
 use super::util::CreatedId;
 use super::{ApiError, ApiResult, ApiState};
-use crate::auth::{UserCreateOutcome, UserMutation, UserSummary};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -27,6 +26,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
+use yagra_auth::auth::{UserCreateOutcome, UserMutation, UserSummary};
 use yagra_common::{Permission, Role, Scope, UserKind};
 
 /// Minimum password length accepted for a new account or a reset.

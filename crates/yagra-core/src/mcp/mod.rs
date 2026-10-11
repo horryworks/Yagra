@@ -10,7 +10,7 @@
 //! edge, it shares the API port and the bearer gate the REST surface on it already has.
 //!
 //! **Auth** is enforced in [`mcp_auth_mw`] before any tool runs: a valid bearer token (an API token,
-//! [`crate::apitokens`], or a session token, [`crate::auth`]) with `View`. MCP is **always
+//! [`yagra_auth::apitokens`], or a session token, [`yagra_auth::auth`]) with `View`. MCP is **always
 //! authenticated even under `public_dashboard`** — an AI surface must never be anonymous.
 //!
 //! **Group-scoped principals are admitted** (WS-F, closed). They were refused here until every tool
@@ -186,8 +186,8 @@ async fn mcp_auth_mw(State(st): State<ApiState>, mut req: Request, next: Next) -
 /// Resolve a bearer token to an [`McpIdentity`] permitted to use MCP, or an error `Response`. The
 /// error is boxed for the reason `api/error.rs` states: an axum `Response` is large enough that
 /// `clippy::result_large_err` refuses it as a bare `Err` variant. Routes
-/// by token shape: a `yat_` API token → [`crate::apitokens::ApiTokenStore::verify`]; otherwise a
-/// session token → [`crate::auth::SessionStore::authorize`]. Requires `View` and (Increment 1) global
+/// by token shape: a `yat_` API token → [`yagra_auth::apitokens::ApiTokenStore::verify`]; otherwise a
+/// session token → [`yagra_auth::auth::SessionStore::authorize`]. Requires `View` and (Increment 1) global
 /// scope.
 async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity, Box<Response>> {
     let Some(token) = token else {
@@ -196,7 +196,7 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity,
     // The actor label is derived from the same resolution that authenticates, not from a second
     // lookup: a PAT used to be audited as the constant `mcp-token`, which named the surface rather
     // than anyone answerable for the call.
-    let resolved = if crate::apitokens::is_api_token_shape(token) {
+    let resolved = if yagra_auth::apitokens::is_api_token_shape(token) {
         // API tokens are backed by PostgreSQL (live mode only). Naming the surface is what keeps a
         // token minted for REST automation out of here, and vice versa.
         match st.admin.as_ref() {
@@ -297,8 +297,8 @@ mod tests {
              published verbatim to every client: {missing:?}"
         );
     }
-    use crate::auth::{LoginThrottle, SessionStore};
     use std::sync::Arc;
+    use yagra_auth::auth::{LoginThrottle, SessionStore};
     use yagra_common::{Principal, Role, Scope};
 
     /// A minimal state whose only wired pieces are the session store (for token auth) and the flag.
@@ -327,7 +327,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
-            oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
             enable_mcp: true,
             rca: None,
             webtls: None,

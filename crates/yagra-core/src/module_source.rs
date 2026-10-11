@@ -50,6 +50,7 @@ pub(crate) fn crate_code() -> Vec<(String, String)> {
 const SPLIT_OUT: &[(&str, &str)] = &[
     ("yagra-base", "../yagra-base/src"),
     ("yagra-netbox", "../yagra-netbox/src"),
+    ("yagra-auth", "../yagra-auth/src"),
 ];
 
 /// The `src` directories of the program: core's and those of the crates split out of it.

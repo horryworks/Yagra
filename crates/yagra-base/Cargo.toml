@@ -27,6 +27,9 @@ async-trait = { workspace = true }
 rand = { workspace = true }
 # The outbound HTTP client (`http.rs`), shared by core and `yagra-netbox`.
 reqwest = { workspace = true }
+# The TLS client configuration (`tls.rs`): syslog over TLS and directory sign-in.
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
 # The table vocabulary's statement scan (`sql_tables`, behind `test-util`).
 regex = { workspace = true, optional = true }
 # The folder, credential and profile summaries are returned by the northbound API, so they carry

@@ -2,7 +2,7 @@
 //! **Yagra-base — the database layer under `yagra-core`** (ADR-202 Inc.5).
 //!
 //! What every part of core stands on: the PostgreSQL repositories (`repo`), the folder tree
-//! (`groups`), the outbound HTTP client (`http`), sealed monitoring credentials (`secrets`, `sealed_row`), how an enum is stored
+//! (`groups`), the outbound HTTP client (`http`) and TLS configuration (`tls`), sealed monitoring credentials (`secrets`, `sealed_row`), how an enum is stored
 //! (`stored_enum`), the reserved seed ids (`seed_ids`), and the two process-wide signals a write
 //! raises (`config_gen`, `change_feed`).
 //!
@@ -42,6 +42,9 @@ pub mod seed_ids;
 #[cfg(any(test, feature = "test-util"))]
 pub mod sql_tables;
 pub mod stored_enum;
+/// The TLS client configuration for the outbound connections that are not HTTP: syslog over TLS
+/// and directory sign-in. Beside `http` for the same reason.
+pub mod tls;
 
 /// What `token_enum!` expands to needs, reachable from a crate that does not name it.
 #[doc(hidden)]

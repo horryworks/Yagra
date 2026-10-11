@@ -88,12 +88,12 @@ mod tests {
 
     // The property this module exists to hold. Installing a custom verifier here would disable
     // certificate checking for **both** forwarding and directory login at once, and nothing about
-    // the resulting connection would look different. The needles are assembled at runtime because
-    // this test reads its own file (`reports/guards.rs::the_run_state_sql_is_built_from_the_enum`'s shape)
-    // — and for the same reason none of them may be spelled out in this comment.
+    // the resulting connection would look different. Read through `module_source`, which drops
+    // this test and the comment lines (this crate binds no file's own raw text); the needles are
+    // still assembled at runtime so that nothing here spells them.
     #[test]
     fn this_module_never_disables_certificate_verification() {
-        let src = include_str!("tls.rs");
+        let src = crate::module_source::code_no_comments("src", "tls");
         for needle in [
             format!("{}()", "dangerous"),
             format!("{}CertVerifier", "Server"),

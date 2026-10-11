@@ -621,7 +621,11 @@ fn every_outbound_client_is_built_here() {
 }
 
 /// The callers whose URL comes from an operator or a third party. Each must refuse redirects.
-const NEVER_FOLLOWS: &[&str] = &["alerts/notify.rs", "yagra-netbox/lib.rs", "oidc.rs"];
+const NEVER_FOLLOWS: &[&str] = &[
+    "alerts/notify.rs",
+    "yagra-netbox/lib.rs",
+    "yagra-auth/oidc.rs",
+];
 
 /// ADR-184: the three callers that must not follow a redirect still say so.
 ///

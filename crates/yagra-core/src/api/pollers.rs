@@ -957,7 +957,7 @@ async fn issue_poller_token(
         .issue_token(
             &id,
             pool,
-            &crate::token::token_hash(&token),
+            &yagra_auth::token::token_hash(&token),
             caller.map(|c| c.0.user_id),
         )
         .await

@@ -1275,7 +1275,7 @@ impl UpgradeRepo {
     /// same commands.
     pub async fn settle_finished_run(
         &self,
-        audit: &crate::audit::AuditRepo,
+        audit: &yagra_auth::audit::AuditRepo,
         maintenance: &crate::alerts::maintenance::MaintenanceRepo,
     ) -> Option<RunStatus> {
         let dir = self.dir.as_deref()?;
@@ -1616,7 +1616,7 @@ pub(crate) async fn start(
 /// and because all six travel together into one task.
 pub(crate) struct SettleHandles {
     /// Where the run's outcome, and each poller's, is recorded.
-    pub audit: std::sync::Arc<crate::audit::AuditRepo>,
+    pub audit: std::sync::Arc<yagra_auth::audit::AuditRepo>,
     /// The fleet-wide window the run opened, which settling closes.
     pub maintenance: std::sync::Arc<crate::alerts::maintenance::MaintenanceRepo>,
     /// Where upgrade commands to the pollers go.

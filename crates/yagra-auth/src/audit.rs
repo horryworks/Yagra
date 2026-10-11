@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Audit log persistence (security.md: who changed what, when).
 //!
-//! Rows are written by the API middleware in [`crate::api`] — one per mutating request
+//! Rows are written by the API middleware in core's `api` — one per mutating request
 //! (method + path + status) plus login events from the auth handler. This is the I/O
 //! adapter only; what gets recorded is decided at the API layer. Append-only: there is no
 //! update or delete path, and reads are admin-gated (`ViewAudit`).
@@ -206,7 +206,7 @@ impl AuditFilter {
 /// Every clause is **always present** with a `NULL` bind meaning "no filter", rather than being
 /// appended when set. A conditionally-built predicate has a branch that can be forgotten, and here
 /// forgetting one fails **open** — the same rule `NodeRepo::SCOPE_PREDICATE` and
-/// [`crate::events::EVENT_FILTER_WHERE`] are written to.
+/// core's `events::EVENT_FILTER_WHERE` are written to.
 ///
 /// ⚠️ The `$4` free-text alternation is parenthesised as a whole. `WHERE a AND b OR c AND d` parses
 /// as `(a AND b) OR (c AND d)`, so an unwrapped `OR` here would let every row matching the username

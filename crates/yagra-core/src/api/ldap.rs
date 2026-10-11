@@ -24,7 +24,7 @@ use utoipa::OpenApi;
 use super::error::{ApiError, ApiResult};
 use super::extract::{Ldap, RequireManageUsers};
 use super::ApiState;
-use crate::ldap::{LdapConfigInput, LdapConfigView, LdapTestResult};
+use yagra_auth::ldap::{LdapConfigInput, LdapConfigView, LdapTestResult};
 
 #[derive(OpenApi)]
 #[openapi(paths(get_ldap_config, put_ldap_config, test_ldap_config))]
@@ -178,7 +178,7 @@ async fn test_ldap_config(
     // A reachable-but-wrong directory answers 200 with a failed stage, never a 5xx: the
     // configuration is the caller's, and the staged result is what tells them which part of it is
     // wrong.
-    Ok(Json(crate::ldap::probe(&cfg, username).await))
+    Ok(Json(yagra_auth::ldap::probe(&cfg, username).await))
 }
 
 #[cfg(test)]

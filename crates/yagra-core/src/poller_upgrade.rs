@@ -327,7 +327,7 @@ pub struct Run {
     /// Where the answer comes back from: the live poller registry.
     pub coordinator: Arc<Coordinator>,
     /// Where each poller's outcome is recorded, one row apiece.
-    pub audit: Arc<crate::audit::AuditRepo>,
+    pub audit: Arc<yagra_auth::audit::AuditRepo>,
     /// Release every poller is being moved to.
     pub tag: String,
     /// Core's upgrade run id, reused verbatim at each site.

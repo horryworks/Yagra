@@ -70,7 +70,7 @@ pub(crate) struct OidcSession {
 }
 
 /// The enabled provider, or the typed 503 the UI distinguishes from "not configured at all".
-async fn enabled_config(oidc: &Oidc) -> Result<crate::oidc::OidcProviderConfig, ApiError> {
+async fn enabled_config(oidc: &Oidc) -> Result<yagra_auth::oidc::OidcProviderConfig, ApiError> {
     oidc.enabled_config()
         .await
         .map_err(|e| {
@@ -96,7 +96,7 @@ async fn enabled_config(oidc: &Oidc) -> Result<crate::oidc::OidcProviderConfig, 
 )]
 async fn oidc_authorize(State(st): State<ApiState>, oidc: Oidc) -> ApiResult<Json<AuthorizeUrl>> {
     let config = enabled_config(&oidc).await?;
-    let url = crate::oidc::begin_authorize(&config, &st.oidc_flight)
+    let url = yagra_auth::oidc::begin_authorize(&config, &st.oidc_flight)
         .await
         // A discovery or configuration problem is the *provider's* failure, not the browser's, so it
         // is a 502 — and its detail stays server-side rather than describing the IdP to a stranger.
@@ -144,53 +144,56 @@ async fn oidc_callback(
     Json(body): Json<OidcCallbackBody>,
 ) -> ApiResult<Json<OidcSession>> {
     let config = enabled_config(&oidc).await?;
-    let login =
-        match crate::oidc::complete_callback(&config, &st.oidc_flight, &body.code, &body.state)
-            .await
-        {
-            Ok(login) => login,
-            // Bad or expired state, code-exchange failure, ID-token validation failure, and "no
-            // group maps to a role" all land here and all answer the same thing. Which one it
-            // was stays server-side: the difference is exactly what an attacker probing the
-            // callback would want to learn.
-            Err(crate::oidc::OidcError::Other(e)) => {
-                tracing::warn!(error = %e, "OIDC login rejected");
-                audit_record(&admin.audit, "(oidc)", AUDIT_OIDC, 401).await;
-                return Err(ApiError::unauthorized_with(
-                    "oidc_denied",
-                    "SSO login could not be completed",
-                ));
-            }
-            // Group overage is the one refusal an admin cannot diagnose from the outside: before
-            // this branch existed it was not a refusal at all — the groups read as empty and the
-            // login silently took `default_role`. The client still gets the identical 401, but the
-            // audit log gets its own action *and the real username*, because "an admin quietly
-            // became a viewer" is unactionable without knowing which admin.
-            //
-            // Naming the user here does not help a prober: reaching this point requires a code
-            // exchange plus an ID token whose signature, issuer, audience, expiry and nonce all
-            // verified against the configured IdP. Nobody arrives here by guessing.
-            Err(crate::oidc::OidcError::GroupOverage { username, claim }) => {
-                // The remediation belongs in the log, where an admin is actually looking. Note what
-                // is *not* logged: `_claim_sources` carries a Graph URL embedding the user's
-                // directory object id, so the claim name is as far as this goes.
-                tracing::warn!(
-                    user = %username,
-                    claim = %claim,
-                    "SSO login refused: the IdP delivered the groups claim out-of-band (group \
-                     overage). Yagra reads groups from the ID token only — configure the app \
-                     registration to emit only the groups assigned to it, or use a group-filtering \
-                     claim."
-                );
-                metrics::counter!("yagra_oidc_login_total", "result" => "group_overage")
-                    .increment(1);
-                audit_record(&admin.audit, &username, AUDIT_OIDC_OVERAGE, 401).await;
-                return Err(ApiError::unauthorized_with(
-                    "oidc_denied",
-                    "SSO login could not be completed",
-                ));
-            }
-        };
+    let login = match yagra_auth::oidc::complete_callback(
+        &config,
+        &st.oidc_flight,
+        &body.code,
+        &body.state,
+    )
+    .await
+    {
+        Ok(login) => login,
+        // Bad or expired state, code-exchange failure, ID-token validation failure, and "no
+        // group maps to a role" all land here and all answer the same thing. Which one it
+        // was stays server-side: the difference is exactly what an attacker probing the
+        // callback would want to learn.
+        Err(yagra_auth::oidc::OidcError::Other(e)) => {
+            tracing::warn!(error = %e, "OIDC login rejected");
+            audit_record(&admin.audit, "(oidc)", AUDIT_OIDC, 401).await;
+            return Err(ApiError::unauthorized_with(
+                "oidc_denied",
+                "SSO login could not be completed",
+            ));
+        }
+        // Group overage is the one refusal an admin cannot diagnose from the outside: before
+        // this branch existed it was not a refusal at all — the groups read as empty and the
+        // login silently took `default_role`. The client still gets the identical 401, but the
+        // audit log gets its own action *and the real username*, because "an admin quietly
+        // became a viewer" is unactionable without knowing which admin.
+        //
+        // Naming the user here does not help a prober: reaching this point requires a code
+        // exchange plus an ID token whose signature, issuer, audience, expiry and nonce all
+        // verified against the configured IdP. Nobody arrives here by guessing.
+        Err(yagra_auth::oidc::OidcError::GroupOverage { username, claim }) => {
+            // The remediation belongs in the log, where an admin is actually looking. Note what
+            // is *not* logged: `_claim_sources` carries a Graph URL embedding the user's
+            // directory object id, so the claim name is as far as this goes.
+            tracing::warn!(
+                user = %username,
+                claim = %claim,
+                "SSO login refused: the IdP delivered the groups claim out-of-band (group \
+                 overage). Yagra reads groups from the ID token only — configure the app \
+                 registration to emit only the groups assigned to it, or use a group-filtering \
+                 claim."
+            );
+            metrics::counter!("yagra_oidc_login_total", "result" => "group_overage").increment(1);
+            audit_record(&admin.audit, &username, AUDIT_OIDC_OVERAGE, 401).await;
+            return Err(ApiError::unauthorized_with(
+                "oidc_denied",
+                "SSO login could not be completed",
+            ));
+        }
+    };
     let upsert = admin
         .users
         .upsert_external_user(
@@ -209,23 +212,23 @@ async fn oidc_callback(
             )
         })?;
     let (user_id, principal) = match upsert {
-        crate::auth::ExternalUpsert::Ok(id, principal) => (id, principal),
+        yagra_auth::auth::ExternalUpsert::Ok(id, principal) => (id, principal),
         // Both of these used to reach the client as a 500 through `from_internal`. They are
         // ordinary refusals: an account an admin switched off, and a name somebody else owns.
         // Which one it was stays server-side, like every other branch of this handler.
         outcome => {
             match &outcome {
-                crate::auth::ExternalUpsert::Disabled => {
+                yagra_auth::auth::ExternalUpsert::Disabled => {
                     tracing::warn!(user = %login.username, "SSO login refused: account is disabled");
                 }
-                crate::auth::ExternalUpsert::UsernameTaken(existing) => {
+                yagra_auth::auth::ExternalUpsert::UsernameTaken(existing) => {
                     tracing::warn!(
                         subject = %login.subject,
                         existing = %existing,
                         "SSO login refused: the username is already held by another account"
                     );
                 }
-                crate::auth::ExternalUpsert::Ok(..) => unreachable!("matched above"),
+                yagra_auth::auth::ExternalUpsert::Ok(..) => unreachable!("matched above"),
             }
             audit_record(&admin.audit, &login.username, AUDIT_OIDC, 401).await;
             return Err(ApiError::unauthorized_with(
@@ -244,7 +247,7 @@ async fn oidc_callback(
 #[utoipa::path(
     get, path = "/api/v1/settings/oidc", tag = "oidc",
     responses(
-        (status = 200, description = "Every configured provider, without its client secret", body = Vec<crate::oidc::OidcProviderSummary>),
+        (status = 200, description = "Every configured provider, without its client secret", body = Vec<yagra_auth::oidc::OidcProviderSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the ManageUsers permission", body = super::error::ErrorBody),
         (status = 503, description = "This deployment does not persist SSO configuration", body = super::error::ErrorBody),
@@ -253,7 +256,7 @@ async fn oidc_callback(
 async fn list_oidc_providers(
     _guard: RequireManageUsers,
     oidc: Oidc,
-) -> ApiResult<Json<Vec<crate::oidc::OidcProviderSummary>>> {
+) -> ApiResult<Json<Vec<yagra_auth::oidc::OidcProviderSummary>>> {
     let list = oidc.list().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -271,14 +274,14 @@ async fn list_oidc_providers(
 /// `e.to_string()` — so a failure to seal the secret (a KEK problem) or a database error was
 /// reported to the operator as "your input is invalid", with the internal message attached. Wrong
 /// status, and internal detail on the wire (security.md).
-fn validate(input: &crate::oidc::OidcProviderInput) -> Result<(), ApiError> {
-    crate::oidc::OidcRepo::validate(input)
+fn validate(input: &yagra_auth::oidc::OidcProviderInput) -> Result<(), ApiError> {
+    yagra_auth::oidc::OidcRepo::validate(input)
         .map_err(|e| ApiError::bad_request("invalid_provider", e.to_string()))
 }
 
 #[utoipa::path(
     post, path = "/api/v1/settings/oidc", tag = "oidc",
-    request_body = crate::oidc::OidcProviderInput,
+    request_body = yagra_auth::oidc::OidcProviderInput,
     responses(
         (status = 201, description = "Provider created", body = CreatedId),
         (status = 400, description = "The provider definition is invalid, or the client secret is missing", body = super::error::ErrorBody),
@@ -290,7 +293,7 @@ fn validate(input: &crate::oidc::OidcProviderInput) -> Result<(), ApiError> {
 async fn create_oidc_provider(
     _guard: RequireManageUsers,
     oidc: Oidc,
-    Json(input): Json<crate::oidc::OidcProviderInput>,
+    Json(input): Json<yagra_auth::oidc::OidcProviderInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     validate(&input)?;
     // Required on create, optional on update (where omitting it keeps the stored secret), so it is
@@ -319,7 +322,7 @@ async fn create_oidc_provider(
 #[utoipa::path(
     put, path = "/api/v1/settings/oidc/{id}", tag = "oidc",
     params(("id" = Uuid, Path, description = "Provider id")),
-    request_body = crate::oidc::OidcProviderInput,
+    request_body = yagra_auth::oidc::OidcProviderInput,
     responses(
         (status = 204, description = "Provider updated; an omitted client secret keeps the stored one"),
         (status = 400, description = "The provider definition is invalid", body = super::error::ErrorBody),
@@ -333,7 +336,7 @@ async fn update_oidc_provider(
     _guard: RequireManageUsers,
     oidc: Oidc,
     Path(id): Path<Uuid>,
-    Json(input): Json<crate::oidc::OidcProviderInput>,
+    Json(input): Json<yagra_auth::oidc::OidcProviderInput>,
 ) -> ApiResult<StatusCode> {
     validate(&input)?;
     let changed = oidc.update(id, &input).await.map_err(|e| {
@@ -464,7 +467,7 @@ mod tests {
     #[test]
     fn a_malformed_provider_is_a_400_and_says_why() {
         // The client-safe half: this is about what the caller submitted.
-        let bad = crate::oidc::OidcProviderInput {
+        let bad = yagra_auth::oidc::OidcProviderInput {
             issuer: "not a url".to_owned(),
             ..sample_input()
         };
@@ -475,10 +478,10 @@ mod tests {
         assert!(validate(&sample_input()).is_ok());
     }
 
-    fn sample_input() -> crate::oidc::OidcProviderInput {
-        crate::oidc::OidcProviderInput {
+    fn sample_input() -> yagra_auth::oidc::OidcProviderInput {
+        yagra_auth::oidc::OidcProviderInput {
             name: "idp".to_owned(),
-            kind: crate::oidc::OidcProviderKind::Generic,
+            kind: yagra_auth::oidc::OidcProviderKind::Generic,
             issuer: "https://idp.example.com".to_owned(),
             client_id: "yagra".to_owned(),
             client_secret: Some("s".to_owned()),

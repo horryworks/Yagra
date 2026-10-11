@@ -214,7 +214,7 @@ mod tests {
     // ── Against a real database (ADR-114) ────────────────────────────────────────────────
 
     async fn account(pool: &sqlx::PgPool, name: &str) {
-        let created = crate::auth::UserStore::new(pool.clone())
+        let created = yagra_auth::auth::UserStore::new(pool.clone())
             .create(
                 name,
                 "correct horse battery staple",
@@ -224,7 +224,7 @@ mod tests {
             .expect("create user");
         assert!(matches!(
             created,
-            crate::auth::UserCreateOutcome::Created(_)
+            yagra_auth::auth::UserCreateOutcome::Created(_)
         ));
     }
 

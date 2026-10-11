@@ -278,7 +278,7 @@ async fn build(
     )?;
     match admin
         .audit
-        .list(&crate::audit::AuditFilter::newest(AUDIT_ROWS))
+        .list(&yagra_auth::audit::AuditFilter::newest(AUDIT_ROWS))
         .await
     {
         Ok(rows) => b.add_json(
@@ -348,7 +348,7 @@ async fn build(
 
 /// How many audit rows to carry. The store's own page maximum — enough to cover the change that
 /// preceded an incident without turning the bundle into an audit export.
-const AUDIT_ROWS: i64 = crate::audit::MAX_LIMIT;
+const AUDIT_ROWS: i64 = yagra_auth::audit::MAX_LIMIT;
 
 /// How many alert-history transitions to carry for the named node. Bounded per node rather than
 /// per bundle: this is "how has this one device behaved lately", not an incident export.

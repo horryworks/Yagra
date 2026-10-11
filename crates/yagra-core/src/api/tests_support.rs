@@ -6,10 +6,10 @@
 //! repeating the ~20-field literal. Compiled only under `cfg(test)`.
 
 use super::ApiState;
-use crate::auth::{LoginThrottle, SessionStore};
 use crate::sink::InMemorySink;
 use crate::store::MetricStore;
 use std::sync::Arc;
+use yagra_auth::auth::{LoginThrottle, SessionStore};
 use yagra_base::repo::StaticNodeList;
 
 /// Skeleton-mode state with `public_dashboard` set as given and no write side.
@@ -48,7 +48,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,
         oidc: None,
-        oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+        oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
         enable_mcp: false,
         rca: None,
         webtls: None,
@@ -350,7 +350,7 @@ async fn live_state_with(
         Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
     ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
-    let audit_repo = Arc::new(crate::audit::AuditRepo::new(pool.clone()));
+    let audit_repo = Arc::new(yagra_auth::audit::AuditRepo::new(pool.clone()));
     let forward_store = Arc::new(crate::forward_store::ForwardStore::new(
         pool.clone(),
         kek.clone(),
@@ -395,7 +395,7 @@ async fn live_state_with(
     let admin = Arc::new(super::AdminState {
         repo: repo.clone(),
         creds: creds.clone(),
-        users: Arc::new(crate::auth::UserStore::new(pool.clone())),
+        users: Arc::new(yagra_auth::auth::UserStore::new(pool.clone())),
         thresholds: Arc::new(crate::alerts::thresholds::ThresholdStore::new(pool.clone())),
         collection: collection.clone(),
         notifications: Arc::new(crate::alerts::notifications::NotificationRepo::new(
@@ -474,7 +474,7 @@ async fn live_state_with(
             Some(store.clone()),
         )),
         pollers: poller_repo,
-        api_tokens: Arc::new(crate::apitokens::ApiTokenStore::new(
+        api_tokens: Arc::new(yagra_auth::apitokens::ApiTokenStore::new(
             pool.clone(),
             crate::config::DEFAULT_PAT_OIDC_IDLE_DAYS,
         )),
@@ -507,15 +507,15 @@ async fn live_state_with(
             crate::api::public_access::PublicAccess::closed(),
         ),
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        ldap: Some(Arc::new(crate::ldap::LdapRepo::new(
+        ldap: Some(Arc::new(yagra_auth::ldap::LdapRepo::new(
             pool.clone(),
             kek.clone(),
         ))),
-        oidc: Some(Arc::new(crate::oidc::OidcRepo::new(
+        oidc: Some(Arc::new(yagra_auth::oidc::OidcRepo::new(
             pool.clone(),
             kek.clone(),
         ))),
-        oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+        oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
         enable_mcp: false,
         rca: Some(Arc::new(crate::rca::orchestrator::RcaOrchestrator::new(
             llm_repo, repo, alerts, analysis, audit_repo, group_repo,
@@ -670,8 +670,8 @@ pub(crate) async fn account_token(
         .await
         .expect("create user")
     {
-        crate::auth::UserCreateOutcome::Created(id) => id,
-        crate::auth::UserCreateOutcome::UsernameTaken => panic!("fixture reused a username"),
+        yagra_auth::auth::UserCreateOutcome::Created(id) => id,
+        yagra_auth::auth::UserCreateOutcome::UsernameTaken => panic!("fixture reused a username"),
     };
     let tok = st.sessions.issue(
         id,

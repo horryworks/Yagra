@@ -266,7 +266,7 @@ pub(crate) fn parse_cadence(body: CadenceBody) -> Result<crate::cadence::Schedul
 /// `/api/v1` requests generically, but the auth endpoints are excluded from it and record their own
 /// rows, with the attempted **username only and never the credential** (security.md).
 pub(crate) async fn audit_record(
-    audit: &crate::audit::AuditRepo,
+    audit: &yagra_auth::audit::AuditRepo,
     username: &str,
     action: &str,
     status: u16,

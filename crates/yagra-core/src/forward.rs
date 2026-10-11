@@ -1315,9 +1315,9 @@ fn split_target(target: &str) -> Result<(String, u16), String> {
 /// exists to send credential-bearing log bodies to another system; an unauthenticated peer is
 /// precisely the failure TLS is here to prevent, so a private CA is configured rather than skipped.
 fn tls_connector(ca_cert: Option<&str>) -> Result<tokio_rustls::TlsConnector, String> {
-    Ok(tokio_rustls::TlsConnector::from(crate::tls::client_config(
-        ca_cert,
-    )?))
+    Ok(tokio_rustls::TlsConnector::from(
+        yagra_base::tls::client_config(ca_cert)?,
+    ))
 }
 
 async fn with_timeout<T, F>(fut: F) -> Result<T, String>

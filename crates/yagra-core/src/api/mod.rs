@@ -120,8 +120,6 @@ use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
-use crate::audit::AuditRepo;
-use crate::auth::{LoginThrottle, SessionStore, UserStore};
 use crate::classification::{ClassificationRepo, Classifier};
 use crate::collection::CollectionRepo;
 use crate::coordinator::Coordinator;
@@ -131,6 +129,8 @@ use crate::logstore::LogStore;
 use crate::mib::MibRepo;
 use crate::pollers::PollerRepo;
 use crate::preferences::UserPrefsRepo;
+use yagra_auth::audit::AuditRepo;
+use yagra_auth::auth::{LoginThrottle, SessionStore, UserStore};
 use yagra_base::groups::GroupRepo;
 
 use crate::alerts::thresholds::ThresholdStore;
@@ -257,7 +257,7 @@ pub struct AdminState {
     pub pollers: Arc<PollerRepo>,
     /// Long-lived API tokens (PATs) for non-browser clients (ADR-028): backs Settings ▸ API tokens
     /// and the MCP auth gate. Admin-managed; the raw token is shown once at creation, never stored.
-    pub api_tokens: Arc<crate::apitokens::ApiTokenStore>,
+    pub api_tokens: Arc<yagra_auth::apitokens::ApiTokenStore>,
     /// Forwarding destinations (ADR-034): backs Settings ▸ Forwarding. Present on every core so
     /// destination CRUD works from either; only the leader's dispatcher actually sends.
     pub forward: Arc<crate::forward_store::ForwardStore>,
@@ -350,10 +350,10 @@ pub struct ApiState {
     /// External-IdP (OIDC) provider store (ADR-010 Phase 3); `None` in skeleton mode. Drives the
     /// SSO login endpoints and Settings ▸ Auth CRUD.
     /// The LDAP/AD directory store (ADR-041). `None` in skeleton mode.
-    pub ldap: Option<Arc<crate::ldap::LdapRepo>>,
-    pub oidc: Option<Arc<crate::oidc::OidcRepo>>,
+    pub ldap: Option<Arc<yagra_auth::ldap::LdapRepo>>,
+    pub oidc: Option<Arc<yagra_auth::oidc::OidcRepo>>,
     /// In-flight OIDC authorizations (CSRF state → nonce/PKCE), one per pending SSO login.
-    pub oidc_flight: Arc<crate::oidc::OidcFlight>,
+    pub oidc_flight: Arc<yagra_auth::oidc::OidcFlight>,
     /// MCP server enabled (ADR-028, `YAGRA_ENABLE_MCP`). When `true` — **the default since ADR-028
     /// Increment 3** — `serve()` mounts the read-only MCP tool surface at `/mcp`; when `false` the
     /// route is absent (a request 404s). Held here so `serve()` reads it off the same state it
@@ -868,7 +868,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
-            oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
             webtls: None,
@@ -910,7 +910,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
-            oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
             webtls: None,
@@ -950,7 +950,7 @@ mod tests {
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
             oidc: None,
-            oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
+            oidc_flight: Arc::new(yagra_auth::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
             webtls: None,

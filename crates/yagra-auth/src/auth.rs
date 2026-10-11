@@ -1298,7 +1298,7 @@ async fn enabled_admin_count(
 /// log on purpose**: it is not stored in plaintext anywhere and will not be shown again, so this is
 /// the operator's only chance to read it. That is a deliberate disclosure, not an oversight, and it
 /// happens only when the account did not already exist.
-pub(crate) async fn ensure_bootstrap_admin(users: &UserStore) -> anyhow::Result<()> {
+pub async fn ensure_bootstrap_admin(users: &UserStore) -> anyhow::Result<()> {
     let provided = std::env::var("YAGRA_ADMIN_PASSWORD")
         .ok()
         .filter(|p| !p.trim().is_empty());
@@ -1336,7 +1336,7 @@ pub(crate) async fn ensure_bootstrap_admin(users: &UserStore) -> anyhow::Result<
 /// **The three tasks run on every core, deliberately not leader-gated**, so a revocation is durable
 /// and reaches all cores, and every core honours revocations made elsewhere — required once reads
 /// go active/active.
-pub(crate) async fn start_sessions(
+pub async fn start_sessions(
     session_key_file: Option<&str>,
     enable_ha: bool,
     pool: PgPool,

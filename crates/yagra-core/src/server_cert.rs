@@ -5,7 +5,7 @@
 //! decides whether an operator's paste is serviceable lives here so it can be tested without a
 //! deployment, and `webtls.rs` is left with only storage and materialization.
 //!
-//! **Named `server_cert`, not `tls`.** [`crate::tls`] builds *client* configurations for outbound
+//! **Named `server_cert`, not `tls`.** [`yagra_base::tls`] builds *client* configurations for outbound
 //! peers and is a different subject; `extensibility.md` §5 is explicit that two modules meaning
 //! different things by the same word costs orientation on every grep.
 //!
@@ -20,7 +20,7 @@
 //! **Not checked: whether the chain is trusted.** No verification against a trust root, deliberately.
 //! An enterprise CA is not in the container's bundle, so requiring it would fail every internal
 //! certificate, and the pressure that creates is precisely the "let me turn verification off" that
-//! [`crate::tls`] exists to resist. Yagra is the *server* here — trust is the browser's decision, and
+//! [`yagra_base::tls`] exists to resist. Yagra is the *server* here — trust is the browser's decision, and
 //! Yagra has no standing to make it.
 //!
 //! ## The key↔certificate proof

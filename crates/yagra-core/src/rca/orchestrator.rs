@@ -37,8 +37,8 @@ use super::provider::{LlmError, LlmProvider};
 use super::store::{ActiveConfig, NewReport, RcaRepo, RcaReport, ReportBody};
 use crate::alerts::AlertManager;
 use crate::analysis::AnalysisRunner;
-use crate::audit::AuditRepo;
 use crate::ratelimit::{charge_window, env_cap};
+use yagra_auth::audit::AuditRepo;
 use yagra_base::repo::NodeRepo;
 
 /// Default simultaneous generations (`YAGRA_RCA_MAX_CONCURRENT`). Two, not four: unlike an analysis

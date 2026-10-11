@@ -22,11 +22,8 @@ static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod alerts;
 mod analysis;
 mod api;
-mod apitokens;
 mod arp;
 mod atomic_file;
-mod audit;
-mod auth;
 mod authcallout;
 mod batch_writer;
 mod bigquery;
@@ -54,7 +51,6 @@ mod interface_util;
 mod ipasn;
 mod l3;
 mod l3_routing;
-mod ldap;
 mod leader;
 mod link_overrides;
 mod logstore;
@@ -72,7 +68,6 @@ mod mib;
 mod module_source;
 mod neighbors;
 mod node_display;
-mod oidc;
 /// Per-account pins on the inventory tree (ADR-146).
 mod pins;
 // The source-text checks whose claim is about the whole program, reading core's tree and the
@@ -120,8 +115,6 @@ mod support_bundle;
 /// Effective label resolution (own + every ancestor folder's − excluded). The accumulating
 /// counterpart to `poolres`, which resolves one value from the nearest folder that carries it.
 mod tagres;
-mod tls;
-mod token;
 mod topology_links;
 mod topology_projection;
 // What this deployment is running and how far back it can be taken (ADR-050). Named apart from
@@ -153,8 +146,6 @@ use alerts::notifications::NotificationRepo;
 use alerts::thresholds::ThresholdStore;
 use alerts::{AlertManager, Notifier};
 use api::{AdminState, ApiState};
-use audit::AuditRepo;
-use auth::{LoginThrottle, SessionStore, UserStore};
 use axum::routing::get;
 use collection::CollectionRepo;
 use config::Config;
@@ -171,6 +162,9 @@ use sink::InMemorySink;
 use store::{MetricStore, VmStore};
 use uuid::Uuid;
 use volatile::VolatileStore;
+use yagra_auth::audit::AuditRepo;
+use yagra_auth::auth::{LoginThrottle, SessionStore, UserStore};
+use yagra_auth::{apitokens, auth, ldap, oidc};
 use yagra_base::repo::{NodeListing, NodeRepo, StaticNodeList};
 use yagra_base::secrets::CredentialStore;
 use yagra_base::{config_gen, groups, repo, secrets};

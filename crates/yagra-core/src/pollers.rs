@@ -9,7 +9,7 @@
 //! rows are merged with the live view for the API — both in a later step.
 //!
 //! Runtime `sqlx::query` (not the compile-time macro) so the build needs no live database, and all
-//! inputs are bound parameters (security.md). Mirrors the [`crate::audit`] repo's shape.
+//! inputs are bound parameters (security.md). Mirrors the [`yagra_auth::audit`] repo's shape.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

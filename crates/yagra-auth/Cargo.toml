@@ -1,0 +1,47 @@
+[package]
+name = "yagra-auth"
+description = "Yagra-auth — who is asking: local accounts and sessions, signed session tokens, API tokens, OIDC and LDAP sign-in, and the audit log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+# The users, sessions and audit rows it keeps, the sealed IdP secrets, the outbound clients.
+yagra-base = { path = "../yagra-base" }
+yagra-secrets = { path = "../yagra-secrets" }
+# Session revocation is broadcast to the other cores (`auth::start_sessions`).
+yagra-bus = { path = "../yagra-bus", features = ["nats"] }
+yagra-telemetry = { path = "../yagra-telemetry" }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+metrics = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+# Signed session tokens (ADR-016 Inc.2a): HMAC-SHA256 over base64url claims.
+hmac = { workspace = true }
+sha2 = { workspace = true }
+data-encoding = { workspace = true }
+# External sign-in (ADR-010 Phase 3, ADR-041).
+openidconnect = { workspace = true }
+ldap3 = { workspace = true }
+# The audit filters are API and MCP parameters, so they carry both schemas. Derive-only.
+utoipa = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+# `srcread` and the real-PostgreSQL fixtures. Dev-dependencies only, so a release build carries
+# neither.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
+yagra-base = { path = "../yagra-base", features = ["test-util"] }

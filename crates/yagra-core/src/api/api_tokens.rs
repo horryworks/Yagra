@@ -275,7 +275,7 @@ async fn create_api_token(
 #[utoipa::path(
     get, path = "/api/v1/api-tokens", tag = "api-tokens",
     responses(
-        (status = 200, description = "Token metadata only — never the raw token or its hash", body = Vec<crate::apitokens::ApiTokenInfo>),
+        (status = 200, description = "Token metadata only — never the raw token or its hash", body = Vec<yagra_auth::apitokens::ApiTokenInfo>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no token store", body = super::error::ErrorBody),
@@ -289,7 +289,7 @@ async fn create_api_token(
 async fn list_api_tokens(
     _guard: RequireManageUsers,
     admin: Admin,
-) -> ApiResult<Json<Vec<crate::apitokens::ApiTokenInfo>>> {
+) -> ApiResult<Json<Vec<yagra_auth::apitokens::ApiTokenInfo>>> {
     // Metadata only — the row type carries no secret, which is what makes this listable at all.
     let tokens = admin.api_tokens.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list API tokens", "failed to list API tokens")

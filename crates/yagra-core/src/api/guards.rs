@@ -495,7 +495,9 @@ fn the_api_import_detector_recognises_both_spellings() {
     assert!(names_the_api_layer(&format!(
         "use crate::{{alerts, {module}}};"
     )));
-    assert!(!names_the_api_layer("use crate::apitokens::TokenRepo;"));
+    assert!(!names_the_api_layer(
+        "use yagra_auth::apitokens::TokenRepo;"
+    ));
     assert!(!names_the_api_layer(
         "use crate::alerts::{api_like, Other};"
     ));

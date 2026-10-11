@@ -20,7 +20,7 @@
 //! OIDC's exact matching is unchanged.
 //!
 //! **Transport is always TLS.** [`LdapSecurity`] has no plaintext variant, the trust anchors come
-//! from [`crate::tls`], and the crate's skip-certificate-checks switch is never called — a test
+//! from [`yagra_base::tls`], and the crate's skip-certificate-checks switch is never called — a test
 //! reads this file to keep it that way, so the switch's name is deliberately not written here.
 
 use std::collections::HashMap;
@@ -887,7 +887,7 @@ struct Conn {
 
 impl Conn {
     async fn open(cfg: &LdapConfig) -> Result<Self, String> {
-        let tls = crate::tls::client_config(cfg.ca_cert.as_deref())?;
+        let tls = yagra_base::tls::client_config(cfg.ca_cert.as_deref())?;
         let settings = LdapConnSettings::new()
             .set_conn_timeout(CONNECT_TIMEOUT)
             .set_starttls(cfg.security.starttls())

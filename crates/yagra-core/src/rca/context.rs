@@ -34,7 +34,7 @@ use yagra_common::{Direction, Node, NodeId};
 
 use crate::alerts::AlertManager;
 use crate::analysis::{AnalysisRunner, IncidentSignal};
-use crate::audit::AuditRepo;
+use yagra_auth::audit::AuditRepo;
 use yagra_base::repo::NodeRepo;
 
 /// Dependents named individually before the rest become a count. Twenty is enough for the model to
@@ -473,14 +473,14 @@ async fn upstream_chain(
 /// older than [`AUDIT_SCAN_ROWS`] entries is not "recent" in any useful sense anyway.
 async fn recent_changes(audit: &AuditRepo, node: Uuid) -> Vec<ChangeFacts> {
     let rows = audit
-        .list(&crate::audit::AuditFilter::newest(AUDIT_SCAN_ROWS))
+        .list(&yagra_auth::audit::AuditFilter::newest(AUDIT_SCAN_ROWS))
         .await
         .unwrap_or_default();
     filter_changes(&rows, node)
 }
 
 /// The pure half of [`recent_changes`], split out so the matching is testable without a database.
-fn filter_changes(rows: &[crate::audit::AuditRow], node: Uuid) -> Vec<ChangeFacts> {
+fn filter_changes(rows: &[yagra_auth::audit::AuditRow], node: Uuid) -> Vec<ChangeFacts> {
     let needle = node.to_string();
     rows.iter()
         .filter(|r| r.action.contains(&needle))
@@ -662,8 +662,8 @@ mod tests {
 
     // ── Recent changes ───────────────────────────────────────────────────────────────────────
 
-    fn audit_row(action: &str) -> crate::audit::AuditRow {
-        crate::audit::AuditRow {
+    fn audit_row(action: &str) -> yagra_auth::audit::AuditRow {
+        yagra_auth::audit::AuditRow {
             id: Uuid::new_v4(),
             at: "2026-07-27T12:00:00Z".to_owned(),
             username: "ops".to_owned(),

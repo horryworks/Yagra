@@ -82,9 +82,9 @@ pub(crate) fn public_route_allowed(parts: &Parts, st: &ApiState) -> bool {
 #[derive(Clone)]
 pub(crate) enum Authenticated {
     /// An interactive login.
-    Session(crate::auth::Session),
+    Session(yagra_auth::auth::Session),
     /// A personal access token, resolved together with the account it acts as.
-    Token(crate::apitokens::TokenAuth),
+    Token(yagra_auth::apitokens::TokenAuth),
 }
 
 impl Authenticated {
@@ -119,7 +119,7 @@ impl Authenticated {
 /// availability" rule (`api-conventions.md`) stays where it is enforced today.
 pub(crate) async fn resolve_auth(st: &ApiState, headers: &HeaderMap) -> Option<Authenticated> {
     let token = bearer(headers)?;
-    if crate::apitokens::is_api_token_shape(token) {
+    if yagra_auth::apitokens::is_api_token_shape(token) {
         // API tokens live in PostgreSQL, so they exist in live mode only.
         let admin = st.admin.as_ref()?;
         return admin
@@ -309,7 +309,7 @@ impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
 ///
 /// It demands only [`Permission::View`], so a handler needing a stronger permission *and* the
 /// username lists its `Require*` guard first and this second.
-pub struct Caller(pub crate::auth::Session);
+pub struct Caller(pub yagra_auth::auth::Session);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for Caller {
@@ -362,7 +362,7 @@ impl std::ops::Deref for Admin {
 /// Its own extractor rather than a field read inside each handler, for the same reason as [`Admin`]:
 /// six handlers each opened with the identical `let Some(oidc) = st.oidc.as_ref() else { … }`, and
 /// the one that forgets it does not fail to compile.
-pub struct Oidc(pub Arc<crate::oidc::OidcRepo>);
+pub struct Oidc(pub Arc<yagra_auth::oidc::OidcRepo>);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for Oidc {
@@ -377,7 +377,7 @@ impl FromRequestParts<ApiState> for Oidc {
 }
 
 impl std::ops::Deref for Oidc {
-    type Target = crate::oidc::OidcRepo;
+    type Target = yagra_auth::oidc::OidcRepo;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -456,7 +456,7 @@ impl std::ops::Deref for Upgrade {
 /// deliberately does not take it**: this rejects with a 503 when absent, so putting it in that
 /// signature would make every deployment without a directory unable to log in at all. That handler
 /// reads `st.ldap` directly, because absence there is a normal branch rather than an error.
-pub struct Ldap(pub Arc<crate::ldap::LdapRepo>);
+pub struct Ldap(pub Arc<yagra_auth::ldap::LdapRepo>);
 
 #[async_trait]
 impl FromRequestParts<ApiState> for Ldap {
@@ -471,7 +471,7 @@ impl FromRequestParts<ApiState> for Ldap {
 }
 
 impl std::ops::Deref for Ldap {
-    type Target = crate::ldap::LdapRepo;
+    type Target = yagra_auth::ldap::LdapRepo;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -721,7 +721,7 @@ mod tests {
         let mut parts = parts_with(None);
         parts
             .extensions
-            .insert(Authenticated::Token(crate::apitokens::TokenAuth {
+            .insert(Authenticated::Token(yagra_auth::apitokens::TokenAuth {
                 token_name: name.to_owned(),
                 owner_username: "svc-ci".to_owned(),
                 principal: Principal::new(role, Scope::All),

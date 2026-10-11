@@ -137,18 +137,18 @@ async fn login(
         .await
         .map_err(|e| ApiError::from_internal(e.as_ref(), "login", "login failed"))?;
     match route {
-        crate::auth::LoginRoute::Local => local_login(&st, &admin, &body).await,
-        crate::auth::LoginRoute::External(yagra_common::UserKind::Ldap) => {
+        yagra_auth::auth::LoginRoute::Local => local_login(&st, &admin, &body).await,
+        yagra_auth::auth::LoginRoute::External(yagra_common::UserKind::Ldap) => {
             directory_login(&st, &admin, &body).await
         }
         // An SSO account signs in through its provider; a disabled or service account cannot sign in
         // at all. Both answer exactly as they did before this path existed.
-        crate::auth::LoginRoute::External(_) | crate::auth::LoginRoute::Refused => {
+        yagra_auth::auth::LoginRoute::External(_) | yagra_auth::auth::LoginRoute::Refused => {
             invalid_credentials(&st, &admin, &body.username, "auth.login").await
         }
         // No such account. If a directory is configured, this is how a first-time sign-in provisions
         // one; otherwise it is an ordinary unknown user.
-        crate::auth::LoginRoute::Unknown => {
+        yagra_auth::auth::LoginRoute::Unknown => {
             if st.ldap.is_some() {
                 directory_login(&st, &admin, &body).await
             } else {
@@ -227,8 +227,8 @@ async fn directory_login(
         }
     };
 
-    match crate::ldap::authenticate(&cfg, &body.username, &body.password).await {
-        crate::ldap::LdapAuth::Unavailable(why) => {
+    match yagra_auth::ldap::authenticate(&cfg, &body.username, &body.password).await {
+        yagra_auth::ldap::LdapAuth::Unavailable(why) => {
             // **No throttle failure.** If a domain-controller outage armed the per-account
             // exponential lockout, five attempts each would leave every user locked out of Yagra
             // even after the DC came back — an outage that outlives its own cause.
@@ -245,16 +245,16 @@ async fn directory_login(
                 "incorrect username or password",
             ))
         }
-        crate::ldap::LdapAuth::Denied(why) => {
+        yagra_auth::ldap::LdapAuth::Denied(why) => {
             tracing::debug!(reason = %why, "the directory refused a login");
             invalid_credentials(st, admin, &body.username, "auth.login.ldap").await
         }
-        crate::ldap::LdapAuth::Ok(identity, role) => {
+        yagra_auth::ldap::LdapAuth::Ok(identity, role) => {
             let upsert = admin
                 .users
                 .upsert_external_user(
                     yagra_common::UserKind::Ldap,
-                    *crate::ldap::LDAP_PROVIDER_ID,
+                    *yagra_auth::ldap::LDAP_PROVIDER_ID,
                     &identity.subject,
                     &identity.username,
                     role,
@@ -262,7 +262,7 @@ async fn directory_login(
                 .await
                 .map_err(|e| ApiError::from_internal(e.as_ref(), "login", "login failed"))?;
             match upsert {
-                crate::auth::ExternalUpsert::Ok(user_id, principal) => {
+                yagra_auth::auth::ExternalUpsert::Ok(user_id, principal) => {
                     st.login_throttle.record_success(&body.username);
                     let role = principal.role;
                     // The session and the audit row carry the **directory's** name, not what was
@@ -272,7 +272,7 @@ async fn directory_login(
                     audit_record(&admin.audit, &identity.username, "auth.login.ldap", 200).await;
                     Ok(Json(LoginOk { token, role }))
                 }
-                crate::auth::ExternalUpsert::Disabled => {
+                yagra_auth::auth::ExternalUpsert::Disabled => {
                     // An admin switched this account off. Not a credential failure, so it does not
                     // arm the lockout — but it must not sign in either.
                     audit_record(&admin.audit, &identity.username, "auth.login.ldap", 401).await;
@@ -281,7 +281,7 @@ async fn directory_login(
                         "incorrect username or password",
                     ))
                 }
-                crate::auth::ExternalUpsert::UsernameTaken(existing) => {
+                yagra_auth::auth::ExternalUpsert::UsernameTaken(existing) => {
                     // Otherwise undiagnosable: the right password, a generic 401, forever.
                     tracing::warn!(
                         directory_user = %identity.username,
@@ -433,7 +433,7 @@ async fn change_own_password(
         Some(UserKind::Oidc | UserKind::Ldap | UserKind::Service) => {
             audit_record(&admin.audit, &username, "auth.password_change", 400).await;
             // The message an operator reads here is `users.rs`'s, not a second wording of it.
-            mutation_result(crate::auth::UserMutation::NotLocal, user_id)?;
+            mutation_result(yagra_auth::auth::UserMutation::NotLocal, user_id)?;
         }
         None => {
             audit_record(&admin.audit, &username, "auth.password_change", 404).await;
