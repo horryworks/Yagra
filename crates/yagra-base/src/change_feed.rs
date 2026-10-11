@@ -65,17 +65,28 @@ mod tests {
     #[tokio::test]
     async fn a_publish_moves_the_revision_and_reaches_every_subscriber() {
         // Process-global and other tests publish in parallel, so assert "moved" and "arrived",
-        // never an exact value.
+        // never an exact value. A publish from another test can land between `subscribe` and
+        // `current`: it is then on the receivers AND in `before`, so each receiver is read until
+        // it reaches a revision past `before` rather than trusting its first one.
         let (mut a, mut b) = (subscribe(), subscribe());
         let before = current();
         publish();
         assert!(current() > before);
         for rx in [&mut a, &mut b] {
-            let got = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
-                .await
-                .expect("a publish reaches the subscriber")
-                .expect("the sender lives for the process");
-            assert!(got > before);
+            let reached = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    match rx.recv().await {
+                        Ok(got) if got > before => return got,
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => {
+                            panic!("the sender lives for the process")
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("a publish reaches the subscriber");
+            assert!(reached > before);
         }
     }
 }
