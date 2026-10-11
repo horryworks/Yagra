@@ -1,0 +1,39 @@
+[package]
+name = "yagra-meraki"
+description = "Yagra-meraki — the Cisco Meraki integration: organizations, the Dashboard inventory sync and import, the collect schedule, and whether the Dashboard is answering."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+yagra-common = { path = "../yagra-common" }
+# The organizations, devices and inventory it keeps, the folders it files into, the sealed key.
+yagra-base = { path = "../yagra-base" }
+# The collect jobs it builds and the result fields it reads.
+yagra-bus = { path = "../yagra-bus" }
+# Every byte of Dashboard I/O (GET-only).
+yagra-transport = { path = "../yagra-transport" }
+# The organization alert it raises, through the sink core hands it (ADR-164 decision 18).
+yagra-alert = { path = "../yagra-alert" }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+metrics = { workspace = true }
+async-trait = { workspace = true }
+# The organization and inventory views are API responses, so they carry their own JSON Schema.
+utoipa = { workspace = true }
+
+[dev-dependencies]
+# `srcread` and the real-PostgreSQL fixtures. Dev-dependencies only, so a release build carries
+# neither.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
+yagra-base = { path = "../yagra-base", features = ["test-util"] }
+yagra-alert = { path = "../yagra-alert", features = ["test-util"] }

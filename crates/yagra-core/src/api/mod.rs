@@ -208,7 +208,7 @@ pub struct AdminState {
     /// Per-node DNS-monitor configs plus the observed resolution chains and their history.
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
     /// Observed CDP/LLDP adjacency per node, and its append-on-change history (ADR-038).
-    pub neighbors: Arc<crate::neighbors::NeighborRepo>,
+    pub neighbors: Arc<yagra_base::neighbors::NeighborRepo>,
     /// Observed interface addresses per node (ADR-043). Read here to place a poller on a segment
     /// when the shadow preview resolves anchors.
     pub l3: Arc<crate::l3::L3Repo>,
@@ -233,19 +233,19 @@ pub struct AdminState {
     /// column on the cache.
     pub link_overrides: Arc<crate::link_overrides::LinkOverrideRepo>,
     /// Cisco Meraki organizations + network scope + device import (read-only Dashboard API).
-    pub meraki_orgs: Arc<crate::meraki::MerakiOrgRepo>,
+    pub meraki_orgs: Arc<yagra_meraki::MerakiOrgRepo>,
     /// What the Dashboard says each organization holds, kept between syncs (ADR-164).
-    pub meraki_inventory: Arc<crate::meraki::inventory::MerakiInventoryRepo>,
+    pub meraki_inventory: Arc<yagra_meraki::inventory::MerakiInventoryRepo>,
     /// What a Meraki import resolves before it writes — shared with the sync (ADR-164 Inc.4).
-    pub meraki_import: Arc<crate::meraki::import::ImportResolver>,
+    pub meraki_import: Arc<yagra_meraki::import::ImportResolver>,
     /// The inventory sync itself — the same value the leader's loop runs, so "Sync now" and the
     /// loop share the organization's lanes (ADR-169).
-    pub meraki_sync: Arc<crate::meraki::sync::MerakiSync>,
+    pub meraki_sync: Arc<yagra_meraki::sync::MerakiSync>,
     /// Configured NetBox deployments and the folder tree pulled from them (ADR-100). Read-only
     /// and outbound from core; the API token lives sealed in `creds`, never on this row.
     pub netbox: Arc<yagra_netbox::NetboxRepo>,
     /// Per-node Cisco Meraki device bindings.
-    pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
+    pub meraki_devices: Arc<yagra_meraki::MerakiDeviceRepo>,
     /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).
     pub events: Arc<crate::events::EventRepo>,
     /// Distributed poller pool control plane (ADR-009/020): the live poller registry + working-set

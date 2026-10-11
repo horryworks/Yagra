@@ -27,7 +27,7 @@ use yagra_base::repo::NodeRepo;
 
 // The vocabulary lives in the parent, which a child can see without any widening — see
 // `super`'s doc for why that is what decides where a thing goes here.
-use crate::alerts::sink::AlertSink;
+use yagra_alert::action::AlertSink;
 
 use super::rules::compile_rule;
 use super::*;

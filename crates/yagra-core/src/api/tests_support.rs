@@ -168,7 +168,7 @@ pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
 /// can show that a request was accepted, never that a saved key was the one that was used.
 pub(crate) async fn live_state_with_dashboard(
     pool: sqlx::PgPool,
-    dashboard: Arc<dyn crate::meraki::sync::MerakiDirectory>,
+    dashboard: Arc<dyn yagra_meraki::sync::MerakiDirectory>,
 ) -> ApiState {
     live_state_with(pool, None, None, Some(dashboard), Vec::new()).await
 }
@@ -182,7 +182,7 @@ pub(crate) async fn live_state_with_dashboard(
 pub(crate) struct EmptyDashboard;
 
 #[async_trait::async_trait]
-impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
+impl yagra_meraki::sync::MerakiDirectory for EmptyDashboard {
     /// No organizations either: a key this Dashboard accepts, that can see nothing.
     async fn organizations(
         &self,
@@ -194,7 +194,7 @@ impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
 
     async fn inventory(
         &self,
-        _org: &crate::meraki::MerakiOrg,
+        _org: &yagra_meraki::MerakiOrg,
         _api_key: &str,
     ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
         Ok(yagra_transport::MerakiInventory::default())
@@ -202,7 +202,7 @@ impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
 
     async fn ha_roles(
         &self,
-        _org: &crate::meraki::MerakiOrg,
+        _org: &yagra_meraki::MerakiOrg,
         _api_key: &str,
     ) -> Result<Vec<(String, Option<yagra_common::MerakiHaRole>)>, yagra_transport::MerakiFetchError>
     {
@@ -212,7 +212,7 @@ impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
     /// Never asked: the listing holds no MX, so there is no network to read.
     async fn network_lans(
         &self,
-        _org: &crate::meraki::MerakiOrg,
+        _org: &yagra_meraki::MerakiOrg,
         _api_key: &str,
         _network_ids: &[String],
         _budget: std::time::Duration,
@@ -225,7 +225,7 @@ impl crate::meraki::sync::MerakiDirectory for EmptyDashboard {
     /// Never asked: no MX of this fixture is a node.
     async fn device_neighbors(
         &self,
-        _org: &crate::meraki::MerakiOrg,
+        _org: &yagra_meraki::MerakiOrg,
         _api_key: &str,
         _serials: &[String],
         _budget: std::time::Duration,
@@ -289,7 +289,7 @@ async fn live_state_with(
     pool: sqlx::PgPool,
     env_community: Option<String>,
     upgrade_dir: Option<std::path::PathBuf>,
-    dashboard: Option<Arc<dyn crate::meraki::sync::MerakiDirectory>>,
+    dashboard: Option<Arc<dyn yagra_meraki::sync::MerakiDirectory>>,
     notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
     use crate::alerts::Notifier;
@@ -331,23 +331,23 @@ async fn live_state_with(
     let collection = Arc::new(crate::collection::CollectionRepo::new(pool.clone()));
     let url_checks = Arc::new(crate::url_check::UrlCheckRepo::new(pool.clone()));
     let dns_checks = Arc::new(crate::dns_check::DnsCheckRepo::new(pool.clone()));
-    let meraki_devices = Arc::new(crate::meraki::MerakiDeviceRepo::new(pool.clone()));
-    let meraki_orgs = Arc::new(crate::meraki::MerakiOrgRepo::new(pool.clone()));
-    let meraki_inventory = Arc::new(crate::meraki::inventory::MerakiInventoryRepo::new(
+    let meraki_devices = Arc::new(yagra_meraki::MerakiDeviceRepo::new(pool.clone()));
+    let meraki_orgs = Arc::new(yagra_meraki::MerakiOrgRepo::new(pool.clone()));
+    let meraki_inventory = Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
         pool.clone(),
     ));
-    let meraki_import = Arc::new(crate::meraki::import::ImportResolver::new(
+    let meraki_import = Arc::new(yagra_meraki::import::ImportResolver::new(
         group_repo.clone(),
         repo.clone(),
     ));
-    let meraki_sync = Arc::new(crate::meraki::sync::MerakiSync::new(
+    let meraki_sync = Arc::new(yagra_meraki::sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
         dashboard.unwrap_or_else(|| Arc::new(EmptyDashboard)),
-        Arc::new(crate::meraki::MerakiInflight::new()),
+        Arc::new(yagra_meraki::MerakiInflight::new()),
         meraki_import.clone(),
-        Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
+        Arc::new(yagra_base::neighbors::NeighborRepo::new(pool.clone())),
     ));
     let reports_repo = Arc::new(crate::reports::ReportsRepo::new(pool.clone()));
     let audit_repo = Arc::new(yagra_auth::audit::AuditRepo::new(pool.clone()));
@@ -450,7 +450,7 @@ async fn live_state_with(
         reports_repo,
         url_checks,
         dns_checks,
-        neighbors: Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
+        neighbors: Arc::new(yagra_base::neighbors::NeighborRepo::new(pool.clone())),
         l3: l3_repo,
         vlans: Arc::new(crate::vlans::VlanRepo::new(pool.clone())),
         routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),

@@ -54,18 +54,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use yagra_alert::action::AlertSink;
 use yagra_alert::Alert;
 
 use super::{history_row, notify::Notifier, NotifyAction};
 use crate::alerts::history::AlertHistoryStore;
-
-/// Where a component sends an alert transition.
-#[async_trait]
-pub(crate) trait AlertSink: Send + Sync {
-    /// Record the transition if it produces a row, then deliver it. Both, or neither — a caller
-    /// holding this has no way to ask for only one.
-    async fn dispatch(&self, action: NotifyAction);
-}
 
 /// The `alert_history` half, as a seam. Implemented by [`AlertHistoryStore`] over PostgreSQL.
 #[async_trait]

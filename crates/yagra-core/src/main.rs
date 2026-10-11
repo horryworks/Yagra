@@ -55,18 +55,16 @@ mod leader;
 mod link_overrides;
 mod logstore;
 mod mcp;
+mod metric_meaning;
+mod mib;
 // ⚠️ **This line used to live at the bottom of the file, and the position was load-bearing.**
 // Twenty-one files in this crate computed "production code" as everything above the first test
 // attribute, so a test-only `mod` declaration at the top of a file truncated their view to its
 // imports — both of this file's structural tests failed the moment this sat here. ADR-091 moved
 // all twenty-one onto `module_source`, which removes each test-only item instead of cutting at
 // the first, so the constraint is gone and this line has come home to prove it.
-mod meraki;
-mod metric_meaning;
-mod mib;
 #[cfg(test)]
 mod module_source;
-mod neighbors;
 mod node_display;
 /// Per-account pins on the inventory tree (ADR-146).
 mod pins;
@@ -167,7 +165,7 @@ use yagra_auth::auth::{LoginThrottle, SessionStore, UserStore};
 use yagra_auth::{apitokens, auth, ldap, oidc};
 use yagra_base::repo::{NodeListing, NodeRepo, StaticNodeList};
 use yagra_base::secrets::CredentialStore;
-use yagra_base::{config_gen, groups, repo, secrets};
+use yagra_base::{config_gen, groups, neighbors, repo, secrets};
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
 
 #[tokio::main]
@@ -492,10 +490,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Cisco Meraki: org/device stores (metadata in Postgres) + the per-lane single-flight tracker
     // (ADR-169; shared by the Meraki scheduler and the result consumer, which clears a lane on the
     // collect's first result). Read-only integration.
-    let meraki_orgs = Arc::new(meraki::MerakiOrgRepo::new(repo.pool()));
+    let meraki_orgs = Arc::new(yagra_meraki::MerakiOrgRepo::new(repo.pool()));
     let netbox = Arc::new(yagra_netbox::NetboxRepo::new(repo.pool()));
-    let meraki_devices = Arc::new(meraki::MerakiDeviceRepo::new(repo.pool()));
-    let meraki_inflight = Arc::new(meraki::MerakiInflight::new());
+    let meraki_devices = Arc::new(yagra_meraki::MerakiDeviceRepo::new(repo.pool()));
+    let meraki_inflight = Arc::new(yagra_meraki::MerakiInflight::new());
 
     // Distributed poller pool (ADR-009/020): the coordinator is core's live poller registry +
     // working-set publisher. Its Redis mirror (from config, independent of live/skeleton) and
@@ -633,14 +631,16 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let creds = Arc::new(CredentialStore::new(repo.pool(), kek.clone()));
     // The Meraki inventory sync (ADR-164). Built once and shared: the leader's periodic loop and
     // the "Sync now" endpoint must go through the same lanes, which live in this value.
-    let meraki_inventory = Arc::new(meraki::inventory::MerakiInventoryRepo::new(repo.pool()));
+    let meraki_inventory = Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
+        repo.pool(),
+    ));
     // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
     // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
     // IP ranges — one hierarchy, read in several places.
     let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
     // What a Meraki import resolves before it writes (ADR-164 Inc.4). One value, because the
     // sync's automatic import and the API's manual one must file a device the same way.
-    let meraki_import = Arc::new(meraki::import::ImportResolver::new(
+    let meraki_import = Arc::new(yagra_meraki::import::ImportResolver::new(
         group_repo.clone(),
         repo.clone(),
     ));
@@ -650,11 +650,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let meraki_wire = yagra_transport::MerakiWireOrigin::from_env()?;
     #[cfg(not(feature = "lab-meraki-mock"))]
     let meraki_wire = None;
-    let meraki_sync = Arc::new(meraki::sync::MerakiSync::new(
+    let meraki_sync = Arc::new(yagra_meraki::sync::MerakiSync::new(
         meraki_orgs.clone(),
         meraki_inventory.clone(),
         creds.clone(),
-        Arc::new(meraki::sync::DashboardApi::new(meraki_wire)),
+        Arc::new(yagra_meraki::sync::DashboardApi::new(meraki_wire)),
         meraki_inflight.clone(),
         meraki_import.clone(),
         Arc::new(neighbors::NeighborRepo::new(repo.pool())),
@@ -1141,16 +1141,16 @@ struct LeaderTasks {
     /// Vendor no-reading placeholders (ADR-156): published by the config refresh, read by both result
     /// consumers.
     no_reading: yagra_alert::no_reading::NoReadingHandle,
-    meraki_inflight: Arc<meraki::MerakiInflight>,
-    meraki_devices: Arc<meraki::MerakiDeviceRepo>,
-    meraki_orgs: Arc<meraki::MerakiOrgRepo>,
+    meraki_inflight: Arc<yagra_meraki::MerakiInflight>,
+    meraki_devices: Arc<yagra_meraki::MerakiDeviceRepo>,
+    meraki_orgs: Arc<yagra_meraki::MerakiOrgRepo>,
     /// The organizations' device listings: the topology derivation reads each bound device's MAC
     /// from it (ADR-191 Inc.7).
-    meraki_inventory: Arc<meraki::inventory::MerakiInventoryRepo>,
+    meraki_inventory: Arc<yagra_meraki::inventory::MerakiInventoryRepo>,
     /// The Meraki inventory sync (ADR-164). Leader-only, and for a stronger reason than NetBox's:
     /// an organization's lanes live in this process, so two cores syncing would each believe they
     /// held one alone.
-    meraki_sync: Arc<meraki::sync::MerakiSync>,
+    meraki_sync: Arc<yagra_meraki::sync::MerakiSync>,
     /// Configured NetBox deployments (ADR-100). Leader-only: two cores syncing one server would
     /// write the same folders twice — idempotent, but twice the load on someone else's NetBox.
     netbox: Arc<yagra_netbox::NetboxRepo>,
@@ -1222,7 +1222,7 @@ impl LeaderTasks {
         &self,
         delivery: &DeliveryQueue,
         subject: &'static str,
-    ) -> Arc<dyn alerts::sink::AlertSink> {
+    ) -> Arc<dyn yagra_alert::action::AlertSink> {
         Arc::new(alerts::sink::RecordingSink::new(
             self.history.clone(),
             Arc::new(alerts::sink::QueuedNotifier::new(delivery.clone())),
@@ -1521,7 +1521,7 @@ impl LeaderTasks {
         // the two never hold one organization at once; the loop decides which are due.
         spawn_cancellable(
             &self.shutdown,
-            meraki::sync::run_sync_loop(self.meraki_sync.clone(), self.repo.clone()),
+            yagra_meraki::sync::run_sync_loop(self.meraki_sync.clone(), self.repo.clone()),
         );
         // NetBox's folder-tree pull (ADR-100 Inc.1). Leader-only for the reason the field's doc
         // gives; the loop itself decides which servers are due.
@@ -1671,7 +1671,7 @@ impl LeaderTasks {
         // it shares `meraki_inflight` with the collect scheduler and the sync above.
         spawn_cancellable(
             &self.shutdown,
-            meraki::health::run_meraki_collect_watch(
+            yagra_meraki::health::run_meraki_collect_watch(
                 self.meraki_orgs.clone(),
                 self.repo.clone(),
                 self.meraki_inflight.clone(),
@@ -1909,7 +1909,7 @@ async fn run_topology_derivation(stores: TopologyStores) {
             l3_mark,
             nb_mark,
             rt_mark,
-            meraki::inventory::inventory_generation(),
+            yagra_meraki::inventory::inventory_generation(),
         );
         if last_signal.as_ref() == Some(&signal) {
             metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
@@ -1932,7 +1932,7 @@ struct TopologyStores {
     routing: Arc<l3_routing::RoutingRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
     overrides: Arc<link_overrides::LinkOverrideRepo>,
-    meraki_inventory: Arc<meraki::inventory::MerakiInventoryRepo>,
+    meraki_inventory: Arc<yagra_meraki::inventory::MerakiInventoryRepo>,
 }
 
 /// What one derivation cycle did.
@@ -2227,11 +2227,11 @@ async fn run_routing_refresh(
 
 /// What the Meraki collect scheduler reads and publishes through ([`run_meraki_scheduler`]).
 struct MerakiScheduler {
-    orgs: Arc<meraki::MerakiOrgRepo>,
-    devices: Arc<meraki::MerakiDeviceRepo>,
+    orgs: Arc<yagra_meraki::MerakiOrgRepo>,
+    devices: Arc<yagra_meraki::MerakiDeviceRepo>,
     creds: Arc<CredentialStore>,
     bus: Arc<NatsBus>,
-    inflight: Arc<meraki::MerakiInflight>,
+    inflight: Arc<yagra_meraki::MerakiInflight>,
     /// The deployment's settings — the global Meraki kill switch.
     settings: Arc<NodeRepo>,
     /// Which capabilities the pool's live pollers claim (ADR-167 decision 9).
@@ -2245,7 +2245,7 @@ struct MerakiScheduler {
 /// the SSID read. Each lane holds one collect at a time, so an organization is asked by two
 /// sessions at most, each paced at half its rate budget (`MerakiOrg::lane_rps`). Separate from the
 /// per-node scheduler so that loop is untouched. Each short tick: honour the global kill switch,
-/// then for every enabled org ask [`meraki::schedule::MerakiSchedule::plan`] what each free lane
+/// then for every enabled org ask [`yagra_meraki::schedule::MerakiSchedule::plan`] what each free lane
 /// sends, and dispatch it (serial→node_id map + monitored networks inlined). Tiers have their own
 /// cadences (free of the per-node 1h cap); a collect's result clears its lane (a lease is the
 /// backstop). An org with no imported devices of a kind is skipped to save budget.
@@ -2258,7 +2258,7 @@ struct MerakiScheduler {
 /// collect of their own in the slow lane (`ssid_only`), which publishes no client count or
 /// utilization, so the fast lane's wireless rounds keep their spacing (ADR-169 decision 2).
 ///
-/// ⚠️ Every decision below is [`meraki::schedule::MerakiSchedule`]'s, which is what a test drives;
+/// ⚠️ Every decision below is [`yagra_meraki::schedule::MerakiSchedule`]'s, which is what a test drives;
 /// this loop reads the stores and publishes.
 async fn run_meraki_scheduler(s: MerakiScheduler) {
     use std::time::Instant;
@@ -2276,7 +2276,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
     } = s;
     const TICK: Duration = Duration::from_secs(15);
     const LEASE: Duration = Duration::from_secs(300);
-    let mut schedule = meraki::schedule::MerakiSchedule::new();
+    let mut schedule = yagra_meraki::schedule::MerakiSchedule::new();
 
     loop {
         tokio::time::sleep(TICK).await;
@@ -2303,7 +2303,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
         let now = Instant::now();
         // Which tiers this pool can run at all (ADR-167 decision 9, ADR-168 decision 7): asked once a tick,
         // since every organization's collect goes to the same pool.
-        let caps = meraki::PoolCaps {
+        let caps = yagra_meraki::PoolCaps {
             switch_ports: coordinator.pollers_support(
                 Some(&meraki_pool),
                 yagra_bus::CAP_MERAKI_SWITCH_PORTS,
@@ -2322,7 +2322,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
             let active = org.active_tiers();
             for tier in yagra_common::MerakiTier::ALL {
                 if tier != yagra_common::MerakiTier::Inventory
-                    && !(active.contains(&tier) && meraki::pool_can_run(tier, caps))
+                    && !(active.contains(&tier) && yagra_meraki::pool_can_run(tier, caps))
                 {
                     inflight.health.set_idle(org.id, tier);
                 }
@@ -2331,7 +2331,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                 !inflight.is_inflight(org.id, lane, now)
             });
             // What both lanes' collects share is read once, and only when one of them needs it.
-            let mut watched: Option<Result<Vec<String>, meraki::NoCollect>> = None;
+            let mut watched: Option<Result<Vec<String>, yagra_meraki::NoCollect>> = None;
             let mut key: Option<Option<String>> = None;
             for work in plan.works() {
                 let tier = work.tier;
@@ -2361,7 +2361,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki::sync::MerakiSyncFailure::Internal,
+                                yagra_meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2377,7 +2377,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     if let Err(e) = &read {
                         tracing::warn!(org = %org.org_id, error = %e, "meraki watched networks load failed");
                     }
-                    watched = Some(meraki::networks_to_collect(read));
+                    watched = Some(yagra_meraki::networks_to_collect(read));
                 }
                 let network_ids = match watched.clone().expect("read above") {
                     Ok(ids) => ids,
@@ -2388,19 +2388,19 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                         // and nothing will answer any of its tiers: an alert raised before must
                         // close on that (decision 35). A read that *failed* is the other thing
                         // entirely, and is counted.
-                        if why == meraki::NoCollect::NothingWatched {
+                        if why == yagra_meraki::NoCollect::NothingWatched {
                             for idle in &active {
                                 inflight.health.set_idle(org.id, *idle);
                             }
                         }
-                        if why == meraki::NoCollect::Unreadable
+                        if why == yagra_meraki::NoCollect::Unreadable
                             && schedule.count_core_failure(org.id, tier, cadence, now)
                         {
                             inflight.health.set_active(org.id, tier);
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki::sync::MerakiSyncFailure::Internal,
+                                yagra_meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2408,7 +2408,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     }
                 };
                 if key.is_none() {
-                    key = Some(meraki::resolve_meraki_key(&creds, org.credential_id).await);
+                    key = Some(yagra_meraki::resolve_meraki_key(&creds, org.credential_id).await);
                 }
                 let Some(api_key) = key.clone().expect("read above") else {
                     tracing::warn!(org = %org.org_id, "meraki key unresolved; skipping");
@@ -2419,7 +2419,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                         inflight.health.record_failed(
                             org.id,
                             tier,
-                            meraki::sync::MerakiSyncFailure::Credential,
+                            yagra_meraki::sync::MerakiSyncFailure::Credential,
                             pool_coverage::now_unix_ms(),
                         );
                     }
@@ -2433,7 +2433,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                     continue; // lost an acquire race
                 }
                 let devices_sent = device_refs.len();
-                let check = meraki::build_collect_check(
+                let check = yagra_meraki::build_collect_check(
                     &org,
                     tier,
                     api_key,
@@ -2479,7 +2479,7 @@ async fn run_meraki_scheduler(s: MerakiScheduler) {
                             inflight.health.record_failed(
                                 org.id,
                                 tier,
-                                meraki::sync::MerakiSyncFailure::Internal,
+                                yagra_meraki::sync::MerakiSyncFailure::Internal,
                                 pool_coverage::now_unix_ms(),
                             );
                         }
@@ -2812,11 +2812,11 @@ mod tests {
         super::TopologyStores {
             repo: Arc::new(pgtest::repo(pool.clone())),
             l3: Arc::new(crate::l3::L3Repo::new(pool.clone())),
-            neighbors: Arc::new(crate::neighbors::NeighborRepo::new(pool.clone())),
+            neighbors: Arc::new(yagra_base::neighbors::NeighborRepo::new(pool.clone())),
             routing: Arc::new(crate::l3_routing::RoutingRepo::new(pool.clone())),
             links: Arc::new(crate::topology_links::TopoLinkRepo::new(pool.clone())),
             overrides: Arc::new(crate::link_overrides::LinkOverrideRepo::new(pool.clone())),
-            meraki_inventory: Arc::new(crate::meraki::inventory::MerakiInventoryRepo::new(
+            meraki_inventory: Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
                 pool.clone(),
             )),
         }

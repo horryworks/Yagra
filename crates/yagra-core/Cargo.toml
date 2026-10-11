@@ -25,6 +25,8 @@ yagra-base = { path = "../yagra-base" }
 yagra-netbox = { path = "../yagra-netbox" }
 # Accounts, sessions, sign-in and the audit log, its own crate since ADR-202 Inc.6.
 yagra-auth = { path = "../yagra-auth" }
+# The Cisco Meraki integration (ADR-164/169), its own crate since ADR-202 Inc.6.
+yagra-meraki = { path = "../yagra-meraki" }
 yagra-discovery = { path = "../yagra-discovery" }
 # Forwarding filters + wire renderers for the passive-data tee (ADR-034).
 yagra-forward = { path = "../yagra-forward" }

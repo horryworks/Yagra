@@ -544,7 +544,7 @@ mod tests {
         // ADR-202 Inc.5 moved `repo/` into `yagra-base`.
         include_str!("../../yagra-base/src/repo/snapshots.rs"),
         include_str!("dns_check.rs"),
-        include_str!("neighbors.rs"),
+        include_str!("../../yagra-base/src/neighbors.rs"),
         include_str!("l3.rs"),
         // ADR-095 split `events.rs` into a directory; the `DELETE` this list is looking for is in
         // the PostgreSQL half. Same shape as the `repo/` and `analysis/` entries, and same safety:

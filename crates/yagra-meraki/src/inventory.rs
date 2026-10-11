@@ -2075,7 +2075,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_address_names_its_organization(pool: sqlx::PgPool) {
         let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+        let org = crate::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
             .expect("org");
@@ -2112,7 +2112,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_mac_names_its_organization_and_its_node(pool: sqlx::PgPool) {
         let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+        let org = crate::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
             .expect("org");
@@ -2218,7 +2218,7 @@ mod tests {
         bind: &str,
     ) -> Vec<String> {
         let cred = yagra_base::pgtest::credential(pool, "meraki-key", "meraki_api").await;
-        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+        let org = crate::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
             .expect("org");
@@ -2297,7 +2297,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn a_device_missing_from_the_listing_is_not_read_for_neighbours(pool: sqlx::PgPool) {
         let cred = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let org = crate::meraki::MerakiOrgRepo::new(pool.clone())
+        let org = crate::MerakiOrgRepo::new(pool.clone())
             .create("123456", "Acme", "https://api.meraki.com", cred)
             .await
             .expect("org");

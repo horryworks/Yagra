@@ -23,20 +23,20 @@ use std::time::{Duration, Instant};
 
 use std::sync::Arc;
 
-use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
 use crate::coordinator::{Coordinator, PollerView};
-use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
+use yagra_alert::action::AlertSink;
 use yagra_alert::engine::POOL_COVERAGE_METRIC as COVERAGE_METRIC;
 use yagra_alert::Alert;
 use yagra_base::groups::GroupRepo;
 use yagra_base::repo::NodeRepo;
 use yagra_common::Node;
+use yagra_meraki::MerakiDeviceRepo;
 // Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
 // lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
 // alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
-use crate::{meraki, pool_coverage};
+use crate::pool_coverage;
 use yagra_base::{config_gen, groups};
 
 /// How often the watch loop samples coverage.
@@ -477,7 +477,7 @@ pub use yagra_common::clock::now_unix_ms;
 pub(crate) async fn run_pool_coverage_watch(
     coordinator: Arc<Coordinator>,
     repo: Arc<NodeRepo>,
-    meraki: Arc<meraki::MerakiDeviceRepo>,
+    meraki: Arc<yagra_meraki::MerakiDeviceRepo>,
     groups: Arc<groups::GroupRepo>,
     alerts: Arc<AlertManager>,
     sink: Arc<dyn AlertSink>,

@@ -144,7 +144,7 @@ impl AlertFactsSource for CachedNodeFacts {
     // Not cached: an organization's collect alert fires a handful of times a year, and a failed
     // read degrades to the id like every other fact here — the notification goes out regardless.
     async fn meraki_org_name(&self, org: Uuid) -> Option<String> {
-        crate::meraki::MerakiOrgRepo::new(self.repo.pool())
+        yagra_meraki::MerakiOrgRepo::new(self.repo.pool())
             .get(org)
             .await
             .ok()

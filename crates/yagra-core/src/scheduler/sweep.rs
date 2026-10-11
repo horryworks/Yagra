@@ -6,7 +6,7 @@
 //! in is the one this module is named after.
 
 use crate::coordinator::Coordinator;
-use crate::{meraki, poolres, scheduler, wireless};
+use crate::{poolres, scheduler, wireless};
 use futures::stream::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ fn group_by_pool(
 /// A struct because the second one made [`run_scheduler`]'s argument list eight long, and two
 /// `Arc<…Repo>` parameters next to each other are where a swap compiles (`extensibility.md` §3).
 pub(crate) struct CollectedElsewhere {
-    pub(crate) meraki: Arc<meraki::MerakiDeviceRepo>,
+    pub(crate) meraki: Arc<yagra_meraki::MerakiDeviceRepo>,
     pub(crate) wireless: Arc<wireless::WirelessRepo>,
 }
 

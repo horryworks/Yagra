@@ -94,7 +94,7 @@ pub struct PollDispatcherStores {
     pub collection: Arc<crate::collection::CollectionRepo>,
     pub url_checks: Arc<crate::url_check::UrlCheckRepo>,
     pub dns_checks: Arc<crate::dns_check::DnsCheckRepo>,
-    pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
+    pub meraki_devices: Arc<yagra_meraki::MerakiDeviceRepo>,
     /// Imported wireless access points (ADR-064), which are answered for by their controller.
     pub wireless: Arc<crate::wireless::WirelessRepo>,
     /// Deployment-wide settings — half of the adjacency seam.

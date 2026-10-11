@@ -44,10 +44,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::meraki::filing::{Filing, FilingReason, MerakiFiled};
-use crate::meraki::import::ImportCandidate;
-use crate::meraki::inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
-use crate::meraki::sync::MerakiSyncFailure;
+use yagra_meraki::filing::{Filing, FilingReason, MerakiFiled};
+use yagra_meraki::import::ImportCandidate;
+use yagra_meraki::inventory::{DeviceRecord, MerakiDeviceCounts, MerakiDeviceState};
+use yagra_meraki::sync::MerakiSyncFailure;
 
 /// Default Dashboard API base URL (the global shard).
 const DEFAULT_MERAKI_BASE_URL: &str = "https://api.meraki.com";
@@ -206,17 +206,17 @@ fn key_source(api_key: Option<&str>, credential_id: Option<Uuid>) -> Result<KeyS
 
 /// The key itself, from wherever the request said it is.
 ///
-/// 🚨 For a saved key, [`crate::meraki::open_saved_meraki_key`] refuses any credential that is not
+/// 🚨 For a saved key, [`yagra_meraki::open_saved_meraki_key`] refuses any credential that is not
 /// a `meraki_api` one **before** its secret is read, so naming an SNMP community's id here cannot
 /// get that community sent to the Dashboard API. Both refusals are 400 `invalid_credential` — the
 /// id came in the body, so it is the request that is wrong (the shape `invalid_group` has).
 async fn resolve_key(admin: &super::AdminState, source: &KeySource) -> Result<String, ApiError> {
-    use crate::meraki::SavedKeyError;
+    use yagra_meraki::SavedKeyError;
     let id = match source {
         KeySource::Typed(key) => return Ok(key.clone()),
         KeySource::Saved(id) => *id,
     };
-    match crate::meraki::open_saved_meraki_key(&admin.creds, id).await {
+    match yagra_meraki::open_saved_meraki_key(&admin.creds, id).await {
         Ok(key) => Ok(key),
         Err(SavedKeyError::NotFound) => Err(ApiError::bad_request(
             "invalid_credential",
@@ -399,7 +399,7 @@ pub(crate) struct MerakiFullSyncView {
 
 impl MerakiFullSyncView {
     /// The organization's read, if one is asked for or running.
-    fn of(o: &crate::meraki::MerakiOrg) -> Option<Self> {
+    fn of(o: &yagra_meraki::MerakiOrg) -> Option<Self> {
         if o.full_sync_requested_at.is_none() && o.full_sync.is_none() {
             return None;
         }
@@ -435,7 +435,7 @@ pub(crate) struct MerakiCollectFailureView {
 }
 
 impl MerakiCollectFailureView {
-    fn of(f: &crate::meraki::health::TierFailure) -> Self {
+    fn of(f: &yagra_meraki::health::TierFailure) -> Self {
         Self {
             tier: f.tier.as_str().to_owned(),
             reason: f.reason,
@@ -453,7 +453,7 @@ impl MerakiCollectFailureView {
 /// organizations under one key have to be tellable from two under two, and "use a saved key" has to
 /// be able to say which organizations a key already serves. (This doc used to say the view existed
 /// to keep that reference off the wire. The reference was never the secret.)
-fn meraki_org_view(o: &crate::meraki::MerakiOrg, devices: MerakiDeviceCounts) -> MerakiOrgView {
+fn meraki_org_view(o: &yagra_meraki::MerakiOrg, devices: MerakiDeviceCounts) -> MerakiOrgView {
     MerakiOrgView {
         id: o.id,
         org_id: o.org_id.clone(),
@@ -812,7 +812,7 @@ pub(super) struct MerakiCadenceReq {
 /// it. So these are rejected rather than clamped — an operator who typed 1 second meant something,
 /// and silently getting 60 would hide that the request was impossible.
 fn check_cadence(body: &MerakiCadenceReq) -> Result<(), ApiError> {
-    use crate::config::*;
+    use yagra_meraki::bounds::*;
     let in_range = |v: i32, lo: i32, hi: i32| v >= lo && v <= hi;
     if !in_range(
         body.availability_secs,
@@ -908,7 +908,7 @@ async fn set_meraki_org_cadence(
 ) -> ApiResult<StatusCode> {
     meraki_is_deployment_wide(&scope)?;
     check_cadence(&body)?;
-    let cadence = crate::meraki::MerakiCadence {
+    let cadence = yagra_meraki::MerakiCadence {
         availability_secs: body.availability_secs,
         uplink_secs: body.uplink_secs,
         traffic_secs: body.traffic_secs,
@@ -1100,12 +1100,12 @@ async fn set_meraki_import_settings(
         .max_devices
         .unwrap_or_else(|| i32::try_from(org.max_devices).unwrap_or(i32::MAX));
     // Refused, not clamped: a cap silently moved is a cap the operator does not know they have.
-    if !(1..=crate::config::MERAKI_MAX_DEVICES_HARD).contains(&max_devices) {
+    if !(1..=yagra_meraki::bounds::MERAKI_MAX_DEVICES_HARD).contains(&max_devices) {
         return Err(ApiError::bad_request(
             "invalid_max_devices",
             format!(
                 "max_devices must be between 1 and {}",
-                crate::config::MERAKI_MAX_DEVICES_HARD
+                yagra_meraki::bounds::MERAKI_MAX_DEVICES_HARD
             ),
         ));
     }
@@ -1503,7 +1503,7 @@ pub(crate) async fn node_meraki_pair(
 pub(crate) async fn node_meraki_site(
     admin: &super::AdminState,
     node: Uuid,
-) -> Option<crate::meraki::MerakiSite> {
+) -> Option<yagra_meraki::MerakiSite> {
     match admin.meraki_devices.site(node).await {
         Ok(site) => site,
         Err(e) => {
@@ -1998,10 +1998,10 @@ mod tests {
         // organization, stopping collection for every device in it. Silently substituting a legal
         // value would hide that the operator asked for something impossible.
         let ok = || MerakiCadenceReq {
-            availability_secs: crate::config::MERAKI_FAST_MIN_SECS,
-            uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
-            traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
-            inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
+            availability_secs: yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
+            uplink_secs: yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
+            traffic_secs: yagra_meraki::bounds::MERAKI_TRAFFIC_MIN_SECS,
+            inventory_secs: yagra_meraki::bounds::MERAKI_INVENTORY_MIN_SECS,
             switch_ports_secs: None,
             wireless_secs: None,
             enabled_tiers: vec!["availability".to_owned()],
@@ -2015,10 +2015,10 @@ mod tests {
 
         // ADR-168 decision 9: the wireless band, likewise.
         for (secs, accepted) in [
-            (crate::config::MERAKI_WIRELESS_MIN_SECS - 1, false),
-            (crate::config::MERAKI_WIRELESS_MIN_SECS, true),
-            (crate::config::MERAKI_WIRELESS_MAX_SECS, true),
-            (crate::config::MERAKI_WIRELESS_MAX_SECS + 1, false),
+            (yagra_meraki::bounds::MERAKI_WIRELESS_MIN_SECS - 1, false),
+            (yagra_meraki::bounds::MERAKI_WIRELESS_MIN_SECS, true),
+            (yagra_meraki::bounds::MERAKI_WIRELESS_MAX_SECS, true),
+            (yagra_meraki::bounds::MERAKI_WIRELESS_MAX_SECS + 1, false),
         ] {
             let mut wireless = ok();
             wireless.wireless_secs = Some(secs);
@@ -2028,10 +2028,16 @@ mod tests {
 
         // ADR-167 decision 11: the switch-port band, when the field is sent at all.
         for (secs, accepted) in [
-            (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS - 1, false),
-            (crate::config::MERAKI_SWITCH_PORTS_MIN_SECS, true),
-            (crate::config::MERAKI_SWITCH_PORTS_MAX_SECS, true),
-            (crate::config::MERAKI_SWITCH_PORTS_MAX_SECS + 1, false),
+            (
+                yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MIN_SECS - 1,
+                false,
+            ),
+            (yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MIN_SECS, true),
+            (yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MAX_SECS, true),
+            (
+                yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MAX_SECS + 1,
+                false,
+            ),
         ] {
             let mut ports = ok();
             ports.switch_ports_secs = Some(secs);
@@ -2045,7 +2051,7 @@ mod tests {
             check_cadence(&rps).unwrap_err().code(),
             "invalid_target_rps"
         );
-        rps.target_rps = crate::config::MERAKI_TARGET_RPS_MAX + 1.0;
+        rps.target_rps = yagra_meraki::bounds::MERAKI_TARGET_RPS_MAX + 1.0;
         assert_eq!(
             check_cadence(&rps).unwrap_err().code(),
             "invalid_target_rps"
@@ -2061,10 +2067,10 @@ mod tests {
     #[test]
     fn a_cadence_that_leaves_out_the_availability_tier_is_refused() {
         let with = |tiers: &[&str]| MerakiCadenceReq {
-            availability_secs: crate::config::MERAKI_FAST_MIN_SECS,
-            uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
-            traffic_secs: crate::config::MERAKI_TRAFFIC_MIN_SECS,
-            inventory_secs: crate::config::MERAKI_INVENTORY_MIN_SECS,
+            availability_secs: yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
+            uplink_secs: yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
+            traffic_secs: yagra_meraki::bounds::MERAKI_TRAFFIC_MIN_SECS,
+            inventory_secs: yagra_meraki::bounds::MERAKI_INVENTORY_MIN_SECS,
             switch_ports_secs: None,
             wireless_secs: None,
             enabled_tiers: tiers.iter().map(|t| (*t).to_owned()).collect(),
@@ -2149,7 +2155,7 @@ mod tests {
         assert_eq!(declared_number(&text, path, "MAX_DEVICES_MIN"), 1);
         assert_eq!(
             declared_number(&text, path, "MAX_DEVICES_MAX"),
-            crate::config::MERAKI_MAX_DEVICES_HARD
+            yagra_meraki::bounds::MERAKI_MAX_DEVICES_HARD
         );
     }
 
@@ -2363,39 +2369,45 @@ mod tests {
         );
         let text = std::fs::read_to_string(path).expect("the cadence dialog's bounds");
         for (name, accepted) in [
-            ("CADENCE_FAST_MIN_SECS", crate::config::MERAKI_FAST_MIN_SECS),
-            ("CADENCE_FAST_MAX_SECS", crate::config::MERAKI_FAST_MAX_SECS),
+            (
+                "CADENCE_FAST_MIN_SECS",
+                yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
+            ),
+            (
+                "CADENCE_FAST_MAX_SECS",
+                yagra_meraki::bounds::MERAKI_FAST_MAX_SECS,
+            ),
             (
                 "CADENCE_TRAFFIC_MIN_SECS",
-                crate::config::MERAKI_TRAFFIC_MIN_SECS,
+                yagra_meraki::bounds::MERAKI_TRAFFIC_MIN_SECS,
             ),
             (
                 "CADENCE_TRAFFIC_MAX_SECS",
-                crate::config::MERAKI_TRAFFIC_MAX_SECS,
+                yagra_meraki::bounds::MERAKI_TRAFFIC_MAX_SECS,
             ),
             (
                 "CADENCE_INVENTORY_MIN_SECS",
-                crate::config::MERAKI_INVENTORY_MIN_SECS,
+                yagra_meraki::bounds::MERAKI_INVENTORY_MIN_SECS,
             ),
             (
                 "CADENCE_INVENTORY_MAX_SECS",
-                crate::config::MERAKI_INVENTORY_MAX_SECS,
+                yagra_meraki::bounds::MERAKI_INVENTORY_MAX_SECS,
             ),
             (
                 "CADENCE_SWITCH_PORTS_MIN_SECS",
-                crate::config::MERAKI_SWITCH_PORTS_MIN_SECS,
+                yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MIN_SECS,
             ),
             (
                 "CADENCE_SWITCH_PORTS_MAX_SECS",
-                crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
+                yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MAX_SECS,
             ),
             (
                 "CADENCE_WIRELESS_MIN_SECS",
-                crate::config::MERAKI_WIRELESS_MIN_SECS,
+                yagra_meraki::bounds::MERAKI_WIRELESS_MIN_SECS,
             ),
             (
                 "CADENCE_WIRELESS_MAX_SECS",
-                crate::config::MERAKI_WIRELESS_MAX_SECS,
+                yagra_meraki::bounds::MERAKI_WIRELESS_MAX_SECS,
             ),
         ] {
             assert_eq!(
@@ -2407,14 +2419,14 @@ mod tests {
         // The rate box's ceiling too (ADR-164 Inc.18): the dialog refuses a save past it.
         assert_eq!(
             f64::from(declared_number(&text, path, "CADENCE_TARGET_RPS_MAX")),
-            crate::config::MERAKI_TARGET_RPS_MAX,
+            yagra_meraki::bounds::MERAKI_TARGET_RPS_MAX,
             "CADENCE_TARGET_RPS_MAX in {path} is not what `check_cadence` accepts"
         );
         // The edge really is held to those constants: one second outside each band is refused.
         let at = |availability: i32, traffic: i32, inventory: i32, ports: i32, wireless: i32| {
             MerakiCadenceReq {
                 availability_secs: availability,
-                uplink_secs: crate::config::MERAKI_FAST_MIN_SECS,
+                uplink_secs: yagra_meraki::bounds::MERAKI_FAST_MIN_SECS,
                 traffic_secs: traffic,
                 inventory_secs: inventory,
                 switch_ports_secs: Some(ports),
@@ -2424,11 +2436,11 @@ mod tests {
             }
         };
         let (fast, traffic, inventory, ports, wireless) = (
-            crate::config::MERAKI_FAST_MAX_SECS,
-            crate::config::MERAKI_TRAFFIC_MAX_SECS,
-            crate::config::MERAKI_INVENTORY_MAX_SECS,
-            crate::config::MERAKI_SWITCH_PORTS_MAX_SECS,
-            crate::config::MERAKI_WIRELESS_MAX_SECS,
+            yagra_meraki::bounds::MERAKI_FAST_MAX_SECS,
+            yagra_meraki::bounds::MERAKI_TRAFFIC_MAX_SECS,
+            yagra_meraki::bounds::MERAKI_INVENTORY_MAX_SECS,
+            yagra_meraki::bounds::MERAKI_SWITCH_PORTS_MAX_SECS,
+            yagra_meraki::bounds::MERAKI_WIRELESS_MAX_SECS,
         );
         assert!(check_cadence(&at(fast, traffic, inventory, ports, wireless)).is_ok());
         for outside in [
@@ -2981,7 +2993,7 @@ mod tests {
             .await
             .expect("the node's folder")
         };
-        let network = crate::meraki::network_group_id(org, "N_1");
+        let network = yagra_meraki::network_group_id(org, "N_1");
 
         // No folder carries a range yet: everything goes under the network, and the answer says
         // that "unmatched" is not a statement about the devices.
@@ -3223,7 +3235,7 @@ mod tests {
         assert_eq!(answer["waiting_lan"], 1, "{answer}");
         let (name, address): (String, String) =
             sqlx::query_as("SELECT name, host(address) FROM nodes WHERE id = $1")
-                .bind(crate::meraki::device_node_id("Q4-AP"))
+                .bind(yagra_meraki::device_node_id("Q4-AP"))
                 .fetch_one(&pool)
                 .await
                 .expect("the node");
@@ -3233,7 +3245,7 @@ mod tests {
             "the request's stale name or address was used"
         );
         let mx_node: Option<Uuid> = sqlx::query_scalar("SELECT id FROM nodes WHERE id = $1")
-            .bind(crate::meraki::device_node_id("Q4-MX"))
+            .bind(yagra_meraki::device_node_id("Q4-MX"))
             .fetch_optional(&pool)
             .await
             .expect("query");
@@ -3390,8 +3402,8 @@ mod tests {
         pool: sqlx::PgPool,
     ) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
-        use crate::meraki::health::TierFailure;
         use std::collections::HashMap;
+        use yagra_meraki::health::TierFailure;
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -3426,8 +3438,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
-        let node = crate::meraki::device_node_id("Q2XX-0001");
-        let folder = crate::meraki::network_group_id(org, "N_1");
+        let node = yagra_meraki::device_node_id("Q2XX-0001");
+        let folder = yagra_meraki::network_group_id(org, "N_1");
 
         // What the config loader builds from `alert_bindings` and the node list.
         let bindings = admin.meraki_orgs.alert_bindings().await.expect("bindings");
@@ -3655,7 +3667,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn the_device_list_says_where_each_device_is_or_would_go(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
-        use crate::meraki::inventory::{DeviceWrite, SeenDevice, SyncPlan};
+        use yagra_meraki::inventory::{DeviceWrite, SeenDevice, SyncPlan};
         let st = live_state(pool.clone()).await;
         let admin = st.admin.clone().expect("live state");
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
@@ -3860,7 +3872,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::meraki::sync::MerakiDirectory for TwoOrgDashboard {
+    impl yagra_meraki::sync::MerakiDirectory for TwoOrgDashboard {
         async fn organizations(
             &self,
             _base_url: &str,
@@ -3872,7 +3884,7 @@ mod tests {
 
         async fn inventory(
             &self,
-            _org: &crate::meraki::MerakiOrg,
+            _org: &yagra_meraki::MerakiOrg,
             _api_key: &str,
         ) -> Result<yagra_transport::MerakiInventory, yagra_transport::MerakiFetchError> {
             Ok(yagra_transport::MerakiInventory::default())
@@ -3880,7 +3892,7 @@ mod tests {
 
         async fn ha_roles(
             &self,
-            _org: &crate::meraki::MerakiOrg,
+            _org: &yagra_meraki::MerakiOrg,
             _api_key: &str,
         ) -> Result<
             Vec<(String, Option<yagra_common::MerakiHaRole>)>,
@@ -3892,7 +3904,7 @@ mod tests {
         /// Never asked: the listing holds no MX.
         async fn network_lans(
             &self,
-            _org: &crate::meraki::MerakiOrg,
+            _org: &yagra_meraki::MerakiOrg,
             _api_key: &str,
             _network_ids: &[String],
             _budget: std::time::Duration,
@@ -3907,7 +3919,7 @@ mod tests {
         /// Never asked: no MX of this fixture is a node.
         async fn device_neighbors(
             &self,
-            _org: &crate::meraki::MerakiOrg,
+            _org: &yagra_meraki::MerakiOrg,
             _api_key: &str,
             _serials: &[String],
             _budget: std::time::Duration,

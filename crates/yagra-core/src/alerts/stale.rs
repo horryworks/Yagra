@@ -23,9 +23,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_common::{CheckId, NodeKind};
 
-use super::sink::AlertSink;
 use super::AlertManager;
 use crate::store::MetricStore;
+use yagra_alert::action::AlertSink;
 use yagra_alert::engine::FreshnessCandidate;
 
 /// How often the two questions are asked.
@@ -73,7 +73,7 @@ const LIVE_WINDOW_SECS: u64 = 7_200;
 
 /// Which of these nodes are Meraki devices.
 ///
-/// A seam, for one reason: the concrete [`crate::meraki::MerakiDeviceRepo`] needs a live PostgreSQL,
+/// A seam, for one reason: the concrete [`yagra_meraki::MerakiDeviceRepo`] needs a live PostgreSQL,
 /// and the fail-closed behaviour below is the part most worth testing.
 ///
 /// # 🚨 Why Meraki is excluded at all
@@ -99,7 +99,7 @@ pub(crate) trait MerakiNodeSet: Send + Sync {
 }
 
 #[async_trait]
-impl MerakiNodeSet for crate::meraki::MerakiDeviceRepo {
+impl MerakiNodeSet for yagra_meraki::MerakiDeviceRepo {
     async fn meraki_subset(&self, node_ids: &[Uuid]) -> anyhow::Result<HashSet<Uuid>> {
         self.filter_meraki(node_ids).await
     }

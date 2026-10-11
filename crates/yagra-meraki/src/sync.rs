@@ -41,7 +41,7 @@
 //!
 //! **Then it imports** (ADR-164 Inc.4), when the organization says so: a device in a watched
 //! network that Meraki has reported online, and that has never been a node here, becomes one. The
-//! pick is [`crate::meraki::import::pick_automatic`] (pure); everything after the pick is the path a
+//! pick is [`crate::import::pick_automatic`] (pure); everything after the pick is the path a
 //! manual import takes — [`ImportResolver`], then the one writer, `MerakiOrgRepo::import_devices`.
 //! ⚠️ The import runs **after** the inventory is written and can fail on its own (a database read).
 //! That sync is recorded as failed (`internal`) and retried an interval later; the inventory rows
@@ -64,14 +64,14 @@ use yagra_transport::{
     MerakiWireOrigin, TransportError,
 };
 
-use crate::meraki::filing::MerakiFiled;
-use crate::meraki::import::{pick_automatic, ImportResolver};
-use crate::meraki::inventory::{
+use crate::filing::MerakiFiled;
+use crate::import::{pick_automatic, ImportResolver};
+use crate::inventory::{
     lan_addresses, lan_order, lan_reads_due, lan_rereads_per_sync, networks_with_an_mx, plan_sync,
     seen_devices, LanAddresses, LanReads, MerakiInventoryRepo, NetworkLan,
 };
-use crate::meraki::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
-use crate::neighbors::NeighborRepo;
+use crate::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
+use yagra_base::neighbors::NeighborRepo;
 use yagra_base::repo::NodeRepo;
 use yagra_base::secrets::CredentialStore;
 
@@ -109,7 +109,7 @@ const NEIGHBOR_READ_BUDGET: Duration = Duration::from_secs(90);
 /// How many networks the LAN stage reads between two progress writes and two `record_network_lans`.
 const LAN_READ_CHUNK: usize = 25;
 /// The shortest interval the loop honours, whatever a row says. Mirrors the column's CHECK.
-const MIN_INTERVAL_SECS: u32 = crate::config::MERAKI_INVENTORY_MIN_SECS.unsigned_abs();
+const MIN_INTERVAL_SECS: u32 = crate::bounds::MERAKI_INVENTORY_MIN_SECS.unsigned_abs();
 
 /// Why a sync failed. Stored on the organization's row as its token and shown to an operator, so
 /// every variant is a closed fact and none carries upstream text — a Dashboard error body can quote
@@ -1105,7 +1105,7 @@ impl MerakiSync {
     ///
     /// Read from the table rather than from the listing in hand: the three conditions are facts the
     /// inventory holds (`first_online_at`, `imported_at`, the network's watch flag), and reading
-    /// them where [`crate::meraki::inventory::classify`] reads them is what keeps "New" on the page
+    /// them where [`crate::inventory::classify`] reads them is what keeps "New" on the page
     /// and "imported by the sync" the same set.
     ///
     /// `mx_ready` is whether this sync's LAN reads ran to the end (decision 31); without it no MX is
@@ -1552,7 +1552,7 @@ mod tests {
         assert_eq!(serials, ["Q2MX-0004", "Q2MX-0005", "Q2MX-0002"]);
         assert!(neighbors_due(&mx, &last, now, every, 0).is_empty());
     }
-    use crate::meraki::MerakiLane;
+    use crate::MerakiLane;
     use sqlx::Row;
     use std::sync::Mutex;
     use yagra_base::pgtest;
@@ -2130,7 +2130,7 @@ mod tests {
     async fn the_sync_records_warm_spare_roles_and_a_failed_roles_read_costs_nothing(
         pool: sqlx::PgPool,
     ) {
-        use crate::meraki::inventory::HaPair;
+        use crate::inventory::HaPair;
         let device = |serial: &str, product: &str, net: &str| MerakiInventoryDevice {
             info: MerakiDeviceInfo {
                 serial: serial.into(),
@@ -2508,7 +2508,7 @@ mod tests {
         );
         assert_eq!(
             folder_of(&pool, "Q2-A").await,
-            Some(crate::meraki::network_group_id(r.org, "N_1")),
+            Some(crate::network_group_id(r.org, "N_1")),
             "with no IP range anywhere the device goes under Organization ▸ Network"
         );
         assert!(
@@ -2549,7 +2549,7 @@ mod tests {
         assert_eq!(nodes_of(&pool, r.org).await, ["Q2-A"]);
 
         sqlx::query("DELETE FROM nodes WHERE id = $1")
-            .bind(crate::meraki::device_node_id("Q2-A"))
+            .bind(crate::device_node_id("Q2-A"))
             .execute(&pool)
             .await
             .expect("the operator deletes the node");
@@ -2567,7 +2567,7 @@ mod tests {
         let devices = r.inventory.devices(r.org).await.expect("devices");
         assert_eq!(
             devices[0].state,
-            crate::meraki::inventory::MerakiDeviceState::Deleted
+            crate::inventory::MerakiDeviceState::Deleted
         );
     }
 
@@ -2740,7 +2740,7 @@ mod tests {
             .expect("second sync");
         assert_eq!(
             folder_of(&pool, "Q2-B").await,
-            Some(crate::meraki::network_group_id(r.org, "N_1"))
+            Some(crate::network_group_id(r.org, "N_1"))
         );
         assert_eq!(
             folder_of(&pool, "Q2-A").await,
@@ -2762,7 +2762,7 @@ mod tests {
             async move {
                 orgs.update_cadence(
                     id,
-                    &crate::meraki::MerakiCadence {
+                    &crate::MerakiCadence {
                         availability_secs: 300,
                         uplink_secs: 300,
                         traffic_secs: 1800,
@@ -2900,15 +2900,15 @@ mod tests {
             .await
             .expect("first sync");
         sqlx::query("UPDATE nodes SET name = 'Reception (do not touch)' WHERE id = $1")
-            .bind(crate::meraki::device_node_id("Q2-A"))
+            .bind(crate::device_node_id("Q2-A"))
             .execute(&pool)
             .await
             .expect("the operator renames the node");
 
         // The statement's own guard, alone: a plan made before the operator's rename still names
         // the old name, which is what a sync that read a moment earlier would hold.
-        let stale_plan = crate::meraki::inventory::SyncPlan {
-            follows: vec![crate::meraki::inventory::NodeFollow {
+        let stale_plan = crate::inventory::SyncPlan {
+            follows: vec![crate::inventory::NodeFollow {
                 serial: "Q2-A".into(),
                 rename: Some(("ap-1".into(), "lobby-ap".into())),
                 address: None,
@@ -2956,7 +2956,7 @@ mod tests {
     async fn a_plan_of_many_rows_lands_whole_and_a_second_write_keeps_what_the_first_stamped(
         pool: sqlx::PgPool,
     ) {
-        use crate::meraki::inventory::{DeviceWrite, SeenDevice, SyncPlan};
+        use crate::inventory::{DeviceWrite, SeenDevice, SyncPlan};
         let r = rig(&pool, Ok(MerakiInventory::default())).await;
         let device =
             |serial: &str, name: &str, model: Option<&str>, lan_ip: Option<&str>| SeenDevice {
@@ -2999,7 +2999,7 @@ mod tests {
         let applied = r.inventory.apply(r.org, &first).await.expect("first write");
         assert_eq!(applied.rows, 3, "one row per serial: {applied:?}");
 
-        let stored = |rows: Vec<crate::meraki::inventory::StoredDevice>| {
+        let stored = |rows: Vec<crate::inventory::StoredDevice>| {
             let mut rows = rows;
             rows.sort_by(|a, b| a.serial.cmp(&b.serial));
             rows
@@ -3211,7 +3211,7 @@ mod tests {
     async fn the_count_of_nodes_nothing_is_collected_for_is_what_the_device_list_marks(
         pool: sqlx::PgPool,
     ) {
-        use crate::meraki::inventory::MerakiDeviceState;
+        use crate::inventory::MerakiDeviceState;
         // Two become nodes; the dormant one never does, and must not be counted wherever it sits.
         let r = rig(
             &pool,

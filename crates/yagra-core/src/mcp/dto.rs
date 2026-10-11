@@ -527,7 +527,7 @@ pub struct NodeStatusDto {
     pub meraki_pair: Option<crate::api::meraki::MerakiPairView>,
     /// The Meraki organization and network this node sits in, by name (ADR-185). Mirrors
     /// `NodeDetail.meraki_site`, from the same function.
-    pub meraki_site: Option<crate::meraki::MerakiSite>,
+    pub meraki_site: Option<yagra_meraki::MerakiSite>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -1154,7 +1154,7 @@ mod tests {
                 cause: crate::api::nodes::CollectionFaultCause::MerakiApi,
                 meraki_org: Some(Uuid::new_v4()),
                 meraki_org_name: Some("Acme".to_owned()),
-                reason: Some(crate::meraki::sync::MerakiSyncFailure::Auth),
+                reason: Some(yagra_meraki::sync::MerakiSyncFailure::Auth),
                 since_unix_ms: 1,
             }),
             snmp_configured: true,
@@ -1212,7 +1212,7 @@ mod tests {
                     node_state: Some(yagra_common::NodeState::Ok),
                 }),
             }),
-            meraki_site: Some(crate::meraki::MerakiSite {
+            meraki_site: Some(yagra_meraki::MerakiSite {
                 org_id: uuid::Uuid::nil(),
                 org_name: "Example Org".to_owned(),
                 network_id: "N_1".to_owned(),

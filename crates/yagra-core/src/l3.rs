@@ -8,7 +8,7 @@
 //! tested there. Runtime `sqlx::query` (not the compile-time macro) so the build needs no live
 //! database.
 //!
-//! Modelled on [`crate::neighbors`] down to the CTE: the same "upsert current state, append history
+//! Modelled on [`yagra_base::neighbors`] down to the CTE: the same "upsert current state, append history
 //! only when the content key moved" shape, for the same reason. Addressing is normally constant, so
 //! what an operator wants is the *transition*, and a history that gains a row per poll answers
 //! nothing.

@@ -44,8 +44,9 @@ use crate::alerts::AlertManager;
 use crate::coordinator::Coordinator;
 use crate::store::MetricStore;
 use crate::wireless_fanout::{ApFanout, Replay};
-use crate::{arp, dns_check, l3, l3_routing, meraki, neighbors, scheduler};
+use crate::{arp, dns_check, l3, l3_routing, scheduler};
 use yagra_alert::no_reading::{Admitted, NoReadingHandle};
+use yagra_base::neighbors;
 use yagra_base::repo::{self, NodeRepo};
 
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
@@ -566,7 +567,7 @@ pub(crate) async fn consume_results<S>(
     history_tx: tokio::sync::mpsc::Sender<HistoryRecord>,
     history: Arc<AlertHistoryStore>,
     stats: Arc<scheduler::SchedulerStats>,
-    meraki_inflight: Arc<meraki::MerakiInflight>,
+    meraki_inflight: Arc<yagra_meraki::MerakiInflight>,
     coordinator: Arc<Coordinator>,
     ap_fanout: Arc<ApFanout>,
 ) where
@@ -863,7 +864,7 @@ fn writer_gone(counter: &'static str, logged: &AtomicBool, writer: &'static str)
 /// 🚨 Before decision 36 the report came last, so a current poller's first *device* result took this
 /// second arm: it counted as "answered" and reset the tier's run of failures, and the report behind
 /// it set it back to one. A read that failed on every collect read as failing once, since the latest.
-fn record_collect_outcome(meraki_inflight: &meraki::MerakiInflight, result: &PollResult) {
+fn record_collect_outcome(meraki_inflight: &yagra_meraki::MerakiInflight, result: &PollResult) {
     let released = meraki_inflight.complete(result.job_id);
     match (&result.meraki_collect, released) {
         (Some(report), _) => meraki_inflight
@@ -890,7 +891,7 @@ async fn ingest_result(
     history_tx: &tokio::sync::mpsc::Sender<HistoryRecord>,
     history: &Arc<AlertHistoryStore>,
     stats: &Arc<scheduler::SchedulerStats>,
-    meraki_inflight: &Arc<meraki::MerakiInflight>,
+    meraki_inflight: &Arc<yagra_meraki::MerakiInflight>,
     coordinator: &Arc<Coordinator>,
 ) {
     let result = admitted.result();
@@ -1472,7 +1473,7 @@ mod tests {
     #[test]
     fn a_tier_that_keeps_failing_in_part_counts_up_collect_after_collect() {
         use yagra_common::MerakiTier;
-        let inflight = meraki::MerakiInflight::default();
+        let inflight = yagra_meraki::MerakiInflight::default();
         let org = uuid::Uuid::from_u128(0xACE);
         let result = |job: uuid::Uuid, report: Option<yagra_bus::MerakiCollectReport>| {
             let mut r: PollResult = serde_json::from_value(serde_json::json!({
@@ -1489,7 +1490,7 @@ mod tests {
             let job = uuid::Uuid::new_v4();
             assert!(inflight.acquire_collect(
                 org,
-                meraki::MerakiLane::Fast,
+                yagra_meraki::MerakiLane::Fast,
                 job,
                 MerakiTier::Uplink,
                 std::time::Duration::from_secs(300),
@@ -1794,7 +1795,7 @@ mod tests {
                 .expect("a lazy pool needs no server"),
         ));
         let stats = Arc::new(scheduler::SchedulerStats::default());
-        let inflight = Arc::new(meraki::MerakiInflight::default());
+        let inflight = Arc::new(yagra_meraki::MerakiInflight::default());
         let coordinator = Arc::new(Coordinator::new(
             Arc::new(yagra_bus::InMemoryBus::new(64)),
             Arc::new(crate::volatile::VolatileStore::disabled()),

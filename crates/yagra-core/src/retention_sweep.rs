@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use crate::alerts::history::AlertHistoryStore;
 use crate::pollers::PollerRepo;
-use crate::{analysis, dns_check, events, l3, neighbors, rca};
+use crate::{analysis, dns_check, events, l3, rca};
+use yagra_base::neighbors;
 use yagra_base::repo::retention_settings::RetentionSettings;
 use yagra_base::repo::NodeRepo;
 

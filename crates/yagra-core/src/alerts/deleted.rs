@@ -12,8 +12,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::sink::AlertSink;
 use super::AlertManager;
+use yagra_alert::action::AlertSink;
 
 /// How often the engine is asked whether it still believes something about a node that is gone.
 ///

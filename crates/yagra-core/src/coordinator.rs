@@ -16,7 +16,7 @@
 //!
 //! Clock is injected everywhere as an [`Instant`] so the registry/failover logic is unit-testable
 //! against [`yagra_bus::InMemoryBus`] without a running NATS or real time (mirrors
-//! [`crate::meraki::MerakiInflight`]).
+//! [`yagra_meraki::MerakiInflight`]).
 //!
 //! Concurrency: the registry is a plain [`std::sync::Mutex`] held only for synchronous
 //! read/mutate; every bus/Redis/PG await happens *after* the guard is dropped, so no lock is held

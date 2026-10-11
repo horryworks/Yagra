@@ -24,6 +24,20 @@ use crate::{Alert, Subject};
 /// than two copies of it.
 pub type StreamFrame = (Subject, Arc<str>);
 
+/// Where a component sends an alert transition: the History row **and** the notification, as one
+/// step (ADR-092).
+///
+/// The trait lives here, beside what it carries, so a crate above the engine (the Meraki
+/// integration, ADR-202 Inc.6) can be handed one without naming core. Its one implementation —
+/// `RecordingSink`, over a history writer and a notifier — stays in core's `alerts/sink.rs`, which
+/// says why there is exactly one.
+#[async_trait::async_trait]
+pub trait AlertSink: Send + Sync {
+    /// Record the transition if it produces a row, then deliver it. Both, or neither — a caller
+    /// holding this has no way to ask for only one.
+    async fn dispatch(&self, action: NotifyAction);
+}
+
 /// What the manager wants done about a committed transition.
 #[derive(Debug, Clone)]
 pub enum NotifyAction {

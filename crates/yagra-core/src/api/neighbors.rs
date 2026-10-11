@@ -947,7 +947,7 @@ fn unaddressed_mac_chassis(set: &NeighborSet) -> BTreeSet<String> {
 /// name, and a chassis no organization lists is left out.
 fn classify_chassis(
     chassis: &BTreeSet<String>,
-    by_mac: &HashMap<String, crate::meraki::inventory::DeviceWithMac>,
+    by_mac: &HashMap<String, yagra_meraki::inventory::DeviceWithMac>,
     scope: &NodeScope,
 ) -> Vec<NeighborChassisPeer> {
     chassis
@@ -1480,7 +1480,7 @@ mod tests {
             n.remote_mgmt_addr = Some(addr.to_owned());
             n
         };
-        crate::neighbors::NeighborRepo::new(pool.clone())
+        yagra_base::neighbors::NeighborRepo::new(pool.clone())
             .record_observation(
                 here,
                 &NeighborSet::new(
@@ -1572,7 +1572,7 @@ mod tests {
             n
         };
         let stored = NeighborSet::new(vec![cdp(10103, "ap-01"), cdp(10120, "ap-02")], 0);
-        crate::neighbors::NeighborRepo::new(pool.clone())
+        yagra_base::neighbors::NeighborRepo::new(pool.clone())
             .record_observation(here, &stored)
             .await
             .expect("record");
@@ -1618,7 +1618,7 @@ mod tests {
         assert_eq!(ports(&body["changes"][0]["neighbors"]["neighbors"]), want);
 
         // What is stored is the poller's spelling, so the key does not move under the display.
-        let kept = crate::neighbors::NeighborRepo::new(pool.clone())
+        let kept = yagra_base::neighbors::NeighborRepo::new(pool.clone())
             .current(here)
             .await
             .expect("read")
@@ -2366,7 +2366,7 @@ mod peer_tests {
 
     #[test]
     fn a_chassis_mac_gets_the_state_of_the_meraki_device_listed_under_it() {
-        use crate::meraki::inventory::{DeviceWithMac, MacNode};
+        use yagra_meraki::inventory::{DeviceWithMac, MacNode};
         let org = Uuid::from_u128(9);
         let folder = Uuid::from_u128(7);
         let node = Uuid::from_u128(5);

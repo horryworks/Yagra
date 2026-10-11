@@ -9,13 +9,22 @@
 //!
 //! The integration is strictly **read-only**: this module only resolves/inlines the API key and
 //! shapes jobs; every byte of Meraki I/O goes through `yagra_transport::meraki` (GET-only).
+//!
+//! **Its own crate since ADR-202 Inc.6** (it was `yagra-core/src/meraki/`). It stands on
+//! `yagra-base` and the alert engine and names nothing in core: an alert it raises leaves through
+//! the [`yagra_alert::action::AlertSink`] core hands it, and its HTTP surface (`api/meraki.rs`)
+//! and the loops' start-up stay in core. ⚠️ Checks about the whole program are
+//! `yagra-core/src/program_guards.rs`, which reads this crate's tree too.
 
-pub(crate) mod filing;
-pub(crate) mod health;
-pub(crate) mod import;
-pub(crate) mod inventory;
-pub(crate) mod schedule;
-pub(crate) mod sync;
+pub mod bounds;
+pub mod filing;
+pub mod health;
+pub mod import;
+pub mod inventory;
+#[cfg(test)]
+mod module_source;
+pub mod schedule;
+pub mod sync;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
@@ -25,11 +34,11 @@ use std::time::{Duration, Instant};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub(crate) use yagra_base::groups::{network_group_id, org_group_id};
+pub use yagra_base::groups::{network_group_id, org_group_id};
 use yagra_bus::{MerakiCollectCheck, MerakiDeviceRef};
 use yagra_common::{MerakiDeviceConfig, MerakiTier};
 
-use crate::meraki::filing::{Filing, MerakiFiled};
+use crate::filing::{Filing, MerakiFiled};
 use yagra_base::secrets::{CredentialStore, MerakiApiSecret, KIND_MERAKI_API};
 
 /// Default page-size cap sent to paginated Dashboard endpoints.
@@ -82,7 +91,7 @@ pub struct MerakiOrg {
     pub last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
     /// `None` until a sync has run: "has not synced yet" is not "failed".
     pub last_sync_ok: Option<bool>,
-    /// Why the last sync failed — a [`crate::meraki::sync::MerakiSyncFailure`] token, never upstream
+    /// Why the last sync failed — a [`crate::sync::MerakiSyncFailure`] token, never upstream
     /// text. `None` after a success.
     pub last_sync_error: Option<String>,
     /// Whether the sync turns newly listed devices into nodes (ADR-164 Inc.4, migration 0125).
@@ -97,7 +106,7 @@ pub struct MerakiOrg {
     pub devices_over_cap: u32,
     /// The collect tiers that are failing right now, as the health loop last wrote them
     /// (migration 0127, ADR-164 decision 18). Empty means none is *known* to be failing.
-    pub collect_failures: Vec<crate::meraki::health::TierFailure>,
+    pub collect_failures: Vec<crate::health::TierFailure>,
     /// When "Sync now" asked for a whole-organization read that has not ended yet (ADR-164 decision 32,
     /// migration 0133). The leader's sync loop runs it once the slow lane is free.
     pub full_sync_requested_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -152,7 +161,7 @@ impl MerakiOrg {
             // Read leniently: an entry a newer core wrote with a tier or a shape this build does
             // not know costs that entry, never the organization (the row is read by the
             // scheduler, and failing it here would stop the collects it describes).
-            collect_failures: crate::meraki::health::TierFailure::from_stored(
+            collect_failures: crate::health::TierFailure::from_stored(
                 row.try_get::<sqlx::types::Json<serde_json::Value>, _>("collect_failures")?
                     .0,
             ),
@@ -501,16 +510,16 @@ pub async fn resolve_meraki_key(creds: &CredentialStore, credential_id: Uuid) ->
 /// - A collect flight whose lease runs out **unanswered** is evidence: a poller from before the
 ///   collect report existed fails silently, a pool with no live poller never picks the job up, a
 ///   poller can crash mid-collect. [`Self::take_unanswered`] hands those to
-///   [`crate::meraki::health`], which counts them as failures (`no_answer`).
+///   [`crate::health`], which counts them as failures (`no_answer`).
 ///
-/// It carries the [`crate::meraki::health::MerakiCollectHealth`] record for the same reason it
+/// It carries the [`crate::health::MerakiCollectHealth`] record for the same reason it
 /// exists at all: it is the one Meraki handle the result-ingest path already holds.
 #[derive(Default)]
 pub struct MerakiInflight {
     flights: Mutex<HashMap<(Uuid, MerakiLane), Flight>>, // (org, lane) → who holds it
     unanswered: Mutex<Vec<(Uuid, MerakiTier)>>,
     /// How each organization's collects have been ending (decision 18).
-    pub health: crate::meraki::health::MerakiCollectHealth,
+    pub health: crate::health::MerakiCollectHealth,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1038,7 +1047,7 @@ impl MerakiOrgRepo {
     pub async fn network_lans(
         &self,
         org_uuid: Uuid,
-    ) -> anyhow::Result<HashMap<String, crate::meraki::inventory::NetworkLan>> {
+    ) -> anyhow::Result<HashMap<String, crate::inventory::NetworkLan>> {
         let rows = sqlx::query(
             "SELECT network_id, lan_ips, lan_read_at FROM meraki_org_networks \
              WHERE org_id = $1 AND lan_read_at IS NOT NULL",
@@ -1051,11 +1060,11 @@ impl MerakiOrgRepo {
                 let ips: Option<Vec<String>> = r.try_get("lan_ips")?;
                 Ok((
                     r.try_get("network_id")?,
-                    crate::meraki::inventory::NetworkLan {
+                    crate::inventory::NetworkLan {
                         ips: ips
                             .unwrap_or_default()
                             .iter()
-                            .filter_map(|ip| crate::meraki::inventory::usable_address(ip))
+                            .filter_map(|ip| crate::inventory::usable_address(ip))
                             .collect(),
                         read_at: r.try_get("lan_read_at")?,
                     },
@@ -1153,7 +1162,7 @@ impl MerakiOrgRepo {
     pub async fn record_collect_failures(
         &self,
         org_uuid: Uuid,
-        failures: &[crate::meraki::health::TierFailure],
+        failures: &[crate::health::TierFailure],
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE meraki_orgs SET collect_failures = $2, updated_at = now() \
@@ -1202,7 +1211,7 @@ impl MerakiOrgRepo {
 
     /// The advisory lock [`Self::import_devices`] serialises on.
     ///
-    /// 🚨 Its own key. Not [`crate::leader`]'s, which the leader holds as a *session* lock for its
+    /// 🚨 Its own key. Not core's `leader`'s, which the leader holds as a *session* lock for its
     /// whole life, and not `NodeRepo`'s import key either — a Meraki device is identified by its
     /// serial and an address import by its address, so the two contend on nothing and sharing a
     /// key would only make one wait for the other. Transaction-scoped, so a failed import cannot
@@ -1427,9 +1436,7 @@ pub fn is_access_point_product(product_type: &str) -> bool {
 pub fn is_mesh_repeater(product_type: &str, listed: bool, lan_ip: Option<&str>) -> bool {
     is_access_point_product(product_type)
         && listed
-        && lan_ip
-            .and_then(crate::meraki::inventory::usable_address)
-            .is_none()
+        && lan_ip.and_then(crate::inventory::usable_address).is_none()
 }
 
 impl MerakiDeviceRepo {
@@ -2954,8 +2961,8 @@ mod tests {
     async fn the_failing_collects_are_kept_on_the_row_and_written_only_on_change(
         pool: sqlx::PgPool,
     ) {
-        use crate::meraki::health::TierFailure;
-        use crate::meraki::sync::MerakiSyncFailure;
+        use crate::health::TierFailure;
+        use crate::sync::MerakiSyncFailure;
         let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
         let repo = MerakiOrgRepo::new(pool.clone());
         let id = repo
@@ -3518,7 +3525,7 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn the_folder_list_marks_what_each_integration_keeps(pool: sqlx::PgPool) {
         let groups = yagra_base::groups::GroupRepo::new(pool.clone());
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let cred = yagra_base::pgtest::credential(&pool, "meraki", "meraki_api").await;
         let org = orgs
             .create("123", "Acme", "https://api.meraki.com", cred)
@@ -3645,7 +3652,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create(
                 "1",
@@ -3717,7 +3724,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create("1", "Added before", "https://api.meraki.com", credential)
             .await
@@ -3771,7 +3778,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let old = orgs
             .create("1", "Added before", "https://api.meraki.com", credential)
             .await
@@ -3830,7 +3837,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [
             ("1", vec!["uplink", "traffic"]),
@@ -3910,7 +3917,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [
             ("1", vec!["availability", "uplink", "traffic"]),
@@ -3997,7 +4004,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("apply {}: {e}", m.version));
         }
         let credential = yagra_base::pgtest::credential(&pool, "meraki-key", "meraki_api").await;
-        let orgs = crate::meraki::MerakiOrgRepo::new(pool.clone());
+        let orgs = crate::MerakiOrgRepo::new(pool.clone());
         let mut made = Vec::new();
         for (org_id, tiers) in [
             (

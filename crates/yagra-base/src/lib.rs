@@ -32,6 +32,8 @@ pub mod http;
 pub mod httpfake;
 #[cfg(test)]
 mod module_source;
+/// CDP/LLDP adjacency: the current neighbour set per node and its append-on-change history.
+pub mod neighbors;
 pub mod pem;
 #[cfg(any(test, feature = "test-util"))]
 pub mod pgtest;

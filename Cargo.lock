@@ -5248,6 +5248,7 @@ dependencies = [
  "yagra-forward",
  "yagra-hoststats",
  "yagra-ingest",
+ "yagra-meraki",
  "yagra-netbox",
  "yagra-oui",
  "yagra-secrets",
@@ -5299,6 +5300,28 @@ dependencies = [
  "snmp2",
  "thiserror 2.0.18",
  "yagra-common",
+]
+
+[[package]]
+name = "yagra-meraki"
+version = "0.3.48"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "metrics",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "uuid",
+ "yagra-alert",
+ "yagra-base",
+ "yagra-bus",
+ "yagra-common",
+ "yagra-transport",
 ]
 
 [[package]]

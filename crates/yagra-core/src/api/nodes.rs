@@ -1113,7 +1113,7 @@ pub(crate) struct NodeDetail {
     meraki_pair: Option<super::meraki::MerakiPairView>,
     /// The Meraki organization and network this node sits in, by name (ADR-185). `null` for a node
     /// with no Meraki binding.
-    meraki_site: Option<crate::meraki::MerakiSite>,
+    meraki_site: Option<yagra_meraki::MerakiSite>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
     /// 🚨 **Do not re-derive this from `credential_id`.** The scheduler falls back to the
@@ -1333,7 +1333,7 @@ pub(crate) struct CollectionFault {
     pub(crate) meraki_org_name: Option<String>,
     /// Why the most recent availability collect failed, when it is known. Only with `meraki_api`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) reason: Option<crate::meraki::sync::MerakiSyncFailure>,
+    pub(crate) reason: Option<yagra_meraki::sync::MerakiSyncFailure>,
     /// `meraki_api`: when the organization's alert was raised — three failed collects after the
     /// last answer, so the state shown is older than this. `wireless_controller`: when a controller
     /// last reported the access point — nothing has been heard about it since.

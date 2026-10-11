@@ -51,6 +51,7 @@ const SPLIT_OUT: &[(&str, &str)] = &[
     ("yagra-base", "../yagra-base/src"),
     ("yagra-netbox", "../yagra-netbox/src"),
     ("yagra-auth", "../yagra-auth/src"),
+    ("yagra-meraki", "../yagra-meraki/src"),
 ];
 
 /// The `src` directories of the program: core's and those of the crates split out of it.

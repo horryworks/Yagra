@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 use yagra_common::MerakiTier;
 
-use crate::meraki::{
+use crate::{
     neighbors_due, pool_can_run, port_names_due, ssid_statuses_due, MerakiLane, MerakiOrg,
     PoolCaps, SlowReads, SSID_STATUSES_EVERY,
 };
@@ -256,7 +256,7 @@ impl MerakiSchedule {
     }
 
     /// Whether a failure core found itself for `(org, tier)` should be counted now — at most once
-    /// per `cadence` ([`crate::meraki::health::count_once_per_cadence`]). Both lanes can pick the
+    /// per `cadence` ([`crate::health::count_once_per_cadence`]). Both lanes can pick the
     /// same tier on different ticks — a wireless round and an SSID read — and they share this
     /// record, so it is still counted once.
     pub fn count_core_failure(
@@ -266,13 +266,7 @@ impl MerakiSchedule {
         cadence: Duration,
         now: Instant,
     ) -> bool {
-        crate::meraki::health::count_once_per_cadence(
-            &mut self.core_failures,
-            org,
-            tier,
-            cadence,
-            now,
-        )
+        crate::health::count_once_per_cadence(&mut self.core_failures, org, tier, cadence, now)
     }
 
     /// `(org, tier)` got past everything core checks before a job is sent.
@@ -284,7 +278,7 @@ impl MerakiSchedule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meraki::{MerakiInflight, PORT_NAMES_EVERY};
+    use crate::{MerakiInflight, PORT_NAMES_EVERY};
 
     const ALL_CAPS: PoolCaps = PoolCaps {
         switch_ports: true,
@@ -409,8 +403,7 @@ mod tests {
             ..SlowReads::default()
         };
         let o = org(&["switch_ports", "availability"]);
-        let check =
-            |tier| crate::meraki::build_collect_check(&o, tier, "k".into(), vec![], vec![], slow);
+        let check = |tier| crate::build_collect_check(&o, tier, "k".into(), vec![], vec![], slow);
         assert!(check(MerakiTier::SwitchPorts).neighbors);
         assert!(!check(MerakiTier::Availability).neighbors);
     }

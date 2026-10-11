@@ -5,7 +5,7 @@
 //! Two stores and the pure rule between them:
 //!
 //! * [`ArpRepo`] holds one aggregated summary per node — the observation, replaced wholesale, with
-//!   the same "a failed walk writes nothing" discipline as [`crate::neighbors`] and [`crate::l3`].
+//!   the same "a failed walk writes nothing" discipline as [`yagra_base::neighbors`] and [`crate::l3`].
 //! * [`DiscoveredRepo`] holds one row per **endpoint**, fleet-wide — the finding.
 //! * [`unmonitored`] turns the first into the second, and is pure so the rule that decides what
 //!   counts as "unmonitored" is testable without a database.

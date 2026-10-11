@@ -52,7 +52,7 @@
 //! The record ([`MerakiCollectHealth`]) is written from the result-ingest hot path and therefore
 //! does no I/O; deciding, persisting and dispatching belong to the leader-gated loop below.
 
-use crate::meraki::sync::MerakiSyncFailure;
+use crate::sync::MerakiSyncFailure;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -513,12 +513,12 @@ const WATCH_TICK: std::time::Duration = std::time::Duration::from_secs(15);
 /// independently would page twice, and the record it reads is fed by the result stream only the
 /// leader consumes. It holds no `Notifier` — everything leaves through the [`AlertSink`], which
 /// persists and notifies as one step (ADR-092).
-pub(crate) async fn run_meraki_collect_watch(
-    orgs: std::sync::Arc<crate::meraki::MerakiOrgRepo>,
+pub async fn run_meraki_collect_watch(
+    orgs: std::sync::Arc<crate::MerakiOrgRepo>,
     settings: std::sync::Arc<yagra_base::repo::NodeRepo>,
-    inflight: std::sync::Arc<crate::meraki::MerakiInflight>,
-    alerts: std::sync::Arc<crate::alerts::AlertManager>,
-    sink: std::sync::Arc<dyn crate::alerts::sink::AlertSink>,
+    inflight: std::sync::Arc<crate::MerakiInflight>,
+    alerts: std::sync::Arc<yagra_alert::engine::AlertManager>,
+    sink: std::sync::Arc<dyn yagra_alert::action::AlertSink>,
 ) {
     // The alerts survived the restart (`alerts::restore`, awaited in `run_live`); the watch that can
     // close them did not. Without the seed an outage that ended while this core was down leaves an
@@ -538,7 +538,7 @@ pub(crate) async fn run_meraki_collect_watch(
                 org,
                 tier,
                 MerakiSyncFailure::NoAnswer,
-                crate::pool_coverage::now_unix_ms(),
+                yagra_common::clock::now_unix_ms(),
             );
         }
 
@@ -575,7 +575,7 @@ pub(crate) async fn run_meraki_collect_watch(
                     alerts.raise_meraki_collect_alert(
                         org,
                         failure.failures,
-                        crate::pool_coverage::now_unix_ms(),
+                        yagra_common::clock::now_unix_ms(),
                     )
                 }
                 Transition::Resolve { org, why } => {

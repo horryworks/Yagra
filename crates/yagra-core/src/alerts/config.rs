@@ -162,7 +162,7 @@ impl AlertConfigSources for LiveConfigSources {
     }
     async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>> {
         // A handle on the pool `repo` already owns, like `collection_items` above.
-        crate::meraki::MerakiOrgRepo::new(self.repo.pool())
+        yagra_meraki::MerakiOrgRepo::new(self.repo.pool())
             .alert_bindings()
             .await
     }

@@ -37,9 +37,9 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
 use crate::store::MetricStore;
+use yagra_alert::action::AlertSink;
 use yagra_alert::engine::DERIVED_WATCH_TICK as WATCH_TICK;
 use yagra_common::derived_metric::{Formula, DERIVED_NODE_METRICS};
 use yagra_common::NodeId;
