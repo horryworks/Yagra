@@ -443,13 +443,16 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   // Bumped on every load, so the password field forgets a "Replace" that a save has answered.
   const [loadGen, setLoadGen] = useState(0);
 
-  // A refusal is not drawn here: the page's own unavailable notice already covers 401/403.
+  // A refusal is not drawn here: the page's own unavailable notice already covers 401/403. Any
+  // other failure is, or the card would show an empty form as if no directory were configured.
   const {
     data: answer,
+    error: loadError,
     loading,
     reload: load,
   } = useLoad(() => api.getLdapConfig(), [], {
     initial: null as { config?: LdapConfigView | null } | null,
+    errorFallback: t('settings-ai:loadFailed'),
   });
 
   // Each answer replaces the form: `data` keeps its identity until a new one arrives.
@@ -709,7 +712,7 @@ function DirectoryCard({ canUsers }: { canUsers: boolean }) {
         <p className="auth-warning">{t('ldap.revokeWarning')}</p>
       )}
 
-      {error && <p className="form-error">{error}</p>}
+      {(error ?? loadError) && <p className="form-error">{error ?? loadError}</p>}
       {saved && <p className="auth-saved">{t('ldap.saved')}</p>}
 
       <div className="auth-toolbar">

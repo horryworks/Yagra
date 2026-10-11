@@ -18,6 +18,7 @@
 ### Bug Fixes
 
 - **A port whose link is down no longer shows a duplex or a speed-derived medium.** A down Cisco port reported `10BASE-T` (the port's 10 Mbit/s fallback) and a down Huawei port `full` duplex. Both are now blank while the link is down; a port with a detected transceiver still shows the module's medium. The same applies to `GET /api/v1/nodes/{node_id}/interfaces` (`if_duplex`, `if_media`) and to the MCP `get_node_status` tool (`duplex`, `media`).
+- **The LDAP card in Settings ▸ Authentication says when it could not read the stored directory settings.** It used to show an empty form, as if no directory were configured.
 
 ## v0.3.48 — The Interfaces tab shows each switch port's mode and VLANs, and YunShan switches show their real model
 

@@ -108,6 +108,7 @@ export function CollectionEditor({
       scope === 'template'
         ? api.deleteTemplateItem(scopeId, id)
         : api.deleteCollectionItem(id);
+    setError(null);
     p.then(load).catch((e: unknown) => setError(errMsg(e, t('editor.err.delete'))));
   };
 

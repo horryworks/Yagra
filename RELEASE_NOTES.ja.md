@@ -18,6 +18,7 @@
 ### バグ修正
 
 - **リンクが落ちているポートに、duplex と速度から作った媒体名を出さなくなりました。** down の Cisco のポートに `10BASE-T`（ポートが申告する 10 Mbit/s の仮の速度から作った名前）が、down の Huawei のポートに duplex の `full` が出ていました。リンクが落ちている間はどちらも空になります。トランシーバが検出できているポートは、down でもモジュールの媒体名を出します。`GET /api/v1/nodes/{node_id}/interfaces`（`if_duplex`・`if_media`）と MCP の `get_node_status`（`duplex`・`media`）も同じです。
+- **Settings ▸ 認証の LDAP のカードが、保存済みのディレクトリ設定を読めなかったときにそう言うようになりました。** これまでは、ディレクトリが未設定であるかのように空のフォームを出していました。
 
 ## v0.3.48 — Interfaces タブにスイッチのポートのモードと VLAN が出て、YunShan のスイッチに本当の型番が出る
 
