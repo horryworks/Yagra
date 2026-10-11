@@ -7,7 +7,7 @@
 //! Docker socket is what acts on it. ADR-050 drew the same line centrally.
 //!
 //! ⚠️ **The three validators here are a deliberate second copy** of core's
-//! (`yagra-core/src/upgrade.rs`). Duplication is normally the thing to avoid, but not across a trust
+//! (`yagra-ops/src/upgrade.rs`). Duplication is normally the thing to avoid, but not across a trust
 //! boundary — the point is that the value is checked by *both* sides, so neither has to assume the
 //! other did. Each copy owes its own tests, and until ADR-103 this side had none while its doc said
 //! otherwise; they are at the bottom of this file now.

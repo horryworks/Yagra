@@ -4,7 +4,7 @@
 // nothing runs. See .claude/rules/testing.md.)
 //
 // Deliberately does NO version arithmetic. The compatibility floor is computed in Rust
-// (`crates/yagra-core/src/upgrade.rs::binding_floor`), where `semver` orders 0.2.10 after 0.2.9 and
+// (`crates/yagra-ops/src/upgrade.rs::binding_floor`), where `semver` orders 0.2.10 after 0.2.9 and
 // a test pins that. Re-deriving it here would put the one rule that decides whether a rollback is
 // offered in two places, in two languages — exactly the drift `.claude/rules/extensibility.md` §2
 // names. This module only decides what the page is allowed to *say*.
@@ -121,7 +121,7 @@ export function runStep(raw: string | undefined | null): UpgradeRunStep | null {
  * It only distinguishes "asked, not visible yet" from "nothing is happening", and it is matched by
  * id — so a stale `pending` cannot make an unrelated run look like this one's result.
  *
- * This is the same problem `watch_step` solves in `crates/yagra-core/src/upgrade.rs`, from the other
+ * This is the same problem `watch_step` solves in `crates/yagra-ops/src/upgrade.rs`, from the other
  * side: there, core boots mid-run and must not read the first `running` as "nothing to do"; here,
  * the browser starts a run and must not read the absence of one as "already finished".
  */
@@ -192,7 +192,7 @@ export function canApply(status: UpgradeStatus, pending: string | null = null): 
 }
 
 /** Which way a release moves this deployment. The backend decides — see `release_offers` in
- *  `crates/yagra-core/src/upgrade.rs`; comparing versions here would be a second copy of the rule
+ *  `crates/yagra-ops/src/upgrade.rs`; comparing versions here would be a second copy of the rule
  *  that says whether a rollback is safe. `as const` so `i18nEnumKeys.test.ts` can iterate it. */
 export const UPGRADE_OFFER_DIRECTIONS = ['upgrade', 'rollback'] as const;
 export type OfferDirection = (typeof UPGRADE_OFFER_DIRECTIONS)[number];
@@ -203,7 +203,7 @@ export type OfferBlock = (typeof UPGRADE_OFFER_BLOCKS)[number];
 
 export type Offer = UpgradeStatus['offers'][number];
 
-/** The id the core+WebUI row carries. Mirrors `CORE_COMPONENT_ID` in `crates/yagra-core/src/upgrade.rs`. */
+/** The id the core+WebUI row carries. Mirrors `CORE_COMPONENT_ID` in `crates/yagra-ops/src/upgrade.rs`. */
 export const CORE_ID = 'core';
 
 /** What a components row describes. `as const` so `i18nEnumKeys.test.ts` can iterate it. */
@@ -467,7 +467,7 @@ export function canUploadBundle(status: UpgradeStatus, pending: string | null = 
 /**
  * A typo filter for the target-tag field, and **deliberately looser than the backend's rule**.
  *
- * The real grammar is `is_valid_tag` in `crates/yagra-core/src/upgrade.rs`, and it stays the only
+ * The real grammar is `is_valid_tag` in `crates/yagra-ops/src/upgrade.rs`, and it stays the only
  * one: copying it here would put the rule that decides what reaches a root-privileged container in
  * two languages with nothing comparing them (extensibility.md §2). What justifies any check at all
  * is the size — a rejected tag after a gigabyte has already been uploaded is a wasted upload.

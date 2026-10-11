@@ -5,7 +5,8 @@
 //! written". When the database layer left core for `yagra-base`, every such check kept compiling
 //! and quietly stopped seeing a third of the code it was about: `env!("CARGO_MANIFEST_DIR")`
 //! expands to the crate a check is written in, so a walk of "this crate" is a walk of one tree.
-//! They are gathered here and read **every** tree — core's, `yagra-base`'s and `yagra-netbox`'s — through
+//! They are gathered here and read **every** tree — core's and every crate named in
+//! `module_source::SPLIT_OUT` — through
 //! [`crate::module_source::program_src_dirs`] and [`crate::module_source::program_code`], which
 //! name a split-out crate's files with its name as a prefix.
 //!
@@ -31,9 +32,9 @@ use yagra_common::srcread::{file_name, read, rs_files};
 // "the needle stopped matching", and a floor left at its first value stops doing that.
 const MIN_DATABASE_TESTS: usize = 70;
 
-/// Every `.rs` file of the program — core's and `yagra-base`'s — as `(name, raw text)`.
+/// Every `.rs` file of the program — core's and every split-out crate's — as `(name, raw text)`.
 ///
-/// Both trees, because a database test is a database test whichever crate holds it: the
+/// Every tree, because a database test is a database test whichever crate holds it: the
 /// repositories' own tests went to `yagra-base` with them (ADR-202 Inc.5), and a check left
 /// reading core alone would have lost a third of its population without failing.
 ///
@@ -183,7 +184,10 @@ fn the_migration_macro_has_exactly_one_call_site() {
 const SQL_WITHOUT_A_TEST_OF_ITS_OWN: [(&str, &str); 3] = [
     (
         "address_owners.rs",
-        "`yagra-base`'s address-owner reads. Their tests feed an L3 observation through the          production writer, `L3Repo`, which lives in core and which the database layer cannot          name (ADR-202 Inc.5) — so they are in `yagra-core/src/topology/l3.rs::address_owner_reads`, the          same tests as before the split.",
+        "`yagra-base`'s address-owner reads. Their tests feed an L3 observation through the \
+         production writer, `L3Repo`, which lives in core and which the database layer cannot \
+         name (ADR-202 Inc.5) — so they are in `yagra-core/src/topology/l3.rs::address_owner_reads`, \
+         the same tests as before the split.",
     ),
     (
         "import_inventory.rs",

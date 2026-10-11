@@ -3,7 +3,7 @@
 // document the backend seals.
 //
 // Extracted from CredentialsPage.tsx so it is testable at all — Vitest never runs `.tsx`. The
-// mirror of this validation lives in `crates/yagra-core/src/secrets.rs::parse_http_auth`, which is
+// mirror of this validation lives in `crates/yagra-base/src/secrets.rs::parse_http_auth`, which is
 // the authority; checking here turns a round trip into an inline message, and keeps an
 // under-specified credential from being encrypted at rest in the first place.
 

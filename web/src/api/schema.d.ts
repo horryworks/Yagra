@@ -8992,6 +8992,11 @@ export interface components {
          *     IANAifType integer (6 = ethernetCsmacd); it is what distinguishes "duplex does not apply to this
          *     interface" — a loopback, a tunnel, a dialer — from "we could not read it".
          *
+         *     `if_media` is the IEEE 802.3 designation (`1000BASE-T`, `10GBASE-SR`, …) when a source the
+         *     device answers names one, and `null` otherwise. While `oper_status` is present and not `1` (up),
+         *     a designation derived from the port's speed is withheld unless a transceiver was found, and
+         *     `if_duplex` is `null` (ADR-063 Inc.8). The stored value is unchanged; only what is served.
+         *
          *     `addresses` lists every IP address configured on the interface — secondaries included — as
          *     the device reports them in its IP address tables (ADR-157). Read from the hourly address walk
          *     (ADR-043), so a change shows within an hour; empty until that walk has run, and for a port the

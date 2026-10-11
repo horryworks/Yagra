@@ -12,7 +12,7 @@
 
 import type { RelocationStatus } from '../types/api';
 
-/** What a request asks for. Mirrors `RelocationMode` in `crates/yagra-core/src/relocation.rs`. */
+/** What a request asks for. Mirrors `RelocationMode` in `crates/yagra-ops/src/relocation.rs`. */
 export const RELOCATION_MODES = ['archive', 'preflight', 'push'] as const;
 export type RelocationMode = (typeof RELOCATION_MODES)[number];
 

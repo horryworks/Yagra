@@ -1653,7 +1653,7 @@ services:
           [ "$$SCHEMA" = "1" ] || { reject "$$ID" "this updater is older than the core that made the request; update it by hand"; return; }
           # Checked before anything uses it — an archive's path is built from it below.
           echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || { reject unknown "malformed run id"; return; }
-          # The command set, mirroring `Command::as_str()` in crates/yagra-core/src/upgrade.rs;
+          # The command set, mirroring `Command::as_str()` in crates/yagra-ops/src/upgrade.rs;
           # `every_command_is_accepted_by_the_sidecar` pins the two lists to each other. Anything
           # else is refused BY NAME, which is what lets core gain a command without a schema bump.
           case "$$CMD" in

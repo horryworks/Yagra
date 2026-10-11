@@ -65,3 +65,21 @@ pub(crate) async fn fresh_fleet_ids(store: &dyn crate::tsdb::store::MetricStore)
         .into_iter()
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_engine_wins_and_otherwise_a_fresh_sample_means_ok() {
+        // The engine's opinion stands whatever the freshness says, including against it.
+        assert_eq!(
+            state_or_fallback(Some(NodeState::Critical), true),
+            NodeState::Critical
+        );
+        assert_eq!(state_or_fallback(Some(NodeState::Ok), false), NodeState::Ok);
+        // No opinion: a recent liveness sample is `ok`, silence is `unknown` - never `ok`.
+        assert_eq!(state_or_fallback(None, true), NodeState::Ok);
+        assert_eq!(state_or_fallback(None, false), NodeState::Unknown);
+    }
+}

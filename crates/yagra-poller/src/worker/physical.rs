@@ -708,10 +708,11 @@ const ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
 /// soldered port cannot, which is what makes this the structural half of "is this text a module?".
 const ENT_PHYSICAL_IS_FRU: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
 
-/// `entPhysicalClass` — what kind of component this is. Read only to exclude `sensor(8)`, which
-/// reaches a port through the same containment chain a transceiver does and whose *name* reads like
-/// a module's. See `mau::entity_text`'s 🚨.
-const ENT_PHYSICAL_CLASS: &str = "1.3.6.1.2.1.47.1.1.1.1.5";
+/// `entPhysicalClass` — what kind of component this is. Read for two things: to exclude
+/// `sensor(8)`, which reaches a port through the same containment chain a transceiver does and whose
+/// *name* reads like a module's (see `mau::entity_text`'s 🚨), and to pick out the `port(10)`
+/// entities whose vendor type may say copper (`mau::copper_port_entities`, ADR-063 Inc.8).
+const ENT_PHYSICAL_CLASS: &str = yagra_discovery::serial::OID_ENT_PHYSICAL_CLASS;
 
 /// Counts every ENTITY-MIB index walk by whether it was read whole (`result`: `complete` or
 /// `incomplete`). Both series are touched on every walk, so a poller that has walked once publishes

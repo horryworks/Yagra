@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-09
-# counts: MA-L=40208 MA-L-repeats-dropped=3 MA-M=6549 MA-S=7192 withheld=3
+# fetched: 2026-10-11
+# counts: MA-L=40208 MA-L-repeats-dropped=3 MA-M=6550 MA-S=7195 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -36361,6 +36361,7 @@
 8C1F642B1	U -MEI-DAH INT'L ENTERPRISE CO.,LTD.
 8C1F642B2	Infosoft Digital Design and Services P L
 8C1F642B4	Sonel S.A.
+8C1F642B5	XTEC Industries Pte Ltd
 8C1F642B6	Stercom Power Solutions GmbH
 8C1F642B8	Veinland GmbH
 8C1F642B9	Ultrasonic Engineering Co., Ltd.
@@ -36435,6 +36436,7 @@
 8C1F6431F	STV Electronic GmbH
 8C1F64320	VITREA Smart Home Technologies Ltd.
 8C1F64324	Kinetic Technologies
+8C1F64326	Famas System S.p.A. Unipersonale
 8C1F64327	Deutescher Wetterdienst
 8C1F64328	Com Video Security Systems Co., Ltd.
 8C1F64329	YUYAMA MFG Co.,Ltd
@@ -38038,6 +38040,7 @@
 8C1F64BD5	Pro-Custom Group
 8C1F64BD6	NOVA Products GmbH
 8C1F64BD7	Union Electronic.
+8C1F64BD8	CCTEC - Codigo Ctecnologia Soc Unip Lda
 8C1F64BD9	WATTS
 8C1F64BDA	Skip Innovations, Inc
 8C1F64BDB	Cardinal Scales Manufacturing Co
@@ -47697,6 +47700,7 @@ CCF67A	Ayecka Communication Systems LTD
 CCF722	IEEE Registration Authority
 CCF7221	Lucky Tone Technology Co., Ltd.
 CCF7225	Foritec GmbH
+CCF7228	75F Engineering Services India Private Ltd
 CCF722C	Walnut Medical Private Limited
 CCF735	Amazon Technologies Inc.
 CCF826	Samsung Electronics Co.,Ltd

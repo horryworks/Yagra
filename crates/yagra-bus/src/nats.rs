@@ -36,7 +36,7 @@ pub const POLLER_QUEUE: &str = "pollers";
 /// 🚨 Both `ring` and `aws-lc-rs` end up enabled in this dependency graph (the workspace
 /// `Cargo.toml` says so at length), so rustls installs no default of its own and **any library that
 /// builds a `ClientConfig` on our behalf panics the first time it tries.** Every call site this
-/// workspace owns names the provider explicitly instead — see `yagra-core/src/tls.rs` — but
+/// workspace owns names the provider explicitly instead — see `yagra-base/src/tls.rs` — but
 /// `async_nats`'s `add_root_certificates` builds its own, and so does `lettre`'s SMTP TLS. Those
 /// have no call site to fix, so the answer has to be process-wide.
 ///

@@ -94,7 +94,7 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ("listing.rs", &["nodes"]),
     // The description of a pool, and - deliberately - the three tables a refused delete has to
     // name. Counting what still points at a pool is part of that refusal, not a second answer to
-    // "who is in this pool": those live in nodes.rs and crate::pollers and stay there.
+    // "who is in this pool": those live in nodes.rs and core's fleet/pollers.rs and stay there.
     ("pools.rs", &["pools", "nodes", "node_groups", "pollers"]),
     // Covering a pool that lost its poller, reversibly (ADR-107 Inc.4). It names the two member
     // tables for the same reason `pools.rs` does — the move is the operation — and its own table

@@ -95,6 +95,11 @@ pub const CLASS_MODULE: i64 = 9;
 pub const OID_ENT_PHYSICAL_CONTAINED_IN: &str = "1.3.6.1.2.1.47.1.1.1.1.4";
 /// `entPhysicalClass`'s `container(5)` — the class of a slot.
 pub const CLASS_CONTAINER: i64 = 5;
+/// `entPhysicalClass`'s `sensor(8)` — read by the poller's media walk, which must never take a
+/// sensor for a transceiver.
+pub const CLASS_SENSOR: i64 = 8;
+/// `entPhysicalClass`'s `port(10)` — read by the poller's media walk to find port entities.
+pub const CLASS_PORT: i64 = 10;
 /// What a CloudEngine-branded Huawei calls the slot one member's main board sits in, followed by the
 /// member number — decision 23. A modular chassis's `MPU slot 1/5` is not one.
 const HUAWEI_MEMBER_SLOT: &str = "MPU slot ";

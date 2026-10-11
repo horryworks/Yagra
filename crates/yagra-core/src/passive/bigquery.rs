@@ -399,7 +399,7 @@ mod tests {
 
     // ── A fake Google, for the request-shaping tests ─────────────────────────────────────────
 
-    /// A scripted queue of `(status, body)`, served by [`crate::httpfake`] once a test asks for an
+    /// A scripted queue of `(status, body)`, served by `yagra_base::httpfake` once a test asks for an
     /// address, and the requests it saw as `(method, path, body)`.
     struct FakeGoogle {
         replies: Mutex<Vec<(u16, String)>>,

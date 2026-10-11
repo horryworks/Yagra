@@ -86,11 +86,11 @@ pub fn speed_by_ifindex(rows: &[SnmpInstanceRow], speed_oid: &str) -> BTreeMap<u
 }
 
 /// `entPhysicalClass` value for `port(10)`.
-const ENT_CLASS_PORT: i64 = 10;
+const ENT_CLASS_PORT: i64 = yagra_discovery::serial::CLASS_PORT;
 
 /// `entPhysicalClass` value for `sensor(8)` — the one class that can never be a transceiver, and
 /// the one that produced a convincing-looking wrong answer on real hardware.
-const ENT_CLASS_SENSOR: i64 = 8;
+const ENT_CLASS_SENSOR: i64 = yagra_discovery::serial::CLASS_SENSOR;
 use yagra_common::{
     copper_designation, mau_subid, media_from_mau_oid, media_from_optic_description,
     media_from_transceiver_text, vendor_type_is_copper_port, Duplex, OID_ENT_PHYSICAL_VENDOR_TYPE,

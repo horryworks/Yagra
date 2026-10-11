@@ -231,28 +231,29 @@ pub fn medium_from_huawei(value: f64) -> Option<Medium> {
 /// registration — instead of quietly making it a claim about a document nobody read.
 #[must_use]
 pub fn copper_designation(bps: i64) -> Option<&'static str> {
-    match bps {
-        10_000_000 => Some("10BASE-T"),
-        100_000_000 => Some("100BASE-TX"),
-        1_000_000_000 => Some("1000BASE-T"),
-        // Above 10 Gbit/s, "copper" means twinax (`…BASE-CR`), which a fixed RJ45 port is not, so a
-        // higher reading is a device saying something this mapping has no business interpreting.
-        10_000_000_000 => Some("10GBASE-T"),
-        _ => None,
-    }
+    COPPER_DESIGNATIONS
+        .iter()
+        .find(|(rate, _)| *rate == bps)
+        .map(|(_, name)| *name)
 }
 
-/// Every speed [`copper_designation`] has an answer for, so its outputs can be enumerated rather
-/// than copied into a second list.
-const COPPER_DESIGNATION_SPEEDS: [i64; 4] =
-    [10_000_000, 100_000_000, 1_000_000_000, 10_000_000_000];
+/// The twisted-pair standard for each rate [`copper_designation`] answers, and the only copy of it:
+/// [`is_speed_derived_copper`] reads the same rows, so a rate added here is hidden on a down port
+/// too (ADR-063 Inc.8 decision 1).
+///
+/// Above 10 Gbit/s, "copper" means twinax (`…BASE-CR`), which a fixed RJ45 port is not, so a higher
+/// reading is a device saying something this mapping has no business interpreting.
+const COPPER_DESIGNATIONS: [(i64, &str); 4] = [
+    (10_000_000, "10BASE-T"),
+    (100_000_000, "100BASE-TX"),
+    (1_000_000_000, "1000BASE-T"),
+    (10_000_000_000, "10GBASE-T"),
+];
 
 /// Whether `media` is a name this crate derives from a port's *speed* rather than one a device or a
 /// module stated outright.
 fn is_speed_derived_copper(media: &str) -> bool {
-    COPPER_DESIGNATION_SPEEDS
-        .iter()
-        .any(|bps| copper_designation(*bps) == Some(media))
+    COPPER_DESIGNATIONS.iter().any(|(_, name)| *name == media)
 }
 
 /// What a port's duplex and media cells show, given whether its link is up (ADR-063 Inc.8 decision 1).
@@ -262,13 +263,15 @@ fn is_speed_derived_copper(media: &str) -> bool {
 /// this exists: a down Cisco port reports `ifHighSpeed` = 10, which the capability `portType` turns
 /// into `10BASE-T`; a down Huawei port answers `hwEthernetDuplex` = full. Both read as facts.
 ///
-/// So, **only when the port is known to be down** (`oper_status` present and not `up(1)`):
+/// So, **only when the port is reported as not up** (`oper_status` present and anything but `up(1)`
+/// — `down(2)`, `lowerLayerDown(7)` and `notPresent(6)`, and also `testing(3)`, `unknown(4)` and
+/// `dormant(5)`: none of those is a link carrying traffic at a negotiated rate, decided 2026-10-11):
 /// - duplex is hidden;
 /// - media is hidden when it is one of the four names derived from speed **and** no transceiver was
 ///   found. A module that was detected is still there with the link down, and its designation is a
 ///   statement about the module — the operator asked to keep that.
 ///
-/// `oper_status` absent (the TSDB had no reading) hides nothing: "we do not know" is not "down".
+/// `oper_status` absent (the TSDB had no reading) hides nothing: no reading is not a status.
 ///
 /// ⚠️ This decides what is *shown*. The stored row is not touched, deliberately — the multi-writer
 /// upsert keeps the last non-NULL value, so a port that comes back up is rewritten by the next walk,
@@ -1628,12 +1631,13 @@ mod tests {
 
     #[test]
     fn the_speed_derived_names_are_exactly_copper_designations_outputs() {
-        // `is_speed_derived_copper` enumerates `copper_designation` instead of copying its outputs;
-        // pin that every speed it lists resolves, so the enumeration cannot go stale silently.
-        for bps in COPPER_DESIGNATION_SPEEDS {
-            let d = copper_designation(bps).unwrap_or_else(|| panic!("{bps} must resolve"));
-            assert!(is_speed_derived_copper(d));
+        // Both functions read `COPPER_DESIGNATIONS`, so every name the one can produce is one the
+        // other recognises — a rate added there cannot be shown on a down port.
+        for (bps, name) in COPPER_DESIGNATIONS {
+            assert_eq!(copper_designation(bps), Some(name));
+            assert!(is_speed_derived_copper(name));
         }
+        assert_eq!(copper_designation(2_500_000_000), None);
         assert!(!is_speed_derived_copper("1000BASE-SX"));
         assert!(!is_speed_derived_copper("2.5GBASE-T"));
     }
