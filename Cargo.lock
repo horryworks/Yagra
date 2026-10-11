@@ -5075,7 +5075,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "async-trait",
  "metrics",
@@ -5093,7 +5093,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-auth"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5124,7 +5124,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-authz"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "data-encoding",
  "nkeys",
@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-base"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5164,7 +5164,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -5183,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "serde",
  "serde_json",
@@ -5193,7 +5193,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5260,7 +5260,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "regex",
  "serde_json",
@@ -5269,7 +5269,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-forward"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "chrono",
  "regex",
@@ -5286,7 +5286,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-hoststats"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "libc",
  "sysinfo",
@@ -5296,7 +5296,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-ingest"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -5305,7 +5305,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-meraki"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5327,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-netbox"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5347,7 +5347,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-ops"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5374,11 +5374,11 @@ dependencies = [
 
 [[package]]
 name = "yagra-oui"
-version = "0.3.48"
+version = "0.3.49"
 
 [[package]]
 name = "yagra-poller"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5407,7 +5407,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5417,7 +5417,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-telemetry"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
@@ -5434,7 +5434,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "uuid",
  "yagra-common",
@@ -5442,7 +5442,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-transport"
-version = "0.3.48"
+version = "0.3.49"
 dependencies = [
  "async-trait",
  "csnmp",

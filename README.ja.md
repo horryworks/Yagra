@@ -26,7 +26,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > アラートも上がりません。規模が小さいほど症状は重く、初めて導入した環境ほど強く踏みます。v0.2.6 で
 > 修正済みです。詳細は [RELEASE_NOTES.ja.md](RELEASE_NOTES.ja.md) を参照してください。
 
-> ステータス: **v0.3.48 — Interfaces タブにスイッチのポートのモードと VLAN が出て、YunShan のスイッチに本当の型番が出る**
+> ステータス: **v0.3.49 — Huawei の光ポートと Cisco の銅ポートに Media が出て、落ちているポートに推測の duplex と媒体名が出なくなる**
 > ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、NetBox からのフォルダーツリー同期（読み取り専用）、受動イベント監視、探索・分類、
 > アラート、ダッシュボード、レポートを備えたスタックが、

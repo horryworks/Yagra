@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.49 — Huawei の光ポートと Cisco の銅ポートに Media が出て、落ちているポートに推測の duplex と媒体名が出なくなる
+
 ### 改善
 
 - **Interfaces タブの Media が、より多くのポートで埋まるようになりました。** Huawei の光ポートは、光モジュール自身の説明文から規格名（`1000BASE-LX`、`1000BASE-SX`、`10GBASE-SR`、`10GBASE-LR`、`10GBASE-ER`）を出します。Media の列を返さない Cisco Catalyst（3650 など）の銅ポートは、ENTITY-MIB のポートの種類（vendor type）から `1000BASE-T` などを出します。DAC（銅の直結ケーブル）・BiDi の光モジュール・Cisco ISR と ASAv のポートは、機器が媒体を答えないので空のままです。毎時の媒体の取得で、1 時間以内に埋まります。
