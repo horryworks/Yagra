@@ -10,10 +10,16 @@
 
 ## Unreleased
 
+## v0.3.50 — Text cut off in a table ends in "…" and shows in full on hover, and the Interfaces table keeps its lines when scrolled sideways
+
 ### Bug Fixes
 
 - **Text cut off in a table now ends in "…" and shows in full on hover.** On Nodes ▸ Missing IP prefixes an opened site's Reason stopped mid-word with no mark, and its "Open folder" link ran under the Mark as intentional button. The same silent cut is fixed on Settings ▸ Forwarding (Name), the collection editor (metric and OID), a node's Flow tab (source and destination) and Subnet overlaps (sites), and the names, reasons and targets on a dozen other lists now carry their full text on hover.
 - **A node's Interfaces table keeps its header background and row lines when scrolled sideways.** They used to stop where the pane ended.
+
+### Security
+
+- **rustls is updated to 0.23.46 (RUSTSEC-2026-0346, -0347, -0348, -0349).** Of the four, one applies to Yagra: a TLS client recorded which key exchange a server chose before the server was authenticated, so an attacker on the network could make later connections to that server name use classical key exchange instead of the post-quantum hybrid. Nothing was decrypted and no authentication was bypassed. The other three need a custom session store, Encrypted Client Hello or the `brotli` feature, none of which Yagra uses.
 
 ## v0.3.49 — Media fills on Huawei fibre and Cisco copper ports, and a down port no longer shows a guessed duplex or medium
 
