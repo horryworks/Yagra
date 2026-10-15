@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Tabs } from '../components/ui/Tabs';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -173,7 +174,7 @@ export function ReportsPage() {
   // ── Column sets ──
   const runSpecs = savedRunFilters(t);
   const runColumns: Column<ReportRun>[] = [
-    { key: 'name', header: t('runs.cols.report'), width: '1.6fr', render: (r) => r.name },
+    { key: 'name', header: t('runs.cols.report'), width: '1.6fr', render: (r) => <ClippedText text={r.name} /> },
     { key: 'status', header: t('runs.cols.status'), width: '160px', render: (r) => <RunStatus run={r} /> },
     {
       key: 'trigger',
@@ -210,7 +211,7 @@ export function ReportsPage() {
 
   const defSpecs = definitionFilters(t);
   const defColumns: Column<ReportDefinition>[] = [
-    { key: 'name', header: t('defs.cols.template'), width: '1.6fr', render: (d) => d.name },
+    { key: 'name', header: t('defs.cols.template'), width: '1.6fr', render: (d) => <ClippedText text={d.name} /> },
     {
       key: 'sections',
       header: t('defs.cols.sections'),
@@ -257,7 +258,7 @@ export function ReportsPage() {
 
   const schedSpecs = reportScheduleFilters(t);
   const schedColumns: Column<ReportSchedule>[] = [
-    { key: 'name', header: t('scheds.cols.report'), width: '1.4fr', render: (s) => s.definition_name },
+    { key: 'name', header: t('scheds.cols.report'), width: '1.4fr', render: (s) => <ClippedText text={s.definition_name} /> },
     {
       key: 'cadence',
       header: t('scheds.cols.cadence'),

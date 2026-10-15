@@ -14,6 +14,7 @@ import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionTemplate } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -63,13 +64,13 @@ export function CollectionTemplatesPage() {
         key: 'name',
         header: t('sets.cols.name'),
         width: '1.6fr',
-        render: (r) => <span className="yt-name-txt">{r.name}</span>,
+        render: (r) => <ClippedText className="yt-name-txt" text={r.name} />,
       },
       {
         key: 'description',
         header: t('sets.cols.description'),
         width: '1.6fr',
-        render: (r) => <span className="muted ellipsis">{r.description ?? '—'}</span>,
+        render: (r) => <ClippedText className="muted" text={r.description ?? '—'} />,
       },
       {
         key: 'metrics',

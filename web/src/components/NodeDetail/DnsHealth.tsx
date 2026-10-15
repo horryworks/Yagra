@@ -18,6 +18,7 @@ import { api } from '../../services/api';
 import { formatTimestamp, pointsToSeries } from '../../lib/format';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { Badge } from '../ui/Badge';
+import { ClippedText } from '../ui/ClippedText';
 import { Column, DataTable } from '../ui/DataTable';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
@@ -119,7 +120,7 @@ export function DnsHealth({
       key: 'chain',
       header: t('overview.resolutionChain'),
       width: '1fr',
-      render: (row) => <span className="dns-history-summary">{chainSummary(row.chain)}</span>,
+      render: (row) => <ClippedText className="dns-history-summary" text={chainSummary(row.chain)} />,
     },
   ];
 

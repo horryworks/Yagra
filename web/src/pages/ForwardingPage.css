@@ -3,10 +3,8 @@
    the filter builder and the two-up form rows need layout here. Colors/fonts come from theme
    variables (ui-conventions). */
 
+/* A ClippedText, so no display of its own: a flex box here drew no ellipsis (ADR-088 Inc.4). */
 .fwd-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   font-weight: 500;
   color: var(--text-primary);
 }

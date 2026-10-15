@@ -14,6 +14,7 @@ import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
@@ -174,7 +175,7 @@ export function MaintenancePage() {
         key: 'name',
         header: t('maintenance.cols.name'),
         width: '1.4fr',
-        render: (w) => <span className="yt-name-txt">{w.name}</span>,
+        render: (w) => <ClippedText className="yt-name-txt" text={w.name} />,
       },
       {
         key: 'scope',

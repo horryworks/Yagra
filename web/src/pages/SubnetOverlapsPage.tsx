@@ -217,7 +217,7 @@ export function SubnetOverlapsPage() {
                 </span>
               ))}
               {more > 0 && <span className="so-chip so-chip-more">{t('subnetOverlaps.sitesMore', { count: more })}</span>}
-              {hidden && <span className="so-chip so-chip-more">{hidden}</span>}
+              {hidden && <span className="so-chip so-chip-more so-chip-hidden">{hidden}</span>}
             </span>
           );
         },

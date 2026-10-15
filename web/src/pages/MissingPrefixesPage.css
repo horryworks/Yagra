@@ -92,6 +92,20 @@
   min-width: 0;
 }
 
+/* Caret, name and tag on one line: the name is the part that gives way (ClippedText), so the caret
+   and the "not a site" tag stay whole. */
+.mp-site-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mp-site-name > .mp-caret,
+.mp-site-name > .mp-tag {
+  flex: none;
+}
+
 .mp-path {
   color: var(--text-tertiary);
   font-size: var(--font-xs);
@@ -101,7 +115,7 @@
 }
 
 .mp-tag {
-  margin-left: var(--space-2);
+  margin-left: var(--space-1);
   font-size: var(--font-2xs);
   padding: 0 6px;
   border: 1px solid var(--border-color);
@@ -110,15 +124,15 @@
   white-space: nowrap;
 }
 
+/* The dot and the words side by side. The words are a ClippedText: `text-overflow` draws no
+   ellipsis on this flex box itself, which is how the reason was once cut with no mark (ADR-088
+   Inc.4). */
 .mp-kind {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-sm);
 }
 
@@ -197,21 +211,16 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.mp-links {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  white-space: nowrap;
-}
-
-/* An intentional gap's note, where the open tab lists the places it was seen. One line; the cell's
-   title carries the whole note. */
-.mp-note {
-  display: block;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* One link per line, each cut to the column (ClippedText). Kept on one line, a long folder name
+   ran past the cell and under the mark button beside it. */
+.mp-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
 }

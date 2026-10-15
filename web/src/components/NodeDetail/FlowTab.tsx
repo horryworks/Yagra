@@ -40,6 +40,7 @@ import { MetricChart } from '../MetricChart/MetricChart';
 import { PALETTE } from '../MetricChart/palette';
 import { RankedBars } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
+import { ClippedText } from '../ui/ClippedText';
 import { RangeControl, resolveRange } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
 // The protocol-series grouping is shared with the fleet-wide throughput widget — one tested
@@ -184,8 +185,8 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           const as = formatAsn(r.src_asn, r.src_as_name);
           return (
             <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.src)}>
-              <span className="mono">{r.src}</span>
-              {as && <span className="nd-flow-as">{as}</span>}
+              <ClippedText className="mono" text={r.src} />
+              {as && <ClippedText className="nd-flow-as" text={as} />}
             </button>
           );
         },
@@ -198,8 +199,8 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           const as = formatAsn(r.dst_asn, r.dst_as_name);
           return (
             <button type="button" className="nd-flow-ip" onClick={() => applyPeer(r.dst)}>
-              <span className="mono">{r.dst}</span>
-              {as && <span className="nd-flow-as">{as}</span>}
+              <ClippedText className="mono" text={r.dst} />
+              {as && <ClippedText className="nd-flow-as" text={as} />}
             </button>
           );
         },

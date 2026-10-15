@@ -198,11 +198,13 @@ export async function inspectScreenGeometry(page: Page): Promise<GeometryReport>
           return o === 'hidden' || o === 'clip';
         };
         let cutBy = clips(el) ? el.scrollWidth - el.clientWidth : 0;
+        let clipper: Element = el;
         if (cutBy <= 0) {
           for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
             if (!clips(p)) continue;
             const pb = p.getBoundingClientRect();
             cutBy = Math.max(box.right - pb.right, pb.left - box.left);
+            clipper = p;
             break; // only the nearest clipping ancestor decides
           }
         }
@@ -213,6 +215,23 @@ export async function inspectScreenGeometry(page: Page): Promise<GeometryReport>
 
         const text = fullText(el);
         if (text === '') continue;
+
+        // ADR-088 Inc.4: a box that asks for an ellipsis but is a flex or grid container never
+        // draws one — its text is an anonymous flex item, and `text-overflow` applies only to a
+        // block container's own line. The words simply stop, so the operator has no sign anything
+        // is missing and no reason to look for the tooltip. A `title` does not excuse that; the
+        // fix is a block box (`ClippedText`). Found on Missing IP prefixes' Reason column, which
+        // had the tooltip all along.
+        const cs = getComputedStyle(clipper);
+        if (cs.textOverflow === 'ellipsis' && /(flex|grid)/.test(cs.display)) {
+          const cls = clipper.getAttribute('class') || '';
+          findings.push({
+            where: `<${clipper.tagName.toLowerCase()}${cls ? ` class="${cls.slice(0, 60)}"` : ''}>`,
+            why: `"${text.slice(0, quote)}${text.length > quote ? '…' : ''}" is cut off by ${Math.round(cutBy)}px with no ellipsis: the box is display:${cs.display}, where text-overflow draws nothing`,
+          });
+          continue;
+        }
+
         if (coveredByTitle(el, text)) continue;
 
         const cls = el.getAttribute('class') || '';

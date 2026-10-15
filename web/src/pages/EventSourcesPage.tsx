@@ -6,6 +6,7 @@ import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { EventSource } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -62,7 +63,7 @@ export function EventSourcesPage() {
     const kinds = [...new Set(rows.map((r) => r.kind))].sort();
     const specs = eventSourceFilters(t, kinds);
     const cols: Column<EventSource>[] = [
-      { key: 'name', header: t('eventSources.cols.name'), width: '1.6fr', render: (r) => r.name },
+      { key: 'name', header: t('eventSources.cols.name'), width: '1.6fr', render: (r) => <ClippedText text={r.name} /> },
       {
         key: 'kind',
         header: t('eventSources.cols.kind'),

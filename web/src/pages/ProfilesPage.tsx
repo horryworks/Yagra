@@ -22,6 +22,7 @@ import type {
 } from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -245,7 +246,7 @@ export function ProfilesPage() {
                     <Fragment key={p.id}>
                       <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
                         <div className="ytable-cell">
-                          <span className="yt-name-txt">{p.name}</span>
+                          <ClippedText className="yt-name-txt" text={p.name} />
                         </div>
                         <div className="ytable-cell">
                           {p.vendor ? p.vendor : <span className="muted">—</span>}

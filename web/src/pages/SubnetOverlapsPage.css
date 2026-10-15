@@ -127,6 +127,12 @@
   border: 1px dashed var(--border-color);
 }
 
+/* "+N not visible to you" is a phrase, not a count, so it may be the chip that gives way: kept
+   whole, it was cut by the row with no ellipsis (ADR-088 Inc.4). The row's title has it in full. */
+.so-chip-more.so-chip-hidden {
+  flex: 0 1 auto;
+}
+
 .so-hint {
   display: inline-flex;
   gap: 6px;

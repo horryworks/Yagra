@@ -15,6 +15,7 @@ import { api, ApiError } from '../services/api';
 import { useAuthStore, useCan } from '../store';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
+import { ClippedText } from '../components/ui/ClippedText';
 import {
   ROLES,
   TOKEN_SURFACES,
@@ -95,7 +96,7 @@ function tokenColumns(
       header: t('cols.name'),
       width: '1fr',
       sortable: true,
-      render: (r) => <span className="tok-name">{r.name}</span>,
+      render: (r) => <ClippedText className="tok-name" text={r.name} />,
     },
     {
       key: 'surfaces',

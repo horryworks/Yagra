@@ -26,6 +26,7 @@ import {
 } from '../types/api';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -180,7 +181,7 @@ function ChannelsSection({
         key: 'name',
         header: t('routing.channels.cols.name'),
         width: '1.6fr',
-        render: (c) => <span className="yt-name-txt">{c.name}</span>,
+        render: (c) => <ClippedText className="yt-name-txt" text={c.name} />,
       },
       {
         key: 'kind',
@@ -599,7 +600,7 @@ function RulesSection({
         key: 'name',
         header: t('routing.rules.cols.name'),
         width: '1.4fr',
-        render: (r) => <span className="yt-name-txt">{r.name}</span>,
+        render: (r) => <ClippedText className="yt-name-txt" text={r.name} />,
       },
       {
         key: 'severity',

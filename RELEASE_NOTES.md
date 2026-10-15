@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Text cut off in a table now ends in "…" and shows in full on hover.** On Nodes ▸ Missing IP prefixes an opened site's Reason stopped mid-word with no mark, and its "Open folder" link ran under the Mark as intentional button. The same silent cut is fixed on Settings ▸ Forwarding (Name), the collection editor (metric and OID), a node's Flow tab (source and destination) and Subnet overlaps (sites), and the names, reasons and targets on a dozen other lists now carry their full text on hover.
+- **A node's Interfaces table keeps its header background and row lines when scrolled sideways.** They used to stop where the pane ended.
+
 ## v0.3.49 — Media fills on Huawei fibre and Cisco copper ports, and a down port no longer shows a guessed duplex or medium
 
 ### Improvements

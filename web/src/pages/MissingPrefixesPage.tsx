@@ -19,6 +19,7 @@ import { SearchField } from '../components/ui/SearchField';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { LoadGate } from '../components/ui/LoadGate';
+import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { useLoad } from '../lib/useLoad';
 import { useClientFilters } from '../lib/useClientFilters';
@@ -152,12 +153,15 @@ export function MissingPrefixesPage() {
     return (
       <span className="mp-seen">
         {g.seen_on.map((s) => (
-          <span key={`${s.node_id}-${s.ifindex}-${s.ip}`}>
+          <ClippedText
+            key={`${s.node_id}-${s.ifindex}-${s.ip}`}
+            text={`${nodeName(s.node_id)}${s.if_name ? ` ${s.if_name}` : ''} ${s.ip}`}
+          >
             <Link to={nodeHref(s.node_id)}>{nodeName(s.node_id)}</Link>
             <span className="mono">
               {s.if_name ? ` ${s.if_name}` : ''} {s.ip}
             </span>
-          </span>
+          </ClippedText>
         ))}
         {more > 0 && <span className="muted">{t('missingPrefixes.moreDevices', { n: more })}</span>}
       </span>
@@ -167,12 +171,16 @@ export function MissingPrefixesPage() {
   const links = (g: PrefixGap, s: SitePrefixGaps) => (
     <span className="mp-links">
       {s.site_id && (
-        <Link to={nodesPageHref({ kind: 'group', id: s.site_id })}>
-          {t('missingPrefixes.openFolder', { name: siteLabel(s) })}
-        </Link>
+        <ClippedText text={t('missingPrefixes.openFolder', { name: siteLabel(s) })}>
+          <Link to={nodesPageHref({ kind: 'group', id: s.site_id })}>
+            {t('missingPrefixes.openFolder', { name: siteLabel(s) })}
+          </Link>
+        </ClippedText>
       )}
       {g.kind === 'other_folder' && (
-        <Link to="/nodes/subnet-overlaps">{t('missingPrefixes.seeOverlaps')}</Link>
+        <ClippedText text={t('missingPrefixes.seeOverlaps')}>
+          <Link to="/nodes/subnet-overlaps">{t('missingPrefixes.seeOverlaps')}</Link>
+        </ClippedText>
       )}
     </span>
   );
@@ -180,15 +188,13 @@ export function MissingPrefixesPage() {
   const noteCell = (g: PrefixGap) => {
     const note = g.intentional?.note || t('missingPrefixes.noNote');
     return (
-      <span className={g.intentional?.note ? 'mp-note' : 'mp-note muted'} title={note}>
-        {note}
-      </span>
+      <ClippedText className={g.intentional?.note ? undefined : 'muted'} text={note} />
     );
   };
 
   const kindCell = (g: PrefixGap) => (
-    <span className={`mp-kind mp-kind-${g.kind}`} title={reason(g)}>
-      {reason(g)}
+    <span className={`mp-kind mp-kind-${g.kind}`}>
+      <ClippedText text={reason(g)} />
     </span>
   );
 
@@ -200,11 +206,11 @@ export function MissingPrefixesPage() {
         width: '1.2fr',
         render: ({ site }) => (
           <span className="mp-site" title={[...site.path, siteLabel(site)].join(' / ')}>
-            <span>
+            <span className="mp-site-name">
               <span className="mp-caret" aria-hidden="true">
                 {openKey === siteKey(site) ? '▾' : '▸'}
-              </span>{' '}
-              {siteLabel(site)}
+              </span>
+              <ClippedText text={siteLabel(site)} />
               {!site.is_site && site.site_id && (
                 <span className="mp-tag">{t('missingPrefixes.notSite')}</span>
               )}
@@ -339,7 +345,9 @@ export function MissingPrefixesPage() {
           </div>
           {gaps.map((g) => (
             <div className="ytable-row" key={g.subnet} style={{ gridTemplateColumns: gapCols }}>
-              <div className="ytable-cell mono">{g.subnet}</div>
+              <div className="ytable-cell mono">
+                <ClippedText text={g.subnet} />
+              </div>
               <div className="ytable-cell">{kindCell(g)}</div>
               <div className="ytable-cell">{g.intentional ? noteCell(g) : seenOn(g)}</div>
               <div className="ytable-cell right num">{g.node_count}</div>

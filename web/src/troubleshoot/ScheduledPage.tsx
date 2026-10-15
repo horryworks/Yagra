@@ -16,6 +16,7 @@ import { api } from '../services/api';
 import { useAuthStore, useCan } from '../store';
 import type { AnalysisSchedule, AnalysisScheduleStatus } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Card } from '../components/ui/Card';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { Button } from '../components/ui/Button';
@@ -67,7 +68,7 @@ function scheduleColumns(
       key: 'scope',
       header: t('schedule.cols.scope'),
       width: '1fr',
-      render: (s) => <span className="muted">{s.scope_label}</span>,
+      render: (s) => <ClippedText className="muted" text={s.scope_label} />,
     },
     {
       key: 'cadence',

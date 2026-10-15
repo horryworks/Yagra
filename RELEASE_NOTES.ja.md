@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### バグ修正
+
+- **表で切れた文字の末尾に「…」が出て、マウスを載せると全文が出るようになりました。** Nodes ▸ Missing IP prefixes でサイトを開くと、Reason が印も無く途中で切れ、「Open folder」のリンクが Mark as intentional のボタンの下にはみ出していました。同じ切れ方を Settings ▸ Forwarding（Name）、コレクションの編集（メトリクスと OID）、ノードの Flow タブ（送信元と宛先）、Subnet overlaps（サイト）でも直し、ほかの十数の一覧でも名前・理由・宛先に全文のツールチップを付けました。
+- **ノードの Interfaces 表を横にスクロールしても、見出しの背景と行の罫線が途切れなくなりました。** 以前はペインの幅で止まっていました。
+
 ## v0.3.49 — Huawei の光ポートと Cisco の銅ポートに Media が出て、落ちているポートに推測の duplex と媒体名が出なくなる
 
 ### 改善

@@ -19,6 +19,7 @@ import { api } from '../services/api';
 import { useCan } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
@@ -157,7 +158,7 @@ export function MutesPage() {
         key: 'reason',
         header: t('mutes.cols.reason'),
         width: '1fr',
-        render: (m) => <span className="ellipsis muted">{m.reason}</span>,
+        render: (m) => <ClippedText className="muted" text={m.reason ?? ''} />,
       },
       {
         key: 'actions',

@@ -20,6 +20,7 @@ import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
 import { SearchField } from '../ui/SearchField';
 import { IconButton } from '../ui/IconButton';
+import { ClippedText } from '../ui/ClippedText';
 import { TrashIcon } from '../ui/icons';
 import './CollectionEditor.css';
 
@@ -143,8 +144,12 @@ export function CollectionEditor({
           </div>
           {items.map((it) => (
             <div className="ytable-row" key={it.id}>
-              <div className="ytable-cell ellipsis ce-metric">{it.metric_name}</div>
-              <div className="ytable-cell ellipsis ce-oid mono">{it.oid}</div>
+              <div className="ytable-cell ce-metric">
+                <ClippedText text={it.metric_name} />
+              </div>
+              <div className="ytable-cell ce-oid mono">
+                <ClippedText text={it.oid} />
+              </div>
               <div className="ytable-cell">{it.kind}</div>
               <div className="ytable-cell">{it.metric_kind}</div>
               <div className="ytable-cell right ce-actions">

@@ -895,6 +895,13 @@ html[data-viewport='mobile'] .nd-extract-row {
       minmax(112px, 1fr) 84px 104px 112px minmax(164px, 1.2fr) 132px minmax(74px, 0.7fr)
       minmax(74px, 0.7fr)
   );
+  /* 🚨 Without this each grid's box is only as wide as the pane, while its tracks run past it.
+     The tracks still paint their cells, so nothing looks wrong at scroll 0 — but scroll sideways
+     and the header's background and every row's bottom border stop where the pane used to end.
+     `min-content` here is the sum of the track floors (an `fr` gets nothing under a min-content
+     constraint), so it follows a dragged column with no second copy of the widths. `DataTable`
+     answers the same question with an inline `minWidth` from `minTableWidth`. */
+  min-width: min-content;
   align-items: center;
 }
 
@@ -2103,6 +2110,8 @@ html[data-viewport='mobile'] .nd-if-row {
     'spark in out';
   gap: 4px 10px;
   height: auto;
+  /* The desktop floor above is the sum of thirteen tracks; this layout has three and must fit. */
+  min-width: 0;
   min-height: var(--touch-target);
   padding: 8px 12px;
 }

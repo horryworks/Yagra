@@ -28,6 +28,7 @@ import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -207,7 +208,7 @@ export function MibRepositoryPage() {
         key: 'metric',
         header: t('mib.cols.metric'),
         width: '1.4fr',
-        render: (e) => <span className="mib-metric">{e.metric_name}</span>,
+        render: (e) => <ClippedText className="mib-metric" text={e.metric_name} />,
         filter: {
           kind: 'text',
           // Contains only: `?q=` is a substring match with no regex parameter and no negated form.
@@ -222,7 +223,7 @@ export function MibRepositoryPage() {
         key: 'oid',
         header: t('mib.cols.oid'),
         width: '2fr',
-        render: (e) => <span className="mono ellipsis">{e.oid}</span>,
+        render: (e) => <ClippedText className="mono" text={e.oid} />,
       },
       {
         key: 'type',

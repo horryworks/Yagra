@@ -11,6 +11,7 @@ import {
   type Severity,
 } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -71,7 +72,7 @@ export function EventRulesPage() {
     const scopeLabel = (r: EventRule) => r.source_kind ?? t('eventRules.any');
     const specs = eventRuleFilters(t, SEVERITIES, scopeLabel);
     const cols: Column<EventRule>[] = [
-      { key: 'name', header: t('eventRules.cols.name'), width: '1.4fr', render: (r) => r.name },
+      { key: 'name', header: t('eventRules.cols.name'), width: '1.4fr', render: (r) => <ClippedText text={r.name} /> },
       {
         key: 'severity',
         header: t('eventRules.cols.severity'),

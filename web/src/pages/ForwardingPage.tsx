@@ -51,6 +51,7 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { LoadGate } from '../components/ui/LoadGate';
+import { ClippedText } from '../components/ui/ClippedText';
 import { useLoad } from '../lib/useLoad';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
@@ -84,7 +85,7 @@ function destinationColumns(
       key: 'name',
       header: t('cols.name'),
       width: '1fr',
-      render: (r) => <span className="fwd-name">{r.name}</span>,
+      render: (r) => <ClippedText className="fwd-name" text={r.name} />,
     },
     {
       key: 'source',
@@ -96,7 +97,7 @@ function destinationColumns(
       key: 'target',
       header: t('cols.target'),
       width: '1fr',
-      render: (r) => <span className="mono">{r.target}</span>,
+      render: (r) => <ClippedText className="mono" text={r.target} />,
     },
     {
       // Split out of Target by ADR-053 Inc.3: the cell rendered the address *and* the protocol, and
@@ -123,7 +124,8 @@ function destinationColumns(
       key: 'scope',
       header: t('cols.scope'),
       width: '120px',
-      render: (r) => r.pool ?? <span className="muted">{t('scope.allPools')}</span>,
+      render: (r) =>
+        r.pool ? <ClippedText text={r.pool} /> : <span className="muted">{t('scope.allPools')}</span>,
     },
     {
       key: 'fidelity',

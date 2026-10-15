@@ -31,6 +31,7 @@ import type {
   WirelessApRow,
 } from '../../types/api';
 import { DataTable, type Column } from '../ui/DataTable';
+import { ClippedText } from '../ui/ClippedText';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -157,7 +158,7 @@ export function ApTab({ node, groups, onChanged }: Props) {
         width: '1.1fr',
         render: (r) => <span className="mono">{r.ip ?? '—'}</span>,
       },
-      { key: 'model', header: t('ap.colModel'), width: '1.1fr', render: (r) => r.model ?? '—' },
+      { key: 'model', header: t('ap.colModel'), width: '1.1fr', render: (r) => <ClippedText text={r.model ?? '—'} /> },
       {
         key: 'clients',
         header: t('ap.colClients'),
