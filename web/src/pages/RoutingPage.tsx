@@ -619,11 +619,7 @@ function RulesSection({
         render: (r) => {
           const names = r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels');
           // The whole list on hover: a rule may name more channels than the column can show.
-          return (
-            <span className="muted ellipsis" title={names}>
-              {names}
-            </span>
-          );
+          return <ClippedText className="muted" text={names} />;
         },
       },
       {

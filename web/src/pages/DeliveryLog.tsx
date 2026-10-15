@@ -17,6 +17,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { EntityName } from '../components/ui/EntityName';
+import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { TimeCell } from '../components/ui/tableCells';
 import { serverToolbarFilters } from '../lib/listToolbar';
@@ -58,12 +59,7 @@ function columnsFor(
       header: t('routing.log.cols.channel'),
       width: '1fr',
       render: (r) => {
-        const label = channelLabel(t, r);
-        return (
-          <span className="ellipsis" title={label}>
-            {label}
-          </span>
-        );
+        return <ClippedText text={channelLabel(t, r)} />;
       },
     },
     {
@@ -74,9 +70,7 @@ function columnsFor(
         r.node_id ? (
           <EntityName name={nodeName(r.node_id)} id={r.node_id} />
         ) : (
-          <span className="ellipsis" title={subjectText(t, r)}>
-            {subjectText(t, r)}
-          </span>
+          <ClippedText text={subjectText(t, r)} />
         ),
     },
     {

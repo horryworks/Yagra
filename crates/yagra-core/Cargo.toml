@@ -50,23 +50,15 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
-# Compatibility-window arithmetic for the upgrade planner (ADR-050 decision 7).
-semver = { workspace = true }
 # Notification-template rendering (ADR-039). Core-only on purpose: the *variable set* is the
 # contract and lives in `yagra-common`, but the engine stays here so it does not ride along into
 # the poller image, which sends no notifications.
 minijinja = { workspace = true }
 sha2 = { workspace = true }
-# Stateless signed session tokens for Core HA active/active (ADR-016 Increment 2a): HMAC-SHA256
-# signing + base64url claim encoding. Both already in the tree; named directly for `token.rs`.
-hmac = { workspace = true }
+# base64 for the server certificate and the GCP service-account key.
 data-encoding = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-# Support-bundle archive (ADR-045). Core-only: the poller produces no bundle — it reports counters
-# over the bus and has no HTTP surface to download one from.
-tar = { workspace = true }
-flate2 = { workspace = true }
 sqlx = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
@@ -80,9 +72,6 @@ tokio-stream = { workspace = true }
 # Already in the tree via yagra-bus's `nats` feature; named directly here for the client handle.
 async-nats = { workspace = true }
 lettre = { workspace = true }
-openidconnect = { workspace = true }
-# LDAP/AD login (ADR-041): `mod ldap`. Core-only — a poller never authenticates a person.
-ldap3 = { workspace = true }
 # MCP server (ADR-028 Phase 4): the inward-facing AI tool surface (`mod mcp`). Mounts a
 # StreamableHttpService into the existing axum `serve()`; tools wrap the read seams on `ApiState`.
 # The tool param schemas derive `JsonSchema` via rmcp's re-exported `schemars`; the direct `schemars`
@@ -98,7 +87,6 @@ tokio-util = { workspace = true }
 # Syslog-over-TLS forwarding destinations (RFC 5425, ADR-034 Increment 2).
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
-rustls-native-certs = { workspace = true }
 # BigQuery forwarding destinations (ADR-034 Increment 3): RS256 signing of the Google
 # service-account assertion. See the workspace entry for why this is `ring` and not `rsa`.
 ring = { workspace = true }

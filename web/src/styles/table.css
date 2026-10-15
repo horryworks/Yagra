@@ -139,14 +139,6 @@
   color: var(--text-secondary);
 }
 
-/* Truncate-with-ellipsis cell, and let a single child (e.g. a mono span) truncate too. */
-.ytable-cell.ellipsis,
-.ytable-cell.ellipsis > * {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Compact in-cell dropdown: sized to its content, never stretched to the cell. */
 .ytable-cell .field {
   width: auto;
