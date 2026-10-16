@@ -101,6 +101,8 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
       // Clearing everything must un-reveal the folders the last term opened, not freeze them —
       // and must clear `loading`, which the cancelled request below will not do for itself.
       setAppliedTerm('');
+      // The page is no longer shown, so a later failure must not treat it as the answer on screen.
+      shownFor.current = null;
       setLoading(false);
       setTruncated(false);
       setFailed(false);

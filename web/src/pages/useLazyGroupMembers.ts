@@ -79,12 +79,14 @@ export interface LazyGroupMembers {
   rereadAfterWrite: () => void;
   /** Re-read every loaded group IN PLACE: its rows stay on screen and are swapped when its answer
    *  lands. For "the states on screen may be stale" (the live stream missed frames) — never after a
-   *  write, which can move a node between groups and so needs `invalidate` (ADR-133 Inc.7 decision 4). */
+   *  write, which can move a node between groups and so needs `rereadAfterWrite` (ADR-133 Inc.7
+   *  decision 4, ADR-203). */
   refresh: () => void;
   /** Someone ELSE changed the inventory (ADR-019 Inc.2): re-read every loaded folder and swap them
    *  ALL AT ONCE, when the last answer is in. Unlike `refresh` this is safe after a move — each
    *  folder swapped as its own answer landed would show a moved node in two folders, or in none, for
-   *  a round trip. Unlike `invalidate` nothing leaves the screen: a failure keeps what is there. */
+   *  a round trip. Unlike `invalidate` nothing leaves the screen: a failure keeps what is there —
+   *  unless this tab's own write is still waiting for its answer (`rereadAfterWrite`). */
   reconcile: () => void;
   /** Clear one group's failure so it is fetched again. The ONLY automatic retry is `invalidate`;
    *  everything else goes through here, driven by the operator pressing the failed row's control. */
@@ -364,6 +366,12 @@ export function useLazyGroupMembers(opts: {
     loadMissing([...revealedGroups]);
   }, [ready, revealedGroups, loadMissing]);
 
+  /** Set by `rereadAfterWrite` until a swap answers or fails. While it is set, a failed swap falls
+   *  back to `invalidate` — whichever swap it is. 🚨 Not a per-call choice: the config-change push
+   *  for this tab's own write starts a `reconcile` a moment later, which supersedes the write's own
+   *  swap, and a reconcile that then failed kept the pre-write membership on screen (ADR-203). */
+  const writeUnsettled = useRef(false);
+
   const invalidate = useCallback(() => {
     // Before the state resets, so the effects they trigger queue against an empty queue: every
     // request still in flight is disowned (`generation`), and its key is free to be asked again.
@@ -371,6 +379,7 @@ export function useLazyGroupMembers(opts: {
     queue.current.waiting = [];
     queue.current.inflight = new Set();
     queue.current.rereads = new Set();
+    writeUnsettled.current = false;
     setLoadedNodes({});
     setLoadedGroups(new Set());
     setLoadingGroups(new Set());
@@ -410,8 +419,9 @@ export function useLazyGroupMembers(opts: {
   /** Bumped by each `reconcile`, so an older one still in flight never swaps over a newer one. */
   const reconcileToken = useRef(0);
 
-  /** `reconcile` and `rereadAfterWrite` differ only in what a failed read does. */
-  const swapTogether = useCallback((onFail: () => void) => {
+  /** The swap behind both `reconcile` and `rereadAfterWrite`; what a failed read does is decided
+   *  by `writeUnsettled`, not by which of the two started it. */
+  const swapTogether = useCallback(() => {
     const q = queue.current;
     // Folders still loading were asked BEFORE the change and would land the old membership:
     // disown them and ask again, exactly as `refresh` does.
@@ -423,35 +433,43 @@ export function useLazyGroupMembers(opts: {
     pump();
 
     const keys = [...loaded.current];
-    if (keys.length === 0) return;
+    if (keys.length === 0) {
+      // Nothing on screen to keep, so nothing pre-write can be left standing.
+      writeUnsettled.current = false;
+      return;
+    }
     const mine = ++reconcileToken.current;
     const askedIn = generation.current;
-    readMembersTogether(keys, batchSupported.current)
+    let capped = false;
+    readMembersTogether(keys, batchSupported.current, () => {
+      capped = true;
+    })
       .then((byGroup) => {
         // A newer reconcile, or an `invalidate` (the operator's own write), has the last word.
         if (mine !== reconcileToken.current || askedIn !== generation.current) return;
+        writeUnsettled.current = false;
         setLoadedNodes((prev) => ({ ...prev, ...byGroup }));
+        // The per-folder loads say this; a swap is the same answer and must too, or a write that
+        // pushed a folder past the server's cap would show it short with nothing saying so.
+        if (capped) setAnyTruncated(true);
       })
       .catch(() => {
         if (mine !== reconcileToken.current || askedIn !== generation.current) return;
-        onFail();
+        // Someone else's change: the previous answer stands — a passing failure must not empty
+        // folders that work. After this tab's own write it must not stand (see `writeUnsettled`).
+        if (writeUnsettled.current) invalidate();
       });
-  }, [pump]);
+  }, [pump, invalidate]);
 
-  const reconcile = useCallback(
-    () =>
-      swapTogether(() => {
-        /* the previous answer stands — a passing failure must not empty folders that work */
-      }),
-    [swapTogether],
-  );
+  const reconcile = swapTogether;
 
   const rereadAfterWrite = useCallback(() => {
     // Before the swap: a folder that failed is not loaded, so it is not part of the swap either —
     // clearing the mark is what lets the viewport fetch ask for it again.
     setFailedGroups((prev) => (prev.size === 0 ? prev : new Set()));
-    swapTogether(invalidate);
-  }, [swapTogether, invalidate]);
+    writeUnsettled.current = true;
+    swapTogether();
+  }, [swapTogether]);
 
   const retry = useCallback((key: string) => {
     setFailedGroups((prev) => {
@@ -490,6 +508,8 @@ export function useLazyGroupMembers(opts: {
 export async function readMembersTogether(
   keys: string[],
   batch: boolean,
+  /** Told when any answer came back capped by the server, so the caller can say so. */
+  onTruncated?: () => void,
 ): Promise<Record<string, NodeSummary[]>> {
   const singles = batch ? keys.filter((k) => k === UNGROUPED) : keys;
   const batched = batch ? keys.filter((k) => k !== UNGROUPED) : [];
@@ -502,10 +522,12 @@ export async function readMembersTogether(
     ...singles.map(async (k) => {
       const res = await api.getGroupNodes(k === UNGROUPED ? null : k);
       out[k] = res.nodes;
+      if (res.truncated) onTruncated?.();
     }),
     ...chunks.map(async (chunk) => {
       const res = await api.getGroupNodesBatch(chunk);
       if (!res.answered) throw new Error('batch answer without an echo');
+      if (res.truncated) onTruncated?.();
       for (const k of chunk) out[k] = [];
       for (const n of res.nodes) {
         if (n.group_id && out[n.group_id]) out[n.group_id].push(n);

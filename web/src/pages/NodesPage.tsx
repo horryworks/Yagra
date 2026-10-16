@@ -817,9 +817,9 @@ export function NodesPage() {
   //
   // 🚨 **Not `reload`.** `reload` is for after this tab's own write: it clears the error and the
   // folder failures and asks every folder again (ADR-203) — on every change anyone made, that would
-  // be all the time, and a failed read there empties the tree rather than keeping it. And **not `refresh`**: a
-  // remote change can be a move, and folders swapped one answer at a time would draw the moved
-  // node twice or not at all. `reconcile` swaps every loaded folder together.
+  // be all the time, and a failed read there empties the tree rather than keeping it. And **not
+  // `refresh`**: a remote change can be a move, and folders swapped one answer at a time would draw
+  // the moved node twice or not at all. `reconcile` swaps every loaded folder together.
   //
   // It does not touch `error`/`loading` either: a passing failure keeps what is on screen.
   const reconcileMembers = members.reconcile;

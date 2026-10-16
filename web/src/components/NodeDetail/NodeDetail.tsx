@@ -167,8 +167,9 @@ export function NodeDetail({
   const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Node config (rarely changes): once per node, re-fetched quietly after an edit or a Poll now, whose identity read (ADR-149) lands on this same document, or
-  // when someone else changes the configuration (ADR-019 Inc.2).
+  // Node config (rarely changes): once per node, re-fetched quietly after an edit or a Poll now,
+  // whose identity read (ADR-149) lands on this same document, or when someone else changes the
+  // configuration (ADR-019 Inc.2).
   const configChanges = useConfigChanges();
   const blankedFor = useRef<string | null>(null);
   useEffect(() => {
@@ -187,9 +188,9 @@ export function NodeDetail({
     };
   }, [nodeId, quietNonce, reloadKey, configChanges]);
 
-  // Blank the live panes when the node changes so a switch never flashes the
-  // previous node's readings. A periodic refresh must NOT blank — that would flicker every tick —
-  // so the reset is its own effect keyed on identity, separate from the load below.
+  // Blank the live panes when the node changes so a switch never flashes the previous node's
+  // readings. A periodic refresh must NOT blank — that would flicker every tick — so the reset is
+  // its own effect keyed on identity, separate from the load below.
   //
   // 🚨 `interfaces` and `ifError` belong here and were missing. The page route does not remount
   // this component per node (the split view does), so node B's Interfaces tab listed node A's

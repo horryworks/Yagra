@@ -288,6 +288,25 @@ describe('useFilterSearch', () => {
     expect(result.current.failed).toBe(true);
   });
 
+  it('a page from before the box was emptied is not kept as the answer when the term comes back', async () => {
+    // Writes can happen while the box is empty and nothing re-reads the search, so that page may be
+    // stale. Only a page still on screen counts as "the answer to this very question".
+    listNodesPage.mockResolvedValueOnce({ nodes: [node('n1')], truncated: false });
+    const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'a',
+    });
+    await tick(200);
+    expect(ids(result.current.nodes)).toEqual(['n1']);
+
+    rerender('');
+    await tick(50);
+    listNodesPage.mockRejectedValueOnce(new Error('boom'));
+    rerender('a');
+    await tick(200);
+    expect(result.current.nodes).toEqual([]);
+    expect(result.current.failed).toBe(true);
+  });
+
   it('clears the failure as soon as a search answers, or the box is emptied', async () => {
     listNodesPage.mockRejectedValueOnce(new Error('boom'));
     const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
