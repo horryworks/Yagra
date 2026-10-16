@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.50 — Text cut off in a table ends in "…" and shows in full on hover, and the Interfaces table keeps its lines when scrolled sideways**
+> Status: **v0.3.51 — Sorting, moving or saving no longer scrolls the node tree, the node detail pane, the Interfaces list or a port's rule dialog away from where you were**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

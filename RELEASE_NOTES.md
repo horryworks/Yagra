@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.51 — Sorting, moving or saving no longer scrolls the node tree, the node detail pane, the Interfaces list or a port's rule dialog away from where you were
+
 ### Bug Fixes
 
 - **Saving no longer scrolls what you were looking at.** On Nodes ▸ All nodes, Sort ascending / descending, a drag, a move, a pool chip or any other change to the inventory used to send the tree back to the top, and the selected folder's member list with it. Edit node, Rediscover, Set dependency and a bulk tag no longer put the node detail pane back to "Loading…" and its top, or close the Interfaces dock.
