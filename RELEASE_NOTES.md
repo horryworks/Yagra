@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Saving no longer scrolls what you were looking at.** On Nodes ▸ All nodes, Sort ascending / descending, a drag, a move, a pool chip or any other change to the inventory used to send the tree back to the top, and the selected folder's member list with it. Edit node, Rediscover, Set dependency and a bulk tag no longer put the node detail pane back to "Loading…" and its top, or close the Interfaces dock.
+- **The Interfaces list stays where you scrolled it.** Once you scrolled away from the selected port, the next resize of the list — the charts below finishing, the window changing size — pulled it back to that port.
+- **Opening a row in a table no longer moves the row under the pointer.** On a node's Neighbors tab, opening a row after scrolling past the one already open shifted everything on screen by that row's height.
+- **A port's alert-rule dialog keeps its place.** Cancelling a delete or an edit used to bring the list back at the top. A failed re-read of the list no longer empties it either.
+- **A failed re-read of a filtered inventory keeps the matches on screen** and says that it failed, instead of emptying the tree.
+
 ## v0.3.50 — Text cut off in a table ends in "…" and shows in full on hover, and the Interfaces table keeps its lines when scrolled sideways
 
 ### Bug Fixes

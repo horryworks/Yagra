@@ -155,3 +155,18 @@ export function dockBudget(root: HTMLElement): number {
   ).reduce((h, el) => h + el.getBoundingClientRect().height, 0);
   return root.clientHeight - chrome;
 }
+
+/** Whether any of the selected row is inside the list's visible strip — below the sticky chrome
+ *  and above the list's bottom edge. All four edges are viewport coordinates (`getBoundingClientRect`).
+ *
+ *  This decides whether a resize may scroll the list back to the selected row (ADR-203). A row the
+ *  operator can still see is being followed, so the list keeps it clear of the dock as the dock
+ *  grows. A row they scrolled out of sight is not: pulling it back on the next resize scrolled the
+ *  list out from under them. A row that is only partly on screen still counts as followed. */
+export function selectedRowInView(
+  list: { top: number; bottom: number },
+  row: { top: number; bottom: number },
+  stickyChrome: number,
+): boolean {
+  return row.bottom > list.top + stickyChrome && row.top < list.bottom;
+}

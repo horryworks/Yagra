@@ -573,6 +573,68 @@ describe('useLazyGroupMembers', () => {
     });
   });
 
+  describe('rereadAfterWrite — this tab wrote (ADR-203)', () => {
+    const member = (id: string, group_id: string | null) =>
+      ({ id, name: id, group_id }) as unknown as NodeSummary;
+
+    it('keeps every loaded row on screen while it asks again, then swaps them together', async () => {
+      // 🚨 THE REGRESSION. The write path used `invalidate`, which emptied every loaded folder for a
+      // round trip; the tree got shorter than its scroll offset and the browser clamped it.
+      getGroupNodesBatch.mockImplementation((ids: string[]) =>
+        Promise.resolve({ nodes: [member('n1', 'g1')], truncated: false, answered: ids }),
+      );
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']));
+
+      const batch = deferred<{ nodes: NodeSummary[]; truncated: boolean; answered: string[] }>();
+      getGroupNodesBatch.mockImplementation(() => batch.promise);
+      act(() => result.current.rereadAfterWrite());
+
+      expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']);
+      expect(result.current.loadedGroups.has('g1')).toBe(true);
+      await act(async () => {
+        batch.resolve({ nodes: [member('n1', 'g2')], truncated: false, answered: ['g1', 'g2'] });
+      });
+      await waitFor(() => expect(result.current.nodes.map((n) => n.group_id)).toEqual(['g2']));
+    });
+
+    it('a failed re-read falls back to emptying the cache — the pre-write rows do not stay', async () => {
+      // The accept side of the difference from `reconcile`: after the operator's own write, the old
+      // membership on screen would read as the answer to what they just did.
+      getGroupNodesBatch.mockImplementation((ids: string[]) =>
+        Promise.resolve({ nodes: [member('n1', 'g1')], truncated: false, answered: ids }),
+      );
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.nodes.map((n) => n.id)).toEqual(['n1']));
+
+      const failing = deferred<{ nodes: NodeSummary[]; truncated: boolean; answered: string[] }>();
+      getGroupNodesBatch.mockImplementationOnce(() => failing.promise);
+      getGroupNodesBatch.mockImplementation(() => new Promise(() => undefined));
+      act(() => result.current.rereadAfterWrite());
+      await act(async () => {
+        failing.reject(new Error('503'));
+      });
+      await waitFor(() => expect(result.current.loadedGroups.has('g1')).toBe(false));
+      expect(result.current.nodes).toEqual([]);
+    });
+
+    it('a folder that failed is asked again — the write may have fixed it', async () => {
+      getGroupNodesBatch.mockRejectedValueOnce(new Error('503'));
+      const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+      const { result } = renderHook(() => useLazyGroupMembers(OPTS));
+      await waitFor(() => expect(result.current.failedGroups.size).toBeGreaterThan(0));
+      const before = getGroupNodesBatch.mock.calls.length;
+
+      await act(async () => {
+        result.current.rereadAfterWrite();
+      });
+      await waitFor(() => expect(result.current.failedGroups.size).toBe(0));
+      await waitFor(() => expect(getGroupNodesBatch.mock.calls.length).toBeGreaterThan(before));
+    });
+  });
+
   describe('readMembersTogether', () => {
     it('sends the ungrouped bucket alone and the folders in one batch', async () => {
       getGroupNodesBatch.mockImplementation((ids: string[]) =>

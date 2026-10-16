@@ -1090,7 +1090,9 @@ function useFacts(
     return () => {
       cancelled = true;
     };
-  }, [node.id]);
+    // The pool and the folder (which the pool inherits from) are in the deps because an edit no
+    // longer remounts this tab (ADR-203): the read has to notice them changing by itself.
+  }, [node.id, node.pool, node.group_id]);
 
   const path = groupPath(groups, node.group_id ?? null);
   const groupName = (id: string) => groups.find((g) => g.id === id)?.name;

@@ -267,6 +267,27 @@ describe('useFilterSearch', () => {
     expect(result.current.failed).toBe(true);
   });
 
+  it('a failed RE-READ of the same term keeps the page on screen, and says it failed (ADR-203)', async () => {
+    // A write ends in `refetch` for the term already on screen. Emptying the page on a failure
+    // there answered nothing new and removed the whole virtualized tree, so the operator landed at
+    // the top. The other direction is the test above: a NEW term that fails still goes empty.
+    listNodesPage.mockResolvedValueOnce({ nodes: [node('n1'), node('n2')], truncated: true });
+    const { result } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'a',
+    });
+    await tick(200);
+    expect(ids(result.current.nodes)).toEqual(['n1', 'n2']);
+
+    listNodesPage.mockRejectedValueOnce(new Error('boom'));
+    act(() => {
+      result.current.refetch();
+    });
+    await tick(200);
+    expect(ids(result.current.nodes)).toEqual(['n1', 'n2']);
+    expect(result.current.truncated).toBe(true);
+    expect(result.current.failed).toBe(true);
+  });
+
   it('clears the failure as soon as a search answers, or the box is emptied', async () => {
     listNodesPage.mockRejectedValueOnce(new Error('boom'));
     const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {

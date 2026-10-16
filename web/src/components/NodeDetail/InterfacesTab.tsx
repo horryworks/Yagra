@@ -58,6 +58,7 @@ import {
   resolveDockHeight,
   DOCK_MIN_PX,
   LIST_MIN_PX,
+  selectedRowInView,
 } from './interfaceDockHeight';
 import { ifStateCounts, interfaceColumns } from './tabFilters';
 import { utilHeat } from '../../lib/utilHeat';
@@ -304,6 +305,10 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     else if (rr.top < lr.top + headH) list.scrollTop -= (lr.top + headH - rr.top) / scale;
   }, []);
 
+  /** Whether the selected row is still being followed: true when it is picked, and after that
+   *  whatever the last scroll left it — on screen or not (`selectedRowInView`, ADR-203). */
+  const following = useRef(false);
+
   // Apply it on selection change AND whenever the list resizes. The dock grows after its charts
   // finish loading (and on a pane resize / narrow-pane chart stacking), which shrinks the list and
   // would re-cover a row that was only scrolled clear of the shorter, still-loading dock. The
@@ -311,6 +316,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // selected row ends up hidden behind the dock (only partly scrolled into view).
   useLayoutEffect(() => {
     if (selected == null) return;
+    following.current = true;
     keepSelectedInView();
   }, [selected, keepSelectedInView]);
 
@@ -318,17 +324,35 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     if (selected == null) return;
     const list = listRef.current;
     if (!list || typeof ResizeObserver === 'undefined') return;
+    // 🚨 Only while the row is still on screen. Every resize used to pull the list back to it, so a
+    // row the operator had scrolled away from came back the next time anything changed the list's
+    // height — the dock's charts loading, a pane resize, an error line (ADR-203). Our own scroll
+    // from `keepSelectedInView` lands the row on screen, so it keeps following by itself.
+    const onScroll = () => {
+      const row = list.querySelector('.nd-if-row.selected');
+      following.current =
+        row !== null &&
+        selectedRowInView(
+          list.getBoundingClientRect(),
+          row.getBoundingClientRect(),
+          stickyChromeHeight(list),
+        );
+    };
+    list.addEventListener('scroll', onScroll, { passive: true });
     const ro = new ResizeObserver(() => {
       // ⚠️ Not during a drag. A drag resizes the list every frame, and the selected row is sitting
       // exactly on the boundary being dragged (the branch below leaves it flush with `lr.bottom`),
       // so this would scroll the list under the operator's cursor one frame at a time — and in one
       // direction only, because the shrink branch guards the top edge alone. Dragging back would
       // not restore where they were. Applied once on pointer-up instead.
-      if (drag.current) return;
+      if (drag.current || !following.current) return;
       keepSelectedInView();
     });
     ro.observe(list);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      list.removeEventListener('scroll', onScroll);
+    };
   }, [selected, keepSelectedInView]);
 
   const onResizeDown = useCallback(
@@ -369,7 +393,9 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       setLiveHeight(null);
       // One store write — and therefore one PUT and one audit row — per gesture.
       setInterfaceDockHeight(final);
-      keepSelectedInView();
+      // The drag is the operator moving the dock edge the row sits on, so follow it again only if
+      // they had not scrolled it away.
+      if (following.current) keepSelectedInView();
     },
     [budget, keepSelectedInView],
   );

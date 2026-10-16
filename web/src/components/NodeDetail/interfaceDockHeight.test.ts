@@ -10,6 +10,7 @@ import {
   heightFromDrag,
   heightFromKey,
   resolveDockHeight,
+  selectedRowInView,
   stickyChromeHeight,
 } from './interfaceDockHeight';
 
@@ -153,5 +154,27 @@ describe('measuring the chrome, rather than mirroring it', () => {
 
   it('reports the whole pane when nothing is above the list', () => {
     expect(dockBudget(el([], 600))).toBe(600);
+  });
+});
+
+describe('selectedRowInView — whether a resize may scroll back to the selected row (ADR-203)', () => {
+  const list = { top: 100, bottom: 500 };
+  const head = 66;
+
+  it('follows a row that is on screen, even partly', () => {
+    expect(selectedRowInView(list, { top: 300, bottom: 330 }, head)).toBe(true);
+    expect(selectedRowInView(list, { top: 485, bottom: 515 }, head)).toBe(true);
+    expect(selectedRowInView(list, { top: 150, bottom: 180 }, head)).toBe(true);
+  });
+
+  it('lets go of a row scrolled out of sight, above or below', () => {
+    expect(selectedRowInView(list, { top: 500, bottom: 530 }, head)).toBe(false);
+    expect(selectedRowInView(list, { top: -900, bottom: -870 }, head)).toBe(false);
+  });
+
+  it('counts a row hidden under the sticky header as out of sight', () => {
+    // The header and the filter row cover the list's top 66px; a row entirely under them is not seen.
+    expect(selectedRowInView(list, { top: 120, bottom: 150 }, head)).toBe(false);
+    expect(selectedRowInView(list, { top: 140, bottom: 170 }, head)).toBe(true);
   });
 });

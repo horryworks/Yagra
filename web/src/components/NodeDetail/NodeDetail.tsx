@@ -89,6 +89,11 @@ interface Props {
    *  else happened to refetch. That was already true for the pool; ADR-135 made it true for the
    *  name, which nobody would read as anything but a broken save. */
   onChanged?: () => void;
+  /** Bumped by the host when something it did changed this node (an edit or a rediscover from the
+   *  tree's menu, a bulk tag). Read like `quietNonce`: the pane re-reads and keeps what it shows
+   *  until the answer lands. 🚨 The host used to put a nonce in this component's `key` instead,
+   *  which remounted the pane, reset its scroll and closed the Interfaces dock (ADR-203). */
+  reloadKey?: number;
 }
 
 export function NodeDetail({
@@ -104,6 +109,7 @@ export function NodeDetail({
   onOpenGroup,
   onDeleted,
   onChanged,
+  reloadKey = 0,
 }: Props) {
   const { t } = useTranslation('nodes');
   const navigate = useNavigate();
@@ -142,11 +148,12 @@ export function NodeDetail({
   const [collCount, setCollCount] = useState<number | null>(null);
   const [polling, setPolling] = useState(false);
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  // A re-read that must NOT blank the pane. `refreshNonce` remounts every tab, which is right after
-  // an edit and wrong for **Poll now**: that bumped it at 4 s and again at 30 s, so the pane fell
-  // back to "Loading…" twice, the Interfaces dock closed twice, and the AP tab's "imported" note
-  // was gone before it could be read.
+  // A re-read that does NOT blank the pane — after **Poll now**, and since ADR-203 after an edit too.
+  // There used to be a second, blanking nonce for edits: it put the pane back to "Loading…", which
+  // unmounted every tab, so the scroll went back to the top and the Interfaces dock closed after
+  // every save. The pane is blanked only when it is about a different node (the effect below).
+  // ⚠️ A tab that reads something an edit can change keys that read on the node's fields (pool,
+  // folder, profile, credential), since it is no longer remounted to ask again.
   const [quietNonce, setQuietNonce] = useState(0);
   const pollTimers = useRef<number[]>([]);
   // The timers outlived the pane: on the un-keyed page route they fired into the NEXT node.
@@ -160,17 +167,15 @@ export function NodeDetail({
   const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Node config (rarely changes): once per node, re-fetched after an edit (refreshNonce bump) —
-  // and quietly after a Poll now, whose identity read (ADR-149) lands on this same document, or
+  // Node config (rarely changes): once per node, re-fetched quietly after an edit or a Poll now, whose identity read (ADR-149) lands on this same document, or
   // when someone else changes the configuration (ADR-019 Inc.2).
   const configChanges = useConfigChanges();
   const blankedFor = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    // Blank for a new node or an edit; a quiet re-read keeps what is on screen until it answers.
-    const identity = `${nodeId}:${refreshNonce}`;
-    if (blankedFor.current !== identity) {
-      blankedFor.current = identity;
+    // Blank for a new node; a re-read keeps what is on screen until it answers.
+    if (blankedFor.current !== nodeId) {
+      blankedFor.current = nodeId;
       setNode(null);
     }
     api
@@ -180,9 +185,9 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce, quietNonce, configChanges]);
+  }, [nodeId, quietNonce, reloadKey, configChanges]);
 
-  // Blank the live panes when the node changes (or after an edit) so a switch never flashes the
+  // Blank the live panes when the node changes so a switch never flashes the
   // previous node's readings. A periodic refresh must NOT blank — that would flicker every tick —
   // so the reset is its own effect keyed on identity, separate from the load below.
   //
@@ -197,7 +202,7 @@ export function NodeDetail({
     setInterfaces([]);
     setIfError(null);
     setIfLoaded(false);
-  }, [nodeId, refreshNonce]);
+  }, [nodeId]);
 
   // Whether this node can have interfaces at all. Gates the eager fetch below: a URL/DNS/Meraki
   // node never gets an ifTable walk, and neither does a ping-only device, so asking every refresh
@@ -252,7 +257,7 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce, quietNonce, tick, t, hasInterfaces, livenessMetric]);
+  }, [nodeId, quietNonce, reloadKey, tick, t, hasInterfaces, livenessMetric]);
 
   // Correct a tab the loaded kind does not show, so the URL (page) or pane state (split) matches
   // what is drawn instead of quietly diverging. Comparing the *normalized* value is deliberate:
@@ -338,7 +343,7 @@ export function NodeDetail({
         status={status}
         unreachable={state === 'unreachable'}
         canEdit={canEdit}
-        onChanged={() => setRefreshNonce((v) => v + 1)}
+        onChanged={() => setQuietNonce((v) => v + 1)}
       />
     ),
     // Takes `onChanged` for the same reason Overview does: importing an AP creates a node, which
@@ -517,7 +522,7 @@ export function NodeDetail({
           onClose={() => setEditingBindings(false)}
           onDone={() => {
             setEditingBindings(false);
-            setRefreshNonce((v) => v + 1);
+            setQuietNonce((v) => v + 1);
             // Both, not either: the nonce refetches this pane, `onChanged` tells the page that the
             // row it is drawing on the left is now stale too.
             onChanged?.();
@@ -532,7 +537,7 @@ export function NodeDetail({
           onClose={() => setEditingParent(false)}
           onSaved={() => {
             setEditingParent(false);
-            setRefreshNonce((v) => v + 1);
+            setQuietNonce((v) => v + 1);
           }}
         />
       )}

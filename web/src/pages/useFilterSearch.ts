@@ -9,7 +9,7 @@
 // is a `.tsx`: the rule that decides WHEN the search is re-issued can only be tested from a `.ts`
 // (see the test beside this file).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../services/api';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '../lib/useDebouncedValue';
 import { inventoryKey, inventoryQuery } from './inventoryFilters';
@@ -70,6 +70,8 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
   const [nonce, setNonce] = useState(0);
 
   const refetch = useCallback(() => setNonce((v) => v + 1), []);
+  /** Which question the page on screen answers — the term and the narrowing it was asked with. */
+  const shownFor = useRef<string | null>(null);
 
   // A plain string, not the filters object: it is re-derived from the URL every render, so putting
   // the object itself in the deps would re-issue the search on every unrelated re-render.
@@ -105,6 +107,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
       return undefined;
     }
     let cancelled = false;
+    const asked = JSON.stringify([term, key]);
     setLoading(true);
     setAppliedTerm(term);
     api
@@ -114,6 +117,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
         // invisible unless something changed, which is the point: a write while a filter is
         // active must not blink the tree to empty and back.
         if (!cancelled) {
+          shownFor.current = asked;
           setNodes(page.nodes);
           setTruncated(page.truncated);
           setFailed(false);
@@ -123,9 +127,16 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
         // The rows go, deliberately: the previous page answered a DIFFERENT term, and leaving it
         // under the new one would be a list that does not match its own box. What was missing is
         // `failed` — without it this empty list was indistinguishable from "no matches".
+        //
+        // 🚨 **Unless the page on screen answers this very question** (ADR-203): a re-read of the
+        // same term after a write. Emptying it then answered nothing new, and it removed the whole
+        // virtualized tree — the operator was back at the top. The failure is still said.
         if (!cancelled) {
-          setNodes([]);
-          setTruncated(false);
+          if (shownFor.current !== asked) {
+            shownFor.current = null;
+            setNodes([]);
+            setTruncated(false);
+          }
           setFailed(true);
         }
       })

@@ -67,8 +67,16 @@ export interface LazyGroupMembers {
   revealTruncated: boolean;
   /** Whether any group's members came back capped by the server (the page says so). */
   anyTruncated: boolean;
-  /** Drop everything so open groups re-fetch. Call after any write that can change membership. */
+  /** Drop everything so open groups re-fetch. Every loaded row leaves the screen for a round trip,
+   *  which is what scrolled the tree after every write (ADR-203) — use `rereadAfterWrite` instead.
+   *  Kept as that one's fallback, and for tests. */
   invalidate: () => void;
+  /** This tab wrote (ADR-203): re-read every loaded folder and swap them ALL AT ONCE, like
+   *  `reconcile`, so nothing leaves the screen and the tree does not move. Two things `reconcile`
+   *  does not do: a failed folder is asked again (the write may have fixed it), and a re-read that
+   *  fails falls back to `invalidate` — after the operator's own write, the pre-write membership
+   *  must not stay on screen as if it were the answer. */
+  rereadAfterWrite: () => void;
   /** Re-read every loaded group IN PLACE: its rows stay on screen and are swapped when its answer
    *  lands. For "the states on screen may be stale" (the live stream missed frames) — never after a
    *  write, which can move a node between groups and so needs `invalidate` (ADR-133 Inc.7 decision 4). */
@@ -402,7 +410,8 @@ export function useLazyGroupMembers(opts: {
   /** Bumped by each `reconcile`, so an older one still in flight never swaps over a newer one. */
   const reconcileToken = useRef(0);
 
-  const reconcile = useCallback(() => {
+  /** `reconcile` and `rereadAfterWrite` differ only in what a failed read does. */
+  const swapTogether = useCallback((onFail: () => void) => {
     const q = queue.current;
     // Folders still loading were asked BEFORE the change and would land the old membership:
     // disown them and ask again, exactly as `refresh` does.
@@ -424,9 +433,25 @@ export function useLazyGroupMembers(opts: {
         setLoadedNodes((prev) => ({ ...prev, ...byGroup }));
       })
       .catch(() => {
-        /* the previous answer stands — a passing failure must not empty folders that work */
+        if (mine !== reconcileToken.current || askedIn !== generation.current) return;
+        onFail();
       });
   }, [pump]);
+
+  const reconcile = useCallback(
+    () =>
+      swapTogether(() => {
+        /* the previous answer stands — a passing failure must not empty folders that work */
+      }),
+    [swapTogether],
+  );
+
+  const rereadAfterWrite = useCallback(() => {
+    // Before the swap: a folder that failed is not loaded, so it is not part of the swap either —
+    // clearing the mark is what lets the viewport fetch ask for it again.
+    setFailedGroups((prev) => (prev.size === 0 ? prev : new Set()));
+    swapTogether(invalidate);
+  }, [swapTogether, invalidate]);
 
   const retry = useCallback((key: string) => {
     setFailedGroups((prev) => {
@@ -448,6 +473,7 @@ export function useLazyGroupMembers(opts: {
     revealTruncated: revealedGroups.size >= REVEAL_GROUP_CAP,
     anyTruncated,
     invalidate,
+    rereadAfterWrite,
     refresh,
     reconcile,
     retry,

@@ -11,7 +11,7 @@
 // Every judgement lives in `lib/portRuleForm.ts`, because Vitest does not execute a `.tsx`
 // (`testing.md`). This file owns the two layouts, the fetch, and nothing else.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
@@ -67,6 +67,24 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
   /** `null` = the list; otherwise the form, editing `rule` or adding when it is undefined. */
   const [editing, setEditing] = useState<{ rule?: StoredThreshold } | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
+  /** Where the list was scrolled when it gave way to the confirm step or the form. The dialog swaps
+   *  its body for either, so coming back mounts a fresh list at the top; this puts it back (ADR-203).
+   *  Not two dialogs stacked: Escape is heard by every mounted dialog, and the list's would close
+   *  the whole thing under the confirm step. */
+  const listEl = useRef<HTMLDivElement>(null);
+  const parkedAt = useRef<number | null>(null);
+  const scroller = () => listEl.current?.closest<HTMLElement>('.modal-body') ?? null;
+  const leaveList = () => {
+    parkedAt.current = scroller()?.scrollTop ?? null;
+  };
+  const showingList = !deleting && !editing;
+  useLayoutEffect(() => {
+    const at = parkedAt.current;
+    const el = scroller();
+    if (!showingList || at === null || !el) return;
+    parkedAt.current = null;
+    el.scrollTop = at;
+  }, [showingList]);
 
   const load = useCallback(() => {
     setError(null);
@@ -74,7 +92,8 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
       .listInterfaceThresholds(nodeId, ifindex)
       .then(setRows)
       .catch((e: unknown) => {
-        setRows([]);
+        // A failed re-read keeps the rules it had, and says so; only a first read goes empty.
+        setRows((prev) => prev ?? []);
         setError(errMsg(e, t('interfaces.rules.loadFailed')));
       });
   }, [nodeId, ifindex, t]);
@@ -131,7 +150,13 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
       footer={
         <>
           {canConfig && (
-            <Button variant="outline" onClick={() => setEditing({})}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                leaveList();
+                setEditing({});
+              }}
+            >
               {t('interfaces.rules.add')}
             </Button>
           )}
@@ -147,50 +172,58 @@ export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onCl
         <p className="ifrules-sub">{t('interfaces.rules.subtitleNoSpeed')}</p>
       )}
 
-      {rows === null ? (
-        <p className="form-status">{t('common:loading')}</p>
-      ) : rows.length === 0 ? (
-        <p className="ifrules-empty">{t('interfaces.rules.empty')}</p>
-      ) : (
-        <>
-          {/* The sections carry `data-kind` so a test can address them structurally: the
-              inherited section's own hint sentence contains the words "this port" too, so a text
-              filter matches both and the assertions inspect the wrong rows while staying green.
-              (It did, on the first run of `interfaceRules.spec.ts`.) */}
-          {own.length > 0 && (
-            <section className="ifrules-section" data-kind="own">
-              <h4 className="ifrules-head">{t('interfaces.rules.thisPort')}</h4>
-              {own.map((row) => (
-                <RuleRow
-                  key={row.rule.id}
-                  row={row}
-                  speedBps={speedBps}
-                  editable={canConfig}
-                  onEdit={() => setEditing({ rule: row.rule })}
-                  onDelete={() => setDeleting(row.rule)}
-                />
-              ))}
-            </section>
-          )}
-          {inherited.length > 0 && (
-            <section className="ifrules-section" data-kind="inherited">
-              <h4 className="ifrules-head">{t('interfaces.rules.inherited')}</h4>
-              {inherited.map((row) => (
-                <RuleRow key={row.rule.id} row={row} speedBps={speedBps} editable={false} />
-              ))}
-              {/* Not a footnote: without it the read-only rows read as broken rather than as
-                  deliberately edited elsewhere (ADR-055 R6). */}
-              <p className="form-status">
-                <Trans
-                  t={t}
-                  i18nKey="interfaces.rules.inheritedHint"
-                  components={{ lnk: <ScreenLink to="/alerts/rules" /> }}
-                />
-              </p>
-            </section>
-          )}
-        </>
-      )}
+      <div ref={listEl}>
+        {rows === null ? (
+          <p className="form-status">{t('common:loading')}</p>
+        ) : rows.length === 0 ? (
+          <p className="ifrules-empty">{t('interfaces.rules.empty')}</p>
+        ) : (
+          <>
+            {/* The sections carry `data-kind` so a test can address them structurally: the
+                inherited section's own hint sentence contains the words "this port" too, so a text
+                filter matches both and the assertions inspect the wrong rows while staying green.
+                (It did, on the first run of `interfaceRules.spec.ts`.) */}
+            {own.length > 0 && (
+              <section className="ifrules-section" data-kind="own">
+                <h4 className="ifrules-head">{t('interfaces.rules.thisPort')}</h4>
+                {own.map((row) => (
+                  <RuleRow
+                    key={row.rule.id}
+                    row={row}
+                    speedBps={speedBps}
+                    editable={canConfig}
+                    onEdit={() => {
+                      leaveList();
+                      setEditing({ rule: row.rule });
+                    }}
+                    onDelete={() => {
+                      leaveList();
+                      setDeleting(row.rule);
+                    }}
+                  />
+                ))}
+              </section>
+            )}
+            {inherited.length > 0 && (
+              <section className="ifrules-section" data-kind="inherited">
+                <h4 className="ifrules-head">{t('interfaces.rules.inherited')}</h4>
+                {inherited.map((row) => (
+                  <RuleRow key={row.rule.id} row={row} speedBps={speedBps} editable={false} />
+                ))}
+                {/* Not a footnote: without it the read-only rows read as broken rather than as
+                    deliberately edited elsewhere (ADR-055 R6). */}
+                <p className="form-status">
+                  <Trans
+                    t={t}
+                    i18nKey="interfaces.rules.inheritedHint"
+                    components={{ lnk: <ScreenLink to="/alerts/rules" /> }}
+                  />
+                </p>
+              </section>
+            )}
+          </>
+        )}
+      </div>
       <FormError form={{ error }} />
     </Modal>
   );

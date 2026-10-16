@@ -345,10 +345,10 @@ export function NodesPage() {
    *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
   const [editingNode, setEditingNode] = useState<NodeSummary | null>(null);
   const [rediscovering, setRediscovering] = useState<NodeSummary | null>(null);
-  /** Bumped when that edit rewrote the node the right pane is showing. It rides in `NodeDetail`'s
-   *  `key`: the pane fetches a node's config once per mount (plus its own post-save refetch), so
-   *  without this an edit from the tree would leave the operator looking at the values they just
-   *  replaced — which reads as a save that did not take. */
+  /** Bumped when that edit rewrote the node the right pane is showing, and handed to `NodeDetail`
+   *  as `reloadKey`: without it an edit from the tree would leave the operator looking at the values
+   *  they just replaced — which reads as a save that did not take. ⚠️ Never in the pane's `key`
+   *  again: a remount reset its scroll and closed the Interfaces dock (ADR-203). */
   const [detailNonce, setDetailNonce] = useState(0);
 
   // Suppression: active maintenance windows + mutes drive the per-row icons; the right-click
@@ -502,7 +502,7 @@ export function NodesPage() {
     revealGroupId: reveal?.sel.kind === 'node' ? (reveal.groupId ?? UNGROUPED) : null,
     filterTerm: search.appliedTerm,
   });
-  const invalidateMembers = members.invalidate;
+  const rereadMembersAfterWrite = members.rereadAfterWrite;
 
   // The nodes the tree renders, in three cases rather than two.
   //
@@ -582,18 +582,23 @@ export function NodesPage() {
     try {
       const g = await api.listNodeGroups();
       setGroups(g);
-      // Both member caches are now stale, and both have to be told so. Dropping the per-group
+      // Both member caches are now stale, and both have to be told so. Re-reading the per-group
       // members alone left filter mode showing an empty tree after any edit: the search page was
       // cleared but nothing re-issued the search, so it stayed cleared until the operator retyped
-      // the term. They are invalidated the same way, side by side, for that reason.
-      invalidateMembers();
+      // the term. They are re-read side by side for that reason.
+      //
+      // 🚨 **Re-read in place, never emptied first** (ADR-203). This used to `invalidate`: every
+      // loaded folder became one loading row, the tree got shorter than its own scroll offset, the
+      // browser clamped it, and the rows came back with the operator somewhere else — after a Sort,
+      // a drag, a pool chip, any write at all.
+      rereadMembersAfterWrite();
       refetchSearch();
     } catch (e: unknown) {
       setError(errMsg(e, t('err.loadNodes')));
     } finally {
       setLoading(false);
     }
-  }, [t, invalidateMembers, refetchSearch, refreshRollups]);
+  }, [t, rereadMembersAfterWrite, refetchSearch, refreshRollups]);
 
   useEffect(() => {
     void reload();
@@ -810,9 +815,9 @@ export function NodesPage() {
   // run already; a second quiet read costs one round trip and is harmless. Everything the tree
   // draws from the server is read again, and nothing is emptied first:
   //
-  // 🚨 **Not `reload`.** `reload` is for after this tab's own write: it drops the member cache,
-  // so every loaded row vanished for a round trip and the tree flashed "Loading…" (ADR-133 Inc.7
-  // decision 4) — on every change anyone made, that would be all the time. And **not `refresh`**: a
+  // 🚨 **Not `reload`.** `reload` is for after this tab's own write: it clears the error and the
+  // folder failures and asks every folder again (ADR-203) — on every change anyone made, that would
+  // be all the time, and a failed read there empties the tree rather than keeping it. And **not `refresh`**: a
   // remote change can be a move, and folders swapped one answer at a time would draw the moved
   // node twice or not at all. `reconcile` swaps every loaded folder together.
   //
@@ -1507,7 +1512,8 @@ export function NodesPage() {
             // Render from the selection id so a node whose group isn't loaded still shows detail
             // (the detail pane fetches the node itself). Move needs the loaded summary — guarded.
             <NodeDetail
-              key={`${selected.id}:${detailNonce}`}
+              key={selected.id}
+              reloadKey={detailNonce}
               nodeId={selected.id}
               variant="inline"
               canEdit={canConfig}
@@ -1704,8 +1710,8 @@ export function NodesPage() {
           onDone={() => {
             setTaggingNodes(null);
             clearChecked();
-            // The tree does not draw tags, but the right-hand detail pane does — and it is keyed
-            // by `detailNonce`, so a reload is what makes a freshly tagged selected node show them.
+            // The tree does not draw tags, but the right-hand detail pane does — `detailNonce` is
+            // what makes it re-read a freshly tagged selected node (quietly, ADR-203).
             setDetailNonce((v) => v + 1);
             void reload();
           }}

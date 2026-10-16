@@ -219,3 +219,54 @@ test('a keyboard focus may still scroll a row into view', async ({ page }) => {
     'a keyboard focus was refused its scroll, so the tree is keyboard-unreachable',
   ).toBeGreaterThan(0);
 });
+
+test('sorting a folder leaves the tree where it was (ADR-203)', async ({ page }) => {
+  // 🚨 THE REGRESSION for the report that opened ADR-203. Every write re-reads the inventory, and the
+  // re-read used to empty every loaded folder first: the sixty Ungrouped rows became one loading row,
+  // the scroller got shorter than its own offset, and the browser clamped `scrollTop` to fit. When
+  // the rows came back the operator was at the top. No scroll call is involved, so only a browser
+  // measuring the offset after the write can see it.
+  //
+  // The offset is small on purpose: the folder row has to stay on screen to be right-clicked, and
+  // any offset above zero is clamped by the collapse.
+  await page.goto('/nodes');
+  await parkAt(page, 20);
+  const sorted = page.waitForRequest(
+    (r) => r.method() === 'POST' && /\/node-groups\/[^/]+\/sort/.test(r.url()),
+  );
+  await page.locator('.ntree-grow').first().click({ button: 'right', position: { x: 40, y: 20 } });
+  // Taken after the press: Playwright's click scrolls a clipped target into view first.
+  const before = await scrollTopOf(page);
+  expect(before, 'the press scrolled the tree to the folder — nothing left to clamp').toBeGreaterThan(0);
+  await page.getByRole('menu').getByRole('button', { name: 'Sort ascending', exact: true }).click();
+  await sorted;
+  // Let the re-read land and the rows come back.
+  await expect(row(page, 0)).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await scrollTopOf(page), 'the write moved the tree').toBe(before);
+});
+
+test('a write while the tree is scrolled far down keeps the rows in view (ADR-203)', async ({ page }) => {
+  // The same collapse from the other side: parked deep, a write the node menu reaches (a pool chip)
+  // must leave the first row on screen where it was. A row's `y`, not only `scrollTop`.
+  await page.goto('/nodes');
+  await parkAt(page, 600);
+  const i = await visibleIndex(page, 2);
+  const anchor = row(page, i);
+  const before = await anchor.boundingBox();
+  await anchor.click({ button: 'right' });
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  const reloaded = page.waitForRequest((r) => r.method() === 'GET' && r.url().includes('/node-groups'));
+  const chip = menu
+    .locator('.ntree-menu-section')
+    .filter({ hasText: 'Poller pool' })
+    .getByRole('button', { name: 'Inherit', exact: true });
+  await expect(chip, 'the node menu offers no pool chip to press').toHaveCount(1);
+  await chip.click();
+  await reloaded;
+  await page.waitForTimeout(300);
+  await expect(anchor).toBeVisible();
+  const after = await anchor.boundingBox();
+  expect(after!.y, 'the write moved the row the operator was looking at').toBeCloseTo(before!.y, 0);
+});

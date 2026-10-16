@@ -196,35 +196,46 @@ export function DataTable<T>({
     overscan: 12,
   });
 
-  // Drop the cached measurements when the open row changes. Without this a row that has been
-  // collapsed keeps the height it had while open — the list stays full of gaps, which reads as a
-  // rendering bug rather than as a stale cache. `measure()` is a no-op for a table with no
-  // expansion, and the dependency never changes there.
+  // Re-measure when the open row changes. Without this a row that has been collapsed keeps the
+  // height it had while open — the list stays full of gaps, which reads as a rendering bug rather
+  // than as a stale cache. A no-op for a table with no expansion, and the dependency never changes
+  // there.
   //
-  // 🚨 Dropping is only half of it: `measure()` forgets every size, and a row that stays mounted is
-  // never handed to `measureElement` again — its ref callback does not re-run — so it falls back to
-  // the 44px estimate. That was invisible while every row was 44px; on an `autoRowHeight` table a
-  // taller row then overlapped the one below it after any open and close (Neighbors, ADR-179 Inc.3).
-  // So the rows on screen are measured again as soon as they have rendered — through `resizeItem`,
-  // not `measureElement`: opening a row scrolls the table, and `measureElement` skips its
-  // measurement while the virtualizer thinks a scroll is under way, which left every row below an
-  // open one at the estimate for as long as it stayed open.
+  // 🚨 **Only the rows that changed, never `measure()`** (ADR-203). `measure()` forgets every size,
+  // and the previous open row — closed by this very click, and usually scrolled out of the rendered
+  // window by then — fell back to the estimate with nothing compensating: every row on screen,
+  // the one just clicked included, moved up by its extra height. `resizeItem` compensates by itself
+  // for a row above the scroll offset, so each row is told its own new size:
+  //  - a row that is rendered is measured, through `resizeItem` rather than `measureElement` — a
+  //    row that stays mounted is never handed to `measureElement` again (its ref callback does not
+  //    re-run), and `measureElement` skips its measurement while the virtualizer thinks a scroll is
+  //    under way, which opening a row causes (ADR-179 Inc.3);
+  //  - the row that closed is set to the estimate when it is not rendered. It is measured for real
+  //    when it next renders.
+  const previousOpen = useRef<string | null | undefined>(expandedKey);
   useEffect(() => {
     if (!expanded) return;
-    virtualizer.measure();
+    const closed = previousOpen.current;
+    previousOpen.current = expandedKey;
     const frame = requestAnimationFrame(() => {
-      // ⚠️ Rebuild the positions first. Until something asks for them after `measure()`, the
-      // virtualizer still holds the sizes it had before, so `resizeItem` compared each row with its
-      // old height, found no change and wrote nothing — and the row then read back at 44px.
-      virtualizer.getVirtualItems();
-      scrollRef.current?.querySelectorAll<HTMLElement>('[data-index]').forEach((el) => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const rendered = new Set<number>();
+      scroller.querySelectorAll<HTMLElement>('[data-index]').forEach((el) => {
         const index = Number(el.dataset.index);
-        if (Number.isInteger(index)) virtualizer.resizeItem(index, el.getBoundingClientRect().height);
+        if (!Number.isInteger(index)) return;
+        rendered.add(index);
+        virtualizer.resizeItem(index, el.getBoundingClientRect().height);
       });
+      if (closed == null || closed === expandedKey) return;
+      const index = rows.findIndex((r) => rowKey(r) === closed);
+      if (index >= 0 && !rendered.has(index)) {
+        virtualizer.resizeItem(index, cardMode ? cardEstimatePx : ROW_PX);
+      }
     });
     return () => cancelAnimationFrame(frame);
     // `virtualizer` is stable for the life of the component; including it would re-run this on
-    // every scroll frame.
+    // every scroll frame. `rows`, `rowKey` and the size are read at the moment the open row changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedKey]);
 
