@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-15
-# counts: MA-L=40225 MA-L-repeats-dropped=3 MA-M=6557 MA-S=7202 withheld=3
+# fetched: 2026-10-16
+# counts: MA-L=40227 MA-L-repeats-dropped=3 MA-M=6559 MA-S=7203 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -15933,6 +15933,7 @@
 14A9E3	MST CORPORATION
 14AB02	HUAWEI TECHNOLOGIES CO.,LTD
 14AB56	WUXI FUNIDE DIGITAL CO.,LTD
+14AB7E	Ciena Corporation
 14ABC5	Intel Corporate
 14ABEC	Hewlett Packard Enterprise
 14ABF0	Commscope
@@ -36602,6 +36603,7 @@
 8C1F643EC	SPEKTRA Schwingungstechnik und Akustik GmbH Dresden
 8C1F643ED	The Exploration Company
 8C1F643EE	BnB Information Technology
+8C1F643F0	Supracontrol d.o.o.
 8C1F643F2	SURYA ELECTRONICS
 8C1F643F3	Cambrian Works, Inc.
 8C1F643F4	ACTELSER S.L.
@@ -47720,9 +47722,11 @@ CCF67A	Ayecka Communication Systems LTD
 CCF722	IEEE Registration Authority
 CCF7220	OP CORE
 CCF7221	Lucky Tone Technology Co., Ltd.
+CCF7222	Everfox Ltd
 CCF7223	InfiMaker(Shenzhen)Limited
 CCF7224	Menuit inc.
 CCF7225	Foritec GmbH
+CCF7226	RIVERSIDE SOLUTIONS PRIVATE LIMITED
 CCF7228	75F Engineering Services India Private Ltd
 CCF7229	deutherm cooling GmbH
 CCF722A	WIWORLD CO.,LTD
@@ -52860,6 +52864,7 @@ F4EE08	Dell Inc.
 F4EE14	MERCURY COMMUNICATION TECHNOLOGIES CO.,LTD.
 F4EE31	Cisco Systems, Inc
 F4EF9E	SGSG SCIENCE & TECHNOLOGY CO. LTD
+F4F032	Ciena Corporation
 F4F15A	Apple, Inc.
 F4F197	EMTAKE Inc
 F4F19E	Wistron InforComm (Zhongshan) Corporation
