@@ -67,10 +67,39 @@ test('a scan sends the credentials in the order the picker shows them', async ({
 }) => {
   await page.goto('/nodes/discovery');
   // A fresh browser remembers no scan, so every SNMP credential is ticked, in the server's order.
-  const order = page.locator('.cred-picker-row-name');
-  await expect(order).toHaveText(['ymock-first', 'ymock-second']);
+  const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
+  await expect(used).toHaveText(['ymock-first', 'ymock-second']);
   await page.getByRole('button', { name: 'Move ymock-second up' }).click();
-  await expect(order).toHaveText(['ymock-second', 'ymock-first']);
+  await expect(used).toHaveText(['ymock-second', 'ymock-first']);
+
+  await page.locator('.disco-f-targets textarea').fill('192.0.2.1');
+  const post = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/discovery/scan',
+  );
+  await page.getByRole('button', { name: 'Scan', exact: true }).click();
+  const body = (await post).postDataJSON() as { credential_ids: string[] };
+  expect(body.credential_ids).toEqual([S2, S1]);
+  expect(errors.uncaught).toEqual([]);
+});
+
+// ADR-205 Inc.3: every credential is on screen, and the checkbox is how one is used or not.
+test('unticking moves a credential down, and ticking it puts it last in the order', async ({
+  page,
+  errors,
+}) => {
+  await page.goto('/nodes/discovery');
+  const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
+  const unused = page.locator('.cred-picker-row.unused .cred-picker-row-name');
+  await expect(used).toHaveText(['ymock-first', 'ymock-second']);
+
+  await page.getByRole('checkbox', { name: 'Use ymock-first' }).uncheck();
+  await expect(used).toHaveText(['ymock-second']);
+  await expect(unused).toHaveText(['ymock-first']);
+  await expect(page.locator('.cred-picker-row:not(.unused) .cred-picker-row-n')).toHaveText(['1']);
+
+  await page.getByRole('checkbox', { name: 'Use ymock-first' }).check();
+  await expect(used).toHaveText(['ymock-second', 'ymock-first']);
+  await expect(unused).toHaveCount(0);
 
   await page.locator('.disco-f-targets textarea').fill('192.0.2.1');
   const post = page.waitForRequest(

@@ -128,7 +128,7 @@ describe('i18n mechanism', () => {
     expect(i18n.t('settings:prefs.language')).toBe('Language');
     // Shared-UI + shell strings (Area 1 extraction).
     expect(i18n.t('common:noRows')).toBe('No rows.');
-    expect(i18n.t('common:credPicker.remove', { name: 'snmp-ro' })).toBe('Remove snmp-ro');
+    expect(i18n.t('common:credPicker.use', { name: 'snmp-ro' })).toBe('Use snmp-ro');
     expect(i18n.t('nav:shell.signedInAs', { role: 'admin' })).toBe('Signed in · admin');
     // Alerts triage namespace (Area 2 extraction).
     expect(i18n.t('alerts:history.cols.severity')).toBe('Severity');

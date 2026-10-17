@@ -36,6 +36,30 @@ export function toggleSelection(
   return [...selected.filter((x) => offered.has(x)), id];
 }
 
+/**
+ * What the picker draws (ADR-205 Inc.3): every offered credential, split in two.
+ *
+ * `used` is the selection in its try order — the order it is sent in, so it is the order it is
+ * numbered in. `unused` is every other offered credential, in the order offered. An id selected but
+ * no longer offered appears in neither: it cannot be sent either (`toggleSelection` drops it).
+ */
+export function splitSelection<T extends Selectable>(
+  options: readonly T[],
+  selected: readonly string[],
+): { used: T[]; unused: T[] } {
+  const byId = new Map(options.map((o) => [o.id, o]));
+  const seen = new Set<string>();
+  const used: T[] = [];
+  for (const id of selected) {
+    const o = byId.get(id);
+    if (o && !seen.has(id)) {
+      seen.add(id);
+      used.push(o);
+    }
+  }
+  return { used, unused: options.filter((o) => !seen.has(o.id)) };
+}
+
 /** The selection with `id` moved one place earlier (`-1`) or later (`1`) in the try order. */
 export function moveSelected(selected: readonly string[], id: string, delta: -1 | 1): string[] {
   return moveBy(selected, selected.indexOf(id), delta);

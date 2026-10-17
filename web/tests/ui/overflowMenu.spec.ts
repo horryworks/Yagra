@@ -53,8 +53,6 @@ const EXEMPT: Record<string, string> = {
     'The shell account menu — anchored to the header, not to a row, so it can never be at the bottom of a list. It has its own spec (`userMenu.spec.ts`).',
   'components/ui/ActionMenu.tsx':
     'A wrapper, not a screen: it chooses between the popover and the icon row. Its own popover geometry is covered by `rowMenu.spec.ts` on the node tree.',
-  'components/ui/CredentialPicker.tsx':
-    'Opens inside a modal, which is centred and scrollable — a different containing block from a table row, and one that cannot push the panel past the viewport edge.',
 };
 
 test.describe('the ⋮ row menu on a phone', () => {

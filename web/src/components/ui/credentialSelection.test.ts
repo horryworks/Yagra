@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { moveSelected, toggleSelection } from './credentialSelection';
+import { moveSelected, splitSelection, toggleSelection } from './credentialSelection';
 
 const OPTIONS = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
 
@@ -44,5 +44,32 @@ describe('moveSelected', () => {
     expect(moveSelected(['a', 'b'], 'a', -1)).toEqual(['a', 'b']);
     expect(moveSelected(['a', 'b'], 'b', 1)).toEqual(['a', 'b']);
     expect(moveSelected(['a', 'b'], 'x', 1)).toEqual(['a', 'b']);
+  });
+});
+
+describe('splitSelection (ADR-205 Inc.3)', () => {
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id);
+
+  it('lists the used ones in the try order and the rest in the order offered', () => {
+    const { used, unused } = splitSelection(OPTIONS, ['c', 'a']);
+    expect(ids(used)).toEqual(['c', 'a']);
+    expect(ids(unused)).toEqual(['b', 'd']);
+  });
+
+  it('shows every offered credential exactly once', () => {
+    const { used, unused } = splitSelection(OPTIONS, ['d', 'b', 'd']);
+    expect([...ids(used), ...ids(unused)].sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(ids(used)).toEqual(['d', 'b']);
+  });
+
+  it('draws nothing for an id that is no longer offered', () => {
+    const { used, unused } = splitSelection(OPTIONS, ['gone', 'a']);
+    expect(ids(used)).toEqual(['a']);
+    expect(ids(unused)).toEqual(['b', 'c', 'd']);
+  });
+
+  it('with nothing selected, everything is unused', () => {
+    expect(ids(splitSelection(OPTIONS, []).unused)).toEqual(['a', 'b', 'c', 'd']);
+    expect(splitSelection([], ['a'])).toEqual({ used: [], unused: [] });
   });
 });
