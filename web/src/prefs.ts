@@ -5,7 +5,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { ColumnWidthDoc } from './lib/columnWidths';
-import type { DiscoveryScanMemory } from './pages/discoveryScans';
+import { withRememberedCredentials, type DiscoveryScanMemory } from './pages/discoveryScans';
 import { withModalSize, type ModalResizeId, type ModalSize } from './lib/modalSize';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -201,6 +201,8 @@ interface PrefsStore {
   /** Record the sweep just started. Call it **once per scan**, not per keystroke — and only after
    *  the target spec has parsed (see [`discoveryScan`]). */
   setDiscoveryScan: (scan: DiscoveryScanMemory) => void;
+  /** Replace only the remembered ticked credentials — Detect's write (ADR-205 Inc.4). */
+  setDiscoveryCredentials: (credentialIds: readonly string[]) => void;
   /** Record the Pinned only switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also syncs
    *  it to the account (see [`nodeTreePinnedOnly`]). */
   setNodeTreePinnedOnly: (on: boolean | null) => void;
@@ -292,6 +294,8 @@ export const usePrefsStore = create<PrefsStore>()(
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
       setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
       setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),
+      setDiscoveryCredentials: (ids) =>
+        set((s) => ({ discoveryScan: withRememberedCredentials(s.discoveryScan, ids) })),
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
       setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),

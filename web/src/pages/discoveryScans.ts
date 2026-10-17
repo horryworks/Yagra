@@ -281,7 +281,10 @@ export interface DiscoveryScanMemory {
    *  ranges instead (the site mode owns the target then, and the folder is not remembered — it is a
    *  mode, and re-entering it is one click from a list that may have changed). */
   targetSpec: string;
-  /** Credential ids that were tried. Ids, so a deleted credential drops out rather than resurrecting. */
+  /** Credential ids that were ticked. Ids, so a deleted credential drops out rather than
+   *  resurrecting. **A set, not an order** (ADR-205 Inc.4): what it is read back into is arranged in
+   *  the stored try order, so the order on Credentials & secrets is the one every visit opens in.
+   *  Written by a range scan and by Detect alike, so all three pickers share it. */
   credentialIds: string[];
   /** The pool the sweep was published to, or `null` for "any poller". */
   pool: string | null;
@@ -297,10 +300,14 @@ export function initialTargetSpec(mem: DiscoveryScanMemory | null): string {
   return mem?.targetSpec || DEFAULT_TARGET_SPEC;
 }
 
-/** The credentials a fresh visit should tick.
+/** The credentials a fresh visit should tick, **in the stored try order** (ADR-205 Inc.4).
  *
  *  The remembered set, narrowed to ids that still exist — and when nothing survives that narrowing,
  *  **the original default (every SNMP credential)** rather than an empty set.
+ *
+ *  The order comes from `creds` (the list as the server returns it, which is the try order), never
+ *  from the memory. The memory once carried its own order and won, so a credential moved to the top
+ *  on Credentials & secrets still opened last here — two sources for one order, read on two screens.
  *
  *  🚨 That fallback is the load-bearing part. An empty tick list is a legal sweep: it probes with
  *  ICMP and identifies nothing. So a memory whose credentials have all been deleted would silently
@@ -312,9 +319,23 @@ export function initialCredentialIds(
 ): string[] {
   const snmp = creds.filter((c) => isSnmpCredentialKind(c.kind)).map((c) => c.id);
   if (!mem) return snmp;
-  const live = new Set(creds.map((c) => c.id));
-  const kept = mem.credentialIds.filter((id) => live.has(id));
+  const remembered = new Set(mem.credentialIds);
+  const kept = snmp.filter((id) => remembered.has(id));
   return kept.length > 0 ? kept : snmp;
+}
+
+/** The memory with its ticked credentials replaced and nothing else touched — what Detect writes
+ *  (ADR-205 Inc.4). With no memory yet, the other fields are the ones a fresh visit opens with: an
+ *  empty spec reads back as the default range, no pool as "pick the default", SNMP only where ping
+ *  answers. */
+export function withRememberedCredentials(
+  mem: DiscoveryScanMemory | null,
+  credentialIds: readonly string[],
+): DiscoveryScanMemory {
+  const ids = [...credentialIds];
+  return mem
+    ? { ...mem, credentialIds: ids }
+    : { targetSpec: '', credentialIds: ids, pool: null, snmpWhenUnreachable: false };
 }
 
 /** The pool a fresh visit should preselect: the last one swept from, if it is still a pool this

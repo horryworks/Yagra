@@ -27,6 +27,7 @@ import { mergePreview, type RowDestination } from '../pages/importFiling';
 import { groupOptions } from './nodeTree';
 import { previewBatches } from './previewBatch';
 import { MAX_POLL_FAILURES, POLL_INTERVAL_MS } from '../pages/discoveryScans';
+import { usePrefsStore } from '../prefs';
 
 /** The row a setup acts on: an unregistered endpoint's id, its address, and the name a neighbour or
  *  a syslog header gave it, if any. */
@@ -160,6 +161,9 @@ export function useEndpointSetup({
   // dropdowns are filled from what answered. Nothing is imported — the operator reads the result
   // and presses Monitor. One read outstanding at a time, like the Scan tab's own poll.
   const detectOne = async (target: SetupTarget) => {
+    // The ticks are shared by every picker (ADR-205 Inc.4): what Detect tried is what a range scan
+    // and the other Detect form open with next. Only the ticks — the range and pool stay the scan's.
+    usePrefsStore.getState().setDiscoveryCredentials(probeCredIds);
     setDetect((cur) => ({ ...cur, [target.id]: 'running' }));
     setError(null);
     const finish = (r: DetectResult) => {

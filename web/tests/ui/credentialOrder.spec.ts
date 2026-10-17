@@ -110,3 +110,59 @@ test('unticking moves a credential down, and ticking it puts it last in the orde
   expect(body.credential_ids).toEqual([S2, S1]);
   expect(errors.uncaught).toEqual([]);
 });
+
+// ADR-205 Inc.4: the browser remembers which credentials were ticked, never their order. A memory
+// that lists them back to front still opens in the order the server lists them.
+test('a remembered selection opens in the stored order, not the remembered one', async ({ page }) => {
+  // Registered after the harness's own seeding script, so this one wins (see columnResize.spec.ts).
+  await page.addInitScript(
+    ([second, first]) => {
+      localStorage.setItem(
+        'yagra_prefs',
+        JSON.stringify({
+          state: {
+            theme: 'dark',
+            language: 'en',
+            uiMode: 'auto',
+            discoveryScan: {
+              targetSpec: '',
+              credentialIds: [second, first],
+              pool: null,
+              snmpWhenUnreachable: false,
+            },
+          },
+          version: 0,
+        }),
+      );
+    },
+    [S2, S1],
+  );
+  await page.goto('/nodes/discovery');
+  await expect(page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name')).toHaveText([
+    'ymock-first',
+    'ymock-second',
+  ]);
+});
+
+// ADR-205 Inc.4: Detect remembers its ticks, and the range scan opens with them — the three pickers
+// share one memory. Before, only a range scan wrote it, so a credential unticked for Detect came
+// back the next time.
+//
+// Read back from storage rather than by navigating again: `tests/support/app.ts` re-seeds
+// `yagra_prefs` on every navigation, so a second `goto` would show the harness's default, not this.
+// What a fresh visit makes of the stored ids is the Vitest suite's (`initialCredentialIds`).
+test('starting a Detect remembers the ticks it used', async ({ page }) => {
+  await page.goto('/nodes/discovery?tab=unregistered');
+  await page.getByRole('checkbox', { name: 'Use ymock-first' }).uncheck();
+  await page.getByRole('button', { name: 'Detect' }).first().click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (JSON.parse(localStorage.getItem('yagra_prefs') ?? '{}') as {
+            state?: { discoveryScan?: { credentialIds?: string[] } };
+          }).state?.discoveryScan?.credentialIds ?? null,
+      ),
+    )
+    .toEqual([S2]);
+});

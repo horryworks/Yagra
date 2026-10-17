@@ -1140,7 +1140,7 @@
       "openNode": "Open node →",
       "errAp": "Could not add the access point.",
       "credsOrder": {
-        "info": "Detect tries these in this order. A change here is not saved."
+        "info": "Detect tries these in this order. The ticks are kept for the next scan; the order is not."
       }
     },
     "matchedOn": {

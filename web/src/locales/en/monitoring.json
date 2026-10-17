@@ -624,7 +624,7 @@
         "noProfile": "(none — ping only)",
         "noCreds": "No credential chosen above — Detect would only ping.",
         "credsOrder": {
-          "info": "Detect tries these in this order. It is the same list as Scan a range, so a change here changes it there too."
+          "info": "Detect tries these in this order. Ticks are shared with Scan a range and kept; the order is not."
         }
       },
       "imported": "{{addr}} is now a monitored node.",

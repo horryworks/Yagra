@@ -18,6 +18,7 @@ import {
   canRequestStop,
   DEFAULT_TARGET_SPEC,
   initialCredentialIds,
+  withRememberedCredentials,
   initialPool,
   initialTargetSpec,
   isScanInFlight,
@@ -417,12 +418,44 @@ describe('seeding the form from the last sweep (ADR-134)', () => {
       ]);
     });
 
+    // ADR-205 Inc.4: the memory says which, never in what order. A credential moved to the top on
+    // Credentials & secrets used to open last here, because the remembered order won.
+    it('arranges the remembered ones in the stored try order, not the remembered order', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['c2', 'c1'] }), creds)).toEqual(['c1', 'c2']);
+      const reordered = [cred('c2', 'snmp_v3'), cred('c3', 'http_auth'), cred('c1', 'snmp_v2c')];
+      expect(initialCredentialIds(mem({ credentialIds: ['c1', 'c2'] }), reordered)).toEqual([
+        'c2',
+        'c1',
+      ]);
+    });
+
+    it('never ticks a remembered credential that is not an SNMP one', () => {
+      expect(initialCredentialIds(mem({ credentialIds: ['c3', 'c1'] }), creds)).toEqual(['c1']);
+    });
+
     // The fallback is "the default", which on a deployment with no SNMP credentials is genuinely
     // empty. It must not invent one.
     it('is empty when the deployment has no SNMP credentials at all', () => {
       expect(initialCredentialIds(mem({ credentialIds: ['gone'] }), [cred('c3', 'http_auth')])).toEqual(
         [],
       );
+    });
+  });
+
+  describe("what Detect writes (ADR-205 Inc.4)", () => {
+    it('replaces the ticked credentials and leaves the rest of the memory alone', () => {
+      const before = mem({ targetSpec: '198.51.100.0/24', credentialIds: ['c1'], pool: 'tokyo' });
+      const after = withRememberedCredentials(before, ['c2', 'c1']);
+      expect(after.credentialIds).toEqual(['c2', 'c1']);
+      expect({ ...after, credentialIds: before.credentialIds }).toEqual(before);
+    });
+
+    it('with no memory yet, starts one that opens like a fresh visit', () => {
+      const made = withRememberedCredentials(null, ['c2']);
+      expect(made.credentialIds).toEqual(['c2']);
+      expect(initialTargetSpec(made)).toBe(DEFAULT_TARGET_SPEC);
+      expect(made.pool).toBeNull();
+      expect(made.snmpWhenUnreachable).toBe(false);
     });
   });
 
