@@ -82,7 +82,7 @@ polling**. Users access it through the WebUI.
 > which identity provider it is — Microsoft Entra ID, Okta, Google Workspace, or any other OIDC
 > provider — and then asks only for what that product actually needs. And a deployment now **takes its
 > next version from its own WebUI**: Settings ▸ Upgrade lists the releases it can move to and runs
-> backup → pull → install the composition carried inside the target image → recreate → verify, in a
+> pull → backup → install the composition carried inside the target image → recreate → verify, in a
 > sidecar that holds the Docker socket so core never has to — with a switch on the page to shut the
 > mechanism off, a declared **downgrade window** so going back is a supported move rather than a
 > gamble, and an offline path that installs from a `docker save` archive where no registry is

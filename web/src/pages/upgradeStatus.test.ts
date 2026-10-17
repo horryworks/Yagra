@@ -383,7 +383,7 @@ describe('runPhase', () => {
 
   it('reports the phase and its position once the sidecar is writing', () => {
     const phase = runPhase(ran({ state: 'running', step: 'pull' }), 'r1');
-    expect(phase).toEqual({ kind: 'running', step: 'pull', index: 2, total: 5 });
+    expect(phase).toEqual({ kind: 'running', step: 'pull', index: 1, total: 5 });
   });
 
   it('is running even for a run this browser did not start', () => {

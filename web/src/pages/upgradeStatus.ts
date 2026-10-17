@@ -93,7 +93,7 @@ export function isRunning(status: UpgradeStatus): boolean {
  *  `validate` is not one of them — it is what a *refused* request is stamped with, so it has a
  *  label but no place on the track. Keeping the two lists separate is what stops a rejection
  *  rendering as "20% done". */
-export const UPGRADE_PROGRESS_STEPS = ['start', 'backup', 'pull', 'compose', 'verify'] as const;
+export const UPGRADE_PROGRESS_STEPS = ['start', 'pull', 'backup', 'compose', 'verify'] as const;
 
 /** Every step that can reach the page, which is the track plus the refusal stamp. Iterated by
  *  `i18nEnumKeys.test.ts` — before this existed the page printed the raw shell token. */

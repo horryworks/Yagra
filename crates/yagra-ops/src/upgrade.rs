@@ -3520,6 +3520,76 @@ pub mod tests {
         }
     }
 
+    /// The pre-upgrade backup leaves the metrics out unless the VictoriaMetrics image changes, and
+    /// that decision fixes the order of four steps (ADR-050 decisions 21–22).
+    ///
+    /// The target composition is the only place the next VictoriaMetrics image is written, and it
+    /// can be read only once the target core image is on the host — so the pull comes first, then
+    /// the composition is staged in /tmp, then the backup runs, and only then is the staged file
+    /// installed. Install it before the backup and the backup's `docker compose ps` reads the
+    /// version it is not backing up; take the backup before the staging and there is nothing to
+    /// compare against, which would silently mean "always skip" or "always take".
+    #[test]
+    fn the_backup_decides_on_the_metrics_from_the_target_composition() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let at = |what: &str, needle: &str| {
+            apply
+                .find(needle)
+                .unwrap_or_else(|| panic!("{what} is gone from the apply procedure"))
+        };
+        let pull = at("the image pull", "docker pull ");
+        let stage = at(
+            "staging the target composition",
+            r#"docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /tmp/target-compose.yml"#,
+        );
+        let running = at(
+            "reading the running VictoriaMetrics image",
+            "com.docker.compose.service=victoriametrics",
+        );
+        let next = at(
+            "reading the target VictoriaMetrics image",
+            "image:[[:space:]]*\\(victoriametrics\\/victoria-metrics:",
+        );
+        let backup = at(
+            "the pre-upgrade backup",
+            "YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh",
+        );
+        let install = at(
+            "installing the staged composition",
+            r#"cp /tmp/target-compose.yml "$$WORKDIR/docker-compose.deploy.yml""#,
+        );
+        assert!(
+            pull < stage,
+            "the composition is staged before the image it comes from is pulled"
+        );
+        assert!(
+            stage < next,
+            "the target image is read before the composition is staged"
+        );
+        assert!(
+            running < backup && next < backup,
+            "the backup runs before both VictoriaMetrics images are known, so it cannot decide \
+             whether to take the metrics"
+        );
+        assert!(
+            backup < install,
+            "the target composition is installed before the backup, so the backup runs against \
+             the version it is not backing up"
+        );
+        // Skipping is the case that needs evidence; anything unreadable must take the metrics.
+        assert!(
+            apply.contains(r#"if [ -n "$$VM_NOW" ] && [ "$$VM_NOW" = "$$VM_NEXT" ]; then"#),
+            "the metrics are skipped on something weaker than two equal, non-empty images"
+        );
+        assert_eq!(
+            apply.matches("sh /tmp/backup.sh").count(),
+            1,
+            "the backup is run on more than one path, and only one of them decides on the metrics"
+        );
+    }
+
     /// A floor that is not a number must not reach the arithmetic that divides it.
     ///
     /// 🚨 The failure this pins is worse than "the check is weakened". `$$(( ))` resolves a bare

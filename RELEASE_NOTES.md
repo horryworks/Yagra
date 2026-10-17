@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The backup Settings ▸ Upgrade takes first is now seconds, not minutes.** It keeps the keys and the full PostgreSQL dump, and leaves the VictoriaMetrics snapshot out unless the release changes the VictoriaMetrics image. Yagra's migrations never touch the metrics, yet the snapshot was nearly all of the backup: measured on a lab deployment, 4 min 46 s of about 5 minutes and 1.6 GB beside a 16 MB dump, growing with retention. Such a backup's `manifest.json` says `"metrics_snapshot": null`, and the run's log says which case it took. The progress track now reads pull → backup, because the target release's composition has to be on the host before the choice can be made. Running `./scripts/yagra-backup.sh` by hand still takes the metrics. ⚠️ This takes effect from the upgrade *after* the one that installs it: an upgrade runs with the updater and backup script of the version it is leaving.
+
 ## v0.3.52 — Choose the order Discovery tries stored credentials in, and sweeps finish sooner
 
 ### Improvements

@@ -33,7 +33,8 @@
 #   PG_DB        database name                  (default yagra)
 #   YAGRA_BACKUP_SKIP_METRICS=1  leave the VictoriaMetrics snapshot out. The manifest records that
 #                as an omission exactly as an unreachable store would be — a backup that says what
-#                it does not hold. Set by a relocation whose operator unticked the metrics (ADR-121)
+#                it does not hold. Set by a relocation whose operator unticked the metrics (ADR-121),
+#                and by Settings > Upgrade when the release keeps the VictoriaMetrics image (ADR-050)
 #
 # VERIFY: a backup you have never restored is not a backup. Run ./scripts/yagra-restore-verify.sh
 # against the directory this produces — it restores into a throwaway stack and asserts the data came
@@ -126,9 +127,11 @@ log "nodes=$NODE_COUNT credentials=$CRED_COUNT audit_log=$AUDIT_COUNT"
 echo "[3/4] victoriametrics"
 SNAP_NAME=""
 # Asking for the metrics to be left out is a *choice*, and it is recorded like every other reason
-# they might be missing: `metrics_snapshot` goes null and the summary says so. It exists for one
-# caller — a relocation whose operator unticked "carry the metrics" (ADR-121) — and it deliberately
-# is not a "make the backup faster" switch: the pre-upgrade backup never sets it.
+# they might be missing: `metrics_snapshot` goes null and the summary says so. Two callers set it:
+# a relocation whose operator unticked "carry the metrics" (ADR-121), and the pre-upgrade backup
+# whenever the target release keeps the VictoriaMetrics image (ADR-050 decisions 21-22) — Yagra's
+# migrations never touch the metrics, so a snapshot there guards against nothing an upgrade does.
+# Run by hand, this script still takes them.
 if [ "${YAGRA_BACKUP_SKIP_METRICS:-0}" = 1 ]; then
   log "metrics skipped by request (YAGRA_BACKUP_SKIP_METRICS=1)"
   VM_CID=""

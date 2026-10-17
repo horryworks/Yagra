@@ -670,7 +670,9 @@ services:
     # Pinned, not `:latest` — this holds the metrics history, and ADR-017 makes "an upgrade must
     # never lose or corrupt data" a top-tier policy. The deploy job pulls on every push to main, so
     # a floating tag would silently roll the storage engine on an unrelated code deploy. Bump this
-    # deliberately, with a backup.
+    # deliberately, with a backup. Settings > Upgrade takes that backup by itself: a release whose
+    # line here differs from the running image is the one upgrade that snapshots the metrics
+    # (ADR-050 decision 22). Keep it a plain unquoted `image:` line — that is what it reads.
     image: victoriametrics/victoria-metrics:v1.148.0
     # Retention (months). This flag is the ONLY way to change it: VictoriaMetrics has no runtime
     # retention API, so Yagra reports this value (read back from /flags) but cannot set it —
@@ -1042,16 +1044,14 @@ services:
         PREV=$${PREV##*:}
         echo "$$PREV" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' || PREV=
 
-        # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
-        #    it. The script ships inside the RUNNING core image at a root-owned path, so core
-        #    cannot alter it and the backup matches the version being replaced. NOTE: this is a
-        #    rollback aid, not a disaster-recovery backup — it lands beside the database it protects.
-        say running backup "backing up before touching anything"
+        # 1. The backup procedure of record (ADR-040), taken out of the RUNNING core image at a
+        #    root-owned path, so core cannot alter it and the backup matches the version being
+        #    replaced. Fetched here, before the pull, so a core that ships none is refused before
+        #    a gigabyte is downloaded. It runs at step 2b, once the target composition can be read.
         CORE_CID=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
         [ -n "$$CORE_CID" ] || fail backup "cannot find the running core container"
         docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
           || fail backup "this core image ships no backup script; upgrade from the command line"
-        ( cd "$$WORKDIR" && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
 
         # 2. Get all three images in place BEFORE anything is stopped, so a bad tag, an
         #    unreachable registry or a corrupt archive costs nothing.
@@ -1086,13 +1086,41 @@ services:
           done
         fi
 
-        # 3. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
-        #    and the images are always the same version. The host's .env is never touched.
-        say running compose "installing the $$TAG composition"
+        # 2a. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
+        #     and the images are always the same version — staged in /tmp for now, because the
+        #     backup below still runs against the composition this deployment is on.
         CID=$$(docker create "$$REPO/yagra-core:$$TAG" 2>/tmp/err) || fail compose "cannot stage the target image: $$(sanitize < /tmp/err)"
-        docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" "$$WORKDIR/docker-compose.deploy.yml" \
+        docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /tmp/target-compose.yml \
           || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
         docker rm "$$CID" >/dev/null 2>&1 || true
+
+        # 2b. Back up — the KEK and the database always, the metrics only when this upgrade changes
+        #     the VictoriaMetrics image (ADR-050 decisions 21–22). Yagra's migrations touch
+        #     PostgreSQL alone, so a metrics snapshot guards against nothing an upgrade does, and it
+        #     was nearly all of the backup's time and size (a lab deployment, 2026-10-17: 4 min 46 s
+        #     of about 5 minutes, 1.6 GB beside a 16 MB dump). A new storage engine is the one case
+        #     it does cover. Either side unreadable counts as a change: a missed snapshot costs more
+        #     than a slow one. A docker-compose.local.yml that swaps the image reads as a change
+        #     every time — the safe direction. NOTE: this is a rollback aid, not a disaster-recovery
+        #     backup — it lands beside the database it protects.
+        #     ⚠️ The pattern is anchored on `image:` so that a comment naming the image cannot match,
+        #     and it reads the line unquoted, as this file writes it; a quoted one matches nothing
+        #     and so takes the metrics.
+        VM_NOW=$$(docker inspect -f '{{.Config.Image}}' "$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=victoriametrics" | head -1)" 2>/dev/null || true)
+        VM_NEXT=$$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(victoriametrics\/victoria-metrics:[^[:space:]]*\).*/\1/p' /tmp/target-compose.yml | head -1)
+        if [ -n "$$VM_NOW" ] && [ "$$VM_NOW" = "$$VM_NEXT" ]; then
+          SKIPM=1
+          say running backup "backing up the keys and the database; metrics are left out because VictoriaMetrics stays at $$VM_NOW"
+        else
+          SKIPM=0
+          say running backup "backing up the keys, the database and the metrics, because VictoriaMetrics changes from $${VM_NOW:-unknown} to $${VM_NEXT:-unknown}"
+        fi
+        ( cd "$$WORKDIR" && YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
+
+        # 3. Install the staged composition. The host's .env is never touched.
+        say running compose "installing the $$TAG composition"
+        cp /tmp/target-compose.yml "$$WORKDIR/docker-compose.deploy.yml" \
+          || fail compose "could not write the $$TAG composition into the deployment directory"
 
         # 4. Recreate. Two variables are passed explicitly and both are load-bearing: `-p` because
         #    compose otherwise derives the project from the directory name, forks a second empty
