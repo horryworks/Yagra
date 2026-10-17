@@ -369,7 +369,8 @@ impl CredentialStore {
 
     /// Seal and store a new credential; returns its id. The plaintext is encrypted before
     /// it touches the database and is never logged. It goes to the end of the try order
-    /// (ADR-205 Inc.2).
+    /// (ADR-205 Inc.2) through the column's default (migration 0150), which is why the INSERT does
+    /// not name `try_order`: a writer that did would need the column to exist.
     pub async fn create(&self, name: &str, kind: &str, secret: &[u8]) -> anyhow::Result<Uuid> {
         let sealed = self
             .cipher
@@ -378,9 +379,8 @@ impl CredentialStore {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO credentials \
-             (id, name, kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, try_order) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, \
-               (SELECT COALESCE(max(try_order), 0) + 1 FROM credentials))",
+             (id, name, kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(id)
         .bind(name)
