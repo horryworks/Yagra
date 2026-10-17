@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-16
-# counts: MA-L=40227 MA-L-repeats-dropped=3 MA-M=6559 MA-S=7203 withheld=3
+# fetched: 2026-10-17
+# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6563 MA-S=7203 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13190,7 +13190,7 @@
 00E0E9	DATA LABS, INC.
 00E0EA	INNOVAT COMMUNICATIONS, INC.
 00E0EB	DIGICOM SYSTEMS, INCORPORATED
-00E0EC	CELESTICA INC.
+00E0EC	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 00E0ED	SILICOM, LTD.
 00E0EE	MAREL HF
 00E0EF	DIONEX
@@ -14653,7 +14653,7 @@
 0C47A9E	BGResearch
 0C47C9	Amazon Technologies Inc.
 0C4885	LG Electronics (Mobile Communications)
-0C48C6	CELESTICA INC.
+0C48C6	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 0C4933	Sichuan Jiuzhou Electronic Technology Co., Ltd.
 0C4B48	Nokia
 0C4B54	TP-LINK TECHNOLOGIES CO.,LTD.
@@ -17155,6 +17155,7 @@
 1CCAE3D	eSight Corporation
 1CCAE3E	Dabi Atlante S/A Industrias Medico Odontológicas
 1CCB99	TCT mobile ltd
+1CCCCD	TECNO MOBILE LIMITED
 1CCCD6	Xiaomi Communications Co Ltd
 1CCDE5	Shanghai Wind Technologies Co.,Ltd
 1CCE51	AzureWave Technology Inc.
@@ -17415,6 +17416,7 @@
 20500D	Espressif Inc.
 20500F	Fiber Groep B.V.
 2050E7	AMPAK Technology,Inc.
+2051A5	NetApp, Inc.
 2051F5	Earda Technologies co Ltd
 20521D	Apple, Inc.
 205383	HUAWEI TECHNOLOGIES CO.,LTD
@@ -18022,6 +18024,7 @@
 248AB3	ICTK Co., Ltd.
 248BE0	Sichuan Tianyi Comheart Telecom Co.,LTD
 249038	Universal Biosensors Pty Ltd
+249123	SZ DJI Ronin Technology Co., Ltd.
 2491BB	HUAWEI TECHNOLOGIES CO.,LTD
 24920E	Samsung Electronics Co.,Ltd
 2493CA	Voxtronic Austria
@@ -20236,7 +20239,7 @@
 34AB95	Espressif Inc.
 34AC11	China Mobile Group Device Co.,Ltd.
 34AC2F	zte corporation
-34AD61	CELESTICA INC.
+34AD61	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 34ADE4	Shanghai Chint Power Systems Co., Ltd.
 34AF2C	Nintendo Co., Ltd.
 34AFA3	Recogni Inc
@@ -21758,6 +21761,7 @@
 40516C	Grandex International Corporation
 40520D	Pico Technology
 40538C	LG Electronics
+4053B3	SUNITEC TECHNOLOGY CO.,LIMITED
 405493	zte corporation
 4054E4	Wearsafe Labs Inc
 405539	Cisco Systems, Inc
@@ -22653,6 +22657,7 @@
 481249	Luxcom Technologies Inc.
 481258	HUAWEI TECHNOLOGIES CO.,LTD
 48128F	HUAWEI TECHNOLOGIES CO.,LTD
+481318	zte corporation
 48137E	Samsung Electronics Co.,Ltd
 481389	Mellanox Technologies, Inc.
 4813F3	BBK EDUCATIONAL ELECTRONICS CORP.,LTD.
@@ -25634,8 +25639,11 @@
 5CA86A	HUAWEI TECHNOLOGIES CO.,LTD
 5CA931	Ubee Interactive Co., Limited
 5CA933	Luma Home
-5CAAA2	CELESTICA INC.
+5CAAA2	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 5CAAFD	Sonos, Inc.
+5CAB22	IEEE Registration Authority
+5CAB223	Xiamen Joint Tech. CO.,Ltd.
+5CAB226	Shanghai Jiweijiu Intelligent Technology Co., Ltd.
 5CAC3D	Samsung Electronics Co.,Ltd
 5CAC4C	Hon Hai Precision Ind. Co.,Ltd.
 5CAD76	Shenzhen TCL New Technology Co., Ltd
@@ -26797,7 +26805,7 @@
 64F2FB	Hangzhou Ezviz Software Co.,Ltd.
 64F50E	Kinion Technology Company Limited
 64F54E	EM Microelectronic
-64F64D	CELESTICA INC.
+64F64D	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 64F69D	Cisco Systems, Inc
 64F6BB	Fibocom Wireless Inc.
 64F6F7	Anhui Dynamic Power Co., Ltd.
@@ -33929,6 +33937,7 @@
 7C852F	Huawei Device Co., Ltd.
 7C8530	Nokia
 7C8657	GTWAVE
+7C86F3	zte corporation
 7C8767	Cisco Systems, Inc
 7C87CE	Espressif Inc.
 7C8899	FN-LINK TECHNOLOGY Ltd.
@@ -35423,7 +35432,7 @@
 8857EE	BUFFALO.INC
 8858BE	kuosheng.com
 885A06	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD
-885A23	CELESTICA INC.
+885A23	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 885A85	WNC Corporation
 885A92	Cisco Systems, Inc
 885BDD	Extreme Networks, Inc.
@@ -40065,7 +40074,7 @@
 946372	vivo Mobile Communication Co., Ltd.
 9463D1	Samsung Electronics Co.,Ltd
 946424	Hewlett Packard Enterprise
-946442	CELESTICA INC.
+946442	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 94652D	OnePlus Technology (Shenzhen) Co., Ltd
 94659C	Intel Corporate
 9466E7	WOM Engineering
@@ -40731,6 +40740,7 @@
 989449	Skyworth Wireless Technology Ltd.
 9897CC	TP-LINK TECHNOLOGIES CO.,LTD.
 9897D1	MitraStar Technology Corp.
+989891	zte corporation
 9898FB	Google, Inc.
 989AB9	zte corporation
 989BCB	AVM Audiovisuelles Marketing und Computersysteme GmbH
@@ -44444,7 +44454,7 @@ B4D64E	Caldero Limited
 B4D7DB	New H3C Technologies Co., Ltd
 B4D8A9	BetterBots
 B4D8DE	iota Computing, Inc.
-B4DB91	CELESTICA INC.
+B4DB91	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 B4DC09	Guangzhou Dawei Communication Co.,Ltd
 B4DD15	ControlThings Oy Ab
 B4DDD0	AUMOVIO Hungary Kft.
@@ -47727,12 +47737,14 @@ CCF7223	InfiMaker(Shenzhen)Limited
 CCF7224	Menuit inc.
 CCF7225	Foritec GmbH
 CCF7226	RIVERSIDE SOLUTIONS PRIVATE LIMITED
+CCF7227	Electronic Security Wholesalers Pty Ltd
 CCF7228	75F Engineering Services India Private Ltd
 CCF7229	deutherm cooling GmbH
 CCF722A	WIWORLD CO.,LTD
 CCF722B	SEP
 CCF722C	Walnut Medical Private Limited
 CCF722D	KONEC SOLUTIONS PTY LTD
+CCF722E	ASML US, LP
 CCF735	Amazon Technologies Inc.
 CCF826	Samsung Electronics Co.,Ltd
 CCF841	Lumewave
@@ -49035,7 +49047,7 @@ D847BB	Huawei Device Co., Ltd.
 D848EE	Hangzhou Xueji Technology Co., Ltd.
 D8490B	HUAWEI TECHNOLOGIES CO.,LTD
 D8492F	CANON INC.
-D849BF	CELESTICA INC.
+D849BF	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 D84A2B	zte corporation
 D84A83	vivo Mobile Communication Co., Ltd.
 D84A87	OI ELECTRIC CO.,LTD
@@ -49760,7 +49772,7 @@ DCD916	HUAWEI TECHNOLOGIES CO.,LTD
 DCD9A8	Guang zhou Xradio Technology Co., Ltd
 DCD9AE	Nokia Shanghai Bell Co., Ltd.
 DCDA0C	Espressif Inc.
-DCDA4D	CELESTICA INC.
+DCDA4D	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 DCDA4F	GETCK TECHNOLOGY, INC
 DCDA80	New H3C Technologies Co., Ltd
 DCDB27	Huawei Device Co., Ltd.
@@ -51432,6 +51444,7 @@ EC4C8C	Intel Corporate
 EC4D3E	Beijing Xiaomi Mobile Software Co., Ltd
 EC4D47	HUAWEI TECHNOLOGIES CO.,LTD
 EC4F82	Calix Inc.
+EC502A	Funshion Online Technologies Co.,Ltd
 EC50A6	Sagemcom Broadband SAS
 EC50AA	Hewlett Packard Enterprise
 EC51BC	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD

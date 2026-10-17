@@ -114,12 +114,11 @@ export const CREDENTIAL_GROUP_KINDS: Record<Exclude<CredentialGroup, 'other'>, r
   integration: INTEGRATION_CREDENTIAL_KINDS,
 };
 
-/** Which tab a stored credential is listed under. */
+/** Which tab a stored credential is listed under: looked up in `CREDENTIAL_GROUP_KINDS`, so the
+ *  table above is the one answer, and `other` for a kind it does not hold. */
 export function credentialGroupOf(kind: string): CredentialGroup {
-  if (isSnmpCredentialKind(kind)) return 'snmp';
-  if (isHttpCredentialKind(kind)) return 'http';
-  if ((INTEGRATION_CREDENTIAL_KINDS as readonly string[]).includes(kind)) return 'integration';
-  return 'other';
+  const groups = Object.keys(CREDENTIAL_GROUP_KINDS) as Exclude<CredentialGroup, 'other'>[];
+  return groups.find((g) => CREDENTIAL_GROUP_KINDS[g].includes(kind)) ?? 'other';
 }
 
 /** The kinds the "+ Add" dialog offers on a tab: the creatable kinds of that group, in

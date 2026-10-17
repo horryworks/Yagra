@@ -19,6 +19,7 @@ import {
   CREDENTIAL_TABLE_PREFIX,
   DEFAULT_CREDENTIAL_SORT,
   canReorderCredentials,
+  credentialSortIn,
   credentialGroupCounts,
   visibleCredentialGroups,
   credentialFilters,
@@ -277,5 +278,25 @@ describe('when a credential can be moved (ADR-205 Inc.2)', () => {
     expect(canReorderCredentials('snmp', { by: 'name', dir: 'asc' }, false)).toBe(false);
     expect(canReorderCredentials('snmp', { by: 'order', dir: 'desc' }, false)).toBe(false);
     expect(canReorderCredentials('snmp', order, true)).toBe(false);
+  });
+});
+
+describe('the sort a tab applies (ADR-205 Inc.2)', () => {
+  const order = { by: 'order', dir: 'asc' } as const;
+
+  // Only the SNMP tab draws the `#` column. Sorted on it elsewhere, the rows come in an order that
+  // means nothing for those kinds and no header carries the arrow.
+  it('reads the try order as name ascending on a tab without the # column', () => {
+    expect(credentialSortIn('snmp', order)).toEqual(order);
+    for (const g of ['http', 'integration', 'other'] as const) {
+      expect(credentialSortIn(g, order)).toEqual({ by: 'name', dir: 'asc' });
+      expect(credentialSortIn(g, { by: 'order', dir: 'desc' })).toEqual({ by: 'name', dir: 'asc' });
+    }
+  });
+
+  it('leaves any other sort alone', () => {
+    const byUse = { by: 'used_by', dir: 'desc' } as const;
+    expect(credentialSortIn('http', byUse)).toEqual(byUse);
+    expect(credentialSortIn('snmp', byUse)).toEqual(byUse);
   });
 });

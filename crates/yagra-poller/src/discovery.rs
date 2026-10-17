@@ -295,20 +295,39 @@ impl HitTally {
 
 /// Which candidate a target should try next, or `None` when it has tried them all (ADR-204).
 ///
-/// Of the untried candidates: stored credentials before typed-in communities, then the one that
-/// has matched the most targets, then the operator's order. The first rule is what
-/// `candidates_of` already promised — import binds a stored credential by reference, so a typed-in
-/// community that happens to match more often must never overtake one.
+/// Of the untried candidates: stored credentials before typed-in communities, then the SNMP
+/// version the operator listed first, then the one that has matched the most targets, then the
+/// operator's order. The first rule is what `candidates_of` already promised — import binds a
+/// stored credential by reference, so a typed-in community that happens to match more often must
+/// never overtake one.
+///
+/// 🚨 **The tally reorders within one version, never across** (ADR-204 Inc.2). Ranked across, an
+/// operator who put v3 first still had a v2c community sent in cleartext to every device after
+/// enough others answered v2c, and a device that speaks both was imported on v2c. Worse, a host on
+/// the swept subnet can answer ping and any community on unused addresses, so the hits it fakes
+/// would push v2c ahead of v3 for the real devices beside it; it cannot answer v3 without the keys.
 ///
 /// Pure, and asked again before every attempt rather than once per target, so a target part way
 /// through its list follows a match that another target found meanwhile.
 fn next_candidate(candidates: &[SnmpCandidate], hits: &[u32], tried: &[bool]) -> Option<usize> {
+    // Where each version first appears in the operator's order: that position ranks the version.
+    let first_of = |v3: bool| {
+        candidates
+            .iter()
+            .position(|c| matches!(c, SnmpCandidate::V3 { .. }) == v3)
+            .unwrap_or(usize::MAX)
+    };
+    let (first_v3, first_v2c) = (first_of(true), first_of(false));
     (0..candidates.len())
         .filter(|&i| !tried.get(i).copied().unwrap_or(false))
         .min_by_key(|&i| {
             let typed_in = candidates[i].cred_ref().is_none();
+            let version = match candidates[i] {
+                SnmpCandidate::V3 { .. } => first_v3,
+                SnmpCandidate::V2c { .. } => first_v2c,
+            };
             let matched = hits.get(i).copied().unwrap_or(0);
-            (typed_in, std::cmp::Reverse(matched), i)
+            (typed_in, version, std::cmp::Reverse(matched), i)
         })
 }
 
@@ -2132,6 +2151,36 @@ mod tests {
         assert_eq!(walk_order(&c, &[0, 0, 0, 0, 9]), vec![0, 1, 2, 4, 3]);
     }
 
+    /// Stored v3, v2c, v3, v2c, then one typed-in community.
+    fn mixed_versions(v3_first: bool) -> Vec<SnmpCandidate> {
+        let v3 = |n: u128| v3_cred(Uuid::from_u128(n), "u");
+        let v2c = |n: u128| v2c_cred(Uuid::from_u128(n), "c");
+        let creds = if v3_first {
+            vec![v3(1), v2c(2), v3(3), v2c(4)]
+        } else {
+            vec![v2c(1), v3(2), v2c(3), v3(4)]
+        };
+        candidates_of(&job(creds, vec!["t".to_owned()]))
+    }
+
+    // ADR-204 Inc.2: hits the v2c side has piled up must not send a community in cleartext ahead
+    // of the v3 credential the operator put first - and a host faking v2c answers on unused
+    // addresses must not be able to arrange that for the real devices beside it.
+    #[test]
+    fn v2c_matches_never_overtake_a_v3_credential_listed_first() {
+        let c = mixed_versions(true); // v3(0), v2c(1), v3(2), v2c(3), typed-in(4)
+        assert_eq!(walk_order(&c, &[0, 9, 0, 20, 0]), vec![0, 2, 3, 1, 4]);
+        // Within v3 the tally still reorders.
+        assert_eq!(walk_order(&c, &[0, 9, 5, 0, 0]), vec![2, 0, 1, 3, 4]);
+    }
+
+    #[test]
+    fn with_v2c_listed_first_v2c_stays_ahead() {
+        let c = mixed_versions(false); // v2c(0), v3(1), v2c(2), v3(3), typed-in(4)
+        assert_eq!(walk_order(&c, &[0, 9, 0, 9, 0]), vec![0, 2, 1, 3, 4]);
+        assert_eq!(walk_order(&c, &[0, 0, 4, 0, 0]), vec![2, 0, 1, 3, 4]);
+    }
+
     #[test]
     fn a_target_that_has_tried_everything_gets_nothing_more() {
         let c = five_candidates();
@@ -2424,7 +2473,8 @@ mod tests {
         assert_eq!(
             order.last(),
             Some(&slow),
-            "the slow target finishes last -- so the eight targets beyond the first              {PROGRESS_CHUNK} finished while it was still out, which the old chunks did not allow"
+            "the slow target finishes last -- so the eight targets beyond the first \
+             {PROGRESS_CHUNK} finished while it was still out, which the old chunks did not allow"
         );
     }
 }

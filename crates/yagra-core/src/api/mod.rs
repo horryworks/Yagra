@@ -773,6 +773,14 @@ fn changes_monitoring_config(path: &str) -> bool {
         // Missing IP prefixes' "intentional" marks (ADR-170 Inc.4), for the same reason: only that
         // screen's own comparison reads them. Invisible to the mechanical check: ManageConfig.
         || path.starts_with("/api/v1/prefix-gaps/")
+        // The order stored credentials are listed in (ADR-205 Inc.2). It writes
+        // `credentials.try_order`, which only `CredentialStore::list` reads; no poll spec, alert
+        // rule or topology does, and Discovery takes its order from the request body, not the
+        // table. Counted, each press of an arrow on Credentials & secrets re-resolved the whole
+        // fleet - nine presses to move one credential from tenth to first. Invisible to the
+        // mechanical check: the handler demands ManageCredentials. The credential writes beside it
+        // (create, edit, delete) are NOT exempt: a secret the scheduler binds does change.
+        || path == "/api/v1/credentials/order"
         // Relocation (ADR-121). All three are real writes, and none of them changes what this
         // deployment monitors: the request builds an archive of the current configuration, the
         // download reads that file back, and the delete removes it. Nothing a rebuild reads moves
@@ -1886,6 +1894,21 @@ mod tests {
             !changes_monitoring_config("/api/v1/prefix-gaps/acks"),
             "a missing-prefix mark is read only by its own screen"
         );
+        // ADR-205 Inc.2: the try order is read by the credential list alone. The writes that
+        // change a secret the scheduler binds stay dirty, and so does a credential's own id path.
+        assert!(
+            !changes_monitoring_config("/api/v1/credentials/order"),
+            "the credential order is read by no rebuild"
+        );
+        for dirty in [
+            "/api/v1/credentials",
+            "/api/v1/credentials/00000000-0000-4000-8000-000000000001",
+        ] {
+            assert!(
+                changes_monitoring_config(dirty),
+                "{dirty} changes a credential"
+            );
+        }
     }
 
     #[test]

@@ -59,6 +59,7 @@ import {
 import {
   canReorderCredentials,
   credentialFilters,
+  credentialSortIn,
   credentialSortValues,
   CREDENTIAL_SORT_KEYS,
   DEFAULT_CREDENTIAL_SORT,
@@ -659,6 +660,7 @@ function CredentialGroupTable({
   const canCredentials = useCan('manage_credentials');
   // In the URL (ADR-153), so a reload keeps the order. One sort for the route: the tabs share it.
   const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
+  const applied = credentialSortIn(group, sort);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
@@ -846,8 +848,8 @@ function CredentialGroupTable({
   // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
   // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
   const shown = useMemo(
-    () => sortRows(matched, sort, credentialSortValues((id) => place.get(id) ?? 0)),
-    [matched, sort, place],
+    () => sortRows(matched, applied, credentialSortValues((id) => place.get(id) ?? 0)),
+    [matched, applied, place],
   );
 
   const empty = anyFiltered ? (
@@ -864,7 +866,7 @@ function CredentialGroupTable({
     rows: shown,
     columns,
     rowKey: (c: CredentialSummary) => c.id,
-    sort,
+    sort: applied,
     onSortChange: setSort,
     filters,
     onFiltersChange: setFilters,
@@ -892,7 +894,7 @@ function CredentialGroupTable({
       </ListToolbar>
 
       {moveError && (
-        <p className="field-error" role="alert">
+        <p className="form-error" role="alert">
           {moveError}
         </p>
       )}

@@ -67,6 +67,14 @@ export function credentialSortValues<T extends CredentialRow>(
   };
 }
 
+/** The sort a tab actually applies. The tabs share one `?sort=`, and only the SNMP tab draws the
+ *  `#` column: on the others the try order means nothing, and a sort on a column that is not drawn
+ *  shows no arrow anywhere. So there the default, and any `order` sort, reads as name ascending —
+ *  the order those tabs opened in before the try order existed. */
+export function credentialSortIn(group: CredentialGroup, sort: SortState): SortState {
+  return group !== 'snmp' && sort.by === 'order' ? { by: 'name', dir: 'asc' } : sort;
+}
+
 /** Whether a tab's rows can be moved with up and down (ADR-205 Inc.2): only the SNMP tab, whose
  *  order is the one Discovery tries, and only while the table shows that order whole — sorted on
  *  it ascending and narrowed by nothing. "Up" in a list sorted by name, or with rows hidden between
