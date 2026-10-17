@@ -97,7 +97,9 @@ test('replacing a Meraki key keeps its kind and sends the document the server pa
   page,
   errors,
 }) => {
-  await page.goto('/nodes/credentials');
+  // An integration's key is listed under its own tab (ADR-205 Inc.1), and only there.
+  await page.goto('/nodes/credentials?tab=integration');
+  await expect(page.locator('.dt-row', { hasText: 'ymock-community' })).toHaveCount(0);
   const row = page.locator('.dt-row', { hasText: MERAKI_KEY_NAME });
   await row.hover();
   await row.getByRole('button', { name: 'Edit' }).click();

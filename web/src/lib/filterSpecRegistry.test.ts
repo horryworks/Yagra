@@ -41,7 +41,8 @@ import { activeAlertFilters } from '../pages/activeAlertFilters';
 import { tokenFilters } from '../pages/apiTokenFilters';
 import { auditFilters } from '../pages/auditQuery';
 import { classificationRuleFilters } from '../pages/classificationFilters';
-import { credentialFilters } from '../pages/credentialList';
+import { CREDENTIAL_TABLE_PREFIX, credentialFilters } from '../pages/credentialList';
+import { CREDENTIAL_GROUPS } from './credentialKinds';
 import { dependencyFilters } from '../pages/dependencyFilters';
 import { candidateFilters, endpointFilters } from '../pages/discoveryFilters';
 import { eventRuleFilters, eventSourceFilters } from '../pages/eventConfigFilters';
@@ -397,7 +398,17 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['inventoryFilterSpecs'], prefix: '' }, ...NODE_TABS],
   },
   { path: '/nodes/:nodeId', own: ['tab'], tables: NODE_TABS },
-  { path: '/nodes/credentials', own: ['sort', 'dir'], tables: [{ entries: ['credentialFilters'], prefix: '' }] },
+  {
+    // One table per tab (ADR-205 Inc.1). The page draws only the active one, through one component
+    // that takes its prefix by the tab — hence one spelling for all four.
+    path: '/nodes/credentials',
+    own: ['sort', 'dir', 'tab'],
+    tables: CREDENTIAL_GROUPS.map((g) => ({
+      entries: ['credentialFilters'],
+      prefix: CREDENTIAL_TABLE_PREFIX[g],
+      wiredIn: { file: 'pages/CredentialsPage.tsx', spelling: 'CREDENTIAL_TABLE_PREFIX[group]' },
+    })),
+  },
   {
     path: '/nodes/classification-rules',
     own: [],

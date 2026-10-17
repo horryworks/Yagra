@@ -96,3 +96,35 @@ export function isSnmpCredentialKind(kind: string): boolean {
 export function isHttpCredentialKind(kind: string): boolean {
   return (HTTP_CREDENTIAL_KINDS as readonly string[]).includes(kind);
 }
+
+/** The tabs of Nodes ▸ Credentials & secrets (ADR-205 Inc.1), in the order they are drawn. The
+ *  first is what a bare URL opens. `other` holds a kind this build does not know — a newer core can
+ *  store one — and is drawn only while such a row exists, so no row is ever silently left out. */
+export const CREDENTIAL_GROUPS = ['snmp', 'http', 'integration', 'other'] as const;
+
+export type CredentialGroup = (typeof CREDENTIAL_GROUPS)[number];
+
+/** The kinds each group holds, built from the allow-lists above rather than listed again.
+ *
+ *  ⚠️ `api_token` is in `http`, not `integration`: despite its name it is the bearer token a URL
+ *  monitor sends (`secrets.rs::KIND_API_TOKEN`), so it sits with `http_auth`. */
+export const CREDENTIAL_GROUP_KINDS: Record<Exclude<CredentialGroup, 'other'>, readonly string[]> = {
+  snmp: SNMP_CREDENTIAL_KINDS,
+  http: HTTP_CREDENTIAL_KINDS,
+  integration: INTEGRATION_CREDENTIAL_KINDS,
+};
+
+/** Which tab a stored credential is listed under. */
+export function credentialGroupOf(kind: string): CredentialGroup {
+  if (isSnmpCredentialKind(kind)) return 'snmp';
+  if (isHttpCredentialKind(kind)) return 'http';
+  if ((INTEGRATION_CREDENTIAL_KINDS as readonly string[]).includes(kind)) return 'integration';
+  return 'other';
+}
+
+/** The kinds the "+ Add" dialog offers on a tab: the creatable kinds of that group, in
+ *  `CREDENTIAL_KINDS` order. Empty for `integration` (those keys are created on the integration
+ *  pages) and for `other`. */
+export function creatableKindsIn(group: CredentialGroup): CredentialKind[] {
+  return CREDENTIAL_KINDS.filter((k) => credentialGroupOf(k) === group);
+}

@@ -8,6 +8,12 @@
     "filter": {
       "allTypes": "All types"
     },
+    "tab": {
+      "snmp": "SNMP",
+      "http": "HTTP",
+      "integration": "Integration keys",
+      "other": "Other"
+    },
     "kind": {
       "snmp_v2c": "SNMP v2c (community)",
       "snmp_v3": "SNMP v3 (user/password)",
@@ -49,7 +55,8 @@
     },
     "empty": {
       "none": "No credentials yet",
-      "filtered": "No credentials match"
+      "filtered": "No credentials match",
+      "keys": "No integration keys yet"
     },
     "field": {
       "name": "Name",
@@ -66,7 +73,8 @@
       "privacyPassphrase": "Privacy passphrase"
     },
     "add": {
-      "title": "Add credential",
+      "snmpTitle": "Add SNMP credential",
+      "httpTitle": "Add HTTP credential",
       "namePlaceholder": "e.g. core-rtr-usm",
       "secretPlaceholder": {
         "apiToken": "Bearer token",

@@ -263,6 +263,17 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     body.collection_fault = null;
     return body as unknown as Json;
   })(),
+  // A credential's `kind` is a plain string in the document, so the generator fills it with a mock
+  // string no build knows — and Credentials & secrets files an unknown kind under its Other tab
+  // (ADR-205 Inc.1), leaving the default SNMP tab empty. Give the rows real kinds, one per tab.
+  '/api/v1/credentials': (() => {
+    const body = defaultBodyFor('/api/v1/credentials') as { kind: string }[];
+    const kinds = ['snmp_v2c', 'http_auth', 'meraki_api'];
+    body.forEach((c, i) => {
+      c.kind = kinds[i % kinds.length];
+    });
+    return body as unknown as Json;
+  })(),
   '/api/v1/meraki/orgs': (() => {
     const body = defaultBodyFor('/api/v1/meraki/orgs') as { collect_failures: unknown[] }[];
     for (const org of body) org.collect_failures = [];

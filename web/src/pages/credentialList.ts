@@ -29,6 +29,7 @@ import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
 import type { SortState, SortValues } from '../lib/tableSort';
 import type { CredentialSummary } from '../types/api';
+import { CREDENTIAL_GROUPS, credentialGroupOf, type CredentialGroup } from '../lib/credentialKinds';
 
 /** The three counts of what uses a credential. `used_by` is **nodes only** — the name predates the
  *  other two (ADR-164 Inc.6), and for a Meraki key it is always zero. */
@@ -181,3 +182,41 @@ export function usageLabel(c: CredentialUsage, t: TFunction): string {
   ];
   return parts.length === 0 ? t('cred.usage.unused') : parts.join(USAGE_SEPARATOR);
 }
+
+/** How many rows each tab holds (ADR-205 Inc.1). */
+export function credentialGroupCounts(rows: readonly { kind: string }[]): Record<CredentialGroup, number> {
+  const counts: Record<CredentialGroup, number> = { snmp: 0, http: 0, integration: 0, other: 0 };
+  for (const r of rows) counts[credentialGroupOf(r.kind)] += 1;
+  return counts;
+}
+
+/** The tabs to draw: the three fixed ones always, `other` only while a row needs it — a row of a
+ *  kind this build does not know must stay reachable, and an empty fourth tab would only puzzle. */
+export function visibleCredentialGroups(
+  counts: Record<CredentialGroup, number>,
+): CredentialGroup[] {
+  return CREDENTIAL_GROUPS.filter((g) => g !== 'other' || counts.other > 0);
+}
+
+/** Each tab's URL-key prefix (ADR-153 decision 3), keyed by the tab so a new tab cannot be added
+ *  without one. The route ledger in `filterSpecRegistry.test.ts` checks they are disjoint. */
+export const CREDENTIAL_TABLE_PREFIX: Record<CredentialGroup, string> = {
+  snmp: 'snmp.',
+  http: 'http.',
+  integration: 'keys.',
+  other: 'other.',
+};
+
+/** Each tab's label key. Literal keys in one table so the i18n checks can find every one. */
+export const CREDENTIAL_GROUP_LABEL_KEYS: Record<CredentialGroup, string> = {
+  snmp: 'cred.tab.snmp',
+  http: 'cred.tab.http',
+  integration: 'cred.tab.integration',
+  other: 'cred.tab.other',
+};
+
+/** The "+ Add" button and dialog title per tab that offers one (`creatableKindsIn` is non-empty). */
+export const CREDENTIAL_ADD_TITLE_KEYS: Partial<Record<CredentialGroup, string>> = {
+  snmp: 'cred.add.snmpTitle',
+  http: 'cred.add.httpTitle',
+};

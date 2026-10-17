@@ -3,10 +3,14 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  CREDENTIAL_GROUP_KINDS,
+  CREDENTIAL_GROUPS,
   CREDENTIAL_KINDS,
   HTTP_CREDENTIAL_KINDS,
   INTEGRATION_CREDENTIAL_KINDS,
   SNMP_CREDENTIAL_KINDS,
+  creatableKindsIn,
+  credentialGroupOf,
   integrationSecret,
   isHttpCredentialKind,
   isSnmpCredentialKind,
@@ -88,5 +92,41 @@ describe('replacing a stored secret', () => {
     expect(JSON.parse(integrationSecret('meraki_api', '  abc123\n'))).toEqual({ api_key: 'abc123' });
     // A key is quoted, never spliced: one holding a quote is still one JSON string.
     expect(JSON.parse(integrationSecret('meraki_api', 'a"b\\c'))).toEqual({ api_key: 'a"b\\c' });
+  });
+});
+
+describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
+  it('puts every known kind under the tab that uses it', () => {
+    expect(credentialGroupOf('snmp_v2c')).toBe('snmp');
+    expect(credentialGroupOf('snmp_v3')).toBe('snmp');
+    expect(credentialGroupOf('http_auth')).toBe('http');
+    // Not an integration key despite its name: it is the bearer token a URL monitor sends.
+    expect(credentialGroupOf('api_token')).toBe('http');
+    expect(credentialGroupOf('meraki_api')).toBe('integration');
+    expect(credentialGroupOf('netbox_token')).toBe('integration');
+  });
+
+  it('sends a kind this build does not know to the Other tab, never nowhere', () => {
+    for (const kind of ['snmp_v4', '', 'SNMP_V2C', 'oauth_client']) {
+      expect(credentialGroupOf(kind)).toBe('other');
+    }
+  });
+
+  it('lists each kind in exactly one group', () => {
+    const all = Object.values(CREDENTIAL_GROUP_KINDS).flat();
+    expect(new Set(all).size).toBe(all.length);
+    for (const [group, kinds] of Object.entries(CREDENTIAL_GROUP_KINDS)) {
+      for (const k of kinds) expect(credentialGroupOf(k)).toBe(group);
+    }
+  });
+
+  it('offers every creatable kind from some tab, and only on its own tab', () => {
+    // A creatable kind no tab offered would be a kind nobody could create any more.
+    const offered = CREDENTIAL_GROUPS.flatMap((g) => creatableKindsIn(g));
+    expect([...offered].sort()).toEqual([...CREDENTIAL_KINDS].sort());
+    expect(creatableKindsIn('snmp')).toEqual(['snmp_v2c', 'snmp_v3']);
+    expect(creatableKindsIn('http')).toEqual(['http_auth', 'api_token']);
+    expect(creatableKindsIn('integration')).toEqual([]);
+    expect(creatableKindsIn('other')).toEqual([]);
   });
 });

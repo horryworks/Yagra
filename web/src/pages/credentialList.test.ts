@@ -13,8 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import type { CredentialSummary } from '../types/api';
 import {
+  CREDENTIAL_ADD_TITLE_KEYS,
+  CREDENTIAL_GROUP_LABEL_KEYS,
   CREDENTIAL_KIND_LABEL_KEYS,
+  CREDENTIAL_TABLE_PREFIX,
   DEFAULT_CREDENTIAL_SORT,
+  credentialGroupCounts,
+  visibleCredentialGroups,
   credentialFilters,
   credentialSortValues,
   integrationUsageLabel,
@@ -214,5 +219,42 @@ describe('the credential-kind maps are two halves of one thing', () => {
     const iconKinds = [...body.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort();
     expect(iconKinds.length).toBeGreaterThan(3);
     expect(iconKinds).toEqual(Object.keys(CREDENTIAL_KIND_LABEL_KEYS).sort());
+  });
+});
+
+describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
+  const row = (kind: string) => ({ kind });
+
+  it('counts each tab, and an unknown kind under Other', () => {
+    const counts = credentialGroupCounts([
+      row('snmp_v2c'),
+      row('snmp_v3'),
+      row('snmp_v2c'),
+      row('api_token'),
+      row('meraki_api'),
+      row('snmp_v4'),
+    ]);
+    expect(counts).toEqual({ snmp: 3, http: 1, integration: 1, other: 1 });
+  });
+
+  it('draws the Other tab only while a row needs it', () => {
+    expect(visibleCredentialGroups({ snmp: 2, http: 0, integration: 0, other: 0 })).toEqual([
+      'snmp',
+      'http',
+      'integration',
+    ]);
+    expect(visibleCredentialGroups({ snmp: 0, http: 0, integration: 0, other: 1 })).toEqual([
+      'snmp',
+      'http',
+      'integration',
+      'other',
+    ]);
+  });
+
+  it('gives every tab a label and a filter prefix of its own, and an Add title where it can add', () => {
+    const prefixes = Object.values(CREDENTIAL_TABLE_PREFIX);
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+    expect(Object.keys(CREDENTIAL_GROUP_LABEL_KEYS).sort()).toEqual(Object.keys(CREDENTIAL_TABLE_PREFIX).sort());
+    expect(Object.keys(CREDENTIAL_ADD_TITLE_KEYS).sort()).toEqual(['http', 'snmp']);
   });
 });

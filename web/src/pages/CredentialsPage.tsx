@@ -31,7 +31,11 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { sortRows } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
+import { ClippedText } from '../components/ui/ClippedText';
 import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
+import { Tabs } from '../components/ui/Tabs';
+import { EmptyState } from '../components/ui/EmptyState';
+import { useEnumParam } from '../lib/useEnumParam';
 import type { ComponentType } from 'react';
 import {
   buildV3Secret,
@@ -58,20 +62,29 @@ import {
   DEFAULT_CREDENTIAL_SORT,
 } from './credentialList';
 import {
+  CREDENTIAL_GROUPS,
   CREDENTIAL_KINDS,
+  creatableKindsIn,
+  credentialGroupOf,
   integrationSecret,
   secretReplacementFor,
+  type CredentialGroup,
   type CredentialKind,
 } from '../lib/credentialKinds';
 import './CredentialsPage.css';
 import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import {
+  CREDENTIAL_ADD_TITLE_KEYS,
+  CREDENTIAL_GROUP_LABEL_KEYS,
+  CREDENTIAL_TABLE_PREFIX,
+  credentialGroupCounts,
   integrationUsageLabel,
   isHeldByIntegration,
   kindLabel,
   totalUsage,
   usageLabel,
+  visibleCredentialGroups,
 } from './credentialList';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -270,11 +283,23 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
   );
 }
 
-/** Create a credential (type-driven focused-editing modal). */
-function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+/** Create a credential (type-driven focused-editing modal). `kinds` is what the tab it was opened
+ *  from may create (ADR-205 Inc.1), and the first of them is selected; `title` names that group
+ *  ("Add SNMP credential"). */
+function AddCredentialModal({
+  kinds,
+  title,
+  onClose,
+  onSaved,
+}: {
+  kinds: readonly Kind[];
+  title: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { t } = useTranslation('access');
   const [name, setName] = useState('');
-  const [kind, setKind] = useState<Kind>('snmp_v2c');
+  const [kind, setKind] = useState<Kind>(kinds[0] ?? 'snmp_v2c');
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
   const [httpAuth, setHttpAuth] = useState<HttpAuthState>(emptyHttpAuth);
@@ -311,14 +336,14 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
   return (
     <Modal
-      title={t('cred.add.title')}
+      title={title}
       onClose={onClose}
       footer={
         <FormFooter
           form={form}
           onClose={onClose}
           onSubmit={submit}
-          submitLabel={t('cred.add.title')}
+          submitLabel={title}
           canSubmit={ready}
         />
       }
@@ -335,7 +360,7 @@ function AddCredentialModal({ onClose, onSaved }: { onClose: () => void; onSaved
       <div className="modal-field">
         <label className="modal-field-label">{t('cred.field.type')}</label>
         <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
-          {KINDS.map((k) => (
+          {kinds.map((k) => (
             <option key={k} value={k}>
               {kindLabel(k, t)}
             </option>
@@ -566,19 +591,72 @@ function DeleteCredentialModal({
 
 export function CredentialsPage() {
   const { t } = useTranslation('access');
+  // In the URL (ADR-153), so a reload or a shared link opens the same tab (ADR-205 Inc.1).
+  const [tab, setTab] = useEnumParam('tab', CREDENTIAL_GROUPS, 'snmp');
+  const creds = useLoad(() => api.listCredentials(), [], { initial: [] as CredentialSummary[] });
+  const { data: rows, reload: load } = creds;
+
+  const counts = useMemo(() => credentialGroupCounts(rows), [rows]);
+  const visible = visibleCredentialGroups(counts);
+  // `other` is drawn only while a row needs it; a link to it after the last such row went opens the
+  // default tab rather than a tab the bar does not show.
+  const active = visible.includes(tab) ? tab : 'snmp';
+  const groupRows = useMemo(() => rows.filter((c) => credentialGroupOf(c.kind) === active), [rows, active]);
+
+  return (
+    <div>
+      <PageHeader
+        title={t('nav:nodes.credentials')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.credentials') }]}
+      />
+
+      <LoadGate load={creds} permission="manage_credentials">
+        <Tabs
+          tabs={visible.map((g) => ({
+            key: g,
+            label: t(CREDENTIAL_GROUP_LABEL_KEYS[g]),
+            count: counts[g],
+          }))}
+          active={active}
+          onChange={setTab}
+        />
+        {/* Keyed by the tab so its filter state and dialogs start fresh on a switch. */}
+        <CredentialGroupTable
+          key={active}
+          group={active}
+          rows={groupRows}
+          loading={creds.loading}
+          onChanged={load}
+        />
+      </LoadGate>
+    </div>
+  );
+}
+
+/** One tab's list: its toolbar, its "+ Add", its table and the dialogs opened from its rows. */
+function CredentialGroupTable({
+  group,
+  rows,
+  loading,
+  onChanged,
+}: {
+  group: CredentialGroup;
+  rows: CredentialSummary[];
+  loading: boolean;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation('access');
   const canCredentials = useCan('manage_credentials');
-  // In the URL (ADR-153), so a reload keeps the order.
+  // In the URL (ADR-153), so a reload keeps the order. One sort for the route: the tabs share it.
   const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
-
-  const creds = useLoad(() => api.listCredentials(), [], { initial: [] as CredentialSummary[] });
-  const { data: rows, loading, reload: load } = creds;
+  const creatable = creatableKindsIn(group);
+  const addTitleKey = CREDENTIAL_ADD_TITLE_KEYS[group];
 
   const columns = useMemo<Column<CredentialSummary>[]>(() => {
-    // Every kind present in the table, so a `meraki_api` or `http_auth` row — neither of which the
-    // old three-option dropdown could select — is filterable.
+    // Every kind present in this tab, so a kind the old dropdown could not select is filterable.
     const kinds = [...new Set(rows.map((c) => c.kind))].sort();
     const specs = credentialFilters(t, kinds, (k) => kindLabel(k, t));
     const cols: Column<CredentialSummary>[] = [
@@ -602,13 +680,15 @@ export function CredentialsPage() {
       {
         key: 'type',
         header: t('cred.cols.type'),
-        width: '150px',
+        // Sized for the longest label ("SNMP v3 (user/password)"); 150px cut every one of them
+        // with no mark, which only showed once the browser walk was given real kinds.
+        width: '200px',
         render: (c) => {
           const Icon = KIND_ICONS[c.kind] ?? KeyIcon;
           return (
-            <span className="yt-chip">
+            <span className="yt-chip cred-kind-chip">
               <Icon />
-              {kindLabel(c.kind, t)}
+              <ClippedText text={kindLabel(c.kind, t)} />
             </span>
           );
         },
@@ -668,55 +748,69 @@ export function CredentialsPage() {
     return cols;
   }, [t, canCredentials, rows]);
 
-  // URL-backed: one table on this route.
-  const filtering = useClientFilters(columns, rows);
+  // URL-backed, one table per tab, each under its own key prefix (ADR-153 decision 3).
+  const filtering = useClientFilters(columns, rows, { prefix: CREDENTIAL_TABLE_PREFIX[group] });
   const { filters, setFilters, shown: matched, counts, anyFiltered } = filtering;
   // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
   // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
   const shown = useMemo(() => sortRows(matched, sort, credentialSortValues()), [matched, sort]);
 
+  const empty = anyFiltered ? (
+    t('cred.empty.filtered')
+  ) : group === 'integration' ? (
+    // These keys are created where the integration is set up, so the next step is a link there.
+    <EmptyState text={t('cred.empty.keys')} action={<ScreenLink to="/settings/integrations" />} />
+  ) : (
+    t('cred.empty.none')
+  );
+  // One prop set for the four tags below. Each tag spells its own `tableId`: an id is a name the
+  // `tableIds.test.ts` check reads off the tag, so it is never passed through a variable.
+  const table = {
+    rows: shown,
+    columns,
+    rowKey: (c: CredentialSummary) => c.id,
+    sort,
+    onSortChange: setSort,
+    filters,
+    onFiltersChange: setFilters,
+    filterCounts: counts,
+    loading,
+    empty,
+  };
+
   return (
-    <div>
-      <PageHeader
-        title={t('nav:nodes.credentials')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.credentials') }]}
-      />
+    <>
+      <ListToolbar
+        list={filtering}
+        labels={columnLabels(columns)}
+        count={{
+          shown: shown.length,
+          total: rows.length,
+          noun: (n) => t('common:noun.credential', { count: n }),
+        }}
+      >
+        {canCredentials && addTitleKey && creatable.length > 0 && (
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            + {t(addTitleKey)}
+          </Button>
+        )}
+      </ListToolbar>
 
-      <LoadGate load={creds} permission="manage_credentials">
-        <ListToolbar
-          list={filtering}
-          labels={columnLabels(columns)}
-          count={{
-            shown: shown.length,
-            total: rows.length,
-            noun: (n) => t('common:noun.credential', { count: n }),
-          }}
-        >
-          {canCredentials && (
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              + {t('cred.add.title')}
-            </Button>
-          )}
-        </ListToolbar>
+      {group === 'snmp' && <DataTable tableId="settings.credentials" {...table} />}
+      {group === 'http' && <DataTable tableId="settings.credentialsHttp" {...table} />}
+      {group === 'integration' && <DataTable tableId="settings.credentialsIntegration" {...table} />}
+      {group === 'other' && <DataTable tableId="settings.credentialsOther" {...table} />}
 
-        <DataTable
-          tableId="settings.credentials"
-          rows={shown}
-          columns={columns}
-          rowKey={(c) => c.id}
-          sort={sort}
-          onSortChange={setSort}
-          filters={filters}
-          onFiltersChange={setFilters}
-          filterCounts={counts}
-          loading={loading}
-          empty={anyFiltered ? t('cred.empty.filtered') : t('cred.empty.none')}
+      {adding && addTitleKey && (
+        <AddCredentialModal
+          kinds={creatable}
+          title={t(addTitleKey)}
+          onClose={() => setAdding(false)}
+          onSaved={onChanged}
         />
-      </LoadGate>
-
-      {adding && <AddCredentialModal onClose={() => setAdding(false)} onSaved={load} />}
+      )}
       {editing && (
-        <EditCredentialModal cred={editing} onClose={() => setEditing(null)} onSaved={load} />
+        <EditCredentialModal cred={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
       )}
       {deleting && (
         <DeleteCredentialModal
@@ -724,10 +818,10 @@ export function CredentialsPage() {
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);
-            load();
+            onChanged();
           }}
         />
       )}
-    </div>
+    </>
   );
 }

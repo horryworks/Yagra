@@ -8,6 +8,12 @@
     "filter": {
       "allTypes": "すべての種類"
     },
+    "tab": {
+      "snmp": "SNMP",
+      "http": "HTTP",
+      "integration": "連携の鍵",
+      "other": "その他"
+    },
     "kind": {
       "snmp_v2c": "SNMP v2c（コミュニティ）",
       "snmp_v3": "SNMP v3（ユーザー/パスワード）",
@@ -46,7 +52,8 @@
     },
     "empty": {
       "none": "認証情報はまだありません",
-      "filtered": "一致する認証情報がありません"
+      "filtered": "一致する認証情報がありません",
+      "keys": "連携の鍵はまだありません"
     },
     "field": {
       "name": "名前",
@@ -63,7 +70,8 @@
       "privacyPassphrase": "暗号化パスフレーズ"
     },
     "add": {
-      "title": "認証情報を追加",
+      "snmpTitle": "SNMP の認証情報を追加",
+      "httpTitle": "HTTP の認証情報を追加",
       "namePlaceholder": "例: core-rtr-usm",
       "secretPlaceholder": {
         "apiToken": "Bearer トークン",
