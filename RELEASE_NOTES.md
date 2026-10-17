@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Discovery finishes sooner when you select several credentials.** Once one device on a sweep answers a credential, the devices after it try that credential first instead of starting from the top of the list, and a device already part way through its list switches to it. Stored credentials still come before typed-in communities, and each device is still asked one credential at a time. One slow device no longer holds up the rest of the sweep, and 64 devices are probed at once instead of 16. ⚠️ On a device that answers two of the selected credentials, the one filled in for import is now the one that has matched most often on that sweep, not necessarily the first in the list.
+
 ## v0.3.51 — Sorting, moving or saving no longer scrolls the node tree, the node detail pane, the Interfaces list or a port's rule dialog away from where you were
 
 ### Bug Fixes

@@ -4,8 +4,9 @@
 //! Consumes [`DiscoveryJob`]s off the bus and probes each target for ICMP liveness + SNMP
 //! identity (`sysDescr.0` / `sysName.0`), trying the job's candidate credentials (stored
 //! v2c/v3, resolved by core) and ad-hoc communities. Runs on the poller because ICMP needs
-//! the raw socket. Progress is published as **cumulative** partial results after each chunk
-//! of targets, so core can show the sweep advancing; the final message carries `done: true`.
+//! the raw socket. Progress is published as **cumulative** partial results after every
+//! [`PROGRESS_CHUNK`] finished targets, so core can show the sweep advancing; the final message
+//! carries `done: true`.
 //!
 //! ## "We have it" comes before "we found something" (ADR-068 Increment 4)
 //!
@@ -27,13 +28,16 @@
 //! poller keeps the ids it has been told to stop in a [`CancelSet`] and checks it in three places:
 //!
 //! 1. when a job is taken off the bus — a sweep cancelled while it queued must not start;
-//! 2. at each chunk boundary — the coarse-grained stop;
+//! 2. before each target is started — the coarse-grained stop;
 //! 3. before each credential attempt on a target — the fine-grained one.
 //!
+//! The second used to be "at each chunk boundary". Since ADR-204 there are no chunk boundaries to
+//! wait at — targets run as one stream — so the check moved to the start of each target, which is
+//! where a stop between chunks used to take effect anyway.
+//!
 //! **The third is not belt-and-braces.** A target costs one ICMP timeout plus one attempt per
-//! credential — **every** credential the operator selected (ADR-161) — so with five credentials a
-//! single target can take ~22s and a 32-target chunk two waves of that. Stopping only at chunk
-//! boundaries would leave
+//! credential it has to try — up to **every** credential the operator selected (ADR-161) — so with
+//! five credentials a single target can take ~22s. Stopping only between targets would leave
 //! the operator watching an unresponsive button for the better part of a minute. What is *not*
 //! interrupted is a probe already in flight: dropping a raw socket or an SNMP session mid-exchange
 //! has consequences that are not worth discovering here, so the worst-case delay is one probe
@@ -44,12 +48,32 @@
 //! the honest count `probed == total` would claim the sweep finished the work it just abandoned.
 //!
 //! 🚨 **"Forever" is literal, and it shipped.** Core has no timeout on a sweep — a scan sits in
-//! `cancelling` until the process restarts — and the chunk-boundary stop (2) used to `break` out of
+//! `cancelling` until the process restarts — and the old chunk-boundary stop used to `break` out of
 //! the loop *before* the publish inside it, so a stop that landed between chunks ended the sweep in
 //! silence and left the operator watching "stopping…" indefinitely. Layers 1 and 3 each published
-//! from their own exit and were fine, which is exactly why nothing looked wrong. The publish is now
-//! **one statement after the loop**, guarded by whether a `done: true` has already gone out, so
+//! from their own exit and were fine, which is exactly why nothing looked wrong. The terminal
+//! publish is **one statement after the loop**, and the loop itself never sends `done: true`, so
 //! closing the scan is a property of the function rather than something each exit must remember.
+//!
+//! ## Which credential first, and how many targets at once (ADR-204)
+//!
+//! Devices on one subnet nearly always share a credential, and a wrong v2c community costs about
+//! four seconds of silence. So the sweep keeps a **hit tally** — how many targets each candidate
+//! has matched so far in this job — and a target picks its next candidate from it **at every
+//! attempt**, not once up front: a target already one wrong guess in switches to the credential
+//! another target has just matched. Ties keep the operator's order, and stored credentials always
+//! come before typed-in communities ([`next_candidate`]).
+//!
+//! ⚠️ What this changes for the operator: on a device where **two** candidates both answer, the one
+//! bound at import is now the one that has matched most often on this sweep, not the one listed
+//! first. Within one target the attempts stay strictly sequential and spaced (security.md) — what
+//! runs concurrently is targets, never credentials against one device. Firing every credential at a
+//! device at once would make a device that locks out a failing source worse, not better.
+//!
+//! The targets themselves run as **one stream**, [`SWEEP_CONCURRENCY`] at a time, with a progress
+//! result after every [`PROGRESS_CHUNK`] completions. They used to run in 32-target chunks that each
+//! waited for their slowest member, so one device working through five wrong credentials held 31
+//! finished ones and every target after them.
 //!
 //! ## The ICMP gate (ADR-068 Increment 3)
 //!
@@ -112,10 +136,13 @@ const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
 const SYSOBJECTID_OID: &str = "1.3.6.1.2.1.1.2.0";
 /// sysName.0 instance OID.
 const SYSNAME_OID: &str = "1.3.6.1.2.1.1.5.0";
-/// Targets probed concurrently within a chunk.
-const SWEEP_CONCURRENCY: usize = 16;
-/// Targets per progress chunk: a cumulative partial result is published after each chunk
-/// so the operator sees the sweep advance instead of one long silence.
+/// Targets probed concurrently (ADR-204; 16 before it). Each target is still probed one credential
+/// at a time — this bounds how many *devices* are being asked at once, never how many credentials
+/// one device is sent. A job carries at most 1,024 targets (core's `JOB_TARGETS`).
+const SWEEP_CONCURRENCY: usize = 64;
+/// Completed targets per progress result: a cumulative partial result is published after every
+/// this many, so the operator sees the sweep advance instead of one long silence. Since ADR-204 it
+/// is only a reporting cadence — nothing waits for a group of this size to finish.
 const PROGRESS_CHUNK: usize = 32;
 
 /// How long a cancelled scan id is remembered.
@@ -237,16 +264,68 @@ fn candidates_of(job: &DiscoveryJob) -> Vec<SnmpCandidate> {
     out
 }
 
+/// How many targets each candidate has matched so far in one sweep (ADR-204), indexed like the
+/// sweep's candidate list. Shared by every target of the job and read before every attempt.
+///
+/// Lives for one job on one poller and nowhere else: a scan split into several jobs, or taken by
+/// several pollers, learns separately in each. A plain `Mutex` because nothing awaits while it is
+/// held — a read is a copy of a handful of integers.
+struct HitTally {
+    hits: Mutex<Vec<u32>>,
+}
+
+impl HitTally {
+    fn new(candidates: usize) -> Self {
+        Self {
+            hits: Mutex::new(vec![0; candidates]),
+        }
+    }
+
+    fn record(&self, candidate: usize) {
+        let mut g = self.hits.lock().expect("hit tally mutex poisoned");
+        if let Some(n) = g.get_mut(candidate) {
+            *n = n.saturating_add(1);
+        }
+    }
+
+    fn snapshot(&self) -> Vec<u32> {
+        self.hits.lock().expect("hit tally mutex poisoned").clone()
+    }
+}
+
+/// Which candidate a target should try next, or `None` when it has tried them all (ADR-204).
+///
+/// Of the untried candidates: stored credentials before typed-in communities, then the one that
+/// has matched the most targets, then the operator's order. The first rule is what
+/// `candidates_of` already promised — import binds a stored credential by reference, so a typed-in
+/// community that happens to match more often must never overtake one.
+///
+/// Pure, and asked again before every attempt rather than once per target, so a target part way
+/// through its list follows a match that another target found meanwhile.
+fn next_candidate(candidates: &[SnmpCandidate], hits: &[u32], tried: &[bool]) -> Option<usize> {
+    (0..candidates.len())
+        .filter(|&i| !tried.get(i).copied().unwrap_or(false))
+        .min_by_key(|&i| {
+            let typed_in = candidates[i].cred_ref().is_none();
+            let matched = hits.get(i).copied().unwrap_or(0);
+            (typed_in, std::cmp::Reverse(matched), i)
+        })
+}
+
 /// Everything one sweep holds constant across its targets.
 ///
 /// A struct rather than a parameter list because the list had reached seven and the ICMP gate made
 /// it eight — which is clippy's `too_many_arguments` threshold and, per `coding-conventions.md`, the
 /// signal that the parameters want to be a type rather than an `#[allow]`. It also removes a real
-/// hazard: `sweep_chunk` and `probe_one` took the same seven values in the same order, so a
+/// hazard: the old `sweep_chunk` and `probe_one` took the same seven values in the same order, so a
 /// transposed pair would have compiled.
 struct SweepCtx {
-    /// Credentials to try on each target, in order; the first that answers wins.
+    /// Credentials to try on each target, in the operator's order; the first that answers wins.
+    /// Which one a target tries next is [`next_candidate`]'s answer, not this order alone.
     candidates: Arc<Vec<SnmpCandidate>>,
+    /// How often each candidate has matched in this sweep (ADR-204). `Arc` only so a test's fake
+    /// transport can record a match "by another target" while one is being probed.
+    hits: Arc<HitTally>,
     /// Per-probe timeout (ICMP and SNMP alike).
     timeout: Duration,
     /// Per-device credential-probe rate limit (security.md).
@@ -270,8 +349,10 @@ struct SweepCtx {
 /// **which rate-limit profile a sweep probes with is a decision, and it was wrong for a year**
 /// with nothing able to see it (ADR-161).
 fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>) -> SweepCtx {
+    let candidates = candidates_of(job);
     SweepCtx {
-        candidates: Arc::new(candidates_of(job)),
+        hits: Arc::new(HitTally::new(candidates.len())),
+        candidates: Arc::new(candidates),
         timeout: Duration::from_millis(u64::from(job.timeout_ms)),
         // Per-device credential-probe rate limit (security.md): space attempts so the sweep
         // paces itself at one device. **No cooldown** — SNMP has no account to lock out, so a
@@ -358,67 +439,65 @@ pub async fn run_discovery_stream<S>(
         let mut probed: u32 = 0;
         let mut cancelled = false;
 
-        let chunk_count = job.targets.chunks(PROGRESS_CHUNK).count();
-        // Whether a message carrying `done: true` has gone out. 🚨 This is not bookkeeping: core
-        // has no timeout, so a sweep that ends without one leaves the scan `cancelling` for the
-        // life of the process and the operator watching "stopping…" forever. It shipped that way —
-        // the chunk-boundary stop below breaks out *before* the publish, which is the one exit from
-        // this loop that used to reach neither the publish inside it nor the one after it.
-        let mut terminal_sent = false;
-        for (i, chunk) in job.targets.chunks(PROGRESS_CHUNK).enumerate() {
-            // Layer 2: skip whole chunks not yet started.
-            if ctx.stopping() {
-                cancelled = true;
-                break;
+        // Targets that have come back, whether probed or skipped by a stop. Counted separately from
+        // `probed` because it is what decides whether there is anything left to report on: a
+        // progress result is only worth sending while targets remain, or the last one would be
+        // sent twice — once as progress and once as the terminal message below.
+        let mut completed: usize = 0;
+        let mut since_progress: usize = 0;
+        let mut outcomes = sweep_targets(&job.targets, &ctx, transport.clone());
+        while let Some(outcome) = outcomes.next().await {
+            completed += 1;
+            match outcome {
+                // A target the stop reached before it began: nothing was sent to it, so it is not
+                // counted. The stream keeps draining, because targets already in flight still
+                // finish and still count.
+                Probe::Skipped => cancelled = true,
+                Probe::Probed(device) => {
+                    // The number actually probed, never the number handed out: a sweep abandoned
+                    // partway must not claim credit for the targets it skipped. `probed` is how
+                    // core (and the operator) tells a sweep that stopped early from one that
+                    // finished.
+                    probed = probed.saturating_add(1);
+                    found.extend(device);
+                    since_progress += 1;
+                }
             }
-            let (devices, swept) = sweep_chunk(chunk, &ctx, transport.clone()).await;
-            found.extend(devices);
-            // The number actually swept, never the chunk length: a chunk abandoned partway must not
-            // claim credit for the targets it skipped. `probed` is how core (and the operator)
-            // tells a sweep that stopped early from one that finished.
-            probed = probed.saturating_add(swept);
-            // A short chunk means the fine-grained check fired inside it.
-            if swept < u32::try_from(chunk.len()).unwrap_or(u32::MAX) {
-                cancelled = true;
-            }
-            let done = cancelled || i + 1 == chunk_count;
-            publish(
-                bus.as_ref(),
-                DiscoveryResult {
-                    scan_id: job.scan_id,
-                    found: found.clone(),
-                    probed,
-                    total,
-                    done,
-                    cancelled,
-                },
-            )
-            .await;
-            terminal_sent = done;
-            if cancelled {
-                break;
+            if since_progress >= PROGRESS_CHUNK && completed < job.targets.len() && !cancelled {
+                since_progress = 0;
+                publish(
+                    bus.as_ref(),
+                    DiscoveryResult {
+                        scan_id: job.scan_id,
+                        found: found.clone(),
+                        probed,
+                        total,
+                        done: false,
+                        cancelled: false,
+                    },
+                )
+                .await;
             }
         }
-        // The single exit that closes the scan, whichever way the loop ended. Three paths arrive
-        // here without having said anything terminal, and they used to be handled by two ad-hoc
-        // branches and one oversight: a stop caught at a chunk boundary (the oversight), a sweep
-        // with no targets at all, and — in principle — a loop that ran no iterations for any other
-        // reason. One statement is what makes "the poller always closes the scan" a property of the
-        // function rather than of remembering to repeat it at each way out.
-        if !terminal_sent {
-            publish(
-                bus.as_ref(),
-                DiscoveryResult {
-                    scan_id: job.scan_id,
-                    found: found.clone(),
-                    probed,
-                    total,
-                    done: true,
-                    cancelled,
-                },
-            )
-            .await;
-        }
+        drop(outcomes);
+        // The single exit that closes the scan, whichever way the stream ended — every target
+        // done, a stop part way, or no targets at all. 🚨 Not bookkeeping: core has no timeout, so
+        // a sweep that ends without `done: true` leaves the scan `cancelling` for the life of the
+        // process. It shipped that way once (the old chunk-boundary stop broke out before its
+        // publish), which is why the loop above never sends `done` and this is the only place
+        // that does.
+        publish(
+            bus.as_ref(),
+            DiscoveryResult {
+                scan_id: job.scan_id,
+                found: found.clone(),
+                probed,
+                total,
+                done: true,
+                cancelled,
+            },
+        )
+        .await;
         // One line for the whole sweep — see `SweepCtx::icmp_errors`. `warn` rather than `info`
         // because the sweep quietly stopped being the fast one: every target it could not ping was
         // probed with SNMP regardless of the gate, so "the gate is on but the sweep took five
@@ -450,24 +529,32 @@ async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
     }
 }
 
-/// Probe one chunk of targets with bounded concurrency.
+/// What became of one target of a sweep.
+enum Probe {
+    /// The stop reached it before it began; nothing was sent to it.
+    Skipped,
+    /// It was probed, and this is the device if it was a candidate.
+    Probed(Option<DiscoveredDevice>),
+}
+
+/// Probe a job's targets with bounded concurrency, yielding each target's outcome **as it
+/// finishes** (ADR-204). No target waits for any other: the slowest device holds up only itself.
 ///
-/// Returns the devices that responded **and how many targets this chunk looked at** — the second
-/// value is what keeps `probed` honest when a stop lands mid-chunk.
+/// The `Skipped` / `Probed` split is what keeps `probed` honest when a stop lands part way.
 ///
-/// **"Looked at" means an ICMP probe was addressed to the target. That is the definition, and it
+/// **"Probed" means an ICMP probe was addressed to the target. That is the definition, and it
 /// is chosen rather than incidental.** Three cases sit either side of the line, and this doc used
 /// to describe only the first — which left the other two reading as bugs:
 ///
-/// * A target the stop reached **before its future began** is *not* counted. Nothing was sent to
+/// * A target the stop reached **before its future began** is `Skipped`. Nothing was sent to
 ///   it, and counting it is exactly how a stopped sweep would claim to have finished the work it
 ///   abandoned.
 /// * A target whose **credential loop ended early** — cut short by the stop (`break 'candidates`)
-///   or by the per-device cooldown — **is** counted. Its ICMP probe had already gone out and been
+///   or by the per-device cooldown — **is** `Probed`. Its ICMP probe had already gone out and been
 ///   awaited before either check could run, so the address really was looked at; only its
 ///   identification is incomplete, and an incomplete identification is reported as a device with
 ///   fewer fields, not as an address nobody visited.
-/// * A target the **ICMP gate refused** is counted as well. The gate is a decision taken *about* a
+/// * A target the **ICMP gate refused** is `Probed` as well. The gate is a decision taken *about* a
 ///   probed target, not a reason to skip one; `probe_one` returning `None` there means "not a
 ///   candidate", never "not looked at".
 ///
@@ -475,38 +562,33 @@ async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
 /// property the operator actually reads is unaffected: `probed < total` on a cancelled sweep still
 /// means the stop took effect, because the only thing that fails to increment the count is a target
 /// that was never sent anything.
-async fn sweep_chunk(
-    targets: &[IpAddr],
-    ctx: &SweepCtx,
+fn sweep_targets<'a>(
+    targets: &'a [IpAddr],
+    ctx: &'a SweepCtx,
     transport: Arc<dyn Transport>,
-) -> (Vec<DiscoveredDevice>, u32) {
-    let results: Vec<Option<Option<DiscoveredDevice>>> =
-        futures::stream::iter(targets.iter().copied())
-            .map(|target| {
-                let transport = transport.clone();
-                async move {
-                    // Layer 3, part one: a target this wave has not reached yet is dropped whole.
-                    // `buffer_unordered` starts at most SWEEP_CONCURRENCY at a time, so with a big
-                    // chunk most of these futures have not begun when a stop arrives.
-                    if ctx.stopping() {
-                        return None;
-                    }
-                    Some(probe_one(target, ctx, transport.as_ref()).await)
+) -> impl Stream<Item = Probe> + 'a {
+    futures::stream::iter(targets.iter().copied())
+        .map(move |target| {
+            let transport = transport.clone();
+            async move {
+                // Layer 2: a target not yet started is dropped whole. `buffer_unordered` starts at
+                // most SWEEP_CONCURRENCY at a time, so most of a job's targets have not begun when
+                // a stop arrives.
+                if ctx.stopping() {
+                    return Probe::Skipped;
                 }
-            })
-            .buffer_unordered(SWEEP_CONCURRENCY)
-            .collect()
-            .await;
-    let swept = u32::try_from(results.iter().filter(|r| r.is_some()).count()).unwrap_or(u32::MAX);
-    let devices = results.into_iter().flatten().flatten().collect();
-    (devices, swept)
+                Probe::Probed(probe_one(target, ctx, transport.as_ref()).await)
+            }
+        })
+        .buffer_unordered(SWEEP_CONCURRENCY)
 }
 
 /// Current Unix time in milliseconds (clock for the per-device probe limiter).
 use yagra_common::clock::now_unix_ms as now_ms;
 
-/// Probe one target: ICMP liveness + SNMP identity, trying each candidate in order
-/// (first that answers wins). Candidate probes run **sequentially per device** and are spaced
+/// Probe one target: ICMP liveness + SNMP identity, trying candidates in the order
+/// [`next_candidate`] picks (first that answers wins, and a match is added to the sweep's
+/// [`HitTally`]). Candidate probes run **sequentially per device** and are spaced
 /// apart by a per-device [`CredentialProbeLimiter`] ([`SweepCtx::rate`]), so the sweep paces
 /// itself at one device (security.md). Attempted credentials are never logged. Returns a
 /// device iff it answered ICMP or SNMP.
@@ -562,11 +644,16 @@ async fn probe_one(
     let mut limiter = CredentialProbeLimiter::<IpAddr>::new(ctx.rate);
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
-    'candidates: for cand in ctx.candidates.iter() {
-        // Layer 3, part two — the fine-grained stop, and the one that decides how long the button
+    let mut tried = vec![false; ctx.candidates.len()];
+    // The tally is read again before every attempt (ADR-204): a match another target finds while
+    // this one is between attempts changes what this one tries next.
+    'candidates: while let Some(i) = next_candidate(&ctx.candidates, &ctx.hits.snapshot(), &tried) {
+        tried[i] = true;
+        let cand = &ctx.candidates[i];
+        // Layer 3 — the fine-grained stop, and the one that decides how long the button
         // appears to do nothing. The rate limiter spaces attempts 2s apart, so a target with five
         // credentials occupies this loop for ~20s; without a check here a stop would wait out every
-        // in-progress target before the chunk boundary could see it.
+        // in-progress target before the per-target check could see it.
         //
         // ⚠️ The ICMP probe above is *not* interrupted — it has already been awaited by the time
         // this runs. That is deliberate (a probe in flight is left to time out rather than having
@@ -591,6 +678,7 @@ async fn probe_one(
         }
         if let Some(id) = try_candidate(target, cand, ctx.timeout, transport).await {
             limiter.record_success(target);
+            ctx.hits.record(i);
             identity = id;
             matched_credential = cand.cred_ref();
             break;
@@ -1072,6 +1160,7 @@ mod tests {
     /// Tests that are *about* the gate set the field themselves.
     fn ctx(candidates: Vec<SnmpCandidate>) -> SweepCtx {
         SweepCtx {
+            hits: Arc::new(HitTally::new(candidates.len())),
             candidates: Arc::new(candidates),
             timeout: Duration::from_millis(100),
             rate: no_rate(),
@@ -1557,7 +1646,8 @@ mod tests {
 
     /// The sweep loop itself — untestable until the bus became a trait, because it published
     /// through the NATS type. What matters to core is the *shape* of the progress stream: one
-    /// result per chunk, `probed` monotone, `found` cumulative, and exactly one terminal `done`.
+    /// result per `PROGRESS_CHUNK` finished targets, `probed` monotone, `found` cumulative, and
+    /// exactly one terminal `done`.
     #[tokio::test]
     async fn a_sweep_publishes_one_cumulative_result_per_chunk_and_one_terminal_done() {
         use yagra_bus::InMemoryBus;
@@ -1565,7 +1655,8 @@ mod tests {
         let bus = Arc::new(InMemoryBus::new(64));
         let mut rx = bus.subscribe_discovery_results();
 
-        // Two chunks' worth of targets, all answering, so `found` must grow across the boundary.
+        // More than one progress step's worth of targets, all answering, so `found` must grow
+        // between the progress result and the terminal one.
         let count = u8::try_from(PROGRESS_CHUNK).unwrap() + 5;
         let targets: Vec<IpAddr> = (1..=count)
             .map(|i| IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)))
@@ -1600,7 +1691,8 @@ mod tests {
         assert_eq!(
             results.len(),
             3,
-            "the 'we have it' message, then one progress result per chunk"
+            "the 'we have it' message, one progress result, and the terminal one -- no duplicate \
+             progress result for the last target"
         );
         // The zero-progress message (ADR-068 Inc.4). It is what core turns into `Running`, so a
         // sweep that never sends it stays `Queued` — which is the whole point, and why this is
@@ -1616,11 +1708,11 @@ mod tests {
         assert!(!results[1].done);
         assert_eq!(results[1].probed, u32::try_from(PROGRESS_CHUNK).unwrap());
         assert_eq!(results[1].found.len(), PROGRESS_CHUNK);
-        assert!(results[2].done, "the last chunk closes the scan");
+        assert!(results[2].done, "the last target closes the scan");
         assert_eq!(results[2].probed, total);
         assert_eq!(results[2].total, total);
-        // Cumulative, not per-chunk: core replaces its candidate list wholesale from each partial,
-        // so a delta here would make the UI drop everything found before the final chunk.
+        // Cumulative, not per-step: core replaces its candidate list wholesale from each partial,
+        // so a delta here would make the UI drop everything found before the final message.
         assert_eq!(results[2].found.len(), usize::from(count));
     }
 
@@ -1737,14 +1829,13 @@ mod tests {
     }
 
     /// Deterministically records a stop on the Nth ICMP probe, so a cancel can be made to land
-    /// exactly at a chunk boundary. Everything else is delegated: this exists to control *when* the
-    /// stop arrives, not to model a device.
+    /// exactly between two targets. Everything else is delegated: this exists to control *when*
+    /// the stop arrives, not to model a device.
     ///
-    /// WHY `at = PROGRESS_CHUNK`: that probe is the last one `buffer_unordered` starts in the first
-    /// chunk, so the chunk still completes whole (`swept == chunk.len()`, no short-chunk signal) and
-    /// the next iteration's layer-2 check is the first thing to see the stop. Let the cancel land
-    /// earlier and it takes the layer-3 exit, which was never broken -- so the test would pass
-    /// against the bug it exists to catch.
+    /// WHY `at = PROGRESS_CHUNK`: the targets after that probe have been handed to
+    /// `buffer_unordered` but not yet polled, so the per-target check (layer 2) is the first thing
+    /// to see the stop -- and the progress result for the first `PROGRESS_CHUNK` targets is due at
+    /// the same moment, which is where the old chunk loop's exit used to skip the publish.
     struct CancelAtProbe {
         inner: SelectiveFake,
         at: usize,
@@ -1876,11 +1967,11 @@ mod tests {
     /// The bug this file's own doc warned about and did not test, found on a real deployment: press
     /// Stop, the poller logs `discovery sweep cancelled probed=32 total=254`, and the screen sits on
     /// "stopping..." until the core process is restarted. The sweep stopped correctly and never said
-    /// so -- the chunk-boundary exit broke out before the publish.
+    /// so -- the old chunk-boundary exit broke out before the publish.
     ///
-    /// What the neighbouring test pins is that a short chunk *counts* honestly. What it left
-    /// unproven, in writing, was "the wiring -- that the loop propagates a short chunk into
-    /// `cancelled` and stops". This is that wiring, and the answer was no.
+    /// Kept through ADR-204, which removed the chunks: the stop now lands between targets, and what
+    /// must still hold is the same -- the skipped targets mark the sweep cancelled, and exactly one
+    /// terminal message goes out.
     #[tokio::test]
     async fn a_stop_caught_between_chunks_still_closes_the_scan() {
         let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
@@ -1888,7 +1979,7 @@ mod tests {
         let scan = Uuid::from_u128(77);
         let cancels = Arc::new(CancelSet::new());
 
-        // Two chunks: the first full, the second holding the remainder.
+        // One progress step's worth, then eight targets the stop must skip.
         let count = u8::try_from(PROGRESS_CHUNK).unwrap() + 8;
         let mut job = job(vec![], vec!["public".to_owned()]);
         job.scan_id = scan;
@@ -1934,8 +2025,8 @@ mod tests {
         assert_eq!(
             last.probed,
             u32::try_from(PROGRESS_CHUNK).unwrap(),
-            "one whole chunk was probed and the second never started -- `probed < total` is the \
-             operator's only evidence that the stop took effect"
+            "the targets before the stop were probed and the rest never started -- `probed < total` \
+             is the operator's only evidence that the stop took effect"
         );
         assert!(last.probed < last.total);
         assert_eq!(
@@ -1951,16 +2042,9 @@ mod tests {
     /// `probed < total` on a cancelled sweep is the **only** evidence an operator has that the stop
     /// took effect: a sweep that abandoned 200 addresses while claiming to have probed them is
     /// indistinguishable from one that finished. So the count has to come from what was actually
-    /// swept, not from the chunk's length.
-    ///
-    /// ⚠️ Tested here rather than through `run_discovery_stream`, and the reason is worth keeping:
-    /// a test that cancels *while* the loop runs has to win a race against it, and against a fake
-    /// transport that answers instantly there is no window to win. Such a test passes or fails on
-    /// scheduling rather than on behaviour, which is worse than no test. **What this leaves
-    /// unproven is the wiring** — that the loop propagates a short chunk into `cancelled` and stops.
-    /// That is read, not tested, and it is the thing to watch on the real deployment.
+    /// probed, not from how many targets were handed out.
     #[tokio::test]
-    async fn a_chunk_counts_what_it_probed_not_what_it_was_given() {
+    async fn a_sweep_counts_what_it_probed_not_what_it_was_given() {
         let scan = Uuid::from_u128(11);
         let transport: Arc<dyn Transport> = Arc::new(SelectiveFake {
             ping: Ping::Answers,
@@ -1973,23 +2057,374 @@ mod tests {
 
         let mut c = ctx(candidates_of(&job(vec![], vec!["public".to_owned()])));
         c.scan_id = scan;
-        let (devices, swept) = sweep_chunk(&targets, &c, transport.clone()).await;
+        let outcomes: Vec<Probe> = sweep_targets(&targets, &c, transport.clone())
+            .collect()
+            .await;
+        let found = outcomes
+            .iter()
+            .filter(|o| matches!(o, Probe::Probed(Some(_))))
+            .count();
         assert_eq!(
-            swept, 8,
-            "an uninterrupted chunk probes everything it was given"
+            found, 8,
+            "an uninterrupted sweep probes everything it was given"
         );
-        assert_eq!(devices.len(), 8);
 
         c.cancels = cancelled(scan);
-        let (devices, swept) = sweep_chunk(&targets, &c, transport).await;
-        assert_eq!(
-            swept, 0,
-            "a cancelled chunk counts nothing — the caller adds this to `probed`, so counting \
-             skipped targets here is exactly how a stopped sweep would claim to have finished"
-        );
+        let outcomes: Vec<Probe> = sweep_targets(&targets, &c, transport).collect().await;
+        assert_eq!(outcomes.len(), 8, "every target still reports back");
         assert!(
-            devices.is_empty(),
-            "and this fake answers every target, so a single device would mean one was probed"
+            outcomes.iter().all(|o| matches!(o, Probe::Skipped)),
+            "a cancelled sweep probes nothing -- the caller counts `Probed`, so a target reported \
+             as probed here is exactly how a stopped sweep would claim to have finished"
+        );
+    }
+
+    // ── Which credential first, and how many at once (ADR-204) ───────────────
+
+    /// Candidates for the ordering tests: three stored v2c credentials, then two typed-in
+    /// communities — the shape `candidates_of` produces.
+    fn five_candidates() -> Vec<SnmpCandidate> {
+        candidates_of(&job(
+            vec![
+                v2c_cred(Uuid::from_u128(1), "s0"),
+                v2c_cred(Uuid::from_u128(2), "s1"),
+                v2c_cred(Uuid::from_u128(3), "s2"),
+            ],
+            vec!["t3".to_owned(), "t4".to_owned()],
+        ))
+    }
+
+    /// The order a target with no other help would walk the list in.
+    fn walk_order(cands: &[SnmpCandidate], hits: &[u32]) -> Vec<usize> {
+        let mut tried = vec![false; cands.len()];
+        let mut out = Vec::new();
+        while let Some(i) = next_candidate(cands, hits, &tried) {
+            assert!(!tried[i], "a candidate is never offered twice");
+            tried[i] = true;
+            out.push(i);
+        }
+        out
+    }
+
+    #[test]
+    fn with_no_matches_yet_the_operators_order_stands() {
+        let c = five_candidates();
+        assert_eq!(walk_order(&c, &[0; 5]), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_credential_that_has_matched_most_is_tried_first() {
+        let c = five_candidates();
+        assert_eq!(walk_order(&c, &[0, 1, 4, 0, 0]), vec![2, 1, 0, 3, 4]);
+    }
+
+    #[test]
+    fn equal_matches_keep_the_operators_order() {
+        let c = five_candidates();
+        assert_eq!(walk_order(&c, &[0, 2, 2, 0, 0]), vec![1, 2, 0, 3, 4]);
+    }
+
+    #[test]
+    fn a_typed_in_community_never_overtakes_a_stored_credential() {
+        // Import binds a stored credential by reference, so this is not a tie-break: a typed-in
+        // community that matched every target so far still waits for the stored ones.
+        let c = five_candidates();
+        assert_eq!(walk_order(&c, &[0, 0, 0, 0, 9]), vec![0, 1, 2, 4, 3]);
+    }
+
+    #[test]
+    fn a_target_that_has_tried_everything_gets_nothing_more() {
+        let c = five_candidates();
+        assert_eq!(next_candidate(&c, &[3, 0, 0, 0, 0], &[true; 5]), None);
+        assert_eq!(next_candidate(&[], &[], &[]), None);
+    }
+
+    /// A device that answers one community, records the order it was asked in, and can be made to
+    /// hold one target up or to report a match "by another target" during its first attempt.
+    struct ScriptedFake {
+        good_community: String,
+        asked: Mutex<Vec<String>>,
+        /// On the first SNMP attempt, record a match for this candidate in this tally — as if a
+        /// target probed at the same time had just found it.
+        match_elsewhere_on_first_ask: Option<(Arc<HitTally>, usize)>,
+        /// Hold this target's ICMP probe for this long.
+        slow: Option<(IpAddr, Duration)>,
+    }
+
+    impl ScriptedFake {
+        fn answering(community: &str) -> Self {
+            Self {
+                good_community: community.to_owned(),
+                asked: Mutex::new(Vec::new()),
+                match_elsewhere_on_first_ask: None,
+                slow: None,
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Transport for ScriptedFake {
+        async fn probe_icmp(
+            &self,
+            target: IpAddr,
+            _count: u8,
+            _timeout: Duration,
+        ) -> Result<IcmpProbe, TransportError> {
+            if let Some((slow, hold)) = self.slow {
+                if slow == target {
+                    tokio::time::sleep(hold).await;
+                }
+            }
+            Ok(IcmpProbe {
+                reachable: true,
+                rtt_ms: Some(1.0),
+                loss_pct: 0.0,
+                sent: 1,
+                received: 1,
+            })
+        }
+        async fn snmp_get(
+            &self,
+            _t: IpAddr,
+            _c: &str,
+            _o: &[String],
+            _to: Duration,
+        ) -> Result<Vec<SnmpSample>, TransportError> {
+            Ok(Vec::new())
+        }
+        async fn snmp_v3_get(
+            &self,
+            _t: IpAddr,
+            _p: &SnmpV3Params,
+            _o: &[String],
+            _to: Duration,
+        ) -> Result<Vec<SnmpSample>, TransportError> {
+            Ok(Vec::new())
+        }
+        async fn snmp_v3_get_strings(
+            &self,
+            _t: IpAddr,
+            _p: &SnmpV3Params,
+            _o: &[String],
+            _to: Duration,
+        ) -> Result<Vec<SnmpStringSample>, TransportError> {
+            Ok(Vec::new())
+        }
+        async fn snmp_walk(
+            &self,
+            _t: IpAddr,
+            _c: &str,
+            _o: &[String],
+            _l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            Ok(empty_walk())
+        }
+        async fn snmp_walk_strings(
+            &self,
+            _target: IpAddr,
+            community: &str,
+            column_oids: &[String],
+            _limits: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            let first = {
+                let mut asked = self.asked.lock().unwrap();
+                asked.push(community.to_owned());
+                asked.len() == 1
+            };
+            if first {
+                if let Some((tally, candidate)) = &self.match_elsewhere_on_first_ask {
+                    tally.record(*candidate);
+                }
+            }
+            let rows = if community == self.good_community {
+                column_oids
+                    .iter()
+                    .map(|b| SnmpTableString {
+                        oid_base: b.clone(),
+                        ifindex: 0,
+                        value: "answered".to_owned(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok(TableWalk {
+                rows,
+                ..empty_walk()
+            })
+        }
+        async fn snmp_v3_walk(
+            &self,
+            _t: IpAddr,
+            _p: &SnmpV3Params,
+            _o: &[String],
+            _l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableSample>, TransportError> {
+            Ok(empty_walk())
+        }
+        async fn snmp_v3_walk_strings(
+            &self,
+            _t: IpAddr,
+            _p: &SnmpV3Params,
+            _o: &[String],
+            _l: WalkLimits,
+        ) -> Result<TableWalk<SnmpTableString>, TransportError> {
+            Ok(empty_walk())
+        }
+        async fn snmp_walk_instances(
+            &self,
+            _t: IpAddr,
+            _c: &str,
+            _o: &[String],
+            _to: Duration,
+            _max: usize,
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+            Ok(yagra_transport::InstanceWalk {
+                rows: Vec::new(),
+                every_column_answered: true,
+            })
+        }
+        async fn snmp_v3_walk_instances(
+            &self,
+            _t: IpAddr,
+            _p: &SnmpV3Params,
+            _o: &[String],
+            _to: Duration,
+            _max: usize,
+        ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+            Ok(yagra_transport::InstanceWalk {
+                rows: Vec::new(),
+                every_column_answered: true,
+            })
+        }
+        async fn probe_http(
+            &self,
+            _spec: &HttpProbeSpec,
+            _to: Duration,
+        ) -> Result<HttpProbe, TransportError> {
+            Ok(HttpProbe {
+                reachable: false,
+                status_code: None,
+                response_time_ms: 0.0,
+                cert_days_to_expiry: None,
+                body: None,
+            })
+        }
+        async fn resolve_dns(
+            &self,
+            _spec: &DnsProbeSpec,
+            _to: Duration,
+        ) -> Result<DnsChain, TransportError> {
+            Ok(unused_dns_chain())
+        }
+        async fn collect_meraki(
+            &self,
+            _spec: &yagra_transport::MerakiCollectSpec,
+            _to: Duration,
+        ) -> Result<yagra_transport::MerakiCollected, yagra_transport::MerakiFetchError> {
+            Ok(yagra_transport::MerakiCollected::default())
+        }
+    }
+
+    /// The point of ADR-204, as one sweep sees it: the first target pays for the four wrong
+    /// guesses, and the next one asks the credential that answered straight away.
+    #[tokio::test]
+    async fn a_later_target_asks_the_credential_an_earlier_one_matched_first() {
+        let right = Uuid::from_u128(9);
+        let c = ctx(candidates_of(&job(
+            vec![
+                v2c_cred(Uuid::from_u128(5), "wrong-1"),
+                v2c_cred(Uuid::from_u128(6), "wrong-2"),
+                v2c_cred(Uuid::from_u128(7), "wrong-3"),
+                v2c_cred(Uuid::from_u128(8), "wrong-4"),
+                v2c_cred(right, "right"),
+            ],
+            vec![],
+        )));
+        let fake = ScriptedFake::answering("right");
+
+        let first = probe_one(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), &c, &fake)
+            .await
+            .expect("the first target is identified");
+        assert_eq!(first.matched_credential, Some(right));
+        assert_eq!(
+            fake.asked().len(),
+            5,
+            "the first target walks the whole list"
+        );
+
+        let second = probe_one(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), &c, &fake)
+            .await
+            .expect("the second target is identified");
+        assert_eq!(second.matched_credential, Some(right));
+        assert_eq!(
+            fake.asked()[5..],
+            ["right".to_owned()],
+            "the second target asks the credential that matched, and nothing else"
+        );
+    }
+
+    /// The choice is made again before every attempt, not once per target: a target already one
+    /// wrong guess in follows a match another target found meanwhile, rather than finishing the
+    /// list it started with.
+    #[tokio::test]
+    async fn a_target_part_way_through_its_list_follows_a_match_found_meanwhile() {
+        let c = ctx(candidates_of(&job(
+            vec![
+                v2c_cred(Uuid::from_u128(1), "wrong-1"),
+                v2c_cred(Uuid::from_u128(2), "wrong-2"),
+                v2c_cred(Uuid::from_u128(3), "right"),
+            ],
+            vec![],
+        )));
+        let mut fake = ScriptedFake::answering("right");
+        // While this target is asking `wrong-1`, another target matches candidate 2 ("right").
+        fake.match_elsewhere_on_first_ask = Some((c.hits.clone(), 2));
+
+        let d = probe_one(target(), &c, &fake)
+            .await
+            .expect("the device is identified");
+        assert_eq!(d.matched_credential, Some(Uuid::from_u128(3)));
+        assert_eq!(
+            fake.asked(),
+            ["wrong-1".to_owned(), "right".to_owned()],
+            "the second attempt goes to the credential that just matched, skipping `wrong-2`"
+        );
+    }
+
+    /// The other half of ADR-204: one slow device holds up only itself. Under the old 32-target
+    /// chunks, the eight targets after the first chunk could not start until its slowest member
+    /// had finished.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_target_does_not_hold_back_the_others() {
+        let slow = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let count = u8::try_from(PROGRESS_CHUNK).unwrap() + 8;
+        let targets: Vec<IpAddr> = (1..=count)
+            .map(|i| IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)))
+            .collect();
+        let mut fake = ScriptedFake::answering("public");
+        fake.slow = Some((slow, Duration::from_secs(30)));
+        let transport: Arc<dyn Transport> = Arc::new(fake);
+        let c = ctx(candidates_of(&job(vec![], vec!["public".to_owned()])));
+
+        let order: Vec<IpAddr> = sweep_targets(&targets, &c, transport)
+            .filter_map(|o| async move {
+                match o {
+                    Probe::Probed(Some(d)) => Some(d.address),
+                    Probe::Probed(None) | Probe::Skipped => None,
+                }
+            })
+            .collect()
+            .await;
+        assert_eq!(order.len(), targets.len(), "every target is identified");
+        assert_eq!(
+            order.last(),
+            Some(&slow),
+            "the slow target finishes last -- so the eight targets beyond the first              {PROGRESS_CHUNK} finished while it was still out, which the old chunks did not allow"
         );
     }
 }
