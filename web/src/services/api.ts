@@ -2065,6 +2065,10 @@ export const api = {
     id: string,
     body: { name: string; kind?: string; secret?: string },
   ): Promise<void> => apiPut('/api/v1/credentials/{id}', { path: { id }, body }),
+  /** Replace the try order (ADR-205 Inc.2). `ids` names every stored credential, first to last;
+   *  a 409 means one was added or deleted since the list was read. */
+  setCredentialOrder: (ids: string[]): Promise<void> =>
+    apiPut('/api/v1/credentials/order', { body: { ids } }),
 
   /** Delete a credential. Node bindings are cleared with it; a Meraki organization or a NetBox
    *  server that uses it refuses the delete instead (`409 credential_in_use`), which is why the

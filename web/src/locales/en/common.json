@@ -46,7 +46,11 @@
     "placeholder": "Select stored credentials…",
     "remove": "Remove {{name}}",
     "empty": "No stored SNMP credentials yet.",
-    "manage": "Manage credentials"
+    "manage": "Manage credentials",
+    "selected_one": "{{count}} credential selected",
+    "selected_other": "{{count}} credentials selected",
+    "moveUp": "Move {{name}} up",
+    "moveDown": "Move {{name}} down"
   },
   "actions": {
     "save": "Save",

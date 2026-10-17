@@ -62,7 +62,7 @@ import { readSources, SRC } from './testSupport/sources';
 
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
-  access: [1343, 736],
+  access: [1367, 747],
   alertNames: [166, 97],
   alerts: [990, 584], // + events.emptyInsideWordsMiss, an empty state (ADR-053, 2026-10-08)
   alertsConfig: [8360, 4431],

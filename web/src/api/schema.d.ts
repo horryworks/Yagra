@@ -674,6 +674,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/credentials/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace the order stored credentials are listed and tried in (ADR-205 Inc.2).
+         * @description It is the order `GET /api/v1/credentials` returns, so it is the order Discovery starts a sweep
+         *     from and the order every credential picker lists. The body names **every** credential: one that
+         *     names a different set — because a credential was added or deleted after the caller read the
+         *     list — is refused with 409 and changes nothing, rather than placing the newcomer arbitrarily.
+         */
+        put: operations["set_credential_order"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/credentials/{id}": {
         parameters: {
             query?: never;
@@ -7075,6 +7098,11 @@ export interface components {
          * @description Stable identifier for a stored monitoring credential (SNMP community / v3 / token).
          */
         CredentialId: string;
+        /** @description The try order, first to last (ADR-205 Inc.2). */
+        CredentialOrder: {
+            /** @description Every stored credential's id, each exactly once, in the order Discovery should start from. */
+            ids: string[];
+        };
         /** @description Credential metadata returned by the API — never includes the secret value. */
         CredentialSummary: {
             /** Format: uuid */
@@ -17447,6 +17475,73 @@ export interface operations {
                 };
             };
             /** @description Credential storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_credential_order: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialOrder"];
+            };
+        };
+        responses: {
+            /** @description Order replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An id appears twice, or more than 10,000 are named (`invalid_order`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The ids are not exactly the stored credentials — one was added or deleted since the list was read (`credential_order_stale`); nothing was changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -37,12 +37,17 @@
       "headerNameRefused": "このヘッダーは設定できません。Host・Authorization・hop-by-hop ヘッダーは予約されています。"
     },
     "cols": {
+      "order": "#",
       "name": "名前",
       "type": "種類",
       "secret": "シークレット",
       "usedBy": "使用元",
       "credentialId": "認証情報 ID",
       "actions": "操作"
+    },
+    "order": {
+      "up": "{{name}} を上へ",
+      "down": "{{name}} を下へ"
     },
     "usage": {
       "unused": "未使用",
@@ -93,7 +98,8 @@
     "err": {
       "add": "認証情報の追加に失敗しました",
       "update": "更新に失敗しました",
-      "delete": "削除に失敗しました"
+      "delete": "削除に失敗しました",
+      "order": "順の保存に失敗しました"
     }
   },
   "users": {

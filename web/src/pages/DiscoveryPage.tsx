@@ -966,7 +966,10 @@ export function DiscoveryPage() {
                 </label>
               )}
 
-              <label className="form-label disco-f-creds">
+              {/* Not a <label>: the picker holds buttons of its own (the order's up / down /
+                  remove, ADR-205 Inc.2), and a click on a label is forwarded to its first control,
+                  so pressing beside a row would open the dropdown. */}
+              <div className="form-label disco-f-creds">
                 {t('discovery.credsLabel')}
                 <CredentialPicker
                   options={snmpCreds}
@@ -977,7 +980,7 @@ export function DiscoveryPage() {
                 <Link className="field-link" to="/nodes/credentials">
                   {t('discovery.manageCreds')}
                 </Link>
-              </label>
+              </div>
 
               {/* Which site the sweep runs from (ADR-068). Before this, the job went to a subject
                   every poller competes for, so a remote-site poller could sweep head office —

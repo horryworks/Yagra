@@ -33,7 +33,8 @@ use uuid::Uuid;
     credential_health,
     create_credential,
     update_credential,
-    delete_credential
+    delete_credential,
+    set_credential_order
 ))]
 pub(super) struct Doc;
 
@@ -45,6 +46,7 @@ pub(super) fn routes() -> Router<ApiState> {
             get(list_credentials).post(create_credential),
         )
         .route("/api/v1/credentials/health", get(credential_health))
+        .route("/api/v1/credentials/order", put(set_credential_order))
         .route(
             "/api/v1/credentials/:id",
             put(update_credential).delete(delete_credential),
@@ -392,6 +394,70 @@ async fn delete_credential(
             e.as_ref(),
             "delete credential",
             "failed to delete credential",
+        )),
+    }
+}
+
+/// The most ids one order may name. Credentials are typed in by an operator, so a real list is a
+/// handful; the cap only bounds what one request can make the server sort and compare.
+const ORDER_IDS_MAX: usize = 10_000;
+
+/// The try order, first to last (ADR-205 Inc.2).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct CredentialOrder {
+    /// Every stored credential's id, each exactly once, in the order Discovery should start from.
+    ids: Vec<Uuid>,
+}
+
+/// Replace the order stored credentials are listed and tried in (ADR-205 Inc.2).
+///
+/// It is the order `GET /api/v1/credentials` returns, so it is the order Discovery starts a sweep
+/// from and the order every credential picker lists. The body names **every** credential: one that
+/// names a different set — because a credential was added or deleted after the caller read the
+/// list — is refused with 409 and changes nothing, rather than placing the newcomer arbitrarily.
+#[utoipa::path(
+    put, path = "/api/v1/credentials/order", tag = "credentials",
+    request_body = CredentialOrder,
+    responses(
+        (status = 204, description = "Order replaced"),
+        (status = 400, description = "An id appears twice, or more than 10,000 are named (`invalid_order`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 409, description = "The ids are not exactly the stored credentials — one was added or deleted since the list was read (`credential_order_stale`); nothing was changed", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_credential_order(
+    _guard: RequireManageCredentials,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<CredentialOrder>,
+) -> ApiResult<StatusCode> {
+    use yagra_base::secrets::SetOrder;
+    credentials_are_deployment_wide(&scope)?;
+    if body.ids.len() > ORDER_IDS_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_order",
+            format!("an order names at most {ORDER_IDS_MAX} credentials"),
+        ));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(body.ids.len());
+    if !body.ids.iter().all(|id| seen.insert(*id)) {
+        return Err(ApiError::bad_request(
+            "invalid_order",
+            "each credential may appear in the order once",
+        ));
+    }
+    match admin.creds.set_order(&body.ids).await {
+        Ok(SetOrder::Done) => Ok(StatusCode::NO_CONTENT),
+        Ok(SetOrder::Mismatch) => Err(ApiError::conflict(
+            "credential_order_stale",
+            "the order does not name exactly the stored credentials; reload the list and try again",
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "set credential order",
+            "failed to save the credential order",
         )),
     }
 }
@@ -789,5 +855,144 @@ mod tests {
         // And one that was never there is still a 404, not a conflict.
         let (status, body) = send(&st, "DELETE", &path, &tok, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    // ── The try order (ADR-205 Inc.2) ─────────────────────────────────────────
+
+    /// The names `GET /api/v1/credentials` lists, in the order it lists them.
+    async fn listed_names(st: &crate::api::ApiState, tok: &str) -> Vec<String> {
+        use crate::api::tests_support::send;
+        let (status, list) = send(st, "GET", "/api/v1/credentials", tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        list.as_array()
+            .expect("an array")
+            .iter()
+            .map(|c| c["name"].as_str().expect("a name").to_owned())
+            .collect()
+    }
+
+    async fn create(st: &crate::api::ApiState, tok: &str, name: &str) -> Uuid {
+        use crate::api::tests_support::send;
+        let (status, body) = send(
+            st,
+            "POST",
+            "/api/v1/credentials",
+            tok,
+            Some(serde_json::json!({ "name": name, "kind": "snmp_v2c", "secret": "c" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        body["id"].as_str().expect("an id").parse().expect("a uuid")
+    }
+
+    /// A new credential goes to the end, the order can be replaced, and the list follows it — the
+    /// list being what Discovery starts a sweep from.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_try_order_is_replaced_and_the_list_follows_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Operator);
+        let a = create(&st, &tok, "a").await;
+        let b = create(&st, &tok, "b").await;
+        let c = create(&st, &tok, "c").await;
+        assert_eq!(
+            listed_names(&st, &tok).await,
+            ["a", "b", "c"],
+            "created last, listed last"
+        );
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/credentials/order",
+            &tok,
+            Some(serde_json::json!({ "ids": [c, a, b] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(listed_names(&st, &tok).await, ["c", "a", "b"]);
+
+        // And one created afterwards still goes to the end of the order as it now stands.
+        create(&st, &tok, "d").await;
+        assert_eq!(listed_names(&st, &tok).await, ["c", "a", "b", "d"]);
+    }
+
+    /// An order that does not name exactly the stored credentials changes nothing: one missing,
+    /// one unknown (409 — the caller's list is out of date) or one twice (400 — malformed).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_order_naming_a_different_set_changes_nothing(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Operator);
+        let a = create(&st, &tok, "a").await;
+        let b = create(&st, &tok, "b").await;
+        let stranger = Uuid::new_v4();
+        let cases = [
+            (
+                serde_json::json!({ "ids": [b] }),
+                StatusCode::CONFLICT,
+                "credential_order_stale",
+            ),
+            (
+                serde_json::json!({ "ids": [b, a, stranger] }),
+                StatusCode::CONFLICT,
+                "credential_order_stale",
+            ),
+            (
+                serde_json::json!({ "ids": [b, b, a] }),
+                StatusCode::BAD_REQUEST,
+                "invalid_order",
+            ),
+        ];
+        for (body, want, code) in cases {
+            let (status, answer) = send(
+                &st,
+                "PUT",
+                "/api/v1/credentials/order",
+                &tok,
+                Some(body.clone()),
+            )
+            .await;
+            assert_eq!(status, want, "{body}: {answer}");
+            assert_eq!(answer["error"]["code"].as_str(), Some(code), "{body}");
+            assert_eq!(
+                listed_names(&st, &tok).await,
+                ["a", "b"],
+                "{body} moved something"
+            );
+        }
+    }
+
+    /// The order is a credential write: a Viewer may not set it, and neither may an account
+    /// restricted to folders — the order is shared by every site.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_viewer_or_a_scoped_caller_cannot_reorder(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool.clone()).await;
+        let operator = token(&st, yagra_common::Role::Operator);
+        let a = create(&st, &operator, "a").await;
+        let b = create(&st, &operator, "b").await;
+        let folder = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let refused = [
+            token(&st, yagra_common::Role::Viewer),
+            scoped_token(&st, &[folder]),
+        ];
+        for tok in &refused {
+            let (status, answer) = send(
+                &st,
+                "PUT",
+                "/api/v1/credentials/order",
+                tok,
+                Some(serde_json::json!({ "ids": [b, a] })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+        }
+        assert_eq!(listed_names(&st, &operator).await, ["a", "b"]);
     }
 }

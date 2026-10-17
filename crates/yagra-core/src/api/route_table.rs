@@ -550,6 +550,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     (
+        "PUT",
+        "/api/v1/credentials/order",
+        CREDENTIAL_WRITE,
+        NO_MCP_WRITE,
+    ),
+    (
         "DELETE",
         "/api/v1/credentials/:id",
         CREDENTIAL_WRITE,

@@ -3185,6 +3185,81 @@
         }
       }
     },
+    "/api/v1/credentials/order": {
+      "put": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "Replace the order stored credentials are listed and tried in (ADR-205 Inc.2).",
+        "description": "It is the order `GET /api/v1/credentials` returns, so it is the order Discovery starts a sweep\nfrom and the order every credential picker lists. The body names **every** credential: one that\nnames a different set — because a credential was added or deleted after the caller read the\nlist — is refused with 409 and changes nothing, rather than placing the newcomer arbitrarily.",
+        "operationId": "set_credential_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Order replaced"
+          },
+          "400": {
+            "description": "An id appears twice, or more than 10,000 are named (`invalid_order`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role does not hold ManageCredentials, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The ids are not exactly the stored credentials — one was added or deleted since the list was read (`credential_order_stale`); nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/credentials/{id}": {
       "put": {
         "tags": [
@@ -29009,6 +29084,23 @@
         "type": "string",
         "format": "uuid",
         "description": "Stable identifier for a stored monitoring credential (SNMP community / v3 / token)."
+      },
+      "CredentialOrder": {
+        "type": "object",
+        "description": "The try order, first to last (ADR-205 Inc.2).",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Every stored credential's id, each exactly once, in the order Discovery should start from."
+          }
+        }
       },
       "CredentialSummary": {
         "type": "object",

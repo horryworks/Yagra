@@ -6,19 +6,24 @@
 // only in the case of its first letter resolves to whichever the filesystem feels like on
 // Windows, and `tsc` refuses it outright (TS1261).
 
+import { moveBy } from '../../lib/reorder';
+
 /** The shape the rule needs: anything with an id, in the order the picker offers them. */
 export interface Selectable {
   id: string;
 }
 
 /**
- * Add or remove `id`, keeping the result in **the order the options are offered in**.
+ * Add or remove `id`. **The selection is an order, not a set** — it is the order the poller tries
+ * the credentials in (ADR-161), and since ADR-205 Inc.2 the operator arranges it. An added
+ * credential goes to the end; a removed one closes the gap.
  *
- * 🚨 The ordering is not cosmetic — it is the order the poller tries the credentials in
- * (ADR-161). The picker renders its chips in option order while the array it sent was in click
- * order, so an operator who ticked the third credential first saw "1, 2, 3" and got "3, 1, 2"
- * attempted. Deriving the selection from `options` makes the two agree by construction rather
- * than by two places sorting the same way.
+ * 🚨 What the picker draws is this array, in this order, numbered. ADR-161 found the chips drawn in
+ * one order while the request carried another; what keeps the two from disagreeing is that the
+ * picker renders `selected` itself, never the options filtered by it.
+ *
+ * Ids no longer offered are dropped whenever anything is ticked — a stale remembered id would fail
+ * the whole scan with a 400 rather than costing one credential.
  */
 export function toggleSelection(
   options: readonly Selectable[],
@@ -26,5 +31,12 @@ export function toggleSelection(
   id: string,
 ): string[] {
   if (selected.includes(id)) return selected.filter((x) => x !== id);
-  return options.filter((o) => selected.includes(o.id) || o.id === id).map((o) => o.id);
+  const offered = new Set(options.map((o) => o.id));
+  if (!offered.has(id)) return [...selected];
+  return [...selected.filter((x) => offered.has(x)), id];
+}
+
+/** The selection with `id` moved one place earlier (`-1`) or later (`1`) in the try order. */
+export function moveSelected(selected: readonly string[], id: string, delta: -1 | 1): string[] {
+  return moveBy(selected, selected.indexOf(id), delta);
 }

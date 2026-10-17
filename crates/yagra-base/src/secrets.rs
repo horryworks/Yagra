@@ -343,6 +343,15 @@ pub fn key_provider_from_env(path: Option<String>) -> anyhow::Result<Arc<StaticK
     Ok(Arc::new(provider))
 }
 
+/// What [`CredentialStore::set_order`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetOrder {
+    /// The order was replaced.
+    Done,
+    /// The ids did not name exactly the stored credentials; nothing was written.
+    Mismatch,
+}
+
 /// PostgreSQL-backed, envelope-encrypted credential store.
 pub struct CredentialStore {
     pool: PgPool,
@@ -359,7 +368,8 @@ impl CredentialStore {
     }
 
     /// Seal and store a new credential; returns its id. The plaintext is encrypted before
-    /// it touches the database and is never logged.
+    /// it touches the database and is never logged. It goes to the end of the try order
+    /// (ADR-205 Inc.2).
     pub async fn create(&self, name: &str, kind: &str, secret: &[u8]) -> anyhow::Result<Uuid> {
         let sealed = self
             .cipher
@@ -368,8 +378,9 @@ impl CredentialStore {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO credentials \
-             (id, name, kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (id, name, kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, try_order) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, \
+               (SELECT COALESCE(max(try_order), 0) + 1 FROM credentials))",
         )
         .bind(id)
         .bind(name)
@@ -380,7 +391,8 @@ impl CredentialStore {
         Ok(id)
     }
 
-    /// Credential metadata (no secret values).
+    /// Credential metadata (no secret values), in the try order (ADR-205 Inc.2) — the order
+    /// Discovery starts from and every credential picker lists.
     pub async fn list(&self) -> anyhow::Result<Vec<CredentialSummary>> {
         // One scalar subquery per referencing table rather than three LEFT JOINs under one GROUP
         // BY: joined together they multiply (3 nodes × 2 organizations counts 6 of each).
@@ -391,7 +403,7 @@ impl CredentialStore {
                  AS used_by_meraki_orgs, \
                (SELECT count(*) FROM netbox_servers s WHERE s.credential_id = c.id) \
                  AS used_by_netbox_servers \
-             FROM credentials c ORDER BY c.created_at",
+             FROM credentials c ORDER BY c.try_order, c.created_at, c.id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -407,6 +419,36 @@ impl CredentialStore {
                 })
             })
             .collect()
+    }
+
+    /// Replace the try order with `ids`, first to last (ADR-205 Inc.2).
+    ///
+    /// `ids` must name every stored credential exactly once. Anything else — one missing, one
+    /// extra, one twice — is [`SetOrder::Mismatch`] and changes nothing: the caller read the list
+    /// before someone added or deleted a credential, and an order written over that would put the
+    /// new one at an arbitrary place. The comparison and the write are one transaction, under a
+    /// lock on every row, so a create or delete cannot land between them.
+    pub async fn set_order(&self, ids: &[Uuid]) -> anyhow::Result<SetOrder> {
+        let mut tx = self.pool.begin().await?;
+        let mut stored: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM credentials FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut asked = ids.to_vec();
+        stored.sort_unstable();
+        asked.sort_unstable();
+        if stored != asked {
+            return Ok(SetOrder::Mismatch);
+        }
+        sqlx::query(
+            "UPDATE credentials SET try_order = t.ord \
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord) \
+             WHERE credentials.id = t.id",
+        )
+        .bind(ids)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(SetOrder::Done)
     }
 
     /// Update a credential. The name is always set; `reseal` carries `(kind, secret)` when the

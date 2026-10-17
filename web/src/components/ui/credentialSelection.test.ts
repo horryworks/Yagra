@@ -1,26 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { toggleSelection } from './credentialSelection';
+import { moveSelected, toggleSelection } from './credentialSelection';
 
 const OPTIONS = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
 
 describe('toggleSelection', () => {
-  it('adds in the order the options are offered, not the order they were clicked', () => {
-    // The bug, stated: ticking c, then a, then b used to send ['c','a','b'] while the chips
-    // read "a b c" — and the first order is the one the sweep probes in (ADR-161).
+  it('adds at the end, so the order is the one the operator built (ADR-205 Inc.2)', () => {
     let sel: string[] = [];
     sel = toggleSelection(OPTIONS, sel, 'c');
     sel = toggleSelection(OPTIONS, sel, 'a');
     sel = toggleSelection(OPTIONS, sel, 'b');
-    expect(sel).toEqual(['a', 'b', 'c']);
+    expect(sel).toEqual(['c', 'a', 'b']);
   });
 
-  it('removes a selected id and leaves the rest in option order', () => {
-    expect(toggleSelection(OPTIONS, ['a', 'b', 'c'], 'b')).toEqual(['a', 'c']);
+  it('removes a selected id and closes the gap, keeping the rest in their order', () => {
+    expect(toggleSelection(OPTIONS, ['c', 'a', 'b'], 'a')).toEqual(['c', 'b']);
   });
 
   it('round-trips: ticking then unticking returns the original selection', () => {
-    const start = ['b', 'd'];
+    const start = ['d', 'b'];
     expect(toggleSelection(OPTIONS, toggleSelection(OPTIONS, start, 'a'), 'a')).toEqual(start);
   });
 
@@ -32,6 +30,19 @@ describe('toggleSelection', () => {
   });
 
   it('drops ids no longer offered when anything is ticked', () => {
-    expect(toggleSelection(OPTIONS, ['a', 'stale'], 'b')).toEqual(['a', 'b']);
+    expect(toggleSelection(OPTIONS, ['b', 'stale', 'a'], 'c')).toEqual(['b', 'a', 'c']);
+  });
+});
+
+describe('moveSelected', () => {
+  it('moves one credential by one place and nothing else', () => {
+    expect(moveSelected(['a', 'b', 'c'], 'c', -1)).toEqual(['a', 'c', 'b']);
+    expect(moveSelected(['a', 'b', 'c'], 'a', 1)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('does nothing at either end or for an id not selected', () => {
+    expect(moveSelected(['a', 'b'], 'a', -1)).toEqual(['a', 'b']);
+    expect(moveSelected(['a', 'b'], 'b', 1)).toEqual(['a', 'b']);
+    expect(moveSelected(['a', 'b'], 'x', 1)).toEqual(['a', 'b']);
   });
 });

@@ -42,8 +42,9 @@ type CredentialUsage = Pick<
  *  values and gets them back unchanged, rather than a re-declared copy of the API shape. */
 type CredentialRow = Pick<CredentialSummary, 'id' | 'name' | 'kind'> & CredentialUsage;
 
-/** The name column sorts ascending by default — the order an operator scanning a list expects. */
-export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'name', dir: 'asc' };
+/** The try order (ADR-205 Inc.2) by default: the order the server lists the credentials in, which
+ *  is the order Discovery starts from — so what the table shows first is what is tried first. */
+export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'order', dir: 'asc' };
 
 /** The columns the credentials table sorts on, derived from the sort values rather than listed again. */
 export const CREDENTIAL_SORT_KEYS: readonly string[] = Object.keys(credentialSortValues());
@@ -55,11 +56,27 @@ export const CREDENTIAL_SORT_KEYS: readonly string[] = Object.keys(credentialSor
  *  that field counts nodes, so a Meraki key polling three organizations would sort as unused —
  *  next to the rows an operator sorts this column to find and delete. The key stays `used_by`
  *  because it is the column's key, and with it the `?sort=` value already in people's URLs. */
-export function credentialSortValues<T extends CredentialRow>(): SortValues<T> {
+export function credentialSortValues<T extends CredentialRow>(
+  orderOf: (id: string) => number = () => 0,
+): SortValues<T> {
   return {
+    // The place in the try order, which the page passes in from the list as the server sent it.
+    order: (c) => orderOf(c.id),
     name: (c) => c.name,
     used_by: (c) => totalUsage(c),
   };
+}
+
+/** Whether a tab's rows can be moved with up and down (ADR-205 Inc.2): only the SNMP tab, whose
+ *  order is the one Discovery tries, and only while the table shows that order whole — sorted on
+ *  it ascending and narrowed by nothing. "Up" in a list sorted by name, or with rows hidden between
+ *  two neighbours, would move a credential somewhere other than where the operator sees it go. */
+export function canReorderCredentials(
+  group: CredentialGroup,
+  sort: SortState,
+  filtered: boolean,
+): boolean {
+  return group === 'snmp' && sort.by === 'order' && sort.dir === 'asc' && !filtered;
 }
 
 /**

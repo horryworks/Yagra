@@ -18,6 +18,7 @@ import {
   CREDENTIAL_KIND_LABEL_KEYS,
   CREDENTIAL_TABLE_PREFIX,
   DEFAULT_CREDENTIAL_SORT,
+  canReorderCredentials,
   credentialGroupCounts,
   visibleCredentialGroups,
   credentialFilters,
@@ -108,8 +109,15 @@ describe('the filter row', () => {
 describe('the sort', () => {
   const values = credentialSortValues<CredentialSummary>();
 
-  it('starts on the name, ascending', () => {
-    expect(DEFAULT_CREDENTIAL_SORT).toEqual({ by: 'name', dir: 'asc' });
+  it('starts on the try order, ascending (ADR-205 Inc.2)', () => {
+    expect(DEFAULT_CREDENTIAL_SORT).toEqual({ by: 'order', dir: 'asc' });
+  });
+
+  it('orders by the place in the try order it is handed', () => {
+    const place = new Map(rows.map((c, i) => [c.id, rows.length - i]));
+    const byOrder = credentialSortValues<CredentialSummary>((id) => place.get(id) ?? 0);
+    const asc = sortRows(rows, { by: 'order', dir: 'asc' }, byOrder).map((c) => c.id);
+    expect(asc).toEqual(rows.map((c) => c.id).reverse());
   });
 
   it('orders by usage numerically, not as text', () => {
@@ -256,5 +264,18 @@ describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
     expect(new Set(prefixes).size).toBe(prefixes.length);
     expect(Object.keys(CREDENTIAL_GROUP_LABEL_KEYS).sort()).toEqual(Object.keys(CREDENTIAL_TABLE_PREFIX).sort());
     expect(Object.keys(CREDENTIAL_ADD_TITLE_KEYS).sort()).toEqual(['http', 'snmp']);
+  });
+});
+
+describe('when a credential can be moved (ADR-205 Inc.2)', () => {
+  const order = { by: 'order', dir: 'asc' } as const;
+
+  it('only on the SNMP tab, sorted by the try order ascending, with nothing filtered', () => {
+    expect(canReorderCredentials('snmp', order, false)).toBe(true);
+    expect(canReorderCredentials('http', order, false)).toBe(false);
+    expect(canReorderCredentials('integration', order, false)).toBe(false);
+    expect(canReorderCredentials('snmp', { by: 'name', dir: 'asc' }, false)).toBe(false);
+    expect(canReorderCredentials('snmp', { by: 'order', dir: 'desc' }, false)).toBe(false);
+    expect(canReorderCredentials('snmp', order, true)).toBe(false);
   });
 });

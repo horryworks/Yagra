@@ -37,12 +37,17 @@
       "headerNameRefused": "This header cannot be set here: Host, Authorization and hop-by-hop headers are reserved."
     },
     "cols": {
+      "order": "#",
       "name": "Name",
       "type": "Type",
       "secret": "Secret",
       "usedBy": "Used by",
       "credentialId": "Credential ID",
       "actions": "Actions"
+    },
+    "order": {
+      "up": "Move {{name}} up",
+      "down": "Move {{name}} down"
     },
     "usage": {
       "unused": "Unused",
@@ -96,7 +101,8 @@
     "err": {
       "add": "failed to add credential",
       "update": "failed to update",
-      "delete": "failed to delete"
+      "delete": "failed to delete",
+      "order": "failed to save the order"
     }
   },
   "users": {

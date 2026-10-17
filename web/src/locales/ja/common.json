@@ -46,7 +46,10 @@
     "placeholder": "保存済み認証情報を選択…",
     "remove": "{{name}} を削除",
     "empty": "保存済みの SNMP 認証情報がありません。",
-    "manage": "認証情報を管理"
+    "manage": "認証情報を管理",
+    "selected_other": "{{count}} 件の認証情報を選択",
+    "moveUp": "{{name}} を上へ",
+    "moveDown": "{{name}} を下へ"
   },
   "actions": {
     "save": "保存",

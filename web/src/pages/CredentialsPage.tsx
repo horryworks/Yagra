@@ -11,9 +11,10 @@
 // validates and seals. Edit: name is always editable; the secret is never returned, so it's left
 // intact unless the operator opts to replace it (then kind + secret are re-entered and re-sealed).
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api } from '../services/api';
+import { api, errMsg } from '../services/api';
+import { moveWithinGroup } from '../lib/reorder';
 import { useCan } from '../store';
 import type { CredentialSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -56,6 +57,7 @@ import {
   type HttpAuthState,
 } from './httpAuthCredential';
 import {
+  canReorderCredentials,
   credentialFilters,
   credentialSortValues,
   CREDENTIAL_SORT_KEYS,
@@ -625,6 +627,7 @@ export function CredentialsPage() {
           key={active}
           group={active}
           rows={groupRows}
+          allIds={rows.map((c) => c.id)}
           loading={creds.loading}
           onChanged={load}
         />
@@ -637,11 +640,15 @@ export function CredentialsPage() {
 function CredentialGroupTable({
   group,
   rows,
+  allIds,
   loading,
   onChanged,
 }: {
   group: CredentialGroup;
+  /** This tab's rows, in the try order the server listed them in. */
   rows: CredentialSummary[];
+  /** Every credential's id in that order — what a saved order must name (ADR-205 Inc.2). */
+  allIds: string[];
   loading: boolean;
   onChanged: () => void;
 }) {
@@ -654,12 +661,79 @@ function CredentialGroupTable({
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
   const creatable = creatableKindsIn(group);
   const addTitleKey = CREDENTIAL_ADD_TITLE_KEYS[group];
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  // A row's place in this tab's try order, 1-based, as the server listed it.
+  const place = useMemo(() => new Map(rows.map((c, i) => [c.id, i + 1])), [rows]);
+
+  // Whether this tab's rows can be moved. Whether the list is narrowed is only known once the
+  // columns exist (`useClientFilters` takes them), so it is mirrored into state by an effect after
+  // that call; the arrows follow a filter one render late, which nothing can click in between.
+  const [filteredNow, setFilteredNow] = useState(false);
+  const reorderable = canCredentials && canReorderCredentials(group, sort, filteredNow);
+  const move = useCallback(
+    (id: string, delta: -1 | 1) => {
+      setMoving(true);
+      setMoveError(null);
+      api
+        .setCredentialOrder(moveWithinGroup(allIds, rows.map((c) => c.id), id, delta))
+        .catch((e: unknown) => setMoveError(errMsg(e, t('cred.err.order'))))
+        // Re-read either way: on a 409 the list the arrows were drawn from is the stale one.
+        .finally(() => {
+          setMoving(false);
+          onChanged();
+        });
+    },
+    [allIds, rows, t, onChanged],
+  );
 
   const columns = useMemo<Column<CredentialSummary>[]>(() => {
     // Every kind present in this tab, so a kind the old dropdown could not select is filterable.
     const kinds = [...new Set(rows.map((c) => c.kind))].sort();
     const specs = credentialFilters(t, kinds, (k) => kindLabel(k, t));
     const cols: Column<CredentialSummary>[] = [
+      ...(group === 'snmp'
+        ? [
+            {
+              key: 'order',
+              header: t('cred.cols.order'),
+              width: '120px',
+              sortable: true,
+              render: (c: CredentialSummary) => {
+                const n = place.get(c.id) ?? 0;
+                return (
+                  <span className="cred-order">
+                    <span className="cred-order-n mono">{n}</span>
+                    {reorderable && (
+                      <>
+                        <button
+                          type="button"
+                          className="cred-order-btn"
+                          aria-label={t('cred.order.up', { name: c.name })}
+                          disabled={moving}
+                          style={n === 1 ? { visibility: 'hidden' } : undefined}
+                          onClick={() => move(c.id, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="cred-order-btn"
+                          aria-label={t('cred.order.down', { name: c.name })}
+                          disabled={moving}
+                          style={n === rows.length ? { visibility: 'hidden' } : undefined}
+                          onClick={() => move(c.id, 1)}
+                        >
+                          ↓
+                        </button>
+                      </>
+                    )}
+                  </span>
+                );
+              },
+            },
+          ]
+        : []),
       {
         key: 'name',
         header: t('cred.cols.name'),
@@ -746,14 +820,18 @@ function CredentialGroupTable({
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, canCredentials, rows]);
+  }, [t, canCredentials, rows, group, place, reorderable, moving, move]);
 
   // URL-backed, one table per tab, each under its own key prefix (ADR-153 decision 3).
   const filtering = useClientFilters(columns, rows, { prefix: CREDENTIAL_TABLE_PREFIX[group] });
   const { filters, setFilters, shown: matched, counts, anyFiltered } = filtering;
+  useEffect(() => setFilteredNow(anyFiltered), [anyFiltered]);
   // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
   // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
-  const shown = useMemo(() => sortRows(matched, sort, credentialSortValues()), [matched, sort]);
+  const shown = useMemo(
+    () => sortRows(matched, sort, credentialSortValues((id) => place.get(id) ?? 0)),
+    [matched, sort, place],
+  );
 
   const empty = anyFiltered ? (
     t('cred.empty.filtered')
@@ -796,6 +874,11 @@ function CredentialGroupTable({
         )}
       </ListToolbar>
 
+      {moveError && (
+        <p className="field-error" role="alert">
+          {moveError}
+        </p>
+      )}
       {group === 'snmp' && <DataTable tableId="settings.credentials" {...table} />}
       {group === 'http' && <DataTable tableId="settings.credentialsHttp" {...table} />}
       {group === 'integration' && <DataTable tableId="settings.credentialsIntegration" {...table} />}
