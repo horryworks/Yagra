@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.52 — Choose the order Discovery tries stored credentials in, and sweeps finish sooner
+
 ### Improvements
 
 - **You can choose the order stored credentials are tried in.** On Nodes ▸ Credentials & secrets, the SNMP tab now opens in that order, with a # column and ↑ / ↓ to move a credential; the order is saved for everyone and is the order Discovery starts from. On Discovery (and the Detect forms on Discovery ▸ Unregistered devices and a node's Neighbors tab), every stored SNMP credential is now listed with a checkbox instead of behind a dropdown: the ones in use come first, numbered in the order they will be tried, with ↑ / ↓; ticking one adds it to the end. A change of order there applies to that scan only: Discovery always opens in the order set on Credentials & secrets. Which credentials are ticked is remembered by this browser, and shared by the range scan and both Detect forms — starting a Detect now remembers its ticks too. A credential you add is placed last, including one created by a core from before this release during an upgrade. Existing credentials keep the order they were created in. The credential pickers elsewhere (adding a node, a URL monitor, a Meraki organization) list credentials in the same order. API: `PUT /api/v1/credentials/order` takes every credential's id in the new order and answers 409 if the list changed meanwhile; `GET /api/v1/credentials` now returns credentials in that order rather than by creation time.
