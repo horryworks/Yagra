@@ -186,8 +186,8 @@ export function NeighborsTab({ node }: Props) {
       .listCredentials()
       .then((list) => {
         setCreds(list);
-        // Discovery's own starting point: the credentials the last range scan tried, else every
-        // SNMP credential. A change made here is not remembered (ADR-179 Inc.3 decision 5).
+        // Discovery's own starting point: the remembered ticks in the stored try order, else every
+        // SNMP credential. A Detect here remembers its ticks, never its order (ADR-205 Inc.4).
         setProbeCredIds(initialCredentialIds(usePrefsStore.getState().discoveryScan, list));
       })
       .catch(() => undefined);

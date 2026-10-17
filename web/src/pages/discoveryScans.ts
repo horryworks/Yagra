@@ -327,11 +327,16 @@ export function initialCredentialIds(
 /** The memory with its ticked credentials replaced and nothing else touched — what Detect writes
  *  (ADR-205 Inc.4). With no memory yet, the other fields are the ones a fresh visit opens with: an
  *  empty spec reads back as the default range, no pool as "pick the default", SNMP only where ping
- *  answers. */
+ *  answers.
+ *
+ *  An empty tick list leaves the memory as it was. Remembered, it would read back as "every SNMP
+ *  credential" (`initialCredentialIds`'s fallback) — so all it could do is erase a real selection,
+ *  which is what a Detect pressed before the credential list had loaded used to do. */
 export function withRememberedCredentials(
   mem: DiscoveryScanMemory | null,
   credentialIds: readonly string[],
-): DiscoveryScanMemory {
+): DiscoveryScanMemory | null {
+  if (credentialIds.length === 0) return mem;
   const ids = [...credentialIds];
   return mem
     ? { ...mem, credentialIds: ids }

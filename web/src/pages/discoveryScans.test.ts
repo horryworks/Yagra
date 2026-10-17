@@ -445,17 +445,27 @@ describe('seeding the form from the last sweep (ADR-134)', () => {
   describe("what Detect writes (ADR-205 Inc.4)", () => {
     it('replaces the ticked credentials and leaves the rest of the memory alone', () => {
       const before = mem({ targetSpec: '198.51.100.0/24', credentialIds: ['c1'], pool: 'tokyo' });
-      const after = withRememberedCredentials(before, ['c2', 'c1']);
+      const after = withRememberedCredentials(before, ['c2', 'c1'])!;
       expect(after.credentialIds).toEqual(['c2', 'c1']);
       expect({ ...after, credentialIds: before.credentialIds }).toEqual(before);
     });
 
     it('with no memory yet, starts one that opens like a fresh visit', () => {
-      const made = withRememberedCredentials(null, ['c2']);
+      const made = withRememberedCredentials(null, ['c2'])!;
       expect(made.credentialIds).toEqual(['c2']);
       expect(initialTargetSpec(made)).toBe(DEFAULT_TARGET_SPEC);
       expect(made.pool).toBeNull();
       expect(made.snmpWhenUnreachable).toBe(false);
+    });
+
+    // A Detect pressed on a neighbour before the credential list has loaded sends no ticks. Writing
+    // that down would replace the operator's selection with the fallback (every SNMP credential).
+    it('leaves the memory alone when nothing is ticked', () => {
+      const before = mem({ credentialIds: ['c2'] });
+      expect(withRememberedCredentials(before, [])).toBe(before);
+      expect(withRememberedCredentials(null, [])).toBeNull();
+      const creds = [cred('c1', 'snmp_v2c'), cred('c2', 'snmp_v3')];
+      expect(initialCredentialIds(withRememberedCredentials(before, []), creds)).toEqual(['c2']);
     });
   });
 

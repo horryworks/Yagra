@@ -427,7 +427,10 @@ impl CredentialStore {
     /// extra, one twice — is [`SetOrder::Mismatch`] and changes nothing: the caller read the list
     /// before someone added or deleted a credential, and an order written over that would put the
     /// new one at an arbitrary place. The comparison and the write are one transaction, under a
-    /// lock on every row, so a create or delete cannot land between them.
+    /// lock on every row, so a delete or an edit cannot land between them. A **create** can: the
+    /// row lock does not cover a row that does not exist yet. That one is harmless — it is not in
+    /// `ids`, so the write leaves it at the sequence number its default gave it (migration 0150),
+    /// which is above the 1..n written here, and it lists last.
     pub async fn set_order(&self, ids: &[Uuid]) -> anyhow::Result<SetOrder> {
         let mut tx = self.pool.begin().await?;
         let mut stored: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM credentials FOR UPDATE")

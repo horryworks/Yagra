@@ -55,6 +55,55 @@ test('moving an SNMP credential up saves the whole order, the HTTP row where it 
   expect(errors.uncaught).toEqual([]);
 });
 
+// The arrows come back as soon as a save returns, before the re-read that shows the new order. A
+// second press in that gap used to be computed from the list on screen and repeat the first move.
+test('a second press before the list is re-read moves on from the order just saved', async ({
+  page,
+}) => {
+  const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
+  const three = ['a', 'b', 'c'].map((n, i) => ({
+    ...first,
+    id: `00000000-0000-4000-8000-0000000000c${i + 1}`,
+    name: `ymock-${n}`,
+    kind: 'snmp_v2c',
+  }));
+  const ids = three.map((c) => c.id);
+  let saved = false;
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/api/v1/credentials', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    // Every re-read after the first save is held, so the screen keeps drawing the old order.
+    if (saved) await held;
+    await route.fulfill({ json: three });
+  });
+  const puts: string[][] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order') {
+      saved = true;
+      puts.push((r.postDataJSON() as { ids: string[] }).ids);
+    }
+  });
+
+  await page.goto('/nodes/credentials');
+  const up = page.getByRole('button', { name: 'Move ymock-c up' });
+  const answered = () =>
+    page.waitForResponse(
+      (r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order',
+    );
+  let done = answered();
+  await up.click();
+  await done;
+  done = answered();
+  await up.click();
+  await done;
+  release();
+  expect(puts).toEqual([
+    [ids[0], ids[2], ids[1]],
+    [ids[2], ids[0], ids[1]],
+  ]);
+});
+
 test('the arrows go while the table is sorted by something else', async ({ page }) => {
   await page.goto('/nodes/credentials?sort=name');
   await expect(page.locator('.dt-row', { hasText: 'ymock-first' })).toBeVisible();

@@ -966,9 +966,9 @@ export function DiscoveryPage() {
                 </label>
               )}
 
-              {/* Not a <label>: the picker holds buttons of its own (the order's up / down /
-                  remove, ADR-205 Inc.2), and a click on a label is forwarded to its first control,
-                  so pressing beside a row would open the dropdown. */}
+              {/* Not a <label>: the picker holds controls of its own (a checkbox per row and the
+                  order's up / down, ADR-205 Inc.3), and a click on a label is forwarded to its
+                  first control, so pressing beside a row would tick the first credential. */}
               <div className="form-label disco-f-creds">
                 {t('discovery.credsLabel')}
                 <CredentialPicker

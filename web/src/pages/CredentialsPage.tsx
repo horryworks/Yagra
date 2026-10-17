@@ -11,7 +11,7 @@
 // validates and seals. Edit: name is always editable; the secret is never returned, so it's left
 // intact unless the operator opts to replace it (then kind + secret are re-entered and re-sealed).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { moveWithinGroup } from '../lib/reorder';
@@ -604,6 +604,9 @@ export function CredentialsPage() {
   // default tab rather than a tab the bar does not show.
   const active = visible.includes(tab) ? tab : 'snmp';
   const groupRows = useMemo(() => rows.filter((c) => credentialGroupOf(c.kind) === active), [rows, active]);
+  // Held across renders, so the table's columns are rebuilt when the list changes and not on every
+  // render of the page.
+  const allIds = useMemo(() => rows.map((c) => c.id), [rows]);
 
   return (
     <div>
@@ -627,7 +630,7 @@ export function CredentialsPage() {
           key={active}
           group={active}
           rows={groupRows}
-          allIds={rows.map((c) => c.id)}
+          allIds={allIds}
           loading={creds.loading}
           onChanged={load}
         />
@@ -671,13 +674,27 @@ function CredentialGroupTable({
   // that call; the arrows follow a filter one render late, which nothing can click in between.
   const [filteredNow, setFilteredNow] = useState(false);
   const reorderable = canCredentials && canReorderCredentials(group, sort, filteredNow);
+  // The order just saved, until the re-read that shows it arrives. The arrows are pressable again
+  // as soon as the save returns, and a second press in that gap must move on from the saved order —
+  // computed from the list on screen, it repeated the first move and the second press was lost.
+  const saved = useRef<string[] | null>(null);
+  useEffect(() => {
+    saved.current = null;
+  }, [allIds]);
   const move = useCallback(
     (id: string, delta: -1 | 1) => {
       setMoving(true);
       setMoveError(null);
+      const next = moveWithinGroup(saved.current ?? allIds, rows.map((c) => c.id), id, delta);
       api
-        .setCredentialOrder(moveWithinGroup(allIds, rows.map((c) => c.id), id, delta))
-        .catch((e: unknown) => setMoveError(errMsg(e, t('cred.err.order'))))
+        .setCredentialOrder(next)
+        .then(() => {
+          saved.current = next;
+        })
+        .catch((e: unknown) => {
+          saved.current = null;
+          setMoveError(errMsg(e, t('cred.err.order')));
+        })
         // Re-read either way: on a 409 the list the arrows were drawn from is the stale one.
         .finally(() => {
           setMoving(false);
