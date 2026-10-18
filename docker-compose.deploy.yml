@@ -815,13 +815,13 @@ services:
       YAGRA_UPGRADE_ALLOW_BUNDLE: ${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}
       # Free space an apply demands before it writes anything (ADR-050 decision 15). 3 GiB by
       # default: a release is roughly 133 MiB of compressed layers that unpack larger, the
-      # pre-upgrade backup is a full PostgreSQL dump plus a VictoriaMetrics snapshot beside it, and
-      # both land on this host.
+      # pre-upgrade backup is a full PostgreSQL dump (plus a VictoriaMetrics snapshot when the
+      # release changes that image) beside them, and all of it lands on this host.
       #
-      # 🚨 The order is what this fixes, not the arithmetic. The backup runs FIRST, so without this
-      # check a host that is already full gets several hundred MB written onto it and *then* fails
-      # the pull — Yagra's own recovery step making the condition worse. Measured 2026-09-04 on a
-      # GCP test deployment: v0.2.17 → v0.3.0 died at `pull` with a 100% full disk.
+      # 🚨 The order is what this fixes, not the arithmetic. The check runs before anything is
+      # written, so without it a host that is already full gets several hundred MB written onto it
+      # and *then* fails — Yagra's own recovery step making the condition worse. Measured
+      # 2026-09-04 on a GCP test deployment: v0.2.17 → v0.3.0 died at `pull` with a 100% full disk.
       YAGRA_UPGRADE_MIN_FREE_BYTES: ${YAGRA_UPGRADE_MIN_FREE_BYTES:-3221225472}
       # How many releases to keep behind the one being installed (ADR-050 decision 17). Applies to
       # this repository's three images and to the pre-upgrade backup directories; nothing else on
@@ -985,10 +985,10 @@ services:
           || fail start "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml. On the host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.deploy.yml up -d --force-recreate yagra-updater — a plain 'up -d' will NOT repair it, because this container's definition is unchanged and compose leaves it running with the stale label"
 
         # 0b. Enough room to do all of this, checked BEFORE anything is written (ADR-050 decision
-        #     15). The order is the whole point: step 1 writes a full PostgreSQL dump and a
-        #     VictoriaMetrics snapshot onto this host, and step 2 unpacks three images onto it. A
-        #     host that is already full therefore gets several hundred MB written to it and *then*
-        #     fails — Yagra's own safety step making the situation worse. Measured 2026-09-04 on a
+        #     15). The order is the whole point: step 2 unpacks three images onto this host and
+        #     step 2b writes a full PostgreSQL dump (and, when VictoriaMetrics changes, a metrics
+        #     snapshot) beside them. A host that is already full therefore gets several hundred MB
+        #     written to it and *then* fails — Yagra's own safety step making the situation worse. Measured 2026-09-04 on a
         #     GCP test deployment: v0.2.17 → v0.3.0 died at `pull` with the disk at 100%.
         #
         #     🚨 **Two filesystems, and they are usually but not always the same one.** The backup

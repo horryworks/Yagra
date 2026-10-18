@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-17
-# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6563 MA-S=7203 withheld=3
+# fetched: 2026-10-18
+# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6563 MA-S=7204 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -37429,6 +37429,7 @@
 8C1F6485C	Zing 5g Communications Canada Inc.
 8C1F6485E	Apen Group S.p.A. (VAT IT08767740155)
 8C1F6485F	NEC Asia Pacific Pte Ltd
+8C1F64860	Gogo BA
 8C1F64861	AvioNova (Chengdu) Technology Company Limited
 8C1F64863	EngiNe srl
 8C1F64864	IMI Thomson Valves
