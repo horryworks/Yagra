@@ -84,7 +84,10 @@
 //! every target takes one slot from a shared, first-come semaphore before it is probed and returns
 //! it when done. So a Detect pressed mid-sweep starts at the next free slot, and the poller never
 //! has more than [`SWEEP_CONCURRENCY`] devices in hand however many jobs are running. What one
-//! device is sent is unchanged: one credential at a time, spaced.
+//! job sends one device is unchanged: one credential at a time, spaced. Two jobs that both hold an
+//! address (a Detect pressed on a device inside a range being swept) each run their own spaced
+//! sequence at it, side by side; SNMP has no account to lock out, so that costs one extra request
+//! every couple of seconds and nothing more.
 //!
 //! ## The ICMP gate (ADR-068 Increment 3)
 //!
@@ -652,14 +655,23 @@ fn sweep_targets<'a>(
         // one of them, the queue being first come first served. The semaphore is never closed, so
         // a failed acquire cannot happen; were it to, the target goes ahead unslotted rather than
         // being dropped unprobed.
-        .then(move |target| async move { (target, ctx.slots.clone().acquire_owned().await.ok()) })
-        .map(move |(target, slot)| {
+        //
+        // A stopped sweep does not queue at all: asking for a slot only to skip the target would
+        // make each of its remaining targets wait its turn behind every other running job, so a
+        // stop would take as long to close the scan as the other sweeps take to finish.
+        .then(move |target| async move {
+            if ctx.stopping() {
+                return (target, None, true);
+            }
+            (target, ctx.slots.clone().acquire_owned().await.ok(), false)
+        })
+        .map(move |(target, slot, stopped)| {
             let transport = transport.clone();
             async move {
                 let _slot = slot;
-                // Layer 2: a target not yet started is dropped whole. Asked after the slot, so a
-                // stop that lands while a target waits for one still reaches it.
-                if ctx.stopping() {
+                // Layer 2: a target not yet started is dropped whole. Asked again after the slot,
+                // so a stop that lands while a target waits for one still reaches it.
+                if stopped || ctx.stopping() {
                     return Probe::Skipped;
                 }
                 Probe::Probed(probe_one(target, ctx, transport.as_ref()).await)
@@ -2666,5 +2678,47 @@ mod tests {
             vec![Uuid::from_u128(2), Uuid::from_u128(1)],
             "the one-address job closed before the ten-address sweep it arrived behind"
         );
+    }
+
+    /// A stopped sweep closes at once even while another job holds every slot. Its remaining
+    /// targets are skipped without queueing for one; were they to queue, each would wait for the
+    /// other sweep's next ten-second device, and the scan would sit in `cancelling` until about
+    /// t=50s instead of closing when its one already-waiting target is served at t=20s.
+    #[tokio::test(start_paused = true)]
+    async fn a_stopped_sweep_does_not_wait_for_slots_to_skip_its_targets() {
+        use yagra_bus::InMemoryBus;
+        let bus = Arc::new(InMemoryBus::new(256));
+        let mut rx = bus.subscribe_discovery_results();
+        let cancels = no_cancels();
+        let mut fake = ScriptedFake::answering("public");
+        fake.hold_all = Some(Duration::from_secs(10));
+        let stopped = Uuid::from_u128(2);
+        let started = tokio::time::Instant::now();
+
+        let run = tokio::spawn(run_discovery_jobs(
+            futures::stream::iter(vec![sweep_job(1, 1, 5), sweep_job(2, 2, 10)]),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            Arc::new(fake),
+            cancels.clone(),
+            Arc::new(Semaphore::new(1)),
+        ));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        cancels.insert(stopped, Instant::now());
+
+        let closed_at = loop {
+            let r = rx
+                .recv()
+                .await
+                .expect("the bus stays open while the jobs run");
+            if r.scan_id == stopped && r.done {
+                assert!(r.cancelled, "the stopped sweep says it was stopped");
+                break started.elapsed();
+            }
+        };
+        assert!(
+            closed_at <= Duration::from_secs(25),
+            "the stopped sweep took {closed_at:?} to close: its skipped targets queued for slots"
+        );
+        run.await.expect("the job loop ends");
     }
 }
