@@ -11,12 +11,12 @@
 //! ## "We have it" comes before "we found something" (ADR-068 Increment 4)
 //!
 //! The first thing a sweep publishes is a zero-progress result, before it probes a single address.
-//! This loop is **strictly sequential** — one job at a time, start to finish — so a job can sit on
-//! the subscription for the length of the sweep ahead of it, which with the ICMP gate off is
-//! minutes. Core used to mark a scan `Running` the moment it accepted it, so "queued behind another
-//! sweep", "no poller ever took this" and "sweeping, and everything out there is silent" were one
-//! sentence on the operator's screen. This message is what core turns into `Running`; a scan nobody
-//! sends it for stays `Queued` and says so.
+//! A job can still wait before that: jobs run side by side since ADR-204 Inc.3, but at most
+//! [`MAX_CONCURRENT_JOBS`] of them, and each target waits for one of the poller's
+//! [`SWEEP_CONCURRENCY`] slots. Core used to mark a scan `Running` the moment it accepted it, so
+//! "queued behind another sweep", "no poller ever took this" and "sweeping, and everything out
+//! there is silent" were one sentence on the operator's screen. This message is what core turns
+//! into `Running`; a scan nobody sends it for stays `Queued` and says so.
 //!
 //! It is an ordinary partial result, so it needs no wire change and an N-1 core folds it in as a
 //! zero-progress update.
@@ -70,10 +70,21 @@
 //! runs concurrently is targets, never credentials against one device. Firing every credential at a
 //! device at once would make a device that locks out a failing source worse, not better.
 //!
-//! The targets themselves run as **one stream**, [`SWEEP_CONCURRENCY`] at a time, with a progress
-//! result after every [`PROGRESS_CHUNK`] completions. They used to run in 32-target chunks that each
-//! waited for their slowest member, so one device working through five wrong credentials held 31
-//! finished ones and every target after them.
+//! The targets themselves run as **one stream**, with a progress result after every
+//! [`PROGRESS_CHUNK`] completions. They used to run in 32-target chunks that each waited for their
+//! slowest member, so one device working through five wrong credentials held 31 finished ones and
+//! every target after them.
+//!
+//! ## Jobs side by side, slots shared (ADR-204 Inc.3)
+//!
+//! Detect on an unregistered device is a one-address job of its own, and jobs used to run strictly
+//! one after another: five Detects pressed together finished one at a time, and a Detect pressed
+//! during a range sweep waited for the whole sweep. Jobs now run concurrently, up to
+//! [`MAX_CONCURRENT_JOBS`], and the [`SWEEP_CONCURRENCY`] limit is **the poller's, not each job's**:
+//! every target takes one slot from a shared, first-come semaphore before it is probed and returns
+//! it when done. So a Detect pressed mid-sweep starts at the next free slot, and the poller never
+//! has more than [`SWEEP_CONCURRENCY`] devices in hand however many jobs are running. What one
+//! device is sent is unchanged: one credential at a time, spaced.
 //!
 //! ## The ICMP gate (ADR-068 Increment 3)
 //!
@@ -116,6 +127,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::stream::{Stream, StreamExt};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 use yagra_bus::{
     DiscoveredDevice, DiscoveryBus, DiscoveryCancel, DiscoveryJob, DiscoveryResult, NatsBus,
@@ -140,6 +152,10 @@ const SYSNAME_OID: &str = "1.3.6.1.2.1.1.5.0";
 /// at a time — this bounds how many *devices* are being asked at once, never how many credentials
 /// one device is sent. A job carries at most 1,024 targets (core's `JOB_TARGETS`).
 const SWEEP_CONCURRENCY: usize = 64;
+/// Discovery jobs run side by side, at most this many (ADR-204 Inc.3). A job beyond it waits for
+/// one to finish. It bounds the jobs, not the devices — [`SWEEP_CONCURRENCY`] slots are shared by
+/// all of them — so this only caps how many scans hold a hit tally and a progress loop at once.
+const MAX_CONCURRENT_JOBS: usize = 16;
 /// Completed targets per progress result: a cumulative partial result is published after every
 /// this many, so the operator sees the sweep advance instead of one long silence. Since ADR-204 it
 /// is only a reporting cadence — nothing waits for a group of this size to finish.
@@ -353,6 +369,9 @@ struct SweepCtx {
     cancels: Arc<CancelSet>,
     /// Whether a target that did not answer ICMP is still tried with SNMP (ADR-068 Increment 3).
     snmp_when_unreachable: bool,
+    /// The poller's [`SWEEP_CONCURRENCY`] slots, shared by every running job (ADR-204 Inc.3). A
+    /// target holds one while it is probed.
+    slots: Arc<Semaphore>,
     /// How many of this sweep's targets could not be probed at all — `probe_icmp` returned `Err`.
     ///
     /// Counted rather than logged per target: a poller that cannot send ICMP fails on *every*
@@ -367,7 +386,7 @@ struct SweepCtx {
 /// A function rather than a literal inside the sweep loop so a test can read the wiring back:
 /// **which rate-limit profile a sweep probes with is a decision, and it was wrong for a year**
 /// with nothing able to see it (ADR-161).
-fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>) -> SweepCtx {
+fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>, slots: Arc<Semaphore>) -> SweepCtx {
     let candidates = candidates_of(job);
     SweepCtx {
         hits: Arc::new(HitTally::new(candidates.len())),
@@ -383,6 +402,7 @@ fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>) -> SweepCtx {
         scan_id: job.scan_id,
         cancels,
         snmp_when_unreachable: job.snmp_when_unreachable,
+        slots,
         icmp_errors: AtomicUsize::new(0),
     }
 }
@@ -396,19 +416,57 @@ impl SweepCtx {
 
 /// Drain discovery jobs off the bus, sweeping each and publishing cumulative progress
 /// results. Returns when the stream ends.
+///
+/// Jobs run side by side, at most [`MAX_CONCURRENT_JOBS`], sharing [`SWEEP_CONCURRENCY`] target
+/// slots (ADR-204 Inc.3) — see the module doc.
 pub async fn run_discovery_stream<S>(
-    mut jobs: S,
+    jobs: S,
     bus: Arc<dyn DiscoveryBus>,
     transport: Arc<dyn Transport>,
     cancels: Arc<CancelSet>,
 ) where
     S: Stream<Item = DiscoveryJob> + Unpin,
 {
-    while let Some(job) = jobs.next().await {
+    let slots = Arc::new(Semaphore::new(SWEEP_CONCURRENCY));
+    run_discovery_jobs(jobs, bus, transport, cancels, slots).await;
+}
+
+/// [`run_discovery_stream`] with the slots handed in, so a test can make them few.
+async fn run_discovery_jobs<S>(
+    jobs: S,
+    bus: Arc<dyn DiscoveryBus>,
+    transport: Arc<dyn Transport>,
+    cancels: Arc<CancelSet>,
+    slots: Arc<Semaphore>,
+) where
+    S: Stream<Item = DiscoveryJob> + Unpin,
+{
+    jobs.for_each_concurrent(MAX_CONCURRENT_JOBS, |job| {
+        run_one_job(
+            job,
+            bus.clone(),
+            transport.clone(),
+            cancels.clone(),
+            slots.clone(),
+        )
+    })
+    .await;
+    tracing::warn!("discovery job stream ended");
+}
+
+/// Sweep one job to its terminal result.
+async fn run_one_job(
+    job: DiscoveryJob,
+    bus: Arc<dyn DiscoveryBus>,
+    transport: Arc<dyn Transport>,
+    cancels: Arc<CancelSet>,
+    slots: Arc<Semaphore>,
+) {
+    {
         let total = u32::try_from(job.targets.len()).unwrap_or(u32::MAX);
-        // Layer 1: a sweep cancelled while it waited its turn must not start. This loop is strictly
-        // sequential, so a job can sit on the subscription for the length of the sweep ahead of it —
-        // long enough for the operator to give up on it before it has probed anything.
+        // Layer 1: a sweep cancelled while it waited its turn must not start. A job can still wait
+        // — behind MAX_CONCURRENT_JOBS others on the subscription — long enough for the operator to
+        // give up on it before it has probed anything.
         if cancels.is_cancelled(job.scan_id, Instant::now()) {
             tracing::info!(scan = %job.scan_id, "discovery sweep cancelled before it started");
             publish(
@@ -423,7 +481,7 @@ pub async fn run_discovery_stream<S>(
                 },
             )
             .await;
-            continue;
+            return;
         }
         tracing::info!(
             scan = %job.scan_id,
@@ -453,7 +511,7 @@ pub async fn run_discovery_stream<S>(
             },
         )
         .await;
-        let ctx = sweep_ctx(&job, cancels.clone());
+        let ctx = sweep_ctx(&job, cancels.clone(), slots);
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
         let mut cancelled = false;
@@ -464,7 +522,9 @@ pub async fn run_discovery_stream<S>(
         // sent twice — once as progress and once as the terminal message below.
         let mut completed: usize = 0;
         let mut since_progress: usize = 0;
-        let mut outcomes = sweep_targets(&job.targets, &ctx, transport.clone());
+        // Boxed: the slot-taking `then` stage holds an async block, which is not `Unpin`. A box
+        // rather than `pin!` so the `drop` below still ends the stream before the terminal publish.
+        let mut outcomes = Box::pin(sweep_targets(&job.targets, &ctx, transport.clone()));
         while let Some(outcome) = outcomes.next().await {
             completed += 1;
             match outcome {
@@ -534,11 +594,10 @@ pub async fn run_discovery_stream<S>(
                 scan = %job.scan_id, probed, total, found = found.len(),
                 "discovery sweep cancelled"
             );
-            continue;
+            return;
         }
         tracing::info!(scan = %job.scan_id, found = found.len(), "discovery sweep done");
     }
-    tracing::warn!("discovery job stream ended");
 }
 
 async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
@@ -587,12 +646,19 @@ fn sweep_targets<'a>(
     transport: Arc<dyn Transport>,
 ) -> impl Stream<Item = Probe> + 'a {
     futures::stream::iter(targets.iter().copied())
-        .map(move |target| {
+        // One of the poller's shared slots first (ADR-204 Inc.3), held until the target is done.
+        // Taken by `then`, so ONE target of this job waits in the semaphore's queue at a time: a
+        // job that queued all its targets at once would put a Detect arriving after it behind every
+        // one of them, the queue being first come first served. The semaphore is never closed, so
+        // a failed acquire cannot happen; were it to, the target goes ahead unslotted rather than
+        // being dropped unprobed.
+        .then(move |target| async move { (target, ctx.slots.clone().acquire_owned().await.ok()) })
+        .map(move |(target, slot)| {
             let transport = transport.clone();
             async move {
-                // Layer 2: a target not yet started is dropped whole. `buffer_unordered` starts at
-                // most SWEEP_CONCURRENCY at a time, so most of a job's targets have not begun when
-                // a stop arrives.
+                let _slot = slot;
+                // Layer 2: a target not yet started is dropped whole. Asked after the slot, so a
+                // stop that lands while a target waits for one still reaches it.
                 if ctx.stopping() {
                     return Probe::Skipped;
                 }
@@ -1186,6 +1252,7 @@ mod tests {
             scan_id: Uuid::nil(),
             cancels: no_cancels(),
             snmp_when_unreachable: true,
+            slots: Arc::new(Semaphore::new(SWEEP_CONCURRENCY)),
             icmp_errors: AtomicUsize::new(0),
         }
     }
@@ -1399,7 +1466,11 @@ mod tests {
     /// did exactly what it was configured to do — it was in the configuration handed to it.
     #[test]
     fn a_sweep_probes_with_the_no_cooldown_profile() {
-        let ctx = sweep_ctx(&job(vec![], vec!["a".to_owned()]), no_cancels());
+        let ctx = sweep_ctx(
+            &job(vec![], vec!["a".to_owned()]),
+            no_cancels(),
+            Arc::new(Semaphore::new(1)),
+        );
         assert_eq!(
             ctx.rate.max_consecutive_failures, None,
             "a cooldown here cuts the candidate list short and protects nothing: SNMP has \
@@ -2198,6 +2269,11 @@ mod tests {
         match_elsewhere_on_first_ask: Option<(Arc<HitTally>, usize)>,
         /// Hold this target's ICMP probe for this long.
         slow: Option<(IpAddr, Duration)>,
+        /// Hold every target's ICMP probe for this long, so targets overlap.
+        hold_all: Option<Duration>,
+        /// Targets inside `probe_icmp` right now, and the most there have ever been at once.
+        in_flight: AtomicUsize,
+        max_in_flight: AtomicUsize,
     }
 
     impl ScriptedFake {
@@ -2207,6 +2283,9 @@ mod tests {
                 asked: Mutex::new(Vec::new()),
                 match_elsewhere_on_first_ask: None,
                 slow: None,
+                hold_all: None,
+                in_flight: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
             }
         }
 
@@ -2223,11 +2302,17 @@ mod tests {
             _count: u8,
             _timeout: Duration,
         ) -> Result<IcmpProbe, TransportError> {
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(now, Ordering::SeqCst);
             if let Some((slow, hold)) = self.slow {
                 if slow == target {
                     tokio::time::sleep(hold).await;
                 }
             }
+            if let Some(hold) = self.hold_all {
+                tokio::time::sleep(hold).await;
+            }
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(IcmpProbe {
                 reachable: true,
                 rtt_ms: Some(1.0),
@@ -2475,6 +2560,111 @@ mod tests {
             Some(&slow),
             "the slow target finishes last -- so the eight targets beyond the first \
              {PROGRESS_CHUNK} finished while it was still out, which the old chunks did not allow"
+        );
+    }
+
+    // ── Jobs side by side, slots shared (ADR-204 Inc.3) ──────────────────────
+
+    /// A job of `targets` addresses from 10.0.<net>.1 on, with one community and SNMP everywhere.
+    fn sweep_job(scan: u128, net: u8, targets: u8) -> DiscoveryJob {
+        DiscoveryJob {
+            scan_id: Uuid::from_u128(scan),
+            targets: (1..=targets)
+                .map(|i| IpAddr::V4(Ipv4Addr::new(10, 0, net, i)))
+                .collect(),
+            communities: vec!["public".to_owned()],
+            credentials: Vec::new(),
+            timeout_ms: 100,
+            snmp_when_unreachable: true,
+        }
+    }
+
+    /// Run `jobs` through the job loop with `slots` shared slots, and return the scan ids in the
+    /// order their terminal (`done`) results were published.
+    async fn finish_order(
+        jobs: Vec<DiscoveryJob>,
+        transport: Arc<dyn Transport>,
+        slots: usize,
+    ) -> Vec<Uuid> {
+        use yagra_bus::InMemoryBus;
+        let bus = Arc::new(InMemoryBus::new(256));
+        let mut rx = bus.subscribe_discovery_results();
+        run_discovery_jobs(
+            futures::stream::iter(jobs),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            transport,
+            no_cancels(),
+            Arc::new(Semaphore::new(slots)),
+        )
+        .await;
+        let mut done = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            if r.done {
+                done.push(r.scan_id);
+            }
+        }
+        done
+    }
+
+    /// The defect this increment fixes: Detect is a one-address job of its own, and a job that
+    /// arrived behind another waited for the whole of it. Here the first job's only device takes
+    /// thirty seconds and the second job's answers at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_job_does_not_hold_back_the_next_one() {
+        let slow_job = sweep_job(1, 1, 1);
+        let mut fake = ScriptedFake::answering("public");
+        fake.slow = Some((slow_job.targets[0], Duration::from_secs(30)));
+        let order = finish_order(
+            vec![slow_job, sweep_job(2, 2, 1)],
+            Arc::new(fake),
+            SWEEP_CONCURRENCY,
+        )
+        .await;
+        assert_eq!(
+            order,
+            vec![Uuid::from_u128(2), Uuid::from_u128(1)],
+            "the job that arrived second closed first -- one at a time, it would have waited 30s"
+        );
+    }
+
+    /// The slots are the poller's, not each job's: two jobs of four devices each, three slots, and
+    /// never more than three devices in hand -- yet three at once, so the jobs did overlap.
+    #[tokio::test(start_paused = true)]
+    async fn every_job_shares_the_pollers_slots() {
+        let mut fake = ScriptedFake::answering("public");
+        fake.hold_all = Some(Duration::from_secs(1));
+        let fake = Arc::new(fake);
+        let order = finish_order(
+            vec![sweep_job(1, 1, 4), sweep_job(2, 2, 4)],
+            fake.clone(),
+            3,
+        )
+        .await;
+        assert_eq!(order.len(), 2, "both jobs closed");
+        assert_eq!(
+            fake.max_in_flight.load(Ordering::SeqCst),
+            3,
+            "the slots bound the devices in hand across both jobs, and both jobs used them"
+        );
+    }
+
+    /// A Detect pressed during a range sweep starts at the next free slot. The slots go out in the
+    /// order they were asked for, so the one-address job is served before the sweep's later
+    /// targets, and it closes long before the sweep does.
+    #[tokio::test(start_paused = true)]
+    async fn a_detect_during_a_sweep_starts_at_the_next_free_slot() {
+        let mut fake = ScriptedFake::answering("public");
+        fake.hold_all = Some(Duration::from_secs(1));
+        let order = finish_order(
+            vec![sweep_job(1, 1, 10), sweep_job(2, 2, 1)],
+            Arc::new(fake),
+            2,
+        )
+        .await;
+        assert_eq!(
+            order,
+            vec![Uuid::from_u128(2), Uuid::from_u128(1)],
+            "the one-address job closed before the ten-address sweep it arrived behind"
         );
     }
 }
