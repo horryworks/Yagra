@@ -3808,8 +3808,36 @@ mod tests {
         assert!(list.to_string().contains("core-sw-01"), "{list}");
     }
 
-    /// `POST /node-names` answers each node's folder beside its name, leaves the field out for an
-    /// ungrouped node, and a scoped caller gets nothing for a node outside its folders
+    /// The Geo map's bubble cuts its ids into batches of `NODE_NAMES_BATCH`, a copy of
+    /// [`NODE_NAMES_BATCH_MAX`]. This endpoint drops the tail past its cap without an error, so a
+    /// WebUI batch larger than the cap would leave alerting nodes unplaced and a pin reading "No
+    /// active alerts" (ADR-191 Inc.15).
+    #[test]
+    fn the_geo_bubbles_batch_is_the_node_names_cap() {
+        let path = format!(
+            "{}/../../web/src/pages/geoPinAlerts.ts",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = std::fs::read_to_string(&path).expect("the Geo bubble's helper");
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("export const NODE_NAMES_BATCH ="))
+            .unwrap_or_else(|| panic!("no NODE_NAMES_BATCH in {path}"));
+        let value: usize = line
+            .trim_start_matches("export const NODE_NAMES_BATCH =")
+            .trim()
+            .trim_end_matches(';')
+            .replace('_', "")
+            .parse()
+            .unwrap_or_else(|e| panic!("NODE_NAMES_BATCH in {path} is not a number: {e}"));
+        assert_eq!(
+            value, NODE_NAMES_BATCH_MAX,
+            "NODE_NAMES_BATCH in {path} is not NODE_NAMES_BATCH_MAX"
+        );
+    }
+
+    /// `POST /node-names` answers each node's folder beside its name, `null` (present, not left
+    /// out) for an ungrouped node, and a scoped caller gets nothing for a node outside its folders
     /// (ADR-191 Inc.15).
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]

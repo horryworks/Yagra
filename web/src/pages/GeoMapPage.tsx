@@ -27,7 +27,13 @@ import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
 import { TEST_IDS } from '../testIds';
-import { relativeTimeMs, severityColorVar, stateColorVar, stateLabel } from '../lib/format';
+import {
+  alertWhatOf,
+  relativeTimeMs,
+  severityColorVar,
+  stateColorVar,
+  stateLabel,
+} from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { sortedAlerts, useAlertStore, useMapPaneStore } from '../store';
@@ -62,7 +68,6 @@ import {
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 import { nodeHref, nodesPageHref, topologyMapHref } from '../lib/entityHref';
 import { AnchoredPopover } from '../components/ui/AnchoredPopover';
-import { alertWhatOf } from '../lib/format';
 import { AlertWhatText } from '../widgets/AlertWhatText';
 import type { NodeGroup } from '../types/api';
 import type { StateCounts } from '../dashboard/widgets/util';

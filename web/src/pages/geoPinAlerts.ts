@@ -16,7 +16,9 @@ import type { NodeState } from '../types/api';
 /** How many alerting nodes the bubble lists before it says "+N more". */
 export const PIN_ALERT_ROWS = 5;
 
-/** The largest batch `POST /api/v1/node-names` reads (`NODE_NAMES_BATCH_MAX` in core). */
+/** The largest batch `POST /api/v1/node-names` reads (`NODE_NAMES_BATCH_MAX` in core, which drops
+ *  the tail past it silently). `the_geo_bubbles_batch_is_the_node_names_cap` pins the two; keep
+ *  this on one line. */
 export const NODE_NAMES_BATCH = 1000;
 
 /** The node ids behind node-subject alerts, once each, in the order the alerts come. A pool's or

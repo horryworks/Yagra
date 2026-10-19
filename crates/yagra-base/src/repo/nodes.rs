@@ -1651,20 +1651,14 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
         ids: &[Uuid],
     ) -> anyhow::Result<HashMap<Uuid, String>> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let rows = sqlx::query(&format!(
-            "SELECT id, name FROM nodes WHERE {} AND id = ANY($2)",
-            Self::SCOPE_PREDICATE
-        ))
-        .bind(Self::scope_bind(groups))
-        .bind(ids)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| Ok((row.try_get("id")?, row.try_get("name")?)))
-            .collect()
+        // One scoped lookup behind both: a rule added to it reaches the entity resolver and the
+        // Geo map's bubble alike.
+        Ok(self
+            .node_names_and_groups(groups, ids)
+            .await?
+            .into_iter()
+            .map(|(id, (name, _))| (id, name))
+            .collect())
     }
 
     /// [`Self::node_names`] plus the folder each node is filed in (`None` = ungrouped). Behind
