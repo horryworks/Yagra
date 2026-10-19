@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Marking a site's last missing prefix as intentional no longer leaves a blank grey band.** On Nodes ▸ Missing IP prefixes, the site dropped off the Gaps tab and the site below it kept the open site's height, with nothing drawn in it. Every list that opens a row under itself had the same fault whenever a reload removed a row above or at the open one.
+
 ## v0.3.53 — Detect on several devices runs side by side, and the pre-upgrade backup takes seconds
 
 ### Improvements

@@ -111,7 +111,7 @@ interface Props<T> {
    *  fixed-size virtualizer, so a table that does not need expansion must not pass this. */
   expanded?: (row: T) => ReactNode | null;
   /** The `rowKey` of the open row, or `null`. **Required for `expanded` to behave**, and it is not
-   *  merely informational: a measured height is cached per index, so a row that collapses keeps
+   *  merely informational: a measured height is cached per row key, so a row that collapses keeps
    *  reserving its expanded height until the cache is dropped. This value changing is what triggers
    *  that. One key rather than a set because both callers open exactly one row at a time. */
   expandedKey?: string | null;
@@ -194,6 +194,15 @@ export function DataTable<T>({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => (cardMode ? cardEstimatePx : ROW_PX),
     overscan: 12,
+    // A measured height belongs to the row, not to its position. Keyed by index (the default),
+    // a row removed by a reload hands its height to the row that slides into its place: marking a
+    // site's last gap as intentional took the open site off the list, and the next site kept the
+    // expanded site's height as a grey band with nothing in it. The open row's key does not change
+    // on a reload, so the effect below never runs to repair it.
+    getItemKey: (index) => {
+      const row = rows[index];
+      return row === undefined ? index : rowKey(row);
+    },
   });
 
   // Re-measure when the open row changes. Without this a row that has been collapsed keeps the
