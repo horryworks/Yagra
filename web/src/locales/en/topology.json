@@ -204,9 +204,17 @@
       }
     },
     "pinMenu": {
-      "label": "Open this site",
       "nodes": "Open in the node list",
       "map": "Open in the network map"
+    },
+    "bubble": {
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} nodes",
+      "withAlerts_one": "{{count}} with alerts",
+      "withAlerts_other": "{{count}} with alerts",
+      "noAlerts": "No active alerts",
+      "more_one": "+{{count}} more",
+      "more_other": "+{{count}} more"
     }
   }
 }

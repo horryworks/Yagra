@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **A Geo map pin now opens a bubble that lists the site's alerting nodes.** Pressing a pin on Topology ▸ Geo map shows the site's name, its state and node count, and up to five nodes under it with an active alert — worst first, each with what fired and how long ago — then "+N more". A row opens that node; "Open in the node list" and "Open in the network map" are still at the bottom. For API clients, `POST /api/v1/node-names` now also returns each node's `group_id` (`null` for an ungrouped node).
+
 ### Bug Fixes
 
 - **Marking a site's last missing prefix as intentional no longer leaves a blank grey band.** On Nodes ▸ Missing IP prefixes, the site dropped off the Gaps tab and the site below it kept the open site's height, with nothing drawn in it. Every list that opens a row under itself had the same fault whenever a reload removed a row above or at the open one.

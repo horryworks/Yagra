@@ -1667,6 +1667,35 @@ impl NodeRepo {
             .collect()
     }
 
+    /// [`Self::node_names`] plus the folder each node is filed in (`None` = ungrouped). Behind
+    /// `POST /api/v1/node-names`, where the Geo map files each alerting node under its site pin
+    /// (ADR-191 Inc.15). Scoped the same way: an out-of-scope id is simply absent.
+    pub async fn node_names_and_groups(
+        &self,
+        groups: GroupFilter<'_>,
+        ids: &[Uuid],
+    ) -> anyhow::Result<HashMap<Uuid, (String, Option<Uuid>)>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT id, name, group_id FROM nodes WHERE {} AND id = ANY($2)",
+            Self::SCOPE_PREDICATE
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("id")?,
+                    (row.try_get("name")?, row.try_get("group_id")?),
+                ))
+            })
+            .collect()
+    }
+
     /// Node ids whose display name matches a case-insensitive substring, capped at `cap`. Lets the
     /// event-log search (which runs against the log store, ADR-024) still find events by node name
     /// without the name ever entering the log store: the API resolves the name → ids here and
@@ -3056,6 +3085,38 @@ mod tests {
             !scoped.contains_key(&b),
             "a name outside the caller's scope was resolved"
         );
+    }
+
+    /// The name lookup that carries the folder answers each node's own folder, `None` for an
+    /// ungrouped one, and nothing outside the scope.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_name_and_folder_lookup_answers_each_nodes_folder(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let a = pgtest::node(&pool, "filed", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "loose", 2, None).await;
+        let c = pgtest::node(&pool, "hidden", 3, Some(theirs)).await;
+        let repo = pgtest::repo(pool);
+
+        let all = repo
+            .node_names_and_groups(None, &[a, b, c])
+            .await
+            .expect("names");
+        assert_eq!(all.get(&a), Some(&("filed".to_string(), Some(mine))));
+        assert_eq!(all.get(&b), Some(&("loose".to_string(), None)));
+        assert_eq!(all.get(&c), Some(&("hidden".to_string(), Some(theirs))));
+
+        let scoped = repo
+            .node_names_and_groups(Some(&[mine]), &[a, b, c])
+            .await
+            .expect("names");
+        assert_eq!(
+            scoped.len(),
+            1,
+            "a node outside the caller's scope was answered"
+        );
+        assert!(scoped.contains_key(&a));
     }
 
     /// The address map is keyed by the address the node was created with.

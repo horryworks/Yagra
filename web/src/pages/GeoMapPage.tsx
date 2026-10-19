@@ -27,10 +27,10 @@ import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
 import { TEST_IDS } from '../testIds';
-import { stateColorVar, stateLabel } from '../lib/format';
+import { relativeTimeMs, severityColorVar, stateColorVar, stateLabel } from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
-import { useMapPaneStore } from '../store';
+import { sortedAlerts, useAlertStore, useMapPaneStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { setGeoMapDayNight } from '../serverPrefs';
 import { useStoredMapView } from '../lib/storedMapView';
@@ -60,8 +60,20 @@ import {
   twilightPaths,
 } from './geoDayNight';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
-import { nodesPageHref, topologyMapHref } from '../lib/entityHref';
+import { nodeHref, nodesPageHref, topologyMapHref } from '../lib/entityHref';
 import { AnchoredPopover } from '../components/ui/AnchoredPopover';
+import { alertWhatOf } from '../lib/format';
+import { AlertWhatText } from '../widgets/AlertWhatText';
+import type { NodeGroup } from '../types/api';
+import type { StateCounts } from '../dashboard/widgets/util';
+import {
+  alertNodeIds,
+  nodeNameBatches,
+  PIN_ALERT_ROWS,
+  pinAlertRows,
+  placesFromNames,
+  type NodePlace,
+} from './geoPinAlerts';
 import './GeoMapPage.css';
 
 /** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
@@ -113,7 +125,7 @@ export function GeoMapPage() {
   // moves once a minute, and only while the shading is showing.
   const dayNight = usePrefsStore((s) => s.geoMapDayNight) !== false;
   const [skyTime, setSkyTime] = useState(() => new Date());
-  /** The pin whose menu is open, and where (ADR-191). */
+  /** The pin whose bubble is open, and where (ADR-191). */
   const [pinMenu, setPinMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null);
   const closePinMenu = useCallback(() => setPinMenu(null), []);
   useEffect(() => {
@@ -433,10 +445,10 @@ export function GeoMapPage() {
                         // first colon and returns null without one, so a bare UUID landed on All
                         // nodes with nothing selected at all — the pin navigated, and then quietly
                         // did nothing. (`PollersPage` has always written the `node:` form.)
-                        // A pin asks where to go: the node list or the network map of that
-                        // site (ADR-191). The menu opens at the pointer, or at the pin's centre
-                        // for the keyboard.
-                        aria-haspopup="menu"
+                        // A pin opens its bubble (ADR-191 Inc.15): the site, its alerting
+                        // nodes, and where to go next. It opens at the pointer, or at the pin's
+                        // centre for the keyboard.
+                        aria-haspopup="dialog"
                         onClick={(e) => setPinMenu({ id: g.id, at: { x: e.clientX, y: e.clientY } })}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
@@ -530,44 +542,156 @@ export function GeoMapPage() {
         </>
       )}
       {pinMenu && (
-        <AnchoredPopover
-          open
+        <PinBubble
+          pinId={pinMenu.id}
           at={pinMenu.at}
-          role="menu"
-          label={t('geo.pinMenu.label')}
-          className="geopage-pin-menu"
-          onDismiss={closePinMenu}
-          // Focus the first item once the menu is placed (it is hidden while being measured, and a
-          // hidden element cannot take focus), so a keyboard-opened menu is usable at once.
-          onPlacedChange={(placed) => {
-            if (placed)
-              document
-                .querySelector<HTMLButtonElement>('.geopage-pin-menu button')
-                ?.focus({ preventScroll: true });
+          name={placed.find((g) => g.id === pinMenu.id)?.name ?? ''}
+          counts={pins[pinMenu.id]}
+          groups={groups.data ?? []}
+          onClose={closePinMenu}
+          onOpen={(href) => {
+            closePinMenu();
+            navigate(href);
           }}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              closePinMenu();
-              navigate(nodesPageHref({ kind: 'group', id: pinMenu.id }));
-            }}
-          >
-            {t('geo.pinMenu.nodes')}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              closePinMenu();
-              navigate(topologyMapHref({ group: pinMenu.id }));
-            }}
-          >
-            {t('geo.pinMenu.map')}
-          </button>
-        </AnchoredPopover>
+        />
       )}
     </div>
+  );
+}
+
+/** The bubble a pin opens (ADR-191 Inc.15): the site's name, its state and size, the nodes under
+ *  it that have an active alert, and the two places to go next. */
+function PinBubble({
+  pinId,
+  at,
+  name,
+  counts,
+  groups,
+  onClose,
+  onOpen,
+}: {
+  pinId: string;
+  at: { x: number; y: number };
+  name: string;
+  counts: StateCounts | undefined;
+  groups: NodeGroup[];
+  onClose: () => void;
+  onOpen: (href: string) => void;
+}) {
+  const { t } = useTranslation('topology');
+  const alerts = useAlertStore((s) => s.alerts);
+  const sorted = useMemo(() => sortedAlerts(alerts), [alerts]);
+  const ids = useMemo(() => alertNodeIds(sorted), [sorted]);
+  const idsKey = ids.join(',');
+  // undefined = still asking; null = this core cannot say where a node is filed.
+  const [places, setPlaces] = useState<Map<string, NodePlace> | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    const wanted = idsKey ? idsKey.split(',') : [];
+    Promise.all(nodeNameBatches(wanted).map((b) => api.getNodeNames(b)))
+      .then((answers) => {
+        if (live) setPlaces(placesFromNames(answers.flat()));
+      })
+      .catch(() => {
+        // A failed read places nothing; the bubble still offers both ways out.
+        if (live) setPlaces(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [idsKey]);
+
+  const pinOf = useMemo(
+    () => new Map(groups.flatMap((g) => (g.geo_group ? [[g.id, g.geo_group] as const] : []))),
+    [groups],
+  );
+  const rows = places ? pinAlertRows(sorted, places, pinOf, pinId) : null;
+  const worst = counts ? worstStateFromCounts(counts) : 'ok';
+  const total = counts ? countsTotal(counts) : 0;
+
+  return (
+    <AnchoredPopover
+      open
+      at={at}
+      role="dialog"
+      label={name}
+      className="geopage-pin-menu"
+      onDismiss={onClose}
+      // Focus the first thing to press once the bubble is placed (it is hidden while being
+      // measured, and a hidden element cannot take focus), so a keyboard-opened bubble is usable.
+      onPlacedChange={(placed) => {
+        if (placed)
+          document
+            .querySelector<HTMLButtonElement>('.geopage-pin-menu .geopage-bubble-go')
+            ?.focus({ preventScroll: true });
+      }}
+    >
+      <div className="geopage-bubble-head">
+        <span className="geopage-bubble-name" title={name}>
+          {name}
+        </span>
+        <button
+          type="button"
+          className="geopage-bubble-close"
+          aria-label={t('common:actions.close')}
+          onClick={onClose}
+        >
+          ✕
+        </button>
+      </div>
+      <div className="geopage-bubble-sum">
+        <span className="geopage-swatch" style={{ background: stateColorVar(worst) }} />
+        <span>{stateLabel(worst)}</span>
+        <span>{t('geo.bubble.nodes', { count: total })}</span>
+        {rows && rows.length > 0 && <span>{t('geo.bubble.withAlerts', { count: rows.length })}</span>}
+      </div>
+      {places === undefined && <p className="geopage-bubble-note muted">{t('common:loading')}</p>}
+      {rows && rows.length === 0 && (
+        <p className="geopage-bubble-note muted">{t('geo.bubble.noAlerts')}</p>
+      )}
+      {rows && rows.length > 0 && (
+        <div className="geopage-bubble-list">
+          {rows.slice(0, PIN_ALERT_ROWS).map((r) => (
+            <button
+              key={r.nodeId}
+              type="button"
+              className="geopage-bubble-go geopage-bubble-row"
+              onClick={() => onOpen(nodeHref(r.nodeId))}
+            >
+              <span
+                className="geopage-bubble-dot"
+                style={{ background: severityColorVar(r.worst.severity) }}
+              />
+              <span className="geopage-bubble-what">
+                <span className="mono">{r.name}</span>{' '}
+                <AlertWhatText what={alertWhatOf(r.worst)} />
+              </span>
+              <span className="geopage-bubble-age muted">{relativeTimeMs(r.worst.at_unix_ms)}</span>
+            </button>
+          ))}
+          {rows.length > PIN_ALERT_ROWS && (
+            <p className="geopage-bubble-more muted">
+              {t('geo.bubble.more', { count: rows.length - PIN_ALERT_ROWS })}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="geopage-bubble-actions">
+        <button
+          type="button"
+          className="geopage-bubble-go"
+          onClick={() => onOpen(nodesPageHref({ kind: 'group', id: pinId }))}
+        >
+          {t('geo.pinMenu.nodes')}
+        </button>
+        <button
+          type="button"
+          className="geopage-bubble-go"
+          onClick={() => onOpen(topologyMapHref({ group: pinId }))}
+        >
+          {t('geo.pinMenu.map')}
+        </button>
+      </div>
+    </AnchoredPopover>
   );
 }

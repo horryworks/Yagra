@@ -37133,6 +37133,14 @@
           "name"
         ],
         "properties": {
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The folder the node is filed in; `null` for an ungrouped node. The Geo map files each\nalerting node under its site pin by it (ADR-191 Inc.15). Always present, so a client can\ntell \"ungrouped\" from a core too old to say."
+          },
           "id": {
             "type": "string",
             "format": "uuid"

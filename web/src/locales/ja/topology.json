@@ -196,9 +196,14 @@
       }
     },
     "pinMenu": {
-      "label": "この拠点を開く",
       "nodes": "ノード一覧で開く",
       "map": "ネットワークマップで開く"
+    },
+    "bubble": {
+      "nodes_other": "{{count}} 台",
+      "withAlerts_other": "アラートあり {{count}} 台",
+      "noAlerts": "アクティブなアラートはありません",
+      "more_other": "ほか {{count}} 台"
     }
   }
 }

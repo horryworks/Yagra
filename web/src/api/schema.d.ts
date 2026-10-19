@@ -11152,6 +11152,13 @@ export interface components {
         };
         /** @description One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id). */
         NodeNameEntry: {
+            /**
+             * Format: uuid
+             * @description The folder the node is filed in; `null` for an ungrouped node. The Geo map files each
+             *     alerting node under its site pin by it (ADR-191 Inc.15). Always present, so a client can
+             *     tell "ungrouped" from a core too old to say.
+             */
+            group_id?: string | null;
             /** Format: uuid */
             id: string;
             name: string;

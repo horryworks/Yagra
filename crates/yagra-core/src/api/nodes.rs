@@ -973,6 +973,10 @@ pub(super) struct NodeNamesReq {
 pub(crate) struct NodeNameEntry {
     id: Uuid,
     name: String,
+    /// The folder the node is filed in; `null` for an ungrouped node. The Geo map files each
+    /// alerting node under its site pin by it (ADR-191 Inc.15). Always present, so a client can
+    /// tell "ungrouped" from a core too old to say.
+    group_id: Option<Uuid>,
 }
 
 /// Resolve a batch of node ids to their display names. The shared `useEntityNames` resolver, and
@@ -996,13 +1000,23 @@ async fn node_names_batch(
 ) -> ApiResult<Json<Vec<NodeNameEntry>>> {
     let mut ids = req.ids;
     ids.truncate(NODE_NAMES_BATCH_MAX);
-    let names = resolve_node_names(&st, &scope, ids.iter().copied()).await;
+    let Some(admin) = st.admin.as_ref() else {
+        return Ok(Json(Vec::new()));
+    };
+    // Best-effort like `resolve_node_names`: a failed read answers nothing, and every cell keeps
+    // the raw id it already had.
+    let found = admin
+        .repo
+        .node_names_and_groups(scope.group_filter(), &ids)
+        .await
+        .unwrap_or_default();
     Ok(Json(
         ids.iter()
             .filter_map(|id| {
-                names.get(id).map(|name| NodeNameEntry {
+                found.get(id).map(|(name, group_id)| NodeNameEntry {
                     id: *id,
                     name: name.clone(),
+                    group_id: *group_id,
                 })
             })
             .collect(),
@@ -1022,9 +1036,9 @@ async fn node_names_batch(
 /// Ids are sorted and deduplicated first: a ranking that mentions the same node twice must not
 /// widen the `IN (…)`, and an empty input skips the query entirely.
 ///
-/// **Scoped.** This is both the internal join and the resolver behind `POST /api/v1/node-names`,
-/// where the caller supplies the ids — so unscoped it would answer "what is node `<uuid>` called"
-/// for the whole fleet. An out-of-scope id is omitted exactly like an unknown one, so the caller's
+/// **Scoped.** The callers pass ids the client chose (`POST /api/v1/node-names` reads the same
+/// rows through `node_names_and_groups`, with the same scope) — so unscoped it would answer "what
+/// is node `<uuid>` called" for the whole fleet. An out-of-scope id is omitted exactly like an unknown one, so the caller's
 /// existing id-string fallback covers it and the two cases stay indistinguishable from outside.
 pub(crate) async fn resolve_node_names(
     st: &ApiState,
@@ -3792,6 +3806,61 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("core-sw-01"), "{list}");
+    }
+
+    /// `POST /node-names` answers each node's folder beside its name, leaves the field out for an
+    /// ungrouped node, and a scoped caller gets nothing for a node outside its folders
+    /// (ADR-191 Inc.15).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn node_names_carry_each_nodes_folder_inside_the_scope(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        use yagra_base::pgtest;
+        let mine = pgtest::group(&pool, "site-a").await;
+        let theirs = pgtest::group(&pool, "site-b").await;
+        let a = pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "loose", 2, None).await;
+        let c = pgtest::node(&pool, "sw-02", 3, Some(theirs)).await;
+        let st = live_state(pool).await;
+        let body = serde_json::json!({ "ids": [a, b, c] });
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, rows) = send(
+            &st,
+            "POST",
+            "/api/v1/node-names",
+            &viewer,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{rows}");
+        let rows = rows.as_array().expect("an array");
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let row = |id: Uuid| rows.iter().find(|r| r["id"] == id.to_string()).unwrap();
+        assert_eq!(row(a)["name"], "sw-01");
+        assert_eq!(row(a)["group_id"], mine.to_string());
+        assert!(
+            row(b)
+                .get("group_id")
+                .is_some_and(serde_json::Value::is_null),
+            "an ungrouped node must say null, not leave the field out"
+        );
+        assert_eq!(row(c)["group_id"], theirs.to_string());
+
+        let scoped = scoped_token(&st, &[mine]);
+        let (status, rows) = send(&st, "POST", "/api/v1/node-names", &scoped, Some(body)).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{rows}");
+        let ids: Vec<&str> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![a.to_string().as_str()],
+            "the scope did not narrow the answer"
+        );
     }
 
     /// Renaming a node and writing its note are **accepted**, and the detail shows both (ADR-135).
