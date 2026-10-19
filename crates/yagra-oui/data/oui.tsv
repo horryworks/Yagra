@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-18
-# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6563 MA-S=7204 withheld=3
+# fetched: 2026-10-19
+# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6564 MA-S=7205 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -25644,6 +25644,7 @@
 5CAB22	IEEE Registration Authority
 5CAB223	Xiamen Joint Tech. CO.,Ltd.
 5CAB226	Shanghai Jiweijiu Intelligent Technology Co., Ltd.
+5CAB229	KIWEE BROADBAND
 5CAC3D	Samsung Electronics Co.,Ltd
 5CAC4C	Hon Hai Precision Ind. Co.,Ltd.
 5CAD76	Shenzhen TCL New Technology Co., Ltd
@@ -36432,6 +36433,7 @@
 8C1F642FE	VERSITRON, Inc.
 8C1F64300	Abbott Diagnostics Technologies AS
 8C1F64301	Agar Corporation Inc.
+8C1F64302	Brandmaier Messen, Steuern, Software
 8C1F64303	IntelliPlanner Software System India Pvt Ltd
 8C1F64304	Jemac Sweden AB
 8C1F64305	VivoKey Technologies Inc.
