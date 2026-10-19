@@ -308,8 +308,10 @@
   font-size: var(--font-xs);
   color: var(--text-secondary);
 }
-.geopage-bubble-sum .geopage-swatch {
-  margin-right: -6px;
+.geopage-bubble-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .geopage-bubble-note,
 .geopage-bubble-more {

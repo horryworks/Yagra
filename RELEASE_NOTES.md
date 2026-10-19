@@ -12,7 +12,7 @@
 
 ### New Features
 
-- **A Geo map pin now opens a bubble that lists the site's alerting nodes.** Pressing a pin on Topology ▸ Geo map shows the site's name, its state and node count, and up to five nodes under it with an active alert — worst first, each with what fired and how long ago — then "+N more". A row opens that node; "Open in the node list" and "Open in the network map" are still at the bottom. For API clients, `POST /api/v1/node-names` now also returns each node's `group_id` (`null` for an ungrouped node).
+- **A Geo map pin now opens a bubble that lists the site's alerting nodes.** Pressing a pin on Topology ▸ Geo map shows the site's name, how many of its nodes are in each state, and up to five nodes under it with an active alert — worst first, each with what fired and how long ago — then "+N more". A row opens that node; "Open in the node list" and "Open in the network map" are still at the bottom. For API clients, `POST /api/v1/node-names` now also returns each node's `group_id` (`null` for an ungrouped node).
 
 ### Bug Fixes
 

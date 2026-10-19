@@ -72,6 +72,7 @@ import {
   PIN_ALERT_ROWS,
   pinAlertRows,
   placesFromNames,
+  stateBreakdown,
   type NodePlace,
 } from './geoPinAlerts';
 import './GeoMapPage.css';
@@ -606,7 +607,6 @@ function PinBubble({
     [groups],
   );
   const rows = places ? pinAlertRows(sorted, places, pinOf, pinId) : null;
-  const worst = counts ? worstStateFromCounts(counts) : 'ok';
   const total = counts ? countsTotal(counts) : 0;
 
   return (
@@ -640,8 +640,12 @@ function PinBubble({
         </button>
       </div>
       <div className="geopage-bubble-sum">
-        <span className="geopage-swatch" style={{ background: stateColorVar(worst) }} />
-        <span>{stateLabel(worst)}</span>
+        {stateBreakdown(counts).map(({ state, count }) => (
+          <span key={state} className="geopage-bubble-state">
+            <span className="geopage-swatch" style={{ background: stateColorVar(state) }} />
+            {count} {stateLabel(state)}
+          </span>
+        ))}
         <span>{t('geo.bubble.nodes', { count: total })}</span>
         {rows && rows.length > 0 && <span>{t('geo.bubble.withAlerts', { count: rows.length })}</span>}
       </div>

@@ -6,7 +6,9 @@ import {
   nodeNameBatches,
   pinAlertRows,
   placesFromNames,
+  stateBreakdown,
 } from './geoPinAlerts';
+import { emptyStateCounts } from '../lib/nodeState';
 
 type A = { node: string; subject_kind?: 'node' | 'pool' | 'meraki_org'; tag: string };
 const alert = (node: string, tag: string): A => ({ node, subject_kind: 'node', tag });
@@ -86,5 +88,20 @@ describe('pinAlertRows', () => {
 
   it('answers nothing for a pin whose nodes are all quiet', () => {
     expect(pinAlertRows([alert('n3', 'x')], places, pinOf, 'g-site')).toEqual([]);
+  });
+});
+
+describe('stateBreakdown', () => {
+  it('names every state present with its count, in the legend order, not only the worst', () => {
+    const counts = { ...emptyStateCounts(), unknown: 3, ok: 4 };
+    expect(stateBreakdown(counts)).toEqual([
+      { state: 'ok', count: 4 },
+      { state: 'unknown', count: 3 },
+    ]);
+  });
+
+  it('is empty when the pin has no counts yet', () => {
+    expect(stateBreakdown(undefined)).toEqual([]);
+    expect(stateBreakdown(emptyStateCounts())).toEqual([]);
   });
 });

@@ -10,6 +10,8 @@
 // Pure, so a test reaches it (Vitest does not run `.tsx`).
 
 import { alertSubject, type HasSubject } from '../lib/alertSubject';
+import { DISPLAY_ORDER } from '../lib/nodeState';
+import type { NodeState } from '../types/api';
 
 /** How many alerting nodes the bubble lists before it says "+N more". */
 export const PIN_ALERT_ROWS = 5;
@@ -83,4 +85,17 @@ export function pinAlertRows<A extends HasSubject>(
     else rows.set(s.nodeId, { nodeId: s.nodeId, name: place.name, worst: a, count: 1 });
   }
   return [...rows.values()];
+}
+
+/** The states present under a pin, each with its node count, in the legend's order. The bubble
+ *  shows these rather than the worst state beside the total: "Unknown · 7 nodes" read as all seven
+ *  being unknown when three were. */
+export function stateBreakdown(
+  counts: Readonly<Record<NodeState, number>> | undefined,
+): { state: NodeState; count: number }[] {
+  if (!counts) return [];
+  return DISPLAY_ORDER.filter((s) => (counts[s] ?? 0) > 0).map((state) => ({
+    state,
+    count: counts[state],
+  }));
 }
