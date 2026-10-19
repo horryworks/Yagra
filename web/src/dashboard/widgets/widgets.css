@@ -179,6 +179,12 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* A site with no nodes: a hollow ring, as on the Geo map page. */
+.geo-pin-empty {
+  fill: none;
+  stroke: var(--text-secondary);
+}
+
 /* Metric chart — the two pickers (node, then one of its metrics), now inside the frame's ⚙ panel
    rather than the card header (ADR-072). Stacked: the panel's width is its own, so there is no
    narrow row to cap against and no reason to truncate a metric name the operator is choosing.

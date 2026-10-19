@@ -425,6 +425,7 @@
       "error": "マップを読み込めませんでした。",
       "empty": "位置情報のあるサイトがありません。グループに座標を設定するとプロットされます。",
       "aria": "座標で配置し、最悪の状態で色分けしたサイト",
+      "pinTitleEmpty": "{{name}}: ノードなし",
       "pinTitle_other": "{{name}}: {{state}}（{{count}} ノード）"
     },
     "maintenance": {

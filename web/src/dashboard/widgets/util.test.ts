@@ -27,6 +27,7 @@ import {
   countsTotal,
   densifyTimeBuckets,
   flowTrendSeries,
+  pinLook,
   pinRollupFromCounts,
   type StateCounts,
   topLevelRollup,
@@ -212,6 +213,13 @@ describe('counts-driven roll-ups (server-side per-group summary, A-1)', () => {
     expect(worstStateFromCounts(counts({ ok: 2, unknown: 1 }))).toBe('unknown');
     expect(worstStateFromCounts(counts({ ok: 1, maintenance: 1 }))).toBe('maintenance');
     expect(worstStateFromCounts(counts({}))).toBe('ok');
+  });
+
+  it('pinLook says empty for a pin with no nodes, never ok', () => {
+    expect(pinLook(undefined)).toBe('empty');
+    expect(pinLook(counts({}))).toBe('empty');
+    expect(pinLook(counts({ ok: 2 }))).toBe('ok');
+    expect(pinLook(counts({ ok: 2, unknown: 1 }))).toBe('unknown');
   });
 
   it('countsTotal sums every state', () => {

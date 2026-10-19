@@ -138,6 +138,13 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* A site with no nodes: a ring with no fill, in the secondary text colour rather than a state colour. */
+.geopage-pin-empty {
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 1.5;
+}
+
 .geopage-pin:hover .geopage-pin-halo,
 .geopage-pin:focus-visible .geopage-pin-halo {
   opacity: 1;
@@ -218,6 +225,11 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
+}
+
+.geopage-swatch-empty {
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-secondary);
 }
 
 .geopage-legend-sep {

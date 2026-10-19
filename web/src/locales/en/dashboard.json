@@ -427,6 +427,7 @@
       "error": "Couldn’t load the map.",
       "empty": "No geo-located sites. Set coordinates on a group to plot it.",
       "aria": "sites positioned by coordinates, colored by worst state",
+      "pinTitleEmpty": "{{name}}: no nodes",
       "pinTitle_one": "{{name}}: {{state}} ({{count}} node)",
       "pinTitle_other": "{{name}}: {{state}} ({{count}} nodes)"
     },

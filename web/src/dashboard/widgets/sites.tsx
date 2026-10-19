@@ -19,6 +19,7 @@ import { useGroupSummary } from '../useGroupSummary';
 import { usePolled } from '../usePolled';
 import {
   countsTotal,
+  pinLook,
   pinRollupFromCounts,
   topLevelRollupFromCounts,
   worstStateFromCounts,
@@ -129,24 +130,26 @@ export function GeoMapWidget() {
       {outline?.lakes.map((d, i) => <path className="geo-lake" d={d} key={`w${i}`} />)}
       {placed.map((g) => {
         const c = pins[g.id];
-        const worst = c ? worstStateFromCounts(c) : 'ok';
+        const look = pinLook(c);
         const count = c ? countsTotal(c) : 0;
         const p = project(g.latitude, g.longitude);
         return (
           <circle
             key={g.id}
-            className="geo-pin"
+            className={look === 'empty' ? 'geo-pin geo-pin-empty' : 'geo-pin'}
             cx={p.x}
             cy={p.y}
             r={r}
-            style={{ fill: stateColorVar(worst) }}
+            style={look === 'empty' ? undefined : { fill: stateColorVar(look) }}
           >
             <title>
-              {t('widgets.geoMap.pinTitle', {
-                name: g.name,
-                state: stateLabel(worst),
-                count,
-              })}
+              {look === 'empty'
+                ? t('widgets.geoMap.pinTitleEmpty', { name: g.name })
+                : t('widgets.geoMap.pinTitle', {
+                    name: g.name,
+                    state: stateLabel(look),
+                    count,
+                  })}
             </title>
           </circle>
         );

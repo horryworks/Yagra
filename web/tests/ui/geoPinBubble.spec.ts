@@ -19,6 +19,7 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')
 const SITE = id(1); // placed, carries the alerts
 const FLOOR = id(2); // no coordinates of its own: inherits SITE's pin
 const QUIET = id(3); // placed, no alerts
+const EMPTY = id(4); // placed, no nodes at all
 const ALERTING = 7; // one more than the bubble lists, plus one
 const node = (i: number) => id(1000 + i);
 
@@ -38,7 +39,20 @@ function folders(): Json {
     g(SITE, 'SITE-01 Tokyo', SITE, 35.68, 139.76),
     g(FLOOR, 'floor-3', SITE, null, null),
     g(QUIET, 'SITE-07 Osaka', QUIET, 34.69, 135.5),
+    g(EMPTY, 'SITE-09 Sapporo', EMPTY, 43.06, 141.35),
   ] as unknown as Json;
+}
+
+/** Nodes per folder: two in the site, five on its floor, three quiet ones, none in EMPTY. */
+function summary(): Json {
+  const none = { critical: 0, maintenance: 0, ok: 0, unknown: 0, unreachable: 0, warning: 0 };
+  return {
+    groups: {
+      [SITE]: { ...none, critical: 2 },
+      [FLOOR]: { ...none, warning: 5 },
+      [QUIET]: { ...none, ok: 3 },
+    },
+  } as unknown as Json;
 }
 
 /** Seven alerting nodes: the first two filed in the site, the rest on its floor, plus one more
@@ -76,6 +90,7 @@ test.use({
     overrides: {
       ...BOOTSTRAP_OVERRIDES,
       '/api/v1/node-groups': folders(),
+      '/api/v1/fleet/group-summary': summary(),
       '/api/v1/alerts': alerts(),
       '/api/v1/node-names': names,
     },
@@ -88,7 +103,7 @@ test('a pin with alerting nodes lists them worst first and opens the node list',
 }) => {
   await page.goto('/topology/geo');
   const pins = page.getByTestId('geo-map-pin');
-  await expect(pins).toHaveCount(2);
+  await expect(pins).toHaveCount(3);
   await pins.first().click();
 
   const bubble = page.getByRole('dialog', { name: `${MOCK_PREFIX}SITE-01 Tokyo` });
@@ -116,7 +131,7 @@ test('a pin with alerting nodes lists them worst first and opens the node list',
 test('a pin with no alerting node says so, and a row opens the node', async ({ page, errors }) => {
   await page.goto('/topology/geo');
   const pins = page.getByTestId('geo-map-pin');
-  await expect(pins).toHaveCount(2);
+  await expect(pins).toHaveCount(3);
 
   await pins.nth(1).click();
   const quiet = page.getByRole('dialog', { name: `${MOCK_PREFIX}SITE-07 Osaka` });
@@ -129,6 +144,27 @@ test('a pin with no alerting node says so, and a row opens the node', async ({ p
   const busy = page.getByRole('dialog', { name: `${MOCK_PREFIX}SITE-01 Tokyo` });
   await busy.locator('.geopage-bubble-row').first().click();
   await expect(page).toHaveURL(new RegExp(`/nodes/${node(0)}$`));
+
+  expect(errors.uncaught).toEqual([]);
+  expect(errors.logged).toEqual([]);
+});
+
+test('a site with no nodes is a hollow ring, and its bubble offers nothing to open', async ({
+  page,
+  errors,
+}) => {
+  await page.goto('/topology/geo');
+  const pins = page.getByTestId('geo-map-pin');
+  await expect(pins).toHaveCount(3);
+  await expect(page.locator('.geopage-pin-empty')).toHaveCount(1);
+  await expect(page.locator('.geopage-legend')).toContainText('No nodes');
+
+  await pins.nth(2).click();
+  const empty = page.getByRole('dialog', { name: `${MOCK_PREFIX}SITE-09 Sapporo` });
+  await expect(empty).toContainText('0 nodes');
+  await expect(empty).not.toContainText('No active alerts');
+  await expect(empty.getByRole('button', { name: 'Open in the node list' })).toHaveCount(0);
+  await expect(empty.getByRole('button', { name: 'Close' })).toBeFocused();
 
   expect(errors.uncaught).toEqual([]);
   expect(errors.logged).toEqual([]);

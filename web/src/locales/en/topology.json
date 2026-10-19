@@ -191,6 +191,8 @@
     "empty": "No group has coordinates yet. Set latitude and longitude on a group in <lnk/>.",
     "error": "Could not load site health.",
     "aria": "World map with {{count}} placed site(s)",
+    "pinTitleEmpty": "{{name}} — no nodes",
+    "noNodes": "No nodes",
     "pinTitle": "{{name}} — {{state}} · {{count}} node(s)",
     "resize": "Drag to resize the map (double-click to reset)",
     "dayNight": {

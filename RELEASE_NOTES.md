@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A Geo map site with no nodes is now a hollow grey ring instead of a green dot.** Green means "checked, and fine", and nothing at such a site is checked. The ring is not the grey of Unknown either, which stays the colour of a node whose state could not be read. The legend names it ("No nodes") while one is on the map, the dashboard's Geo map widget draws it the same way, and its bubble no longer says "No active alerts" or offers the node list and the network map, which would both open empty.
+
 ## v0.3.54 — A Geo map pin opens a bubble listing the site's alerting nodes
 
 ### New Features

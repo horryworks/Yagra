@@ -25,7 +25,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
-import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
+import { countsTotal, pinLook, pinRollupFromCounts } from '../dashboard/widgets/util';
 import { TEST_IDS } from '../testIds';
 import {
   alertWhatOf,
@@ -328,6 +328,8 @@ export function GeoMapPage() {
   // Per-pin totals, not per-folder: a group with no coordinates of its own is counted at the
   // nearest placed ancestor's pin (geo inheritance), which the server resolved into `geo_group`.
   const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
+  // The legend names the hollow ring only while one is on the map.
+  const hasEmptyPin = placed.some((g) => pinLook(pins[g.id]) === 'empty');
 
   return (
     <div className="geopage">
@@ -431,7 +433,7 @@ export function GeoMapPage() {
                   {placed.map((g) => {
                     const p = project(g.latitude, g.longitude);
                     const c = pins[g.id];
-                    const worst = c ? worstStateFromCounts(c) : 'ok';
+                    const look = pinLook(c);
                     const total = c ? countsTotal(c) : 0;
                     const sky = dayNight
                       ? t(`geo.dayNight.sky.${skyAt(sunAltitude(sun, g.latitude, g.longitude))}`)
@@ -468,20 +470,28 @@ export function GeoMapPage() {
                         }}
                       >
                         <title>
-                          {t('geo.pinTitle', {
-                            name: g.name,
-                            state: stateLabel(worst),
-                            count: total,
-                          })}
+                          {look === 'empty'
+                            ? t('geo.pinTitleEmpty', { name: g.name })
+                            : t('geo.pinTitle', {
+                                name: g.name,
+                                state: stateLabel(look),
+                                count: total,
+                              })}
                           {sky && ` · ${sky}`}
                         </title>
                         {/* Halo first so the dot reads against both land and ocean. */}
                         <circle className="geopage-pin-halo" r={r * 1.9} />
-                        <circle
-                          className="geopage-pin-dot"
-                          r={r}
-                          style={{ fill: stateColorVar(worst) }}
-                        />
+                        {/* A site with no nodes is a hollow ring: nothing there is monitored, so
+                            it gets no state colour — not green, and not the grey of `unknown`. */}
+                        {look === 'empty' ? (
+                          <circle className="geopage-pin-dot geopage-pin-empty" r={r} />
+                        ) : (
+                          <circle
+                            className="geopage-pin-dot"
+                            r={r}
+                            style={{ fill: stateColorVar(look) }}
+                          />
+                        )}
                       </g>
                     );
                   })}
@@ -521,6 +531,12 @@ export function GeoMapPage() {
                   {stateLabel(s)}
                 </li>
               ))}
+              {hasEmptyPin && (
+                <li>
+                  <span className="geopage-swatch geopage-swatch-empty" />
+                  {t('geo.noNodes')}
+                </li>
+              )}
               {dayNight && (
                 <>
                   <li className="geopage-legend-sep" aria-hidden="true" />
@@ -613,6 +629,7 @@ function PinBubble({
   );
   const rows = places ? pinAlertRows(sorted, places, pinOf, pinId) : null;
   const total = counts ? countsTotal(counts) : 0;
+  const empty = total === 0;
 
   return (
     <AnchoredPopover
@@ -624,10 +641,13 @@ function PinBubble({
       onDismiss={onClose}
       // Focus the first thing to press once the bubble is placed (it is hidden while being
       // measured, and a hidden element cannot take focus), so a keyboard-opened bubble is usable.
+      // An empty site's bubble has no way out but ✕, so that takes the focus instead.
       onPlacedChange={(placed) => {
         if (placed)
           document
-            .querySelector<HTMLButtonElement>('.geopage-pin-menu .geopage-bubble-go')
+            .querySelector<HTMLButtonElement>(
+              `.geopage-pin-menu ${empty ? '.geopage-bubble-close' : '.geopage-bubble-go'}`,
+            )
             ?.focus({ preventScroll: true });
       }}
     >
@@ -654,8 +674,12 @@ function PinBubble({
         <span>{t('geo.bubble.nodes', { count: total })}</span>
         {rows && rows.length > 0 && <span>{t('geo.bubble.withAlerts', { count: rows.length })}</span>}
       </div>
-      {places === undefined && <p className="geopage-bubble-note muted">{t('common:loading')}</p>}
-      {rows && rows.length === 0 && (
+      {/* An empty site has nothing to report and nowhere worth going: both ways out open an
+          empty screen, and "No active alerts" would be true of nothing. */}
+      {!empty && places === undefined && (
+        <p className="geopage-bubble-note muted">{t('common:loading')}</p>
+      )}
+      {!empty && rows && rows.length === 0 && (
         <p className="geopage-bubble-note muted">{t('geo.bubble.noAlerts')}</p>
       )}
       {rows && rows.length > 0 && (
@@ -685,22 +709,24 @@ function PinBubble({
           )}
         </div>
       )}
-      <div className="geopage-bubble-actions">
-        <button
-          type="button"
-          className="geopage-bubble-go"
-          onClick={() => onOpen(nodesPageHref({ kind: 'group', id: pinId }))}
-        >
-          {t('geo.pinMenu.nodes')}
-        </button>
-        <button
-          type="button"
-          className="geopage-bubble-go"
-          onClick={() => onOpen(topologyMapHref({ group: pinId }))}
-        >
-          {t('geo.pinMenu.map')}
-        </button>
-      </div>
+      {!empty && (
+        <div className="geopage-bubble-actions">
+          <button
+            type="button"
+            className="geopage-bubble-go"
+            onClick={() => onOpen(nodesPageHref({ kind: 'group', id: pinId }))}
+          >
+            {t('geo.pinMenu.nodes')}
+          </button>
+          <button
+            type="button"
+            className="geopage-bubble-go"
+            onClick={() => onOpen(topologyMapHref({ group: pinId }))}
+          >
+            {t('geo.pinMenu.map')}
+          </button>
+        </div>
+      )}
     </AnchoredPopover>
   );
 }

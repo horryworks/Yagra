@@ -49,6 +49,16 @@ export function countsTotal(c: StateCounts): number {
   return SEVERITY_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
 }
 
+/** What a map pin draws: the worst state of the nodes that resolve to it, or `'empty'` when none
+ *  do. `worstStateFromCounts` answers `ok` for no nodes at all, which painted a site nobody monitors
+ *  in the colour that means "checked, and fine". Not `unknown` either: that grey already means a
+ *  node whose state could not be read, which is worth a look, and an empty site is not. */
+export type PinLook = NodeState | 'empty';
+
+export function pinLook(c: StateCounts | undefined): PinLook {
+  return c && countsTotal(c) > 0 ? worstStateFromCounts(c) : 'empty';
+}
+
 // Removed: `stateCounts` / `downCount` / `percentHealthy`, which tallied a client-side
 // `NodeSummary[]`. The widgets read the server's `fleet/group-summary` rollup instead (it is the
 // only shape that works at fleet scale), so `fleet.tsx` folds `HARD_DOWN_STATES` over
