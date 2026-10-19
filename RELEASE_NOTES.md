@@ -14,6 +14,8 @@
 
 - **Marking a site's last missing prefix as intentional no longer leaves a blank grey band.** On Nodes ▸ Missing IP prefixes, the site dropped off the Gaps tab and the site below it kept the open site's height, with nothing drawn in it. Every list that opens a row under itself had the same fault whenever a reload removed a row above or at the open one.
 
+- **On a phone, Alerts ▸ Active no longer overlaps cards or leaves gaps between them after an alert closes.** A card took over the height of the alert that had been in its place, so a card that wraps to more or fewer lines was drawn over its neighbour or with empty space below it.
+
 ## v0.3.53 — Detect on several devices runs side by side, and the pre-upgrade backup takes seconds
 
 ### Improvements

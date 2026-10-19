@@ -180,6 +180,14 @@ function VirtualAlertRows({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => (cardMode ? CARD_PX : ROW_PX),
     overscan: 12,
+    // A measured height belongs to the alert, not to its position. Keyed by index (the default),
+    // an alert that closes hands its height to the one that slides into its place, and a mobile
+    // card that wraps to a different number of lines then overlaps or leaves a gap — the row stays
+    // mounted, so nothing re-measures it. The shared DataTable keys the same way.
+    getItemKey: (index) => {
+      const a = alerts[index];
+      return a === undefined ? index : rowKey(a);
+    },
   });
 
   return (
