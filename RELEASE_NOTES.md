@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **A node's name now follows its device's hostname (sysName).** The hourly identity read also reads the device's sysName, and a node whose name is still the one the device gave it — or still the bare address Discovery fell back to — is renamed when the device's name changes, after two reads in a row agree. A name a person typed is never overwritten. Each rename is recorded in the audit log as `system`. A node behind an older poller does not follow until that poller is upgraded.
+- **A different model at a node's address is now held for a person to confirm.** When the device answers with a different sysObjectID than the one stored, Yagra no longer updates the node's identity (sysObjectID, sysDescr, name, OS version, serial) and raises a warning alert, "Device possibly replaced". Nodes ▸ Rediscover shows it and its Apply accepts the new device — even with no row ticked — then polls the node at once, which closes the alert. Rediscover also gained a Name row. For API clients: the comparison carries `device_changed` and a `name` row, and the Apply body accepts `name`; before this change a different sysObjectID simply replaced the stored one.
+
 ### Improvements
 
 - **The Geo map's coastline stays smooth when zoomed in.** Past a city-level zoom the map now draws a finer coastline — about 110 m instead of about 3 km — for just the part on screen, so bays, islands and peninsulas keep their shape at the maximum zoom instead of turning into long straight edges. It is still drawn from the WebUI's own files, with no map service and no internet access needed; the world view and the dashboard widget are unchanged.

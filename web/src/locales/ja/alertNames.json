@@ -23,6 +23,7 @@
   "cisco_ra_sessions": "リモートアクセス VPN セッション数",
   "cisco_ra_users": "リモートアクセス VPN ユーザー数",
   "cisco_temp_c": "筐体温度",
+  "device_replaced": "機器が入れ替わった可能性",
   "dns_answer_count": "DNS 応答の件数",
   "dns_chain_length": "名前解決の段数",
   "dns_resolve_ms": "名前解決の時間",

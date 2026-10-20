@@ -28,6 +28,7 @@
 //! the [`Admitted`] it returns, so neither path can store or judge a placeholder as a value. The
 //! live path hands the placeholders to the engine as evidence; the backfill path drops them.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -516,6 +517,9 @@ pub(crate) struct MetaRecord {
     /// and a `None` writes nothing to that column.
     sys_object_id: Option<String>,
     sys_descr: Option<String>,
+    /// The `sysName` the device reported, when it is one a node's name may follow (ADR-208) —
+    /// `yagra_discovery::sanitize_sys_name` refuses rather than repairs. `None` writes nothing.
+    sys_name: Option<String>,
     /// The serial number the device reported (ADR-147), sanitized again here for the reason
     /// `os_version` is. `None` means nothing was read and nothing is written.
     serial_number: Option<String>,
@@ -747,6 +751,11 @@ fn persist_metrics_and_meta(
         .sys_descr
         .as_deref()
         .and_then(yagra_discovery::sanitize_sys_descr);
+    // And the name the device gives itself (ADR-208), which a node's name may follow.
+    let sys_name = result
+        .sys_name
+        .as_deref()
+        .and_then(yagra_discovery::sanitize_sys_name);
     // The serial rides the same identity probe (ADR-147), so it too arrives hourly.
     let serial_number = result
         .serial_number
@@ -787,6 +796,7 @@ fn persist_metrics_and_meta(
         || os_version_without_patch.is_some()
         || sys_object_id.is_some()
         || sys_descr.is_some()
+        || sys_name.is_some()
         || serial_number.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
@@ -805,6 +815,7 @@ fn persist_metrics_and_meta(
             os_version_without_patch,
             sys_object_id,
             sys_descr,
+            sys_name,
             serial_number,
             dns_chain,
             neighbors,
@@ -1145,6 +1156,12 @@ pub(crate) struct MetaStores {
     pub(crate) wireless: Arc<crate::topology::wireless::WirelessRepo>,
     /// The classification rules, for the maker and model a node's identity probe fills (ADR-184).
     pub(crate) classifier: Arc<crate::discover::classification::Classifier>,
+    /// The engine and the sink for the "device replaced" alert (ADR-208): raised when a node's
+    /// device reads as a different model, closed when it reads as the stored one again.
+    pub(crate) alerts: Arc<AlertManager>,
+    pub(crate) replaced: Arc<dyn yagra_alert::action::AlertSink>,
+    /// Where a name changed to follow its device's `sysName` is recorded (ADR-208 decision 7).
+    pub(crate) audit: Arc<yagra_auth::audit::AuditRepo>,
 }
 
 /// The `(vendor, model)` a record fills, or `None` when it says nothing about either.
@@ -1247,6 +1264,52 @@ pub(crate) async fn run_pg_writer(
     }
 }
 
+/// Who an audit row written by Yagra itself names (ADR-208 decision 7). Nothing reserves the name,
+/// so a local account called `system` would read the same; the `system.` action prefix is what
+/// tells Yagra's own rows apart.
+const AUDIT_ACTOR: &str = "system";
+
+/// The audit action for a name that followed its device's `sysName`. `{:?}` quotes both names, so a
+/// name holding a space or an `=` still reads as one value.
+fn rename_audit_action(f: &repo::NameFollowed) -> String {
+    format!(
+        "system.node.rename_from_sysname node={} from={:?} to={:?}",
+        f.node, f.from, f.to
+    )
+}
+
+/// Which nodes in this batch read as a different model than the one stored (ADR-208 decision 5):
+/// raise their "device replaced" alert, close it for the ones that read as stored again, and return
+/// the replaced ones, whose identity writes the caller holds.
+///
+/// ⚠️ A node whose read carried no `sysObjectID` is not judged at all — absence is not evidence
+/// either way (ADR-156 decision 3), so its alert stays as it is.
+async fn hold_replaced_devices(
+    repo: &NodeRepo,
+    alerts: &AlertManager,
+    sink: &Arc<dyn yagra_alert::action::AlertSink>,
+    reads: &[(Uuid, String)],
+) -> anyhow::Result<HashSet<Uuid>> {
+    let changes = repo.sys_object_id_changes(reads).await?;
+    let now = yagra_common::clock::now_unix_ms();
+    let mut held = HashSet::new();
+    for (node, replaced) in changes {
+        let action = if replaced {
+            held.insert(node);
+            alerts.raise_device_replaced_alert(yagra_common::NodeId::from(node), now)
+        } else {
+            alerts.resolve_device_replaced_alert(yagra_common::NodeId::from(node))
+        };
+        if let Some(action) = action {
+            if replaced {
+                tracing::warn!(%node, "a different model answers at this node's address; its identity is held until Rediscover is applied");
+            }
+            sink.dispatch(action).await;
+        }
+    }
+    Ok(held)
+}
+
 /// Flush buffered metadata: coalesce every buffered result's interfaces into one cross-node upsert
 /// and every identity into one cross-node fill. Best-effort — a DB error is logged, never propagated.
 async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
@@ -1260,6 +1323,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         routing,
         wireless,
         classifier,
+        alerts,
+        replaced,
+        audit,
     } = stores;
     if buf.is_empty() {
         return;
@@ -1271,6 +1337,8 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut os_version_without_patch_rows: Vec<(Uuid, String)> = Vec::new();
     let mut snmp_identity_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
     let mut serial_number_rows: Vec<(Uuid, String)> = Vec::new();
+    let mut sys_name_rows: Vec<(Uuid, String)> = Vec::new();
+    let mut sys_object_id_reads: Vec<(Uuid, String)> = Vec::new();
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
@@ -1297,8 +1365,14 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         if let Some(version) = rec.os_version_without_patch {
             os_version_without_patch_rows.push((rec.node_id, version));
         }
+        if let Some(oid) = &rec.sys_object_id {
+            sys_object_id_reads.push((rec.node_id, oid.clone()));
+        }
         if rec.sys_object_id.is_some() || rec.sys_descr.is_some() {
             snmp_identity_rows.push((rec.node_id, rec.sys_object_id, rec.sys_descr));
+        }
+        if let Some(name) = rec.sys_name {
+            sys_name_rows.push((rec.node_id, name));
         }
         if let Some(serial_number) = rec.serial_number {
             serial_number_rows.push((rec.node_id, serial_number));
@@ -1330,6 +1404,31 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
             tracing::warn!(error = %e, "batch interface upsert failed");
         }
     }
+    // A different model at a node's address holds every identity write for that node until a
+    // person applies Rediscover (ADR-208 decision 5). Decided before the first of them, and when the
+    // comparison itself fails every identity write of the batch waits for the next read — they are
+    // all re-read hourly, and writing them blind is the one thing this must not do.
+    let held = match hold_replaced_devices(repo, alerts, replaced, &sys_object_id_reads).await {
+        Ok(held) => held,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not compare sysObjectIDs; identity writes wait for the next read");
+            ident_rows.clear();
+            os_version_rows.clear();
+            os_version_without_patch_rows.clear();
+            snmp_identity_rows.clear();
+            serial_number_rows.clear();
+            sys_name_rows.clear();
+            HashSet::new()
+        }
+    };
+    if !held.is_empty() {
+        ident_rows.retain(|r| !held.contains(&r.0));
+        os_version_rows.retain(|r| !held.contains(&r.0));
+        os_version_without_patch_rows.retain(|r| !held.contains(&r.0));
+        snmp_identity_rows.retain(|r| !held.contains(&r.0));
+        serial_number_rows.retain(|r| !held.contains(&r.0));
+        sys_name_rows.retain(|r| !held.contains(&r.0));
+    }
     if !ident_rows.is_empty() {
         if let Err(e) = repo.fill_node_identity_batch(&ident_rows).await {
             tracing::warn!(error = %e, "batch node-identity fill failed");
@@ -1358,6 +1457,23 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !serial_number_rows.is_empty() {
         if let Err(e) = repo.update_serial_number_batch(&serial_number_rows).await {
             tracing::warn!(error = %e, "batch node serial-number update failed");
+        }
+    }
+    if !sys_name_rows.is_empty() {
+        match repo.follow_sys_names(&sys_name_rows).await {
+            Ok(followed) => {
+                for f in followed {
+                    tracing::info!(node = %f.node, from = %f.from, to = %f.to, "node name followed its device's sysName");
+                    // A failed audit write is logged and never stops the batch.
+                    if let Err(e) = audit
+                        .record(AUDIT_ACTOR, &rename_audit_action(&f), 200)
+                        .await
+                    {
+                        tracing::warn!(node = %f.node, error = %e, "could not record a sysName rename in the audit log");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "batch node sysName follow failed"),
         }
     }
     // One statement per observation, in arrival order. Deliberately NOT coalesced per node the way
@@ -3058,5 +3174,191 @@ mod tests {
             vm.try_send(&Arc::new(r)).expect("room in both shards");
         }
         assert_eq!(vm.depth(), 2, "one queued in each shard, counted once each");
+    }
+
+    /// ADR-208: a `sysName` reaches the PG writer trimmed, a result carrying nothing else still
+    /// makes a record, and one the device should not be saying (a control character) is dropped on
+    /// this edge rather than cleaned up into a name nobody configured.
+    #[test]
+    fn a_sys_name_reaches_the_pg_writer_only_when_it_is_a_plain_name() {
+        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+        let result = |name: String| {
+            let mut r: PollResult = serde_json::from_str(
+                r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                    "node_id":"00000000-0000-0000-0000-000000000000",
+                    "at_unix_ms":0,"outcome":"reachable"}"#,
+            )
+            .expect("a result");
+            r.sys_name = Some(name);
+            r
+        };
+        persist_metrics_and_meta(
+            &NoReadingHandle::default().admit(result(" sw-01 ".to_owned())),
+            &vm,
+            &meta_tx,
+        );
+        let rec = meta_rx
+            .try_recv()
+            .expect("the record reaches the PG writer");
+        assert_eq!(rec.sys_name.as_deref(), Some("sw-01"));
+
+        persist_metrics_and_meta(
+            &NoReadingHandle::default().admit(result(format!("sw{}01", char::from(27)))),
+            &vm,
+            &meta_tx,
+        );
+        assert!(
+            meta_rx.try_recv().is_err(),
+            "a name carrying a control character makes no record"
+        );
+    }
+
+    /// The metadata writer over a real database, as the leader runs it.
+    async fn meta_stores(
+        pool: &sqlx::PgPool,
+        alerts: Arc<AlertManager>,
+    ) -> (
+        MetaStores,
+        Arc<crate::alerts::sink::testkit::FakeHistory>,
+        Arc<crate::alerts::sink::testkit::FakeNotifier>,
+    ) {
+        let history = Arc::new(crate::alerts::sink::testkit::FakeHistory::default());
+        let notifier = Arc::new(crate::alerts::sink::testkit::FakeNotifier::default());
+        let stores = MetaStores {
+            repo: Arc::new(yagra_base::pgtest::repo(pool.clone())),
+            dns: Arc::new(dns_check::DnsCheckRepo::new(pool.clone())),
+            neighbors: Arc::new(neighbors::NeighborRepo::new(pool.clone())),
+            l3: Arc::new(l3::L3Repo::new(pool.clone())),
+            vlans: Arc::new(crate::topology::vlans::VlanRepo::new(pool.clone())),
+            arp: Arc::new(arp::ArpRepo::new(pool.clone())),
+            routing: Arc::new(l3_routing::RoutingRepo::new(pool.clone())),
+            wireless: Arc::new(crate::topology::wireless::WirelessRepo::new(pool.clone())),
+            classifier: Arc::new(crate::discover::classification::Classifier::empty()),
+            alerts,
+            replaced: Arc::new(crate::alerts::sink::RecordingSink::new(
+                history.clone(),
+                notifier.clone(),
+                "a test transition",
+            )),
+            audit: Arc::new(yagra_auth::audit::AuditRepo::new(pool.clone())),
+        };
+        (stores, history, notifier)
+    }
+
+    /// One read's identity for the writer, as the ingest edge would hand it over.
+    fn identity_record(node: Uuid, oid: &str, descr: &str, name: &str) -> MetaRecord {
+        let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(1);
+        let vm = VmWriters::from_senders(vec![metrics_tx]);
+        let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(1);
+        let mut r: PollResult = serde_json::from_str(
+            r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                "node_id":"00000000-0000-0000-0000-000000000000",
+                "at_unix_ms":0,"outcome":"reachable"}"#,
+        )
+        .expect("a result");
+        r.node_id = yagra_common::NodeId::from(node);
+        r.sys_object_id = Some(oid.to_owned());
+        r.sys_descr = Some(descr.to_owned());
+        r.sys_name = Some(name.to_owned());
+        r.serial_number = Some("FOC0000X0AA".to_owned());
+        persist_metrics_and_meta(&NoReadingHandle::default().admit(r), &vm, &meta_tx);
+        meta_rx.try_recv().expect("a record")
+    }
+
+    /// ADR-208 end to end through the writer: a node that nobody renamed follows its device's
+    /// `sysName` on the second read and the audit log says so; a node whose device reads as a
+    /// different model keeps every identity column, its name included, and raises one "device
+    /// replaced" alert that is recorded and delivered — and closes once the device reads as the
+    /// stored model again.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_writer_follows_a_sys_name_and_holds_a_replaced_device(pool: sqlx::PgPool) {
+        let follows = yagra_base::pgtest::node(&pool, "10.0.0.1", 1, None).await;
+        let replaced = yagra_base::pgtest::node(&pool, "10.0.0.2", 2, None).await;
+        let alerts = Arc::new(crate::alerts::new_manager());
+        let (stores, history, notifier) = meta_stores(&pool, alerts.clone()).await;
+        let c3750 = "1.3.6.1.4.1.9.1.516";
+        let c9300 = "1.3.6.1.4.1.9.1.2494";
+        // The replaced node already holds a model; the other is read for the first time.
+        stores
+            .repo
+            .update_snmp_identity_batch(&[(replaced, Some(c3750.to_owned()), None)])
+            .await
+            .expect("seed");
+
+        for _ in 0..2 {
+            let mut buf = vec![
+                identity_record(follows, c3750, "Cisco IOS Software, C3750", "sw-01"),
+                identity_record(replaced, c9300, "Cisco IOS XE Software, C9300", "sw-02"),
+            ];
+            flush_meta(&stores, &mut buf).await;
+        }
+
+        let row = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+                    "SELECT name, sys_object_id, sys_descr, serial_number FROM nodes WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read")
+            }
+        };
+        assert_eq!(
+            row(follows).await,
+            (
+                "sw-01".to_owned(),
+                Some(c3750.to_owned()),
+                Some("Cisco IOS Software, C3750".to_owned()),
+                Some("FOC0000X0AA".to_owned()),
+            )
+        );
+        assert_eq!(
+            row(replaced).await,
+            ("10.0.0.2".to_owned(), Some(c3750.to_owned()), None, None),
+            "a replaced device writes nothing — not its name, its sysDescr or its serial"
+        );
+
+        let audit: Vec<(String, String)> =
+            sqlx::query_as("SELECT username, action FROM audit_log ORDER BY at")
+                .fetch_all(&pool)
+                .await
+                .expect("audit");
+        assert_eq!(
+            audit,
+            vec![(
+                "system".to_owned(),
+                format!(
+                    "system.node.rename_from_sysname node={follows} from=\"10.0.0.1\" to=\"sw-01\""
+                ),
+            )]
+        );
+
+        let open = alerts.active_alerts();
+        assert_eq!(open.len(), 1, "raised once, though read twice: {open:?}");
+        assert_eq!(open[0].node(), Some(yagra_common::NodeId::from(replaced)));
+        assert_eq!(open[0].metric, yagra_alert::engine::DEVICE_REPLACED_METRIC);
+        assert_eq!(history.rows.lock().expect("rows").len(), 1, "recorded");
+        assert_eq!(
+            notifier.delivered.lock().expect("delivered").len(),
+            1,
+            "delivered"
+        );
+
+        // The device reads as the stored model again: closed, recorded and delivered.
+        let mut buf = vec![identity_record(
+            replaced,
+            c3750,
+            "Cisco IOS Software, C3750",
+            "sw-02",
+        )];
+        flush_meta(&stores, &mut buf).await;
+        assert!(alerts.active_alerts().is_empty());
+        assert_eq!(history.rows.lock().expect("rows").len(), 2);
+        assert_eq!(notifier.delivered.lock().expect("delivered").len(), 2);
     }
 }

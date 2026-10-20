@@ -27,6 +27,8 @@ const comparison = (over: Partial<RediscoverComparison> = {}): RediscoverCompari
   },
   vendor: { current: null, found: 'Huawei', verdict: 'differs' },
   model: { current: 'CE6881', found: null, verdict: 'undetermined' },
+  name: { current: 'sw-01', found: 'sw-01', verdict: 'same' },
+  device_changed: false,
   ...over,
 });
 
@@ -96,6 +98,24 @@ describe('rows and apply', () => {
     });
     expect(applyBody('s-1', comparison(), new Set(['model']))).toBeNull();
     expect(applyBody('s-1', comparison(), new Set())).toBeNull();
+  });
+
+  it('offers the name row and sends it like the others (ADR-208)', () => {
+    const renamed = comparison({
+      name: { current: '192.0.2.10', found: 'sw-01', verdict: 'differs' },
+    });
+    expect(rowsOf(renamed).map((r) => r.field)).toEqual(['profile', 'vendor', 'model', 'name']);
+    expect(applyBody('s-1', renamed, new Set(['name']))).toEqual({
+      scan_id: 's-1',
+      name: { from: '192.0.2.10', to: 'sw-01' },
+    });
+  });
+
+  it('accepts a replaced device with no row ticked, and only then (ADR-208)', () => {
+    expect(applyBody('s-1', comparison({ device_changed: true }), new Set())).toEqual({
+      scan_id: 's-1',
+    });
+    expect(applyBody('s-1', comparison({ device_changed: false }), new Set())).toBeNull();
   });
 });
 

@@ -61,6 +61,9 @@ use std::sync::LazyLock;
 pub const OID_SYS_DESCR: &str = "1.3.6.1.2.1.1.1.0";
 /// `sysObjectID.0` — the enterprise OID a device names itself with.
 pub const OID_SYS_OBJECT_ID: &str = "1.3.6.1.2.1.1.2.0";
+/// `sysName.0` — the name the device gives itself. Read beside the two above so a node's name can
+/// follow it (ADR-208); nothing here derives a version from it.
+pub const OID_SYS_NAME: &str = "1.3.6.1.2.1.1.5.0";
 /// The longest version this product keeps. A longer one is cut, never refused: a device that
 /// reports a paragraph still has a version worth showing, and refusing would read as "unknown".
 pub const OS_VERSION_MAX_CHARS: usize = 128;

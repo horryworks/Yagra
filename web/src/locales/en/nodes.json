@@ -886,6 +886,7 @@
       "waitingLong": "No poller has picked this up after a minute — check this node's pool in <lnk/>.",
       "reading": "Asking the device…",
       "nothingToApply": "The device answered, and nothing differs from this node.",
+      "deviceChanged": "A different model answers here. Apply accepts it.",
       "noSnmpAnswer": "The device answers ping but not SNMP with this node's credential — check it in Edit node.",
       "noAnswer": "The device answered neither ping nor SNMP.",
       "stopped": "The re-read was stopped before it finished."
@@ -899,7 +900,8 @@
     "field": {
       "profile": "Device profile",
       "vendor": "Maker",
-      "model": "Model"
+      "model": "Model",
+      "name": "Name"
     },
     "verdict": {
       "same": "Same",

@@ -1,5 +1,6 @@
 [
   "__liveness__",
+  "device_replaced",
   "dns_up",
   "http_body_match",
   "http_up",

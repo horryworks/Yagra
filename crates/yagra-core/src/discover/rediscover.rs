@@ -26,6 +26,11 @@ pub struct Current {
     pub profile_locked: bool,
     pub vendor: Option<String>,
     pub model: Option<String>,
+    /// The node's name, for the name row (ADR-208 decision 6).
+    pub name: String,
+    /// The `sysObjectID` stored for the node; `None` ⇒ never read. Compared with the device's to say
+    /// whether a different model answers at the address (ADR-208 decision 5).
+    pub sys_object_id: Option<String>,
 }
 
 /// Where a rediscovery is.
@@ -80,7 +85,7 @@ pub struct Found {
     pub sys_name: Option<String>,
 }
 
-/// The three rows, when the device answered.
+/// The four rows, when the device answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comparison {
     pub found: Found,
@@ -90,6 +95,13 @@ pub struct Comparison {
     pub rule_id: Option<Uuid>,
     pub vendor: Row<String>,
     pub model: Row<String>,
+    /// The node's name beside the device's `sysName` (ADR-208 decision 6). `found` is `None` when
+    /// the device gave no name a node may take (`yagra_discovery::sanitize_sys_name`).
+    pub name: Row<String>,
+    /// The device's `sysObjectID` is not the one stored: a different model answers at the address,
+    /// and the node's identity is held until an Apply accepts it (ADR-208 decision 5). An Apply may
+    /// then name no row at all — accepting the device is itself the change.
+    pub device_changed: bool,
 }
 
 /// Everything the dialog shows.
@@ -148,6 +160,13 @@ pub fn judge(current: &Current, status: &ScanStatus, classifier: &Classifier) ->
         let descr = c.sysdescr.as_deref();
         let matched = suggestion_for(oid, descr, classifier);
         let (vendor, model) = identity_of(classifier, oid, descr);
+        let device_changed = matches!(
+            (
+                current.sys_object_id.as_deref(),
+                oid.and_then(yagra_discovery::normalize_sys_object_id),
+            ),
+            (Some(stored), Some(read)) if stored != read
+        );
         Comparison {
             found: Found {
                 sys_object_id: c.sysobjectid.clone(),
@@ -162,6 +181,14 @@ pub fn judge(current: &Current, status: &ScanStatus, classifier: &Classifier) ->
             rule_id: matched.and_then(|m| m.rule_id),
             vendor: row(current.vendor.clone(), vendor, false),
             model: row(current.model.clone(), model, false),
+            name: row(
+                Some(current.name.clone()),
+                c.sysname
+                    .as_deref()
+                    .and_then(yagra_discovery::sanitize_sys_name),
+                false,
+            ),
+            device_changed,
         }
     });
     Judgement { state, comparison }
@@ -180,23 +207,40 @@ pub struct ApplyRequest {
     pub profile: Option<Change<Uuid>>,
     pub vendor: Option<Change<String>>,
     pub model: Option<Change<String>>,
+    pub name: Option<Change<String>>,
+}
+
+impl ApplyRequest {
+    fn names_no_field(&self) -> bool {
+        self.profile.is_none()
+            && self.vendor.is_none()
+            && self.model.is_none()
+            && self.name.is_none()
+    }
 }
 
 /// What Apply may write: the accepted changes, plus the identity the device reported, so Nodes ▸
-/// Reclassify judges from the same answer rather than proposing to undo it.
+/// Reclassify judges from the same answer rather than proposing to undo it — and, since ADR-208, so
+/// a replaced device's identity stops being held and its name follows the device again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyPlan {
     pub profile: Option<Change<Uuid>>,
     pub vendor: Option<Change<String>>,
     pub model: Option<Change<String>>,
+    pub name: Option<Change<String>>,
     pub sys_object_id: Option<String>,
     pub sys_descr: Option<String>,
+    /// The device's `sysName`, when it is one a node may take: the name a node's name follows from
+    /// here on — whichever name the person kept.
+    pub sys_name: Option<String>,
+    /// The Apply accepted a different model at the address (see [`Comparison::device_changed`]).
+    pub device_changed: bool,
 }
 
 /// Why an Apply was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
-    /// The request named no field.
+    /// The request named no field, and the device is the model already stored.
     NothingToApply,
     /// The scan has no comparison — still waiting, or the device did not answer SNMP.
     NotAnswered,
@@ -239,18 +283,25 @@ pub fn check_apply(
     classifier: &Classifier,
     request: &ApplyRequest,
 ) -> Result<ApplyPlan, Refusal> {
-    if request.profile.is_none() && request.vendor.is_none() && request.model.is_none() {
+    let comparison = judge(current, status, classifier).comparison;
+    // An empty request is still an answer when the device is a different model: accepting it is
+    // what lets its identity be written again (ADR-208 decision 5).
+    let accepts_the_device = comparison.as_ref().is_some_and(|c| c.device_changed);
+    if request.names_no_field() && !accepts_the_device {
         return Err(Refusal::NothingToApply);
     }
-    let Some(cmp) = judge(current, status, classifier).comparison else {
+    let Some(cmp) = comparison else {
         return Err(Refusal::NotAnswered);
     };
     Ok(ApplyPlan {
         profile: accept(request.profile.as_ref(), &cmp.profile)?,
         vendor: accept(request.vendor.as_ref(), &cmp.vendor)?,
         model: accept(request.model.as_ref(), &cmp.model)?,
+        name: accept(request.name.as_ref(), &cmp.name)?,
         sys_object_id: cmp.found.sys_object_id,
         sys_descr: cmp.found.sys_descr,
+        sys_name: cmp.name.found,
+        device_changed: cmp.device_changed,
     })
 }
 
@@ -293,6 +344,8 @@ mod tests {
             profile_locked: false,
             vendor: None,
             model: None,
+            name: "192.0.2.10".into(),
+            sys_object_id: None,
         }
     }
 
@@ -374,12 +427,16 @@ mod tests {
             profile_locked: false,
             vendor: Some("Huawei".into()),
             model: None,
+            name: "sw-01".into(),
+            sys_object_id: Some("1.3.6.1.4.1.2011.2.23.1".into()),
         };
         let c = judge(&now, &done(huawei()), &classifier())
             .comparison
             .expect("answered");
         assert_eq!(c.profile.verdict, RediscoverVerdict::Same);
         assert_eq!(c.vendor.verdict, RediscoverVerdict::Same);
+        assert_eq!(c.name.verdict, RediscoverVerdict::Same);
+        assert!(!c.device_changed);
     }
 
     #[test]
@@ -494,9 +551,16 @@ mod tests {
                     to: "Huawei".into(),
                 }),
                 model: None,
+                name: Some(Change {
+                    from: Some("192.0.2.10".into()),
+                    to: "sw-01".into(),
+                }),
             },
         )
         .expect("accepted");
+        assert_eq!(plan.name.map(|c| c.to).as_deref(), Some("sw-01"));
+        assert_eq!(plan.sys_name.as_deref(), Some("sw-01"));
+        assert!(!plan.device_changed, "nothing was stored to differ from");
         assert_eq!(plan.profile.map(|c| c.to), Some(Uuid::from_u128(HUAWEI)));
         assert_eq!(plan.vendor.map(|c| c.to).as_deref(), Some("Huawei"));
         assert_eq!(plan.model, None);
@@ -552,5 +616,87 @@ mod tests {
             ),
             Err(Refusal::NothingToApply)
         );
+    }
+
+    /// ADR-208 decision 5: a stored `sysObjectID` the device no longer reports is a replaced device.
+    /// An Apply that names no row then accepts the device itself; for the model already stored the
+    /// same empty Apply is still refused.
+    #[test]
+    fn a_different_model_at_the_address_can_be_accepted_with_no_row() {
+        let stored = |oid: &str| Current {
+            sys_object_id: Some(oid.into()),
+            ..current()
+        };
+        let swapped = stored("1.3.6.1.4.1.9.1.516");
+        let c = judge(&swapped, &done(huawei()), &classifier())
+            .comparison
+            .expect("answered");
+        assert!(c.device_changed);
+        let plan = check_apply(
+            &swapped,
+            &done(huawei()),
+            &classifier(),
+            &ApplyRequest::default(),
+        )
+        .expect("accepting the device is the change");
+        assert!(plan.device_changed);
+        assert_eq!(
+            plan.sys_object_id.as_deref(),
+            Some("1.3.6.1.4.1.2011.2.23.1")
+        );
+        assert_eq!(plan.name, None, "the name row was not asked for");
+        assert_eq!(
+            plan.sys_name.as_deref(),
+            Some("sw-01"),
+            "but it is followed from here on"
+        );
+
+        let same = stored("1.3.6.1.4.1.2011.2.23.1");
+        assert!(
+            !judge(&same, &done(huawei()), &classifier())
+                .comparison
+                .expect("answered")
+                .device_changed
+        );
+        assert_eq!(
+            check_apply(
+                &same,
+                &done(huawei()),
+                &classifier(),
+                &ApplyRequest::default()
+            ),
+            Err(Refusal::NothingToApply)
+        );
+    }
+
+    /// The name row is judged like the others: a device with no usable `sysName` proposes none, and
+    /// a name the node no longer holds refuses the Apply.
+    #[test]
+    fn the_name_row_proposes_only_a_usable_sys_name() {
+        let mut silent = huawei();
+        silent.sysname = Some(format!("sw{}01", char::from(27)));
+        let c = judge(&current(), &done(silent), &classifier())
+            .comparison
+            .expect("answered");
+        assert_eq!(c.name.found, None);
+        assert_eq!(c.name.verdict, RediscoverVerdict::Undetermined);
+
+        let renamed = Current {
+            name: "Core switch".into(),
+            ..current()
+        };
+        let refused = check_apply(
+            &renamed,
+            &done(huawei()),
+            &classifier(),
+            &ApplyRequest {
+                name: Some(Change {
+                    from: Some("192.0.2.10".into()),
+                    to: "sw-01".into(),
+                }),
+                ..ApplyRequest::default()
+            },
+        );
+        assert_eq!(refused, Err(Refusal::NodeChanged));
     }
 }

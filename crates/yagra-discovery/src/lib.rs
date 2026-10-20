@@ -167,9 +167,64 @@ pub fn sanitize_sys_descr(raw: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// The longest `sysName` a node's name follows: SNMPv2-MIB declares it a `DisplayString`, which is
+/// at most 255 octets (ADR-208).
+pub const SYS_NAME_MAX_CHARS: usize = 255;
+
+/// A `sysName` a node's name may follow (ADR-208), or `None` when it is not one.
+///
+/// Unlike [`sanitize_sys_descr`] this refuses rather than repairs: a name carrying a control
+/// character, or longer than [`SYS_NAME_MAX_CHARS`], is something the device should not be saying,
+/// and renaming a node to a cleaned-up version of it would put a name on screen nobody configured.
+/// The same goes for an invisible format character — a bidirectional override, a zero-width
+/// space or joiner, a line or paragraph separator: on screen it makes a name read as another
+/// node's. Trimmed; blank is `None`.
+#[must_use]
+pub fn sanitize_sys_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let usable = !trimmed.is_empty()
+        && trimmed.chars().count() <= SYS_NAME_MAX_CHARS
+        && !trimmed
+            .chars()
+            .any(|c| c.is_control() || is_invisible_format(c));
+    usable.then(|| trimmed.to_owned())
+}
+
+/// Unicode's format characters (category Cf) and the two separators (Zl, Zp) — the characters that
+/// change how the text around them is drawn while drawing nothing themselves. Listed by range
+/// rather than through a Unicode-tables crate: the set is small and changes rarely.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x2028..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{identify, normalize_sys_object_id, sanitize_sys_descr, SYS_DESCR_MAX_CHARS};
+    use super::{
+        identify, normalize_sys_object_id, sanitize_sys_descr, sanitize_sys_name,
+        SYS_DESCR_MAX_CHARS, SYS_NAME_MAX_CHARS,
+    };
 
     #[test]
     fn a_sys_object_id_is_kept_only_as_dotted_decimal() {
@@ -203,6 +258,34 @@ mod tests {
             sanitize_sys_descr(&long).map(|s| s.chars().count()),
             Some(SYS_DESCR_MAX_CHARS)
         );
+    }
+
+    #[test]
+    fn a_sys_name_is_followed_only_when_it_is_a_plain_name() {
+        assert_eq!(
+            sanitize_sys_name("  sw-01.example.com ").as_deref(),
+            Some("sw-01.example.com")
+        );
+        assert_eq!(sanitize_sys_name("\u{3000}\u{3000}"), None);
+        for bad in [
+            "",
+            "   ",
+            "sw\u{1b}01",
+            "sw\n01",
+            "sw\t01",
+            "sw-01\u{202e}10-ws",
+            "sw\u{200b}-01",
+            "sw\u{2028}01",
+            "sw\u{feff}01",
+        ] {
+            assert_eq!(sanitize_sys_name(bad), None, "{bad:?}");
+        }
+        let longest = "x".repeat(SYS_NAME_MAX_CHARS);
+        assert_eq!(
+            sanitize_sys_name(&longest).as_deref(),
+            Some(longest.as_str())
+        );
+        assert_eq!(sanitize_sys_name(&format!("{longest}x")), None);
     }
 
     #[test]

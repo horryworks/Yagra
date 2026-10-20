@@ -1,0 +1,25 @@
+-- 0151_node_sys_name — the name a node's device gives itself, so a name nobody chose follows it
+-- (ADR-208).
+--
+-- reversible: additive only — two nullable columns on `nodes`, nothing narrowed and nothing
+-- rewritten. An older core projects a node row through `NodeRepo::NODE_COLUMNS` and inserts by
+-- naming its columns, so it never reads these; rolling the binary back leaves the values in place,
+-- unread. No `schema_compat` floor, for the reason 0108 records.
+--
+-- `sys_name` — THE sysName THE NODE'S NAME LAST FOLLOWED
+-- A node's name is renamed to a new sysName only while it still equals this column, the rule the
+-- Meraki and wireless-AP renames already use (compare with what was written last, keep no flag).
+-- A person who renames the node breaks the equality and the name stops following; renaming it back
+-- makes it follow again. NULL means no sysName has been accepted yet, and the first one is taken
+-- only when the node's name already equals it or is still the address Discovery fell back to.
+--
+-- `sys_name_seen` — A NEW sysName READ ONCE
+-- A new value is accepted only when two reads in a row agree, so a shared address answered by
+-- alternate members of an HA pair does not rename the node every hour. Only the result-ingest
+-- metadata writer writes either column, and the configuration bundle carries neither: both are
+-- observed state, not configuration.
+--
+-- NO LENGTH CHECK, deliberately, for the reason 0113 gives for `sys_descr`: the cap is applied at
+-- ingest, and a CHECK here would turn one bad value into a failed batch UPDATE for every node in it.
+ALTER TABLE nodes ADD COLUMN sys_name TEXT;
+ALTER TABLE nodes ADD COLUMN sys_name_seen TEXT;

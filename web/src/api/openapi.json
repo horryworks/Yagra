@@ -15149,7 +15149,7 @@
         },
         "responses": {
           "200": {
-            "description": "The accepted changes were written, with the device's sysObjectID and sysDescr",
+            "description": "The accepted changes were written, with the device's sysObjectID, sysDescr and sysName",
             "content": {
               "application/json": {
                 "schema": {
@@ -15159,7 +15159,7 @@
             }
           },
           "400": {
-            "description": "`nothing_to_apply`: the body names no field",
+            "description": "`nothing_to_apply`: the body names no field, and the device is the model already stored",
             "content": {
               "application/json": {
                 "schema": {
@@ -36653,7 +36653,7 @@
               "string",
               "null"
             ],
-            "description": "The node's display name. **Absent** = leave it unchanged; otherwise rename the node.\n`\"\"` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.\n\nRenaming is safe for everything downstream: `Node::id` is the identity every store is keyed\nby, so metric series and alert history follow the node across a rename. Nothing else in the\nproduct writes this column — no poll, no sweep, no classifier — so a hand-edited name stays."
+            "description": "The node's display name. **Absent** = leave it unchanged; otherwise rename the node.\n`\"\"` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.\n\nRenaming is safe for everything downstream: `Node::id` is the identity every store is keyed\nby, so metric series and alert history follow the node across a rename. A name set here\nstays: the three other writers — the Meraki sync, the wireless-AP sync and the device's own\n`sysName` (ADR-208) — rename a node only while it still carries the name they gave it."
           },
           "notes": {
             "type": [
@@ -40023,12 +40023,22 @@
       },
       "RediscoverApplyBody": {
         "type": "object",
-        "description": "The changes a person accepted. Name at least one.",
+        "description": "The changes a person accepted. Name at least one — unless the comparison said\n`device_changed`, when an empty Apply accepts the device itself.",
         "required": [
           "scan_id"
         ],
         "properties": {
           "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextChange"
+              }
+            ]
+          },
+          "name": {
             "oneOf": [
               {
                 "type": "null"
@@ -40070,13 +40080,23 @@
         "description": "The node beside what the device now says it is.",
         "required": [
           "profile_locked",
+          "device_changed",
           "profile",
           "vendor",
-          "model"
+          "model",
+          "name"
         ],
         "properties": {
+          "device_changed": {
+            "type": "boolean",
+            "description": "The device reports a `sysObjectID` other than the one stored: a different model answers at\nthe node's address, and its identity is held until an Apply accepts it — which may then name\nno row (ADR-208)."
+          },
           "model": {
             "$ref": "#/components/schemas/RediscoverTextRow"
+          },
+          "name": {
+            "$ref": "#/components/schemas/RediscoverTextRow",
+            "description": "The node's name beside the device's `sysName`. `found` is `null` when the device gave none a\nnode may take (blank, too long, or carrying a control character)."
           },
           "profile": {
             "$ref": "#/components/schemas/RediscoverProfileRow"
@@ -40115,7 +40135,8 @@
         "enum": [
           "profile",
           "vendor",
-          "model"
+          "model",
+          "name"
         ]
       },
       "RediscoverProfileRow": {
@@ -43089,7 +43110,7 @@
       },
       "TextChange": {
         "type": "object",
-        "description": "One vendor or model change, echoing what the dialog showed.",
+        "description": "One vendor, model or name change, echoing what the dialog showed.",
         "required": [
           "to"
         ],

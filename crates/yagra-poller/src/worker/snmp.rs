@@ -82,6 +82,8 @@ pub(super) struct IdentityProbe {
     /// Always read by the first GET, to pick the version rows; kept since ADR-140 so core can
     /// re-run the classification rules on an existing node.
     pub(super) sys_object_id: Option<String>,
+    /// `sysName`, read in the same first GET, so a node's name can follow it (ADR-208).
+    pub(super) sys_name: Option<String>,
     /// The device's serial number (ADR-147) — from its vendor's own MIB (a Juniper Virtual Chassis
     /// lists its members, Increment 2) or ENTITY-MIB's chassis rows, a stack's members joined with
     /// `, `. `None` when `sysDescr` did not answer, the walk that decided did not finish, or nothing
@@ -108,10 +110,12 @@ impl IdentityProbe {
 }
 
 /// What [`SnmpWalker::read_classifying`] brought back: `sysDescr` when it was answered and not
-/// empty, and `sysObjectID` as the device spelled it (each caller normalises it for its own use).
+/// empty, `sysObjectID` as the device spelled it (each caller normalises it for its own use), and
+/// `sysName` trimmed, when it was answered and not blank (ADR-208).
 struct Classifiers {
     sys_descr: Option<String>,
     sys_object_id: Option<String>,
+    sys_name: Option<String>,
 }
 
 /// What one scalar GET reads: the check's scalars and columns, and how much of the node's identity
@@ -149,9 +153,10 @@ impl SnmpWalker {
         }
     }
 
-    /// `sysDescr` and `sysObjectID`, in one GET: what core classifies a device's maker and model
-    /// from, and what the full probe reads first to decide which OIDs hold the version. The one
-    /// place that decides what counts as an answered `sysDescr` — an empty string does not.
+    /// `sysDescr`, `sysObjectID` and `sysName`, in one GET: what core classifies a device's maker
+    /// and model from, what the full probe reads first to decide which OIDs hold the version, and
+    /// the name a node's name follows (ADR-208). The one place that decides what counts as an
+    /// answered `sysDescr` — an empty string does not — and an answered `sysName`.
     async fn read_classifying(
         &self,
         transport: &dyn Transport,
@@ -162,7 +167,11 @@ impl SnmpWalker {
             .read_strings(
                 transport,
                 target,
-                &[os_version::OID_SYS_DESCR, os_version::OID_SYS_OBJECT_ID],
+                &[
+                    os_version::OID_SYS_DESCR,
+                    os_version::OID_SYS_OBJECT_ID,
+                    os_version::OID_SYS_NAME,
+                ],
                 timeout,
             )
             .await;
@@ -171,24 +180,30 @@ impl SnmpWalker {
                 .remove(os_version::OID_SYS_DESCR)
                 .filter(|v| !v.is_empty()),
             sys_object_id: first.remove(os_version::OID_SYS_OBJECT_ID),
+            sys_name: first
+                .remove(os_version::OID_SYS_NAME)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty()),
         }
     }
 
     /// The light form of the identity probe (ADR-138 Increment 6): only what [`Self::read_classifying`]
     /// reads, for a node whose maker core does not know yet. No version, no patch table, no serial
-    /// walk — those wait for the node's hourly full probe.
+    /// walk — those wait for the node's hourly full probe. `sysObjectID` comes back normalised.
     async fn fetch_classifiers(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         timeout: Duration,
-    ) -> (Option<String>, Option<String>) {
+    ) -> Classifiers {
         let first = self.read_classifying(transport, target, timeout).await;
-        let sys_object_id = first
-            .sys_object_id
-            .as_deref()
-            .and_then(yagra_discovery::normalize_sys_object_id);
-        (first.sys_descr, sys_object_id)
+        Classifiers {
+            sys_object_id: first
+                .sys_object_id
+                .as_deref()
+                .and_then(yagra_discovery::normalize_sys_object_id),
+            ..first
+        }
     }
 
     /// The identity probe: `sysDescr` (so core can fill the node's maker/model) and the OS version
@@ -214,6 +229,7 @@ impl SnmpWalker {
     ) -> IdentityProbe {
         let first = self.read_classifying(transport, target, timeout).await;
         let sys_descr = first.sys_descr;
+        let sys_name = first.sys_name;
         let sys_object_id = first.sys_object_id.as_deref();
         let reads = os_version::oids_to_read(sys_object_id, sys_descr.as_deref());
         let mut answers = os_version::Answers::default();
@@ -278,6 +294,7 @@ impl SnmpWalker {
             os_version_without_patch,
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
+            sys_name,
             serial_number,
             hardware_model: chassis.model,
             unread,
@@ -713,17 +730,18 @@ pub(super) async fn execute_scalar_get(
             match identity {
                 IdentityRead::Skip => {}
                 IdentityRead::Classify => {
-                    let (sys_descr, sys_object_id) = walker
+                    let first = walker
                         .fetch_classifiers(transport, job.target, timeout)
                         .await;
-                    let heard = if sys_descr.is_some() {
+                    let heard = if first.sys_descr.is_some() {
                         "answered"
                     } else {
                         "silent"
                     };
                     metrics::counter!(IDENTITY_CLASSIFY_METRIC, "result" => heard).increment(1);
-                    r.sys_descr = sys_descr;
-                    r.sys_object_id = sys_object_id;
+                    r.sys_descr = first.sys_descr;
+                    r.sys_object_id = first.sys_object_id;
+                    r.sys_name = first.sys_name;
                     // Core fills the vendor from this and not the model (ADR-138 Increment 8).
                     r.identity_partial = true;
                 }
@@ -735,6 +753,7 @@ pub(super) async fn execute_scalar_get(
                     r.os_version = probe.os_version;
                     r.os_version_without_patch = probe.os_version_without_patch;
                     r.sys_object_id = probe.sys_object_id;
+                    r.sys_name = probe.sys_name;
                     r.serial_number = probe.serial_number;
                     r.hardware_model = probe.hardware_model;
                 }
@@ -1179,6 +1198,35 @@ mod tests {
             "the patch table was never walked: {:?}",
             t.asked()
         );
+    }
+
+    /// ADR-208: the identity probe reads `sysName` in its first GET and sends it trimmed; a blank one
+    /// is not sent, so core never reads "no name" as a name.
+    #[tokio::test]
+    async fn the_identity_probe_sends_the_devices_sys_name() {
+        let device = |name: &str| {
+            FakeTransport::reachable(0.0)
+                .with_snmp(vec![SnmpSample {
+                    oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                    value: 1.0,
+                }])
+                .with_snmp_table_strings(vec![
+                    string_row("1.3.6.1.2.1.1.1", 0, "Cisco IOS Software, C3750"),
+                    string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.1.516"),
+                    string_row("1.3.6.1.2.1.1.5", 0, name),
+                ])
+        };
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let r = execute(&job, &device(" sw-01.example.com "), 1_000).await;
+        assert_eq!(r.sys_name.as_deref(), Some("sw-01.example.com"));
+        let r = execute(&job, &device("   "), 1_000).await;
+        assert!(r.sys_descr.is_some(), "the identity was read");
+        assert_eq!(r.sys_name, None);
+        // The light read between full ones carries it too.
+        let r = execute_reading(&job, &device("sw-01"), 1_000, IdentityRead::Classify).await;
+        assert!(r.identity_partial);
+        assert_eq!(r.sys_name.as_deref(), Some("sw-01"));
     }
 
     /// 🚨 The defect ADR-138 Increment 3 closes, as both lab deployments showed it: the patch table's

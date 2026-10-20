@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11222, 6644],
   nav: [2907, 1367],
-  nodes: [15378, 8693],
+  nodes: [15406, 8701], // + rediscover.phase.deviceChanged, a state message (ADR-208, 2026-10-20)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

@@ -48,6 +48,15 @@ pub const MERAKI_COLLECT_METRIC: &str = "meraki_api_collect";
 /// alert records this as its threshold, so the two read one constant.
 pub const MERAKI_RAISE_AFTER_FAILURES: u32 = 3;
 
+/// The metric a "device replaced" alert carries (ADR-208 decision 5): a node's device answered
+/// with a `sysObjectID` other than the one stored, so a different model now answers at its address.
+/// Not a collected series — a label for the alert row, like [`POOL_COVERAGE_METRIC`].
+///
+/// Core's result-ingest writer raises it and holds every identity write for the node while it is
+/// open; it closes on evidence only — the device reads as the stored model again, which is also
+/// what a Nodes ▸ Rediscover Apply leads to, since Apply writes the new `sysObjectID`.
+pub const DEVICE_REPLACED_METRIC: &str = "device_replaced";
+
 /// The prefix every passive-event alert carries in its `metric`, and the marker that says
 /// **this alert has no time series behind it**.
 ///
@@ -2416,6 +2425,11 @@ impl AlertManager {
         if a.metric.starts_with(EVENT_METRIC_PREFIX) {
             return false;
         }
+        // A replaced device has no series and no rule either; the result-ingest writer closes it
+        // when the device reads as the stored model again (ADR-208).
+        if a.metric == DEVICE_REPLACED_METRIC {
+            return false;
+        }
         true
     }
 
@@ -2711,6 +2725,44 @@ impl AlertManager {
         self.resolve_event_alert(subject_check_id(
             &Subject::MerakiOrg(org),
             MERAKI_COLLECT_METRIC,
+        ))
+    }
+
+    /// Raise the "device replaced" alert on a node (ADR-208 decision 5). `None` when it is already
+    /// open, so the writer can call this on every read that still disagrees.
+    ///
+    /// `Warning`: nothing has stopped — the node is still polled — but the inventory now describes
+    /// a device that is not there, and only a person can say which is right. No dwell: one read of a
+    /// different `sysObjectID` is not noise the way one slow ping is, because the value is read, not
+    /// timed.
+    pub fn raise_device_replaced_alert(
+        &self,
+        node: NodeId,
+        at_unix_ms: i64,
+    ) -> Option<NotifyAction> {
+        let subject = Subject::Node(node);
+        let check = subject_check_id(&subject, DEVICE_REPLACED_METRIC);
+        self.raise_event_alert(Alert {
+            subject,
+            check,
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms,
+            root_cause: None,
+            flapping: false,
+            metric: DEVICE_REPLACED_METRIC.to_owned(),
+            breach: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+        })
+    }
+
+    /// Resolve a node's "device replaced" alert. `None` if it was not active.
+    pub fn resolve_device_replaced_alert(&self, node: NodeId) -> Option<NotifyAction> {
+        self.resolve_event_alert(subject_check_id(
+            &Subject::Node(node),
+            DEVICE_REPLACED_METRIC,
         ))
     }
 
@@ -6791,6 +6843,34 @@ mod tests {
             "an event alert belongs to events::engine, whole lifecycle"
         );
         assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// A "device replaced" alert is on a node but has no rule and no series (ADR-208), so both of
+    /// ADR-097 Increment 6's sweeps would take it — the rule-gone one at once, the freshness one on
+    /// the first look. Restored after a restart, it must stay open just the same.
+    #[test]
+    fn neither_sweep_closes_a_device_replaced_alert() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert!(mgr.raise_device_replaced_alert(node, 1_000).is_some());
+        assert!(
+            mgr.raise_device_replaced_alert(node, 2_000).is_none(),
+            "an open alert is not raised twice"
+        );
+
+        assert!(mgr.resolve_orphaned_collected_alerts().is_empty());
+        assert!(mgr.freshness_candidates().iter().all(|c| c.node != node));
+
+        let restored = AlertManager::new(untitled);
+        restored.set_config(cfg(Vec::new(), meta_for(node)));
+        restored.restore(mgr.active_alerts());
+        assert!(restored.resolve_orphaned_collected_alerts().is_empty());
+        assert_eq!(restored.active_alerts().len(), 1);
+
+        assert!(mgr.resolve_device_replaced_alert(node).is_some());
+        assert!(mgr.active_alerts().is_empty());
+        assert!(mgr.resolve_device_replaced_alert(node).is_none());
     }
 
     /// A pool-coverage alert is `pool_coverage`'s, and it has no node to resolve a rule against.

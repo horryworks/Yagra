@@ -19,7 +19,7 @@ export const PICKUP_WARN_MS = 60_000;
 /** How often the dialog asks again while the re-read is in flight. */
 export const REDISCOVER_POLL_MS = 2_000;
 
-/** The three rows, in the order the dialog lists them — declared beside the generated types. */
+/** The four rows, in the order the dialog lists them — declared beside the generated types. */
 export { REDISCOVER_FIELDS };
 export type { RediscoverField };
 
@@ -97,7 +97,7 @@ export interface RowView {
   verdict: RediscoverVerdict;
 }
 
-/** The three rows, with profile ids turned into names. The found profile falls back to its id
+/** The four rows, with profile ids turned into names. The found profile falls back to its id
  *  only when the server could not name it (a profile deleted since the answer arrived). */
 export function rowsOf(c: RediscoverComparison): RowView[] {
   return [
@@ -119,6 +119,12 @@ export function rowsOf(c: RediscoverComparison): RowView[] {
       found: c.model.found ?? null,
       verdict: c.model.verdict,
     },
+    {
+      field: 'name',
+      current: c.name.current ?? null,
+      found: c.name.found ?? null,
+      verdict: c.name.verdict,
+    },
   ];
 }
 
@@ -130,7 +136,8 @@ export function applicable(c: RediscoverComparison): RediscoverField[] {
 }
 
 /** The body for the chosen rows, each echoing what the dialog showed as current. `null` when
- *  nothing chosen can be applied. */
+ *  nothing chosen can be applied — unless a different model answers at the address
+ *  (`device_changed`), when a body naming no row is the Apply that accepts the device (ADR-208). */
 export function applyBody(
   scanId: string,
   c: RediscoverComparison,
@@ -147,7 +154,10 @@ export function applyBody(
   if (chosen.has('model') && can.has('model') && c.model.found) {
     body.model = { from: c.model.current ?? null, to: c.model.found };
   }
-  return body.profile || body.vendor || body.model ? body : null;
+  if (chosen.has('name') && can.has('name') && c.name.found) {
+    body.name = { from: c.name.current ?? null, to: c.name.found };
+  }
+  return body.profile || body.vendor || body.model || body.name || c.device_changed ? body : null;
 }
 
 /** The dialog's own words for a refusal it can explain better than the server's English. `null`

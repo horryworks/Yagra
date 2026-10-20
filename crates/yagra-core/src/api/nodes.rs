@@ -1692,8 +1692,9 @@ pub(super) struct NodeBindings {
     /// `""` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.
     ///
     /// Renaming is safe for everything downstream: `Node::id` is the identity every store is keyed
-    /// by, so metric series and alert history follow the node across a rename. Nothing else in the
-    /// product writes this column — no poll, no sweep, no classifier — so a hand-edited name stays.
+    /// by, so metric series and alert history follow the node across a rename. A name set here
+    /// stays: the three other writers — the Meraki sync, the wireless-AP sync and the device's own
+    /// `sysName` (ADR-208) — rename a node only while it still carries the name they gave it.
     #[serde(default)]
     name: Option<String>,
     /// The operator's free-text note about this node. **Absent** = leave it unchanged; `""` (or

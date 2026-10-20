@@ -10859,8 +10859,9 @@ export interface components {
              *     `""` (or whitespace) is **400**, not a clear — `nodes.name` is `NOT NULL`.
              *
              *     Renaming is safe for everything downstream: `Node::id` is the identity every store is keyed
-             *     by, so metric series and alert history follow the node across a rename. Nothing else in the
-             *     product writes this column — no poll, no sweep, no classifier — so a hand-edited name stays.
+             *     by, so metric series and alert history follow the node across a rename. A name set here
+             *     stays: the three other writers — the Meraki sync, the wireless-AP sync and the device's own
+             *     `sysName` (ADR-208) — rename a node only while it still carries the name they gave it.
              */
             name?: string | null;
             /**
@@ -12572,9 +12573,13 @@ export interface components {
         RediscoverApplied: {
             applied: components["schemas"]["RediscoverField"][];
         };
-        /** @description The changes a person accepted. Name at least one. */
+        /**
+         * @description The changes a person accepted. Name at least one — unless the comparison said
+         *     `device_changed`, when an empty Apply accepts the device itself.
+         */
         RediscoverApplyBody: {
             model?: null | components["schemas"]["TextChange"];
+            name?: null | components["schemas"]["TextChange"];
             profile?: null | components["schemas"]["ProfileChange"];
             /**
              * Format: uuid
@@ -12585,7 +12590,18 @@ export interface components {
         };
         /** @description The node beside what the device now says it is. */
         RediscoverComparison: {
+            /**
+             * @description The device reports a `sysObjectID` other than the one stored: a different model answers at
+             *     the node's address, and its identity is held until an Apply accepts it — which may then name
+             *     no row (ADR-208).
+             */
+            device_changed: boolean;
             model: components["schemas"]["RediscoverTextRow"];
+            /**
+             * @description The node's name beside the device's `sysName`. `found` is `null` when the device gave none a
+             *     node may take (blank, too long, or carrying a control character).
+             */
+            name: components["schemas"]["RediscoverTextRow"];
             profile: components["schemas"]["RediscoverProfileRow"];
             /** @description A person fixed this node's profile (ADR-140); the profile row reads `locked` when it differs. */
             profile_locked: boolean;
@@ -12599,7 +12615,7 @@ export interface components {
          * @description Which fields an Apply wrote.
          * @enum {string}
          */
-        RediscoverField: "profile" | "vendor" | "model";
+        RediscoverField: "profile" | "vendor" | "model" | "name";
         /**
          * @description The profile row. `found_id` is chosen by the classification rules from the device's
          *     `sysObjectID`; with no `sysObjectID` no profile is proposed (`undetermined`).
@@ -13956,7 +13972,7 @@ export interface components {
             delivered: boolean;
             error?: string | null;
         };
-        /** @description One vendor or model change, echoing what the dialog showed. */
+        /** @description One vendor, model or name change, echoing what the dialog showed. */
         TextChange: {
             /** @description The value the dialog showed as current; `null` ⇒ none. */
             from?: string | null;
@@ -26638,7 +26654,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The accepted changes were written, with the device's sysObjectID and sysDescr */
+            /** @description The accepted changes were written, with the device's sysObjectID, sysDescr and sysName */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -26647,7 +26663,7 @@ export interface operations {
                     "application/json": components["schemas"]["RediscoverApplied"];
                 };
             };
-            /** @description `nothing_to_apply`: the body names no field */
+            /** @description `nothing_to_apply`: the body names no field, and the device is the model already stored */
             400: {
                 headers: {
                     [name: string]: unknown;

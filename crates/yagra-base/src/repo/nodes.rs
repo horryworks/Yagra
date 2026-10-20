@@ -105,6 +105,10 @@ pub struct RediscoverCurrent {
     pub profile_locked: bool,
     pub vendor: Option<String>,
     pub model: Option<String>,
+    /// For the name row (ADR-208 decision 6).
+    pub name: String,
+    /// What the device last said it is, to tell a replaced device apart (ADR-208 decision 5).
+    pub sys_object_id: Option<String>,
 }
 
 /// One accepted rediscovery — see [`NodeRepo::apply_rediscovery`]. Each field that is `Some` is a
@@ -114,9 +118,14 @@ pub struct RediscoverWrite {
     pub profile: Option<(Option<Uuid>, Uuid)>,
     pub vendor: Option<(Option<String>, String)>,
     pub model: Option<(Option<String>, String)>,
+    /// The node's name (ADR-208 decision 6), guarded like the three above.
+    pub name: Option<(Option<String>, String)>,
     /// What the device reported. `None` leaves the stored value.
     pub sys_object_id: Option<String>,
     pub sys_descr: Option<String>,
+    /// The device's `sysName`: what the node's name follows from here on (ADR-208). `None` leaves
+    /// the stored one; `Some` also forgets a name read once and not yet accepted.
+    pub sys_name: Option<String>,
 }
 
 /// The most nodes that may share a value before the value stops counting as evidence (ADR-148
@@ -1296,6 +1305,12 @@ impl NodeRepo {
     /// [`Self::fill_node_identity_batch`]. A `None` leaves that column alone, so a probe that read one
     /// value and not the other never blanks the other. Two polls of one node in a batch merge, the
     /// later value winning column by column.
+    ///
+    /// 🚨 **A stored `sysObjectID` is never replaced by a different one** (ADR-208 decision 5). A
+    /// different model at the node's address is a replaced device, and the row is left exactly as
+    /// it is — its `sysDescr` too — until a person applies Nodes ▸ Rediscover, which writes both.
+    /// The caller raises the alert that says so; this predicate is what keeps a race between that
+    /// check and this write from overwriting the evidence.
     pub async fn update_snmp_identity_batch(
         &self,
         rows: &[(Uuid, Option<String>, Option<String>)],
@@ -1323,6 +1338,8 @@ impl NodeRepo {
                 updated_at = now() \
              FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, sys_object_id, sys_descr) \
              WHERE nodes.id = t.id \
+               AND (t.sys_object_id IS NULL OR nodes.sys_object_id IS NULL \
+                    OR nodes.sys_object_id = t.sys_object_id) \
                AND ((t.sys_object_id IS NOT NULL \
                      AND nodes.sys_object_id IS DISTINCT FROM t.sys_object_id) \
                  OR (t.sys_descr IS NOT NULL AND nodes.sys_descr IS DISTINCT FROM t.sys_descr))",
@@ -1333,6 +1350,94 @@ impl NodeRepo {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
+    }
+
+    /// Which of these nodes already hold a `sysObjectID`, and whether the one just read is it
+    /// (ADR-208 decision 5). `true` = the device at the address is a different model. A node with
+    /// none stored is left out: its first read is a fill, not a change.
+    ///
+    /// Read before any identity write of the batch, so the caller can hold every write for a
+    /// replaced device and raise the alert, and close it for one that reads as stored again. Dedups
+    /// keeping the last read per node.
+    pub async fn sys_object_id_changes(
+        &self,
+        rows: &[(Uuid, String)],
+    ) -> anyhow::Result<Vec<(Uuid, bool)>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (ids, oids) = last_version_per_node(rows);
+        let found: Vec<(Uuid, bool)> = sqlx::query_as(
+            "SELECT n.id, n.sys_object_id <> t.sys_object_id \
+             FROM nodes n \
+             JOIN unnest($1::uuid[], $2::text[]) AS t(id, sys_object_id) ON t.id = n.id \
+             WHERE n.sys_object_id IS NOT NULL",
+        )
+        .bind(&ids)
+        .bind(&oids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(found)
+    }
+
+    /// Let each node's name follow the `sysName` its device reported (ADR-208), for MANY nodes in
+    /// one statement. Returns the nodes whose **name** changed, with the name they had.
+    ///
+    /// A new `sysName` is accepted only on the second read in a row that says it (decision 3): the
+    /// first is kept in `sys_name_seen`, and a read that says the accepted one again forgets it, so
+    /// a shared address answered by alternate HA members never settles. On acceptance the name
+    /// follows when it is still what the device said before (`sys_name`, compared trimmed and
+    /// case-blind), or — on a node that never had one accepted — when it is still the bare address
+    /// Discovery falls back to (decision 2). Anything else is a name a person gave, and stays.
+    ///
+    /// ⚠️ The caller sanitizes (`yagra_discovery::sanitize_sys_name`) and leaves out every node whose
+    /// device was replaced: this writer does not look at `sysObjectID`. Rows that would change
+    /// nothing are not written. Dedups keeping the last read per node.
+    pub async fn follow_sys_names(
+        &self,
+        rows: &[(Uuid, String)],
+    ) -> anyhow::Result<Vec<NameFollowed>> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (ids, names) = last_version_per_node(rows);
+        let followed: Vec<(Uuid, String, String)> = sqlx::query_as(
+            "WITH t AS ( \
+                 SELECT * FROM unnest($1::uuid[], $2::text[]) AS t(id, read) \
+             ), cur AS ( \
+                 SELECT n.id, n.name AS old_name, n.sys_name AS prev, n.sys_name_seen AS seen, \
+                        t.read, host(n.address) AS addr, \
+                        (t.read IS DISTINCT FROM n.sys_name \
+                         AND t.read = n.sys_name_seen) AS accept \
+                 FROM nodes n JOIN t ON t.id = n.id \
+                 WHERE n.sys_name IS DISTINCT FROM t.read OR n.sys_name_seen IS NOT NULL \
+                 FOR UPDATE OF n \
+             ), upd AS ( \
+                 UPDATE nodes SET \
+                     sys_name_seen = CASE \
+                         WHEN cur.read IS NOT DISTINCT FROM cur.prev OR cur.accept THEN NULL \
+                         ELSE cur.read END, \
+                     sys_name = CASE WHEN cur.accept THEN cur.read ELSE nodes.sys_name END, \
+                     name = CASE \
+                         WHEN cur.accept AND cur.prev IS NOT NULL \
+                              AND lower(btrim(nodes.name)) = lower(cur.prev) THEN cur.read \
+                         WHEN cur.accept AND cur.prev IS NULL \
+                              AND lower(btrim(nodes.name)) = cur.addr THEN cur.read \
+                         ELSE nodes.name END, \
+                     updated_at = now() \
+                 FROM cur WHERE nodes.id = cur.id \
+                 RETURNING nodes.id, cur.old_name, nodes.name AS new_name \
+             ) \
+             SELECT id, old_name, new_name FROM upd WHERE old_name IS DISTINCT FROM new_name",
+        )
+        .bind(&ids)
+        .bind(&names)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(followed
+            .into_iter()
+            .map(|(node, from, to)| NameFollowed { node, from, to })
+            .collect())
     }
 
     /// Every device node the caller may see, with what Nodes ▸ Reclassify weighs it on (ADR-140),
@@ -1516,8 +1621,8 @@ impl NodeRepo {
         groups: GroupFilter<'_>,
     ) -> anyhow::Result<Option<RediscoverCurrent>> {
         let sql = format!(
-            "SELECT n.profile_id, n.profile_locked, n.vendor, n.model FROM nodes n \
-             WHERE n.id = $2 AND {scope} AND {device}",
+            "SELECT n.profile_id, n.profile_locked, n.vendor, n.model, n.name, n.sys_object_id \
+             FROM nodes n WHERE n.id = $2 AND {scope} AND {device}",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
         );
@@ -1532,6 +1637,8 @@ impl NodeRepo {
                 profile_locked: row.try_get("profile_locked")?,
                 vendor: row.try_get("vendor")?,
                 model: row.try_get("model")?,
+                name: row.try_get("name")?,
+                sys_object_id: row.try_get("sys_object_id")?,
             })
         })
         .transpose()
@@ -1541,7 +1648,7 @@ impl NodeRepo {
     /// column still holds what they were shown**, and never a profile a person locked. Returns
     /// whether the row was written.
     ///
-    /// 🚨 One statement, one guard for all three fields: the dialog was read seconds or minutes
+    /// 🚨 One statement, one guard for all four fields: the dialog was read seconds or minutes
     /// ago, and a partial write that took the vendor but refused the profile would leave a node the
     /// person never agreed to. Like [`Self::apply_reclassification`] it does not set the lock.
     pub async fn apply_rediscovery(
@@ -1555,13 +1662,17 @@ impl NodeRepo {
                  profile_id = CASE WHEN $3 THEN $5 ELSE n.profile_id END, \
                  vendor = CASE WHEN $6 THEN $8 ELSE n.vendor END, \
                  model = CASE WHEN $9 THEN $11 ELSE n.model END, \
+                 name = CASE WHEN $14 THEN $16 ELSE n.name END, \
                  sys_object_id = COALESCE($12, n.sys_object_id), \
                  sys_descr = COALESCE($13, n.sys_descr), \
+                 sys_name = COALESCE($17, n.sys_name), \
+                 sys_name_seen = CASE WHEN $17 IS NULL THEN n.sys_name_seen END, \
                  updated_at = now() \
              WHERE n.id = $2 \
                AND (NOT $3 OR (n.profile_id IS NOT DISTINCT FROM $4 AND NOT n.profile_locked)) \
                AND (NOT $6 OR n.vendor IS NOT DISTINCT FROM $7) \
                AND (NOT $9 OR n.model IS NOT DISTINCT FROM $10) \
+               AND (NOT $14 OR n.name IS NOT DISTINCT FROM $15) \
                AND {scope} AND {device} \
              RETURNING n.id",
             scope = Self::SCOPE_PREDICATE,
@@ -1578,6 +1689,10 @@ impl NodeRepo {
             .model
             .clone()
             .map_or((None, None), |(from, to)| (from, Some(to)));
+        let (n_from, n_to) = write
+            .name
+            .clone()
+            .map_or((None, None), |(from, to)| (from, Some(to)));
         let written: Option<Uuid> = sqlx::query_scalar(&sql)
             .bind(Self::scope_bind(groups))
             .bind(id)
@@ -1592,6 +1707,10 @@ impl NodeRepo {
             .bind(m_to)
             .bind(&write.sys_object_id)
             .bind(&write.sys_descr)
+            .bind(write.name.is_some())
+            .bind(n_from)
+            .bind(n_to)
+            .bind(&write.sys_name)
             .fetch_optional(&self.pool)
             .await?;
         Ok(written.is_some())
@@ -1920,6 +2039,15 @@ impl NodeRepo {
 /// `(node, version)` rows as the two parallel arrays `unnest` takes, one per node — the **last**
 /// row for a node wins, so two polls of one node in a batch write the newer answer. Shared by both
 /// OS-version writers so they cannot disagree about which of two answers is current.
+/// A node whose name followed its device's `sysName` (ADR-208): what [`NodeRepo::follow_sys_names`]
+/// renamed, for the audit row that says so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameFollowed {
+    pub node: Uuid,
+    pub from: String,
+    pub to: String,
+}
+
 fn last_version_per_node(rows: &[(Uuid, String)]) -> (Vec<Uuid>, Vec<String>) {
     let mut by_node: BTreeMap<Uuid, String> = BTreeMap::new();
     for (node, version) in rows {
@@ -2226,21 +2354,185 @@ mod tests {
             .expect("rewrite");
         assert_eq!(again, 0, "an unchanged identity must not be written");
 
-        // Only the sysObjectID arrives: it changes, and the stored sysDescr stays.
+        // Only the sysDescr arrives: it changes, and the stored sysObjectID stays.
         let moved = repo
-            .update_snmp_identity_batch(&[(id, Some("1.3.6.1.4.1.9.1.2066".to_owned()), None)])
+            .update_snmp_identity_batch(&[(
+                id,
+                None,
+                Some("Cisco IOS Software, C3750E".to_owned()),
+            )])
             .await
             .expect("half write");
         assert_eq!(moved, 1);
         assert_eq!(
             read(&pool, id).await,
-            (Some("1.3.6.1.4.1.9.1.2066".to_owned()), descr())
+            (oid(), Some("Cisco IOS Software, C3750E".to_owned()))
+        );
+
+        // A different model at the address writes nothing at all — not even its sysDescr — until a
+        // person applies Rediscover (ADR-208 decision 5).
+        let swapped = repo
+            .update_snmp_identity_batch(&[(
+                id,
+                Some("1.3.6.1.4.1.9.1.2066".to_owned()),
+                Some("Cisco IOS Software, C9300".to_owned()),
+            )])
+            .await
+            .expect("swapped write");
+        assert_eq!(
+            swapped, 0,
+            "a replaced device must not overwrite the stored identity"
+        );
+        assert_eq!(
+            read(&pool, id).await,
+            (oid(), Some("Cisco IOS Software, C3750E".to_owned()))
         );
 
         assert_eq!(
             repo.update_snmp_identity_batch(&[]).await.expect("empty"),
             0
         );
+    }
+
+    /// ADR-208 decision 5: a node with no `sysObjectID` stored is left out (its first read is a
+    /// fill), one that reads as stored is `false`, one that reads differently is `true`.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_changed_sys_object_id_is_reported_and_a_first_one_is_not(pool: sqlx::PgPool) {
+        let fresh = pgtest::node(&pool, "fresh", 1, None).await;
+        let same = pgtest::node(&pool, "same", 2, None).await;
+        let swapped = pgtest::node(&pool, "swapped", 3, None).await;
+        let repo = pgtest::repo(pool.clone());
+        let oid = "1.3.6.1.4.1.9.1.516".to_owned();
+        repo.update_snmp_identity_batch(&[
+            (same, Some(oid.clone()), None),
+            (swapped, Some(oid.clone()), None),
+        ])
+        .await
+        .expect("seed");
+
+        let mut got = repo
+            .sys_object_id_changes(&[
+                (fresh, oid.clone()),
+                (same, oid.clone()),
+                (swapped, "1.3.6.1.4.1.9.1.2066".to_owned()),
+            ])
+            .await
+            .expect("compare");
+        got.sort();
+        let mut want = vec![(same, false), (swapped, true)];
+        want.sort();
+        assert_eq!(got, want);
+        assert!(repo
+            .sys_object_id_changes(&[])
+            .await
+            .expect("empty")
+            .is_empty());
+    }
+
+    /// ADR-208 decisions 1–3, in the order a node meets them: a name a person gave never follows;
+    /// a name still equal to the sysName follows a new one, but only on the second read in a row;
+    /// a read in between that says the old name again resets the count.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_name_follows_the_sys_name_only_while_nobody_renamed_it(pool: sqlx::PgPool) {
+        let follows = pgtest::node(&pool, "SW-01", 1, None).await;
+        let by_address = pgtest::node(&pool, "10.0.0.2", 2, None).await;
+        let person = pgtest::node(&pool, "Core switch", 3, None).await;
+        let repo = pgtest::repo(pool.clone());
+        async fn state(pool: &sqlx::PgPool, id: uuid::Uuid) -> (String, Option<String>) {
+            sqlx::query_as("SELECT name, sys_name FROM nodes WHERE id = $1")
+                .bind(id)
+                .fetch_one(pool)
+                .await
+                .expect("read")
+        }
+        let read = |id, name: &str| (id, name.to_owned());
+
+        // First read: nothing is accepted yet, so nothing is renamed.
+        let first = repo
+            .follow_sys_names(&[
+                read(follows, "sw-01"),
+                read(by_address, "sw-02"),
+                read(person, "sw-03"),
+            ])
+            .await
+            .expect("first");
+        assert!(first.is_empty(), "{first:?}");
+        assert_eq!(state(&pool, follows).await, ("SW-01".to_owned(), None));
+
+        // Second read in a row: accepted. The name equal to it (case-blind) keeps its own
+        // spelling, the bare address follows, the name a person gave stays.
+        let mut second = repo
+            .follow_sys_names(&[
+                read(follows, "sw-01"),
+                read(by_address, "sw-02"),
+                read(person, "sw-03"),
+            ])
+            .await
+            .expect("second");
+        second.sort_by_key(|f| f.node);
+        assert_eq!(
+            second,
+            vec![NameFollowed {
+                node: by_address,
+                from: "10.0.0.2".to_owned(),
+                to: "sw-02".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state(&pool, follows).await,
+            ("SW-01".to_owned(), Some("sw-01".to_owned()))
+        );
+        assert_eq!(
+            state(&pool, person).await,
+            ("Core switch".to_owned(), Some("sw-03".to_owned()))
+        );
+
+        // The device is renamed, then a read says the old name again: the count starts over.
+        for name in ["sw-01-new", "sw-01"] {
+            assert!(repo
+                .follow_sys_names(&[read(follows, name)])
+                .await
+                .expect("flap")
+                .is_empty());
+        }
+        assert!(repo
+            .follow_sys_names(&[read(follows, "sw-01-new")])
+            .await
+            .expect("once more")
+            .is_empty());
+        let renamed = repo
+            .follow_sys_names(&[read(follows, "sw-01-new")])
+            .await
+            .expect("twice in a row");
+        assert_eq!(
+            renamed,
+            vec![NameFollowed {
+                node: follows,
+                from: "SW-01".to_owned(),
+                to: "sw-01-new".to_owned(),
+            }]
+        );
+
+        // A person renames it: the next device rename is not followed.
+        sqlx::query("UPDATE nodes SET name = 'Lobby switch' WHERE id = $1")
+            .bind(follows)
+            .execute(&pool)
+            .await
+            .expect("rename");
+        for _ in 0..2 {
+            assert!(repo
+                .follow_sys_names(&[read(follows, "sw-01-newer")])
+                .await
+                .expect("not followed")
+                .is_empty());
+        }
+        assert_eq!(
+            state(&pool, follows).await,
+            ("Lobby switch".to_owned(), Some("sw-01-newer".to_owned()))
+        );
+        assert!(repo.follow_sys_names(&[]).await.expect("empty").is_empty());
     }
 
     /// A save that names `profile_locked` sets it, and one that does not leaves it (ADR-140) — both

@@ -164,6 +164,7 @@ export function RediscoverModal({
       case 'reading':
         return t('rediscover.phase.reading');
       case 'answered':
+        if (comparison?.device_changed) return t('rediscover.phase.deviceChanged');
         return canApply.length === 0 ? t('rediscover.phase.nothingToApply') : null;
       case 'noSnmpAnswer':
         return t('rediscover.phase.noSnmpAnswer');
@@ -191,6 +192,7 @@ export function RediscoverModal({
     profile: t('rediscover.field.profile'),
     vendor: t('rediscover.field.vendor'),
     model: t('rediscover.field.model'),
+    name: t('rediscover.field.name'),
   } as const;
 
   return (

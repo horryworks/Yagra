@@ -99,8 +99,8 @@ pub use migrate::MIGRATIONS;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
 pub use nodes::{
-    DuplicateInput, NodeBindingUpdate, NodeWithNotes, ReclassifyInput, ReclassifyWrite,
-    RediscoverWrite, SHARED_VALUE_MAX,
+    DuplicateInput, NameFollowed, NodeBindingUpdate, NodeWithNotes, ReclassifyInput,
+    ReclassifyWrite, RediscoverWrite, SHARED_VALUE_MAX,
 };
 // Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping

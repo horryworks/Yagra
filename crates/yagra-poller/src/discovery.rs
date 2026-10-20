@@ -149,8 +149,8 @@ const SYSNAME_BASE: &str = "1.3.6.1.2.1.1.5";
 const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
 /// sysObjectID.0 instance OID.
 const SYSOBJECTID_OID: &str = "1.3.6.1.2.1.1.2.0";
-/// sysName.0 instance OID.
-const SYSNAME_OID: &str = "1.3.6.1.2.1.1.5.0";
+/// sysName.0 instance OID — the one the identity probe reads too.
+const SYSNAME_OID: &str = yagra_discovery::os_version::OID_SYS_NAME;
 /// Targets probed concurrently (ADR-204; 16 before it). Each target is still probed one credential
 /// at a time — this bounds how many *devices* are being asked at once, never how many credentials
 /// one device is sent. A job carries at most 1,024 targets (core's `JOB_TARGETS`).

@@ -772,8 +772,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // leader drains/runs them. Bus subscriptions happen inside `run`, so a standby never subscribes.
     // On a standby none of this runs, which is why the event-webhook/close API handlers 503 rather
     // than enqueue to an undrained channel.
+    // Built here rather than beside the RCA orchestrator: the result-ingest writer records the
+    // renames it makes on its own (ADR-208), so the leader's tasks need it too.
+    let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
     let leader_tasks = LeaderTasks {
         llm: llm_repo.clone(),
+        audit: audit_repo.clone(),
         deliveries: deliveries.clone(),
         shutdown: shutdown.clone(),
         bus: bus.clone(),
@@ -834,7 +838,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // on-demand endpoint. Present on every core, leader or not: generating an explanation is a read
     // plus one outbound call, so there is nothing for a standby to double-do. With no config row
     // (the default) the orchestrator answers 503 and nothing leaves the building.
-    let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
     let rca = Some(Arc::new(rca::orchestrator::RcaOrchestrator::new(
         llm_repo.clone(),
         repo.clone(),
@@ -1067,6 +1070,9 @@ struct LeaderTasks {
     repo: Arc<NodeRepo>,
     history: Arc<AlertHistoryStore>,
     alerts: Arc<AlertManager>,
+    /// The audit log: the result-ingest writer records a name it changed to follow a device's
+    /// `sysName` (ADR-208).
+    audit: Arc<AuditRepo>,
     scheduler_stats: Arc<scheduler::SchedulerStats>,
     /// Published into by the scheduler after every rebuild whose reads all succeeded (ADR-144).
     poll_intervals: yagra_common::poll_interval::PollIntervals,
@@ -1275,6 +1281,9 @@ impl LeaderTasks {
                 routing: self.routing.clone(),
                 wireless: self.wireless.clone(),
                 classifier: self.classifier.clone(),
+                alerts: self.alerts.clone(),
+                replaced: self.alert_sink(&notify_tx, "a device-replaced transition"),
+                audit: self.audit.clone(),
             },
             self.history.clone(),
             self.shutdown.clone(),

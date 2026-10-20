@@ -86,9 +86,16 @@ pub(crate) struct RediscoverComparison {
     sys_name: Option<String>,
     /// A person fixed this node's profile (ADR-140); the profile row reads `locked` when it differs.
     profile_locked: bool,
+    /// The device reports a `sysObjectID` other than the one stored: a different model answers at
+    /// the node's address, and its identity is held until an Apply accepts it — which may then name
+    /// no row (ADR-208).
+    device_changed: bool,
     profile: RediscoverProfileRow,
     vendor: RediscoverTextRow,
     model: RediscoverTextRow,
+    /// The node's name beside the device's `sysName`. `found` is `null` when the device gave none a
+    /// node may take (blank, too long, or carrying a control character).
+    name: RediscoverTextRow,
 }
 
 /// The profile row. `found_id` is chosen by the classification rules from the device's
@@ -133,7 +140,7 @@ pub(super) struct ProfileChange {
     to: Uuid,
 }
 
-/// One vendor or model change, echoing what the dialog showed.
+/// One vendor, model or name change, echoing what the dialog showed.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(super) struct TextChange {
     /// The value the dialog showed as current; `null` ⇒ none.
@@ -142,7 +149,8 @@ pub(super) struct TextChange {
     to: String,
 }
 
-/// The changes a person accepted. Name at least one.
+/// The changes a person accepted. Name at least one — unless the comparison said
+/// `device_changed`, when an empty Apply accepts the device itself.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(super) struct RediscoverApplyBody {
     /// The rediscovery the dialog showed.
@@ -153,6 +161,8 @@ pub(super) struct RediscoverApplyBody {
     vendor: Option<TextChange>,
     #[serde(default)]
     model: Option<TextChange>,
+    #[serde(default)]
+    name: Option<TextChange>,
 }
 
 /// Which fields an Apply wrote.
@@ -162,6 +172,7 @@ pub(crate) enum RediscoverField {
     Profile,
     Vendor,
     Model,
+    Name,
 }
 
 /// What an Apply wrote.
@@ -183,6 +194,8 @@ async fn current_of(admin: &AdminState, scope: &NodeScope, node_id: Uuid) -> Api
         profile_locked: row.profile_locked,
         vendor: row.vendor,
         model: row.model,
+        name: row.name,
+        sys_object_id: row.sys_object_id,
     })
 }
 
@@ -324,6 +337,7 @@ async fn get_rediscovery(
                 sys_descr: c.found.sys_descr,
                 sys_name: c.found.sys_name,
                 profile_locked: current.profile_locked,
+                device_changed: c.device_changed,
                 profile: RediscoverProfileRow {
                     current_id: c.profile.current,
                     current_name: name(c.profile.current),
@@ -334,6 +348,7 @@ async fn get_rediscovery(
                 },
                 vendor: c.vendor.into(),
                 model: c.model.into(),
+                name: c.name.into(),
             })
         }
     };
@@ -349,8 +364,8 @@ async fn get_rediscovery(
     params(("node_id" = Uuid, Path, description = "Node id")),
     request_body = RediscoverApplyBody,
     responses(
-        (status = 200, description = "The accepted changes were written, with the device's sysObjectID and sysDescr", body = RediscoverApplied),
-        (status = 400, description = "`nothing_to_apply`: the body names no field", body = super::error::ErrorBody),
+        (status = 200, description = "The accepted changes were written, with the device's sysObjectID, sysDescr and sysName", body = RediscoverApplied),
+        (status = 400, description = "`nothing_to_apply`: the body names no field, and the device is the model already stored", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such device node the caller can see, or (`scan_not_found`) no such rediscovery of this node on this core", body = super::error::ErrorBody),
@@ -379,13 +394,11 @@ async fn apply_rediscovery(
             from: c.from,
             to: c.to,
         }),
+        name: body.name.map(|c| Change {
+            from: c.from,
+            to: c.to,
+        }),
     };
-    if request.profile.is_none() && request.vendor.is_none() && request.model.is_none() {
-        return Err(ApiError::bad_request(
-            "nothing_to_apply",
-            "name at least one of profile, vendor and model",
-        ));
-    }
     let current = current_of(&admin, &scope, node_id).await?;
     let status = admin
         .discovery
@@ -395,7 +408,7 @@ async fn apply_rediscovery(
         check_apply(&current, &status, &admin.classifier, &request).map_err(|r| match r {
             Refusal::NothingToApply => ApiError::bad_request(
                 "nothing_to_apply",
-                "name at least one of profile, vendor and model",
+                "name at least one of profile, vendor, model and name",
             ),
             Refusal::NotAnswered => ApiError::conflict(
                 "not_answered",
@@ -424,12 +437,18 @@ async fn apply_rediscovery(
     if plan.model.is_some() {
         applied.push(RediscoverField::Model);
     }
+    if plan.name.is_some() {
+        applied.push(RediscoverField::Name);
+    }
+    let device_changed = plan.device_changed;
     let write = RediscoverWrite {
         profile: plan.profile.map(|c| (c.from, c.to)),
         vendor: plan.vendor.map(|c| (c.from, c.to)),
         model: plan.model.map(|c| (c.from, c.to)),
+        name: plan.name.map(|c| (c.from, c.to)),
         sys_object_id: plan.sys_object_id,
         sys_descr: plan.sys_descr,
+        sys_name: plan.sys_name,
     };
     let written = admin
         .repo
@@ -445,7 +464,15 @@ async fn apply_rediscovery(
             "the node changed since the comparison was read — read it again",
         ));
     }
-    tracing::info!(node = %node_id, fields = ?applied, "rediscovery applied");
+    tracing::info!(node = %node_id, fields = ?applied, device_changed, "rediscovery applied");
+    // A replaced device's alert closes on the next read that matches what was just stored
+    // (ADR-208). Ask for that read now rather than leave the alert open for up to an hour; a poll
+    // that cannot be sent costs only that wait, so it never fails the Apply.
+    if device_changed {
+        if let Err(e) = super::nodes::poll_now(&admin, node_id).await {
+            tracing::warn!(node = %node_id, error = ?e, "could not poll the node after accepting its new device");
+        }
+    }
     Ok(Json(RediscoverApplied { applied }))
 }
 
@@ -637,6 +664,100 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{out}");
         assert_eq!(out["error"]["code"], "node_changed", "{out}");
+    }
+
+    /// ADR-208, **accepted**: a different model at the node's address is shown as
+    /// `device_changed`, with the name row beside it; an Apply that names only the name accepts the
+    /// device too — the new sysObjectID and sysName are stored, so the identity writes resume and
+    /// the name follows from here on. The same empty Apply on the stored model is still refused.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_replaced_device_is_shown_and_accepted_with_its_name(pool: sqlx::PgPool) {
+        let st = loaded_state(&pool).await;
+        let tok = token(&st, Role::Admin);
+        let node = yagra_base::pgtest::node(&pool, "10.0.0.10", 10, None).await;
+        let cred = yagra_base::pgtest::credential(&pool, "lab-v2c", "snmp_v2c").await;
+        sqlx::query(
+            "UPDATE nodes SET credential_id = $2, sys_object_id = '1.3.6.1.4.1.9.1.516', \
+             sys_name_seen = 'sw-01' WHERE id = $1",
+        )
+        .bind(node)
+        .bind(cred)
+        .execute(&pool)
+        .await
+        .expect("bind");
+        a_live_poller(&st, "default").await;
+
+        let scan = started(&st, &tok, node).await;
+        answer(
+            &st,
+            scan,
+            Some("1.3.6.1.4.1.2011.2.23.1"),
+            Some("Huawei Versatile Routing Platform Software"),
+        );
+        let (status, view) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/nodes/{node}/rediscover/{scan}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        let cmp = &view["comparison"];
+        assert_eq!(cmp["device_changed"], true, "{view}");
+        assert_eq!(cmp["name"]["current"], "10.0.0.10", "{view}");
+        assert_eq!(cmp["name"]["found"], "sw-01", "{view}");
+        assert_eq!(cmp["name"]["verdict"], "differs", "{view}");
+
+        let (status, out) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/nodes/{node}/rediscover/apply"),
+            &tok,
+            Some(json!({
+                "scan_id": scan,
+                "name": { "from": "10.0.0.10", "to": "sw-01" },
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["applied"], json!(["name"]), "{out}");
+        let row: (String, Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT name, sys_object_id, sys_name, sys_name_seen FROM nodes WHERE id = $1",
+        )
+        .bind(node)
+        .fetch_one(&pool)
+        .await
+        .expect("row");
+        assert_eq!(
+            row,
+            (
+                "sw-01".to_owned(),
+                Some("1.3.6.1.4.1.2011.2.23.1".to_owned()),
+                Some("sw-01".to_owned()),
+                None,
+            )
+        );
+
+        // The device is now the stored model: an Apply naming nothing has nothing to accept.
+        let again = started(&st, &tok, node).await;
+        answer(
+            &st,
+            again,
+            Some("1.3.6.1.4.1.2011.2.23.1"),
+            Some("Huawei Versatile Routing Platform Software"),
+        );
+        let (status, out) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/nodes/{node}/rediscover/apply"),
+            &tok,
+            Some(json!({ "scan_id": again })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+        assert_eq!(out["error"]["code"], "nothing_to_apply", "{out}");
     }
 
     /// A locked profile is shown as locked and Apply refuses to move it; another node's id cannot

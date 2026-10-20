@@ -807,9 +807,9 @@ export type StartedRediscovery = components['schemas']['StartedRediscovery'];
 /** What an accepted Apply wrote. */
 export type RediscoverApplied = components['schemas']['RediscoverApplied'];
 
-/** The three rows of a rediscovery, in the order the dialog lists them. The dialog iterates it, so
+/** The four rows of a rediscovery, in the order the dialog lists them. The dialog iterates it, so
  *  it exists at runtime; `schemaEnumPins` ties it to the schema. */
-export const REDISCOVER_FIELDS = ['profile', 'vendor', 'model'] as const;
+export const REDISCOVER_FIELDS = ['profile', 'vendor', 'model', 'name'] as const;
 export type RediscoverField = (typeof REDISCOVER_FIELDS)[number];
 
 /** Nodes ▸ Duplicates (`GET /api/v1/nodes/duplicates`, ADR-148): device nodes that look like one

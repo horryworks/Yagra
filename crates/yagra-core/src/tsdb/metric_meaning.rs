@@ -284,7 +284,7 @@ impl AlertName {
 /// Names for the alerts that come from no threshold rule, so have no row in [`METRIC_MEANINGS`]
 /// (whose test forbids a sentence for a metric no rule can name). Their `metric` strings are owned
 /// by the modules that raise them; the event-rule prefix is handled by [`alert_title`] itself.
-pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 2] = [
+pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 3] = [
     (
         yagra_alert::engine::POOL_COVERAGE_METRIC,
         AlertName::Value("Too few pollers in pool"),
@@ -292,6 +292,10 @@ pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 2] = [
     (
         yagra_alert::engine::MERAKI_COLLECT_METRIC,
         AlertName::Flag("Meraki Dashboard collection failing"),
+    ),
+    (
+        yagra_alert::engine::DEVICE_REPLACED_METRIC,
+        AlertName::Flag("Device possibly replaced"),
     ),
 ];
 
@@ -856,6 +860,10 @@ mod tests {
         assert_eq!(
             alert_title(yagra_alert::engine::MERAKI_COLLECT_METRIC),
             "Meraki Dashboard collection failing"
+        );
+        assert_eq!(
+            alert_title(yagra_alert::engine::DEVICE_REPLACED_METRIC),
+            "Device possibly replaced"
         );
         assert_eq!(
             alert_title(&format!(

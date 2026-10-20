@@ -2353,6 +2353,15 @@ pub struct PollResult {
     /// wire form is unchanged (ADR-017).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sys_object_id: Option<String>,
+    /// The device's `sysName.0`, read in the same GET as `sys_object_id` by both the full and the
+    /// light identity read, trimmed (ADR-208). Core lets a node's name follow it while nobody has
+    /// renamed the node. `None` means "not probed, or blank", never "the device has none", and core
+    /// leaves the stored name alone on `None`. Descriptive device text — never a TSDB label.
+    ///
+    /// Defaulted so an N-1 poller stays compatible — its nodes simply do not follow — and skipped
+    /// when absent so every other result's wire form is unchanged (ADR-017).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sys_name: Option<String>,
     /// The device's serial number, read by the same identity probe from ENTITY-MIB's chassis rows
     /// (ADR-147) — a stack's members joined with `, `. `None` means "not probed, not read to the
     /// end, or no chassis row carries one", never "the device has none", and core leaves the stored
@@ -2545,6 +2554,7 @@ impl PollResult {
             os_version: None,
             os_version_without_patch: None,
             sys_object_id: None,
+            sys_name: None,
             serial_number: None,
             hardware_model: None,
             identity_partial: false,
@@ -4144,6 +4154,29 @@ mod tests {
         let wire = serde_json::to_string(&result).unwrap();
         assert!(!wire.contains("neighbors"), "{wire}");
         assert!(!wire.contains("observational"), "{wire}");
+    }
+
+    /// ADR-208's identity field. An N-1 poller sends no `sys_name`; a result without one keeps
+    /// exactly the wire form it had; and a probed one survives the round trip.
+    #[test]
+    fn poll_result_sys_name_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "sys_object_id": "1.3.6.1.4.1.9.1.516",
+            "some_future_field": 42
+        }"#;
+        let mut result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.sys_name.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("sys_name"), "{wire}");
+
+        result.sys_name = Some("sw-01".to_owned());
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        assert_eq!(back.sys_name.as_deref(), Some("sw-01"));
     }
 
     /// ADR-140's identity field. An N-1 poller sends no `sys_object_id`; a result without one keeps
