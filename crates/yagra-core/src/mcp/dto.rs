@@ -518,6 +518,10 @@ pub struct NodeStatusDto {
     /// Whether a person fixed this node's profile, so reclassification never offers to change it
     /// (ADR-140). Mirrors `NodeDetail.profile_locked`, a sibling of `node` for the reason `notes` is.
     pub profile_locked: bool,
+    /// The name the device gives itself (`sysName`), accepted after two reads in a row (ADR-208);
+    /// `null` ⇒ not read yet. While the node's name equals it, the name follows the device.
+    /// Mirrors `NodeDetail.sys_name`, a sibling of `node` for the reason `notes` is.
+    pub sys_name: Option<String>,
     /// What this node is to the wireless inventory (ADR-064): a controller's AP inventory and
     /// import settings, or an imported AP's entry in the AP list. Mirrors `NodeDetail.wireless`,
     /// from the same function, so a scoped caller's controllers are narrowed the same way.
@@ -1162,6 +1166,7 @@ mod tests {
             os_version: Some("15.0(2a)EX5".to_owned()),
             serial_number: Some("FCW1929B68S, FCW1931A06Z".to_owned()),
             profile_locked: true,
+            sys_name: Some("sw-01".to_owned()),
             // Populated, both halves: the canary sees only the keys an instance fills.
             wireless: Some(crate::api::wireless::NodeWireless {
                 controller: Some(crate::api::wireless::WirelessControllerSummary {

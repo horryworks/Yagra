@@ -1,0 +1,26 @@
+/* The "name from device" dialog (ADR-208 Inc.2): one line per node, current name → device name. */
+.name-from-device-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  border-top: 1px solid var(--border-color);
+}
+
+.name-from-device-row {
+  display: contents;
+}
+
+.name-from-device-row > span {
+  padding: var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-from-device-row.muted > span {
+  grid-column: 1 / -1;
+}
+
+.name-from-device-old {
+  color: var(--text-secondary);
+}

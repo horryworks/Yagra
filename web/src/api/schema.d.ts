@@ -2406,6 +2406,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/name-from-device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rename nodes to their device's name, as the preview showed (ADR-208 Inc.2).
+         * @description A renamed node's name then equals its `sysName`, so it follows the device from here on. Each
+         *     change is written only while the node still holds the name and the `sysName` that were shown.
+         *     ⚠️ Scoped via `Scoped` for the reason `POST /nodes/pool` is: an Operator holds `manage_config`
+         *     and can be group-scoped.
+         */
+        post: operations["apply_name_from_device"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/name-from-device/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview renaming the selected nodes to their device's name (ADR-208 Inc.2).
+         * @description A POST only because the id list is too long for a query string; it writes nothing, and it is in
+         *     `changes_monitoring_config`'s exemptions for that reason. Device nodes the caller may see only.
+         */
+        post: operations["preview_name_from_device"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/poll": {
         parameters: {
             query?: never;
@@ -10442,6 +10486,50 @@ export interface components {
          * @enum {string}
          */
         MuteScope: "node" | "group";
+        /** @description The renames a person accepted. */
+        NameFromDeviceBody: {
+            changes: components["schemas"]["NameFromDeviceChange"][];
+        };
+        /** @description One rename the dialog showed, echoed back so the write can refuse a node that moved since. */
+        NameFromDeviceChange: {
+            /** @description The name the dialog showed as current. */
+            from: string;
+            /** Format: uuid */
+            node_id: string;
+            /** @description The device's name the dialog showed. */
+            to: string;
+        };
+        /** @description What "name from device" would do to the selected nodes. */
+        NameFromDevicePreview: {
+            /** @description Device nodes already named as their device names itself. */
+            already_same: number;
+            /** @description The nodes that would be renamed, ordered by their current name. */
+            changes: components["schemas"]["NameFromDeviceRow"][];
+            /** @description Device nodes whose `sysName` has not been accepted yet — nothing to rename them to. */
+            no_device_name: number;
+            /** @description Distinct ids the request named. */
+            requested: number;
+        };
+        /** @description What a "name from device" apply did. */
+        NameFromDeviceResult: {
+            /**
+             * Format: int64
+             * @description Nodes renamed. **Lower than `requested` is normal**: a node renamed, re-read, deleted or moved
+             *     out of the caller's folders since the preview is left as it is. The cases are not told apart.
+             */
+            applied: number;
+            /** @description Distinct nodes the request named. */
+            requested: number;
+        };
+        /** @description One node whose name would become its device's name. */
+        NameFromDeviceRow: {
+            /** @description The name the node has now. */
+            name: string;
+            /** Format: uuid */
+            node_id: string;
+            /** @description The name the device gives itself (`sysName`, accepted after two reads in a row). */
+            sys_name: string;
+        };
         /**
          * @description One observed adjacency.
          *
@@ -11033,6 +11121,12 @@ export interface components {
              *     `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
              */
             snmp_configured: boolean;
+            /**
+             * @description The name the device gives itself (`sysName`), accepted after two reads in a row (ADR-208);
+             *     `null` ⇒ not read yet. While the node's name equals it, the name follows the device; the
+             *     edit dialog offers it as the name. ⚠️ Observed, like `os_version`. Detail-only.
+             */
+            sys_name?: string | null;
             /**
              * @description The labels stored **on this node** (ADR-135). Empty when it has none, sorted.
              *
@@ -24224,6 +24318,126 @@ export interface operations {
             };
             /** @description The folder is not one this caller may see */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    apply_name_from_device: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NameFromDeviceBody"];
+            };
+        };
+        responses: {
+            /** @description How many of the named nodes were renamed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameFromDeviceResult"];
+                };
+            };
+            /** @description More changes than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    preview_name_from_device: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeIdBatch"];
+            };
+        };
+        responses: {
+            /** @description Which of the selected nodes would be renamed, and how many would not */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameFromDevicePreview"];
+                };
+            };
+            /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

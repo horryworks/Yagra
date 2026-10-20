@@ -358,6 +358,9 @@ interface Props {
   /** Right-click → poll this node, or the whole working set, immediately (ADR-124 Inc.12).
    *  Omit to hide the item — it is `ManageConfig`, the permission its handler checks. */
   onPollNodes?: (target: ActionTarget) => void;
+  /** Right-click → rename this device node, or the working set, to the device's own name, behind a
+   *  confirmation that shows each change (ADR-208 Inc.2). Omit to hide the item — `ManageConfig`. */
+  onNameFromDevice?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;
   /** Right-click → open the network map on this folder, on the level holding this node, or on the
@@ -431,6 +434,7 @@ export function NodeTree({
   onShowEmptyFolders,
   keepGroups,
   onPollNodes,
+  onNameFromDevice,
   onTogglePin,
   onShowGroupOnMap,
   onShowNodeOnMap,
@@ -2405,6 +2409,27 @@ export function NodeTree({
                       : t('tree.pollNow')}
                 </button>
               )}
+              {/* A selection may mix kinds — the dialog sorts out which nodes have a device name.
+                  A single row offers it only on a device (ADR-208 Inc.2). */}
+              {onNameFromDevice &&
+                pollItems &&
+                (pollItems.scope === 'selection' || menu.node.kind === 'device') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onNameFromDevice(
+                        batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
+                      );
+                      setMenu(null);
+                    }}
+                  >
+                    {pollItems.scope === 'selection'
+                      ? t('tree.nameFromDeviceSelected', { count: pollItems.count })
+                      : pollItems.nameTheRow
+                        ? t('tree.nameFromDeviceNamed', { name: menu.node.name })
+                        : t('tree.nameFromDevice')}
+                  </button>
+                )}
               {/* 🚨 These two act on the row even while the menu also carries
                   "Move N selected…" above them, so while a batch is in play they name the node
                   (ADR-124 Inc.9 / ADR-055 R1). Neither has a batch form: a pin is this account's

@@ -807,6 +807,11 @@ export type StartedRediscovery = components['schemas']['StartedRediscovery'];
 /** What an accepted Apply wrote. */
 export type RediscoverApplied = components['schemas']['RediscoverApplied'];
 
+/** Renaming nodes to their device's name (ADR-208 Inc.2): the preview, the apply body, the result. */
+export type NameFromDevicePreview = components['schemas']['NameFromDevicePreview'];
+export type NameFromDeviceBody = components['schemas']['NameFromDeviceBody'];
+export type NameFromDeviceResult = components['schemas']['NameFromDeviceResult'];
+
 /** The four rows of a rediscovery, in the order the dialog lists them. The dialog iterates it, so
  *  it exists at runtime; `schemaEnumPins` ties it to the schema. */
 export const REDISCOVER_FIELDS = ['profile', 'vendor', 'model', 'name'] as const;

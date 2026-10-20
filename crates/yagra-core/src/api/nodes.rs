@@ -62,6 +62,8 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     move_nodes_by_prefix,
     set_node_pool,
     bulk_set_node_pool,
+    preview_name_from_device,
+    apply_name_from_device,
     poll_nodes_now,
     set_node_parent,
     set_node_suppression_opt_out,
@@ -89,6 +91,14 @@ pub(crate) fn routes() -> Router<ApiState> {
         )
         .route("/api/v1/nodes/move-by-prefix", post(move_nodes_by_prefix))
         .route("/api/v1/nodes/pool", post(bulk_set_node_pool))
+        .route(
+            "/api/v1/nodes/name-from-device/preview",
+            post(preview_name_from_device),
+        )
+        .route(
+            "/api/v1/nodes/name-from-device",
+            post(apply_name_from_device),
+        )
         .route("/api/v1/nodes/poll", post(poll_nodes_now))
         .route("/api/v1/nodes/:node_id", get(get_node).delete(delete_node))
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
@@ -1094,6 +1104,10 @@ pub(crate) struct NodeDetail {
     /// Whether a person fixed this node's profile (ADR-140). A locked node is never offered on
     /// Nodes ▸ Reclassify; the edit dialog is where it is set and cleared. Detail-only.
     profile_locked: bool,
+    /// The name the device gives itself (`sysName`), accepted after two reads in a row (ADR-208);
+    /// `null` ⇒ not read yet. While the node's name equals it, the name follows the device; the
+    /// edit dialog offers it as the name. ⚠️ Observed, like `os_version`. Detail-only.
+    sys_name: Option<String>,
     /// The group this node belongs to; `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
     /// The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
@@ -1219,6 +1233,7 @@ async fn get_node(
         os_version,
         serial_number,
         profile_locked,
+        sys_name,
     } = admin
         .repo
         .get_node_with_notes(node_id)
@@ -1283,6 +1298,7 @@ async fn get_node(
         os_version,
         serial_number,
         profile_locked,
+        sys_name,
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
@@ -2859,6 +2875,170 @@ async fn bulk_set_node_pool(
     Ok(Json(BulkPoolResult { requested, applied }))
 }
 
+// ── Name from device (ADR-208 Inc.2) ────────────────────────────────────────────────────────────
+
+/// One node whose name would become its device's name.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct NameFromDeviceRow {
+    node_id: Uuid,
+    /// The name the node has now.
+    name: String,
+    /// The name the device gives itself (`sysName`, accepted after two reads in a row).
+    sys_name: String,
+}
+
+/// What "name from device" would do to the selected nodes.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct NameFromDevicePreview {
+    /// Distinct ids the request named.
+    requested: usize,
+    /// The nodes that would be renamed, ordered by their current name.
+    changes: Vec<NameFromDeviceRow>,
+    /// Device nodes whose `sysName` has not been accepted yet — nothing to rename them to.
+    no_device_name: usize,
+    /// Device nodes already named as their device names itself.
+    already_same: usize,
+}
+
+/// One rename the dialog showed, echoed back so the write can refuse a node that moved since.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NameFromDeviceChange {
+    node_id: Uuid,
+    /// The name the dialog showed as current.
+    from: String,
+    /// The device's name the dialog showed.
+    to: String,
+}
+
+/// The renames a person accepted.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NameFromDeviceBody {
+    changes: Vec<NameFromDeviceChange>,
+}
+
+/// What a "name from device" apply did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct NameFromDeviceResult {
+    /// Distinct nodes the request named.
+    requested: usize,
+    /// Nodes renamed. **Lower than `requested` is normal**: a node renamed, re-read, deleted or moved
+    /// out of the caller's folders since the preview is left as it is. The cases are not told apart.
+    applied: u64,
+}
+
+fn refuse_over_the_batch_cap(len: usize) -> ApiResult<()> {
+    if len > NODE_MOVE_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!("at most {NODE_MOVE_BATCH_MAX} nodes may be renamed in one request, got {len}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Preview renaming the selected nodes to their device's name (ADR-208 Inc.2).
+///
+/// A POST only because the id list is too long for a query string; it writes nothing, and it is in
+/// `changes_monitoring_config`'s exemptions for that reason. Device nodes the caller may see only.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/name-from-device/preview", tag = "nodes",
+    request_body = NodeIdBatch,
+    responses(
+        (status = 200, description = "Which of the selected nodes would be renamed, and how many would not", body = NameFromDevicePreview),
+        (status = 400, description = "More ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_name_from_device(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<NodeIdBatch>,
+) -> ApiResult<Json<NameFromDevicePreview>> {
+    refuse_over_the_batch_cap(body.node_ids.len())?;
+    let requested = body
+        .node_ids
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let rows = admin
+        .repo
+        .name_from_device_inputs(&body.node_ids, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "preview name from device",
+                "failed to read the nodes",
+            )
+        })?;
+    let mut preview = NameFromDevicePreview {
+        requested,
+        changes: Vec::new(),
+        no_device_name: 0,
+        already_same: 0,
+    };
+    for row in rows {
+        match row.sys_name {
+            None => preview.no_device_name += 1,
+            Some(sys_name) if sys_name == row.name => preview.already_same += 1,
+            Some(sys_name) => preview.changes.push(NameFromDeviceRow {
+                node_id: row.node,
+                name: row.name,
+                sys_name,
+            }),
+        }
+    }
+    Ok(Json(preview))
+}
+
+/// Rename nodes to their device's name, as the preview showed (ADR-208 Inc.2).
+///
+/// A renamed node's name then equals its `sysName`, so it follows the device from here on. Each
+/// change is written only while the node still holds the name and the `sysName` that were shown.
+/// ⚠️ Scoped via `Scoped` for the reason `POST /nodes/pool` is: an Operator holds `manage_config`
+/// and can be group-scoped.
+#[utoipa::path(
+    post, path = "/api/v1/nodes/name-from-device", tag = "nodes",
+    request_body = NameFromDeviceBody,
+    responses(
+        (status = 200, description = "How many of the named nodes were renamed", body = NameFromDeviceResult),
+        (status = 400, description = "More changes than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn apply_name_from_device(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<NameFromDeviceBody>,
+) -> ApiResult<Json<NameFromDeviceResult>> {
+    refuse_over_the_batch_cap(body.changes.len())?;
+    let changes: Vec<(Uuid, String, String)> = body
+        .changes
+        .into_iter()
+        .map(|c| (c.node_id, c.from, c.to))
+        .collect();
+    let (requested, applied) = admin
+        .repo
+        .rename_to_sys_name(&changes, scope.group_filter())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "rename to device name",
+                "failed to rename the nodes",
+            )
+        })?;
+    // The audit middleware records method and path only, so this line is what says how many.
+    tracing::info!(requested, applied, "nodes renamed to their device's name");
+    Ok(Json(NameFromDeviceResult { requested, applied }))
+}
+
 // ── Manual poll ──────────────────────────────────────────────────────────────
 
 /// What an out-of-schedule poll dispatched.
@@ -4411,6 +4591,111 @@ mod tests {
             repo.get_node(kept).await.expect("read").is_some(),
             "an unnamed node was deleted"
         );
+    }
+
+    /// ADR-208 Inc.2, **accepted**: the preview sorts the selection into renames, nodes with no
+    /// device name and nodes already named so; the apply renames what was shown and leaves a node
+    /// renamed since; a scoped caller previews and renames only inside its folders; a Viewer is
+    /// refused both.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rename_to_the_device_name_is_previewed_and_accepted(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let a = yagra_base::pgtest::node(&pool, "Core switch", 1, Some(mine)).await;
+        let b = yagra_base::pgtest::node(&pool, "sw-02", 2, Some(mine)).await;
+        let c = yagra_base::pgtest::node(&pool, "Spare", 3, Some(mine)).await;
+        let d = yagra_base::pgtest::node(&pool, "Edge", 4, Some(theirs)).await;
+        for (id, name) in [(a, "sw-01"), (b, "sw-02"), (d, "sw-04")] {
+            sqlx::query("UPDATE nodes SET sys_name = $2 WHERE id = $1")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed");
+        }
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/name-from-device/preview",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, b, c, d, a] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 4, "{body}");
+        assert_eq!(body["no_device_name"], 1, "{body}");
+        assert_eq!(body["already_same"], 1, "{body}");
+        let names: Vec<&str> = body["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .map(|r| r["sys_name"].as_str().expect("sys_name"))
+            .collect();
+        assert_eq!(names, vec!["sw-01", "sw-04"], "{body}");
+
+        let scoped = scoped_token(&st, &[mine]);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/name-from-device/preview",
+            &scoped,
+            Some(serde_json::json!({ "node_ids": [a, d] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            body["changes"].as_array().expect("changes").len(),
+            1,
+            "{body}"
+        );
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes/name-from-device",
+            &scoped,
+            Some(serde_json::json!({ "changes": [
+                { "node_id": a, "from": "Core switch", "to": "sw-01" },
+                { "node_id": d, "from": "Edge", "to": "sw-04" },
+            ]})),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(
+            body["applied"], 1,
+            "the node outside the caller's folders stays: {body}"
+        );
+        let repo = yagra_base::pgtest::repo(pool.clone());
+        assert_eq!(
+            repo.get_node(a).await.expect("read").expect("a").name,
+            "sw-01"
+        );
+        assert_eq!(
+            repo.get_node(d).await.expect("read").expect("d").name,
+            "Edge"
+        );
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        for path in [
+            "/api/v1/nodes/name-from-device/preview",
+            "/api/v1/nodes/name-from-device",
+        ] {
+            let (status, _) = send(
+                &st,
+                "POST",
+                path,
+                &viewer,
+                Some(serde_json::json!({ "node_ids": [], "changes": [] })),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}");
+        }
     }
 
     /// A bulk pool change is accepted, and clearing it puts the nodes back to inherited.

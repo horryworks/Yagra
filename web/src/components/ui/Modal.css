@@ -214,6 +214,27 @@
   min-width: 0;
 }
 
+/* A field with one button beside it that fills the field — the device's own name beside a node's
+   Name (ADR-208 Inc.2). The input takes the room; the button keeps its label on one line. */
+.input-with-action {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.input-with-action > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-with-action > .btn {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Stack the pair on mobile — side-by-side fields do not fit ~390px. `.form-row` (index.css) has
    always had this; this one did not, so every paired row in a modal (DNS resolver + port, the URL
    status bounds, a credential's kind + name) was squeezed to about half a screen each.

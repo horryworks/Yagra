@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### 新機能
+
+- **ノードの名前を、1 回の操作で機器の名前に合わせられるようになりました。** ノードの編集で、名前の欄の横に機器の名前（sysName）を出します。ツリーの右クリックからは、1 台でも選択した複数台でも、変わる内容を並べた確認画面を開けます。こうして合わせたノードは、以後また機器の名前に追従します。API を使う方へ: `GET /api/v1/nodes/{node_id}` と MCP の `get_node_status` が `sys_name` を返すようになり、`POST /api/v1/nodes/name-from-device/preview` と `POST /api/v1/nodes/name-from-device` を足しました。
+
 ## v0.3.55 — ノード名が機器の sysName に合わせて変わり、入れ替わった機器は再検出で確かめるまで止まる
 
 ### 新機能

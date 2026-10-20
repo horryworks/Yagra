@@ -83,6 +83,9 @@ pub struct NodeWithNotes {
     /// Whether a person fixed this node's profile, so Nodes ▸ Reclassify never offers to change it
     /// (ADR-140). Read here because the edit dialog shows it and writes it back.
     pub profile_locked: bool,
+    /// The name the device gives itself, accepted after two reads in a row (ADR-208); `None` ⇒ not
+    /// read yet. The edit dialog offers it as the node's name (Inc.2).
+    pub sys_name: Option<String>,
 }
 
 /// One device node as Nodes ▸ Reclassify weighs it (ADR-140) — see [`NodeRepo::reclassify_inputs`].
@@ -273,7 +276,7 @@ impl NodeRepo {
     /// interpolated from the same constant, so the two cannot disagree about the node half.
     pub async fn get_node_with_notes(&self, id: Uuid) -> anyhow::Result<Option<NodeWithNotes>> {
         let row = sqlx::query(&format!(
-            "SELECT {}, notes, os_version, serial_number, profile_locked FROM nodes WHERE id = $1",
+            "SELECT {}, notes, os_version, serial_number, profile_locked, sys_name FROM nodes WHERE id = $1",
             Self::NODE_COLUMNS
         ))
         .bind(id)
@@ -287,6 +290,7 @@ impl NodeRepo {
                     os_version: row.try_get("os_version")?,
                     serial_number: row.try_get("serial_number")?,
                     profile_locked: row.try_get("profile_locked")?,
+                    sys_name: row.try_get("sys_name")?,
                 })
             })
             .transpose()
@@ -917,6 +921,73 @@ impl NodeRepo {
         .bind(&ids)
         .bind(pool)
         .bind(Self::scope_bind(scope))
+        .execute(&self.pool)
+        .await?;
+        Ok((ids.len(), res.rows_affected()))
+    }
+
+    /// The name and accepted `sysName` of each of these nodes the caller may see, device nodes only
+    /// (ADR-208 Inc.2) — what the "name from device" dialog previews. Ids that name no such node are
+    /// simply absent; the caller tells "no device name" and "already the same" apart itself.
+    pub async fn name_from_device_inputs(
+        &self,
+        ids: &[Uuid],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<NameFromDevice>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(&format!(
+            "SELECT n.id, n.name, n.sys_name FROM nodes n \
+             WHERE n.id = ANY($2) AND {scope} AND {device} ORDER BY n.name, n.id",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        ))
+        .bind(Self::scope_bind(scope))
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(node, name, sys_name)| NameFromDevice {
+                node,
+                name,
+                sys_name,
+            })
+            .collect())
+    }
+
+    /// Rename each node to its device's `sysName` — **only while it still holds the name and the
+    /// `sysName` the dialog showed** (ADR-208 Inc.2, the guard Rediscover's Apply uses). A name equal
+    /// to `sys_name` is what makes it follow the device from then on. Returns `(requested, applied)`:
+    /// distinct ids asked for, and rows written; a node renamed, re-read or moved out of the caller's
+    /// folders since the preview is simply not among the written.
+    pub async fn rename_to_sys_name(
+        &self,
+        changes: &[(Uuid, String, String)],
+        scope: GroupFilter<'_>,
+    ) -> anyhow::Result<(usize, u64)> {
+        let mut seen = std::collections::HashSet::new();
+        let changes: Vec<&(Uuid, String, String)> =
+            changes.iter().filter(|c| seen.insert(c.0)).collect();
+        if changes.is_empty() {
+            return Ok((0, 0));
+        }
+        let ids: Vec<Uuid> = changes.iter().map(|c| c.0).collect();
+        let froms: Vec<String> = changes.iter().map(|c| c.1.clone()).collect();
+        let tos: Vec<String> = changes.iter().map(|c| c.2.clone()).collect();
+        let res = sqlx::query(&format!(
+            "UPDATE nodes n SET name = t.to_name, updated_at = now() \
+             FROM unnest($2::uuid[], $3::text[], $4::text[]) AS t(id, from_name, to_name) \
+             WHERE n.id = t.id AND n.name = t.from_name AND n.sys_name = t.to_name \
+               AND n.name <> n.sys_name AND {scope} AND {device}",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+        ))
+        .bind(Self::scope_bind(scope))
+        .bind(&ids)
+        .bind(&froms)
+        .bind(&tos)
         .execute(&self.pool)
         .await?;
         Ok((ids.len(), res.rows_affected()))
@@ -2039,6 +2110,16 @@ impl NodeRepo {
 /// `(node, version)` rows as the two parallel arrays `unnest` takes, one per node — the **last**
 /// row for a node wins, so two polls of one node in a batch write the newer answer. Shared by both
 /// OS-version writers so they cannot disagree about which of two answers is current.
+/// One node as the "name from device" dialog previews it (ADR-208 Inc.2) — see
+/// [`NodeRepo::name_from_device_inputs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameFromDevice {
+    pub node: Uuid,
+    pub name: String,
+    /// `None` ⇒ the device's name has not been accepted yet.
+    pub sys_name: Option<String>,
+}
+
 /// A node whose name followed its device's `sysName` (ADR-208): what [`NodeRepo::follow_sys_names`]
 /// renamed, for the audit row that says so.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2533,6 +2614,94 @@ mod tests {
             ("Lobby switch".to_owned(), Some("sw-01-newer".to_owned()))
         );
         assert!(repo.follow_sys_names(&[]).await.expect("empty").is_empty());
+    }
+
+    /// ADR-208 Inc.2: the rename writes only what the dialog showed — a node renamed since, a
+    /// `sysName` re-read since, one outside the caller's folders, and one already named so are left.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rename_to_the_device_name_writes_only_what_was_shown(pool: sqlx::PgPool) {
+        let mine = pgtest::group(&pool, "mine").await;
+        let theirs = pgtest::group(&pool, "theirs").await;
+        let shown = pgtest::node(&pool, "Core switch", 1, Some(mine)).await;
+        let renamed = pgtest::node(&pool, "Lobby", 2, Some(mine)).await;
+        let outside = pgtest::node(&pool, "Edge", 3, Some(theirs)).await;
+        let unread = pgtest::node(&pool, "Spare", 4, Some(mine)).await;
+        for (id, name) in [(shown, "sw-01"), (renamed, "sw-02"), (outside, "sw-03")] {
+            sqlx::query("UPDATE nodes SET sys_name = $2 WHERE id = $1")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed");
+        }
+        let repo = pgtest::repo(pool.clone());
+        let scope = [mine];
+
+        let mut seen = repo
+            .name_from_device_inputs(&[shown, renamed, outside, unread], Some(&scope))
+            .await
+            .expect("preview");
+        seen.sort_by_key(|n| n.node);
+        let mut want = vec![
+            NameFromDevice {
+                node: shown,
+                name: "Core switch".into(),
+                sys_name: Some("sw-01".into()),
+            },
+            NameFromDevice {
+                node: renamed,
+                name: "Lobby".into(),
+                sys_name: Some("sw-02".into()),
+            },
+            NameFromDevice {
+                node: unread,
+                name: "Spare".into(),
+                sys_name: None,
+            },
+        ];
+        want.sort_by_key(|n| n.node);
+        assert_eq!(
+            seen, want,
+            "the node outside the caller's folders is not previewed"
+        );
+
+        sqlx::query("UPDATE nodes SET name = 'Lobby AP' WHERE id = $1")
+            .bind(renamed)
+            .execute(&pool)
+            .await
+            .expect("renamed since");
+        let (requested, applied) = repo
+            .rename_to_sys_name(
+                &[
+                    (shown, "Core switch".into(), "sw-01".into()),
+                    (shown, "Core switch".into(), "sw-01".into()),
+                    (renamed, "Lobby".into(), "sw-02".into()),
+                    (outside, "Edge".into(), "sw-03".into()),
+                ],
+                Some(&scope),
+            )
+            .await
+            .expect("rename");
+        assert_eq!((requested, applied), (3, 1));
+        let names: Vec<(Uuid, String)> =
+            sqlx::query_as("SELECT id, name FROM nodes WHERE id = ANY($1) ORDER BY name")
+                .bind(vec![shown, renamed, outside])
+                .fetch_all(&pool)
+                .await
+                .expect("read");
+        assert_eq!(
+            names,
+            vec![
+                (outside, "Edge".to_owned()),
+                (renamed, "Lobby AP".to_owned()),
+                (shown, "sw-01".to_owned()),
+            ]
+        );
+        assert_eq!(
+            repo.rename_to_sys_name(&[], None).await.expect("empty"),
+            (0, 0)
+        );
     }
 
     /// A save that names `profile_locked` sets it, and one that does not leaves it (ADR-140) — both

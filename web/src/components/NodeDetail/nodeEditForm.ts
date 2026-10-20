@@ -52,6 +52,19 @@ export const NODE_EDIT_FIELDS = [
 
 export type NodeEditField = (typeof NODE_EDIT_FIELDS)[number];
 
+/** The device's own name, offered beside the Name field (ADR-208 Inc.2) — or `null` when there is
+ *  nothing to offer: not a device, no `sysName` accepted yet, or the field already says it. Pressing
+ *  the offer only fills the field; the save is the dialog's own. */
+export function deviceNameOffer(
+  node: Pick<NodeDetail, 'kind' | 'sys_name'>,
+  draftName: string,
+): string | null {
+  if (node.kind !== 'device') return null;
+  const offered = node.sys_name?.trim();
+  if (!offered || offered === draftName.trim()) return null;
+  return offered;
+}
+
 /** Which half of the dialog a row belongs to. The dialog heads each half when a kind has both;
  *  a kind with one section gets no heading, because there is nothing to tell apart.
  *

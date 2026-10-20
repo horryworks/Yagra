@@ -357,7 +357,8 @@
     "profileLock": "分類ルールが変わってもこのプロファイルのままにする",
     "err": {
       "bindingsAfterCheck": "監視の内容は保存しましたが、ノードの設定は保存できませんでした: {{reason}}。もう一度保存しても安全です。"
-    }
+    },
+    "useDeviceName": "{{name}} にする"
   },
   "deleteNodes": {
     "title_one": "{{count}} 件のノードを削除",
@@ -863,7 +864,11 @@
     },
     "moveGroupByPrefix": "このフォルダの中を IP レンジで振り分け…",
     "showOnMap": "ネットワークマップで表示",
-    "showEmptyFolders": "空のフォルダを表示"
+    "showEmptyFolders": "空のフォルダを表示",
+    "nameFromDevice": "名前を機器の名前にする…",
+    "nameFromDeviceNamed": "「{{name}}」を機器の名前にする…",
+    "nameFromDeviceSelected": "選択した {{count}} 件を機器の名前にする…",
+    "namedFromDevice": "{{requested}} 件のうち {{applied}} 件の名前を変えました。"
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -1153,7 +1158,8 @@
     "more": "その他…",
     "maintenance": "メンテナンス…",
     "mute": "ミュート…",
-    "pollNow": "今すぐポーリング"
+    "pollNow": "今すぐポーリング",
+    "nameFromDevice": "機器の名前にする"
   },
   "groupPicker": {
     "none": "フォルダなし",
@@ -1188,5 +1194,16 @@
   "moreMenu": {
     "trigger": "その他の操作",
     "moveAllByPrefix": "全ノードを IP レンジで振り分け…"
+  },
+  "nameFromDevice": {
+    "titleLoading": "機器の名前にする",
+    "title": "{{requested}} 件のうち {{count}} 件の名前を変える",
+    "apply": "{{count}} 件の名前を変える",
+    "more": "ほか {{count}} 件",
+    "unchanged": "変えない {{count}} 件（機器の名前なし {{noDeviceName}}・同じ名前 {{alreadySame}}・その他 {{other}}）",
+    "err": {
+      "preview": "選んだノードを読めませんでした。",
+      "apply": "名前を変えられませんでした。"
+    }
   }
 }

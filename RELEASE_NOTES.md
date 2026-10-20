@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **A node can be renamed to its device's own name in one step.** Edit node offers the device's name (sysName) beside the Name field, and the node tree's right-click menu — for one device or a whole selection — opens a confirmation that lists each change. A node renamed this way follows its device's name again from then on. For API clients: `GET /api/v1/nodes/{node_id}` and the MCP `get_node_status` tool now return `sys_name`, and `POST /api/v1/nodes/name-from-device/preview` and `POST /api/v1/nodes/name-from-device` are new.
+
 ## v0.3.55 — A node's name follows its device's sysName, and a replaced device waits for Rediscover
 
 ### New Features

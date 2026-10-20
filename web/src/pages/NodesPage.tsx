@@ -109,6 +109,7 @@ import {
 import { BulkTagModal } from '../components/NodeTree/BulkTagModal';
 import { DeleteNodesModal } from '../components/NodeTree/DeleteNodesModal';
 import { RediscoverModal } from '../components/NodeTree/RediscoverModal';
+import { NameFromDeviceModal } from '../components/NameFromDeviceModal/NameFromDeviceModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
@@ -345,6 +346,8 @@ export function NodesPage() {
    *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
   const [editingNode, setEditingNode] = useState<NodeSummary | null>(null);
   const [rediscovering, setRediscovering] = useState<NodeSummary | null>(null);
+  /** The nodes the "name from device" dialog is open for (ADR-208 Inc.2). */
+  const [naming, setNaming] = useState<ActionTarget | null>(null);
   /** Bumped when that edit rewrote the node the right pane is showing, and handed to `NodeDetail`
    *  as `reloadKey`: without it an edit from the tree would leave the operator looking at the values
    *  they just replaced — which reads as a save that did not take. ⚠️ Never in the pane's `key`
@@ -900,6 +903,13 @@ export function NodesPage() {
         onSelect: () => pollNodes({ kind: 'nodes', nodes }),
       });
     }
+    if (canConfig) {
+      items.push({
+        key: 'nameFromDevice',
+        label: t('select.nameFromDevice'),
+        onSelect: () => setNaming({ kind: 'nodes', nodes }),
+      });
+    }
     if (canMaintenance) {
       items.push({
         key: 'maintenance',
@@ -1340,6 +1350,7 @@ export function NodesPage() {
             // `canConfig` — since Inc.11 an operator who may only suppress still has batch verbs
             // to reach, and gating the *selection* on the strictest of them would hide them all.
             onPollNodes={canConfig ? pollNodes : undefined}
+            onNameFromDevice={canConfig ? setNaming : undefined}
             onCheckedChange={
               canConfig || canMaintenance || canAck
                 ? (next, anchor) => {
@@ -1658,6 +1669,25 @@ export function NodesPage() {
               setDetailNonce((v) => v + 1);
             }
             setEditingNode(null);
+            void reload();
+          }}
+        />
+      )}
+
+      {naming && (
+        <NameFromDeviceModal
+          nodeIds={targetNodeIds(naming)}
+          onClose={() => setNaming(null)}
+          onApplied={(r) => {
+            if (naming.kind === 'nodes') clearChecked();
+            if (selected?.kind === 'node') setDetailNonce((v) => v + 1);
+            setNaming(null);
+            // The same status line Poll now uses; a shortfall stays on screen.
+            setPollMsg({
+              text: t('tree.namedFromDevice', { applied: r.applied, requested: r.requested }),
+              tone: r.applied < r.requested ? 'error' : 'info',
+            });
+            if (r.applied >= r.requested) window.setTimeout(() => setPollMsg(null), 8000);
             void reload();
           }}
         />

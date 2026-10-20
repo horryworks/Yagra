@@ -358,7 +358,8 @@
     "profileLock": "Keep this profile when classification rules change",
     "err": {
       "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
-    }
+    },
+    "useDeviceName": "Use {{name}}"
   },
   "deleteNodes": {
     "title_one": "Delete {{count}} node",
@@ -867,7 +868,11 @@
     },
     "moveGroupByPrefix": "Sort this folder by IP range…",
     "showOnMap": "Show on network map",
-    "showEmptyFolders": "Show empty folders"
+    "showEmptyFolders": "Show empty folders",
+    "nameFromDevice": "Name from device…",
+    "nameFromDeviceNamed": "Name “{{name}}” from device…",
+    "nameFromDeviceSelected": "Name {{count}} selected from device…",
+    "namedFromDevice": "Renamed {{applied}} of {{requested}}."
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -1163,7 +1168,8 @@
     "more": "More…",
     "maintenance": "Maintenance…",
     "mute": "Mute…",
-    "pollNow": "Poll now"
+    "pollNow": "Poll now",
+    "nameFromDevice": "Name from device"
   },
   "groupPicker": {
     "none": "No folder",
@@ -1198,5 +1204,16 @@
   "moreMenu": {
     "trigger": "More actions",
     "moveAllByPrefix": "Sort every node by IP range…"
+  },
+  "nameFromDevice": {
+    "titleLoading": "Name from device",
+    "title": "Rename {{count}} of {{requested}}",
+    "apply": "Rename {{count}}",
+    "more": "{{count}} more",
+    "unchanged": "{{count}} unchanged: no device name {{noDeviceName}}, same name {{alreadySame}}, other {{other}}",
+    "err": {
+      "preview": "Could not read the selected nodes.",
+      "apply": "Could not rename the nodes."
+    }
   }
 }

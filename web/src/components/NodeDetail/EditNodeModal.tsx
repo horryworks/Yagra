@@ -24,6 +24,7 @@ import { Modal } from '../ui/Modal';
 import { FieldError, Select, TextArea, TextInput } from '../ui/Field';
 import { DnsCheckFields, Row, UrlCheckFields } from './CheckFields';
 import {
+  deviceNameOffer,
   nodeEditDraftFrom,
   nodeEditErrorKey,
   nodeEditRequest,
@@ -130,12 +131,21 @@ export function EditNodeModal({
     );
   };
 
+  const nameOffer = deviceNameOffer(node, d.name);
+
   // Keyed by field rather than chained on the kind, so a new field is one entry the compiler
   // demands instead of a branch that quietly falls through to the device form.
   const rows: Record<NodeEditField, ReactNode> = {
     name: (
       <Row label={t('field.name')} required>
-        <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
+        <div className="input-with-action">
+          <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
+          {nameOffer && (
+            <Button onClick={() => set('name', nameOffer)}>
+              {t('editNode.useDeviceName', { name: nameOffer })}
+            </Button>
+          )}
+        </div>
         {nameInvalid && <FieldError>{t('field.nameRequired')}</FieldError>}
       </Row>
     ),

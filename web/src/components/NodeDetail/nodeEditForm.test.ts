@@ -25,6 +25,7 @@ vi.mock('../../services/api', () => ({
 import { NODE_KINDS, type NodeDetail, type NodeKind, type ProfileSummary } from '../../types/api';
 import { PROFILE_CATEGORIES } from '../../lib/profileCategories';
 import {
+  deviceNameOffer,
   NODE_EDIT_FIELDS,
   NODE_EDIT_FIELD_META,
   NODE_EDIT_KIND_SPEC,
@@ -505,5 +506,19 @@ describe('nodeEditErrorKey', () => {
     // reopen the dialog to find their URL change applied with no sign the pool move was not.
     expect(nodeEditErrorKey(withCheck, 'bindings')).toBe('editNode.err.bindingsAfterCheck');
     expect(nodeEditErrorKey(noCheck, 'bindings')).toBe('err.saveNode');
+  });
+});
+
+describe('deviceNameOffer (ADR-208 Inc.2)', () => {
+  it("offers a device's own name only while the field says something else", () => {
+    const device = { kind: 'device' as const, sys_name: 'sw-01' };
+    expect(deviceNameOffer(device, 'Core switch')).toBe('sw-01');
+    expect(deviceNameOffer(device, ' sw-01 ')).toBeNull();
+  });
+
+  it('offers nothing with no name read yet, or for a node that is not a device', () => {
+    expect(deviceNameOffer({ kind: 'device', sys_name: null }, 'Core switch')).toBeNull();
+    expect(deviceNameOffer({ kind: 'device', sys_name: '  ' }, 'Core switch')).toBeNull();
+    expect(deviceNameOffer({ kind: 'url', sys_name: 'sw-01' }, 'Core switch')).toBeNull();
   });
 });

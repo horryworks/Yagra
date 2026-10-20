@@ -700,6 +700,11 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/nodes/move-preview"
         // The same proposal over a subtree or the whole inventory (ADR-176). Same blind spot.
         || path == "/api/v1/nodes/move-preview/subtree"
+        // Which selected nodes would take their device's name (ADR-208 Inc.2). It writes nothing —
+        // the rename that may follow is `POST /nodes/name-from-device`, which is **not** listed here.
+        // The same blind spot as the move preview: it demands ManageConfig, so the read-shape check
+        // cannot see it, and the test beside this function is what holds it.
+        || path == "/api/v1/nodes/name-from-device/preview"
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
@@ -1909,6 +1914,14 @@ mod tests {
                 "{dirty} changes a credential"
             );
         }
+    }
+
+    #[test]
+    fn previewing_a_rename_to_the_device_name_does_not_dirty_the_config_generation() {
+        assert!(!changes_monitoring_config(
+            "/api/v1/nodes/name-from-device/preview"
+        ));
+        assert!(changes_monitoring_config("/api/v1/nodes/name-from-device"));
     }
 
     #[test]

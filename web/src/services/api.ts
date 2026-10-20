@@ -199,6 +199,9 @@ import type {
   RetentionValues,
   CredentialHealth,
   RediscoverApplied,
+  NameFromDeviceBody,
+  NameFromDevicePreview,
+  NameFromDeviceResult,
   RediscoverApplyBody,
   RediscoverView,
   StartedRediscovery,
@@ -1359,6 +1362,15 @@ export const api = {
     nodeIds: string[],
   ): Promise<{ requested: number; dispatched: number; jobs: number }> =>
     apiPost('/api/v1/nodes/poll', { body: { node_ids: nodeIds } }),
+
+  /** Which of these nodes would take their device's name (ADR-208 Inc.2). **Writes nothing.** */
+  previewNameFromDevice: (nodeIds: string[]): Promise<NameFromDevicePreview> =>
+    apiPost('/api/v1/nodes/name-from-device/preview', { body: { node_ids: nodeIds } }),
+
+  /** Rename nodes to their device's name, each only while it still holds what the preview showed.
+   *  ⚠️ `applied` can be lower than `requested`: show both numbers. */
+  applyNameFromDevice: (body: NameFromDeviceBody): Promise<NameFromDeviceResult> =>
+    apiPost('/api/v1/nodes/name-from-device', { body }),
 
   /** Move MANY nodes to one poll-pool (`''` ⇒ back to inherited) in one request (ADR-124 Inc.10).
    *

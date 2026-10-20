@@ -1170,6 +1170,24 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/nodes/name-from-device/preview",
+        GroupFiltered,
+        Exempt(
+            "a proposal for a write, not an answer about the fleet: it says which selected nodes \
+             would take their device's name (ADR-208 Inc.2), so the only thing to do with it is \
+             press Rename, which MCP cannot. Each node's own sys_name is served by get_node_status",
+        ),
+    ),
+    // Scoped for the reason `/nodes/pool` is: an Operator holds `manage_config` and can be
+    // group-scoped, so an unscoped rename would reach another site's inventory.
+    (
+        "POST",
+        "/api/v1/nodes/name-from-device",
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/nodes/move-preview",
         GroupFiltered,
         Exempt(
