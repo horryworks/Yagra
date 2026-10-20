@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-19
-# counts: MA-L=40236 MA-L-repeats-dropped=3 MA-M=6564 MA-S=7205 withheld=3
+# fetched: 2026-10-20
+# counts: MA-L=40241 MA-L-repeats-dropped=3 MA-M=6565 MA-S=7206 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -21315,6 +21315,7 @@
 3C6D89	Apple, Inc.
 3C6E63	Mitron OY
 3C6F45	Fiberpro Inc.
+3C6F75	Juniper Networks
 3C6F9B	zte corporation
 3C6FEA	Panasonic India Pvt. Ltd.
 3C6FF7	EnTek Systems, Inc.
@@ -25642,6 +25643,7 @@
 5CAAA2	Celestica Platform and Cloud Solution Malaysia Sdn Bhd
 5CAAFD	Sonos, Inc.
 5CAB22	IEEE Registration Authority
+5CAB222	Santiam Labs
 5CAB223	Xiamen Joint Tech. CO.,Ltd.
 5CAB226	Shanghai Jiweijiu Intelligent Technology Co., Ltd.
 5CAB229	KIWEE BROADBAND
@@ -36626,6 +36628,7 @@
 8C1F643FE	Plum sp. z.o.o.
 8C1F643FF	UISEE(SHANGHAI) AUTOMOTIVE TECHNOLOGIES LTD.
 8C1F64402	Integer.pl S.A.
+8C1F64405	Digital Way
 8C1F64406	ANDA TELECOM PVT LTD
 8C1F64407	broadtek
 8C1F64408	techone system
@@ -39776,6 +39779,7 @@
 90DA72	Espressif Inc.
 90DAF9	Siemens Rail Automation SAU
 90DB46	E-LEAD ELECTRONIC CO., LTD
+90DB77	Arista Networks
 90DD5D	Apple, Inc.
 90DE80	Shenzhen Century Xinyang Technology Co., Ltd
 90DF06	Ciena Corporation
@@ -40179,6 +40183,7 @@
 94A9A8	Texas Instruments
 94AA07	Nokia
 94AA0A	Fiberhome Telecommunication Technologies Co.,LTD
+94AA7E	Inveya Limited
 94AAB8	Joview(Beijing) Technology Co. Ltd.
 94AB18	cellXica ltd
 94ABDE	OMX Technology - FZE
@@ -42801,6 +42806,7 @@ A87285	IDT, INC.
 A8741D	Phoenix Contact GmbH & Co. KG
 A87484	zte corporation
 A8754E	Nexlawn Intelligent Technology (Suzhou) Co., Ltd.
+A8756A	Juniper Networks
 A875D6	FreeTek International Co., Ltd.
 A875E2	Aventura Technologies, Inc.
 A87650	Samsung Electronics Co.,Ltd
@@ -45033,6 +45039,7 @@ BC122F	LCFC(Hefei) Electronics Technology co., ltd
 BC125E	Beijing WisVideo INC.
 BC13A8	Shenzhen YOUHUA Technology Co., Ltd
 BC1401	Hitron Technologies. Inc
+BC1409	Arista Networks
 BC1469	Phyplus Technology (Shanghai) Co., Ltd
 BC1485	Samsung Electronics Co.,Ltd
 BC14EF	ITON Technology Limited
