@@ -98,8 +98,10 @@ export function worstFirst(members: readonly PinPoint[]): PinPoint[] {
   );
 }
 
-/** Whether zooming in can ever pull these sites apart. Sites at one coordinate never separate, so
- *  for them a "Zoom in" would only move the map and leave the same marker. */
-export function separable(members: readonly PinPoint[]): boolean {
-  return members.some((m) => m.x !== members[0].x || m.y !== members[0].y);
+/** Whether these sites would be drawn as more than one marker at `scale` — the page asks it at
+ *  the zoom ceiling, so "Zoom in" is offered only when zooming can actually pull them apart. A pin
+ *  is 14 px wide at every zoom and 1 px is roughly 230 m at the ceiling, so sites a few hundred
+ *  metres apart stay one marker however far the map is zoomed — not only sites at one coordinate. */
+export function splitsAt(members: readonly PinPoint[], scale: number): boolean {
+  return clusterPins(members, scale).length > 1;
 }

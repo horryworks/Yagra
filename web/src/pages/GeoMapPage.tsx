@@ -81,7 +81,7 @@ import {
   stateBreakdown,
   type NodePlace,
 } from './geoPinAlerts';
-import { clusterPins, separable, type PinCluster } from './geoCluster';
+import { clusterPins, splitsAt, type PinCluster } from './geoCluster';
 import './GeoMapPage.css';
 
 /** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
@@ -668,7 +668,9 @@ export function GeoMapPage() {
         <ClusterBubble
           cluster={clusterMenu.cluster}
           at={clusterMenu.at}
-          canZoom={v.scale < MAX_GEO_SCALE && separable(clusterMenu.cluster.members)}
+          canZoom={
+            v.scale < MAX_GEO_SCALE && splitsAt(clusterMenu.cluster.members, MAX_GEO_SCALE)
+          }
           onClose={closeClusterMenu}
           onPick={(id) => {
             const at = clusterMenu.at;

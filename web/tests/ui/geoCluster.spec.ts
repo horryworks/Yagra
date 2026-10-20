@@ -17,8 +17,9 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')
 const SAME_A = id(1);
 const SAME_B = id(2);
 const SAME_C = id(3);
-// Two sites a few metres apart, on the other side of the world: they overlap at the fitted scale
-// and separate only when zoomed in.
+// Two sites about 5.5 km apart, on the other side of the world: they overlap at the fitted scale
+// and separate only when zoomed in. (A few hundred metres would never separate: at the zoom
+// ceiling one pixel is roughly 230 m, so "Zoom in" would not be offered for them.)
 const NEAR_D = id(4);
 const NEAR_E = id(5);
 
@@ -39,7 +40,7 @@ function folders(): Json {
     g(SAME_B, 'site-b', 35.68, 139.76),
     g(SAME_C, 'site-c', 35.68, 139.76),
     g(NEAR_D, 'site-d', 51.5, -0.12),
-    g(NEAR_E, 'site-e', 51.5005, -0.12),
+    g(NEAR_E, 'site-e', 51.55, -0.12),
   ] as unknown as Json;
 }
 
@@ -104,6 +105,15 @@ test('sites that zooming can separate offer Zoom in', async ({ page, errors }) =
   await expect(list.locator('.geopage-bubble-row').first()).toContainText(`${MOCK_PREFIX}site-e`);
   await list.getByRole('button', { name: 'Zoom in' }).click();
   await expect(list).toHaveCount(0);
+
+  // Keep pressing it: before the ceiling the two sites become two pins, and the marker is gone.
+  const pins = page.getByTestId('geo-map-pin');
+  for (let i = 0; i < 5 && (await pins.count()) === 0; i++) {
+    await near.click();
+    await page.getByRole('dialog', { name: '2 sites' }).getByRole('button', { name: 'Zoom in' }).click();
+  }
+  await expect(pins).toHaveCount(2);
+  await expect(near).toHaveCount(0);
 
   expect(errors.uncaught).toEqual([]);
   expect(errors.logged).toEqual([]);

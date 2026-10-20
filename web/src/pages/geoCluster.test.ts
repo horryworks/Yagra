@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CLUSTER_PX,
   clusterPins,
-  separable,
+  splitsAt,
   sumCounts,
   worstFirst,
   type PinPoint,
@@ -97,9 +97,13 @@ describe('worstFirst', () => {
   });
 });
 
-describe('separable', () => {
-  it('is false only when every site sits on one coordinate', () => {
-    expect(separable([pin('a', 1, 2), pin('b', 1, 2)])).toBe(false);
-    expect(separable([pin('a', 1, 2), pin('b', 1, 2.0001)])).toBe(true);
+describe('splitsAt', () => {
+  it('is true only when the sites would be more than one marker at that scale', () => {
+    // One coordinate: never.
+    expect(splitsAt([pin('a', 1, 2), pin('b', 1, 2)], MAX_GEO_SCALE)).toBe(false);
+    // 0.001 map units (about 55 m) is a quarter of a pixel at the ceiling: still one marker.
+    expect(splitsAt([pin('a', 1, 2), pin('b', 1, 2.001)], MAX_GEO_SCALE)).toBe(false);
+    // 0.1 map units is 24 px at the ceiling: two markers.
+    expect(splitsAt([pin('a', 1, 2), pin('b', 1, 2.1)], MAX_GEO_SCALE)).toBe(true);
   });
 });
