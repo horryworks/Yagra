@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.55 — A node's name follows its device's sysName, and a replaced device waits for Rediscover
+
 ### New Features
 
 - **A node's name now follows its device's hostname (sysName).** The hourly identity read also reads the device's sysName, and a node whose name is still the one the device gave it — or still the bare address Discovery fell back to — is renamed when the device's name changes, after two reads in a row agree. A name a person typed is never overwritten. Each rename is recorded in the audit log as `system`. A node behind an older poller does not follow until that poller is upgraded.
