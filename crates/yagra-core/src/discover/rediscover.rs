@@ -126,6 +126,21 @@ fn row<T: PartialEq>(current: Option<T>, found: Option<T>, locked: bool) -> Row<
     }
 }
 
+/// The name row (ADR-208 decision 6). A name equal to the `sysName` apart from surrounding spaces
+/// and letter case is the same name — the rule `NodeRepo::follow_sys_names` applies — so the row
+/// reads `Same` and proposes no rename that would only change its case. `found` keeps the device's
+/// own spelling, which is what Apply stores as the name to follow.
+fn name_row(current: &str, found: Option<String>) -> Row<String> {
+    let same = found
+        .as_deref()
+        .is_some_and(|f| current.trim().to_lowercase() == f.to_lowercase());
+    let mut r = row(Some(current.to_owned()), found, false);
+    if same {
+        r.verdict = RediscoverVerdict::Same;
+    }
+    r
+}
+
 /// Where the scan is, and the one candidate it found if it has finished.
 fn outcome(status: &ScanStatus) -> (RediscoverState, Option<&Candidate>) {
     match status.state {
@@ -181,12 +196,11 @@ pub fn judge(current: &Current, status: &ScanStatus, classifier: &Classifier) ->
             rule_id: matched.and_then(|m| m.rule_id),
             vendor: row(current.vendor.clone(), vendor, false),
             model: row(current.model.clone(), model, false),
-            name: row(
-                Some(current.name.clone()),
+            name: name_row(
+                &current.name,
                 c.sysname
                     .as_deref()
                     .and_then(yagra_discovery::sanitize_sys_name),
-                false,
             ),
             device_changed,
         }
@@ -680,6 +694,19 @@ mod tests {
             .expect("answered");
         assert_eq!(c.name.found, None);
         assert_eq!(c.name.verdict, RediscoverVerdict::Undetermined);
+
+        // A name that differs from the sysName only in case and surrounding spaces is the same
+        // name, as the follower reads it: no rename is proposed, and the device's spelling is
+        // still the one Apply would store.
+        let cased = Current {
+            name: " SW-01 ".into(),
+            ..current()
+        };
+        let c = judge(&cased, &done(huawei()), &classifier())
+            .comparison
+            .expect("answered");
+        assert_eq!(c.name.verdict, RediscoverVerdict::Same);
+        assert_eq!(c.name.found.as_deref(), Some("sw-01"));
 
         let renamed = Current {
             name: "Core switch".into(),
