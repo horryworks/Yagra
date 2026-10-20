@@ -7,23 +7,33 @@
 // (see the header of the generated file for why that matters).
 //
 // Source data (public domain, no rights reserved):
-//   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_land.geojson
-//   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_lakes.geojson
-// (`ne_10m_*` is the finer set, `ne_110m_*` the coarse one the first generation used.)
+//   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_land.geojson
+//   https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson
+// (`ne_10m_*` is what both outputs use; `ne_50m_*` and `ne_110m_*` are the coarser sets.)
 //
 // Usage:
 //   node scripts/gen-world-outline.mjs --land ne_50m_land.geojson --lakes ne_50m_lakes.geojson
 //       [--tol 0.06] [--min-area 0.01] [--lake-min-area 0.2] [--decimals 1]
 //       [--out src/pages/worldOutline.ts] [--dry]
+//   node scripts/gen-world-outline.mjs --land ne_10m_land.geojson --lakes ne_10m_lakes.geojson \
+//       --tiles src/pages/geoTileData --tol 0.004 --min-area 0.0002 --lake-min-area 0.0005 [--dry]
 //
 // The pipeline is: reproject every ring into the 720 × 360 equirectangular grid `geoProjection.ts`
 // draws in (2 units per degree) → Ramer–Douglas–Peucker at `--tol` units → drop rings whose area is
 // below `--min-area` units² (sub-pixel specks) → sort largest-first so continents paint before the
 // islands sitting on them → emit one SVG path per ring. `--dry` prints the statistics and writes
 // nothing.
+//
+// `--tiles <dir>` writes the fine set instead (ADR-207): the same pipeline at a much smaller
+// tolerance, cut into `TILE_DEG`° squares, one JSON file per square that holds any land or water.
+// Each file holds three lists of path data in integer thousandths of a map unit, relative to the
+// square's corner: `land` and `water` are filled shapes clipped a little beyond the square (so two
+// neighbours overlap instead of leaving a hairline seam) and are drawn without a stroke, and
+// `coast` is the shoreline clipped exactly to the square as open lines — the only thing stroked,
+// so a square's edge never reads as a coast.
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 360;
@@ -46,6 +56,7 @@ const LAKE_MIN_AREA = Number(opt('lake-min-area', 0.2));
 const DECIMALS = Number(opt('decimals', 1));
 const OUT = opt('out', 'src/pages/worldOutline.ts');
 const DRY = opt('dry', false) === true;
+const TILES = opt('tiles', null);
 if (!LAND || LAND === true) {
   console.error(
     'usage: gen-world-outline.mjs --land <ne_XXm_land.geojson> [--lakes <ne_XXm_lakes.geojson>] …',
@@ -165,6 +176,192 @@ function prepare(geojson, minArea) {
   return { outers, holes };
 }
 
+// ---- tiling (ADR-207) --------------------------------------------------------------------------
+
+/** Degrees per tile side. Must match `GEO_TILE_DEG` in `src/pages/geoProjection.ts`. */
+const TILE_DEG = 10;
+const TILE_UNITS = (TILE_DEG * MAP_WIDTH) / 360;
+const TILE_COLS = MAP_WIDTH / TILE_UNITS;
+const TILE_ROWS = MAP_HEIGHT / TILE_UNITS;
+/** How far a filled shape is kept beyond its square, in map units (≈2 px at the 240× ceiling). */
+const TILE_OVERLAP = 0.01;
+/** Path data resolution: thousandths of a map unit (≈55 m, a quarter pixel at the ceiling). */
+const TILE_SCALE = 1000;
+
+/** Sutherland–Hodgman against one half-plane: keep the points where `inside(p)`. */
+function clipEdge(ring, inside, cross) {
+  const out = [];
+  for (let i = 0; i < ring.length; i++) {
+    const cur = ring[i];
+    const prev = ring[(i + ring.length - 1) % ring.length];
+    const ci = inside(cur);
+    const pi = inside(prev);
+    if (ci) {
+      if (!pi) out.push(cross(prev, cur));
+      out.push(cur);
+    } else if (pi) {
+      out.push(cross(prev, cur));
+    }
+  }
+  return out;
+}
+
+/** A closed ring clipped to the box `[x0,x1]×[y0,y1]`; empty when nothing is left. */
+function clipRing(ring, x0, y0, x1, y1) {
+  const atX = (x) => (a, b) => [x, a[1] + ((b[1] - a[1]) * (x - a[0])) / (b[0] - a[0])];
+  const atY = (y) => (a, b) => [a[0] + ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]), y];
+  let r = ring;
+  r = clipEdge(r, (p) => p[0] >= x0, atX(x0));
+  if (r.length) r = clipEdge(r, (p) => p[0] <= x1, atX(x1));
+  if (r.length) r = clipEdge(r, (p) => p[1] >= y0, atY(y0));
+  if (r.length) r = clipEdge(r, (p) => p[1] <= y1, atY(y1));
+  return r.length >= 3 ? r : [];
+}
+
+/** Liang–Barsky: the part of segment a→b inside the box, or null. */
+function clipSegment(a, b, x0, y0, x1, y1) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [
+    [-dx, a[0] - x0],
+    [dx, x1 - a[0]],
+    [-dy, a[1] - y0],
+    [dy, y1 - a[1]],
+  ]) {
+    if (p === 0) {
+      if (q < 0) return null;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) {
+      if (t > t1) return null;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return null;
+      if (t < t1) t1 = t;
+    }
+  }
+  return [
+    [a[0] + t0 * dx, a[1] + t0 * dy],
+    [a[0] + t1 * dx, a[1] + t1 * dy],
+  ];
+}
+
+/** A closed ring's shoreline inside the box, as open polylines. */
+function clipLines(ring, x0, y0, x1, y1) {
+  const lines = [];
+  let cur = null;
+  for (let i = 0; i < ring.length; i++) {
+    const seg = clipSegment(ring[i], ring[(i + 1) % ring.length], x0, y0, x1, y1);
+    if (!seg) {
+      cur = null;
+      continue;
+    }
+    const last = cur && cur[cur.length - 1];
+    if (last && last[0] === seg[0][0] && last[1] === seg[0][1]) {
+      cur.push(seg[1]);
+    } else {
+      cur = [seg[0], seg[1]];
+      lines.push(cur);
+    }
+  }
+  return lines;
+}
+
+/** Points → a relative SVG path in integer thousandths of a unit from the tile corner. */
+function tilePath(points, ox, oy, closed) {
+  let d = '';
+  let px = 0;
+  let py = 0;
+  let n = 0;
+  for (const p of points) {
+    const x = Math.round((p[0] - ox) * TILE_SCALE);
+    const y = Math.round((p[1] - oy) * TILE_SCALE);
+    if (n > 0 && x === px && y === py) continue;
+    if (n === 0) d += `M${x} ${y}`;
+    else d += `${n === 1 ? 'l' : ' '}${x - px} ${y - py}`;
+    px = x;
+    py = y;
+    n++;
+  }
+  if (n < (closed ? 3 : 2)) return null;
+  return closed ? `${d}z` : d;
+}
+
+/** The bounding box of a ring, for skipping the tiles it cannot touch. */
+function bbox(ring) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  return { x0, y0, x1, y1 };
+}
+
+function writeTiles(dir, landRings, waterRings) {
+  const tiles = new Map();
+  const tileOf = (c, r) => {
+    const k = `${c}_${r}`;
+    if (!tiles.has(k)) tiles.set(k, { land: [], water: [], coast: [] });
+    return tiles.get(k);
+  };
+  const add = (rings, kind) => {
+    for (const ring of rings) {
+      const b = bbox(ring);
+      const c0 = Math.max(0, Math.floor((b.x0 - TILE_OVERLAP) / TILE_UNITS));
+      const c1 = Math.min(TILE_COLS - 1, Math.floor((b.x1 + TILE_OVERLAP) / TILE_UNITS));
+      const r0 = Math.max(0, Math.floor((b.y0 - TILE_OVERLAP) / TILE_UNITS));
+      const r1 = Math.min(TILE_ROWS - 1, Math.floor((b.y1 + TILE_OVERLAP) / TILE_UNITS));
+      for (let c = c0; c <= c1; c++) {
+        for (let r = r0; r <= r1; r++) {
+          const x0 = c * TILE_UNITS;
+          const y0 = r * TILE_UNITS;
+          const x1 = x0 + TILE_UNITS;
+          const y1 = y0 + TILE_UNITS;
+          const o = TILE_OVERLAP;
+          const fill = clipRing(ring, x0 - o, y0 - o, x1 + o, y1 + o);
+          if (fill.length === 0) continue;
+          const t = tileOf(c, r);
+          const d = tilePath(fill, x0, y0, true);
+          if (d) t[kind].push(d);
+          for (const line of clipLines(ring, x0, y0, x1, y1)) {
+            const l = tilePath(line, x0, y0, false);
+            if (l) t.coast.push(l);
+          }
+        }
+      }
+    }
+  };
+  add(landRings, 'land');
+  add(waterRings, 'water');
+
+  let total = 0;
+  let heaviest = { key: '', bytes: 0 };
+  const out = [];
+  for (const [key, t] of [...tiles].sort(([a], [b]) => a.localeCompare(b))) {
+    if (t.land.length === 0 && t.water.length === 0) continue;
+    const json = `${JSON.stringify(t)}\n`;
+    total += json.length;
+    if (json.length > heaviest.bytes) heaviest = { key, bytes: json.length };
+    out.push([key, json]);
+  }
+  console.error(
+    `tiles: ${out.length} files, ${total} bytes, heaviest t${heaviest.key} ${heaviest.bytes} bytes`,
+  );
+  if (DRY) return;
+  mkdirSync(dir, { recursive: true });
+  for (const f of readdirSync(dir)) if (/^t\d+_\d+\.json$/.test(f)) unlinkSync(join(dir, f));
+  for (const [key, json] of out) writeFileSync(join(dir, `t${key}.json`), json);
+  console.error(`wrote ${out.length} tiles to ${dir}`);
+}
+
 // ---- run ---------------------------------------------------------------------------------------
 
 const land = JSON.parse(readFileSync(LAND, 'utf8'));
@@ -193,6 +390,17 @@ console.error(
     ` | water-on-land: ${lakePaths.length} rings (${landPrepared.holes.length} holes + ${lakeCount} lakes), ${lakeBytes} bytes` +
     ` | tol ${TOL} min-area ${MIN_AREA} lake-min-area ${LAKE_MIN_AREA} decimals ${DECIMALS}`,
 );
+// ---- fine tiles (ADR-207) ----------------------------------------------------------------------
+
+if (TILES && TILES !== true) {
+  writeTiles(
+    TILES,
+    landPrepared.outers.map((r) => r.ring),
+    water.map((r) => r.ring),
+  );
+  process.exit(0);
+}
+
 if (DRY) process.exit(0);
 
 const kmPerUnit = 55.6; // 0.5° of longitude at the equator

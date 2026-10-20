@@ -16,7 +16,7 @@
 // All the geometry lives in `geoProjection.ts` because Vitest never runs `.tsx`; what is left here
 // is markup and pointer plumbing, which tsc and the build cover.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConfigChanges } from '../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -50,13 +50,22 @@ import {
   clampGeoScale,
   clampGeoView,
   fitPins,
+  GEO_TILE_UNITS,
   MAP_HEIGHT,
   MAP_WIDTH,
   MAX_GEO_SCALE,
   placedOnly,
   project,
+  visibleGeoTiles,
   zoomGeoView,
 } from './geoProjection';
+import {
+  GEO_TILE_PATH_SCALE,
+  type GeoTile,
+  tileOrigin,
+  useGeoTiles,
+  wantedTiles,
+} from './geoTiles';
 import {
   SKIES,
   type Sky,
@@ -91,6 +100,57 @@ const SKY_DEPTH: Record<Sky, number> = {
   night: TWILIGHT_LEVELS.length,
 };
 const SKY_LEGEND = SKIES.map((sky) => ({ sky, depth: SKY_DEPTH[sky] }));
+
+/**
+ * The fine tiles, drawn over the world outline (ADR-207): each tile's square in the ocean colour
+ * first, so the coarser land cannot show past the finer coast, then every tile's land, its inland
+ * water, and last the shoreline — the only stroked list, since the filled shapes' edges include
+ * the cut along the square. Memoized, so a drag re-renders none of its paths.
+ */
+const GeoDetailLayer = memo(function GeoDetailLayer({ tiles }: { tiles: [string, GeoTile][] }) {
+  if (tiles.length === 0) return null;
+  // A hair beyond the square, as the filled shapes are, so two squares leave no seam between them.
+  const pad = 0.01;
+  const placed = tiles.map(([key, tile]) => {
+    const o = tileOrigin(key);
+    return { key, tile, o, at: `translate(${o.x} ${o.y}) scale(${GEO_TILE_PATH_SCALE})` };
+  });
+  return (
+    <g>
+      {placed.map(({ key, o }) => (
+        <rect
+          className="geopage-ocean"
+          key={key}
+          x={o.x - pad}
+          y={o.y - pad}
+          width={GEO_TILE_UNITS + 2 * pad}
+          height={GEO_TILE_UNITS + 2 * pad}
+        />
+      ))}
+      {placed.map(({ key, tile, at }) => (
+        <g transform={at} key={key}>
+          {tile.land.map((d, i) => (
+            <path className="geopage-detail-land" d={d} key={i} />
+          ))}
+        </g>
+      ))}
+      {placed.map(({ key, tile, at }) => (
+        <g transform={at} key={key}>
+          {tile.water.map((d, i) => (
+            <path className="geopage-detail-water" d={d} key={i} />
+          ))}
+        </g>
+      ))}
+      {placed.map(({ key, tile, at }) => (
+        <g transform={at} key={key}>
+          {tile.coast.map((d, i) => (
+            <path className="geopage-coast" d={d} key={i} />
+          ))}
+        </g>
+      ))}
+    </g>
+  );
+});
 
 export function GeoMapPage() {
   const { t } = useTranslation('topology');
@@ -359,6 +419,17 @@ export function GeoMapPage() {
     [placed, pins, v.scale],
   );
 
+  // The fine coastline tiles under the pane (ADR-207), none below the detail zoom. Kept as state
+  // so a drag that stays inside the same tiles changes nothing the tile layer reads.
+  const [tileKeys, setTileKeys] = useState<string[]>([]);
+  useEffect(() => {
+    const el = wrapRef.current;
+    const next =
+      el && view ? wantedTiles(visibleGeoTiles(view, el.clientWidth, el.clientHeight)) : [];
+    setTileKeys((prev) => (prev.join(',') === next.join(',') ? prev : next));
+  }, [view]);
+  const detailTiles = useGeoTiles(tileKeys);
+
   /** Zoom in around a marker, from its list. */
   const zoomAt = useCallback(
     (c: PinCluster) => {
@@ -466,6 +537,8 @@ export function GeoMapPage() {
                   {WORLD_LAKES.map((d, i) => (
                     <path className="geopage-lake" d={d} key={i} />
                   ))}
+                  {/* The fine coastline over the world outline where it has loaded (ADR-207). */}
+                  <GeoDetailLayer tiles={detailTiles} />
                   {/* The night side, four stacked shades from sunset to the end of astronomical
                       twilight (ADR-189). Over the land, under the pins: a site's colour is its
                       health and must read the same at midnight as at noon. */}

@@ -99,10 +99,44 @@ export interface GeoView {
  *  (`minGeoScale`), because the only meaningful floor is "the whole world, and no more".
  *
  *  240 is the user's request (ADR-188): ten times the old 24, so the sites inside one city stop
- *  overlapping. ⚠️ The coastline is simplified at ≈3.3 km (ADR-127 decision 2), which is about 14 px
- *  here — the outline turns visibly angular near the ceiling. The pins stay exact; the outline is
- *  context, and the resolution was accepted as the price of zooming in on a site. */
+ *  overlapping. The world outline is simplified at ≈3.3 km (ADR-127 decision 2), about 14 px here,
+ *  so past `GEO_DETAIL_MIN_SCALE` the page draws the fine tiles instead (ADR-207), simplified at
+ *  ≈110 m — half a pixel at this ceiling. */
 export const MAX_GEO_SCALE = 240;
+
+/** Degrees per side of one fine coastline tile (ADR-207). The generator cuts at the same size
+ *  (`TILE_DEG` in `scripts/gen-world-outline.mjs`); `geoTiles.test.ts` checks the files agree. */
+export const GEO_TILE_DEG = 10;
+
+/** One tile's side in map units. */
+export const GEO_TILE_UNITS = (GEO_TILE_DEG * MAP_WIDTH) / 360;
+
+/** The zoom from which the fine tiles replace the world outline. Below it the world outline's
+ *  ≈5.5 km rounding is under two pixels; above it the pane spans few enough tiles (about nine on a
+ *  wide pane) that loading and drawing them stays cheap. */
+export const GEO_DETAIL_MIN_SCALE = 40;
+
+/**
+ * The fine tiles the pane shows, as `"<col>_<row>"` keys (the generator's file names without the
+ * `t` and the extension), or none below `GEO_DETAIL_MIN_SCALE`.
+ *
+ * Whether a tile has a file is not this function's question: tiles of open ocean were never
+ * written, and the caller skips keys it has no file for.
+ */
+export function visibleGeoTiles(v: GeoView, vw: number, vh: number): string[] {
+  if (v.scale < GEO_DETAIL_MIN_SCALE || vw <= 0 || vh <= 0) return [];
+  const cols = MAP_WIDTH / GEO_TILE_UNITS;
+  const rows = MAP_HEIGHT / GEO_TILE_UNITS;
+  const toTile = (map: number, last: number) =>
+    Math.max(0, Math.min(last, Math.floor(map / GEO_TILE_UNITS)));
+  const c0 = toTile(-v.tx / v.scale, cols - 1);
+  const c1 = toTile((vw - v.tx) / v.scale, cols - 1);
+  const r0 = toTile(-v.ty / v.scale, rows - 1);
+  const r1 = toTile((vh - v.ty) / v.scale, rows - 1);
+  const keys: string[] = [];
+  for (let c = c0; c <= c1; c++) for (let r = r0; r <= r1; r++) keys.push(`${c}_${r}`);
+  return keys;
+}
 
 /** Fraction of the viewport fitted pins fill, so pins near the edge are not flush. */
 const MARGIN = 0.88;

@@ -115,6 +115,25 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* The fine tiles (ADR-207). The filled shapes are cut at the tile's square, so they carry no
+   stroke; the shoreline is drawn on its own, with the outline's hairline. */
+.geopage-detail-land {
+  fill: var(--bg-tertiary);
+}
+
+.geopage-detail-water {
+  fill: var(--bg-secondary);
+}
+
+.geopage-coast {
+  fill: none;
+  stroke: var(--border-color);
+  stroke-width: 0.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
 /* The night side (ADR-189). Four of these stack, so each is faint on its own; the colour and the
    per-step strength are tokens because the dark theme's ground is already near-night. */
 .geopage-night {

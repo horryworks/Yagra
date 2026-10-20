@@ -6,12 +6,15 @@ import {
   fitPins,
   fitWorld,
   geoBounds,
+  GEO_DETAIL_MIN_SCALE,
+  GEO_TILE_UNITS,
   MAP_HEIGHT,
   MAP_WIDTH,
   MAX_GEO_SCALE,
   minGeoScale,
   placedOnly,
   project,
+  visibleGeoTiles,
   zoomGeoView,
   type GeoView,
 } from './geoProjection';
@@ -274,5 +277,44 @@ describe('zoomGeoView', () => {
     let v = fitWorld(2000, 520);
     for (let i = 0; i < 20; i++) v = zoomGeoView(v, 1 / 1.3, 0, 0, 2000, 520);
     expect(v).toEqual(fitWorld(2000, 520));
+  });
+});
+
+describe('visibleGeoTiles', () => {
+  it('asks for nothing below the detail zoom', () => {
+    expect(visibleGeoTiles({ tx: 0, ty: 0, scale: GEO_DETAIL_MIN_SCALE - 1 }, 1200, 600)).toEqual(
+      [],
+    );
+  });
+
+  it('asks for every square the pane covers, and no other', () => {
+    // At the ceiling, centred on Kyoto: 1200 px is 5 units wide, inside one 20-unit square.
+    const kyoto = project(35.01, 135.77);
+    const scale = MAX_GEO_SCALE;
+    const v = { tx: 600 - kyoto.x * scale, ty: 300 - kyoto.y * scale, scale };
+    expect(visibleGeoTiles(v, 1200, 600)).toEqual(['31_5']);
+  });
+
+  it('asks for both squares a pane straddles', () => {
+    // The left edge of the pane sits just left of the 140°E line, the right edge just right.
+    const scale = 60;
+    const edge = project(35, 140).x;
+    const v = { tx: 600 - edge * scale, ty: -100 * scale, scale };
+    expect(visibleGeoTiles(v, 1200, 600)).toEqual(['31_5', '32_5']);
+  });
+
+  it('stays on the grid at the edges of the world', () => {
+    // A view whose maths reaches past the date line or a pole asks for the edge square, never
+    // for a column or row that does not exist.
+    const scale = GEO_DETAIL_MIN_SCALE;
+    const keys = visibleGeoTiles({ tx: 100, ty: 100, scale }, 400, 400);
+    expect(keys).toEqual(['0_0']);
+    const last = `${MAP_WIDTH / GEO_TILE_UNITS - 1}_${MAP_HEIGHT / GEO_TILE_UNITS - 1}`;
+    const far = { tx: -(MAP_WIDTH * scale) + 100, ty: -(MAP_HEIGHT * scale) + 100, scale };
+    expect(visibleGeoTiles(far, 400, 400)).toEqual([last]);
+  });
+
+  it('answers nothing for an unmeasured pane', () => {
+    expect(visibleGeoTiles({ tx: 0, ty: 0, scale: MAX_GEO_SCALE }, 0, 0)).toEqual([]);
   });
 });
