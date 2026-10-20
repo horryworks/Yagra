@@ -206,6 +206,10 @@
       "withAlerts_other": "アラートあり {{count}} 台",
       "noAlerts": "アクティブなアラートはありません",
       "more_other": "ほか {{count}} 台"
+    },
+    "cluster": {
+      "title_other": "{{count}} 拠点",
+      "zoomIn": "拡大"
     }
   }
 }

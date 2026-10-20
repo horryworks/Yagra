@@ -52,6 +52,7 @@ import {
   fitPins,
   MAP_HEIGHT,
   MAP_WIDTH,
+  MAX_GEO_SCALE,
   placedOnly,
   project,
   zoomGeoView,
@@ -80,6 +81,7 @@ import {
   stateBreakdown,
   type NodePlace,
 } from './geoPinAlerts';
+import { clusterPins, separable, type PinCluster } from './geoCluster';
 import './GeoMapPage.css';
 
 /** The legend's day/night swatches: how many of the four shades lie over a place with that sky. */
@@ -126,6 +128,7 @@ export function GeoMapPage() {
   const resize = useRef<{ y: number; h: number } | null>(null);
 
   const placed = useMemo(() => placedOnly(groups.data ?? []), [groups.data]);
+  const placedById = useMemo(() => new Map(placed.map((g) => [g.id, g])), [placed]);
 
   // Day/night shading (ADR-189). On unless this account switched it off; the clock it is drawn for
   // moves once a minute, and only while the shading is showing.
@@ -134,6 +137,13 @@ export function GeoMapPage() {
   /** The pin whose bubble is open, and where (ADR-191). */
   const [pinMenu, setPinMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null);
   const closePinMenu = useCallback(() => setPinMenu(null), []);
+  /** The overlapping sites whose list is open (ADR-206): a snapshot of the members, so zooming
+   *  while it is open cannot change what the list names. */
+  const [clusterMenu, setClusterMenu] = useState<{
+    cluster: PinCluster;
+    at: { x: number; y: number };
+  } | null>(null);
+  const closeClusterMenu = useCallback(() => setClusterMenu(null), []);
   useEffect(() => {
     if (!dayNight) return;
     setSkyTime(new Date());
@@ -327,9 +337,41 @@ export function GeoMapPage() {
   const v = view ?? { tx: 0, ty: 0, scale: 1 };
   // Per-pin totals, not per-folder: a group with no coordinates of its own is counted at the
   // nearest placed ancestor's pin (geo inheritance), which the server resolved into `geo_group`.
-  const pins = pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []);
+  const pins = useMemo(
+    () => pinRollupFromCounts(summary?.groups ?? {}, groups.data ?? []),
+    [summary, groups.data],
+  );
   // The legend names the hollow ring only while one is on the map.
   const hasEmptyPin = placed.some((g) => pinLook(pins[g.id]) === 'empty');
+  // Pins that overlap on screen are drawn as one marker (ADR-206). Grouped by scale only, so a
+  // drag never moves a site from one marker to another.
+  const clusters = useMemo(
+    () =>
+      clusterPins(
+        placed.map((g) => ({
+          id: g.id,
+          name: g.name,
+          ...project(g.latitude, g.longitude),
+          counts: pins[g.id],
+        })),
+        v.scale,
+      ),
+    [placed, pins, v.scale],
+  );
+
+  /** Zoom in around a marker, from its list. */
+  const zoomAt = useCallback(
+    (c: PinCluster) => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setView((cur) =>
+        cur ? zoomGeoView(cur, 3, c.x * cur.scale + cur.tx, c.y * cur.scale + cur.ty, w, h) : cur,
+      );
+    },
+    [setView],
+  );
 
   return (
     <div className="geopage">
@@ -430,23 +472,82 @@ export function GeoMapPage() {
                   {nightPaths.map((d, i) => (
                     <path className="geopage-night" d={d} key={i} />
                   ))}
-                  {placed.map((g) => {
-                    const p = project(g.latitude, g.longitude);
-                    const c = pins[g.id];
-                    const look = pinLook(c);
-                    const total = c ? countsTotal(c) : 0;
-                    const sky = dayNight
-                      ? t(`geo.dayNight.sky.${skyAt(sunAltitude(sun, g.latitude, g.longitude))}`)
-                      : null;
+                  {clusters.map((c) => {
                     // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that
                     // grows with the map turns into a blob that hides the site it marks.
                     const r = 5 / v.scale;
+                    if (c.members.length > 1) {
+                      const look = pinLook(c.counts);
+                      const label = t('geo.cluster.title', {
+                        count: c.members.length,
+                      });
+                      return (
+                        <g
+                          className="geopage-pin geopage-cluster"
+                          data-testid={TEST_IDS.geoMapCluster}
+                          key={`cluster:${c.key}`}
+                          transform={`translate(${c.x} ${c.y})`}
+                          role="button"
+                          tabIndex={0}
+                          aria-haspopup="dialog"
+                          onClick={(e) =>
+                            setClusterMenu({
+                              cluster: c,
+                              at: { x: e.clientX, y: e.clientY },
+                            })
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              const b = e.currentTarget.getBoundingClientRect();
+                              setClusterMenu({
+                                cluster: c,
+                                at: {
+                                  x: b.left + b.width / 2,
+                                  y: b.top + b.height / 2,
+                                },
+                              });
+                            }
+                          }}
+                        >
+                          <title>
+                            {look === 'empty' ? label : `${label} — ${stateLabel(look)}`}
+                          </title>
+                          <circle className="geopage-pin-halo" r={r * 2.6} />
+                          {look === 'empty' ? (
+                            <circle className="geopage-pin-dot geopage-pin-empty" r={r * 1.7} />
+                          ) : (
+                            <circle
+                              className="geopage-pin-dot"
+                              r={r * 1.7}
+                              style={{ fill: stateColorVar(look) }}
+                            />
+                          )}
+                          <text
+                            className="geopage-cluster-count"
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fontSize={9 / v.scale}
+                          >
+                            {c.members.length}
+                          </text>
+                        </g>
+                      );
+                    }
+                    const g = c.members[0];
+                    const look = pinLook(g.counts);
+                    const total = g.counts ? countsTotal(g.counts) : 0;
+                    const lat = placedById.get(g.id)?.latitude ?? 0;
+                    const lon = placedById.get(g.id)?.longitude ?? 0;
+                    const sky = dayNight
+                      ? t(`geo.dayNight.sky.${skyAt(sunAltitude(sun, lat, lon))}`)
+                      : null;
                     return (
                       <g
                         className="geopage-pin"
                         data-testid={TEST_IDS.geoMapPin}
                         key={g.id}
-                        transform={`translate(${p.x} ${p.y})`}
+                        transform={`translate(${g.x} ${g.y})`}
                         role="button"
                         tabIndex={0}
                         // ⚠️ The `group:` prefix is not decoration. `parseSelection` splits on the
@@ -562,6 +663,24 @@ export function GeoMapPage() {
             </ul>
           </div>
         </>
+      )}
+      {clusterMenu && (
+        <ClusterBubble
+          cluster={clusterMenu.cluster}
+          at={clusterMenu.at}
+          canZoom={v.scale < MAX_GEO_SCALE && separable(clusterMenu.cluster.members)}
+          onClose={closeClusterMenu}
+          onPick={(id) => {
+            const at = clusterMenu.at;
+            closeClusterMenu();
+            setPinMenu({ id, at });
+          }}
+          onZoom={() => {
+            const c = clusterMenu.cluster;
+            closeClusterMenu();
+            zoomAt(c);
+          }}
+        />
       )}
       {pinMenu && (
         <PinBubble
@@ -724,6 +843,87 @@ function PinBubble({
             onClick={() => onOpen(topologyMapHref({ group: pinId }))}
           >
             {t('geo.pinMenu.map')}
+          </button>
+        </div>
+      )}
+    </AnchoredPopover>
+  );
+}
+
+/** The list an overlapping marker opens (ADR-206): each site under it, worst first. A row hands
+ *  over to that site's own bubble; "Zoom in" is offered only while zooming can pull them apart. */
+function ClusterBubble({
+  cluster,
+  at,
+  canZoom,
+  onClose,
+  onPick,
+  onZoom,
+}: {
+  cluster: PinCluster;
+  at: { x: number; y: number };
+  canZoom: boolean;
+  onClose: () => void;
+  onPick: (id: string) => void;
+  onZoom: () => void;
+}) {
+  const { t } = useTranslation('topology');
+  const title = t('geo.cluster.title', { count: cluster.members.length });
+  return (
+    <AnchoredPopover
+      open
+      at={at}
+      role="dialog"
+      label={title}
+      className="geopage-pin-menu"
+      onDismiss={onClose}
+      onPlacedChange={(placed) => {
+        if (placed)
+          document
+            .querySelector<HTMLButtonElement>('.geopage-pin-menu .geopage-bubble-row')
+            ?.focus({ preventScroll: true });
+      }}
+    >
+      <div className="geopage-bubble-head">
+        <span className="geopage-bubble-name">{title}</span>
+        <button
+          type="button"
+          className="geopage-bubble-close"
+          aria-label={t('common:actions.close')}
+          onClick={onClose}
+        >
+          ✕
+        </button>
+      </div>
+      <div className="geopage-bubble-list geopage-cluster-list">
+        {cluster.members.map((m) => {
+          const look = pinLook(m.counts);
+          const total = m.counts ? countsTotal(m.counts) : 0;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              className="geopage-bubble-go geopage-bubble-row"
+              onClick={() => onPick(m.id)}
+            >
+              <span
+                className={`geopage-bubble-dot${look === 'empty' ? ' geopage-bubble-dot-empty' : ''}`}
+                style={look === 'empty' ? undefined : { background: stateColorVar(look) }}
+              />
+              <span className="geopage-bubble-what" title={m.name}>
+                {m.name}
+              </span>
+              <span className="geopage-bubble-age muted">
+                {look === 'empty' ? t('geo.noNodes') : t('geo.bubble.nodes', { count: total })}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {canZoom && (
+        <div className="geopage-bubble-actions">
+          <button type="button" className="geopage-bubble-go" onClick={onZoom}>
+            {t('geo.cluster.zoomIn')}
           </button>
         </div>
       )}

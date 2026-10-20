@@ -159,6 +159,18 @@
   stroke-width: 2;
 }
 
+/* Several sites drawn as one marker (ADR-206): the count sits on the dot. The size is set on the
+   element, counter-scaled by the zoom like the dot's radius. */
+.geopage-cluster-count {
+  font-family: var(--ui-font-family);
+  font-weight: 700;
+  fill: var(--bg-primary);
+  pointer-events: none;
+}
+.geopage-cluster:has(.geopage-pin-empty) .geopage-cluster-count {
+  fill: var(--text-primary);
+}
+
 /* Zoom controls, same placement and affordance as the topology map's. */
 .geopage-controls {
   position: absolute;
@@ -372,4 +384,12 @@
   flex-direction: column;
   padding-top: var(--space-1);
   border-top: var(--border-width) solid var(--border-color);
+}
+/* A marker's list can name many sites; it scrolls rather than running off the screen. */
+.geopage-cluster-list {
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+}
+.geopage-bubble-dot-empty {
+  border: 1.5px solid var(--text-secondary);
 }

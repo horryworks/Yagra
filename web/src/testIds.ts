@@ -22,6 +22,8 @@ export const TEST_IDS = {
    *  the walk would otherwise be unable to tell "plotted the groups it was given" from "drew an
    *  empty world map". */
   geoMapPin: 'geo-map-pin',
+  /** Several Geo map sites drawn as one marker because they overlap on screen (ADR-206). */
+  geoMapCluster: 'geo-map-cluster',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

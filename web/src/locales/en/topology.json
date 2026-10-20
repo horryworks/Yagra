@@ -217,6 +217,11 @@
       "noAlerts": "No active alerts",
       "more_one": "+{{count}} more",
       "more_other": "+{{count}} more"
+    },
+    "cluster": {
+      "title_one": "{{count}} site",
+      "title_other": "{{count}} sites",
+      "zoomIn": "Zoom in"
     }
   }
 }
