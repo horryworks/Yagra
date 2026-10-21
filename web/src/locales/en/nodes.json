@@ -163,6 +163,7 @@
     "edit": "Edit group",
     "delete": "Delete group",
     "addSubgroup": "Add subgroup",
+    "sort": "Sort",
     "type": "Type",
     "parentGroup": "Parent group",
     "topLevelOption": "— top level —",
@@ -236,8 +237,8 @@
   "detail": {
     "polling": "Polling…",
     "pollNow": "Poll now",
-    "dependency": "Dependency…",
-    "move": "Move…",
+    "dependency": "Upstream node…",
+    "move": "Move to group…",
     "openDetail": "Open detail",
     "editNode": "Edit node",
     "pin": "Pin",
@@ -247,6 +248,14 @@
     "needsAttention": "needs attention",
     "pollDispatched_one": "Poll requested — {{count}} check dispatched.",
     "pollDispatched_other": "Poll requested — {{count}} checks dispatched.",
+    "maintenance": "Maintenance…",
+    "mute": "Mute…",
+    "more": "More",
+    "pool": "Poller pool…",
+    "rediscover": "Rediscover…",
+    "nameFromDevice": "Name from device…",
+    "moveByPrefix": "Move by IP range…",
+    "delete": "Delete…",
     "showOnMap": "Show on map"
   },
   "tabs": {

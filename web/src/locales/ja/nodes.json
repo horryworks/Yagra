@@ -163,6 +163,7 @@
     "edit": "グループを編集",
     "delete": "グループを削除",
     "addSubgroup": "サブグループを追加",
+    "sort": "並べ替え",
     "type": "タイプ",
     "parentGroup": "親グループ",
     "topLevelOption": "— トップレベル —",
@@ -236,8 +237,8 @@
   "detail": {
     "polling": "ポーリング中…",
     "pollNow": "今すぐポーリング",
-    "dependency": "依存関係…",
-    "move": "移動…",
+    "dependency": "上流ノード…",
+    "move": "グループへ移動…",
     "openDetail": "詳細を開く",
     "editNode": "ノードを編集",
     "pin": "ピン留め",
@@ -247,6 +248,14 @@
     "needsAttention": "要対応",
     "pollDispatched_one": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
     "pollDispatched_other": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
+    "maintenance": "メンテナンス…",
+    "mute": "ミュート…",
+    "more": "その他",
+    "pool": "ポーラープール…",
+    "rediscover": "再検出…",
+    "nameFromDevice": "名前を機器の名前にする…",
+    "moveByPrefix": "IP レンジで移動…",
+    "delete": "削除…",
     "showOnMap": "マップで表示"
   },
   "tabs": {

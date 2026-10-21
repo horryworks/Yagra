@@ -1559,6 +1559,11 @@ export function NodesPage() {
               // An edit made in this pane changes the row the tree is drawing beside it — its name
               // and its pool are both editable from that dialog (ADR-135).
               onChanged={() => void reload()}
+              // Delete is in the pane's "More" menu since ADR-209: the pane it was in goes with it.
+              onDeleted={() => {
+                select(null);
+                void reload();
+              }}
             />
           ) : selectedGroup ? (
             <GroupDetail
@@ -1582,6 +1587,12 @@ export function NodesPage() {
               onOpenGroup={(id) => select({ kind: 'group', id })}
               onOpenNode={(id) => select({ kind: 'node', id })}
               onPinError={(e) => setError(errMsg(e, t('tree.pinFailed')))}
+              // The tree's folder menu, as buttons (ADR-209 decision 9): the same handlers.
+              onAddSubgroup={() => setGroupModal({ mode: 'add', parentId: selectedGroup.id })}
+              onRunDiscovery={() =>
+                navigate(`/nodes/discovery?group=${encodeURIComponent(selectedGroup.id)}`)
+              }
+              onSortChildren={(direction) => sortGroupChildren(selectedGroup.id, direction)}
             />
           ) : (
             <div className="nd-empty">

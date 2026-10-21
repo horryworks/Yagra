@@ -32,6 +32,8 @@ import { GROUP_ORIGIN_BADGE_BRANDS, GROUP_ORIGIN_BADGES, groupOriginOf } from '.
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import { GroupCrumbs } from './GroupCrumbs';
 import { PinButton } from './PinButton';
+import { ActionMenu } from '../ui/ActionMenu';
+import { canRunDiscovery } from '../NodeTree/nodeTreeMenu';
 import { PrefixGaps } from './PrefixGapsSection';
 import { GroupMapSection } from './GroupMapSection';
 import { membersTrailer, type MemberFetch } from './groupMembers';
@@ -58,6 +60,11 @@ interface Props {
   onOpenNode?: (nodeId: string) => void;
   /** Where a refused pin is reported (ADR-146). Absent ⇒ no pin button. */
   onPinError?: (e: unknown) => void;
+  /** The folder actions that were only in the tree's right-click menu (ADR-209 decision 9).
+   *  Each absent ⇒ its button is not drawn. */
+  onAddSubgroup?: () => void;
+  onRunDiscovery?: () => void;
+  onSortChildren?: (direction: 'asc' | 'desc') => void;
 }
 
 export function GroupDetail({
@@ -73,6 +80,9 @@ export function GroupDetail({
   onOpenGroup,
   onOpenNode,
   onPinError,
+  onAddSubgroup,
+  onRunDiscovery,
+  onSortChildren,
 }: Props) {
   const { t } = useTranslation('nodes');
   // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
@@ -148,6 +158,40 @@ export function GroupDetail({
                   <Button variant="outline" onClick={() => onEditGroup(group)}>
                     {t('group.edit')}
                   </Button>
+                  {onAddSubgroup && (
+                    <Button variant="outline" onClick={onAddSubgroup}>
+                      {t('group.addSubgroup')}
+                    </Button>
+                  )}
+                  {/* Only a folder with IP ranges has anything to scan — the tree's own rule. */}
+                  {onRunDiscovery && canRunDiscovery(group, { canEdit }) && (
+                    <Button variant="outline" onClick={onRunDiscovery}>
+                      {t('tree.runDiscovery')}
+                    </Button>
+                  )}
+                  {onSortChildren && (
+                    <ActionMenu
+                      label={t('group.sort')}
+                      align="end"
+                      items={[
+                        {
+                          key: 'asc',
+                          label: t('tree.sortAsc'),
+                          onSelect: () => onSortChildren('asc'),
+                        },
+                        {
+                          key: 'desc',
+                          label: t('tree.sortDesc'),
+                          onSelect: () => onSortChildren('desc'),
+                        },
+                      ]}
+                      trigger={(p) => (
+                        <Button {...p} variant="outline">
+                          {t('group.sort')} ▾
+                        </Button>
+                      )}
+                    />
+                  )}
                   <Button variant="primary" onClick={onAddNode}>
                     {t('add.node')}
                   </Button>

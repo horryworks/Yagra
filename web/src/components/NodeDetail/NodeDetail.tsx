@@ -47,7 +47,18 @@ import {
   type NodeDetailTabStats,
 } from './tabs';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
-import { PinButton } from './PinButton';
+import { ActionMenu, type ActionMenuItem } from '../ui/ActionMenu';
+import { AddMaintenanceWindowModal } from '../suppression/AddMaintenanceWindowModal';
+import { AddMuteModal } from '../suppression/AddMuteModal';
+import { SetPoolModal } from '../SetPoolModal/SetPoolModal';
+import { RediscoverModal } from '../NodeTree/RediscoverModal';
+import { NameFromDeviceModal } from '../NameFromDeviceModal/NameFromDeviceModal';
+import { MoveNodeModal } from '../MoveNodeModal/MoveNodeModal';
+import { MoveByPrefixModal } from '../MoveByPrefixModal/MoveByPrefixModal';
+import { fallbackPool } from '../../lib/pool';
+import { usePinsStore } from '../../pinsStore';
+import { useCan } from '../../store';
+import { nodeHeaderActions, type NodeHeaderMore } from './nodeHeaderActions';
 import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
@@ -69,7 +80,8 @@ interface Props {
    *  the page wrapper fetches groups, and parent name falls back to a targeted fetch). */
   groups: NodeGroup[];
   nodes?: NodeSummary[];
-  /** Inline only: open the move-to-group picker. Handed the node this pane has loaded. 🚨 The host
+  /** Open the move-to-group picker; without it the pane opens its own. Handed the node this pane
+   *  has loaded. 🚨 The host
    *  used to look the node up among its own loaded rows instead, and the button did nothing
    *  whenever it was not there — a deep link into a folder below the fold, or a selection the
    *  active filter no longer matches. */
@@ -79,7 +91,7 @@ interface Props {
   /** Open a folder from the eyebrow breadcrumb (ADR-142) — a pane in the split, All nodes on the
    *  route. Absent ⇒ the breadcrumb stays plain text. */
   onOpenGroup?: (groupId: string) => void;
-  /** Page only: navigate away after a delete. */
+  /** After a delete: the page navigates away, the split clears its selection. */
   onDeleted?: () => void;
   /** 🚨 **Something about this node changed and the surrounding page shows it too.**
    *
@@ -166,6 +178,29 @@ export function NodeDetail({
   const [editingBindings, setEditingBindings] = useState(false);
   const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // The dialogs the header opens that used to be reachable only from the tree's right-click menu
+  // (ADR-209 decision 8). Held here, like the three above, so the pane and the full page have them
+  // alike; the tree keeps its own for the selection and for folders.
+  const [dialog, setDialog] = useState<
+    | 'maintenance'
+    | 'mute'
+    | 'pool'
+    | 'rediscover'
+    | 'nameFromDevice'
+    | 'move'
+    | 'moveByPrefix'
+    | null
+  >(null);
+  const canMaintenance = useCan('manage_maintenance');
+  const canMute = useCan('ack_alerts');
+  const pinsReady = usePinsStore((s) => s.status === 'ready');
+  const pinned = usePinsStore((s) => s.nodeIds.has(nodeId));
+  const setNodePinned = usePinsStore((s) => s.setNodePinned);
+  /** After a dialog wrote something about this node: re-read the pane, tell the page. */
+  const changed = () => {
+    setQuietNonce((v) => v + 1);
+    onChanged?.();
+  };
 
   // Node config (rarely changes): once per node, re-fetched quietly after an edit or a Poll now,
   // whose identity read (ADR-149) lands on this same document, or when someone else changes the
@@ -323,6 +358,56 @@ export function NodeDetail({
   }
 
   const state = status?.state ?? 'unknown';
+  const header = nodeHeaderActions(
+    { canConfig: canEdit, canMaintenance, canMute, pinsReady, inline: variant === 'inline' },
+    node,
+    groups,
+  );
+  /** The node as the suppression and pool dialogs name their target. */
+  const self = { kind: 'node' as const, id: node.id, name: node.name };
+  const moreItem = (key: NodeHeaderMore): ActionMenuItem => {
+    switch (key) {
+      case 'openDetail':
+        return { key, label: t('detail.openDetail'), onSelect: () => onOpenDetail?.() };
+      case 'map':
+        // The level holding this node, with the node selected (ADR-191).
+        return {
+          key,
+          label: t('detail.showOnMap'),
+          onSelect: () =>
+            navigate(
+              topologyMapHref({ group: node.group_id ?? null, sel: { kind: 'node', id: node.id } }),
+            ),
+        };
+      case 'pin':
+        return {
+          key,
+          label: pinned ? t('detail.unpin') : t('detail.pin'),
+          onSelect: () =>
+            void setNodePinned(nodeId, !pinned).catch((e: unknown) =>
+              setPollMsg({ text: errMsg(e, t('tree.pinFailed')), tone: 'error' }),
+            ),
+        };
+      case 'upstream':
+        return { key, label: t('detail.dependency'), onSelect: () => setEditingParent(true) };
+      case 'move':
+        return {
+          key,
+          label: t('detail.move'),
+          onSelect: () =>
+            onMove
+              ? onMove({ id: node.id, name: node.name, group_id: node.group_id ?? null })
+              : setDialog('move'),
+        };
+      case 'delete':
+        return { key, label: t('detail.delete'), danger: true, onSelect: () => setDeleting(true) };
+      case 'moveByPrefix':
+      case 'pool':
+      case 'rediscover':
+      case 'nameFromDevice':
+        return { key, label: t(`detail.${key}`), onSelect: () => setDialog(key) };
+    }
+  };
   const trail = groupTrail(groups, node.group_id ?? null);
   const lastSeen = series.timestamps.at(-1);
   // What the tab bar decorates itself from (count pills / warning dots) — the rules themselves live
@@ -398,64 +483,38 @@ export function NodeDetail({
             ))}
             {status && <StatePill state={state} />}
           </div>
+          {/* Four buttons and "More" (ADR-209 decision 8), the same set in the split and on the
+              page. Which ones, and in what order, is `nodeHeaderActions` — tested, and gated on the
+              permission each action's handler checks (ADR-056). The tree's right-click menu stays
+              as the shortcut. */}
           <div className="nd-actions">
-            {/* Any signed-in account, whatever its role: a pin is its own navigation (ADR-146).
-                The touch-screen way to pin — the tree's right-click menu is the other. */}
-            <PinButton
-              kind="node"
-              id={node.id}
-              onError={(e) => setPollMsg({ text: errMsg(e, t('tree.pinFailed')), tone: 'error' })}
+            {header.primary.map((key) =>
+              key === 'pollNow' ? (
+                <Button key={key} variant="outline" onClick={pollNow} disabled={polling}>
+                  {polling ? t('detail.polling') : t('detail.pollNow')}
+                </Button>
+              ) : (
+                <Button
+                  key={key}
+                  variant="outline"
+                  onClick={() =>
+                    key === 'edit' ? setEditingBindings(true) : setDialog(key)
+                  }
+                >
+                  {key === 'edit' ? t('detail.editNode') : t(`detail.${key}`)}
+                </Button>
+              ),
+            )}
+            <ActionMenu
+              label={t('detail.more')}
+              align="end"
+              items={header.more.map((key) => moreItem(key))}
+              trigger={(p) => (
+                <Button {...p} variant="outline">
+                  {t('detail.more')} ▾
+                </Button>
+              )}
             />
-            {/* Navigation, so shown to every account: the level holding this node, with the node
-                selected (ADR-191). */}
-            <Button
-              variant="outline"
-              onClick={() =>
-                navigate(
-                  topologyMapHref({ group: node.group_id ?? null, sel: { kind: 'node', id: node.id } }),
-                )
-              }
-            >
-              {t('detail.showOnMap')}
-            </Button>
-            {canEdit && (
-              <Button variant="outline" onClick={pollNow} disabled={polling}>
-                {polling ? t('detail.polling') : t('detail.pollNow')}
-              </Button>
-            )}
-            {canEdit && (
-              <Button variant="outline" onClick={() => setEditingParent(true)}>
-                {t('detail.dependency')}
-              </Button>
-            )}
-            {variant === 'inline' && canEdit && onMove && (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  onMove({ id: node.id, name: node.name, group_id: node.group_id ?? null })
-                }
-              >
-                {t('detail.move')}
-              </Button>
-            )}
-            {/* Both variants: editing the bindings from the inline pane was only reachable via
-                "Open detail", which nobody read as "edit this node". The modal is nodeId-driven and
-                the refetch is local, so it works identically in the split. */}
-            {canEdit && (
-              <Button variant="outline" onClick={() => setEditingBindings(true)}>
-                {t('detail.editNode')}
-              </Button>
-            )}
-            {variant === 'inline' && onOpenDetail && (
-              <Button variant="outline" onClick={onOpenDetail}>
-                {t('detail.openDetail')}
-              </Button>
-            )}
-            {variant === 'page' && canEdit && (
-              <Button variant="danger" onClick={() => setDeleting(true)}>
-                {t('common:actions.delete')}
-              </Button>
-            )}
           </div>
         </div>
         <div className="nd-sub">
@@ -548,6 +607,86 @@ export function NodeDetail({
           name={node.name}
           onClose={() => setDeleting(false)}
           onDeleted={() => onDeleted?.()}
+        />
+      )}
+      {dialog === 'maintenance' && (
+        <AddMaintenanceWindowModal
+          groups={groups}
+          initialScope={self}
+          onClose={() => setDialog(null)}
+          onSaved={changed}
+        />
+      )}
+      {dialog === 'mute' && (
+        <AddMuteModal
+          groups={groups}
+          initialScope={self}
+          onClose={() => setDialog(null)}
+          onSaved={changed}
+        />
+      )}
+      {dialog === 'pool' && (
+        <SetPoolModal
+          target={self}
+          currentPool={node.pool ?? null}
+          inheritedPool={fallbackPool(groups, node.group_id ?? null)}
+          onClose={() => setDialog(null)}
+          onSaved={() => {
+            setDialog(null);
+            changed();
+          }}
+        />
+      )}
+      {dialog === 'rediscover' && (
+        <RediscoverModal
+          nodeId={nodeId}
+          name={node.name}
+          onClose={() => setDialog(null)}
+          onApplied={() => {
+            setDialog(null);
+            changed();
+          }}
+        />
+      )}
+      {dialog === 'nameFromDevice' && (
+        <NameFromDeviceModal
+          nodeIds={[nodeId]}
+          onClose={() => setDialog(null)}
+          onApplied={() => {
+            setDialog(null);
+            changed();
+          }}
+        />
+      )}
+      {dialog === 'move' && (
+        <MoveNodeModal
+          targets={[{ id: node.id, name: node.name, group_id: node.group_id ?? null }]}
+          groups={groups}
+          onClose={() => setDialog(null)}
+          onMoved={changed}
+        />
+      )}
+      {dialog === 'moveByPrefix' && (
+        <MoveByPrefixModal
+          source={{
+            kind: 'nodes',
+            targets: [
+              {
+                id: node.id,
+                name: node.name,
+                address: node.address,
+                state,
+                vendor: node.vendor ?? null,
+                model: node.model ?? null,
+                group_id: node.group_id ?? null,
+                sort_order: 0,
+                kind: node.kind,
+              },
+            ],
+          }}
+          groups={groups}
+          onClose={() => setDialog(null)}
+          onMoved={changed}
         />
       )}
     </div>

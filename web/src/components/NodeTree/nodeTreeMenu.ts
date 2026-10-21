@@ -61,7 +61,7 @@ export function groupMenuHasItems(c: MenuCapabilities): boolean {
  * "Add subgroup"'s, so a menu containing only this one cannot exist. Adding a field would make
  * `groupMenuHasItems` true in a case where the menu would render empty.
  */
-export function canRunDiscovery(group: NodeGroup, c: MenuCapabilities): boolean {
+export function canRunDiscovery(group: NodeGroup, c: Pick<MenuCapabilities, 'canEdit'>): boolean {
   return c.canEdit && group.prefixes.length > 0;
 }
 
