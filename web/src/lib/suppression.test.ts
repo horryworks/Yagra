@@ -14,6 +14,8 @@ import {
   causesFor,
   groupContainers,
   groupSubtree,
+  muteCovering,
+  muteRuleCovers,
   muteTargetFromAlert,
   MAX_TIMER_DELAY_MS,
   nextSuppressionExpiry,
@@ -23,6 +25,7 @@ import {
   type SuppressionPanelRow,
 } from './suppression';
 import { LIVENESS_METRIC } from './format';
+import muteCases from './fixtures/muteMatch.cases.json';
 
 // Tree: tokyo ⊃ edge ⊃ (n2); tokyo also holds n1. osaka is a separate top-level group with n3.
 const groups: NodeGroup[] = [
@@ -721,5 +724,81 @@ describe('suppressionRefreshDelayMs', () => {
 
   it('is never negative when the expiry has just passed', () => {
     expect(suppressionRefreshDelayMs(T0 - 5, T0)).toBe(1000);
+  });
+});
+
+// The same table core's `alerts/notify.rs` runs against `mute_matches` (ADR-209 decision 3): a
+// disagreement fails on one side or the other. Add a case to the JSON, never only here.
+describe('muteRuleCovers answers the case table core shares', () => {
+  it('has the cases', () => {
+    expect(muteCases.cases.length).toBeGreaterThanOrEqual(10);
+  });
+  for (const c of muteCases.cases) {
+    it(c.name, () => {
+      expect(
+        muteRuleCovers(
+          { nodeId: c.mute.node, metric: c.mute.metric },
+          { nodeId: c.alert.node, metric: c.alert.metric },
+        ),
+      ).toBe(c.covered);
+    });
+  }
+});
+
+describe('muteCovering', () => {
+  const on = (over: Partial<{ nodeId: string | null; metric: string; groupId: string | null }>) => ({
+    nodeId: 'n2',
+    metric: 'icmp_rtt_ms',
+    groupId: 'edge',
+    ...over,
+  });
+
+  it('finds a mute naming the node', () => {
+    const m = mute({ node_id: 'n2' });
+    expect(muteCovering(on({}), [m], groups, [])).toBe(m);
+  });
+
+  it('finds a group mute from any group above the node', () => {
+    const m = mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo' });
+    expect(muteCovering(on({}), [m], groups, [])).toBe(m);
+  });
+
+  it('ignores a group mute on a group the node is not in', () => {
+    const m = mute({ scope_kind: 'group', node_id: null, group_id: 'osaka' });
+    expect(muteCovering(on({}), [m], groups, [])).toBeNull();
+  });
+
+  it('ignores a group mute the node was released from, but not one naming it', () => {
+    const viaGroup = mute({ id: 'g', scope_kind: 'group', node_id: null, group_id: 'tokyo' });
+    const direct = mute({ id: 'd', node_id: 'n2' });
+    const released = [exemption({ node_id: 'n2', kind: 'mute' })];
+    expect(muteCovering(on({}), [viaGroup], groups, released)).toBeNull();
+    expect(muteCovering(on({}), [viaGroup, direct], groups, released)).toBe(direct);
+  });
+
+  it('ignores an expired mute', () => {
+    const m = mute({ node_id: 'n2', until_at: '2026-01-01T00:00:00Z' });
+    expect(muteCovering(on({}), [m], groups, [], Date.parse('2026-06-01T00:00:00Z'))).toBeNull();
+  });
+
+  it('ignores a mute on another metric', () => {
+    const m = mute({ node_id: 'n2', metric_name: 'snmp_up' });
+    expect(muteCovering(on({}), [m], groups, [])).toBeNull();
+  });
+
+  it('picks the one that lasts longest', () => {
+    const short = mute({ id: 's', node_id: 'n2', until_at: '2099-01-01T00:00:00Z' });
+    const long = mute({ id: 'l', node_id: 'n2', until_at: '2099-06-01T00:00:00Z' });
+    expect(muteCovering(on({}), [short, long], groups, [])).toBe(long);
+  });
+
+  it('never covers an alert about something other than a node', () => {
+    const m = mute({ node_id: 'n2' });
+    expect(muteCovering(on({ nodeId: null }), [m], groups, [])).toBeNull();
+  });
+
+  it('covers an ungrouped node only through a mute naming it', () => {
+    const viaGroup = mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo' });
+    expect(muteCovering(on({ groupId: null }), [viaGroup], groups, [])).toBeNull();
   });
 });

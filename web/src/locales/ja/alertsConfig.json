@@ -40,6 +40,7 @@
         "actions": "操作"
       },
       "empty": "ルーティングルールがありません",
+      "emptyNoChannels": "先にチャネルを追加してください。",
       "any": "すべて",
       "noChannels": "（チャネルなし）",
       "enable": "ルールを有効化",

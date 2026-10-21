@@ -48,6 +48,8 @@ export const NAME_MAX_ATTEMPTS = 3;
 export interface NameEntry {
   id: string;
   name: string;
+  /** The node's group, when the endpoint says (`node-names` always does). */
+  group_id?: string | null;
 }
 
 export interface NameBatchDeps {

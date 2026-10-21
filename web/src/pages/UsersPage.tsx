@@ -22,6 +22,7 @@ import { CREATABLE_USER_KINDS, kindInfoKey, type CreatableUserKind } from './use
 import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
@@ -153,11 +154,22 @@ export function UsersPage() {
         <div className="identity-list">
           {list.length === 0 ? (
             <div className="il-empty">
-              {loading
-                ? t('common:loading')
-                : rows.length === 0
-                  ? t('users.empty.none')
-                  : t('users.empty.filtered')}
+              {loading ? (
+                t('common:loading')
+              ) : rows.length === 0 ? (
+                <EmptyState
+                  text={t('users.empty.none')}
+                  action={
+                    canUsers && (
+                      <Button variant="primary" onClick={() => setAdding(true)}>
+                        + {t('users.actions.addUser')}
+                      </Button>
+                    )
+                  }
+                />
+              ) : (
+                t('users.empty.filtered')
+              )}
             </div>
           ) : (
             list.map((u) => {

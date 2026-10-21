@@ -1,0 +1,17 @@
+{
+  "_doc": "Whether one node-level mute covers one alert. Read by core's alerts/notify.rs (mute_matches) and by web/src/lib/suppression.test.ts (muteRuleCovers), so the two answers cannot drift apart (ADR-209 decision 3). Nodes are named A and B; an alert whose node is null has a non-node subject (a poller pool). port is the alert's ifIndex, or null for a node-level check. A new case goes here, never in one of the two tests.",
+  "cases": [
+    { "name": "a whole-node mute covers a node-level alert", "mute": { "node": "A", "metric": null }, "alert": { "node": "A", "metric": "icmp_rtt_ms", "port": null }, "covered": true },
+    { "name": "a whole-node mute covers a port alert", "mute": { "node": "A", "metric": null }, "alert": { "node": "A", "metric": "if_in_util_pct", "port": 7 }, "covered": true },
+    { "name": "a whole-node mute covers reachability", "mute": { "node": "A", "metric": null }, "alert": { "node": "A", "metric": "__liveness__", "port": null }, "covered": true },
+    { "name": "another node's mute does not cover", "mute": { "node": "B", "metric": null }, "alert": { "node": "A", "metric": "icmp_rtt_ms", "port": null }, "covered": false },
+    { "name": "the same metric is covered", "mute": { "node": "A", "metric": "icmp_rtt_ms" }, "alert": { "node": "A", "metric": "icmp_rtt_ms", "port": null }, "covered": true },
+    { "name": "a different metric is not covered", "mute": { "node": "A", "metric": "icmp_rtt_ms" }, "alert": { "node": "A", "metric": "icmp_loss_pct", "port": null }, "covered": false },
+    { "name": "a per-port metric mute covers every port", "mute": { "node": "A", "metric": "if_in_util_pct" }, "alert": { "node": "A", "metric": "if_in_util_pct", "port": 48 }, "covered": true },
+    { "name": "a per-port metric mute does not spill to another metric", "mute": { "node": "A", "metric": "if_in_util_pct" }, "alert": { "node": "A", "metric": "if_out_util_pct", "port": 48 }, "covered": false },
+    { "name": "a reachability mute covers reachability", "mute": { "node": "A", "metric": "__liveness__" }, "alert": { "node": "A", "metric": "__liveness__", "port": null }, "covered": true },
+    { "name": "a reachability mute does not cover snmp_up", "mute": { "node": "A", "metric": "__liveness__" }, "alert": { "node": "A", "metric": "snmp_up", "port": null }, "covered": false },
+    { "name": "the right metric on the wrong node is not covered", "mute": { "node": "B", "metric": "icmp_rtt_ms" }, "alert": { "node": "A", "metric": "icmp_rtt_ms", "port": null }, "covered": false },
+    { "name": "a pool alert is never muted", "mute": { "node": "A", "metric": null }, "alert": { "node": null, "metric": "pool_coverage", "port": null }, "covered": false }
+  ]
+}

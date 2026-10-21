@@ -858,7 +858,18 @@ function CredentialGroupTable({
     // These keys are created where the integration is set up, so the next step is a link there.
     <EmptyState text={t('cred.empty.keys')} action={<ScreenLink to="/settings/integrations" />} />
   ) : (
-    t('cred.empty.none')
+    <EmptyState
+      text={t('cred.empty.none')}
+      action={
+        canCredentials &&
+        addTitleKey &&
+        creatable.length > 0 && (
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            + {t(addTitleKey)}
+          </Button>
+        )
+      }
+    />
   );
   // One prop set for the four tags below. Each tag spells its own `tableId`: an id is a name the
   // `tableIds.test.ts` check reads off the tag, so it is never passed through a variable.

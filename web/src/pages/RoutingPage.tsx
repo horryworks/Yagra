@@ -28,6 +28,7 @@ import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../components/ui/Field';
@@ -293,7 +294,22 @@ function ChannelsSection({
         onFiltersChange={setFilters}
         filterCounts={counts}
         loading={loading}
-        empty={anyFiltered ? t('common:filter.noMatch') : t('routing.channels.empty')}
+        empty={
+          anyFiltered ? (
+            t('common:filter.noMatch')
+          ) : (
+            <EmptyState
+              text={t('routing.channels.empty')}
+              action={
+                canSystem && (
+                  <Button variant="primary" onClick={() => setAdding(true)}>
+                    {t('routing.channels.add')}
+                  </Button>
+                )
+              }
+            />
+          )
+        }
       />
 
       {adding && (
@@ -685,8 +701,10 @@ function RulesSection({
           <h2 className="table-section-title">{t('routing.rules.title')}</h2>
         }
       >
-        {canSystem && (
-          <Button variant="primary" onClick={() => setAdding(true)} disabled={channels.length === 0}>
+        {/* Not drawn rather than disabled while there is no channel (ADR-056): a rule names the
+            channels it sends to, and the empty list below says what comes first (ADR-209). */}
+        {canSystem && channels.length > 0 && (
+          <Button variant="primary" onClick={() => setAdding(true)}>
             {t('routing.rules.add')}
           </Button>
         )}
@@ -715,7 +733,24 @@ function RulesSection({
         onFiltersChange={setFilters}
         filterCounts={counts}
         loading={loading}
-        empty={anyFiltered ? t('common:filter.noMatch') : t('routing.rules.empty')}
+        empty={
+          anyFiltered ? (
+            t('common:filter.noMatch')
+          ) : channels.length === 0 ? (
+            t('routing.rules.emptyNoChannels')
+          ) : (
+            <EmptyState
+              text={t('routing.rules.empty')}
+              action={
+                canSystem && (
+                  <Button variant="primary" onClick={() => setAdding(true)}>
+                    {t('routing.rules.add')}
+                  </Button>
+                )
+              }
+            />
+          )
+        }
       />
 
       {adding && (

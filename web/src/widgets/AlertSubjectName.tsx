@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { EntityName } from '../components/ui/EntityName';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
-import { merakiOrgPath } from '../lib/entityHref';
+import { merakiOrgPath, nodeHref } from '../lib/entityHref';
 import './AlertSubjectName.css';
 
 /** Renders the alert's subject: a node's resolved name (UUID on hover), or the poller pool the
@@ -35,7 +35,15 @@ export function AlertSubjectName({
   // subject "Poller pool", and a third kind would have compiled straight into that sentence.
   switch (subject.kind) {
     case 'node':
-      return <EntityName name={nodeName(subject.nodeId)} id={subject.nodeId} />;
+      // The name opens the node (ADR-209 decision 2): "which device, and what else is wrong with
+      // it" is the first question a row raises, and it used to mean finding the node again by hand.
+      return (
+        <EntityName
+          name={nodeName(subject.nodeId)}
+          id={subject.nodeId}
+          to={nodeHref(subject.nodeId)}
+        />
+      );
     case 'pool':
       // A pool name is already the human-readable thing — there is no inventory row to resolve
       // it through, and the label is what tells an operator this row is about Yagra's own polling

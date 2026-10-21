@@ -221,6 +221,8 @@
      168px — the trade taken deliberately, since a rail nobody can read saves nothing. */
   --sidebar-w-collapsed: 120px;
   --transition: 0.15s ease;
+  /* Row edit/delete icons at rest: present but quiet until the row is hovered (ADR-209). */
+  --row-action-rest-opacity: 0.45;
 
   /* ---- responsive / mobile (ADR-027; ui-conventions.md "Responsive / mobile") ----
      The one canonical layout boundary is 768px (< 768px = mobile mode). A CSS custom property

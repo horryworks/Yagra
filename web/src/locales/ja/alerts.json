@@ -2,6 +2,7 @@
   "active": {
     "empty": "アクティブなアラートはありません。",
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
+    "noNodes": "監視しているノードがありません。",
     "searchPlaceholder": "ノードまたはメトリクスを検索…",
     "ack": {
       "all": "ACK の有無を問わない",
@@ -18,6 +19,7 @@
   "row": {
     "flapping": "フラッピング",
     "acked": "ACK 済み",
+    "mutedUntil": "ミュート中（{{until}} まで）",
     "poolSubject": "ポーラープール「{{pool}}」",
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
     "partOfOutage": "このノードの停止に含まれる",

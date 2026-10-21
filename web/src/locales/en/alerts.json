@@ -2,6 +2,7 @@
   "active": {
     "empty": "No active alerts.",
     "emptyFiltered": "No active alerts match these filters.",
+    "noNodes": "No nodes are being monitored.",
     "searchPlaceholder": "Search node or metric…",
     "ack": {
       "all": "Acked and not",
@@ -18,6 +19,7 @@
   "row": {
     "flapping": "flapping",
     "acked": "acked",
+    "mutedUntil": "muted until {{until}}",
     "poolSubject": "Poller pool “{{pool}}”",
     "merakiOrgSubject": "Meraki organization “{{org}}”",
     "partOfOutage": "part of this node’s outage",

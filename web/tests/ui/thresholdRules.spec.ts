@@ -284,8 +284,11 @@ test('the row actions are actually on screen when the row is hovered', async ({ 
   const actions = row.locator('.ytable-actions');
   const opacity = async () => Number(await actions.evaluate((e) => getComputedStyle(e).opacity));
 
-  // Hidden until asked for — the convention these icons follow (and the half that still worked).
-  expect(await opacity()).toBe(0);
+  // Faint until asked for (ADR-209 decision 6: they were invisible at rest, and an editable list
+  // read as a read-only one) — present, but not at full strength.
+  const rest = await opacity();
+  expect(rest).toBeGreaterThan(0);
+  expect(rest).toBeLessThan(1);
   await row.hover();
   await expect.poll(opacity).toBe(1);
   // Keyboard reach is the other path, and it was broken by the same missing selector.

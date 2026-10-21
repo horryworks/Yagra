@@ -36,6 +36,21 @@ export function nodesPageHref(sel: TreeSelection): string {
   return `/nodes?${new URLSearchParams({ sel: value }).toString()}`;
 }
 
+/** The query parameter that opens All nodes with its Add node dialog up (ADR-209 decision 4) — how
+ *  a screen with no inventory of its own (Active alerts on an empty fleet) hands the operator the
+ *  first step. NodesPage opens the dialog and drops the parameter, so a reload does not reopen it. */
+export const ADD_NODE_PARAM = 'add';
+
+/** All nodes with the Add node dialog open. */
+export function addNodeHref(): string {
+  return `/nodes?${new URLSearchParams({ [ADD_NODE_PARAM]: '1' }).toString()}`;
+}
+
+/** Whether All nodes was opened asking for the Add node dialog. */
+export function wantsAddNode(params: URLSearchParams): boolean {
+  return params.get(ADD_NODE_PARAM) === '1';
+}
+
 /** The network map opened on one folder level (`group`, null for the whole network), optionally
  *  with a node or folder already selected (ADR-191). Same encoder and `sel` spelling as
  *  `nodesPageHref`, so the two screens hand selections to each other unchanged. */

@@ -89,6 +89,23 @@
   padding: 0 5px;
 }
 
+/* "Muted until …" (ADR-209 decision 3): the acked mark's shape, as a link to the mute list. Neutral
+   for the same reason — a mute is not a node state. */
+.alertrow-muted {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.alertrow-muted:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
 .alertrow-time {
   margin-left: auto;
   font-size: var(--font-xs);
@@ -145,7 +162,8 @@ html[data-viewport='mobile'] .alertrow-check {
 
 html[data-viewport='mobile'] .alertrow-cause,
 html[data-viewport='mobile'] .alertrow-flap,
-html[data-viewport='mobile'] .alertrow-acked {
+html[data-viewport='mobile'] .alertrow-acked,
+html[data-viewport='mobile'] .alertrow-muted {
   order: 3;
 }
 

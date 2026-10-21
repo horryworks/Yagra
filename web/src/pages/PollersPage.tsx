@@ -24,6 +24,7 @@ import type {
 } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
@@ -1861,7 +1862,22 @@ export function PollersPage() {
           onFiltersChange={setFilters}
           filterCounts={counts}
           loading={loading}
-          empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
+          empty={
+            anyFiltered ? (
+              t('common:filter.noMatch')
+            ) : (
+              <EmptyState
+                text={t('pollers.empty.title')}
+                action={
+                  canSystem && (
+                    <Button variant="primary" onClick={() => setRegistering(true)}>
+                      {t('pollers.registerButton')}
+                    </Button>
+                  )
+                }
+              />
+            )
+          }
         />
         </DndContext>
 

@@ -155,11 +155,14 @@
    right when read, and **Playwright's `isVisible()` returns true for an `opacity: 0` element**, so
    a browser test can click a control no human can see. Assert the computed opacity, not
    visibility — `tests/ui/thresholdRules.spec.ts` does. */
+/* Faint at rest, full on row hover or focus (ADR-209 decision 6). They were fully transparent at
+   rest, so a list that can be edited read as one that cannot until the pointer happened to cross a
+   row. Faint rather than full, so a long list does not turn into a column of icons. */
 .ytable-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  opacity: 0;
+  opacity: var(--row-action-rest-opacity);
   transition: opacity var(--transition);
 }
 

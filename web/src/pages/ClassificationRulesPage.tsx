@@ -17,6 +17,7 @@ import { useCan } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select, RequiredMark, FieldError } from '../components/ui/Field';
@@ -193,7 +194,22 @@ export function ClassificationRulesPage() {
           onFiltersChange={setFilters}
           filterCounts={counts}
           loading={loading}
-          empty={anyFiltered ? t('rules.empty.noMatch') : t('rules.empty.none')}
+          empty={
+            anyFiltered ? (
+              t('rules.empty.noMatch')
+            ) : (
+              <EmptyState
+                text={t('rules.empty.none')}
+                action={
+                  canConfig && (
+                    <Button variant="primary" onClick={() => setAdding(true)}>
+                      + {t('rules.addRule')}
+                    </Button>
+                  )
+                }
+              />
+            )
+          }
         />
       </LoadGate>
 

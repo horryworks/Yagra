@@ -2811,6 +2811,89 @@ mod tests {
         assert!(mute_matches(std::slice::from_ref(&whole_node), &other));
     }
 
+    /// The WebUI draws "muted" on an active alert's row from its own copy of this rule
+    /// (`web/src/lib/suppression.ts::muteRuleCovers`, ADR-209 decision 3). Both run
+    /// `web/src/lib/fixtures/muteMatch.cases.json`, so a change to one side that the other does not
+    /// make fails here or there -- change the two together, and add a case to the table, not here.
+    #[test]
+    fn mute_matches_answers_the_case_table_the_alert_rows_share() {
+        use yagra_common::IfIndex;
+
+        #[derive(serde::Deserialize)]
+        struct Side {
+            node: Option<String>,
+            metric: Option<String>,
+            #[serde(default)]
+            port: Option<u32>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            mute: Side,
+            alert: Side,
+            covered: bool,
+        }
+        #[derive(serde::Deserialize)]
+        struct Table {
+            cases: Vec<Case>,
+        }
+        let table: Table = serde_json::from_str(include_str!(
+            "../../../../web/src/lib/fixtures/muteMatch.cases.json"
+        ))
+        .expect("the shared case table parses");
+        assert!(table.cases.len() >= 10, "{} cases", table.cases.len());
+
+        let (a, b) = (NodeId::new(), NodeId::new());
+        let node_of = |n: &str| match n {
+            "A" => a,
+            "B" => b,
+            other => panic!("unknown node {other:?} in the case table"),
+        };
+        let wrong: Vec<&str> = table
+            .cases
+            .iter()
+            .filter(|c| {
+                let mute = ActiveMute::new(
+                    node_of(c.mute.node.as_deref().expect("a mute names a node")).as_uuid(),
+                    c.mute.metric.as_deref(),
+                );
+                let metric = c.alert.metric.clone().expect("an alert carries a metric");
+                let (subject, check) = match c.alert.node.as_deref() {
+                    Some(n) => {
+                        let node = node_of(n);
+                        let check = match c.alert.port {
+                            Some(p) => interface_check_id(node, IfIndex(p), &metric),
+                            None => check_id(node, &metric),
+                        };
+                        (Subject::Node(node), check)
+                    }
+                    None => {
+                        let subject = Subject::Pool("site-a".to_owned());
+                        let check = yagra_alert::rules::subject_check_id(&subject, &metric);
+                        (subject, check)
+                    }
+                };
+                let alert = Alert {
+                    subject,
+                    check,
+                    severity: Severity::Critical,
+                    state: NodeState::Critical,
+                    at_unix_ms: 0,
+                    root_cause: None,
+                    flapping: false,
+                    metric,
+                    breach: None,
+                    ifindex: c.alert.port.map(IfIndex),
+                    row: None,
+                    row_name: None,
+                };
+                mute_matches(std::slice::from_ref(&mute), &alert) != c.covered
+            })
+            .map(|c| c.name.as_str())
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
     #[test]
     fn mute_matches_node_and_check() {
         let node = NodeId::new();

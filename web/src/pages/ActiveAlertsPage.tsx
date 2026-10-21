@@ -12,7 +12,7 @@
 // Alerts (and acks) arrive live over SSE.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useCan } from '../store';
 import { api } from '../services/api';
@@ -30,6 +30,9 @@ import { facetCounts } from '../lib/filterCounts';
 import { RcaModal } from '../components/Rca/RcaModal';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { AlertRows } from '../widgets/AlertRows';
+import { EmptyState } from '../components/ui/EmptyState';
+import { useFleetSummary } from '../dashboard/useFleetSummary';
+import { addNodeHref } from '../lib/treeSelection';
 import {
   activeAlertColumns,
   activeAlertLabels,
@@ -104,6 +107,12 @@ export function ActiveAlertsPage() {
   // Both actions are AckAlerts-gated server-side — a caller without it would get a 403, so don't
   // show a button that only ever fails. Explain additionally needs a provider.
   const canSuppress = useCan('ack_alerts');
+  const canConfig = useCan('manage_config');
+  const navigate = useNavigate();
+  // No alerts on an empty fleet is not "all clear" (ADR-209 decision 4): nothing is being watched.
+  // `total` is null-safe — until the summary arrives the ordinary empty sentence stands.
+  const { summary } = useFleetSummary();
+  const noNodes = summary?.total === 0;
   const canExplain = rcaEnabled && canSuppress;
 
   return (
@@ -118,6 +127,20 @@ export function ActiveAlertsPage() {
           mobile the cell takes a full-width row of its own, which would otherwise be blank. */}
       <AlertRows
         filter={filter}
+        empty={
+          noNodes ? (
+            <EmptyState
+              text={t('active.noNodes')}
+              action={
+                canConfig && (
+                  <Button variant="primary" onClick={() => navigate(addNodeHref())}>
+                    {t('nodes:add.node')}
+                  </Button>
+                )
+              }
+            />
+          ) : undefined
+        }
         emptyFiltered={t('active.emptyFiltered')}
         // The toolbar is a slot of the list rather than a sibling because the counts come from the
         // sorted-and-filtered set, which only the list has. Fixed order (design-system §4.1):

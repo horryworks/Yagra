@@ -2182,7 +2182,7 @@ export function NodeTree({
           ) : filtering ? null : loading ? (
             <p className="muted ntree-empty">{t('tree.loadingNodes')}</p>
           ) : (
-            <p
+            <div
               className="muted ntree-empty"
               onContextMenu={(e) => {
                 if (!rootMenuHasItems(caps)) return;
@@ -2190,8 +2190,18 @@ export function NodeTree({
                 setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
               }}
             >
-              {t('tree.emptyInventory')}
-            </p>
+              {/* The first step, where an empty inventory is seen (ADR-209 decision 5). */}
+              <EmptyState
+                text={t('tree.emptyInventory')}
+                action={
+                  onAddNode && (
+                    <Button variant="primary" onClick={() => onAddNode(null)}>
+                      {t('add.node')}
+                    </Button>
+                  )
+                }
+              />
+            </div>
           )
         ) : (
           // Virtualized body: only the on-screen window of `drawn` is turned into DOM (S13).

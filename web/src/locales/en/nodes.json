@@ -818,7 +818,7 @@
     "loadingNodes": "Loading nodes…",
     "loadFailed": "Could not load this folder's nodes.",
     "retry": "Retry",
-    "emptyInventory": "No nodes in inventory. Add one to start monitoring.",
+    "emptyInventory": "No nodes in inventory.",
     "addNodeHere": "Add node here…",
     "editMove": "Edit / move…",
     "runDiscovery": "Run discovery here…",

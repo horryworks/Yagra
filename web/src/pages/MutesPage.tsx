@@ -21,6 +21,7 @@ import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
@@ -217,7 +218,22 @@ export function MutesPage() {
           onFiltersChange={setFilters}
           filterCounts={counts}
           loading={loading}
-          empty={anyFiltered ? t('mutes.empty.filtered') : t('mutes.empty.title')}
+          empty={
+            anyFiltered ? (
+              t('mutes.empty.filtered')
+            ) : (
+              <EmptyState
+                text={t('mutes.empty.title')}
+                action={
+                  canAck && (
+                    <Button variant="primary" onClick={() => setAdding(true)}>
+                      {t('mutes.add')}
+                    </Button>
+                  )
+                }
+              />
+            )
+          }
         />
       </LoadGate>
 

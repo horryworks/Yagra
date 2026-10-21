@@ -2,7 +2,14 @@
 // Pure-helper tests for the Nodes split selection ↔ URL-param round-trip.
 
 import { describe, expect, it } from 'vitest';
-import { escapeTarget, nodesPageHref, parseSelection, selectionToParam } from './treeSelection';
+import {
+  addNodeHref,
+  escapeTarget,
+  nodesPageHref,
+  parseSelection,
+  selectionToParam,
+  wantsAddNode,
+} from './treeSelection';
 
 describe('selectionToParam', () => {
   it('encodes node and group selections', () => {
@@ -80,5 +87,18 @@ describe('escapeTarget', () => {
     // The caller mounts no listener at all in this case, so answering null is the second line of
     // defence rather than the first.
     expect(escapeTarget(false, false)).toBeNull();
+  });
+});
+
+describe('addNodeHref / wantsAddNode', () => {
+  it('round-trips: the link it builds is one NodesPage reads as a request for the dialog', () => {
+    const url = new URL(addNodeHref(), 'http://x');
+    expect(url.pathname).toBe('/nodes');
+    expect(wantsAddNode(url.searchParams)).toBe(true);
+  });
+
+  it('is not asked for by a plain All nodes link or a selection', () => {
+    expect(wantsAddNode(new URLSearchParams())).toBe(false);
+    expect(wantsAddNode(new URL(nodesPageHref({ kind: 'node', id: 'n1' }), 'http://x').searchParams)).toBe(false);
   });
 });

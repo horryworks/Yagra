@@ -42,6 +42,7 @@
         "actions": "Actions"
       },
       "empty": "No routing rules",
+      "emptyNoChannels": "Add a channel first.",
       "any": "any",
       "noChannels": "(no channels)",
       "enable": "Enable rule",

@@ -78,7 +78,13 @@ import {
 } from '../lib/suppression';
 import { fallbackPool, sharedFallbackPool, sharedOwnPool } from '../lib/pool';
 import { targetNodeIds, type ActionTarget } from '../lib/actionTarget';
-import { escapeTarget, parseSelection, selectionToParam } from '../lib/treeSelection';
+import {
+  ADD_NODE_PARAM,
+  escapeTarget,
+  parseSelection,
+  selectionToParam,
+  wantsAddNode,
+} from '../lib/treeSelection';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import {
   maxTreeWidth,
@@ -957,6 +963,18 @@ export function NodesPage() {
     setAddGroupId(groupId);
     setAdding(true);
   };
+
+  // `?add=1` (ADR-209 decision 4): another screen's "Add node" — Active alerts on an empty fleet.
+  // Opened once and the parameter dropped, so a reload or a back press does not reopen the dialog.
+  // Waits for `canConfig`, which answers false while the role is still resolving.
+  useEffect(() => {
+    if (!wantsAddNode(searchParams) || !canConfig) return;
+    setAddGroupId(null);
+    setAdding(true);
+    const params = new URLSearchParams(searchParams);
+    params.delete(ADD_NODE_PARAM);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams, canConfig]);
 
   // Direct moves (drag-drop): assign immediately and refresh.
   //

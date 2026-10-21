@@ -677,3 +677,54 @@ export function releasableRows(
     r.action && !can(releasePermission(r.kind)) ? { ...r, action: null } : r,
   );
 }
+
+/** One node-level mute against one alert — core's `alerts/notify.rs::mute_matches`, written again
+ *  because the active-alert rows draw "muted" from it (ADR-209 decision 3). A mute naming no metric
+ *  covers the whole node; one naming a metric covers that metric's alerts, every port's included.
+ *  An alert about something other than a node (`nodeId: null`, a poller pool) is never muted.
+ *  ⚠️ Both sides run `lib/fixtures/muteMatch.cases.json` — change them together. */
+export function muteRuleCovers(
+  mute: { nodeId: string; metric: string | null },
+  alert: { nodeId: string | null; metric: string },
+): boolean {
+  if (alert.nodeId === null) return false;
+  return mute.nodeId === alert.nodeId && (mute.metric === null || mute.metric === alert.metric);
+}
+
+/**
+ * The mute that silences this alert, or `null` — the one that lasts longest when several do.
+ *
+ * A group mute covers the nodes in that group and every group beneath it, unless the node was
+ * released from it; a mute naming the node always counts. That is the expansion core's
+ * `alerts/config.rs::load_mutes` does before {@link muteRuleCovers} runs, and the one
+ * {@link buildSuppressionIndex} does for the tree. `groupId` is the alert node's group (`null`
+ * when ungrouped); only an expired mute or exemption is ignored, as {@link inForce} decides.
+ */
+export function muteCovering(
+  alert: { nodeId: string | null; metric: string; groupId: string | null },
+  mutes: Mute[],
+  groups: NodeGroup[],
+  exemptions: SuppressionExemption[],
+  now: number = Date.now(),
+): Mute | null {
+  const nodeId = alert.nodeId;
+  if (nodeId === null) return null;
+  const released = exemptions.some(
+    (e) => e.kind === 'mute' && e.node_id === nodeId && inForce(e.until_at, now),
+  );
+  const containers = new Set(groupContainers(groups, alert.groupId));
+  let best: Mute | null = null;
+  for (const m of mutes) {
+    if (!inForce(m.until_at, now)) continue;
+    const target =
+      m.scope_kind === 'group'
+        ? !released && m.group_id && containers.has(m.group_id)
+          ? nodeId
+          : null
+        : (m.node_id ?? null);
+    if (target === null) continue;
+    if (!muteRuleCovers({ nodeId: target, metric: m.metric_name ?? null }, alert)) continue;
+    if (best === null || Date.parse(m.until_at) > Date.parse(best.until_at)) best = m;
+  }
+  return best;
+}
