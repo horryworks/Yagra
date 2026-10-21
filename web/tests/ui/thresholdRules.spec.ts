@@ -365,6 +365,39 @@ test('the scope id is a picker, and which picker follows the level', async ({ pa
   expect(offered).toEqual(['global', 'profile', 'group_id', 'node']);
 });
 
+test('a port rule is added by picking a node, then a port (ADR-209)', async ({ page }) => {
+  // It used to be creatable only from Node detail ▸ Interfaces. The add dialog now picks the port
+  // and hands it to that same port-rule dialog, so there is still one port-rule form.
+  await page.goto('/alerts/rules');
+  await page.getByRole('button', { name: '+ Add rule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .locator('.modal-field')
+    .filter({ has: page.locator('.modal-field-label', { hasText: 'Scope type' }) })
+    .locator('select')
+    .selectOption('interface');
+
+  // The generic fields give way: the metric is chosen in the port-rule dialog.
+  await expect(dialog.locator('.metricpick-trigger')).toHaveCount(0);
+  const next = dialog.getByRole('button', { name: 'Next' });
+  await expect(next).toBeDisabled();
+
+  await dialog.locator('.nodepick-trigger').click();
+  await page.locator('.nodepick-option').first().click();
+  const port = dialog.locator('#threshold-port');
+  await expect(port).toBeVisible({ timeout: 15_000 });
+  await port.selectOption({ index: 1 });
+  await expect(next).toBeEnabled();
+  await next.click();
+
+  // The port-rule dialog, open on its add form.
+  const portDialog = page.getByRole('dialog');
+  await expect(portDialog).toContainText('Add a rule —');
+  await expect(
+    portDialog.locator('.modal-field-label', { hasText: 'Scope type' }),
+  ).toHaveCount(0);
+});
+
 test('a rule opens for editing with its own values, and reachability offers no bounds', async ({
   page,
 }) => {

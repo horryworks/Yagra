@@ -43,41 +43,41 @@
       "l3_switch": "ルーティングするスイッチ (L3)",
       "l2_switch": "スイッチ (L2)",
       "access_point": "Wi-Fi アクセスポイント",
-      "other": "その他の機器"
+      "other": "その他のノード"
     },
     "roleReason": {
       "wireless_ap": "無線コントローラーから取り込んだ AP",
       "meraki_product": "Meraki の製品種別",
       "profile_category": "デバイスプロファイルの分類",
-      "default_route": "拠点の外への既定経路を持つ",
+      "default_route": "サイトの外への既定経路を持つ",
       "routing_adjacency": "OSPF・BGP・経路表の隣接を持つ",
       "subnets": "{{count}} 個のサブネットにアドレスを持つ",
       "default": "ほかに判断材料なし"
     },
     "kind": {
       "node": "ノード",
-      "folder": "フォルダ（押すと中に入る）",
-      "external": "このフォルダの外"
+      "folder": "グループ（押すと中に入る）",
+      "external": "このグループの外"
     },
     "folderTitle": "{{name}} — ノード {{count}} 台、最も悪い状態: {{state}}。押すと中に入ります。",
     "folderSub": "ノード {{count}} 台",
     "folderSubBad": "ノード {{count}} 台 · 停止・重大 {{bad}}",
-    "externalTitle": "{{name}} へのリンク（このフォルダの外）。押すと、両端が見える階を開きます。",
+    "externalTitle": "{{name}} へのリンク（このグループの外）。押すと、両端が見える階を開きます。",
     "externalSub": "外 · 押すと開く",
     "edgeTitle": "リンク {{count}} 本（{{source}}）。押すとポートの一覧を出します。",
     "overflow": {
       "title": "1 つの階に描ききれません",
-      "body": "この階の直下にリンクを持つノードが {{count}} 台あり、1 つの階に描ける {{max}} 台を超えています。サブフォルダに分けてください。",
-      "openNodes": "このフォルダをノード一覧で開く"
+      "body": "この階の直下にリンクを持つノードが {{count}} 台あり、1 つの階に描ける {{max}} 台を超えています。サブグループに分けてください。",
+      "openNodes": "このグループをノード一覧で開く"
     },
     "panel": {
       "summary": {
         "title": "この階",
-        "folders": "サブフォルダ",
+        "folders": "サブグループ",
         "linked": "リンクのあるノード",
         "isolated": "リンクのないノード（描いていない）",
         "edges": "線",
-        "stubs": "このフォルダの外へのリンク"
+        "stubs": "このグループの外へのリンク"
       },
       "openLevelInNodes": "ノード一覧で開く",
       "node": {
@@ -121,7 +121,7 @@
     },
     "cols": {
       "node": "ノード",
-      "upstream": "依存先",
+      "upstream": "上流ノード",
       "status": "ステータス",
       "root": "根本原因",
       "actions": "操作"
@@ -208,7 +208,7 @@
       "more_other": "ほか {{count}} 台"
     },
     "cluster": {
-      "title_other": "{{count}} 拠点",
+      "title_other": "{{count}} サイト",
       "zoomIn": "拡大"
     }
   }

@@ -20,7 +20,7 @@
     },
     "scope": {
       "group": "グループ",
-      "groupTag": "グループ（タグ）",
+      "groupTag": "タグ",
       "node": "ノード",
       "profile": "プロファイル",
       "system": "システム全体"
@@ -57,11 +57,11 @@
     "scope": "スコープ",
     "scopeLevel": "スコープの種類",
     "lockedNode": "ノード",
-    "lockedGroup": "フォルダグループ",
+    "lockedGroup": "グループ",
     "inclSubgroups": "（サブグループを含む）",
     "level": {
       "node": "ノード",
-      "groupId": "フォルダグループ",
+      "groupId": "グループ",
       "profile": "デバイスプロファイル"
     },
     "pickNode": "（ノードを選択）",
@@ -114,11 +114,11 @@
     "submit": "ミュートを追加",
     "scope": "スコープ",
     "lockedNode": "ノード",
-    "lockedGroup": "フォルダグループ",
+    "lockedGroup": "グループ",
     "inclSubgroups": "（サブグループを含む）",
     "kind": {
       "node": "ノード",
-      "group": "フォルダグループ"
+      "group": "グループ"
     },
     "entityNode": "ノード",
     "entityGroup": "グループ",

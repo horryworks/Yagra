@@ -146,7 +146,7 @@
       "noMatch": "見つかりません",
       "pickerLabel": "変数",
       "groups": {
-        "subject": "どの機器か",
+        "subject": "どの対象か",
         "what": "何が起きたか",
         "numbers": "測った値",
         "time": "いつ",
@@ -171,8 +171,8 @@
           "desc": "ノードを監視しているアドレス"
         },
         "group": {
-          "label": "フォルダ",
-          "desc": "ノードが入っているインベントリのフォルダ"
+          "label": "グループ",
+          "desc": "ノードが入っているインベントリのグループ"
         },
         "profile": {
           "label": "プロファイル",
@@ -180,7 +180,7 @@
         },
         "tags": {
           "label": "タグ",
-          "desc": "ノードのラベル。フォルダから継いだものも含む。「, 」でつないで出す"
+          "desc": "ノードのラベル。グループから継いだものも含む。「, 」でつないで出す"
         },
         "subject_kind": {
           "label": "対象の種類",
@@ -463,23 +463,23 @@
       "metric": "メトリクス",
       "direction": "方向",
       "bounds": "境界値",
-      "dwell": "連続検出回数",
+      "dwell": "連続回数",
       "actions": "操作",
       "meaning": "測っているもの",
       "scopeId": "スコープ"
     },
     "empty": "しきい値ルールがまだありません",
     "truncated": "ルール {{total}} 件中 {{shown}} 件を表示",
-    "warnShort": "W",
-    "critShort": "C",
+    "warnShort": "警告",
+    "critShort": "重大",
     "dwellValue": "連続 {{n}} 回検出",
     "scopeLevel": {
       "global": "全ノード",
       "profile": "プロファイル",
-      "group": "ノードのタグ",
+      "group": "タグ",
       "node": "ノード",
-      "group_id": "フォルダグループ",
-      "interface": "インタフェース"
+      "group_id": "グループ",
+      "interface": "インターフェース"
     },
     "direction": {
       "above": "上回る",
@@ -492,9 +492,9 @@
       "scopeId": "スコープ",
       "scopeIdPlaceholder": {
         "profile": "デバイスプロファイルを選択",
-        "group": "ノードのタグ（例: サイト名）",
+        "group": "タグ（例: サイト名）",
         "node": "ノードを選択",
-        "group_id": "フォルダグループを選択"
+        "group_id": "グループを選択"
       },
       "removeTarget": "{{name}} を対象から外す",
       "metric": "メトリクス",
@@ -504,7 +504,7 @@
       "critPlaceholder": "重大",
       "add": "ルールを追加",
       "folderGroupHint": "中のグループもすべて対象です。",
-      "legacyTagHint": "旧スコープ: ノードのタグと照合します。新しいルールはフォルダグループを使ってください。",
+      "legacyTagHint": "旧スコープ: タグと照合します。新しいルールはグループを使ってください。",
       "port": "ポート",
       "portPlaceholder": "ポートを選択",
       "noPorts": "このノードはポートを報告していません。",
@@ -517,7 +517,7 @@
       "dwell": {
         "label": "連続回数",
         "unit": "回",
-        "info": "計算で出すインタフェースの値（if_in_util_pct・if_out_util_pct・if_in_bps・if_out_bps）は 1 分に 1 回読むため、回数は分の数になります。"
+        "info": "計算で出すインターフェースの値（if_in_util_pct・if_out_util_pct・if_in_bps・if_out_bps）は 1 分に 1 回読むため、回数は分の数になります。"
       },
       "row": {
         "info": "この名前の行だけに当てます。* は何にでも一致し、名前つきのルールが名前なしより優先されます。"

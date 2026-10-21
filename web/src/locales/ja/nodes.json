@@ -12,7 +12,7 @@
     "serialNumber": "シリアル番号",
     "osVersion": "OS バージョン",
     "group": "グループ",
-    "parentNode": "親ノード",
+    "parentNode": "上流ノード",
     "uptime": "稼働時間",
     "makerPlaceholder": "例: Cisco",
     "modelPlaceholder": "例: C2960",
@@ -38,8 +38,8 @@
     "tagPlaceholder": "JAPAN",
     "tagRemove": "タグ {{label}} を削除",
     "tagExclude": "このノードではタグ {{label}} を継承しない",
-    "tagsInherited": "フォルダから継承",
-    "tagsInheritedFrom": "フォルダから",
+    "tagsInherited": "グループから継承",
+    "tagsInheritedFrom": "グループから",
     "tagsExcluded": "ここでは継承しない",
     "tagErr": {
       "empty": "空のタグは付けられません。",
@@ -48,7 +48,7 @@
       "tooMany": "このノードのタグはもう上限に達しています。"
     },
     "resolver": "リゾルバ",
-    "poolInheritFolder": "フォルダから継承",
+    "poolInheritFolder": "グループから継承",
     "sentWithAlerts": "アラートと一緒に送信"
   },
   "kind": {
@@ -95,9 +95,9 @@
     "showTree": "インベントリを表示",
     "resizePane": "ドラッグでインベントリの幅を変更（ダブルクリックで既定に戻す）",
     "pinnedOnly": "ピン留めのみ",
-    "pinnedOnlyHint": "ピン留めした項目と、その上のフォルダ",
-    "withNodesOnly": "空のフォルダを隠す",
-    "withNodesOnlyHint": "この画面で作ったフォルダは開き直すまで表示",
+    "pinnedOnlyHint": "ピン留めした項目と、その上のグループ",
+    "withNodesOnly": "空のグループを隠す",
+    "withNodesOnlyHint": "この画面で作ったグループは開き直すまで表示",
     "needAttentionOnly": "要対応",
     "filterMenu": {
       "label": "インベントリの絞り込み",
@@ -109,7 +109,7 @@
     "chips": {
       "label": "有効な絞り込み",
       "remove": "「{{name}}」を外す",
-      "emptyHidden": "空のフォルダを非表示"
+      "emptyHidden": "空のグループを非表示"
     },
     "needAttentionOnlyHint": "警告・重大・到達不能（メンテナンス中を除く）",
     "filterScanTruncated": "一致するノードの一部は表示されていません（絞り込みが調べられる上限まで調べた結果です）。検索語を足して絞り込んでください。",
@@ -129,8 +129,8 @@
   },
   "add": {
     "node": "ノードを追加",
-    "duplicateLead": "{{address}} は既に次の機器として監視しています:",
-    "duplicateHint": "もう 1 つ追加すると同じ機器のノードが 2 つになり、そのアドレスから届く syslog とフローは片方にしか紐付きません。",
+    "duplicateLead": "{{address}} は既に次のノードとして監視しています:",
+    "duplicateHint": "もう 1 つ追加すると同じアドレスのノードが 2 つになり、そのアドレスから届く syslog とフローは片方にしか紐付きません。",
     "addAnyway": "それでも追加",
     "urlMonitor": "URL 監視を追加",
     "monitoringType": "監視タイプ",
@@ -142,7 +142,7 @@
     "verifyTls": "TLS 証明書を検証",
     "deviceProfileOptional": "デバイスプロファイル（任意）",
     "snmpCredentialOptional": "SNMP 認証情報（任意 — 指定すると SNMP ポーリングが有効になります）",
-    "parentNodeOptional": "親ノード（任意 — 依存関係による抑制に使います）",
+    "parentNodeOptional": "上流ノード（任意 — 依存関係による抑制に使います）",
     "makerOptional": "メーカー（任意）",
     "modelOptional": "モデル（任意）",
     "dnsMonitor": "DNS 監視を追加",
@@ -170,7 +170,7 @@
     "pool": "ポーラープール（任意）",
     "latitude": "緯度（任意）",
     "longitude": "経度（任意）",
-    "geoInherited": "上位フォルダから継承して、すでに「{{name}}」の位置で地図に載っています。",
+    "geoInherited": "上位グループから継承して、すでに「{{name}}」の位置で地図に載っています。",
     "tags": "タグ",
     "prefixes": "IP レンジ",
     "prefixAdd": "+ レンジを追加",
@@ -183,10 +183,10 @@
     },
     "prefixSyncHint": "NetBox 同期が管理しています。変更は NetBox 側で行います。",
     "tagsInherit": {
-      "info": "配下のフォルダとノードすべてがこのタグを持ちます（あとから見つかったノードも含みます）。不要なノードは「ノードを編集」で個別に外せます。"
+      "info": "配下のグループとノードすべてがこのタグを持ちます（あとから見つかったノードも含みます）。不要なノードは「ノードを編集」で個別に外せます。"
     },
     "prefixesUse": {
-      "info": "ディスカバリでこのレンジを掃引できます。取り込みでは、アドレスを含むレンジを持つフォルダへ機器を振り分けます。"
+      "info": "ディスカバリでこの IP レンジをスキャンできます。取り込みでは、アドレスを含む IP レンジを持つグループへノードを振り分けます。"
     }
   },
   "deleteGroup": {
@@ -208,7 +208,7 @@
     "movePartial": "{{requested}} 台のうち {{moved}} 台を移動しました。残りは削除済みか、スコープの外です。",
     "moveGroup": "グループの移動に失敗しました",
     "reorderGroup": "グループの並べ替えに失敗しました",
-    "sortChildren": "フォルダの並べ替えに失敗しました",
+    "sortChildren": "グループの並べ替えに失敗しました",
     "deleteGroup": "グループの削除に失敗しました",
     "saveGroup": "グループの保存に失敗しました",
     "geoPair": "緯度と経度は両方入力するか、両方空欄にしてください",
@@ -221,12 +221,12 @@
     "saveNode": "ノードの保存に失敗しました",
     "setDependency": "依存関係の設定に失敗しました",
     "addDnsMonitor": "DNS 監視の追加に失敗しました",
-    "movePreview": "アドレスとフォルダの IP レンジの照合に失敗しました",
+    "movePreview": "アドレスとグループの IP レンジの照合に失敗しました",
     "moveByPrefix": "移動に失敗しました。1 台も移動していません",
     "prefixEmpty": "レンジが空です。",
     "prefixDuplicate": "{{prefix}} が 2 回書かれています。",
     "prefixOwnedBySync": "{{prefix}} は同期が管理しているため、ここでは編集できません。",
-    "prefixTooMany": "1 つのフォルダーが持てるレンジは最大 64 件です。",
+    "prefixTooMany": "1 つのグループが持てる IP レンジは最大 64 件です。",
     "prefixDescTooLong": "{{prefix}} の呼び名が長すぎます（最大 200 文字）。",
     "savePrefixes": "IP レンジを保存できませんでした",
     "setPoolPartial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。",
@@ -243,7 +243,7 @@
     "editNode": "ノードを編集",
     "pin": "ピン留め",
     "unpin": "ピン留めを外す",
-    "unknownDevice": "不明なデバイス",
+    "unknownDevice": "機種不明",
     "seen": "最終確認: {{time}}",
     "needsAttention": "要対応",
     "pollDispatched_one": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
@@ -253,7 +253,7 @@
     "more": "その他",
     "pool": "ポーラープール…",
     "rediscover": "再検出…",
-    "nameFromDevice": "名前を機器の名前にする…",
+    "nameFromDevice": "名前を sysName に合わせる…",
     "moveByPrefix": "IP レンジで移動…",
     "delete": "削除…",
     "showOnMap": "マップで表示"
@@ -304,8 +304,8 @@
       "title": "アクセスポイントの監視",
       "importAps": "一度接続したアクセスポイントを自動で監視に入れる",
       "maxAps": "上限",
-      "group": "新しいノードのフォルダ",
-      "groupDefault": "— このコントローラと同じフォルダ —",
+      "group": "新しいノードのグループ",
+      "groupDefault": "— このコントローラと同じグループ —",
       "save": "保存"
     },
     "empty": {
@@ -353,7 +353,7 @@
     },
     "none": "この期間のフローデータはありません。",
     "noTrend": "この期間のトラフィック推移はありません。",
-    "empty": "フローデータがまだありません。この機器から NetFlow v9 / IPFIX をポーラー（既定 UDP :2055）へエクスポートするよう設定してください。",
+    "empty": "フローデータがまだありません。このノードから NetFlow v9 / IPFIX をポーラー（既定 UDP :2055）へエクスポートするよう設定してください。",
     "disabled": "フロー監視は無効です。コアに YAGRA_CLICKHOUSE_URL、ポーラーに YAGRA_FLOW_BIND を設定してください。",
     "loadError": "フローデータの読み込みに失敗しました。"
   },
@@ -372,9 +372,9 @@
   "deleteNodes": {
     "title_one": "{{count}} 件のノードを削除",
     "title_other": "{{count}} 件のノードを削除",
-    "body": "次のノードを削除しますか？インベントリの項目とインターフェースが消え、依存関係の親だったノードは配下を抑制しなくなります。元に戻せません。",
+    "body": "次のノードを削除しますか？インベントリの項目とインターフェースが消え、上流ノードだったものは下流のノードを抑制しなくなります。元に戻せません。",
     "more": "ほか {{count}} 件",
-    "partial": "{{requested}} 件のうち {{deleted}} 件を削除しました。残りは既に無いか、見えないフォルダにあります。"
+    "partial": "{{requested}} 件のうち {{deleted}} 件を削除しました。残りは既に無いか、見えないグループにあります。"
   },
   "deleteNode": {
     "title": "ノードを削除",
@@ -451,7 +451,7 @@
       "sent": "送信",
       "received": "受信"
     },
-    "deviceHealth": "デバイスヘルス",
+    "deviceHealth": "ノードのヘルス",
     "healthLoadFailed": "このノードのメトリクス一覧を読み込めなかったため、ヘルスのカードを表示していません。再読み込みしてください。",
     "cpu": "CPU",
     "memory": "メモリ",
@@ -510,8 +510,8 @@
     "colDescription": "説明",
     "colNeighbors": "隣接",
     "neighborsMore": "+{{count}}",
-    "neighborsOpen": "{{port}} の隣接機器を表示",
-    "neighborsTitle": "{{port}} の隣接機器",
+    "neighborsOpen": "{{port}} の隣接ノードを表示",
+    "neighborsTitle": "{{port}} の隣接ノード",
     "neighborsMgmt": "管理アドレス",
     "colAddresses": "IP アドレス",
     "addressesMore": "+{{count}}",
@@ -641,7 +641,7 @@
       "info": "セカンダリを含む、このポートの全アドレスです（1 時間ごとに読み取り）。+N で一覧が開きます。"
     },
     "neighborsCol": {
-      "info": "このポートの先の機器です（CDP・LLDP）。名前を押すと、そのポートの隣接を全部表示します。"
+      "info": "このポートの先のノードです（CDP・LLDP）。名前を押すと、そのポートの隣接を全部表示します。"
     },
     "duplexCol": {
       "info": "リンクの確立のしかたです。光ポートと停止中のポートでは「報告なし」が正常です。"
@@ -685,9 +685,9 @@
     "statusUnknown": "収集の状態を確認できません",
     "setsActive_one": "セット {{count}} 件が有効 · 予定どおりポーリング中",
     "setsActive_other": "セット {{count}} 件が有効 · 予定どおりポーリング中",
-    "subFailing": "最近の SNMP 値がありません — 機器に到達できないか、SNMP を拒否されている可能性があります",
+    "subFailing": "最近の SNMP 値がありません — ノードに到達できないか、SNMP を拒否されている可能性があります",
     "subNone": "SNMP 認証情報が紐付いていません。ICMP による死活のみ収集します",
-    "subUnknown": "このノードのメトリクス一覧を読み込めませんでした。機器が応答しているかどうかは、ここからは分かりません。再読み込みしてください。",
+    "subUnknown": "このノードのメトリクス一覧を読み込めませんでした。ノードが応答しているかどうかは、ここからは分かりません。再読み込みしてください。",
     "profile": "プロファイル",
     "credential": "認証情報",
     "metricCount_one": "メトリクス {{count}} 件",
@@ -722,18 +722,18 @@
     "health": "ヘルス",
     "members": "メンバー",
     "noNodes": "このグループにはノードがありません。",
-    "noMembers": "このフォルダにはサブフォルダもノードもありません。",
-    "prefixes": "IP プレフィックス",
+    "noMembers": "このグループにはサブグループもノードもありません。",
+    "prefixes": "IP レンジ",
     "tags": "タグ",
     "map": {
       "title": "ネットワークマップ",
       "open": "大きく開く",
       "loading": "地図を読み込んでいます…",
       "empty": "線はまだ見つかっていません。",
-      "overflow": "このフォルダは大きすぎて、ここには描けません。大きく開くと、サブフォルダに分けて見られます。",
+      "overflow": "このグループは大きすぎて、ここには描けません。大きく開くと、サブグループに分けて見られます。",
       "wheelHint": "Ctrl（Mac は ⌘）を押しながらホイールで拡大します",
-      "summaryNodes_one": "線のある機器 {{count}} 台",
-      "summaryNodes_other": "線のある機器 {{count}} 台",
+      "summaryNodes_one": "線のあるノード {{count}} 台",
+      "summaryNodes_other": "線のあるノード {{count}} 台",
       "summaryEdges_one": "線 {{count}} 組",
       "summaryEdges_other": "線 {{count}} 組",
       "summaryStubs_one": "外への線 {{count}} 組",
@@ -747,25 +747,25 @@
     }
   },
   "prefixGaps": {
-    "title": "IP プレフィックスに無いサブネット",
-    "loading": "機器のサブネットと IP プレフィックスを比べています…",
-    "err": "サブネットと IP プレフィックスを比べられませんでした",
-    "tooMany": "このフォルダは機器が多すぎて、一度に比べられません。下のフォルダを開いてください。",
-    "noData": "ここの機器から、まだアドレスが取れていません。",
-    "clean": "ここの機器が持つサブネットは、すべて IP プレフィックスに入っています。",
+    "title": "IP レンジに無いサブネット",
+    "loading": "ノードのサブネットと IP レンジを比べています…",
+    "err": "サブネットと IP レンジを比べられませんでした",
+    "tooMany": "このグループはノードが多すぎて、一度に比べられません。下のグループを開いてください。",
+    "noData": "ここのノードから、まだアドレスが取れていません。",
+    "clean": "ここのノードが持つサブネットは、すべて IP レンジに入っています。",
     "read": "{{total}} 台中 {{read}} 台からアドレスを読みました。",
     "truncated_other": "{{count}} 台は、保存できる数より多くのアドレスを持っていました。",
     "more_other": "ほか {{count}} 台",
     "kind": {
-      "unregistered": "どの IP プレフィックスにも無い",
-      "partial": "IP プレフィックスで一部だけ登録されている",
-      "other_folder": "別のフォルダの IP プレフィックスに入っている",
-      "parent_only": "上のフォルダの IP プレフィックスにだけ入っている"
+      "unregistered": "どの IP レンジにも無い",
+      "partial": "IP レンジで一部だけ登録されている",
+      "other_folder": "別のグループの IP レンジに入っている",
+      "parent_only": "上のグループの IP レンジにだけ入っている"
     },
     "reason": {
       "partial": "{{range}} で一部だけ登録されている",
       "otherFolder": "{{name}} の {{range}} に入っている",
-      "parentOnly": "上のフォルダ {{name}} の {{range}} にだけ入っている"
+      "parentOnly": "上のグループ {{name}} の {{range}} にだけ入っている"
     }
   },
   "bulkTag": {
@@ -775,7 +775,7 @@
     "remove": "削除",
     "removePlaceholder": "owner",
     "apply": "選択したノードに適用",
-    "partial": "{{requested}} 件中 {{applied}} 件にタグを付けました。残りは削除済みか、操作できるフォルダの外にあります。",
+    "partial": "{{requested}} 件中 {{applied}} 件にタグを付けました。残りは削除済みか、操作できるグループの外にあります。",
     "err": "選択したノードにタグを付けられませんでした",
     "removeDirect": "削除（直接付けたタグのみ）"
   },
@@ -818,15 +818,15 @@
     "dropHere": "ここに入ります",
     "dropMore": "ほか {{count}} 件",
     "pickCount": "選択 {{count}}",
-    "pickCountTitle": "選んでいるノードのうち {{count}} 台がこのフォルダの中にあります",
+    "pickCountTitle": "選んでいるノードのうち {{count}} 台がこのグループの中にあります",
     "dragHint": "グループの上にドラッグすると入れ子・割り当て、行と行の間にドラッグすると並べ替えになります。",
     "loadingNodes": "ノードを読み込み中…",
-    "loadFailed": "このフォルダのノードを読み込めませんでした。",
+    "loadFailed": "このグループのノードを読み込めませんでした。",
     "retry": "再試行",
     "emptyInventory": "インベントリにノードがありません。",
     "addNodeHere": "ここにノードを追加…",
     "editMove": "編集 / 移動…",
-    "runDiscovery": "ここで機器探索を実行…",
+    "runDiscovery": "ここでスキャンを実行…",
     "sortAsc": "昇順で並べ替え",
     "sortDesc": "降順で並べ替え",
     "open": "開く",
@@ -855,8 +855,8 @@
     "pinNamed": "「{{name}}」をピン留め",
     "unpinNamed": "「{{name}}」のピン留めを外す",
     "pinnedMark": "ピン留め中",
-    "withNodesEmpty": "すべてのフォルダが空のため、隠れています。",
-    "pinnedEmpty": "ピン留めはまだありません（ノードかフォルダの右クリックで付けられます）。",
+    "withNodesEmpty": "すべてのグループが空のため、隠れています。",
+    "pinnedEmpty": "ピン留めはまだありません（ノードかグループの右クリックで付けられます）。",
     "pinFailed": "ピン留めを変更できませんでした",
     "menuFor": "{{name}} の操作",
     "menuRoot": "ツリーの操作",
@@ -868,15 +868,15 @@
     "pollSelected": "選択した {{count}} 件を今すぐポーリング",
     "pollDispatched": "{{requested}} 台のうち {{dispatched}} 台をポーリング待ちに入れました。",
     "origin": {
-      "meraki": "Cisco Meraki 連携が作ったフォルダ",
-      "netbox": "NetBox 連携が作ったフォルダ"
+      "meraki": "Cisco Meraki 連携が作ったグループ",
+      "netbox": "NetBox 連携が作ったグループ"
     },
-    "moveGroupByPrefix": "このフォルダの中を IP レンジで振り分け…",
+    "moveGroupByPrefix": "このグループの中を IP レンジで振り分け…",
     "showOnMap": "ネットワークマップで表示",
-    "showEmptyFolders": "空のフォルダを表示",
-    "nameFromDevice": "名前を機器の名前にする…",
-    "nameFromDeviceNamed": "「{{name}}」を機器の名前にする…",
-    "nameFromDeviceSelected": "選択した {{count}} 件を機器の名前にする…",
+    "showEmptyFolders": "空のグループを表示",
+    "nameFromDevice": "名前を sysName に合わせる…",
+    "nameFromDeviceNamed": "「{{name}}」の名前を sysName に合わせる…",
+    "nameFromDeviceSelected": "選択した {{count}} 件の名前を sysName に合わせる…",
     "namedFromDevice": "{{requested}} 件のうち {{applied}} 件の名前を変えました。"
   },
   "moveNode": {
@@ -891,20 +891,20 @@
     "apply": "適用",
     "applyHint": "OS バージョンとシリアル番号は、次の毎時の読み取りか「今すぐポーリング」で更新されます。",
     "phase": {
-      "starting": "読み直しを始めています…",
+      "starting": "再検出を始めています…",
       "waiting": "ポーラーが受け取るのを待っています…",
       "waitingLong": "1 分たってもポーラーが受け取らないため、<lnk/> でこのノードのプールを確かめてください。",
-      "reading": "機器に問い合わせています…",
-      "nothingToApply": "機器は答え、このノードと違うところはありませんでした。",
+      "reading": "ノードに問い合わせています…",
+      "nothingToApply": "ノードは応答しました。今の値と違うところはありませんでした。",
       "deviceChanged": "別の機種が答えています。適用すると受け入れます。",
-      "noSnmpAnswer": "機器は ping には答えますが、このノードの認証情報では SNMP に答えないため、「ノードを編集」で確かめてください。",
-      "noAnswer": "機器は ping にも SNMP にも答えませんでした。",
-      "stopped": "読み直しは途中で止められました。"
+      "noSnmpAnswer": "ノードは ping には答えますが、設定中の認証情報では SNMP に答えません。「ノードを編集」で確かめてください。",
+      "noAnswer": "ノードは ping にも SNMP にも答えませんでした。",
+      "stopped": "再検出は途中で止められました。"
     },
     "col": {
       "field": "項目",
       "current": "今の値",
-      "found": "機器の答え",
+      "found": "ノードの応答",
       "verdict": "結果"
     },
     "field": {
@@ -920,7 +920,7 @@
       "locked": "固定"
     },
     "err": {
-      "start": "読み直しを始められませんでした。",
+      "start": "再検出を始められませんでした。",
       "apply": "変更を適用できませんでした。",
       "noLivePoller": "このノードのプールで動くポーラーが無いため、<lnk/> を確かめてください。",
       "noCredential": "このノードには SNMP 認証情報がありません。先に「ノードを編集」で設定してください。",
@@ -937,11 +937,11 @@
   },
   "setParent": {
     "title": "{{name}} の依存関係",
-    "dependsOn": "依存先（上流）",
-    "currentUnnamed": "現在の上流（名前を読み込めていません）",
-    "loadFailed": "依存関係のマップを読み込めませんでした。上流の名前が表示されず、循環になる選択肢もここでは除外されません。循環はサーバーが拒否します。",
-    "noUpstream": "— 上流なし（トップレベル） —",
-    "info": "上流がダウンしている間、このノードのアラートは抑制し、上流側にまとめて表示します。"
+    "dependsOn": "上流ノード",
+    "currentUnnamed": "現在の上流ノード（名前を読み込めていません）",
+    "loadFailed": "依存関係のマップを読み込めませんでした。上流ノードの名前が表示されず、循環になる選択肢もここでは除外されません。循環はサーバーが拒否します。",
+    "noUpstream": "— 上流ノードなし（トップレベル） —",
+    "info": "上流ノードがダウンしている間、このノードのアラートは抑制し、上流ノード側にまとめて表示します。"
   },
   "checkEdit": {
     "urlTitle": "URL 監視を編集",
@@ -1027,18 +1027,18 @@
   },
   "neighbors": {
     "colLocalPort": "ローカルポート",
-    "colPeer": "対向機器",
+    "colPeer": "対向ノード",
     "colRemotePort": "対向ポート",
     "colCapabilities": "機能",
     "colProto": "プロトコル",
     "colAddress": "アドレス",
     "colMonitoring": "監視",
     "colPlatform": "機種 / OS",
-    "rowHint": "行をクリックすると、対向機器が送ってきた内容をすべて表示します。",
+    "rowHint": "行をクリックすると、対向ノードが送ってきた内容をすべて表示します。",
     "peer": {
       "state": {
         "node": "監視中",
-        "outside_scope": "監視中（見えないフォルダ）",
+        "outside_scope": "監視中（見えないグループ）",
         "ambiguous": "複数のノード",
         "unregistered": "未登録",
         "none": "アドレスなし"
@@ -1048,14 +1048,14 @@
         "heading_other": "ほかに {{count}} 台がこのアドレスを持っています",
         "chipAll_other": "このアドレスを持つノード {{count}} 台",
         "headingAll_other": "{{count}} 台がこのアドレスを持っています",
-        "more_other": "ほかに {{count}} 台あります（見られないフォルダにあるか、11 台目以降のため表示していません）。",
+        "more_other": "ほかに {{count}} 台あります（見られないグループにあるか、11 台目以降のため表示していません）。",
         "port": {
           "up": "リンク up",
           "link_down": "リンクダウン",
           "unknown": "リンク状態不明"
         }
       },
-      "hint": "管理アドレス（ノード自身か、そのインターフェースのアドレス）で突き合わせます。アドレスを送らない Meraki の機器は、組織の機器一覧の MAC で突き合わせます。",
+      "hint": "管理アドレス（ノード自身か、そのインターフェースのアドレス）で突き合わせます。アドレスを送らない Meraki のノードは、組織のインベントリにある MAC で突き合わせます。",
       "badge": {
         "node": "監視中",
         "outside_scope": "監視中（範囲外）",
@@ -1085,14 +1085,14 @@
     "historyEmpty": "変更の記録はありません。隣接は変わったときだけ記録します。",
     "empty": {
       "disabled": "このデプロイでは隣接情報の収集が無効です。<lnk/> で有効にできます。",
-      "unrecorded": "まだ記録がありません。LLDP も CDP も話さない機器は何も返しません。",
-      "none": "この機器を読み取りましたが、隣接は報告されませんでした。"
+      "unrecorded": "まだ記録がありません。LLDP も CDP も話さないノードは何も返しません。",
+      "none": "このノードを読み取りましたが、隣接は報告されませんでした。"
     },
     "proto": {
       "lldp": "LLDP",
       "cdp": "CDP"
     },
-    "capabilityFromListing": "相手は名乗っていません。Meraki の組織の機器一覧での種類です",
+    "capabilityFromListing": "相手は名乗っていません。Meraki の組織のインベントリでの種類です",
     "capability": {
       "router": "ルータ",
       "bridge": "ブリッジ",
@@ -1126,18 +1126,18 @@
     },
     "setup": {
       "blocked": {
-        "not_listed_yet": "まだ未登録の機器の一覧に載っていません。一覧は 5 分ごとに更新されます。",
+        "not_listed_yet": "まだ未登録のノードの一覧に載っていません。一覧は 5 分ごとに更新されます。",
         "end_station": "端末（電話など）と名乗っているため、一覧に載せていません。",
-        "not_a_device_address": "このアドレスは機器を特定できない種類（ループバックなど）です。",
-        "found_outside_your_folders": "あなたのフォルダーの外のノードが見つけた機器です。",
-        "controller_hidden": "あなたのフォルダーの外のコントローラーが管理している AP です。"
+        "not_a_device_address": "このアドレスはノードを特定できない種類（ループバックなど）です。",
+        "found_outside_your_folders": "あなたのグループの外にあるノードが見つけたものです。",
+        "controller_hidden": "あなたのグループの外にあるコントローラーが管理している AP です。"
       },
       "open": "監視を設定",
       "title": "監視の設定",
       "controller": "この AP は {{controller}} が管理しています。ノードが 2 つにならないよう、コントローラーの AP として追加します。",
       "controllerImported": "この AP は {{controller}} が管理していて、別のアドレスですでにノードになっています。",
       "addFromController": "{{controller}} の AP として追加",
-      "meraki": "この機器は Meraki 組織 {{org}} にあります。",
+      "meraki": "このノードは Meraki 組織 {{org}} にあります。",
       "openOrg": "{{org}} を開く →",
       "apHint": "スタンドアロン AP は、SNMP が答えればここで追加できます。",
       "apNoAnswer": "どの認証情報にも応答しませんでした。<ctl>無線コントローラーをノードとして追加</ctl>するか、<mer>Meraki 組織を登録</mer>してください。",
@@ -1152,7 +1152,7 @@
     "matchedOn": {
       "address": "管理アドレス",
       "mac": "Meraki 組織の一覧にある MAC",
-      "name": "対向機器が送った名前"
+      "name": "対向ノードが送った名前"
     }
   },
   "select": {
@@ -1168,36 +1168,36 @@
     "maintenance": "メンテナンス…",
     "mute": "ミュート…",
     "pollNow": "今すぐポーリング",
-    "nameFromDevice": "機器の名前にする"
+    "nameFromDevice": "名前を sysName に合わせる"
   },
   "groupPicker": {
-    "none": "フォルダなし",
-    "noMatch": "一致するフォルダなし",
-    "listAria": "フォルダ",
-    "searchPlaceholder": "フォルダを絞り込む",
-    "searchAria": "フォルダ名で絞り込む"
+    "none": "グループなし",
+    "noMatch": "一致するグループなし",
+    "listAria": "グループ",
+    "searchPlaceholder": "グループを絞り込む",
+    "searchAria": "グループ名で絞り込む"
   },
   "moveByPrefix": {
     "title": "{{count}} 件を IP レンジで移動",
-    "loading": "アドレスをフォルダの IP レンジと照合しています…",
+    "loading": "アドレスをグループの IP レンジと照合しています…",
     "willMove": "移動する（{{count}} 件）",
-    "ambiguous": "複数のフォルダが該当（{{count}} 件）",
-    "ambiguousHint": "2 つのフォルダが同じだけ該当するため、これらは動かしません。",
+    "ambiguous": "複数のグループが該当（{{count}} 件）",
+    "ambiguousHint": "2 つのグループが同じだけ該当するため、これらは動かしません。",
     "unmatched": "どのレンジにも入らない（{{count}} 件）",
     "apply": "{{count}} 件を移動",
     "result": "{{requested}} 件のうち {{moved}} 件を移動しました。",
     "empty": {
-      "noPrefixes": "IP レンジを持つフォルダが 1 つもありません。照合する相手がありません。",
-      "noMatch": "どのアドレスもフォルダの IP レンジに入りません。",
-      "allAmbiguous": "該当したものはすべて、複数のフォルダが同じだけ該当しました。",
-      "allInPlace": "該当したノードは、すべてすでに正しいフォルダにあります。"
+      "noPrefixes": "IP レンジを持つグループが 1 つもありません。照合する相手がありません。",
+      "noMatch": "どのアドレスもグループの IP レンジに入りません。",
+      "allAmbiguous": "該当したものはすべて、複数のグループが同じだけ該当しました。",
+      "allInPlace": "該当したノードは、すべてすでに正しいグループにあります。"
     },
     "titleAll": "全ノードを IP レンジで振り分け",
     "titleFolder": "{{name}} の中を IP レンジで振り分け",
     "more": "ほか {{count}} 件",
     "firstBatch": "今回は最初の {{shown}} 件を移動します。残りの {{rest}} 件は、移動のあとで続けて振り分けられます。",
     "continue": "続きを振り分ける（残り {{count}} 件）",
-    "inPlace": "すでに正しいフォルダにある: {{count}} 件（動かしません）。"
+    "inPlace": "すでに正しいグループにある: {{count}} 件（動かしません）。"
   },
   "maintenanceWindowNameMany": "メンテナンス — {{count}} 台",
   "moreMenu": {
@@ -1205,11 +1205,11 @@
     "moveAllByPrefix": "全ノードを IP レンジで振り分け…"
   },
   "nameFromDevice": {
-    "titleLoading": "機器の名前にする",
+    "titleLoading": "名前を sysName に合わせる",
     "title": "{{requested}} 件のうち {{count}} 件の名前を変える",
     "apply": "{{count}} 件の名前を変える",
     "more": "ほか {{count}} 件",
-    "unchanged": "変えない {{count}} 件（機器の名前なし {{noDeviceName}}・同じ名前 {{alreadySame}}・その他 {{other}}）",
+    "unchanged": "変えない {{count}} 件（sysName なし {{noDeviceName}}・同じ名前 {{alreadySame}}・その他 {{other}}）",
     "err": {
       "preview": "選んだノードを読めませんでした。",
       "apply": "名前を変えられませんでした。"

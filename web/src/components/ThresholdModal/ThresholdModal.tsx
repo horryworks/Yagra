@@ -332,13 +332,16 @@ export function ThresholdModal({
   // ⚠️ It must still appear while editing a rule
   // that already sits at it: a `<select>` whose value is absent from its options renders blank,
   // and the next save would silently move the rule to whichever level rendered first.
-  const levels = useMemo(
-    () =>
-      CREATABLE_SCOPE_LEVELS.includes(form.level)
+  // A port is picked only when a rule is ADDED (ADR-209 decision 7): an existing rule cannot be
+  // moved onto a port, because nothing in the edit path picks one — offering the level there
+  // would be a choice that leaves the target empty.
+  const levels = useMemo(() => {
+    const base =
+      mode === 'add'
         ? CREATABLE_SCOPE_LEVELS
-        : [...CREATABLE_SCOPE_LEVELS, form.level],
-    [form.level],
-  );
+        : CREATABLE_SCOPE_LEVELS.filter((l) => l !== 'interface');
+    return base.includes(form.level) ? base : [...base, form.level];
+  }, [mode, form.level]);
 
   // Two derivations of "this is the reachability rule", and they are deliberately different.
   //

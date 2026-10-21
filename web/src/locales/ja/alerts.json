@@ -24,14 +24,14 @@
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
     "partOfOutage": "このノードの停止に含まれる",
     "poolSubjectWhy": {
-      "info": "デバイスではなく、Yagra 自身の監視についてのアラートです。このプールにはノードがあるのに稼働中のポーラーがなく、監視されていません。"
+      "info": "ノードではなく、Yagra 自身の監視についてのアラートです。このプールにはノードがあるのに稼働中のポーラーがなく、監視されていません。"
     },
     "merakiOrgSubjectWhy": {
-      "info": "Meraki の Dashboard API がこの組織に応答せず、デバイスの値を取得できていません。各デバイスは最後に取得した状態のままで、このアラート 1 つが全部を代表します。"
+      "info": "Meraki の Dashboard API がこの組織に応答せず、ノードの値を取得できていません。各ノードは最後に取得した状態のままで、このアラート 1 つが全部を代表します。"
     }
   },
   "acked": {
-    "title": "{{source}} で {{by}} が確認済み{{note}}",
+    "title": "{{source}} で {{by}} が ACK 済み{{note}}",
     "note": " — {{note}}"
   },
   "history": {
@@ -56,9 +56,9 @@
       "allSeverities": "すべての重大度",
       "allPhases": "発生と解消",
       "allStates": "すべての状態",
-      "allAcked": "確認の有無を問わない",
-      "acked": "確認済み",
-      "unacked": "未確認"
+      "allAcked": "ACK の有無を問わない",
+      "acked": "ACK 済み",
+      "unacked": "ACK 未実施"
     }
   },
   "events": {

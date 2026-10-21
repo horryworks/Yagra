@@ -19,7 +19,7 @@
     "discovery": "Discovery",
     "duplicates": "Duplicates",
     "subnetOverlaps": "Subnet overlaps",
-    "missingPrefixes": "Missing IP prefixes",
+    "missingPrefixes": "Subnets missing from IP ranges",
     "profiles": "Device profiles",
     "classificationRules": "Classification rules",
     "reclassify": "Reclassify",
@@ -35,7 +35,7 @@
   "alerts": {
     "active": "Active alerts",
     "history": "History",
-    "rules": "Metric alert rules",
+    "rules": "Threshold rules",
     "routing": "Notification delivery",
     "eventRules": "Event alert rules",
     "maintenance": "Maintenance windows",

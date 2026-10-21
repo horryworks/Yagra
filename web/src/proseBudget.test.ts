@@ -71,23 +71,23 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11222, 6644],
-  nav: [2907, 1367],
+  monitoring: [11222, 6750], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  nav: [2937, 1384], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   nodes: [15591, 8828], // + rediscover.phase.deviceChanged, and the name-from-device dialog's state line, two errors and menu items (ADR-208, 2026-10-20)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
-  'settings-ai': [736, 410],
+  'settings-ai': [736, 411], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   'settings-auth': [3540, 2095],
   'settings-forwarding': [1695, 900],
-  'settings-relocation': [3661, 1808],
+  'settings-relocation': [3661, 1820], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   'settings-tls': [1592, 857],
   'settings-tokens': [812, 442],
-  'settings-upgrade': [3291, 1796],
+  'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   suppression: [866, 571],
-  system: [12975, 7143],
-  topology: [3104, 1757],
-  troubleshoot: [3370, 1766],
+  system: [12975, 7251], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  topology: [3104, 1758], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
 };
 
 /** How far below its ceiling a namespace may sit before the ceiling must come down. */

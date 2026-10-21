@@ -124,7 +124,7 @@ test('the port button carries the rule count and opens the rules that govern the
   await expect(own.getByRole('button', { name: 'Edit' })).toHaveCount(1);
   await expect(inherited.getByRole('button', { name: 'Edit' })).toHaveCount(0);
   await expect(inherited.getByRole('button', { name: 'Delete' })).toHaveCount(0);
-  await expect(inherited).toContainText('Metric alert rules');
+  await expect(inherited).toContainText('Threshold rules');
 });
 
 test('adding a rule asks what to watch, never for a metric name', async ({ page }) => {
