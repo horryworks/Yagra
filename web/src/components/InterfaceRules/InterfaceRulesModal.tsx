@@ -59,6 +59,8 @@ interface Props {
   /** Open on the add form rather than the list — the threshold-rule dialog hands a freshly picked
    *  port here to have a rule made for it (ADR-209 decision 7). */
   startAdding?: boolean;
+  /** A rule of this port was saved or deleted. The dialog itself re-reads its list either way. */
+  onChanged?: () => void;
   onClose: () => void;
 }
 
@@ -68,6 +70,7 @@ export function InterfaceRulesModal({
   portLabel,
   speedBps,
   startAdding = false,
+  onChanged,
   onClose,
 }: Props) {
   const { t } = useTranslation('nodes');
@@ -131,6 +134,7 @@ export function InterfaceRulesModal({
         onDone={() => {
           setDeleting(null);
           load();
+          onChanged?.();
         }}
       >
         {t('interfaces.rules.deleteBody', { port: portLabel })}
@@ -150,6 +154,7 @@ export function InterfaceRulesModal({
         onSaved={() => {
           setEditing(null);
           load();
+          onChanged?.();
         }}
       />
     );

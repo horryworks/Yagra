@@ -10,7 +10,7 @@
 // The judgement (what the fields become, whether they may be submitted, which control each scope
 // level needs) lives in `pages/thresholdRequest.ts`, because Vitest does not execute a `.tsx`.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { done } from '../../lib/submitState';
@@ -324,6 +324,9 @@ export function ThresholdModal({
   const portMode = mode === 'add' && form.level === 'interface';
   const [port, setPort] = useState<PickedPort | null>(null);
   const [handoff, setHandoff] = useState<PickedPort | null>(null);
+  /** Whether the port-rule dialog wrote anything. Closing it without a save is a cancel, and must
+   *  not reload the list or open its level filter as if a rule had been made. */
+  const portRuleChanged = useRef(false);
 
   // The legacy tag-based `group` level is not offered for a *new* rule — a folder group says the
   // same thing with a type on it, recursively, and is the unit RBAC already scopes by (ADR-075
@@ -372,8 +375,11 @@ export function ThresholdModal({
         portLabel={handoff.label}
         speedBps={handoff.speedBps}
         startAdding
+        onChanged={() => {
+          portRuleChanged.current = true;
+        }}
         onClose={() => {
-          onSaved('interface');
+          if (portRuleChanged.current) onSaved('interface');
           onClose();
         }}
       />

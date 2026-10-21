@@ -398,6 +398,33 @@ test('a port rule is added by picking a node, then a port (ADR-209)', async ({ p
   ).toHaveCount(0);
 });
 
+test('backing out of the port-rule dialog leaves the list as it was', async ({ page }) => {
+  // Closing the hand-off used to report a save whatever happened inside it, so a cancel opened the
+  // level filter that keeps port rules out of the default view, as if a rule had been made.
+  await page.goto('/alerts/rules');
+  await page.getByRole('button', { name: '+ Add rule' }).click();
+  const before = page.url();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .locator('.modal-field')
+    .filter({ has: page.locator('.modal-field-label', { hasText: 'Scope type' }) })
+    .locator('select')
+    .selectOption('interface');
+  await dialog.locator('.nodepick-trigger').click();
+  await page.locator('.nodepick-option').first().click();
+  const port = dialog.locator('#threshold-port');
+  await expect(port).toBeVisible({ timeout: 15_000 });
+  await port.selectOption({ index: 1 });
+  await dialog.getByRole('button', { name: 'Next' }).click();
+
+  const portDialog = page.getByRole('dialog');
+  await expect(portDialog).toContainText('Add a rule —');
+  await portDialog.locator('.modal-footer').getByRole('button', { name: 'Cancel' }).click();
+  await portDialog.locator('.modal-footer').getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(page.url()).toBe(before);
+});
+
 test('a rule opens for editing with its own values, and reachability offers no bounds', async ({
   page,
 }) => {

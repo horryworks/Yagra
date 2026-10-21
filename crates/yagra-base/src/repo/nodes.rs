@@ -2107,9 +2107,6 @@ impl NodeRepo {
     }
 }
 
-/// `(node, version)` rows as the two parallel arrays `unnest` takes, one per node — the **last**
-/// row for a node wins, so two polls of one node in a batch write the newer answer. Shared by both
-/// OS-version writers so they cannot disagree about which of two answers is current.
 /// One node as the "name from device" dialog previews it (ADR-208 Inc.2) — see
 /// [`NodeRepo::name_from_device_inputs`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2129,6 +2126,9 @@ pub struct NameFollowed {
     pub to: String,
 }
 
+/// `(node, version)` rows as the two parallel arrays `unnest` takes, one per node — the **last**
+/// row for a node wins, so two polls of one node in a batch write the newer answer. Shared by both
+/// OS-version writers so they cannot disagree about which of two answers is current.
 fn last_version_per_node(rows: &[(Uuid, String)]) -> (Vec<Uuid>, Vec<String>) {
     let mut by_node: BTreeMap<Uuid, String> = BTreeMap::new();
     for (node, version) in rows {
