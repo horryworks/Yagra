@@ -10,17 +10,23 @@
 
 ## Unreleased
 
+## v0.3.56 — A node takes its device's name in one step, and alerts open the node they are about
+
 ### New Features
 
-- **A node can be renamed to its device's own name in one step.** Edit node offers the device's name (sysName) beside the Name field, and the node tree's right-click menu — for one device or a whole selection — opens a confirmation that lists each change. A node renamed this way follows its device's name again from then on. For API clients: `GET /api/v1/nodes/{node_id}` and the MCP `get_node_status` tool now return `sys_name`, and `POST /api/v1/nodes/name-from-device/preview` and `POST /api/v1/nodes/name-from-device` are new.
+- **A node can be renamed to its device's own name in one step.** Edit node offers the device's name (sysName) beside the Name field, and the node tree's right-click menu — for one device or a whole selection — opens a confirmation that shows what would change. A node renamed this way follows its device's name again from then on. For API clients: `GET /api/v1/nodes/{node_id}` and the MCP `get_node_status` tool now return `sys_name`, and `POST /api/v1/nodes/name-from-device/preview` and `POST /api/v1/nodes/name-from-device` are new.
 
 ### Improvements
 
 - **Alerts lead to the node, and a muted alert says so.** A node name on Alerts ▸ Active, Alerts ▸ History and the dashboard alert widgets now opens that node, and so does the upstream node named beside a suppressed alert. An active alert covered by a mute now carries a "muted until …" mark that opens Alerts ▸ Mutes — before, a mute stopped the notification and left the row looking exactly like one that pages. With no nodes in the inventory, Active alerts says nothing is being monitored and offers Add node, instead of reading "No active alerts".
 - **Node detail puts its actions in one place, the same on the pane and the page.** The header shows Edit node, Maintenance, Mute and Poll now, and a More menu holds the rest: Show on map, Pin, Upstream node, Move to group, Move by IP range, Poller pool, Rediscover, Name from device and Delete. Maintenance, mute, pool, Rediscover and Name from device used to be only in the tree's right-click menu, Move only on the pane and Delete only on the page. A folder's detail adds Add subgroup, Run discovery here (for a folder with IP ranges) and Sort. The right-click menus are unchanged.
 - **Two menu items are renamed.** Alerts ▸ Metric alert rules is now Threshold rules, and Nodes ▸ Missing IP prefixes is now Subnets missing from IP ranges. The Japanese screens also now use one word for each concept (group, IP range, upstream node, scan, node, ACK, finding) where several were in use.
-- **A port rule can be created from Alerts ▸ Threshold rules.** Choosing the Interface level in Add rule now asks for a node and one of its ports, then opens the same port-rule dialog as Node detail ▸ Interfaces. When the list was leaving port rules out, it shows them after the dialog closes.
+- **A port rule can be created from Alerts ▸ Threshold rules.** Choosing the Interface level in Add rule now asks for a node and one of its ports, then opens the same port-rule dialog as Node detail ▸ Interfaces. When the list was leaving port rules out and a rule was made, it shows them after the dialog closes.
 - **An empty list offers its first step, and row actions can be seen before hovering.** The node tree, Credentials, Classification rules, Maintenance, Mutes, Pollers, notification channels and routing rules, and Users show their add button inside the empty list. The routing-rule add button is no longer drawn disabled while there is no channel. The edit and delete icons on list rows are now faint at rest instead of invisible, and full on hover.
+
+### Security
+
+- **TLS certificate checks updated.** `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10 stop Yagra's outbound TLS connections (core and poller alike) from trusting certificate chains through intermediates that have since been distrusted (RUSTSEC-2026-0382, RUSTSEC-2026-0381).
 
 ## v0.3.55 — A node's name follows its device's sysName, and a replaced device waits for Rediscover
 
