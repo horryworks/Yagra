@@ -359,7 +359,7 @@ interface Props {
    *  Omit to hide the item — it is `ManageConfig`, the permission its handler checks. */
   onPollNodes?: (target: ActionTarget) => void;
   /** Right-click → rename this device node, or the working set, to the device's own name, behind a
-   *  confirmation that shows each change (ADR-208 Inc.2). Omit to hide the item — `ManageConfig`. */
+   *  confirmation that previews the changes (ADR-208 Inc.2). Omit to hide the item — `ManageConfig`. */
   onNameFromDevice?: (target: ActionTarget) => void;
   /** Right-click → pin or unpin a node or folder. Omit to hide the item. */
   onTogglePin?: (target: { kind: 'node' | 'group'; id: string }) => void;

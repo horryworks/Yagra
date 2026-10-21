@@ -58,7 +58,11 @@ import { MoveByPrefixModal } from '../MoveByPrefixModal/MoveByPrefixModal';
 import { fallbackPool } from '../../lib/pool';
 import { usePinsStore } from '../../pinsStore';
 import { useCan } from '../../store';
-import { nodeHeaderActions, type NodeHeaderMore } from './nodeHeaderActions';
+import {
+  nodeHeaderActions,
+  type NodeHeaderDialog,
+  type NodeHeaderMore,
+} from './nodeHeaderActions';
 import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
@@ -181,16 +185,7 @@ export function NodeDetail({
   // The dialogs the header opens that used to be reachable only from the tree's right-click menu
   // (ADR-209 decision 8). Held here, like the three above, so the pane and the full page have them
   // alike; the tree keeps its own for the selection and for folders.
-  const [dialog, setDialog] = useState<
-    | 'maintenance'
-    | 'mute'
-    | 'pool'
-    | 'rediscover'
-    | 'nameFromDevice'
-    | 'move'
-    | 'moveByPrefix'
-    | null
-  >(null);
+  const [dialog, setDialog] = useState<NodeHeaderDialog | null>(null);
   const canMaintenance = useCan('manage_maintenance');
   const canMute = useCan('ack_alerts');
   const pinsReady = usePinsStore((s) => s.status === 'ready');

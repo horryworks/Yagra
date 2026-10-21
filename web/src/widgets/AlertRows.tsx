@@ -247,8 +247,10 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
   // One resolver for the whole list. `nodeName` enqueues only the ids the current render actually
   // referenced — i.e. the visible window — and batch-resolves them after the commit, so this stays
   // one request per scroll burst even at the thousands-of-rows the triage screen must survive.
-  const { nodeName, nodeGroup, groups } = useEntityNames();
-  const { mutes, exemptions } = useMuteLists();
+  const { nodeName, nodeGroup } = useEntityNames();
+  // The folder tree comes with the mutes, not from `useEntityNames`, which reads it once: a folder
+  // moved under a muted one has to change the mark as soon as a new mute would.
+  const { mutes, exemptions, groups } = useMuteLists();
   // Asks only once a mute exists: `nodeGroup` enqueues the node for the name batch, which the row
   // has already done for its name, so this adds no request of its own.
   const muteOf = useCallback<MuteOf>(

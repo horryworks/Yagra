@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
+import { useOnConfigChange } from '../../lib/configChanges';
 import type { NodeGroup, ProfileSummary, ScopeLevel } from '../../types/api';
 import { interfaceScopeLabel } from '../../lib/interfaceScope';
 import { createNameBatcher, type NameBatcher } from './entityNameBatch';
@@ -85,6 +86,14 @@ export function useEntityNames() {
     },
     [nodeNames],
   );
+  // A node moved to another folder is a configuration change, and the folder it was answered with
+  // decides whether a group mute is drawn on its alerts. Drop the folders and let the batcher ask
+  // again: only an id someone asks about is re-sent — `nodeName` still holds its names, so only the
+  // active-alert rows' `nodeGroup` asks — and an id with no row is re-asked once per change.
+  useOnConfigChange(() => {
+    batcher.current?.forgetAll();
+    setNodeGroups({});
+  });
   /** The group a node is filed in: `null` when it is ungrouped, `undefined` until its name has
    *  resolved. Asks for the node exactly as {@link nodeName} does. */
   const nodeGroup = useCallback(

@@ -15,7 +15,7 @@ import type { NodeDetail, NodeGroup } from '../../types/api';
 export const NODE_HEADER_PRIMARY = ['edit', 'maintenance', 'mute', 'pollNow'] as const;
 export type NodeHeaderPrimary = (typeof NODE_HEADER_PRIMARY)[number];
 
-/** "More ▾", in this order. `delete` is last, after a gap, because it cannot be undone. */
+/** "More ▾", in this order. `delete` is last, in the danger colour, because it cannot be undone. */
 export const NODE_HEADER_MORE = [
   'openDetail',
   'map',
@@ -29,6 +29,13 @@ export const NODE_HEADER_MORE = [
   'delete',
 ] as const;
 export type NodeHeaderMore = (typeof NODE_HEADER_MORE)[number];
+
+/** The header actions that open a dialog the pane holds itself. Drawn from the two lists above, so
+ *  renaming a key there fails to compile here rather than leaving a dialog nothing opens. */
+export type NodeHeaderDialog = Extract<
+  NodeHeaderPrimary | NodeHeaderMore,
+  'maintenance' | 'mute' | 'pool' | 'rediscover' | 'nameFromDevice' | 'move' | 'moveByPrefix'
+>;
 
 export interface NodeHeaderCaps {
   /** `manage_config` — edit, poll, move, pool, Rediscover, rename, delete. */

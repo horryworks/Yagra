@@ -8,16 +8,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../services/api';
 import { useOnConfigChange } from '../lib/configChanges';
 import { nextSuppressionExpiry, suppressionRefreshDelayMs } from '../lib/suppression';
-import type { Mute, SuppressionExemption } from '../types/api';
+import type { Mute, NodeGroup, SuppressionExemption } from '../types/api';
 
-export function useMuteLists(): { mutes: Mute[]; exemptions: SuppressionExemption[] } {
+export function useMuteLists(): {
+  mutes: Mute[];
+  exemptions: SuppressionExemption[];
+  /** The folder tree a group mute is expanded over. Read here, with the mutes, because a folder
+   *  re-parented under a muted one changes the answer exactly as a new mute does. */
+  groups: NodeGroup[];
+} {
   const [mutes, setMutes] = useState<Mute[]>([]);
   const [exemptions, setExemptions] = useState<SuppressionExemption[]>([]);
+  const [groups, setGroups] = useState<NodeGroup[]>([]);
   // A refusal (a viewer of the public board, a core that is down) leaves the lists as they were:
   // the mark is a convenience, and an alert drawn without it is still drawn.
   const reload = useCallback(() => {
     api.listMutes().then(setMutes).catch(() => undefined);
     api.listSuppressionExemptions().then(setExemptions).catch(() => undefined);
+    api.listNodeGroups().then(setGroups).catch(() => undefined);
   }, []);
   useEffect(() => {
     reload();
@@ -29,5 +37,5 @@ export function useMuteLists(): { mutes: Mute[]; exemptions: SuppressionExemptio
     const h = setTimeout(reload, suppressionRefreshDelayMs(at));
     return () => clearTimeout(h);
   }, [mutes, exemptions, reload]);
-  return { mutes, exemptions };
+  return { mutes, exemptions, groups };
 }

@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-20
-# counts: MA-L=40241 MA-L-repeats-dropped=3 MA-M=6565 MA-S=7206 withheld=3
+# fetched: 2026-10-21
+# counts: MA-L=40249 MA-L-repeats-dropped=3 MA-M=6566 MA-S=7208 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -14107,6 +14107,7 @@
 0827CE	NAGANO KEIKI CO., LTD.
 0827F0	Accton Technology Co., Ltd.
 082802	SHENZHEN CHUANGWEI-RGB ELECTRONICS CO.,LTD
+08299E	Nokia
 082AD0	SRD Innovations Inc.
 082CB0	Network Instruments
 082CB6	Apple, Inc.
@@ -18834,6 +18835,7 @@
 2C16BDC	Beijing CHJ Automotive Co., Ltd.
 2C16BDD	Hangzhou Yanzhi Technology Co.,Ltd.
 2C16BDE	Molex Incorporated
+2C1719	Motorola Mobility LLC, a Lenovo Company
 2C17E0	SYSTEMES ET TECHNOLOGIES IDENTIFICATION (STid)
 2C1809	Apple, Inc.
 2C1875	Skyworth Digital Technology(Shenzhen) Co.,Ltd
@@ -21823,6 +21825,7 @@
 4075C3	Vantiva USA LLC
 4076A9	Huawei Device Co., Ltd.
 4077A9	New H3C Technologies Co., Ltd
+407803	Guangzhou Shiyuan Electronic Technology Company Limited
 40786A	Motorola Mobility LLC, a Lenovo Company
 407875	IMBEL - Industria de Material Belico do Brasil
 407911	Apple, Inc.
@@ -25646,6 +25649,7 @@
 5CAB222	Santiam Labs
 5CAB223	Xiamen Joint Tech. CO.,Ltd.
 5CAB226	Shanghai Jiweijiu Intelligent Technology Co., Ltd.
+5CAB227	Chubb France
 5CAB229	KIWEE BROADBAND
 5CAC3D	Samsung Electronics Co.,Ltd
 5CAC4C	Hon Hai Precision Ind. Co.,Ltd.
@@ -26509,6 +26513,7 @@
 64557F	NSFOCUS Information Technology Co., Ltd.
 6455B1	Commscope
 645601	TP-LINK TECHNOLOGIES CO.,LTD.
+645647	Nokia
 6456B5	Samsung Electronics Co.,Ltd
 645725	Hui Zhou Gaoshengda Technology Co.,LTD
 6457BA	Intel Corporate
@@ -28171,6 +28176,7 @@
 709383	Intelligent Optical Network High Tech CO.,LTD.
 7093C1	eero inc.
 7093F8	Space Monkey, Inc.
+709620	Hewlett Packard Enterprise
 709684	Apple, Inc.
 709741	Arcadyan Corporation
 709751	Beijing Xiaomi Mobile Software Co., Ltd
@@ -32767,6 +32773,7 @@
 748D08	Apple, Inc.
 748DAA	HUAWEI TECHNOLOGIES CO.,LTD
 748E08	Bestek Corp.
+748E9C	Shenzhen Yingchen Technology Co., Ltd.
 748EF8	Brocade Communications Systems LLC
 748F1B	MasterImage 3D
 748F3C	Apple, Inc.
@@ -36937,6 +36944,7 @@
 8C1F645B7	Vortex Sp. z o.o.
 8C1F645B9	ViewSonic Corp
 8C1F645BA	Connectcom System Co., Ltd
+8C1F645BB	Powell Electronics Inc.
 8C1F645BC	HEITEC AG
 8C1F645BD	MPT-Service project
 8C1F645BE	Benchmark Electronics BV
@@ -38151,6 +38159,7 @@
 8C1F64C44	Sypris Electronics
 8C1F64C45	Flextroincs International (Taiwain Ltd
 8C1F64C46	Inex Technologies
+8C1F64C47	Season Electronics Ltd
 8C1F64C48	AK Automation
 8C1F64C4A	SGi Technology Group Ltd.
 8C1F64C4C	Lumiplan Duhamel
@@ -45046,6 +45055,7 @@ BC14EF	ITON Technology Limited
 BC1541	Nokia
 BC15A6	Taiwan Jantek Electronics,Ltd.
 BC15AC	Vodafone Italia S.p.A.
+BC1656	Guangzhou Shiyuan Electronic Technology Company Limited
 BC1665	Cisco Systems, Inc
 BC1695	zte corporation
 BC16F5	Cisco Systems, Inc
@@ -51960,6 +51970,7 @@ F02B18	Nanjing Jiahao Technology Co., Ltd.
 F02B7C	Extreme Networks, Inc.
 F02C59	Chipsea Technologies (Shenzhen) Crop.
 F02E51	Casa Systems
+F02E7A	Motorola Mobility LLC, a Lenovo Company
 F02F4B	Apple, Inc.
 F02F50	Shenzhen SEI Robotics Co.,Ltd
 F02F74	ASUSTek COMPUTER INC.

@@ -172,7 +172,7 @@
   opacity: 1;
 }
 
-/* Keyboard focus inside a hidden action group must still be visible. */
+/* Keyboard focus inside a faint action group brings it to full strength. */
 .ytable-row:focus-within .ytable-actions,
 .dt-row:focus-within .ytable-actions,
 .il-row:focus-within .il-actions {
@@ -781,10 +781,12 @@ html[data-viewport='mobile'] .ytable {
   flex: none;
 }
 
+/* Faint at rest, like `.ytable-actions` (ADR-209 decision 6): the Users list is the one list that
+   uses this group, and it was the last whose actions stayed invisible until hovered. */
 .il-actions {
   display: flex;
   gap: 2px;
-  opacity: 0;
+  opacity: var(--row-action-rest-opacity);
   transition: opacity var(--transition);
 }
 

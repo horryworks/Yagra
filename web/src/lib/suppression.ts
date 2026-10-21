@@ -699,6 +699,9 @@ export function muteRuleCovers(
  * `alerts/config.rs::load_mutes` does before {@link muteRuleCovers} runs, and the one
  * {@link buildSuppressionIndex} does for the tree. `groupId` is the alert node's group (`null`
  * when ungrouped); only an expired mute or exemption is ignored, as {@link inForce} decides.
+ *
+ * ⚠️ Only {@link muteRuleCovers} is pinned to core by the shared case table. This expansion is a
+ * second copy of `load_mutes` that nothing compares — change the two together.
  */
 export function muteCovering(
   alert: { nodeId: string | null; metric: string; groupId: string | null },

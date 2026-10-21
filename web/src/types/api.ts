@@ -567,7 +567,7 @@ export const SCOPE_LEVELS = [
 
 /** The levels a *new* rule may be created at from the Metric alert rules screen.
  *
- *  Two are excluded, for different reasons.
+ *  One is excluded.
  *
  *  `group` (a node **tag**) is legacy because a folder group is the better-typed axis: it is
  *  recursive, it is the unit RBAC scopes by, and since ADR-135 Inc.2 it is also what carries tags.
@@ -580,9 +580,10 @@ export const SCOPE_LEVELS = [
  *
  *  `interface` (one port of one node, ADR-076) is creatable since ADR-209 decision 7: the dialog
  *  picks a node, then one of its ports, and hands the port to the same port-rule dialog Node
- *  detail ▸ Interfaces opens.
+ *  detail ▸ Interfaces opens. That is the ADD dialog only: the edit dialog drops `interface`, since
+ *  nothing there picks a port, and re-adds it just for a rule already at that level.
  *
- *  Both still resolve, list, filter and **edit** at their level, which is why they stay in
+ *  `group` still resolves, lists, filters and **edits** at its level, which is why it stays in
  *  `SCOPE_LEVELS` above — the filter row, the table badge and the edit dialog all iterate that one,
  *  and the dialog re-adds a rule's own level when it is not creatable. */
 export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(

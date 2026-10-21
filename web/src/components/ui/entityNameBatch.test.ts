@@ -97,6 +97,20 @@ describe('createNameBatcher', () => {
     expect(h.fetchNames).toHaveBeenCalledTimes(1);
   });
 
+  it('asks again after forgetAll, which is how a dropped folder answer is re-read', async () => {
+    // `useEntityNames` drops each node's folder on a configuration change. Without forgetting what
+    // was asked, the next `nodeGroup` would enqueue nothing and a group mute's mark would never
+    // come back.
+    const h = harness();
+    h.batcher.request('a');
+    await h.tick();
+    h.batcher.forgetAll();
+    h.batcher.request('a');
+    expect(h.scheduled).toHaveLength(1);
+    await h.tick();
+    expect(h.fetchNames).toHaveBeenCalledTimes(2);
+  });
+
   it('never asks twice for an id the server had no name for', async () => {
     // A deleted or out-of-scope node is omitted from the response rather than reported. Retrying
     // that would be a fetch loop on every render, which is why "asked" is kept on success even
