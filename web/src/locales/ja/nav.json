@@ -72,6 +72,7 @@
   },
   "groups": {
     "inventory": "インベントリ",
+    "consistencyChecks": "整合性チェック",
     "monitoringConfig": "監視の組み立て",
     "monitor": "モニタリング",
     "configure": "設定",

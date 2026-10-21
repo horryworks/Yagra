@@ -72,6 +72,7 @@
   },
   "groups": {
     "inventory": "Inventory",
+    "consistencyChecks": "Consistency checks",
     "monitoringConfig": "Monitoring setup",
     "monitor": "Monitor",
     "configure": "Configure",

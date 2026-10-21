@@ -104,8 +104,18 @@ export const NAV: NavSection[] = [
             path: '/nodes/discovery',
             implemented: true,
           },
-          // The way out beside the way in: Discovery adds nodes, this finds the ones added twice — at
-          // one address or at two — and deletes the copies an operator picks (ADR-148).
+        ],
+      },
+      {
+        // Screens that read the inventory and list what disagrees with itself, rather than manage it
+        // (ADR-209 decision 10). Directly under Inventory because they are read against it. Not
+        // "Checks" alone: a check is a monitoring item here (URL check, DNS check). Reclassify is
+        // the same shape but stays after the classification rules, which is when it is opened.
+        // The paths did not move with the group, so no `MovedTo` and no remembered route changed.
+        labelKey: 'groups.consistencyChecks',
+        items: [
+          // Discovery adds nodes, this finds the ones added twice — at one address or at two — and
+          // deletes the copies an operator picks (ADR-148).
           {
             labelKey: 'nodes.duplicates',
             descKey: 'descriptions.nodesDuplicates',

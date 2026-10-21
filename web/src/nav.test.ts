@@ -115,6 +115,22 @@ describe('nav IA', () => {
     expect(pollers?.implemented).toBe(true);
   });
 
+  it('keeps the inventory checks in their own group, directly under Inventory', () => {
+    // ADR-209 decision 10: these read the inventory and list what disagrees, they do not manage it.
+    const nodes = NAV.find((s) => s.key === 'nodes')!;
+    expect(nodes.groups.map((g) => g.labelKey)).toEqual([
+      'groups.inventory',
+      'groups.consistencyChecks',
+      'groups.monitoringConfig',
+    ]);
+    expect(nodes.groups[0].items.map((i) => i.path)).toEqual(['/nodes', '/nodes/discovery']);
+    expect(nodes.groups[1].items.map((i) => i.path)).toEqual([
+      '/nodes/duplicates',
+      '/nodes/subnet-overlaps',
+      '/nodes/missing-prefixes',
+    ]);
+  });
+
   it('orders Nodes ▸ Monitoring setup in the order the work is done', () => {
     // ADR-055 R7. Not cosmetic: it ran profiles-first, and the profiles entry's own description
     // says "Attach Metric sets here" — two items further down. A menu that tells the reader to

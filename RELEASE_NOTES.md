@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Nodes menu gives the inventory checks a group of their own.** Duplicates, Subnet overlaps and Subnets missing from IP ranges moved out of Inventory into a new Consistency checks group directly under it: they list what disagrees in the inventory rather than manage it. Their addresses are unchanged, so bookmarks and links keep working.
+
 ## v0.3.57 — The node tree stays where you left it, and a breadcrumb folder is shown in it
 
 ### Improvements
