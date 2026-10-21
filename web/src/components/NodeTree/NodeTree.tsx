@@ -47,11 +47,18 @@ import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import { setNodeTreeCollapsed } from '../../serverPrefs';
 import {
+  anchorAt,
   foldersToOpen,
   openFolders,
+  REVEAL_FOLLOW_MS,
+  restoreOffset,
+  restoreStep,
   revealHolds,
   revealOutstayed,
   revealStep,
+  sessionStorageOrUndefined,
+  waitsOnFilter,
+  writeTreeAnchor,
   type RevealRequest,
 } from './nodeTreeReveal';
 import { useTreeTouchedStore } from '../../store';
@@ -1776,7 +1783,7 @@ export function NodeTree({
   // Every decision is `nodeTreeReveal.ts`'s. Two effects: the folders open once per request (a
   // store write that reaches `drawn` a render later), and the scroll waits for the row.
   const revealFolders = useMemo(
-    () => (reveal ? foldersToOpen(groups, reveal.groupId) : []),
+    () => (reveal && reveal.top === undefined ? foldersToOpen(groups, reveal.groupId) : []),
     [reveal, groups],
   );
   const openedFor = useRef(0);
@@ -1807,12 +1814,15 @@ export function NodeTree({
       setRevealHeld(null);
       return;
     }
-    const step = revealStep(drawn, reveal, {
-      filtering,
-      collapsed,
-      folders: revealFolders,
-      loadedGroups,
-    });
+    const restoring = reveal.top !== undefined;
+    const step = restoring
+      ? restoreStep(drawn, reveal)
+      : revealStep(drawn, reveal, {
+          filtering: waitsOnFilter(filtering, reveal),
+          collapsed,
+          folders: revealFolders,
+          loadedGroups,
+        });
     if (step.kind === 'wait') return;
     if (step.kind === 'done') {
       onRevealDone?.();
@@ -1831,11 +1841,14 @@ export function NodeTree({
       setRevealHeld(reveal.seq);
       // Whether this moves the pane at all. When it does, the placeholders to judge are the ones
       // around the row's new position, which only exist once the scroll has rendered.
-      const target = rowVirtualizer.getOffsetForIndex(step.index, 'center');
-      const moves = target !== undefined && Math.abs(target[0] - scrollTop) >= 1;
-      // Centred, not `auto`: the operator is looking for the row, and a row at the very edge of the
-      // pane — or under the pinned-parents band — is one they would still have to find.
-      rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
+      // A reload puts the row back where it sat. Anything else is centred, not `auto`: the operator
+      // is looking for the row, and a row at the very edge of the pane — or under the
+      // pinned-parents band — is one they would still have to find.
+      const back = restoring ? restoreOffset(step.index, ROW_H, reveal.top ?? 0) : null;
+      const target = back ?? rowVirtualizer.getOffsetForIndex(step.index, 'center')?.[0];
+      const moves = target !== undefined && Math.abs(target - scrollTop) >= 1;
+      if (back !== null) rowVirtualizer.scrollToOffset(back);
+      else rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
       if (moves) return;
     }
     if (revealHolds(drawn, step.index, loadingGroups ?? NO_GROUPS, onScreenPending)) return;
@@ -1853,17 +1866,49 @@ export function NodeTree({
     rowVirtualizer,
     onRevealDone,
   ]);
-  // The operator taking the scroll over ends a reveal that is still following its row.
+  // The operator taking the scroll over ends a reveal that is still following its row — and a
+  // reload's restore from the moment it exists, since it may scroll late, once its row arrives.
+  const restorePending = reveal?.top !== undefined;
   useEffect(() => {
     const el = scrollRef.current;
-    if (revealHeld === null || !el) return;
+    if ((revealHeld === null && !restorePending) || !el) return;
     const letGo = () => onRevealDone?.();
     const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     for (const e of events) el.addEventListener(e, letGo, { passive: true });
     return () => {
       for (const e of events) el.removeEventListener(e, letGo);
     };
-  }, [revealHeld, onRevealDone]);
+  }, [revealHeld, restorePending, onRevealDone]);
+  // A restore whose row never comes (deleted, filtered away) gives up rather than jumping the tree
+  // whenever that row appears later. Counted from when it was made, not from its first scroll.
+  useEffect(() => {
+    if (!restorePending) return;
+    const timer = window.setTimeout(() => onRevealDone?.(), REVEAL_FOLLOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [restorePending, onRevealDone]);
+  // Remember the row at the top of the pane for the next time this tab shows the tree — after a
+  // reload, or on coming back from another screen (ADR-073 Inc.3). Written when the tree goes away
+  // (`pagehide`, unmount), never per scroll: that would be a storage write per frame for a value
+  // read once. The offset is tracked from the scroll event because by the time an unmount's cleanup
+  // runs, the ref to the scroller is already detached.
+  const drawnRef = useRef(drawn);
+  drawnRef.current = drawn;
+  useEffect(() => {
+    const el = scrollRef.current;
+    let lastTop = el?.scrollTop ?? 0;
+    const track = () => {
+      lastTop = el?.scrollTop ?? lastTop;
+    };
+    const save = () =>
+      writeTreeAnchor(sessionStorageOrUndefined(), anchorAt(drawnRef.current, lastTop, ROW_H));
+    el?.addEventListener('scroll', track, { passive: true });
+    window.addEventListener('pagehide', save);
+    return () => {
+      el?.removeEventListener('scroll', track);
+      window.removeEventListener('pagehide', save);
+      save();
+    };
+  }, []);
 
   /** Put the cursor on a row: the working set first (it is page state, and not debounced), then the
    *  cursor, then the scroll — the one scroll this tree writes (ADR-155 decision 4). */

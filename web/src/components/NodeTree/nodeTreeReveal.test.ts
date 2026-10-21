@@ -3,13 +3,22 @@
 // asserts the row it lands on, not only that it scrolls — a reveal one row off passes "it scrolled".
 import { describe, expect, it } from 'vitest';
 import {
+  anchorAt,
   foldersToOpen,
+  isRevealArrival,
   openFolders,
+  readTreeAnchor,
+  restoreOffset,
+  restoreStep,
+  REVEAL_ARRIVAL,
   REVEAL_FOLLOW_MS,
   revealHolds,
   revealOutstayed,
   revealRequestFor,
   revealStep,
+  TREE_ANCHOR_KEY,
+  waitsOnFilter,
+  writeTreeAnchor,
   type RevealRequest,
 } from './nodeTreeReveal';
 import { UNGROUPED, type FlatRow } from '../../lib/nodeTree';
@@ -182,5 +191,125 @@ describe('revealOutstayed', () => {
     expect(revealOutstayed(1_000, 1_000)).toBe(false);
     expect(revealOutstayed(1_000, 1_000 + REVEAL_FOLLOW_MS - 1)).toBe(false);
     expect(revealOutstayed(1_000, 1_000 + REVEAL_FOLLOW_MS)).toBe(true);
+  });
+});
+
+describe('putting the tree back after a reload (ADR-073 Inc.3)', () => {
+  const ROW = 30;
+  const memoryStorage = (): Storage => {
+    const m = new Map<string, string>();
+    return {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+      clear: () => m.clear(),
+      key: () => null,
+      get length() {
+        return m.size;
+      },
+    };
+  };
+  const member = (id: string): FlatRow => ({
+    kind: 'node',
+    depth: 2,
+    node: { id, name: id, group_id: 'site' } as NodeSummary,
+  });
+  const drawn: FlatRow[] = [groupRow('region'), groupRow('site', 1), loadingRow('site'), member('sw1'), member('sw2')];
+
+  it('names the row at the top of the pane and how far its edge sat above it', () => {
+    // 100px down: sw1 (row 3) starts at 90, so its edge is 10px above the pane's top.
+    expect(anchorAt(drawn, 100, ROW)).toEqual({ sel: { kind: 'node', id: 'sw1' }, groupId: 'site', seq: 0, top: -10 });
+  });
+
+  it('walks past a loading placeholder to the next row a reload can find', () => {
+    // 65px: row 2 is the placeholder; sw1 (row 3) starts 25px below the pane's top.
+    expect(anchorAt(drawn, 65, ROW)).toMatchObject({ sel: { kind: 'node', id: 'sw1' }, top: 25 });
+  });
+
+  it('names a folder by its parent, which is what opening the way to it needs', () => {
+    // `groupRow` builds a folder with no parent_id.
+    expect(anchorAt(drawn, 30, ROW)).toMatchObject({ sel: { kind: 'group', id: 'site' }, groupId: null, top: 0 });
+  });
+
+  it('has nothing to restore at the very top, or with no row below the pane top', () => {
+    expect(anchorAt(drawn, 0, ROW)).toBeNull();
+    expect(anchorAt([], 300, ROW)).toBeNull();
+    expect(anchorAt([groupRow('region'), loadingRow('region')], 30, ROW)).toBeNull();
+  });
+
+  it('scrolls so the row sits where it sat, never above the top of the tree', () => {
+    expect(restoreOffset(3, ROW, -10)).toBe(100);
+    expect(restoreOffset(3, ROW, 25)).toBe(65);
+    expect(restoreOffset(0, ROW, 25)).toBe(0);
+  });
+
+  it('lands on the anchor row at its index NOW, and waits until it is drawn', () => {
+    const req = anchorAt(drawn, 100, ROW)!;
+    expect(restoreStep(drawn, req)).toEqual({ kind: 'scroll', index: 3 });
+    // The folder above answered differently after the reload: the row moved, the request follows it.
+    expect(restoreStep([drawn[0], drawn[1], drawn[3], drawn[4]], req)).toEqual({ kind: 'scroll', index: 2 });
+    expect(restoreStep([drawn[0], drawn[1], drawn[2]], req)).toEqual({ kind: 'wait' });
+  });
+
+  it('round-trips through the tab storage, and forgets on null', () => {
+    const store = memoryStorage();
+    writeTreeAnchor(store, anchorAt(drawn, 100, ROW));
+    expect(readTreeAnchor(store)).toEqual({ sel: { kind: 'node', id: 'sw1' }, groupId: 'site', seq: -1, top: -10 });
+    writeTreeAnchor(store, null);
+    expect(readTreeAnchor(store)).toBeNull();
+    expect(store.length).toBe(0);
+  });
+
+  it('ignores a stored value it did not write, and storage that is missing or throws', () => {
+    const store = memoryStorage();
+    const bad = [
+      '{',
+      '{"sel":{"kind":"x","id":"a"},"groupId":null,"top":0}',
+      '{"sel":{"kind":"node","id":"a"},"groupId":3,"top":0}',
+      '{"sel":{"kind":"node","id":"a"},"groupId":null}',
+    ];
+    for (const raw of bad) {
+      store.setItem(TREE_ANCHOR_KEY, raw);
+      expect(readTreeAnchor(store)).toBeNull();
+    }
+    expect(readTreeAnchor(undefined)).toBeNull();
+    const refusing: Storage = {
+      ...memoryStorage(),
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('quota');
+      },
+    };
+    expect(() => writeTreeAnchor(refusing, anchorAt(drawn, 100, ROW))).not.toThrow();
+    expect(readTreeAnchor(refusing)).toBeNull();
+  });
+});
+
+describe('a row the operator asked for (ADR-073 Inc.3)', () => {
+  const asked: RevealRequest = { sel: { kind: 'group', id: 'site' }, groupId: 'region', seq: 2, asked: true };
+  const rows = [groupRow('region'), groupRow('site', 1)];
+
+  it('does not wait out a filter, while a reveal made by clearing one still does', () => {
+    expect(revealStep(rows, asked, ctx({ filtering: waitsOnFilter(true, asked) }))).toEqual({
+      kind: 'scroll',
+      index: 1,
+    });
+    const unasked: RevealRequest = { sel: asked.sel, groupId: asked.groupId, seq: 2 };
+    expect(revealStep(rows, unasked, ctx({ filtering: waitsOnFilter(true, unasked) }))).toEqual({ kind: 'wait' });
+  });
+
+  it('is done when the narrowed tree does not draw it — there is nothing to wait for', () => {
+    expect(revealStep([groupRow('region')], asked, ctx({ filtering: waitsOnFilter(true, asked) }))).toEqual({
+      kind: 'done',
+    });
+  });
+
+  it('arrives from another screen only with its own mark in history state', () => {
+    expect(isRevealArrival(REVEAL_ARRIVAL)).toBe(true);
+    expect(isRevealArrival(null)).toBe(false);
+    expect(isRevealArrival({ revealSelection: 'yes' })).toBe(false);
+    expect(isRevealArrival('revealSelection')).toBe(false);
   });
 });

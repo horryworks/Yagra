@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The node tree stays where you left it.** Reloading the page, or going to another screen and coming back, puts All nodes' tree back on the rows that were at the top of it — also while a search or filter is applied. Pressing a folder in a node's or folder's breadcrumb now also scrolls the tree to that folder.
+
 ## v0.3.56 — A node takes its device's name in one step, and alerts open the node they are about
 
 ### New Features

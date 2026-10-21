@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan, useNodeTabStore } from '../store';
 import { usePrefsStore } from '../prefs';
@@ -126,7 +126,13 @@ import {
   groupDeletionReach,
   UNGROUPED,
 } from '../lib/nodeTree';
-import { revealRequestFor, type RevealRequest } from '../components/NodeTree/nodeTreeReveal';
+import {
+  isRevealArrival,
+  readTreeAnchor,
+  revealRequestFor,
+  sessionStorageOrUndefined,
+  type RevealRequest,
+} from '../components/NodeTree/nodeTreeReveal';
 import { sameSelection } from '../components/NodeTree/nodeTreeKeys';
 import { nodeHref, topologyMapHref } from '../lib/entityHref';
 
@@ -500,8 +506,13 @@ export function NodesPage() {
   const settledTerm = search.settledTerm;
   useEffect(() => commitTerm(settledTerm), [commitTerm, settledTerm]);
   /** Bring the selection back into view when the last narrowing control goes (ADR-073 Inc.2).
-   *  Made below, once the node rows are known; read here because its folder has to load. */
-  const [reveal, setReveal] = useState<RevealRequest | null>(null);
+   *  Made below, once the node rows are known; read here because its folder has to load.
+   *  It starts as the point the tree was left at — by a reload, or by going to another screen
+   *  (ADR-073 Inc.3): the tree goes back to the row that was at the top of the pane. The tree
+   *  writes that point again whenever it goes away, so it is never older than the last visit. */
+  const [reveal, setReveal] = useState<RevealRequest | null>(() =>
+    readTreeAnchor(sessionStorageOrUndefined()),
+  );
   const members = useLazyGroupMembers({
     groups,
     visibleGroupKeys,
@@ -1099,7 +1110,9 @@ export function NodesPage() {
     const was = wasNarrowed.current;
     wasNarrowed.current = narrowedAny;
     if (narrowedAny) {
-      setReveal(null);
+      // A reload under a filter keeps its restore: `was` is already true on the first run. Starting
+      // to narrow ends any reveal, a restore included.
+      setReveal((r) => (was && r?.top !== undefined ? r : null));
       return;
     }
     if (!was) return;
@@ -1111,13 +1124,42 @@ export function NodesPage() {
     // that moment, and a later change to either must not fire a second reveal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [narrowedAny]);
-  // Picking another row ends a reveal still waiting for the old one.
+  // Picking another row ends a reveal still waiting for the old one. A reload's restore names the
+  // row at the top of the pane, not the selection, so this never ends it — the tree does, on the
+  // operator's first press, wheel or key in it.
   const selectedKey = selected ? `${selected.kind}:${selected.id}` : '';
   useEffect(() => {
-    setReveal((r) => (r && !sameSelection(r.sel, selected) ? null : r));
+    setReveal((r) => (r && r.top === undefined && !sameSelection(r.sel, selected) ? null : r));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `selected` is a new object every render
   }, [selectedKey]);
   const endReveal = useCallback(() => setReveal(null), []);
+  /** A folder named in the detail pane's breadcrumb: open it, and show its row in the tree (ADR-073
+   *  Inc.3) — the operator just asked "where is this", and the pane alone does not answer that. */
+  const openGroupInTree = useCallback(
+    (id: string) => {
+      select({ kind: 'group', id });
+      revealSeq.current += 1;
+      const req = revealRequestFor({ kind: 'group', id }, groups, undefined, revealSeq.current);
+      setReveal(req ? { ...req, asked: true } : null);
+    },
+    [select, groups],
+  );
+  // The standalone node page sends its breadcrumb here with the folder in `?sel=` and this mark, so
+  // the tree shows the folder there too. Made once the folder list is in: the request needs the
+  // folder's parent.
+  const location = useLocation();
+  const arrivedToReveal = useRef(isRevealArrival(location.state));
+  useEffect(() => {
+    if (!arrivedToReveal.current || groups.length === 0) return;
+    arrivedToReveal.current = false;
+    // Dropped from history, or a reload of this entry would reveal again instead of restoring.
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true });
+    const cur = parseSelection(searchParams.get('sel'));
+    revealSeq.current += 1;
+    const req = revealRequestFor(cur, groups, undefined, revealSeq.current);
+    if (req) setReveal({ ...req, asked: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the folders first arrive
+  }, [groups]);
 
   const selectedGroup = selected?.kind === 'group' ? groupById.get(selected.id) ?? null : null;
   // What the pane-head + acts on: the selected group, a selected node's folder, else top level.
@@ -1555,7 +1597,7 @@ export function NodesPage() {
               onOpenDetail={() => navigate(nodeHref(selected.id))}
               // The breadcrumb opens a folder the same way its tree row does (ADR-142), so Escape
               // and the dropped `tab` behave exactly as they do after a row click.
-              onOpenGroup={(id) => select({ kind: 'group', id })}
+              onOpenGroup={openGroupInTree}
               // An edit made in this pane changes the row the tree is drawing beside it — its name
               // and its pool are both editable from that dialog (ADR-135).
               onChanged={() => void reload()}
@@ -1584,7 +1626,7 @@ export function NodesPage() {
               canEdit={canConfig}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => openAddNode(selectedGroup.id)}
-              onOpenGroup={(id) => select({ kind: 'group', id })}
+              onOpenGroup={openGroupInTree}
               onOpenNode={(id) => select({ kind: 'node', id })}
               onPinError={(e) => setError(errMsg(e, t('tree.pinFailed')))}
               // The tree's folder menu, as buttons (ADR-209 decision 9): the same handlers.

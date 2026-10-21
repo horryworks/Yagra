@@ -15,6 +15,7 @@ import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { nodesPageHref } from '../lib/entityHref';
+import { REVEAL_ARRIVAL } from '../components/NodeTree/nodeTreeReveal';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();
@@ -57,8 +58,8 @@ export function NodeDetailPage() {
         onTabChange={setTab}
         groups={groups}
         // This route has no pane to open a folder in, so a folder hands the operator to All nodes
-        // with that folder open (ADR-142 decision 4).
-        onOpenGroup={(id) => navigate(nodesPageHref({ kind: 'group', id }))}
+        // with that folder open (ADR-142 decision 4) — and its row shown in the tree (ADR-073 Inc.3).
+        onOpenGroup={(id) => navigate(nodesPageHref({ kind: 'group', id }), { state: REVEAL_ARRIVAL })}
         onDeleted={() => navigate('/nodes')}
       />
     </div>

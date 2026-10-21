@@ -28,6 +28,136 @@ export interface RevealRequest {
   /** The folder the selected node lives in (`null` = Ungrouped). For a selected folder, its parent. */
   groupId: string | null;
   seq: number;
+  /** The operator pressed something that names this row (a folder in the detail pane's breadcrumb),
+   *  so it is shown even while the tree is narrowed — if the narrowed tree draws it. */
+  asked?: true;
+  /** The tree put back where it was left — a reload, or coming back from another screen
+   *  (`anchorAt`): the row's top edge sat this many pixels below the top of the pane. Present ⇒
+   *  the row goes back to that spot, not to the centre, and no folder is opened — the layout it
+   *  was taken from already had them open. */
+  top?: number;
+}
+
+/**
+ * The row at the top of the pane, as a request that puts it back there (ADR-073 Inc.3).
+ *
+ * 🚨 **A row, not a pixel offset.** Members load only once their folder is on screen, so after a
+ * reload every folder above the old position is one placeholder row again until it answers: the
+ * same `scrollTop` lands hundreds of rows further down the tree. The row is what the operator saw.
+ *
+ * Walks down from the first row on screen to the first folder or node, because a loading
+ * placeholder or the Ungrouped header names nothing a reload can find again. Null at the very top
+ * (nothing to restore) and when no such row is drawn.
+ */
+export function anchorAt(
+  drawn: readonly FlatRow[],
+  scrollTop: number,
+  rowHeight: number,
+): RevealRequest | null {
+  if (scrollTop <= 0 || rowHeight <= 0) return null;
+  for (let i = Math.floor(scrollTop / rowHeight); i < drawn.length; i++) {
+    const row = drawn[i];
+    const top = i * rowHeight - scrollTop;
+    if (row.kind === 'group') {
+      const sel = { kind: 'group', id: row.group.id } as const;
+      return { sel, groupId: row.group.parent_id ?? null, seq: 0, top };
+    }
+    if (row.kind === 'node' || row.kind === 'ungrouped-node') {
+      const sel = { kind: 'node', id: row.node.id } as const;
+      return { sel, groupId: row.node.group_id ?? null, seq: 0, top };
+    }
+  }
+  return null;
+}
+
+/** Where the restore step scrolls to: the row's top `top` pixels below the pane's top. */
+export function restoreOffset(index: number, rowHeight: number, top: number): number {
+  return Math.max(0, index * rowHeight - top);
+}
+
+/**
+ * What a reload's restore does against the rows drawn now: scroll once the row is drawn, and wait
+ * until then — the folder list, its members and the search page all arrive after the first render.
+ *
+ * ⚠️ Never `done` by itself. A row that never comes (deleted, filtered out) leaves the request
+ * waiting, and the tree ends it on a timer or on the operator's first wheel, press or key.
+ */
+export function restoreStep(drawn: readonly FlatRow[], req: RevealRequest): RevealStep {
+  const index = indexOfSelection(drawn, req.sel);
+  return index >= 0 ? { kind: 'scroll', index } : { kind: 'wait' };
+}
+
+/** Whether a reveal waits out the tree's filter. One the operator asked for does not: if the
+ *  narrowed tree draws the row it is shown now, and if not there is nothing to wait for. */
+export function waitsOnFilter(filtering: boolean, req: RevealRequest): boolean {
+  return filtering && !req.asked;
+}
+
+/** The history state a link sends with `?sel=` when the tree should show that row on arrival — the
+ *  standalone node page's breadcrumb, which has no tree of its own to show it in. */
+export const REVEAL_ARRIVAL = { revealSelection: true } as const;
+
+/** Whether a location's state is that mark. History state is anything any code wrote, so this
+ *  reads it rather than trusting a type. */
+export function isRevealArrival(state: unknown): boolean {
+  return (
+    typeof state === 'object' &&
+    state !== null &&
+    (state as { revealSelection?: unknown }).revealSelection === true
+  );
+}
+
+/** Where the tree keeps the restore point across a reload or a visit to another screen. One key:
+ *  there is one inventory tree. */
+export const TREE_ANCHOR_KEY = 'yagra.nodeTree.anchor';
+
+/** This tab's storage, or undefined where there is none (Vitest's node environment) or where even
+ *  reaching for it throws (blocked site data). */
+export function sessionStorageOrUndefined(): Storage | undefined {
+  try {
+    return typeof sessionStorage === 'undefined' ? undefined : sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Persist (or, given null, forget) the restore point. Storage may be missing or refuse a write
+ *  (private windows, blocked site data); losing the position is then the whole cost. */
+export function writeTreeAnchor(store: Storage | undefined, anchor: RevealRequest | null): void {
+  try {
+    if (!store) return;
+    if (!anchor || anchor.top === undefined) {
+      store.removeItem(TREE_ANCHOR_KEY);
+      return;
+    }
+    const { sel, groupId, top } = anchor;
+    store.setItem(TREE_ANCHOR_KEY, JSON.stringify({ sel, groupId, top }));
+  } catch {
+    // Nothing to do: the next reload starts at the top, as it did before this existed.
+  }
+}
+
+/** The restore point a previous load of this tab left, or null. Anything malformed is ignored —
+ *  the value comes back from storage, not from this build. `seq` is -1, which no page-made
+ *  request uses (they count up from 1). */
+export function readTreeAnchor(store: Storage | undefined): RevealRequest | null {
+  try {
+    const raw = store?.getItem(TREE_ANCHOR_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as {
+      sel?: { kind?: unknown; id?: unknown };
+      groupId?: unknown;
+      top?: unknown;
+    };
+    const kind = v.sel?.kind;
+    const id = v.sel?.id;
+    if ((kind !== 'node' && kind !== 'group') || typeof id !== 'string') return null;
+    if (typeof v.top !== 'number' || !Number.isFinite(v.top)) return null;
+    if (v.groupId !== null && typeof v.groupId !== 'string') return null;
+    return { sel: { kind, id }, groupId: v.groupId, seq: -1, top: v.top };
+  } catch {
+    return null;
+  }
 }
 
 /**
