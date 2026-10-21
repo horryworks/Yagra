@@ -129,6 +129,7 @@ import {
 import {
   isRevealArrival,
   readTreeAnchor,
+  revealOnNarrowing,
   revealRequestFor,
   sessionStorageOrUndefined,
   type RevealRequest,
@@ -1106,13 +1107,18 @@ export function NodesPage() {
   const narrowedAny = filtering || pinnedOnly || withNodesOnly;
   const wasNarrowed = useRef(narrowedAny);
   const revealSeq = useRef(0);
+  // Pinned only counts only once the pins have loaded, so after a reload it comes into force a
+  // moment after the first render — which this effect would otherwise read as the operator starting
+  // to narrow. Kept current by the effect after this one, so this one reads the previous value.
+  const pinsWereReady = useRef(pinsReady);
   useEffect(() => {
     const was = wasNarrowed.current;
     wasNarrowed.current = narrowedAny;
     if (narrowedAny) {
       // A reload under a filter keeps its restore: `was` is already true on the first run. Starting
       // to narrow ends any reveal, a restore included.
-      setReveal((r) => (was && r?.top !== undefined ? r : null));
+      const pinsArrived = pinsReady && !pinsWereReady.current;
+      setReveal((r) => revealOnNarrowing(r, was, pinsArrived));
       return;
     }
     if (!was) return;
@@ -1124,6 +1130,9 @@ export function NodesPage() {
     // that moment, and a later change to either must not fire a second reveal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [narrowedAny]);
+  useEffect(() => {
+    pinsWereReady.current = pinsReady;
+  }, [pinsReady]);
   // Picking another row ends a reveal still waiting for the old one. A reload's restore names the
   // row at the top of the pane, not the selection, so this never ends it — the tree does, on the
   // operator's first press, wheel or key in it.

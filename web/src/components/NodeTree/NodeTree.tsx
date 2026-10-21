@@ -47,7 +47,7 @@ import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { usePrefsStore } from '../../prefs';
 import { setNodeTreeCollapsed } from '../../serverPrefs';
 import {
-  anchorAt,
+  anchorToSave,
   foldersToOpen,
   openFolders,
   REVEAL_FOLLOW_MS,
@@ -1893,14 +1893,18 @@ export function NodeTree({
   // runs, the ref to the scroller is already detached.
   const drawnRef = useRef(drawn);
   drawnRef.current = drawn;
+  const restorePendingRef = useRef(restorePending);
+  restorePendingRef.current = restorePending;
   useEffect(() => {
     const el = scrollRef.current;
     let lastTop = el?.scrollTop ?? 0;
     const track = () => {
       lastTop = el?.scrollTop ?? lastTop;
     };
-    const save = () =>
-      writeTreeAnchor(sessionStorageOrUndefined(), anchorAt(drawnRef.current, lastTop, ROW_H));
+    const save = () => {
+      const anchor = anchorToSave(restorePendingRef.current, drawnRef.current, lastTop, ROW_H);
+      if (anchor !== undefined) writeTreeAnchor(sessionStorageOrUndefined(), anchor);
+    };
     el?.addEventListener('scroll', track, { passive: true });
     window.addEventListener('pagehide', save);
     return () => {

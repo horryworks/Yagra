@@ -4,12 +4,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   anchorAt,
+  anchorToSave,
   foldersToOpen,
   isRevealArrival,
   openFolders,
   readTreeAnchor,
   restoreOffset,
   restoreStep,
+  revealOnNarrowing,
   REVEAL_ARRIVAL,
   REVEAL_FOLLOW_MS,
   revealHolds,
@@ -237,6 +239,14 @@ describe('putting the tree back after a reload (ADR-073 Inc.3)', () => {
     expect(anchorAt([groupRow('region'), loadingRow('region')], 30, ROW)).toBeNull();
   });
 
+  it('keeps the stored point while a restore has not put the pane back yet', () => {
+    // A second reload before the rows arrive: the pane is still at the top, which is not where the
+    // operator left it, so nothing is written over the point.
+    expect(anchorToSave(true, drawn, 0, ROW)).toBeUndefined();
+    expect(anchorToSave(false, drawn, 0, ROW)).toBeNull();
+    expect(anchorToSave(false, drawn, 100, ROW)).toEqual(anchorAt(drawn, 100, ROW));
+  });
+
   it('scrolls so the row sits where it sat, never above the top of the tree', () => {
     expect(restoreOffset(3, ROW, -10)).toBe(100);
     expect(restoreOffset(3, ROW, 25)).toBe(65);
@@ -311,5 +321,22 @@ describe('a row the operator asked for (ADR-073 Inc.3)', () => {
     expect(isRevealArrival(null)).toBe(false);
     expect(isRevealArrival({ revealSelection: 'yes' })).toBe(false);
     expect(isRevealArrival('revealSelection')).toBe(false);
+  });
+});
+
+describe('a narrowing control coming into force (ADR-073 Inc.3)', () => {
+  const restore: RevealRequest = { sel: { kind: 'node', id: 'sw1' }, groupId: 'site', seq: -1, top: 12 };
+  const reveal: RevealRequest = { sel: { kind: 'node', id: 'sw1' }, groupId: 'site', seq: 3 };
+
+  it('keeps a restore when the tree loaded narrowed, or when Pinned only took effect as the pins arrived', () => {
+    expect(revealOnNarrowing(restore, true, false)).toBe(restore);
+    // A reload with Pinned only on: the switch counts only once the pins load, a render later.
+    expect(revealOnNarrowing(restore, false, true)).toBe(restore);
+  });
+
+  it('ends a restore when the operator starts to narrow, and any other reveal always', () => {
+    expect(revealOnNarrowing(restore, false, false)).toBeNull();
+    expect(revealOnNarrowing(reveal, true, true)).toBeNull();
+    expect(revealOnNarrowing(null, true, true)).toBeNull();
   });
 });

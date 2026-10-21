@@ -70,6 +70,18 @@ export function anchorAt(
   return null;
 }
 
+/** What to store when the tree goes away: the row at the top of the pane, or `undefined` — keep
+ *  the point already stored — while a restore is still pending. Until it has scrolled and been let
+ *  go, the pane is not where the operator left it, and reading it would forget the real point. */
+export function anchorToSave(
+  restorePending: boolean,
+  drawn: readonly FlatRow[],
+  scrollTop: number,
+  rowHeight: number,
+): RevealRequest | null | undefined {
+  return restorePending ? undefined : anchorAt(drawn, scrollTop, rowHeight);
+}
+
 /** Where the restore step scrolls to: the row's top `top` pixels below the pane's top. */
 export function restoreOffset(index: number, rowHeight: number, top: number): number {
   return Math.max(0, index * rowHeight - top);
@@ -85,6 +97,18 @@ export function restoreOffset(index: number, rowHeight: number, top: number): nu
 export function restoreStep(drawn: readonly FlatRow[], req: RevealRequest): RevealStep {
   const index = indexOfSelection(drawn, req.sel);
   return index >= 0 ? { kind: 'scroll', index } : { kind: 'wait' };
+}
+
+/** What a narrowing control coming into force does to the reveal in hand. Starting to narrow ends
+ *  it — but not a reload's restore when the tree loaded already narrowed, or when the narrowing is
+ *  Pinned only taking effect because this load's pins just arrived: neither is the operator
+ *  starting anything, and the saved point was taken from that narrowed tree. */
+export function revealOnNarrowing(
+  r: RevealRequest | null,
+  wasNarrowed: boolean,
+  pinsArrived: boolean,
+): RevealRequest | null {
+  return (wasNarrowed || pinsArrived) && r?.top !== undefined ? r : null;
 }
 
 /** Whether a reveal waits out the tree's filter. One the operator asked for does not: if the
