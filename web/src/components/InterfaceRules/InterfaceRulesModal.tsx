@@ -56,16 +56,28 @@ interface Props {
   portLabel: string;
   /** The device's own declared speed, in bits/sec, or null when it reports none. */
   speedBps: number | null;
+  /** Open on the add form rather than the list — the threshold-rule dialog hands a freshly picked
+   *  port here to have a rule made for it (ADR-209 decision 7). */
+  startAdding?: boolean;
   onClose: () => void;
 }
 
-export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onClose }: Props) {
+export function InterfaceRulesModal({
+  nodeId,
+  ifindex,
+  portLabel,
+  speedBps,
+  startAdding = false,
+  onClose,
+}: Props) {
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<MatchingThreshold[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** `null` = the list; otherwise the form, editing `rule` or adding when it is undefined. */
-  const [editing, setEditing] = useState<{ rule?: StoredThreshold } | null>(null);
+  const [editing, setEditing] = useState<{ rule?: StoredThreshold } | null>(
+    startAdding ? {} : null,
+  );
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   /** Where the list was scrolled when it gave way to the confirm step or the form. The dialog swaps
    *  its body for either, so coming back mounts a fresh list at the top; this puts it back (ADR-203).

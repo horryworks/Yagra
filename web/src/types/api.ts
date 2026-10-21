@@ -578,16 +578,15 @@ export const SCOPE_LEVELS = [
  *  exactly the shape that rots, since a comment giving a reason does not update itself when the
  *  reason does. The decision (ADR-075 Inc.3 decision 10) is unchanged; only this text is.
  *
- *  `interface` (one port of one node, ADR-076) is excluded because this screen has nowhere to pick
- *  a port from — a fleet-wide interface picker does not exist, and building one is its own piece of
- *  work. A port rule is created from Node detail ▸ Interfaces, where the port being looked at *is*
- *  the target and nothing has to be searched for.
+ *  `interface` (one port of one node, ADR-076) is creatable since ADR-209 decision 7: the dialog
+ *  picks a node, then one of its ports, and hands the port to the same port-rule dialog Node
+ *  detail ▸ Interfaces opens.
  *
  *  Both still resolve, list, filter and **edit** at their level, which is why they stay in
  *  `SCOPE_LEVELS` above — the filter row, the table badge and the edit dialog all iterate that one,
  *  and the dialog re-adds a rule's own level when it is not creatable. */
 export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
-  (l) => l !== 'group' && l !== 'interface',
+  (l) => l !== 'group',
 );
 
 /** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */

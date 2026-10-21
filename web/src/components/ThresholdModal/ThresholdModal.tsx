@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The shared create/edit dialog for a metric alert rule.
 //
-// Mounted from two places (ADR-076): Alerts ▸ Metric alert rules, where a rule is created at a
-// profile / folder-group / node scope, and Node detail ▸ Interfaces, where the dock creates one
-// for the port being looked at. ONE component rather than two, because the alternative is two
-// answers to "what does this form send" that drift the first time a field is added — the same
-// reason the add and edit paths are one dialog rather than two.
+// Mounted from Alerts ▸ Threshold rules, where a rule is created at a profile / folder-group /
+// node scope or edited at any. A NEW port rule is not filled in here: the dialog picks a node and
+// a port and hands them to the port-rule dialog Node detail ▸ Interfaces opens (ADR-209), so
+// there is one port-rule form. ONE dialog for adding and editing, because two would be two
+// answers to "what does this form send" that drift the first time a field is added.
 //
 // The judgement (what the fields become, whether they may be submitted, which control each scope
 // level needs) lives in `pages/thresholdRequest.ts`, because Vitest does not execute a `.tsx`.
@@ -34,6 +34,8 @@ import {
   type StoredThreshold,
 } from '../../types/api';
 import { MetricPicker } from '../MetricPicker/MetricPicker';
+import { InterfaceRulesModal } from '../InterfaceRules/InterfaceRulesModal';
+import { portChoices, type PortChoice } from './portChoice';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
@@ -106,17 +108,15 @@ function ScopeIdField({
       </div>
     );
   }
-  // What the target list needs said, by level: a folder reaches the folders inside it, the legacy
-  // tag scope is on its way out, and a port rule is made elsewhere. The others say nothing — the
-  // picker names its own targets (ADR-200).
+  // What the target list needs said, by level: a folder reaches the folders inside it, and the
+  // legacy tag scope is on its way out. The others say nothing — the picker names its own targets
+  // (ADR-200).
   const hint =
     kind === 'folderGroup'
       ? t('thresholds.addModal.folderGroupHint')
       : kind === 'tag'
         ? t('thresholds.addModal.legacyTagHint')
-        : kind === 'interface'
-          ? t('thresholds.addModal.interfaceHint')
-          : null;
+        : null;
   return (
     <div className="modal-field">
       <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
@@ -162,10 +162,9 @@ function ScopeIdField({
           )}
         />
       ) : kind === 'interface' ? (
-        // One port of one node (ADR-076). Shown, not edited: this screen has no port picker —
-        // a fleet-wide one does not exist — so a rule at this level is created from Node detail ▸
-        // Interfaces, where the port being looked at *is* the target. It still reaches this dialog
-        // when an existing rule is edited, and its bounds and breach count are editable there.
+        // One port of one node (ADR-076), when an existing rule is edited: the port is shown, not
+        // changed — moving a rule to another port is a different rule. A NEW port rule never gets
+        // here: `PortPick` takes the dialog over and hands the port to the port-rule dialog.
         <>
           <div className="thresholds-fixed mono">
             {interfaceScopeLabel(single, nodeName, portNames)}
@@ -188,6 +187,95 @@ function ScopeIdField({
     </div>
   );
 }
+/** A port the operator picked, with what the port-rule dialog needs to open on it. */
+type PickedPort = PortChoice & { nodeId: string };
+
+/** A node, then one of its ports (ADR-209 decision 7). A port rule used to be creatable only from
+ *  Node detail ▸ Interfaces; this is the same rule reached from the rules screen, and it is made in
+ *  the same dialog that tab opens, so there is one port-rule form, not two. */
+function PortPick({
+  picked,
+  onPick,
+}: {
+  picked: PickedPort | null;
+  onPick: (port: PickedPort | null) => void;
+}) {
+  const { t } = useTranslation('alertsConfig');
+  const [node, setNode] = useState<{ id: string; name: string } | null>(null);
+  /** `null` while the node's ports are being read. */
+  const [ports, setPorts] = useState<PortChoice[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!node) return undefined;
+    let live = true;
+    setPorts(null);
+    setFailed(false);
+    api
+      .listNodeInterfaces(node.id)
+      .then((rows) => {
+        if (live) setPorts(portChoices(rows));
+      })
+      .catch(() => {
+        if (!live) return;
+        setPorts([]);
+        setFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [node]);
+
+  return (
+    <>
+      <div className="modal-field">
+        <label className="modal-field-label">{t('thresholds.scopeLevel.node')}</label>
+        <NodePicker
+          value={node?.id ?? null}
+          valueLabel={node?.name}
+          onChange={(n) => {
+            setNode(n);
+            onPick(null);
+          }}
+          placeholder={t('thresholds.addModal.scopeIdPlaceholder.node')}
+        />
+      </div>
+      {node && (
+        <div className="modal-field">
+          <label className="modal-field-label" htmlFor="threshold-port">
+            {t('thresholds.addModal.port')}
+          </label>
+          {ports === null ? (
+            <p className="form-status">{t('common:loading')}</p>
+          ) : ports.length === 0 ? (
+            <p className="form-status">
+              {failed ? t('thresholds.addModal.portsFailed') : t('thresholds.addModal.noPorts')}
+            </p>
+          ) : (
+            <Select
+              id="threshold-port"
+              value={picked ? String(picked.ifindex) : ''}
+              onChange={(e) => {
+                const p = ports.find((x) => String(x.ifindex) === e.target.value);
+                onPick(p ? { ...p, nodeId: node.id } : null);
+              }}
+            >
+              <option value="" disabled>
+                {t('thresholds.addModal.portPlaceholder')}
+              </option>
+              {ports.map((p) => (
+                <option key={p.ifindex} value={String(p.ifindex)}>
+                  {p.option}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Create or edit a threshold rule (focused-editing modal).
  *
  *  One dialog for both, the shape `EventRulesPage`'s `RuleModal` uses. Two would be two answers to
@@ -210,7 +298,9 @@ export function ThresholdModal({
   /** The list's `port_names`, so a port rule's target reads as it does in the row. */
   portNames?: Readonly<Record<string, string>>;
   onClose: () => void;
-  onSaved: () => void;
+  /** After a save. `interface` when the dialog handed off to the port-rule dialog, so the list can
+   *  bring port rules into view — its default leaves them out (ADR-076 decision 12). */
+  onSaved: (level?: ScopeLevel) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   // ⚠️ Held here, inside a conditionally-mounted component, so closing the dialog *is* the reset
@@ -229,6 +319,11 @@ export function ThresholdModal({
     setForm((f) => ({ ...f, [key]: value }));
 
   const ready = isThresholdReady(form);
+  // A NEW port rule is not filled in here: the dialog picks the port, then gives way to the
+  // port-rule dialog (ADR-209 decision 7). Editing one stays here, as it always did.
+  const portMode = mode === 'add' && form.level === 'interface';
+  const [port, setPort] = useState<PickedPort | null>(null);
+  const [handoff, setHandoff] = useState<PickedPort | null>(null);
 
   // The legacy tag-based `group` level is not offered for a *new* rule — a folder group says the
   // same thing with a type on it, recursively, and is the unit RBAC already scopes by (ADR-075
@@ -266,6 +361,22 @@ export function ThresholdModal({
     });
   };
 
+  if (handoff) {
+    return (
+      <InterfaceRulesModal
+        nodeId={handoff.nodeId}
+        ifindex={handoff.ifindex}
+        portLabel={handoff.label}
+        speedBps={handoff.speedBps}
+        startAdding
+        onClose={() => {
+          onSaved('interface');
+          onClose();
+        }}
+      />
+    );
+  }
+
   return (
     <Modal
       title={mode === 'edit' ? t('thresholds.editModal.title') : t('thresholds.addModal.title')}
@@ -274,9 +385,15 @@ export function ThresholdModal({
         <FormFooter
           form={save}
           onClose={onClose}
-          onSubmit={submit}
-          submitLabel={mode === 'edit' ? t('common:actions.save') : t('thresholds.addModal.add')}
-          canSubmit={ready}
+          onSubmit={portMode ? () => port && setHandoff(port) : submit}
+          submitLabel={
+            mode === 'edit'
+              ? t('common:actions.save')
+              : portMode
+                ? t('thresholds.addModal.portNext')
+                : t('thresholds.addModal.add')
+          }
+          canSubmit={portMode ? port !== null : ready}
         />
       }
     >
@@ -288,7 +405,10 @@ export function ThresholdModal({
             // Clear the targets with the level. Ids are not interchangeable across levels — a
             // profile UUID left behind on a folder-group rule is a rule that matches nothing —
             // and every control below is a picker, so nothing an operator would want is carried.
-            setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeIds: [] }))
+            {
+              setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeIds: [] }));
+              setPort(null);
+            }
           }
         >
           {levels.map((l) => (
@@ -298,11 +418,38 @@ export function ThresholdModal({
           ))}
         </Select>
       </div>
-      <ScopeIdField
-        form={form}
-        onChange={(scopeIds) => set('scopeIds', scopeIds)}
-        portNames={portNames}
-      />
+      {portMode ? (
+        <PortPick picked={port} onPick={setPort} />
+      ) : (
+        <ScopeIdField
+          form={form}
+          onChange={(scopeIds) => set('scopeIds', scopeIds)}
+          portNames={portNames}
+        />
+      )}
+      {!portMode && (
+        <ThresholdFields form={form} set={set} lockedMetric={lockedMetric} noBounds={noBounds} />
+      )}
+      <FormError form={save} />
+    </Modal>
+  );
+}
+
+/** Everything below the target: the metric, the row pattern, the bounds and the breach count. */
+function ThresholdFields({
+  form,
+  set,
+  lockedMetric,
+  noBounds,
+}: {
+  form: ThresholdForm;
+  set: <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) => void;
+  lockedMetric: boolean;
+  noBounds: boolean;
+}) {
+  const { t } = useTranslation('alertsConfig');
+  return (
+    <>
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
         {lockedMetric ? (
@@ -399,7 +546,6 @@ export function ThresholdModal({
         </div>
         {noBounds && <span className="form-status">{t('thresholds.livenessMetric')}</span>}
       </Field>
-      <FormError form={save} />
-    </Modal>
+    </>
   );
 }

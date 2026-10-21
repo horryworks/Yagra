@@ -17,6 +17,7 @@
 ### Improvements
 
 - **Alerts lead to the node, and a muted alert says so.** A node name on Alerts ▸ Active, Alerts ▸ History and the dashboard alert widgets now opens that node, and so does the upstream node named beside a suppressed alert. An active alert covered by a mute now carries a "muted until …" mark that opens Alerts ▸ Mutes — before, a mute stopped the notification and left the row looking exactly like one that pages. With no nodes in the inventory, Active alerts says nothing is being monitored and offers Add node, instead of reading "No active alerts".
+- **A port rule can be created from Alerts ▸ Metric alert rules.** Choosing the Interface level in Add rule now asks for a node and one of its ports, then opens the same port-rule dialog as Node detail ▸ Interfaces. When the list was leaving port rules out, it shows them after the dialog closes.
 - **An empty list offers its first step, and row actions can be seen before hovering.** The node tree, Credentials, Classification rules, Maintenance, Mutes, Pollers, notification channels and routing rules, and Users show their add button inside the empty list. The routing-rule add button is no longer drawn disabled while there is no channel. The edit and delete icons on list rows are now faint at rest instead of invisible, and full on hover.
 
 ## v0.3.55 — A node's name follows its device's sysName, and a replaced device waits for Rediscover

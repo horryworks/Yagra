@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1367, 747],
   alertNames: [166, 97],
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
-  alertsConfig: [8360, 4431],
+  alertsConfig: [8368, 4434], // + routing.rules.emptyNoChannels and the port picker's two state lines, - interfaceHint (ADR-209, 2026-10-21)
   auth: [79, 43],
   common: [717, 385],
   dashboard: [6229, 3448],

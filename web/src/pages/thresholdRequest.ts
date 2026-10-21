@@ -133,9 +133,9 @@ export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
 
 /** Whether the level accepts more than one target (ADR-078 decision 3).
  *
- *  `interface` is deliberately single: a rule at that level covers one port of one node and is
- *  created from that port's own screen, so there is no control that could pick a second. `tag` is
- *  single because it is the legacy free-text scope and no new rule is created at it. */
+ *  `interface` is deliberately single: a rule at that level covers one port of one node, and every
+ *  control that creates one picks exactly one port. `tag` is single because it is the legacy
+ *  free-text scope and no new rule is created at it. */
 export function scopeAcceptsMany(level: ScopeLevel): boolean {
   const kind = scopeIdKind(level);
   return kind === 'profile' || kind === 'folderGroup' || kind === 'node';

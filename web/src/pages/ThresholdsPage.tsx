@@ -527,7 +527,18 @@ export function ThresholdsPage() {
         />
       </LoadGate>
 
-      {adding && <ThresholdModal mode="add" onClose={() => setAdding(false)} onSaved={load} />}
+      {adding && (
+        <ThresholdModal
+          mode="add"
+          onClose={() => setAdding(false)}
+          onSaved={(level) => {
+            load();
+            // A port rule just made would be left out by the default view (ADR-076 decision 12):
+            // open the level filter, as "Show them" does, so the rule is seen to exist (ADR-209).
+            if (level === 'interface' && portRulesHidden) setFilters({ ...filters, scope_level: '' });
+          }}
+        />
+      )}
       {editing && (
         // Keyed by the row's id so opening a *different* rule remounts the dialog with that rule's
         // values. Without it React would keep the mounted form state and show the previous rule.

@@ -512,10 +512,10 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
                 "the same target is named twice",
             ));
         }
-        // One port of one node. A fleet-wide port picker does not exist, so a rule at this level
-        // is created from the port being looked at (ADR-076 Inc.5) and there is nothing that
-        // could have supplied a second one — accepting a set here would be a shape only a
-        // hand-written call can produce, with no screen able to show or edit it.
+        // One port of one node. Every screen that creates one picks a single port — the port
+        // being looked at (ADR-076 Inc.5), or one picked node by node (ADR-209) — so accepting a
+        // set here would be a shape only a hand-written call can produce, with no screen able to
+        // show or edit it.
         if level == ScopeLevel::Interface && scope_ids.len() != 1 {
             return Err(ApiError::bad_request(
                 "invalid_scope_id",
