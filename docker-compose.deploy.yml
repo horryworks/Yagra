@@ -448,6 +448,10 @@ services:
       core: { condition: service_healthy }
     environment:
       OXIDIZED_HOME: /var/lib/yagra/oxidized
+      # Its log and crash directories default to OXIDIZED_HOME, which is read-only here; this puts
+      # them on its own data volume instead. Without it oxidized never starts ("Read-only file
+      # system @ dir_s_mkdir - …/logs"), measured on a lab deployment.
+      OXIDIZED_LOGS: /home/oxidized/.config/oxidized
     volumes:
       - oxconf:/var/lib/yagra/oxidized:ro
       - oxdata:/home/oxidized/.config/oxidized
