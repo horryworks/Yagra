@@ -52,6 +52,24 @@ pub(crate) fn parse_time(text: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// The versions in a `/node/version.json` body.
+///
+/// 🚨 A node with no stored version yet does not get an empty array: oxidized answers something that
+/// is not one, measured on a lab deployment in the seconds between "fetch now" and the first commit.
+/// Read as an error, that put "the config backup service did not answer" on the screen of every node
+/// just switched on. Anything that is not an array is "no versions yet"; an entry that does not read
+/// is skipped.
+#[must_use]
+pub(crate) fn versions_of(body: &str) -> Vec<OxVersion> {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|v| serde_json::from_value(v).ok())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// A client for one oxidized.
 pub(crate) struct OxidizedClient {
     base: String,
@@ -103,11 +121,12 @@ impl OxidizedClient {
     /// A node's versions, newest first as oxidized lists them.
     pub(crate) async fn versions(&self, node: Uuid) -> anyhow::Result<Vec<OxVersion>> {
         let full = format!("{}/{node}", super::GROUP);
-        Ok(self
+        let body = self
             .get("/node/version.json", &[("node_full", &full)])
             .await?
-            .json()
-            .await?)
+            .text()
+            .await?;
+        Ok(versions_of(&body))
     }
 
     /// One version's text.
@@ -140,6 +159,18 @@ mod tests {
         let b = parse_time("2026-10-22 10:00:00 UTC").expect("utc");
         assert_eq!(b.to_rfc3339(), "2026-10-22T10:00:00+00:00");
         assert!(parse_time("never").is_none());
+    }
+
+    #[test]
+    fn a_node_with_no_history_has_no_versions_rather_than_an_error() {
+        assert!(versions_of("null").is_empty());
+        assert!(versions_of("").is_empty());
+        assert!(versions_of("<html>").is_empty());
+        let one = versions_of(
+            r#"[{"oid":"abc","date":"2026-10-22 10:00:00 +0000","author":{"name":"Yagra"}},{"x":1}]"#,
+        );
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].oid, "abc");
     }
 
     #[test]
